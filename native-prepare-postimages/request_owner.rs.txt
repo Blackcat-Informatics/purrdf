@@ -1,0 +1,16 @@
+    fn prepare_for_admitted(
+        &self, query: &str, base_iri: Option<&str>,
+        env: &crate::extension_env::ExtensionEnv, workspace: &crate::WorkspaceCapability,
+    ) -> Result<PreparedHandle, EvaluationFailure> {
+        self.cache.borrow_mut().prepare_execution_plan_admitted(query, base_iri, env, &[], &[], workspace)
+    }
+
+    fn prepare_request_admitted(
+        &self, query: &str, base_iri: Option<&str>,
+        env: &crate::extension_env::ExtensionEnv, admitted: &RequestParameters<'_>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<PreparedHandle, EvaluationFailure> {
+        self.cache.borrow_mut().prepare_execution_plan_admitted(
+            query, base_iri, env, &admitted.names, &admitted.exempt, workspace,
+        )
+    }

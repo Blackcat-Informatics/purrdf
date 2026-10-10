@@ -1,0 +1,99 @@
+    #[test]
+    fn native_correlated_rows_and_maps_keep_original_grants_until_last_owner() {
+        use purrdf_sparql_algebra::{Child, Expression, GraphPattern, GroundTerm, NamedNode, Variable};
+        let pattern=GraphPattern::Filter {
+            expr:Expression::Exists(Child::new(GraphPattern::Bgp { patterns:Vec::new() })),
+            inner:Child::new(GraphPattern::Bgp { patterns:Vec::new() }),
+        };
+        let (workspace,ledger,base)=account(1_000_000);
+        let capability=workspace.capability();
+        let copied=crate::expr::CorrelatedPattern::copy(&pattern,&capability).expect("native original copy");
+        let row=crate::expr::SubstitutionRow::build(&capability,|expr,term,memory| {
+            let variable=Variable::from_admitted(capability.authored_text("outer")?);
+            let iri=NamedNode::from_admitted(capability.authored_text("http://example.org/native-original")?);
+            memory.push(expr,(variable.clone(),Expression::NamedNode(iri.clone())))
+                .map_err(|error|crate::expr::correlated_storage_error(memory,error))?;
+            memory.push(term,(variable,GroundTerm::NamedNode(iri)))
+                .map_err(|error|crate::expr::correlated_storage_error(memory,error))
+        }).expect("native immutable row");
+        let after_row=ledger.live.load(Ordering::Relaxed);
+        let retained=row.clone();
+        assert_eq!(ledger.live.load(Ordering::Relaxed),after_row,
+            "ordinary row clone retains the original payload and child grant");
+        let wrapped=copied.first().expect("move beneath original first-witness wrapper");
+        let mut map=crate::expr::SubstitutionSourceMap::default();
+        crate::enf::map_clone_admitted(&pattern,
+            match wrapped.as_ref() { GraphPattern::Slice { inner,.. }=>inner,_=>panic!("wrapper") },
+            &mut map,&capability).expect("actual native source mapping");
+        let original_address=std::ptr::from_ref(&pattern) as usize;
+        assert!(map.iter().any(|(_,entry)|entry.source==original_address));
+        let map=super::SharedWorkspace::new_admitted(map,&capability).expect("original map control");
+        let mut stack=crate::expr::CorrelatedMaps::default();
+        stack.push(map,&capability).expect("original window");
+        let fork=stack.clone();
+        drop(stack);
+        assert_eq!(fork.iter().count(),1);
+        assert!(!retained.term.is_empty());
+        drop(wrapped);
+        drop(row);
+        assert!(ledger.live.load(Ordering::Relaxed)>base);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed)>0);
+        drop(retained);
+        drop(fork);
+        assert_eq!(ledger.live.load(Ordering::Relaxed),0);
+    }
+
+    #[test]
+    fn native_correlated_preparation_refusal_moves_first_cause_and_releases_partial_tree() {
+        use purrdf_sparql_algebra::{Child, Expression, GraphPattern, Literal, Variable};
+        let mut pattern=GraphPattern::Bgp { patterns:Vec::new() };
+        for index in 0..64 {
+            pattern=GraphPattern::Extend {
+                inner:Child::new(pattern),
+                variable:Variable::new(format!("column{index}")),
+                expression:Expression::Literal(Literal::new_simple("original lexical leaf")),
+            };
+        }
+        let base=QueryWorkspace::<Refusal>::control_bytes().expect("account layout");
+        for extra in [0,1,64,256,1024] {
+            let (workspace,ledger,_)=account(base+extra);
+            let capability=workspace.capability();
+            let error=crate::eval::PreparedExists::build_admitted(&pattern,&capability)
+                .err().expect("the actual native AST cannot fit this original account");
+            assert!(matches!(error,EvalError::WorkspaceStopped));
+            drop(error);
+            assert_eq!(ledger.live.load(Ordering::Relaxed),base,
+                "partial native trees, source tables and analysis owners die on failure");
+            let cause=workspace.take_failure().expect("original typed source refusal");
+            assert_eq!(cause.identity,7);
+            assert_eq!(ledger.clones.load(Ordering::Relaxed),0);
+            assert!(workspace.take_failure().is_none(),"no copied or replaced provider cause");
+            drop(capability);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed),0);
+        }
+    }
+
+    #[test]
+    fn native_scope_preflight_failure_leaves_flags_maps_and_placeholders_unmodified() {
+        let dataset=purrdf_core::RdfDatasetBuilder::new().freeze().expect("empty source");
+        let base=QueryWorkspace::<Refusal>::control_bytes().expect("account layout");
+        let (workspace,ledger,_)=account(base+1);
+        let capability=workspace.capability();
+        let mut ctx=crate::EvalCtx::new(dataset.as_ref());
+        ctx.growth=capability.clone();
+        let refused=ctx.enter_substituted_exists(Some(crate::expr::SubstitutionSourceMap::default()),None);
+        assert!(matches!(refused,Err(EvalError::WorkspaceStopped)));
+        drop(refused);
+        assert!(!ctx.in_substituted_exists);
+        assert!(ctx.correlated_node_maps.last().is_none());
+        assert!(ctx.deferred_exists.is_none());
+        assert_eq!(ledger.live.load(Ordering::Relaxed),base);
+        assert_eq!(workspace.take_failure().expect("original cause").identity,7);
+        drop(ctx);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed),0);
+    }

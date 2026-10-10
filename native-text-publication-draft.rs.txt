@@ -1,0 +1,37 @@
+    /// Publish one originally admitted UTF-8 buffer without copying its bytes.
+    /// Construction scratch must already be destroyed, leaving exactly this
+    /// buffer in the frame. Refusal leaves the enclosing text and grant intact.
+    pub(crate) fn finish_text(
+        &mut self,
+        text: &mut Option<String>,
+    ) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
+        use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
+        if let Some(error) = self.take_failure() { return Err(error); }
+        let Some(capacity) = text.as_ref().map(String::capacity) else {
+            return Err(NativeDiagnostic::error(
+                NativeDiagnosticKind::Internal,
+                &"native text publication has no payload", &self.workspace,
+            ));
+        };
+        if capacity != self.live {
+            return Err(NativeDiagnostic::error(
+                NativeDiagnosticKind::Internal,
+                &"native text publication retains unmatched working storage", &self.workspace,
+            ));
+        }
+        let control = purrdf_lex::allocation::SharedText::allocation_layout::<WorkspaceAllocation>().size();
+        let bytes = capacity.checked_add(control).ok_or(EvalError::WorkspaceBoundOverflow)?;
+        self.resize_live(bytes)?;
+        // Every fallible admission occurs while both original owners remain
+        // enclosing. The native SharedText factory keeps text before its grant
+        // even when the actual control allocator refuses.
+        let allocation = self.allocation.take().expect("positive shared control has its original grant");
+        let text = text.take().expect("native text checked before ownership transfer");
+        self.live = 0;
+        purrdf_lex::allocation::SharedText::try_from_admitted(text, allocation)
+            .map_err(|_| {
+                let error = EvalError::AllocationFailed { construct: "native text shared control" };
+                self.failure = Some(error.clone());
+                error
+            })
+    }

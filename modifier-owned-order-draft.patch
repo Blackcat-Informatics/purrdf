@@ -1,0 +1,538 @@
+diff --git a/crates/sparql-eval/src/modifier.rs b/crates/sparql-eval/src/modifier.rs
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -558,18 +558,15 @@
+-fn sort_keys_numeric_cost_admitted<'key, 'value: 'key>(
+-    keys: impl Iterator<Item = &'key SortKey<'value>> + Clone, count: usize, width: usize,
++fn sort_keys_numeric_cost_admitted<'key, 'value: 'key, V: std::borrow::Borrow<XsdValue> + 'key>(
++    keys: impl Iterator<Item = &'key SortKey<'value, V>> + Clone, count: usize, width: usize,
+     workspace: &crate::WorkspaceCapability,
+ ) -> Result<purrdf_xsd::exact::Cost, EvalError> {
+     let mut total = purrdf_xsd::exact::Cost::ZERO;
+     // Only a number past the machine words aligns at any cost; a sort without one
+     // pays this scan of the variants and nothing else.
+     let any_big = keys.clone().any(|key| {
+-        matches!(
+-            key,
+-            SortKey::Literal(LiteralKey {
+-                value: Some(XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_)),
+-                ..
+-            })
+-        )
++        if let SortKey::Literal(literal) = key {
++            matches!(literal.value.as_ref().map(std::borrow::Borrow::borrow),
++                Some(XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_)))
++        } else { false }
+     });
+     if width == 0 || !any_big {
+         return Ok(total);
+@@ -580,7 +577,7 @@
+         let mut shapes = AdmittedVec::with_capacity(rows, workspace)?;
+         for key in keys.clone().skip(column).step_by(width) {
+             if let SortKey::Literal(LiteralKey { value: Some(value), .. }) = key
+-                && let Some(shape) = purrdf_xsd::exact::cost::Shape::of_value(value)
++                && let Some(shape) = purrdf_xsd::exact::cost::Shape::of_value(value.borrow())
+             { shapes.push(shape)?; }
+         }
+         let mut keyed = AdmittedVec::with_capacity(shapes.len(), workspace)?;
+diff --git a/crates/sparql-eval/src/modifier.rs b/crates/sparql-eval/src/modifier.rs
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -1126,8 +1126,7 @@
+ /// Native project_admitted returns a key together with its parse/box owner.
+ /// The source TermValue array outlives these borrowed parsed keys.
+ pub(crate) struct OwnedSortKey<'a> {
+-    key: SortKey<'a>,
+-    _allocation: crate::WorkspaceAllocation,
++    key: SortKey<'a, crate::parsed_value::ParsedValue>,
+ }
+ 
+ fn compare_keys_admitted(
+@@ -1221,16 +1220,20 @@
+     /// no value space, or its lexical does not parse), answering the class with
+     /// the value it orders BY — `None` for the three value-less blocks, which
+     /// therefore never reach [`value_total_cmp`].
+-    fn of(parsed: Option<XsdValue>, lexical: &str) -> (Self, Option<XsdValue>) {
+-        let Some(value) = parsed else {
+-            return (Self::Opaque, None);
+-        };
++    fn of<V: std::borrow::Borrow<XsdValue>>(parsed: Option<V>, lexical: &str) -> (Self, Option<V>) {
++        let Some(value) = parsed else { return (Self::Opaque, None); };
++        let class = Self::classify(value.borrow(), lexical);
++        let ordered = !matches!(class, Self::Opaque | Self::NotANumber | Self::Duration);
++        (class, ordered.then_some(value))
++    }
++
++    fn classify(value: &XsdValue, lexical: &str) -> Self {
+         // A timezone is a trailing `Z` or the six-byte `(+|-)hh:mm` offset, whose
+         // `':'` three from the end tells it from an untimezoned `2000-01-01`.
+         let b = lexical.as_bytes();
+         let zoned = b.last() == Some(&b'Z')
+             || (b.len() >= 6 && matches!(b[b.len() - 6], b'+' | b'-') && b[b.len() - 3] == b':');
+-        let class = match &value {
++        match value {
+             XsdValue::Boolean(_) => Self::Boolean,
+             XsdValue::Float(f) if f.is_nan() => Self::NotANumber,
+             XsdValue::Double(d) if d.is_nan() => Self::NotANumber,
+@@ -1254,9 +1257,7 @@
+             // `XsdValue` is `#[non_exhaustive]`: an undecided value space is
+             // opaque, never guessed at.
+             _ => Self::Opaque,
+-        };
+-        let ordered = !matches!(class, Self::Opaque | Self::NotANumber | Self::Duration);
+-        (class, ordered.then_some(value))
++        }
+     }
+ 
+     /// The class of a value held OUTSIDE a term, where there is no lexical form
+@@ -1284,7 +1285,7 @@
+         ) {
+             return Self::Opaque;
+         }
+-        Self::of(Some(value.clone()), "").0
++        Self::classify(value, "")
+     }
+ }
+ 
+@@ -1292,9 +1293,9 @@
+ /// orders by, and the `(datatype, language, lexical)` tiebreak the value-less
+ /// classes and the value-space ties fall back on (a base direction plays no part,
+ /// matching §15.1's silence about it).
+-pub(crate) struct LiteralKey<'a> {
++pub(crate) struct LiteralKey<'a, V = XsdValue> {
+     class: ValueClass,
+-    value: Option<XsdValue>,
++    value: Option<V>,
+     datatype: &'a str,
+     language: Option<&'a str>,
+     lexical: &'a str,
+@@ -1315,7 +1316,7 @@
+ /// keys puts them back through `total_order`'s pair walk, as [`SortKey::Triple`]
+ /// does, so the category inherits the whole relation instead of restating any of
+ /// it. [`SortKey::Composite`] is the worked example of a leaf category.
+-pub(crate) enum SortKey<'a> {
++pub(crate) enum SortKey<'a, V = XsdValue> {
+     /// Unbound — sorts before every bound term.
+     Unbound,
+     /// Blank node, by `(scope ordinal, label)`.
+@@ -1323,7 +1324,7 @@
+     /// IRI, by its string.
+     Iri(&'a str),
+     /// Literal — see [`LiteralKey`].
+-    Literal(LiteralKey<'a>),
++    Literal(LiteralKey<'a, V>),
+     /// A SEP-0009 composite literal (`cdt:List` / `cdt:Map`) whose lexical form
+     /// parses, ordered by the value it denotes rather than by that lexical form.
+     ///
+@@ -1343,7 +1344,7 @@
+     /// rank below every composite that does parse.
+     Composite(purrdf_cdt::CdtValue),
+     /// RDF 1.2 triple term, componentwise over `(s, p, o)`.
+-    Triple(TripleKey<'a>),
++    Triple(TripleKey<'a, V>),
+ }
+ 
+ /// The three component keys of a triple term's [`SortKey`], boxed.
+@@ -1351,44 +1352,58 @@
+ /// Reads like a `Box<[SortKey; 3]>` — it dereferences to the array — and its drop takes
+ /// the nested keys apart over a work list, so the key of a term nested to any depth is
+ /// dropped without recursion.
+-pub(crate) struct TripleKey<'a>(Option<Box<[SortKey<'a>; 3]>>);
++pub(crate) struct TripleKey<'a, V = XsdValue>(purrdf_lex::walk::Nested<TripleParts<'a, V>>);
+ 
+-impl<'a> TripleKey<'a> {
+-    /// The key of a triple term whose components project to `components`.
+-    fn new(components: [SortKey<'a>; 3]) -> Self {
+-        Self(Some(Box::new(components)))
+-    }
++struct TripleParts<'a, V> {
++    components: [SortKey<'a, V>; 3],
++    // Components and their payloads die before the node's own admission.
++    _allocation: crate::WorkspaceAllocation,
+ }
+ 
+-impl<'a> std::ops::Deref for TripleKey<'a> {
+-    type Target = [SortKey<'a>; 3];
++impl<'a, V> TripleKey<'a, V> {
++    fn new(components: [SortKey<'a, V>; 3]) -> Self {
++        Self(purrdf_lex::walk::Nested::new(TripleParts {
++            components, _allocation: crate::WorkspaceAllocation::default(),
++        }))
++    }
+ 
+-    fn deref(&self) -> &Self::Target {
+-        self.0
+-            .as_deref()
+-            .expect("a triple key is emptied only by its own drop")
++    fn new_admitted(
++        components: [SortKey<'a, V>; 3], workspace: &crate::WorkspaceCapability,
++    ) -> Result<Self, EvalError> {
++        let bytes = u64::try_from(std::alloc::Layout::new::<TripleParts<'a, V>>().size())
++            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++        let allocation = workspace.charge(bytes)?;
++        let boxed = purrdf_core::small::try_boxed(TripleParts { components, _allocation: allocation })
++            .map_err(|_| EvalError::AllocationFailed { construct: "sort triple key" })?;
++        Ok(Self(purrdf_lex::walk::Nested::from(boxed)))
+     }
+ }
+ 
+-impl Drop for TripleKey<'_> {
+-    fn drop(&mut self) {
+-        let Some(root) = self.0.take() else {
+-            return;
+-        };
+-        let mut pending: Vec<Box<[SortKey<'_>; 3]>> = vec![root];
+-        while let Some(mut components) = pending.pop() {
+-            for component in &mut *components {
+-                if let SortKey::Triple(nested) = component
+-                    && let Some(inner) = nested.0.take()
+-                {
+-                    pending.push(inner);
+-                }
+-            }
+-        }
++impl<'a, V> std::ops::Deref for TripleKey<'a, V> {
++    type Target = [SortKey<'a, V>; 3];
++    fn deref(&self) -> &Self::Target { &self.0.components }
++}
++
++impl<V> purrdf_lex::walk::Dismantle for TripleParts<'_, V> {
++    fn dismantle(node: Box<Self>) { purrdf_lex::walk::dismantle_tree(node); }
++}
++
++impl<V> purrdf_lex::walk::DismantleTree for TripleParts<'_, V> {
++    fn next_child(&mut self) -> Option<&mut purrdf_lex::walk::Nested<Self>> {
++        self.components.iter_mut().find_map(|component| match component {
++            SortKey::Triple(key) if !key.0.is_taken() => Some(&mut key.0),
++            _ => None,
++        })
+     }
++    fn last_child(&mut self) -> Option<&mut purrdf_lex::walk::Nested<Self>> {
++        self.components.iter_mut().rev().find_map(|component| match component {
++            SortKey::Triple(key) if key.0.is_taken() => Some(&mut key.0),
++            _ => None,
++        })
++    }
+ }
+ 
+-impl SortKey<'_> {
++impl<V> SortKey<'_, V> {
+     /// §15.1's kind order, extended with the composite and triple terms it does not
+     /// mention. The ranks are declaration order and nothing else reads them.
+     const fn rank(&self) -> u8 {
+@@ -1437,6 +1452,66 @@
+         .expect("the root term's key is the last one assembled")
+ }
+ 
++/// The owned native projection used by operational ORDER and extrema.
++/// XSD parse payloads retain their own immutable grants; each triple owns its box.
++pub(crate) fn project_admitted<'a>(
++    value: Option<&'a TermValue>, workspace: &crate::WorkspaceCapability,
++) -> Result<OwnedSortKey<'a>, EvalError> {
++    enum Step<'v> { Term(&'v TermValue), Assemble }
++    let Some(root @ TermValue::Triple { .. }) = value else {
++        return project_shallow_admitted(value, workspace).map(|key| OwnedSortKey { key });
++    };
++    let mut steps = AdmittedVec::new(workspace);
++    let mut keys = AdmittedVec::new(workspace);
++    steps.push(Step::Term(root))?;
++    while let Some(step) = steps.pop() {
++        match step {
++            Step::Term(TermValue::Triple { s, p, o }) => {
++                steps.push(Step::Assemble)?;
++                steps.push(Step::Term(o))?;
++                steps.push(Step::Term(p))?;
++                steps.push(Step::Term(s))?;
++            }
++            Step::Term(leaf) => keys.push(project_shallow_admitted(Some(leaf), workspace)?)?,
++            Step::Assemble => {
++                let o = keys.pop().expect("a triple object's key is ready");
++                let p = keys.pop().expect("a triple predicate's key is ready");
++                let s = keys.pop().expect("a triple subject's key is ready");
++                keys.push(SortKey::Triple(TripleKey::new_admitted([s, p, o], workspace)?))?;
++            }
++        }
++    }
++    Ok(OwnedSortKey { key: keys.pop().expect("the root sort key is ready") })
++}
++
++fn project_shallow_admitted<'a>(
++    value: Option<&'a TermValue>, workspace: &crate::WorkspaceCapability,
++) -> Result<SortKey<'a, crate::parsed_value::ParsedValue>, EvalError> {
++    Ok(match value {
++        None => SortKey::Unbound,
++        Some(TermValue::Blank { label, scope }) => SortKey::Blank(scope.ordinal(), label),
++        Some(TermValue::Iri(iri)) => SortKey::Iri(iri),
++        Some(TermValue::Literal { lexical_form, datatype, language, .. }) => {
++            if matches!(datatype.as_str(), purrdf_cdt::CDT_LIST | purrdf_cdt::CDT_MAP)
++                && let Ok(Some(composite)) = purrdf_cdt::parse_cdt_by_iri(lexical_form, datatype)
++            {
++                // The Stage integration notes identify this native CDT call's
++                // required physical owner; it must be replaced before qualification.
++                return Ok(SortKey::Composite(composite));
++            }
++            let parsed = match XsdDatatype::from_iri(datatype) {
++                Some(datatype) => crate::parsed_value::ParsedValue::parse(lexical_form, datatype, false, workspace)?,
++                None => None,
++            };
++            let (class, value) = ValueClass::of(parsed, lexical_form);
++            SortKey::Literal(LiteralKey {
++                class, value, datatype, language: language.as_deref(), lexical: lexical_form,
++            })
++        }
++        Some(TermValue::Triple { .. }) => unreachable!("triples are projected over the worklist"),
++    })
++}
++
+ /// [`project`] for an unbound cell or a term that is not a triple term.
+ fn project_shallow(value: Option<&TermValue>) -> SortKey<'_> {
+     match value {
+@@ -1505,48 +1580,64 @@
+ /// triple terms puts its three component pairs in front of whatever follows it — so
+ /// two terms nested to any depth cost no more machine stack.
+ pub(crate) fn total_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
++    total_order_admitted(a, b, &crate::WorkspaceCapability::default()).expect("resident sort order")
++}
++
++pub(crate) fn total_order_admitted<V: std::borrow::Borrow<XsdValue>>(
++    a: &SortKey<'_, V>, b: &SortKey<'_, V>, workspace: &crate::WorkspaceCapability,
++) -> Result<Ordering, EvalError> {
+     if !matches!((a, b), (SortKey::Triple(_), SortKey::Triple(_))) {
+-        return shallow_order(a, b);
++        return shallow_order_admitted(a, b, workspace);
+     }
+-    let mut pending: Vec<(&SortKey<'_>, &SortKey<'_>)> = vec![(a, b)];
++    let mut pending = AdmittedVec::new(workspace);
++    pending.push((a, b))?;
+     while let Some((a, b)) = pending.pop() {
+         match (a, b) {
+             (SortKey::Triple(x), SortKey::Triple(y)) => {
+-                pending.extend([(&x[2], &y[2]), (&x[1], &y[1]), (&x[0], &y[0])]);
++                pending.push((&x[2], &y[2]))?;
++                pending.push((&x[1], &y[1]))?;
++                pending.push((&x[0], &y[0]))?;
+             }
+-            _ => match shallow_order(a, b) {
++            _ => match shallow_order_admitted(a, b, workspace)? {
+                 Ordering::Equal => {}
+-                decided => return decided,
++                decided => return Ok(decided),
+             },
+         }
+     }
+-    Ordering::Equal
++    Ok(Ordering::Equal)
+ }
+ 
+ /// [`total_order`] on two keys of which at most one is a triple term's: two keys of
+ /// the same kind by that kind's own order, two of different kinds by their rank.
+ fn shallow_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
+-    match (a, b) {
++    shallow_order_admitted(a, b, &crate::WorkspaceCapability::default()).expect("resident shallow sort order")
++}
++
++fn shallow_order_admitted<V: std::borrow::Borrow<XsdValue>>(
++    a: &SortKey<'_, V>, b: &SortKey<'_, V>, workspace: &crate::WorkspaceCapability,
++) -> Result<Ordering, EvalError> {
++    Ok(match (a, b) {
+         (SortKey::Blank(sa, la), SortKey::Blank(sb, lb)) => (sa, la).cmp(&(sb, lb)),
+         (SortKey::Iri(x), SortKey::Iri(y)) => x.cmp(y),
+         (SortKey::Literal(x), SortKey::Literal(y)) => {
+-            if x.class != y.class {
+-                return x.class.cmp(&y.class);
+-            }
+-            if let (Some(av), Some(bv)) = (&x.value, &y.value)
+-                && let Some(ord) = value_total_cmp(av, bv)
+-            {
+-                return ord;
++            if x.class != y.class { return Ok(x.class.cmp(&y.class)); }
++            if let (Some(av), Some(bv)) = (&x.value, &y.value) {
++                let (av, bv) = (av.borrow(), bv.borrow());
++                let order = if x.class == ValueClass::Numeric {
++                    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
++                    let result = purrdf_xsd::numeric::numeric_total_cmp_admitted(av, bv, &mut |layout| frame.admit(layout));
++                    frame.finish_scalar(result)?
++                } else { value_total_cmp(av, bv) };
++                if let Some(order) = order { return Ok(order); }
+             }
+             (x.datatype, x.language, x.lexical).cmp(&(y.datatype, y.language, y.lexical))
+         }
++        // Native CDT parser/order admission remains a required integration owner.
+         (SortKey::Composite(x), SortKey::Composite(y)) => purrdf_cdt::total_value_cmp(x, y),
+-        // Two triple terms are decided by their components, which `total_order` walks.
+         (SortKey::Triple(_), SortKey::Triple(_)) => Ordering::Equal,
+         _ => a.rank().cmp(&b.rank()),
+-    }
++    })
+ }
+-
+ // ---------------------------------------------------------------------------
+ // value-level entry points
+ // ---------------------------------------------------------------------------
+diff --git a/crates/rdf-core/src/ir/term_walk.rs b/crates/rdf-core/src/ir/term_walk.rs
+--- a/crates/rdf-core/src/ir/term_walk.rs
++++ b/crates/rdf-core/src/ir/term_walk.rs
+@@ -54,32 +54,19 @@
+ impl Dismantle for TermValue {
+-    /// Destructively traverse existing child boxes without allocating. Children
+-    /// are removed in s/p/o order. The last empty slot in that prefix stores the
+-    /// former grandparent, while `parent` owns the immediate parent. Thus every
+-    /// continuation is acyclic and removed before its slot's ordinary drop.
+-    fn dismantle(mut node: Box<Self>) {
+-        let mut parent = None;
+-        loop {
+-            let child = if let Self::Triple { s, p, o } = &mut *node {
+-                let slot = if !s.is_taken() { Some(s) } else if !p.is_taken() { Some(p) } else if !o.is_taken() { Some(o) } else { None };
+-                slot.map(|slot| {
+-                    let child = slot.take().expect("selected a populated child");
+-                    slot.set_dismantle_parent(parent.take());
+-                    child
+-                })
+-            } else { None };
+-            if let Some(child) = child {
+-                parent = Some(node);
+-                node = child;
+-                continue;
+-            }
+-            drop(node);
+-            let Some(mut resumed) = parent.take() else { break; };
+-            let Self::Triple { s, p, o } = &mut *resumed else { unreachable!("only triples own children"); };
+-            let slot = if o.is_taken() { o } else if p.is_taken() { p } else { s };
+-            parent = slot.take_dismantle_parent();
+-            node = resumed;
+-        }
++    fn dismantle(node: Box<Self>) { purrdf_lex::walk::dismantle_tree(node); }
++}
++
++impl purrdf_lex::walk::DismantleTree for TermValue {
++    fn next_child(&mut self) -> Option<&mut NestedBox<Self>> {
++        if let Self::Triple { s, p, o } = self {
++            if !s.is_taken() { Some(s) } else if !p.is_taken() { Some(p) } else if !o.is_taken() { Some(o) } else { None }
++        } else { None }
+     }
++
++    fn last_child(&mut self) -> Option<&mut NestedBox<Self>> {
++        if let Self::Triple { s, p, o } = self {
++            if o.is_taken() { Some(o) } else if p.is_taken() { Some(p) } else { Some(s) }
++        } else { None }
++    }
+ }
+ 
+ /// One event of [`TermValue::visit_terms_pre_post`].
+diff --git a/crates/lex/src/walk.rs b/crates/lex/src/walk.rs
+--- a/crates/lex/src/walk.rs
++++ b/crates/lex/src/walk.rs
+@@ -254,6 +254,39 @@
+     fn dismantle(node: Box<Self>);
+ }
+ 
++/// Child-slot access for allocation-free destruction through existing boxes.
++/// Both selectors borrow slots inside the live node: next_child selects the
++/// first populated child; last_child selects the most recently emptied child.
++pub trait DismantleTree: Dismantle {
++    /// The next owned child, or None after every child has been removed.
++    fn next_child(&mut self) -> Option<&mut Nested<Self>>;
++    /// The most recently removed child carrying the ancestor continuation.
++    fn last_child(&mut self) -> Option<&mut Nested<Self>>;
++}
++
++/// Dismantle existing nested boxes without a destructor worklist allocation.
++/// The emptied child stores the older ancestor while the loop owns the parent.
++/// Every continuation is removed before ordinary drop; no cycle survives.
++pub fn dismantle_tree<T: DismantleTree>(mut node: Box<T>) {
++    let mut parent = None;
++    loop {
++        let child = node.next_child().map(|slot| {
++            let child = slot.take().expect("selected a populated dismantling child");
++            slot.set_dismantle_parent(parent.take());
++            child
++        });
++        if let Some(child) = child {
++            parent = Some(node);
++            node = child;
++            continue;
++        }
++        drop(node);
++        let Some(mut resumed) = parent.take() else { break; };
++        parent = resumed.last_child().expect("the resumed node removed a child").take_dismantle_parent();
++        node = resumed;
++    }
++}
++
+ /// One boxed nested value of a recursive type — a triple term's component, an
+ /// operator's operand — whose drop takes the nesting apart over a work list
+ /// ([`Dismantle`]) instead of recursing.
+diff --git a/crates/sparql-eval/src/native_numeric.rs b/crates/sparql-eval/src/native_numeric.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/sparql-eval/src/native_numeric.rs
+@@ -0,0 +1,54 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! The evaluator's owned transient frame for native numeric scalar computations.
++
++use purrdf_xsd::bigint::LimbScratchError;
++use purrdf_xsd::exact::cost::NumericOperationLayout;
++use crate::{EvalError, WorkspaceAllocation, WorkspaceCapability};
++
++/// Keeps every newly allocated native intermediate admitted until scalar completion.
++/// Parsed input carriers independently keep their borrowed payloads admitted.
++pub(crate) struct NumericFrame<'a> {
++    workspace: &'a WorkspaceCapability,
++    allocation: Option<WorkspaceAllocation>,
++    failure: Option<EvalError>,
++}
++
++impl<'a> NumericFrame<'a> {
++    pub(crate) const fn new(workspace: &'a WorkspaceCapability) -> Self {
++        Self { workspace, allocation: None, failure: None }
++    }
++
++    pub(crate) fn admit(&mut self, layout: NumericOperationLayout) -> Result<(), LimbScratchError> {
++        // Returning the stored operational refusal must neither render an error
++        // nor resize an already refused reservation.
++        if self.failure.is_some() { return Err(LimbScratchError::AllocationFailed); }
++        let bytes = match u64::try_from(layout.peak_bytes()) {
++            Ok(bytes) => bytes,
++            Err(_) => return Err(LimbScratchError::SizeOverflow),
++        };
++        let admitted = if let Some(allocation) = &mut self.allocation {
++            allocation.resize(bytes)
++        } else if bytes == 0 { Ok(()) } else {
++            self.workspace.charge(bytes).map(|allocation| { self.allocation = Some(allocation); })
++        };
++        if let Err(error) = admitted {
++            self.failure = Some(error);
++            return Err(LimbScratchError::AllocationFailed);
++        }
++        Ok(())
++    }
++
++    /// Only a Copy scalar may leave after this transient frame is released.
++    /// An owned magnitude or text result needs its separate retained carrier.
++    pub(crate) fn finish_scalar<T: Copy>(
++        mut self, result: Result<T, LimbScratchError>,
++    ) -> Result<T, EvalError> {
++        if let Some(error) = self.failure.take() { return Err(error); }
++        result.map_err(|error| match error {
++            LimbScratchError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
++            _ => EvalError::AllocationFailed { construct: "native numeric destination" },
++        })
++    }
++}
+diff --git a/crates/sparql-eval/src/parsed_value.rs b/crates/sparql-eval/src/parsed_value.rs
+--- a/crates/sparql-eval/src/parsed_value.rs
++++ b/crates/sparql-eval/src/parsed_value.rs
+@@ -43,1 +43,5 @@
++impl std::borrow::Borrow<XsdValue> for ParsedValue {
++    fn borrow(&self) -> &XsdValue { self }
++}
++
+ impl Clone for ParsedValue {
+diff --git a/crates/sparql-eval/src/lib.rs b/crates/sparql-eval/src/lib.rs
+--- a/crates/sparql-eval/src/lib.rs
++++ b/crates/sparql-eval/src/lib.rs
+@@ -117,1 +117,2 @@
++mod native_numeric;
+ mod parsed_value;

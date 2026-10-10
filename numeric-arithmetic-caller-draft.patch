@@ -1,0 +1,523 @@
+diff --git a/crates/xsd/src/numeric.rs b/crates/xsd/src/numeric.rs
+--- a/crates/xsd/src/numeric.rs
++++ b/crates/xsd/src/numeric.rs
+@@ -701,6 +701,77 @@
+     }
+ }
+ 
++
++/// Native canonical text prepared without a coefficient String or magnitude clone.
++/// Its surviving group capacity must stay admitted until the final write.
++#[derive(Debug)]
++pub enum PreparedNumericText {
++    /// Exact signed base-ten integer groups.
++    Integer(crate::bigint::PreparedDecimalDigits),
++    /// Exact decimal groups, point and fractional padding.
++    Decimal(crate::exact::PreparedDecimalText),
++    /// Inline IEEE text with its original precision.
++    Ieee(CanonicalFloatText),
++}
++
++impl PreparedNumericText {
++    /// Exact destination length after preparation and before output allocation.
++    #[must_use]
++    pub fn len(&self) -> usize { match self {
++        Self::Integer(value) => value.len(),
++        Self::Decimal(value) => value.len(),
++        Self::Ieee(value) => value.len(),
++    } }
++    /// Canonical numeric text is never empty.
++    #[must_use]
++    pub const fn is_empty(&self) -> bool { false }
++    /// Actual remaining native temporary capacity.
++    #[must_use]
++    pub fn temporary_bytes(&self) -> usize { match self {
++        Self::Integer(value) => value.heap_bytes(),
++        Self::Decimal(value) => value.temporary_bytes(),
++        Self::Ieee(_) => 0,
++    } }
++    /// Write into a preallocated final destination without hidden growth.
++    /// # Errors
++    /// Refuses insufficient capacity before writing any bytes.
++    pub fn write_to(&self, output: &mut String) -> Result<(), NumericRenderError> { match self {
++        Self::Integer(value) => value.write_to(output),
++        Self::Decimal(value) => value.write_to(output),
++        Self::Ieee(value) => value.write_to(output),
++    } }
++}
++
++/// Prepare the existing native numeric renderer under checked physical admission.
++/// A nonnumeric value belongs to its separate native renderer.
++/// # Errors
++/// Returns checked layout/admission or allocator refusal before lexical allocation.
++pub fn prepare_numeric_text(
++    value: &XsdValue,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Option<PreparedNumericText>, crate::bigint::LimbScratchError> {
++    use crate::exact::cost::NumericOperationLayout;
++    let integer = |value: &crate::exact::Integer, admit: &mut dyn FnMut(NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>| {
++        let layout = value.render_layout(0)?;
++        admit(NumericOperationLayout::bytes(layout.temporary_bytes(), 0)?)?;
++        value.prepare_decimal_digits().map(PreparedNumericText::Integer).map(Some)
++    };
++    let decimal = |value: &crate::exact::Decimal, admit: &mut dyn FnMut(NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>| {
++        let layout = value.render_layout()?;
++        admit(NumericOperationLayout::bytes(layout.temporary_bytes(), 0)?)?;
++        value.prepare_text().map(PreparedNumericText::Decimal).map(Some)
++    };
++    match value {
++        XsdValue::Integer { value, .. } => integer(&crate::exact::Integer::from_i128(*value), admit),
++        XsdValue::BigInteger { value, .. } => integer(value, admit),
++        XsdValue::Decimal(value) => decimal(&crate::exact::Decimal::from_bounded(value), admit),
++        XsdValue::BigDecimal(value) => decimal(value, admit),
++        XsdValue::Float(value) => Ok(Some(PreparedNumericText::Ieee(canonical_float_text(*value)))),
++        XsdValue::Double(value) => Ok(Some(PreparedNumericText::Ieee(canonical_double_text(*value)))),
++        _ => Ok(None),
++    }
++}
++
+ /// XSD canonical double in inline caller-borrowable storage. No allocation.
+ #[must_use]
+ pub fn canonical_double_text(value: f64) -> CanonicalFloatText {
+@@ -1112,6 +1183,129 @@
+     })
+ }
+ 
++
++/// Arithmetic selected by the caller without allocating an operator closure.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum NumericBinaryOperator {
++    /// Numeric/value-space addition.
++    Add,
++    /// Numeric/value-space subtraction.
++    Subtract,
++    /// Numeric/value-space multiplication.
++    Multiply,
++    /// Numeric/value-space division.
++    Divide,
++}
++
++/// A numerical refusal is distinct from a native destination refusal.
++#[derive(Debug)]
++pub enum NumericOperationError {
++    /// Existing value-space and F&O classification.
++    Value(XsdError),
++    /// Checked physical layout or allocator refusal.
++    Storage(crate::bigint::LimbScratchError),
++}
++
++impl From<XsdError> for NumericOperationError {
++    fn from(error: XsdError) -> Self { Self::Value(error) }
++}
++impl From<crate::bigint::LimbScratchError> for NumericOperationError {
++    fn from(error: crate::bigint::LimbScratchError) -> Self { Self::Storage(error) }
++}
++
++/// Promote to binary64 through the existing correctly rounded native kernels.
++/// # Errors
++/// Returns physical admission/refusal separately from a nonnumeric operand.
++pub fn numeric_to_f64_admitted(
++    value: &XsdValue,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Option<f64>, crate::bigint::LimbScratchError> {
++    match value {
++        XsdValue::BigInteger { value, .. } => value.try_to_f64_admitted(admit).map(Some),
++        XsdValue::BigDecimal(value) => value.try_to_f64_admitted(admit).map(Some),
++        other => Ok(num_f64(other)),
++    }
++}
++
++/// Promote directly to binary32, preserving the single-rounding law.
++/// # Errors
++/// Returns physical admission/refusal separately from a nonnumeric operand.
++pub fn numeric_to_f32_admitted(
++    value: &XsdValue,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Option<f32>, crate::bigint::LimbScratchError> {
++    match value {
++        XsdValue::BigInteger { value, .. } => value.try_to_f32_admitted(admit).map(Some),
++        XsdValue::BigDecimal(value) => value.try_to_f32_admitted(admit).map(Some),
++        other => Ok(num_f32(other)),
++    }
++}
++
++/// Numeric arithmetic with checked phase admission and fallible native destinations.
++/// Parsed inputs are borrowed; the caller retains the returned native payload
++/// under its admitted frame before rendering or sharing it.
++/// # Errors
++/// Preserves all existing F&O/precision failures separately from storage refusal.
++pub fn numeric_binary_admitted(
++    a: &XsdValue, b: &XsdValue, op: NumericBinaryOperator, policy: DivisionPolicy,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<XsdValue, NumericOperationError> {
++    if matches!(a, XsdValue::Double(_)) || matches!(b, XsdValue::Double(_)) {
++        let x = numeric_to_f64_admitted(a, admit)?.ok_or(XsdError::TypeMismatch { reason: "non-numeric arithmetic operand" })?;
++        let y = numeric_to_f64_admitted(b, admit)?.ok_or(XsdError::TypeMismatch { reason: "non-numeric arithmetic operand" })?;
++        return Ok(XsdValue::Double(match op {
++            NumericBinaryOperator::Add => ieee::f64_add(x, y),
++            NumericBinaryOperator::Subtract => ieee::f64_sub(x, y),
++            NumericBinaryOperator::Multiply => ieee::f64_mul(x, y),
++            NumericBinaryOperator::Divide => ieee::f64_div(x, y),
++        }));
++    }
++    if matches!(a, XsdValue::Float(_)) || matches!(b, XsdValue::Float(_)) {
++        let x = numeric_to_f32_admitted(a, admit)?.ok_or(XsdError::TypeMismatch { reason: "non-numeric arithmetic operand" })?;
++        let y = numeric_to_f32_admitted(b, admit)?.ok_or(XsdError::TypeMismatch { reason: "non-numeric arithmetic operand" })?;
++        return Ok(XsdValue::Float(match op {
++            NumericBinaryOperator::Add => ieee::f32_add(x, y),
++            NumericBinaryOperator::Subtract => ieee::f32_sub(x, y),
++            NumericBinaryOperator::Multiply => ieee::f32_mul(x, y),
++            NumericBinaryOperator::Divide => ieee::f32_div(x, y),
++        }));
++    }
++    let exact_pair = a.is_exact_numeric() && b.is_exact_numeric();
++    if exact_pair {
++        // The old bounded int_binop renders its overflow before the exact
++        // fallback. Classify it in machine words without that doomed allocation.
++        if let (XsdValue::Integer { value: x, .. }, XsdValue::Integer { value: y, .. }) = (a, b)
++            && op != NumericBinaryOperator::Divide {
++            let value = match op {
++                NumericBinaryOperator::Add => x.checked_add(*y),
++                NumericBinaryOperator::Subtract => x.checked_sub(*y),
++                NumericBinaryOperator::Multiply => x.checked_mul(*y),
++                NumericBinaryOperator::Divide => unreachable!("division excluded"),
++            };
++            return if let Some(value) = value { Ok(integer_result(value)) } else {
++                exact_path::binary_admitted(a, b, op, policy, admit)
++            };
++        }
++        if op == NumericBinaryOperator::Divide
++            && (policy != DivisionPolicy::xsd_default() || exact_path::involves_big(a, b)) {
++            return exact_path::binary_admitted(a, b, op, policy, admit);
++        }
++    }
++    let bounded = match op {
++        NumericBinaryOperator::Add => numeric_add_bounded(a, b),
++        NumericBinaryOperator::Subtract => numeric_sub_bounded(a, b),
++        NumericBinaryOperator::Multiply => numeric_mul_bounded(a, b),
++        NumericBinaryOperator::Divide => numeric_div_bounded(a, b),
++    };
++    match bounded {
++        Ok(XsdValue::Decimal(quotient)) if exact_pair && op == NumericBinaryOperator::Divide
++            && quotient.scale() != MAX_DECIMAL_SCALE => exact_path::binary_admitted(a, b, op, policy, admit),
++        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. }) if exact_pair =>
++            exact_path::binary_admitted(a, b, op, policy, admit),
++        other => other.map_err(NumericOperationError::Value),
++    }
++}
++
+ // ── Numeric arithmetic (SPARQL §17.4 / XPath op:numeric-*) ──────────────────
+ 
+ /// Promote both operands to the least common type in the numeric tower, perform
+diff --git a/crates/xsd/src/numeric/exact_path.rs b/crates/xsd/src/numeric/exact_path.rs
+--- a/crates/xsd/src/numeric/exact_path.rs
++++ b/crates/xsd/src/numeric/exact_path.rs
+@@ -80,6 +80,50 @@
+     Ok(XsdValue::from_exact_decimal(result))
+ }
+ 
++
++/// The admitted exact branch borrows input coefficients instead of cloning
++/// magnitudes for numeric promotion.
++pub(crate) fn binary_admitted(
++    a: &XsdValue, b: &XsdValue, op: super::NumericBinaryOperator, policy: DivisionPolicy,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<XsdValue, super::NumericOperationError> {
++    use super::{NumericBinaryOperator as Operator, NumericOperationError as Error};
++    let integer_pair = is_integer_family(a) && is_integer_family(b);
++    with_coefficient(a, |left, ls| with_coefficient(b, |right, rs| {
++        if integer_pair && op != Operator::Divide {
++            let operation = match op {
++                Operator::Add => cost::IntegerOperation::Add,
++                Operator::Subtract => cost::IntegerOperation::Subtract,
++                Operator::Multiply => cost::IntegerOperation::Multiply,
++                Operator::Divide => unreachable!("division excluded"),
++            };
++            admit(left.operation_layout(right, operation)?)?;
++            let result = match op {
++                Operator::Add => left.try_add(right)?,
++                Operator::Subtract => left.try_sub(right)?,
++                Operator::Multiply => left.try_mul(right)?,
++                Operator::Divide => unreachable!("division excluded"),
++            };
++            return Ok(XsdValue::from_exact_integer(result, XsdDatatype::Integer));
++        }
++        let result = match op {
++            Operator::Add => exact::Decimal::try_add_parts_admitted(left, ls, right, rs, admit)
++                .map_err(exact::ExactOperationError::Storage),
++            Operator::Subtract => exact::Decimal::try_sub_parts_admitted(left, ls, right, rs, admit)
++                .map_err(exact::ExactOperationError::Storage),
++            Operator::Multiply => exact::Decimal::try_mul_parts_admitted(left, ls, right, rs, admit),
++            Operator::Divide => exact::Decimal::try_div_parts_admitted(left, ls, right, rs, policy, admit),
++        };
++        result.map(XsdValue::from_exact_decimal).map_err(|error| match error {
++            exact::ExactOperationError::Storage(error) => Error::Storage(error),
++            exact::ExactOperationError::Value(ExactError::DivisionByZero) => Error::Value(
++                XsdError::DivisionByZero { datatype: if integer_pair { XsdDatatype::Integer } else { XsdDatatype::Decimal } },
++            ),
++            exact::ExactOperationError::Value(error) => Error::Value(XsdError::Exact(error)),
++        })
++    }))
++}
++
+ /// `op:numeric-divide` for two exact-branch operands under `policy`: always a
+ /// decimal (integer ÷ integer included, as XPath defines).
+ #[cold]
+@@ -104,7 +148,7 @@
+         })
+ }
+ 
+-fn with_coefficient<T>(value: &XsdValue, use_value: impl FnOnce(&exact::Integer, u32) -> T) -> T {
++pub(crate) fn with_coefficient<T>(value: &XsdValue, use_value: impl FnOnce(&exact::Integer, u32) -> T) -> T {
+     match value {
+         XsdValue::BigInteger { value, .. } => use_value(value, 0),
+         XsdValue::BigDecimal(value) => use_value(value.unscaled(), value.scale()),
+diff --git a/crates/xsd/src/ops.rs b/crates/xsd/src/ops.rs
+--- a/crates/xsd/src/ops.rs
++++ b/crates/xsd/src/ops.rs
+@@ -620,6 +620,29 @@
+     }
+ }
+ 
++
++/// The complete existing value-space operator law with admitted numeric kernels.
++/// Nonnumeric/temporal pairs use this module's existing dispatch, including
++/// commuted duration multiplication and datatype-specific division errors.
++/// # Errors
++/// Value-space refusals remain distinct from native storage/admission failures.
++pub fn value_binary_admitted(
++    a: &XsdValue, b: &XsdValue, op: numeric::NumericBinaryOperator,
++    policy: crate::exact::DivisionPolicy,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<XsdValue, numeric::NumericOperationError> {
++    if a.is_numeric()
++        && !(op == numeric::NumericBinaryOperator::Multiply && matches!(b, XsdValue::Duration(_))) {
++        return numeric::numeric_binary_admitted(a, b, op, policy, admit);
++    }
++    match op {
++        numeric::NumericBinaryOperator::Add => value_add(a, b),
++        numeric::NumericBinaryOperator::Subtract => value_sub(a, b),
++        numeric::NumericBinaryOperator::Multiply => value_mul(a, b),
++        numeric::NumericBinaryOperator::Divide => value_div_with_policy(a, b, policy),
++    }.map_err(numeric::NumericOperationError::Value)
++}
++
+ /// SPARQL value-space unary minus (`-x`, `op:numeric-unary-minus` extended to
+ /// `xsd:duration`). Numeric operands follow
+ /// [`crate::numeric::numeric_unary_minus`]; a duration negates both components
+diff --git a/crates/sparql-eval/src/parsed_value.rs b/crates/sparql-eval/src/parsed_value.rs
+--- a/crates/sparql-eval/src/parsed_value.rs
++++ b/crates/sparql-eval/src/parsed_value.rs
+@@ -65,6 +65,41 @@
+ }
+ 
+ impl ParsedValue {
++
++    /// Retain a native result whose actual payload was already admitted by its
++    /// operation frame. This factory admits only its newly needed shared control.
++    pub(crate) fn from_admitted(
++        value: XsdValue, mut allocation: Option<WorkspaceAllocation>,
++        admitted_bytes: usize,
++    ) -> Result<Self, EvalError> {
++        let Some(bytes) = value.owned_heap_bytes() else {
++            drop(value); return Err(EvalError::WorkspaceBoundOverflow);
++        };
++        if bytes > admitted_bytes {
++            drop(value); return Err(EvalError::WorkspaceBoundOverflow);
++        }
++        if bytes == 0 {
++            drop(allocation);
++            return Ok(Self { storage: ParsedStorage::Inline(value) });
++        }
++        let Some(mut allocation) = allocation.take() else {
++            drop(value); return Err(EvalError::WorkspaceBoundOverflow);
++        };
++        let header = Shared::<ParsedPayload>::allocation_layout().size();
++        let retained = match bytes.checked_add(header).and_then(|bytes| u64::try_from(bytes).ok()) {
++            Some(bytes) => bytes,
++            None => { drop(value); return Err(EvalError::WorkspaceBoundOverflow); }
++        };
++        if let Err(error) = allocation.resize(retained) {
++            drop(value); return Err(error);
++        }
++        // The original frame grant now covers the retained payload plus control.
++        // Neither raw extraction nor independent admission replacement is exposed.
++        let payload = Shared::try_new(ParsedPayload { value, _allocation: allocation })
++            .map_err(|_| EvalError::AllocationFailed { construct: "computed numeric shared control" })?;
++        Ok(Self { storage: ParsedStorage::Shared(payload) })
++    }
++
+     pub(crate) fn parse(
+         lexical: &str, datatype: XsdDatatype, xsd10: bool, workspace: &WorkspaceCapability,
+     ) -> Result<Option<Self>, EvalError> {
+diff --git a/crates/sparql-eval/src/native_numeric.rs b/crates/sparql-eval/src/native_numeric.rs
+--- a/crates/sparql-eval/src/native_numeric.rs
++++ b/crates/sparql-eval/src/native_numeric.rs
+@@ -13,11 +13,26 @@
+     workspace: &'a WorkspaceCapability,
+     allocation: Option<WorkspaceAllocation>,
+     failure: Option<EvalError>,
++    admitted_bytes: usize,
+ }
+ 
++
++pub(crate) struct NumericText {
++    // Group payload dies before its original transient admission.
++    text: purrdf_xsd::numeric::PreparedNumericText,
++    _allocation: Option<WorkspaceAllocation>,
++}
++
++impl NumericText {
++    pub(crate) fn len(&self) -> usize { self.text.len() }
++    pub(crate) fn write_to(&self, output: &mut String) -> Result<(), EvalError> {
++        self.text.write_to(output).map_err(|_| EvalError::WorkspaceBoundOverflow)
++    }
++}
++
+ impl<'a> NumericFrame<'a> {
+     pub(crate) const fn new(workspace: &'a WorkspaceCapability) -> Self {
+-        Self { workspace, allocation: None, failure: None }
++        Self { workspace, allocation: None, failure: None, admitted_bytes: 0 }
+     }
+ 
+     pub(crate) fn admit(&mut self, layout: NumericOperationLayout) -> Result<(), LimbScratchError> {
+@@ -37,6 +52,7 @@
+             self.failure = Some(error);
+             return Err(LimbScratchError::AllocationFailed);
+         }
++        self.admitted_bytes = layout.peak_bytes();
+         Ok(())
+     }
+ 
+@@ -51,4 +67,47 @@
+             _ => EvalError::AllocationFailed { construct: "native numeric destination" },
+         })
+     }
++    /// Transfer a computed native payload into the same immutable owner used by
++    /// parsed operands/cache entries. No magnitude leaves with a dropped grant.
++    pub(crate) fn finish_value(
++        mut self, result: Result<purrdf_xsd::XsdValue, purrdf_xsd::numeric::NumericOperationError>,
++    ) -> Result<Result<crate::parsed_value::ParsedValue, Option<purrdf_xsd::ErrorCode>>, EvalError> {
++        if self.failure.is_some() {
++            // A native result/diagnostic, if any, dies before its transient owner.
++            drop(result);
++            return Err(self.failure.take().expect("checked stored failure"));
++        }
++        match result {
++            Ok(value) => crate::parsed_value::ParsedValue::from_admitted(
++                value, self.allocation.take(), self.admitted_bytes,
++            ).map(Ok),
++            Err(purrdf_xsd::numeric::NumericOperationError::Value(error)) => Ok(Err(error.code())),
++            Err(purrdf_xsd::numeric::NumericOperationError::Storage(error)) => Err(match error {
++                LimbScratchError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
++                _ => EvalError::AllocationFailed { construct: "native numeric destination" },
++            }),
++        }
++    }
++
++    /// Prepared native groups are owned until their final lexical write.
++    pub(crate) fn finish_text(
++        mut self, result: Result<Option<purrdf_xsd::numeric::PreparedNumericText>, LimbScratchError>,
++    ) -> Result<Option<NumericText>, EvalError> {
++        if self.failure.is_some() {
++            drop(result);
++            return Err(self.failure.take().expect("checked stored failure"));
++        }
++        match result {
++            Ok(Some(text)) => {
++                if text.temporary_bytes() > self.admitted_bytes {
++                    drop(text); return Err(EvalError::WorkspaceBoundOverflow);
++                }
++                Ok(Some(NumericText { text, _allocation: self.allocation.take() }))
++            }
++            Ok(None) => Ok(None),
++            Err(LimbScratchError::SizeOverflow) => Err(EvalError::WorkspaceBoundOverflow),
++            Err(_) => Err(EvalError::AllocationFailed { construct: "native numeric render groups" }),
++        }
++    }
++
+ }
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -6357,7 +6357,30 @@
+     ctx: &mut EvalCtx<'_, D>,
+     v: &XsdValue,
+ ) -> Result<SolutionTerm<D::Id>, EvalError> {
+-    typed_term(ctx, &v.canonical_lexical(), v.datatype().iri())
++    let capability = ctx.growth.clone();
++    let mut frame = crate::native_numeric::NumericFrame::new(&capability);
++    let prepared = purrdf_xsd::numeric::prepare_numeric_text(v, &mut |layout| frame.admit(layout));
++    let Some(text) = frame.finish_text(prepared)? else {
++        return typed_term(ctx, &v.canonical_lexical(), v.datatype().iri());
++    };
++    let datatype = v.datatype().iri();
++    let bytes = text.len().checked_add(datatype.len()).ok_or(EvalError::WorkspaceBoundOverflow)?;
++    // Final lexical/datatype allocation is separate from the still-live groups.
++    let admission = ctx.admit_computed(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++    let mut lexical = String::new();
++    lexical.try_reserve_exact(text.len()).map_err(|_| EvalError::AllocationFailed { construct: "numeric lexical destination" })?;
++    text.write_to(&mut lexical)?;
++    drop(text);
++    let before = ctx.scratch.owned_value_count();
++    let value = TermValue::Literal {
++        lexical_form: lexical,
++        datatype: crate::workspace::string(datatype, "numeric literal datatype")?,
++        language: None,
++        direction: None,
++    };
++    let term = ctx.scratch.try_intern_admitted(ctx.dataset, value, &ctx.growth)?;
++    if ctx.scratch.owned_value_count() > before { ctx.keep_computed(admission); }
++    Ok(term)
+ }
+ 
+ /// [`xsd_to_term`]'s value-only half: the canonical typed-literal [`TermValue`] for a
+@@ -6408,36 +6431,24 @@
+     let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta)?, xsd_of_term(ctx, tb)?) else {
+         return Ok(None);
+     };
+-    // An operation on the arbitrary-precision tower — a big operand, or any division
+-    // under a non-default policy — is charged by operand size before it runs
+-    // (machine-word operands cost nothing here).
+     let cost_op = match op {
+         ArithmeticOperator::Add | ArithmeticOperator::Subtract => CostOp::Add,
+         ArithmeticOperator::Multiply => CostOp::Mul,
+         ArithmeticOperator::Divide => CostOp::Div(ctx.division),
+     };
+-    if !numeric_step_admitted(ctx, numeric_cost(&xa, &xb, cost_op)) {
+-        return Ok(None);
+-    }
+-    let result = match op {
+-        ArithmeticOperator::Add => value_add(&xa, &xb),
+-        ArithmeticOperator::Subtract => value_sub(&xa, &xb),
+-        ArithmeticOperator::Multiply => value_mul(&xa, &xb),
+-        ArithmeticOperator::Divide => value_div_with_policy(&xa, &xb, ctx.division),
++    if !numeric_step_admitted(ctx, numeric_cost(&xa, &xb, cost_op)) { return Ok(None); }
++    let operation = match op {
++        ArithmeticOperator::Add => purrdf_xsd::numeric::NumericBinaryOperator::Add,
++        ArithmeticOperator::Subtract => purrdf_xsd::numeric::NumericBinaryOperator::Subtract,
++        ArithmeticOperator::Multiply => purrdf_xsd::numeric::NumericBinaryOperator::Multiply,
++        ArithmeticOperator::Divide => purrdf_xsd::numeric::NumericBinaryOperator::Divide,
+     };
+-    match result {
+-        // The result's rendering is charged too: a product of short coefficients
+-        // has the sum of their scales, and its text is that long.
++    let capability = ctx.growth.clone();
++    let mut frame = crate::native_numeric::NumericFrame::new(&capability);
++    let computed = purrdf_xsd::ops::value_binary_admitted(&xa, &xb, operation, ctx.division, &mut |layout| frame.admit(layout));
++    match frame.finish_value(computed)? {
+         Ok(result) => governed_xsd_to_term(ctx, &result),
+-        // Every failure is a SPARQL expression error (§17.2): the value is unbound.
+-        // That includes a quotient the caller's division policy cannot express (a
+-        // non-terminating quotient under `exact`, err:FOAR0002), so `COALESCE` and
+-        // `BIND` handle it like division by zero; the F&O code goes to the governed
+-        // outcome's evidence either way.
+-        Err(error) => {
+-            ctx.record_expression_error(error.code());
+-            Ok(None)
+-        }
++        Err(code) => { ctx.record_expression_error(code); Ok(None) }
+     }
+ }
+ 
+

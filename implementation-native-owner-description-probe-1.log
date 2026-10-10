@@ -1,0 +1,64 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+   Compiling syn v2.0.118
+   Compiling clap_derive v4.6.1
+   Compiling clap v4.6.1
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/markdown)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shex)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/columnar)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/json)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/entail)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/geo)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/retrieval)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/validate)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/purrdf)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cli)
+    Finished `test` profile [optimized] target(s) in 3m 10s
+     Running tests/describe_cli.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-cli/54ffa9ce3c37f47f/out/describe_cli-54ffa9ce3c37f47f)
+
+running 1 test
+
+thread 'the_description_is_a_symmetric_concise_bounded_description' (2173605) panicked at crates/cli/tests/describe_cli.rs:64:5:
+assertion `left == right` failed: temporary memory refund probe: live=148 release=152
+   0: purrdf_core::describe::release_map::<purrdf_core::ir::dataset::QuadIds, (), purrdf_lex::allocation::Resident>
+   1: <purrdf_core::describe::Describer>::describe_iris::<core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::string::String>, <alloc::string::String>::as_str>>
+   2: <purrdf_cli::describe::DescribeOp as purrdf_cli::source::ViewOp>::run::<purrdf_core::ir::dataset::RdfDataset>
+   3: purrdf_cli::source::run_over_input::<purrdf_cli::describe::DescribeOp>
+   4: purrdf_cli::describe::run
+   5: purrdf_cli::run
+   6: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+   7: std::rt::lang_start::<()>::{closure#0}
+   8: std::rt::lang_start_internal
+   9: main
+  10: <unknown>
+  11: __libc_start_main
+  12: _start
+
+purrdf: error rdf-describe-source-read: native allocation layout overflow
+
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test the_description_is_a_symmetric_concise_bounded_description ... FAILED
+
+failures:
+
+failures:
+    the_description_is_a_symmetric_concise_bounded_description
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-cli --test describe_cli`

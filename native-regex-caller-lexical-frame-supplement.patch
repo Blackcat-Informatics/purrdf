@@ -1,0 +1,264 @@
+--- a/crates/sparql-eval/src/xpath_regex.rs
++++ b/crates/sparql-eval/src/xpath_regex.rs
+@@ -1,4 +1,4 @@
+-// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+ //! Selected pattern laws at the SPARQL expression boundary.
+@@ -11,10 +11,11 @@
+ use purrdf_core::{DatasetView, RdfTextDirection, TermValue};
+ use purrdf_core::xsd_regex::{self, xpath};
+ use purrdf_iri::vocab::rdf::{DIR_LANG_STRING, LANG_STRING};
+-use purrdf_lex::allocation::{Admission, StorageError};
++use purrdf_lex::allocation::StorageError;
+ use purrdf_xsd::datatype::XSD_STRING;
+ 
+-use crate::{EvalError, WorkspaceAllocation, WorkspaceCapability, WorkspaceTerm};
++use crate::{EvalError, WorkspaceCapability, WorkspaceTerm};
++use crate::workspace::LexicalFrame;
+ use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
+ use crate::eval::EvalCtx;
+ use crate::plan_cache::BoundedCache;
+@@ -38,61 +39,26 @@
+     }
+ }
+ 
+-// One erased capability, original grant and first typed native admission failure.
+-// The native leaf owns this callback; it never owns a copied grant or bare payload.
+-struct NativeAdmission {
+-    workspace: WorkspaceCapability,
+-    allocation: Option<WorkspaceAllocation>,
+-    failure: Option<EvalError>,
+-    live: usize,
+-}
+-
+-impl NativeAdmission {
+-    fn new(workspace: &WorkspaceCapability) -> Self {
+-        Self { workspace: workspace.clone(), allocation: None, failure: None, live: 0 }
+-    }
+-    fn resize_eval(&mut self, live: usize) -> Result<(), EvalError> {
+-        if let Some(error) = &self.failure { return Err(error.clone()); }
+-        let bytes = u64::try_from(live).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+-        match &mut self.allocation {
+-            Some(allocation) => allocation.resize(bytes)?,
+-            None if live != 0 => self.allocation = Some(self.workspace.charge(bytes)?),
+-            None => {}
+-        }
+-        self.live = live;
+-        Ok(())
+-    }
+-}
+-impl std::fmt::Debug for NativeAdmission {
+-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+-        f.debug_struct("NativeAdmission").field("live", &self.live).finish_non_exhaustive()
+-    }
+-}
+-impl Admission for NativeAdmission {
+-    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+-        match self.resize_eval(live) {
+-            Ok(()) => Ok(()),
+-            Err(error) => {
+-                if self.failure.is_none() { self.failure = Some(error); }
+-                Err(StorageError::AdmissionFailed)
+-            }
+-        }
+-    }
+-}
+-
+ trait FailureOwner {
+     fn take_failure(&mut self) -> Option<EvalError>;
+     fn workspace(&self) -> &WorkspaceCapability;
+-}
+-impl FailureOwner for NativeAdmission {
+-    fn take_failure(&mut self) -> Option<EvalError> { self.failure.take() }
+-    fn workspace(&self) -> &WorkspaceCapability { &self.workspace }
+-}
+-impl FailureOwner for (NativeAdmission, NativeAdmission) {
++    fn storage_error(&mut self, error: StorageError) -> EvalError;
++}
++impl FailureOwner for LexicalFrame {
++    fn take_failure(&mut self) -> Option<EvalError> { LexicalFrame::take_failure(self) }
++    fn workspace(&self) -> &WorkspaceCapability { LexicalFrame::workspace(self) }
++    fn storage_error(&mut self, error: StorageError) -> EvalError {
++        LexicalFrame::storage_error(self, error, "native XPath storage")
++    }
++}
++impl FailureOwner for (LexicalFrame, LexicalFrame) {
+     fn take_failure(&mut self) -> Option<EvalError> {
+         self.0.take_failure().or_else(|| self.1.take_failure())
+     }
+-    fn workspace(&self) -> &WorkspaceCapability { &self.0.workspace }
++    fn workspace(&self) -> &WorkspaceCapability { self.0.workspace() }
++    fn storage_error(&mut self, error: StorageError) -> EvalError {
++        self.0.storage_error(error, "native XPath storage")
++    }
+ }
+ 
+ // Operational errors have no owned text. Syntax text remains in the native
+@@ -111,10 +77,7 @@
+             xpath::Error::Allocation { resource, units } => Err(EvalError::XPathRegex(xpath::Error::Allocation {
+                 resource: *resource, units: *units,
+             })),
+-            xpath::Error::Storage(StorageError::SizeOverflow) => Err(EvalError::WorkspaceBoundOverflow),
+-            xpath::Error::Storage(StorageError::AllocationFailed) => Err(EvalError::AllocationFailed { construct: "native XPath storage" }),
+-            xpath::Error::Storage(StorageError::AdmissionFailed) => Err(EvalError::WorkspaceStopped),
+-            xpath::Error::Storage(StorageError::FormattingFailed) => Err(EvalError::UnstableNativeDiagnostic),
++            xpath::Error::Storage(error) => Err(storage.storage_error(*error)),
+             xpath::Error::Flags { .. } | xpath::Error::Syntax { .. }
+                 | xpath::Error::EmptyMatch | xpath::Error::Replacement(_) => Ok(None),
+             _ => Err(NativeDiagnostic::error(NativeDiagnosticKind::Internal,
+@@ -126,7 +89,7 @@
+ pub(crate) struct NativeProgram {
+     // The program dies before the original compiler/control grant.
+     pattern: xpath::CompiledPattern,
+-    storage: NativeAdmission,
++    storage: LexicalFrame,
+ }
+ impl std::fmt::Debug for NativeProgram {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+@@ -134,19 +97,19 @@
+     }
+ }
+ struct ProgramPublication;
+-impl xpath::Publication<xpath::CompiledPattern, NativeAdmission> for ProgramPublication {
++impl xpath::Publication<xpath::CompiledPattern, LexicalFrame> for ProgramPublication {
+     type Output = Shared<NativeProgram>;
+     type Error = EvalError;
+-    fn publish(self, value: &mut Option<xpath::CompiledPattern>, storage: &mut NativeAdmission) -> Result<Self::Output, EvalError> {
++    fn publish(self, value: &mut Option<xpath::CompiledPattern>, storage: &mut LexicalFrame) -> Result<Self::Output, EvalError> {
+         let control = Shared::<NativeProgram>::allocation_layout().size();
+-        let total = storage.live.checked_add(control).ok_or(EvalError::WorkspaceBoundOverflow)?;
+-        storage.resize_eval(total)?;
+-        let workspace = storage.workspace.clone();
++        let total = storage.live_bytes().checked_add(control).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        storage.resize_live(total)?;
++        let workspace = storage.workspace().clone();
+         // Allocate the final control BEFORE removing either original payload or
+         // original grant. Refusal does not invoke this infallible factory.
+         Shared::try_new_with(|| NativeProgram {
+             pattern: value.take().expect("native program remains enclosed"),
+-            storage: std::mem::replace(storage, NativeAdmission::new(&workspace)),
++            storage: std::mem::replace(storage, LexicalFrame::new(&workspace)),
+         }).map_err(|_| EvalError::AllocationFailed { construct: "native XPath shared program" })
+     }
+ }
+@@ -155,7 +118,7 @@
+     profile: xpath::Profile, pattern: &str, flags: &str, limits: xpath::Limits,
+     workspace: &WorkspaceCapability,
+ ) -> Result<Option<Shared<NativeProgram>>, EvalError> {
+-    match xpath::compile_with_storage(profile, pattern, flags, limits, NativeAdmission::new(workspace)) {
++    match xpath::compile_with_storage(profile, pattern, flags, limits, LexicalFrame::new(workspace)) {
+         Ok(compiled) => compiled.publish_with(ProgramPublication).map(Some),
+         Err(error) => error.publish_with(ErrorPublication::new()),
+     }
+@@ -176,10 +139,10 @@
+     language: Option<&'a str>,
+     direction: Option<RdfTextDirection>,
+ }
+-impl<'h> xpath::Publication<Cow<'h, str>, (NativeAdmission, NativeAdmission)> for StringLiteralPublication<'_> {
++impl<'h> xpath::Publication<Cow<'h, str>, (LexicalFrame, LexicalFrame)> for StringLiteralPublication<'_> {
+     type Output = WorkspaceTerm;
+     type Error = EvalError;
+-    fn publish(self, value: &mut Option<Cow<'h, str>>, storage: &mut (NativeAdmission, NativeAdmission)) -> Result<WorkspaceTerm, EvalError> {
++    fn publish(self, value: &mut Option<Cow<'h, str>>, storage: &mut (LexicalFrame, LexicalFrame)) -> Result<WorkspaceTerm, EvalError> {
+         if let Some(error) = storage.take_failure() { return Err(error); }
+         let original = value.as_ref().expect("native replacement remains enclosed");
+         let lexical_bytes = match original { Cow::Borrowed(text) => text.len(), Cow::Owned(text) => text.capacity() };
+@@ -194,7 +157,7 @@
+             .ok_or(EvalError::WorkspaceBoundOverflow)?;
+         // All fallible payload/grant operations happen with the original Cow
+         // and account intact. Existing Owned text is never copied or detached.
+-        storage.1.resize_eval(total)?;
++        storage.1.resize_live(total)?;
+         let datatype = crate::workspace::string(datatype, "native replacement datatype")?;
+         let language = self.language.map(|text| crate::workspace::string(text, "native replacement language")).transpose()?;
+         let borrowed = match original {
+@@ -203,12 +166,13 @@
+         };
+         // The datatype makes total nonzero, so the account exists even for an
+         // empty replacement. Construction after both takes is infallible.
+-        let allocation = storage.1.allocation.take().expect("literal payload pre-admitted");
+-        let lexical_form = match value.take().expect("native replacement remains enclosed") {
+-            Cow::Owned(text) => text,
+-            Cow::Borrowed(_) => borrowed.expect("borrowed lexical copy already constructed"),
+-        };
+-        Ok(WorkspaceTerm::new(TermValue::Literal { lexical_form, datatype, language, direction }, allocation))
++        storage.1.finish_term(|| {
++            let lexical_form = match value.take().expect("native replacement remains enclosed") {
++                Cow::Owned(text) => text,
++                Cow::Borrowed(_) => borrowed.expect("borrowed lexical copy already constructed"),
++            };
++            TermValue::Literal { lexical_form, datatype, language, direction }
++        })
+     }
+ }
+ 
+@@ -217,7 +181,7 @@
+     pub(crate) fn is_match(&self, text: &str, workspace: &WorkspaceCapability) -> Result<Option<bool>, EvalError> {
+         match self {
+             Self::Compatibility(pattern) => Ok(Some(pattern.is_match(text))),
+-            Self::Native(pattern, limits) => match pattern.pattern.is_match_with_storage(text, *limits, NativeAdmission::new(workspace)) {
++            Self::Native(pattern, limits) => match pattern.pattern.is_match_with_storage(text, *limits, LexicalFrame::new(workspace)) {
+                 Ok(result) => Ok(Some(*result.value())),
+                 Err(error) => error.publish_with(ErrorPublication::new()),
+             },
+@@ -232,17 +196,18 @@
+         let publication = StringLiteralPublication { language, direction };
+         match self {
+             Self::Native(pattern, limits) => match pattern.pattern.replace_all_with_storage(
+-                text, replacement, *limits, NativeAdmission::new(workspace), NativeAdmission::new(workspace),
++                text, replacement, *limits, LexicalFrame::new(workspace), LexicalFrame::new(workspace),
+             ) {
+                 Ok(result) => result.publish_with(publication).map(Some),
+                 Err(error) => error.publish_with(ErrorPublication::new()),
+             },
+             Self::Compatibility(pattern) => {
+-                // Apply the configured compatibility pattern and preserve its
+-                // replacement law.
++                // Existing compatibility engine law is preserved in this native
++                // caller unit. Its producer is replaced by the separately staged
++                // same-program compatibility-law unit before #508 qualification.
+                 let Ok(result) = pattern.replace_all(text, replacement) else { return Ok(None); };
+                 let mut original = Some(Cow::Borrowed(result.as_ref()));
+-                let mut storage = (NativeAdmission::new(workspace), NativeAdmission::new(workspace));
++                let mut storage = (LexicalFrame::new(workspace), LexicalFrame::new(workspace));
+                 xpath::Publication::publish(publication, &mut original, &mut storage).map(Some)
+             }
+         }
+@@ -296,7 +261,7 @@
+         return Ok(Some(Program::Native(compiled, limits)));
+     }
+     let Some(compiled) = compile_owned(profile, pattern, flags, limits, &ctx.growth)? else { return Ok(None); };
+-    let bytes = compiled.storage.live.checked_add(size_of::<u64>()).ok_or(EvalError::WorkspaceBoundOverflow)?;
++    let bytes = compiled.storage.live_bytes().checked_add(size_of::<u64>()).ok_or(EvalError::WorkspaceBoundOverflow)?;
+     ctx.xpath_regex_cache.insert_admitted(key, compiled.clone(), bytes, &ctx.growth)?;
+     Ok(Some(Program::Native(compiled, limits)))
+ }
+@@ -493,7 +458,7 @@
+         let different = compile_owned(Profile::Xpath20, "z", "", Limits::new(), &ctx.growth).unwrap().unwrap();
+         let key = purrdf_hash::fixed::FixedState::default().hash_one((Profile::Xpath31, "a"));
+         ctx.xpath_regex_cache
+-            .insert_admitted(key, different.clone(), different.storage.live, &ctx.growth).unwrap();
++            .insert_admitted(key, different.clone(), different.storage.live_bytes(), &ctx.growth).unwrap();
+         assert_eq!(
+             resolve(&mut ctx, "a", "", None)
+                 .unwrap()
+@@ -589,7 +554,7 @@
+         let program = compile_owned(xpath::Profile::Xpath31, "(a)", "",
+             xpath::Limits::new(), &capability).unwrap().unwrap();
+         let native = program.pattern.replace_all_with_storage("aba", "$1é", xpath::Limits::new(),
+-            NativeAdmission::new(&capability), NativeAdmission::new(&capability)).unwrap();
++            LexicalFrame::new(&capability), LexicalFrame::new(&capability)).unwrap();
+         let Cow::Owned(lexical) = native.value() else { panic!("replacement fixture owns output"); };
+         let original_pointer = lexical.as_ptr();
+         let value = native.publish_with(StringLiteralPublication {
+@@ -618,7 +583,7 @@
+             xpath::Limits::new(), &capability).unwrap().unwrap();
+         let text = String::from("aé");
+         let native = program.pattern.replace_all_with_storage(&text, "unused", xpath::Limits::new(),
+-            NativeAdmission::new(&capability), NativeAdmission::new(&capability)).unwrap();
++            LexicalFrame::new(&capability), LexicalFrame::new(&capability)).unwrap();
+         assert!(matches!(native.value(), Cow::Borrowed(_)));
+         let value = native.publish_with(StringLiteralPublication { language: None, direction: Some(RdfTextDirection::Rtl) }).unwrap();
+         let TermValue::Literal { lexical_form, datatype, language, direction } = &*value else { unreachable!(); };

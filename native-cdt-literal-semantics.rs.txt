@@ -1,0 +1,76 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+/// The XSD branch of the single literal-to-value law, preserving its tri-state.
+/// An owned native value remains inside the caller's original payload owner.
+pub enum XsdDenotation<V> {
+    /// The datatype is modeled and the lexical form denotes this value.
+    Value(V),
+    /// The datatype is modeled, but its lexical form denotes nothing.
+    IllTyped,
+    /// The datatype lies outside the XSD value spaces modeled here.
+    Opaque,
+}
+
+/// The concrete XSD producer/comparison seam beneath CDT's existing relations.
+/// CDT cannot depend on an evaluator's reservation type. Its owner is therefore
+/// supplied here and borrowed while the original relation law runs. The resident
+/// and admitted callers use the same CDT algorithm and denotation dispatch.
+pub trait LiteralSemantics {
+    /// An immutable parsed value retaining its original native payload grant.
+    type Value: core::ops::Deref<Target = purrdf_xsd::XsdValue>;
+
+    /// Parse at the original XSD producer, before allocating any owned payload.
+    /// # Errors
+    /// Returns physical refusal independently of an ill-typed lexical form.
+    fn parse_xsd(
+        &mut self,
+        lexical: &str,
+        datatype: &str,
+    ) -> Result<XsdDenotation<Self::Value>, crate::memory::StorageError>;
+
+    /// Compare the borrowed native values through the one XSD equality law.
+    /// # Errors
+    /// Returns original promotion/storage refusal independently of a type error.
+    fn value_equal(
+        &mut self,
+        left: &purrdf_xsd::XsdValue,
+        right: &purrdf_xsd::XsdValue,
+    ) -> Result<bool, crate::memory::StorageError>;
+
+    /// Compare through the one XSD partial-order law, preserving unordered pairs.
+    /// # Errors
+    /// Returns original promotion/storage refusal independently of an unordered pair.
+    fn value_cmp(
+        &mut self,
+        left: &purrdf_xsd::XsdValue,
+        right: &purrdf_xsd::XsdValue,
+    ) -> Result<Option<core::cmp::Ordering>, crate::memory::StorageError>;
+}
+
+/// Explicit resident input owner for the original public, unbounded APIs.
+pub struct ResidentXsd(purrdf_xsd::XsdValue);
+impl core::ops::Deref for ResidentXsd {
+    type Target = purrdf_xsd::XsdValue;
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+
+/// Resident callers use the exact same CDT relation body as admitted callers.
+#[derive(Default)]
+pub struct ResidentSemantics;
+impl LiteralSemantics for ResidentSemantics {
+    type Value = ResidentXsd;
+    fn parse_xsd(&mut self, lexical: &str, datatype: &str) -> Result<XsdDenotation<Self::Value>, crate::memory::StorageError> {
+        Ok(match purrdf_xsd::parse_by_iri(lexical, datatype) {
+            Ok(Some(value)) => XsdDenotation::Value(ResidentXsd(value)),
+            Ok(None) => XsdDenotation::Opaque,
+            Err(_) => XsdDenotation::IllTyped,
+        })
+    }
+    fn value_equal(&mut self, left: &purrdf_xsd::XsdValue, right: &purrdf_xsd::XsdValue) -> Result<bool, crate::memory::StorageError> {
+        Ok(purrdf_xsd::value_eq(left, right))
+    }
+    fn value_cmp(&mut self, left: &purrdf_xsd::XsdValue, right: &purrdf_xsd::XsdValue) -> Result<Option<core::cmp::Ordering>, crate::memory::StorageError> {
+        Ok(purrdf_xsd::value_cmp(left, right))
+    }
+}

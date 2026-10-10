@@ -1,0 +1,75 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Insert before the dated table section of the existing Unicode generator.
+// category_spans_from is the existing category_spans body, parameterized by
+// its borrowed UnicodeData input; no second UCD parser is introduced.
+const COMPATIBILITY_VERSION: (u8, u8, u8) = (16, 0, 0);
+
+fn compatibility_read(name: &str, identity: &str) -> String {
+    let (major, minor, patch) = COMPATIBILITY_VERSION;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../iri/unicode/{major}.{minor}.{patch}/{name}"));
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    let actual = purrdf_hash::blake3::hash(text.as_bytes());
+    let expected = purrdf_hash::hex::decode_32(identity).expect("frozen input identity");
+    assert_eq!(actual.as_bytes(), &expected, "{} changed identity", path.display());
+    text
+}
+
+fn xpath_categories(mut categories: BTreeMap<String, Spans>) -> BTreeMap<String, Spans> {
+    for kind in ["L", "M", "N", "P", "Z", "S", "C"] {
+        let spans = merge(categories.iter()
+            .filter(|(name, _)| name.len() == 2 && name.starts_with(kind))
+            .flat_map(|(_, spans)| spans.iter().copied()));
+        categories.insert(kind.to_owned(), spans);
+    }
+    // Keep Cs inside C before removing the named escape, as in the dated set.
+    categories.remove("Cs");
+    categories
+}
+
+fn xpath_compatibility() -> String {
+    let data = compatibility_read("UnicodeData.txt",
+        "24dd932e1b587f076f3895081f4eb2fd41c77881b3d84a2f743157f6b3f96c40");
+    let folding = compatibility_read("CaseFolding.txt",
+        "a9e649104f7da0ed7263e3b62543711a279ed4762409abc7bbe221a2afca4d5a");
+    assert!(folding.starts_with("# CaseFolding-16.0.0.txt\n"));
+    let categories = xpath_categories(category_spans_from(&data));
+    let mut simple = BTreeMap::new();
+    for fields in data_lines(&folding) {
+        if matches!(fields[1], "C" | "S") {
+            let target = hex_list(fields[2]);
+            assert_eq!(target.len(), 1, "simple fold has exactly one scalar");
+            set_case_mapping(&mut simple, hex(fields[0]), target);
+        }
+    }
+    // C/S mappings are idempotent. The existing partition emitter therefore
+    // produces the complete simple-fold equivalence class in one pass.
+    for image in simple.values() {
+        assert!(!simple.contains_key(&image[0]), "simple fold is not idempotent");
+    }
+    let variants = xpath_case_variants(&[simple, BTreeMap::new()]);
+    let mut out = String::new();
+    emit_header(&mut out, "xpath-compatibility", &[
+        "Frozen Unicode 16 categories and simple-fold equivalence classes.",
+        "The evaluator's unselected law matches regex-syntax 0.8.11; it is",
+        "distinct from the dated XPath laws' Unicode 17 full-case relation.",
+        "Inputs: crates/iri/unicode/16.0.0/{UnicodeData,CaseFolding}.txt.",
+        "The generator checks each original input's exact BLAKE3 identity.",
+    ]);
+    out.push_str("const _: () = assert!(matches!(super::super::blocks::unicode_version(), (16, 0, 0)),\n");
+    out.push_str("    \"compatibility categories/folding and block tables differ\");\n\n");
+    emit_named_spans(&mut out, "CATEGORIES", &categories);
+    out.push_str("pub(super) const CASE_VARIANTS: &[(u32, &[u32])] = &[\n");
+    for (point, neighbors) in variants {
+        let _ = write!(out, "    ({}, &[", grouped_hex(point));
+        for neighbor in neighbors {
+            let _ = write!(out, "{},", grouped_hex(neighbor));
+        }
+        out.push_str("]),\n");
+    }
+    out.push_str("];\n");
+    out
+}

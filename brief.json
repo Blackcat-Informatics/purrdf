@@ -1,0 +1,99 @@
+{
+  "issue": 508,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {
+    "394": "sparql-eval: fallible EXPLAIN entry point for operational (FallibleDatasetView) storage",
+    "395": "sparql-eval: prepared + governed entry point for operational (FallibleDatasetView) storage",
+    "481": "perf(sparql-eval): reduce grouped-output buffer traffic through fallible admission",
+    "526": "Complete bounded operational SPARQL ownership",
+    "443": "Optimize the exact numeric tower: small-value parity and subquadratic large-value arithmetic",
+    "508": "sparql-eval: complete bounded workspace admission for stored operational queries and EXPLAIN"
+  },
+  "related": [
+    {
+      "number": 485,
+      "title": "sparql-eval: merge joins over sorted inputs as the default, and push build-side id ranges into probe-side scans",
+      "state": "OPEN"
+    },
+    {
+      "number": 471,
+      "title": "v4.0: remembered empty named graphs become the default",
+      "state": "OPEN"
+    },
+    {
+      "number": 394,
+      "title": "sparql-eval: fallible EXPLAIN entry point for operational (FallibleDatasetView) storage",
+      "state": "CLOSED"
+    },
+    {
+      "number": 395,
+      "title": "sparql-eval: prepared + governed entry point for operational (FallibleDatasetView) storage",
+      "state": "CLOSED"
+    },
+    {
+      "number": 393,
+      "title": "EXPLAIN aborts the process on a large join",
+      "state": "CLOSED"
+    },
+    {
+      "number": 392,
+      "title": "A pattern after OPTIONAL or BIND, or an OPTIONAL body, is evaluated without the bindings before it",
+      "state": "CLOSED"
+    },
+    {
+      "number": 454,
+      "title": "rdflib shim: algebra-level reassignment rewrite so every case matches rdflib 7.6",
+      "state": "CLOSED"
+    },
+    {
+      "number": 478,
+      "title": "SPARQL governor: governed parallel row loops regressed 1.2\u20131.65\u00d7 at 32 threads (block scheduling)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 372,
+      "title": "Sequence and inverse property paths are not translated to triple patterns (SPARQL 1.1 section 18.2.2.4), so linked patterns become a cross product",
+      "state": "CLOSED"
+    },
+    {
+      "number": 469,
+      "title": "SPARQL governor: metered governed evaluation costs 1.4\u20131.7\u00d7 ungoverned (target 1.2\u00d7)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 425,
+      "title": "Keep general semantic coverage native and focus existing WASM execution on target behavior",
+      "state": "CLOSED"
+    },
+    {
+      "number": 406,
+      "title": "Native XPath regex profile with operational resource refusal",
+      "state": "CLOSED"
+    },
+    {
+      "number": 426,
+      "title": "XSD constructor casts between xsd:dateTime and xsd:date are unbound",
+      "state": "CLOSED"
+    },
+    {
+      "number": 418,
+      "title": "Vendor and run the W3C SPARQL 1.0 data-r2 conformance suites",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "performance": 2,
+    "none": 21,
+    "semantic-identity-loss": 1
+  },
+  "coverage": [
+    "issue #508 + 2 comment(s) via github",
+    "link crawl: 6 issue(s) within 2 hop(s) of `#N` references",
+    "forge search on ['sparql-eval:', 'complete', 'bounded']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}

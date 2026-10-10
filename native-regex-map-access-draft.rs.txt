@@ -1,0 +1,50 @@
+    /// The live entry count; retained spare capacity remains admitted.
+    #[must_use]
+    pub fn len(&self) -> usize { self.entries.len() }
+
+    /// Whether there are no live entries.
+    #[must_use]
+    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+
+    /// Borrow each existing key and value without an iterator allocation.
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.entries.iter().map(|entry| (&entry.0, &entry.1))
+    }
+
+    /// Borrow existing keys and mutable values without growing the table.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&K, &mut V)> {
+        self.entries.iter_mut().map(|entry| (&entry.0, &mut entry.1))
+    }
+
+    /// Borrow a value using the same fixed hash and a borrowed key identity.
+    #[must_use]
+    pub fn get<Q: ?Sized + Eq + std::hash::Hash>(&self, key: &Q) -> Option<&V>
+    where K: std::borrow::Borrow<Q> {
+        self.get_key_value(key).map(|(_, value)| value)
+    }
+
+    /// Borrow the original key and value without copying either owner.
+    #[must_use]
+    pub fn get_key_value<Q: ?Sized + Eq + std::hash::Hash>(&self, key: &Q) -> Option<(&K, &V)>
+    where K: std::borrow::Borrow<Q> {
+        self.entries.find(purrdf_hash::fixed::hash_one(key),
+            |entry| <K as std::borrow::Borrow<Q>>::borrow(&entry.0) == key)
+            .map(|entry| (&entry.0, &entry.1))
+    }
+
+    /// Mutate a value while its original table and payload owners remain alive.
+    #[must_use]
+    pub fn get_mut<Q: ?Sized + Eq + std::hash::Hash>(&mut self, key: &Q) -> Option<&mut V>
+    where K: std::borrow::Borrow<Q> {
+        self.entries.find_mut(purrdf_hash::fixed::hash_one(key),
+            |entry| <K as std::borrow::Borrow<Q>>::borrow(&entry.0) == key)
+            .map(|entry| &mut entry.1)
+    }
+
+    /// Move a value out without allocating or releasing the live table buffer.
+    pub fn remove<Q: ?Sized + Eq + std::hash::Hash>(&mut self, key: &Q) -> Option<V>
+    where K: std::borrow::Borrow<Q> {
+        let entry = self.entries.find_entry(purrdf_hash::fixed::hash_one(key),
+            |entry| <K as std::borrow::Borrow<Q>>::borrow(&entry.0) == key).ok()?;
+        Some(entry.remove().0.1)
+    }

@@ -1,0 +1,33 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+error[E0425]: cannot find value `memory` in this scope
+    --> crates/sparql-results/src/json_read.rs:1370:79
+     |
+1370 |     json::read_slice(bytes, LIMITS).map_err(|error| syntax_with_memory(error, memory))
+     |                                                                               ^^^^^^ not found in this scope
+
+error[E0716]: temporary value dropped while borrowed
+   --> crates/sparql-results/src/json_read.rs:127:39
+    |
+127 |     let mut memory = Memory::new(&mut Resident);
+    |                                       ^^^^^^^^ - temporary value is freed at the end of this statement
+    |                                       |
+    |                                       creates a temporary value which is freed while still in use
+128 |     let mut reader = Reader::from_slice(bytes, LIMITS)
+129 |         .map_err(|error| syntax_with_memory(error, &mut memory))?;
+    |                                                         ------ borrow later captured here by closure
+    |
+help: consider using a `let` binding to create a longer lived value
+    |
+127 ~     let mut binding = Resident;
+128 ~     let mut memory = Memory::new(&mut binding);
+    |
+
+Some errors have detailed explanations: E0425, E0716.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `purrdf-sparql-results` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-results` (lib test) due to 2 previous errors

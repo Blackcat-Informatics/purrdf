@@ -1,0 +1,73 @@
+diff --git a/crates/sparql-eval/src/plan/mod.rs b/crates/sparql-eval/src/plan/mod.rs
+--- a/crates/sparql-eval/src/plan/mod.rs
++++ b/crates/sparql-eval/src/plan/mod.rs
+@@ -703,12 +703,22 @@
+     pub(crate) fn handle(&self, root: &GraphPattern) -> PlanHandle {
+-        let kept = self.kept.get_or_init(|| Tree::build(root).handle());
+-        debug_assert!(
+-            kept.shape.kind(NodeId::ROOT) == NodeKind::of(root),
+-            "a plan cache is only ever asked about the tree its owner holds"
+-        );
+-        kept.shape
+-            .root
+-            .store(std::ptr::from_ref(root) as usize, Ordering::Relaxed);
+-        kept.clone()
++
++        self.handle_admitted(root, &crate::WorkspaceCapability::resident()).expect("resident plan cache")
+     }
++
++    /// The same kept numbering, with native construction fallible and owned.
++    pub(crate) fn handle_admitted(
++        &self,
++        root: &GraphPattern,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<PlanHandle, crate::EvalError> {
++        if self.kept.get().is_none() {
++            let handle = Tree::build_admitted(root, workspace)?.handle();
++            let _ = self.kept.set(handle);
++        }
++        let kept = self.kept.get().expect("a successful constructor or another worker installed the shape");
++        debug_assert!(kept.shape.kind(NodeId::ROOT) == NodeKind::of(root), "the cache keeps its owner's tree");
++        kept.shape.root.store(std::ptr::from_ref(root) as usize, Ordering::Relaxed);
++        Ok(kept.clone())
++
+ }
++}
+diff --git a/crates/sparql-eval/src/eval.rs b/crates/sparql-eval/src/eval.rs
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -3054,7 +3054,7 @@
+             {
+                 ctx.temporary_positive_numberings += 1;
+             }
+-            let tree = crate::plan::Tree::build(pattern);
++            let tree = crate::plan::Tree::build_admitted(pattern, &ctx.growth)?;
+             let mut guard = ctx.enter_positive_shape(tree.handle());
+             eval_node(pattern, &mut guard)
+         } else {
+diff --git a/crates/sparql-eval/src/eval.rs b/crates/sparql-eval/src/eval.rs
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -4126,7 +4126,7 @@
+     let pattern = normalized.as_ref().unwrap_or(pattern);
+     let source_schema =
+         (joined.is_some() || normalized.is_some()).then(|| syntactic_schema(source_pattern));
+-    let tree = crate::plan::Tree::build(pattern);
++    let tree = crate::plan::Tree::build_admitted(pattern, &ctx.growth)?;
+     let previous_plan = ctx.plan.take();
+     ctx.install_plan(&tree);
+     let result = (|| {
+diff --git a/crates/sparql-eval/src/eval.rs b/crates/sparql-eval/src/eval.rs
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -4396,8 +4396,8 @@
+     // The tree every node of this evaluation is numbered in, with its variable-endpoint
+     // analysis and `EXISTS` sites: the kept one, or one built here.
+     let plan = match kept {
+-        Some(cache) => cache.handle(query_pattern(query)),
+-        None => crate::plan::Tree::build(query_pattern(query)).handle(),
++        Some(cache) => cache.handle_admitted(query_pattern(query), &ctx.growth)?,
++        None => crate::plan::Tree::build_admitted(query_pattern(query), &ctx.growth)?.handle(),
+     };
+     ctx.install_plan_handle(plan.clone());
+     install_answer_cap_pushdown(query, &plan, ctx);

@@ -1,0 +1,216 @@
+--- a/crates/sparql-eval/src/error.rs
++++ b/crates/sparql-eval/src/error.rs
+@@ -82,10 +82,106 @@
+     }
+ }
+ 
++/// Existing request/error meanings with immutable, admission-carrying text.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub enum NativeDiagnosticKind {
++    /// The relation received an invalid invocation.
++    Function,
++    /// The relation failed operationally while executing its invocation.
++    FunctionOperational,
++    /// The requested data violated the native producer's input contract.
++    Data,
++    /// The supplied native configuration was invalid.
++    Config,
++    /// A native evaluator invariant failed.
++    Internal,
++}
++
++#[derive(Debug)]
++struct NativeDiagnosticPayload {
++    // Payload dies before its string+Shared-header admission is released.
++    text: String,
++    _allocation: crate::WorkspaceAllocation,
++}
++
++/// An engine-supplied diagnostic clones its immutable allocation and lease.
++#[derive(Debug, Clone)]
++pub struct NativeDiagnostic {
++    kind: NativeDiagnosticKind,
++    payload: purrdf_core::small::Shared<NativeDiagnosticPayload>,
++}
++
++impl NativeDiagnostic {
++    /// Stable, allocation-free sizing followed by fallible admitted rendering.
++    /// `message` must render borrowed fields without private heap allocation;
++    /// a term Debug walker must acquire its own actual work-list grant first.
++    pub fn render(
++        kind: NativeDiagnosticKind,
++        message: impl core::fmt::Display,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Self, EvalError> {
++        let length = crate::workspace::display_len(&message)?;
++        let control = purrdf_core::small::Shared::<NativeDiagnosticPayload>::allocation_layout().size();
++        let bytes = length.checked_add(control).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        let allocation = workspace.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++        let text = crate::workspace::format_exact(&message, length, "native diagnostic text")?;
++        let payload = purrdf_core::small::Shared::try_new(NativeDiagnosticPayload { text, _allocation: allocation })
++            .map_err(|_| EvalError::AllocationFailed { construct: "native diagnostic owner" })?;
++        Ok(Self { kind, payload })
++    }
++
++    /// Stable typed classification, independent of its English message.
++    pub const fn kind(&self) -> NativeDiagnosticKind { self.kind }
++    /// Borrow the immutable body while retaining its shared owner.
++    pub fn message(&self) -> &str { &self.payload.text }
++    /// One native diagnostic adaptation for `ok_or_else` and `map_err` callers.
++    /// A refused render returns its original static operational failure.
++    pub fn error(
++        kind: NativeDiagnosticKind, message: impl core::fmt::Display,
++        workspace: &crate::WorkspaceCapability,
++    ) -> EvalError {
++        match Self::render(kind, message, workspace) {
++            Ok(diagnostic) => EvalError::NativeDiagnostic(diagnostic),
++            Err(error) => error,
++        }
++    }
++    fn preserve_function_failure(mut self) -> Self {
++        if self.kind == NativeDiagnosticKind::Function { self.kind = NativeDiagnosticKind::FunctionOperational; }
++        self
++    }
++}
++
++impl PartialEq for NativeDiagnostic {
++    fn eq(&self, other: &Self) -> bool { self.kind == other.kind && self.message() == other.message() }
++}
++impl Eq for NativeDiagnostic {}
++impl core::hash::Hash for NativeDiagnostic {
++    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
++        core::hash::Hash::hash(&self.kind, state);
++        core::hash::Hash::hash(self.message(), state);
++    }
++}
++impl core::fmt::Display for NativeDiagnostic {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        let prefix = match self.kind {
++            NativeDiagnosticKind::Function | NativeDiagnosticKind::FunctionOperational => "host function error",
++            NativeDiagnosticKind::Data => "malformed RDF input",
++            NativeDiagnosticKind::Config => "invalid evaluation configuration",
++            NativeDiagnosticKind::Internal => "internal evaluator error",
++        };
++        write!(f, "{prefix}: {}", self.message())
++    }
++}
++impl std::error::Error for NativeDiagnostic {}
++
+ /// An error raised while evaluating a SPARQL query.
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ #[non_exhaustive]
+ pub enum EvalError {
++    /// An immutable native diagnostic retaining its exact allocation grant.
++    NativeDiagnostic(NativeDiagnostic),
++    /// A native formatter violated its certified stable output length.
++    UnstableNativeDiagnostic,
+     /// A query failed to parse in [`purrdf_sparql_algebra`]. Carries the rendered
+     /// parse error.
+     Parse(String),
+@@ -442,6 +538,7 @@
+     pub(crate) fn preserve_function_failure(self) -> Self {
+         match self {
+             Self::Function(message) => Self::FunctionOperational(message),
++            Self::NativeDiagnostic(message) => Self::NativeDiagnostic(message.preserve_function_failure()),
+             other => other,
+         }
+     }
+@@ -501,6 +598,12 @@
+     #[must_use]
+     pub fn diagnostic_code(&self) -> Option<&'static str> {
+         match self {
++            Self::NativeDiagnostic(message) => match message.kind() {
++                NativeDiagnosticKind::Internal => Some(Self::INTERNAL_CODE),
++                NativeDiagnosticKind::FunctionOperational => Some(Self::FUNCTION_OPERATIONAL_CODE),
++                NativeDiagnosticKind::Function | NativeDiagnosticKind::Data | NativeDiagnosticKind::Config => None,
++            },
++            Self::UnstableNativeDiagnostic => Some("native-sparql-unstable-native-diagnostic"),
+             Self::SourceRead(_) | Self::WorkspaceStopped => Some("native-sparql-source-read"),
+             Self::XPathRegex(purrdf_core::xsd_regex::xpath::Error::Resource(refusal)) => {
+                 Some(refusal.resource.code())
+@@ -672,6 +775,8 @@
+ impl core::fmt::Display for EvalError {
+     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+         match self {
++            Self::NativeDiagnostic(message) => core::fmt::Display::fmt(message, f),
++            Self::UnstableNativeDiagnostic => f.write_str("native diagnostic formatter violated its certified output length"),
+             Self::Parse(msg) => write!(f, "SPARQL parse error: {msg}"),
+             Self::SourceRead(msg) => write!(f, "dataset read failed: {msg}"),
+             Self::WorkspaceStopped => f.write_str("operational workspace admission stopped evaluation"),
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -545,35 +545,47 @@
+ /// Measure a Display value without an output allocation, then admit and render
+ /// into one fallibly reserved buffer. Display implementations used here render
+ /// borrowed diagnostic fields; the two passes must have identical output.
+-pub(crate) fn render(
+-    workspace: &WorkspaceCapability,
+-    value: &EvalError,
+-    construct: &'static str,
+-) -> Result<(String, WorkspaceAllocation), EvalError> {
+-    use std::fmt::Write;
++pub(crate) fn display_len(value: &impl core::fmt::Display) -> Result<usize, EvalError> {
++    use core::fmt::Write;
+     struct Counter(usize);
+     impl Write for Counter {
+-        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+-            self.0 = self.0.checked_add(text.len()).ok_or(std::fmt::Error)?;
++        fn write_str(&mut self, text: &str) -> core::fmt::Result {
++            self.0 = self.0.checked_add(text.len()).ok_or(core::fmt::Error)?;
+             Ok(())
+         }
+     }
+     let mut counter = Counter(0);
+     write!(&mut counter, "{value}").map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+-    let admission = workspace.charge(u64::try_from(counter.0).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++    Ok(counter.0)
++}
++
++pub(crate) fn format_exact(
++    value: &impl core::fmt::Display, length: usize, construct: &'static str,
++) -> Result<String, EvalError> {
++    use core::fmt::Write;
+     let mut text = String::new();
+-    text.try_reserve_exact(counter.0).map_err(|_| EvalError::AllocationFailed { construct })?;
+-    struct BoundedText<'a> { text: &'a mut String, limit: usize }
+-    impl Write for BoundedText<'_> {
+-        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+-            let length = self.text.len().checked_add(text.len()).ok_or(std::fmt::Error)?;
+-            if length > self.limit { return Err(std::fmt::Error); }
++    text.try_reserve_exact(length).map_err(|_| EvalError::AllocationFailed { construct })?;
++    struct Bounded<'a> { text: &'a mut String, length: usize }
++    impl Write for Bounded<'_> {
++        fn write_str(&mut self, text: &str) -> core::fmt::Result {
++            if self.text.len().checked_add(text.len()).is_none_or(|n| n > self.length) {
++                return Err(core::fmt::Error);
++            }
+             self.text.push_str(text);
+             Ok(())
+         }
+     }
+-    write!(&mut BoundedText { text: &mut text, limit: counter.0 }, "{value}")
+-        .expect("a diagnostic Display has stable sized output");
+-    assert_eq!(text.len(), counter.0, "diagnostic Display output must be stable across sizing and rendering");
++    write!(&mut Bounded { text: &mut text, length }, "{value}")
++        .map_err(|_| EvalError::UnstableNativeDiagnostic)?;
++    if text.len() != length { return Err(EvalError::UnstableNativeDiagnostic); }
++    Ok(text)
++}
++
++pub(crate) fn render(
++    workspace: &WorkspaceCapability, value: &EvalError, construct: &'static str,
++) -> Result<(String, WorkspaceAllocation), EvalError> {
++    let length = display_len(value)?;
++    let admission = workspace.charge(u64::try_from(length).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++    let text = format_exact(value, length, construct)?;
+     Ok((text, admission))
+ }
+--- a/crates/sparql-eval/src/lib.rs
++++ b/crates/sparql-eval/src/lib.rs
+@@ -344,3 +344,6 @@
+ 
+ /// A deterministic, seed-free [`HashSet`](std::collections::HashSet). See [`DetHasher`].
+ pub(crate) type DetHashSet<K> = std::collections::HashSet<K, DetHasher>;
++
++/// Immutable admission-carrying native producer diagnostics.
++pub use error::{NativeDiagnostic, NativeDiagnosticKind};

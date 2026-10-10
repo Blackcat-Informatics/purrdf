@@ -1,0 +1,236 @@
+pub(crate) fn nested_sites<'a,D:DatasetView+Sync>(
+    pattern:&GraphPattern,source:CorrelatedSource<'a>,ctx:&mut EvalCtx<'_,D>,
+)->Result<SitesRef<'a>,EvalError> {
+    let root=std::ptr::from_ref(pattern) as usize;
+    let workspace=ctx.growth.clone();
+    Ok(match source.sites {
+        SiteSlot::Prepared(slot)=>{
+            if let Some(kept)=slot.get() { return Ok(SitesRef::Kept(kept)); }
+            let sites=SharedWorkspace::new_admitted(prepare_sites(pattern,source,ctx)?,&workspace)?;
+            SitesRef::Kept(slot.get_or_init(||sites))
+        }
+        SiteSlot::Plan=>{
+            if ctx.plan_exists_sites.is_none() {
+                ctx.plan_exists_sites=Some(SharedWorkspace::new_admitted(PlanSites::default(),&workspace)?);
+            }
+            let plan_sites=ctx.plan_exists_sites.as_ref().expect("initialized above").clone();
+            let kept=plan_sites.by_root.read().unwrap_or_else(std::sync::PoisonError::into_inner).get(&root).cloned();
+            if let Some(kept)=kept { return Ok(SitesRef::Owned(kept)); }
+            let sites=SharedWorkspace::new_admitted(prepare_sites(pattern,source,ctx)?,&workspace)?;
+            let mut table=plan_sites.by_root.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let kept=match table.get(&root) {
+                Some(kept)=>kept.clone(),
+                None=>{ table.insert_admitted(root,sites.clone(),&workspace)?; sites }
+            };
+            SitesRef::Owned(kept)
+        }
+        SiteSlot::Transient=>SitesRef::Owned(SharedWorkspace::new_admitted(prepare_sites(pattern,source,ctx)?,&workspace)?),
+        SiteSlot::Lateral(site)=>{
+            if let Some(kept)=site.sites.get() { return Ok(SitesRef::Kept(kept)); }
+            let sites=SharedWorkspace::new_admitted(prepare_sites(pattern,source,ctx)?,&workspace)?;
+            SitesRef::Kept(site.sites.get_or_init(||sites))
+        }
+    })
+}
+
+fn prepare_sites<D:DatasetView+Sync>(pattern:&GraphPattern,source:CorrelatedSource<'_>,ctx:&EvalCtx<'_,D>)->Result<NestedSites,EvalError> {
+    let mut sites=NestedSites::default();
+    let deferrable=Deferrable::of(ctx);
+    let workspace=&ctx.growth;
+    let (bodies,operands)=nested_bodies(pattern,ctx.deferred_exists.as_deref(),deferrable,workspace)?;
+    for body in bodies {
+        let site=SharedWorkspace::new_admitted(build_site(body,source,ctx)?,workspace)?;
+        sites.exists.insert_admitted(std::ptr::from_ref(body) as usize,site,workspace)?;
+    }
+    for operand in operands {
+        let site=build_lateral_site(operand,source,deferrable,ctx)?;
+        sites.lateral.insert_admitted(std::ptr::from_ref(operand) as usize,site,workspace)?;
+    }
+    if let SiteSlot::Lateral(site)=source.sites {
+        for (&address,child) in site.children.iter() { sites.lateral.insert_admitted(address,child.clone(),workspace)?; }
+    }
+    Ok(sites)
+}
+
+fn nested_bodies<'p>(pattern:&'p GraphPattern,placeholders:Option<&DeferredMap>,deferrable:Deferrable,workspace:&WorkspaceCapability)
+    ->Result<(AdmittedVec<&'p GraphPattern>,AdmittedVec<&'p GraphPattern>),EvalError> {
+    enum Node<'a> { Pattern(&'a GraphPattern),Expression(&'a Expression) }
+    let mut bodies=AdmittedVec::new(workspace);
+    let mut operands=AdmittedVec::new(workspace);
+    let mut pending=AdmittedVec::new(workspace);
+    pending.push(Node::Pattern(pattern))?;
+    while let Some(node)=pending.pop() {
+        let mut failure=None;
+        match node {
+            Node::Pattern(GraphPattern::Service { .. })=>{},
+            Node::Pattern(GraphPattern::Lateral { left,right })=>{
+                if deferrable.operand(right,workspace)? { operands.push(&**right)?; }
+                else if !is_lateral_placeholder(right) { pending.push(Node::Pattern(right))?; }
+                pending.push(Node::Pattern(left))?;
+            }
+            Node::Pattern(pattern)=>{
+                crate::governor::soundness::visit_pattern_parts(pattern,&mut |part| {
+                    remember_failure(pending.push(match part { PatternPart::Child(child,_)=>Node::Pattern(child),PatternPart::Expression(expr)=>Node::Expression(expr) }),&mut failure)
+                });
+            }
+            Node::Expression(expr)=>{
+                crate::governor::soundness::visit_expression_parts(expr,&mut |part| {
+                    match part {
+                        ExpressionPart::Sub(sub)=>remember_failure(pending.push(Node::Expression(sub)),&mut failure),
+                        ExpressionPart::Exists(body)=>{
+                            let address=std::ptr::from_ref(body) as usize;
+                            if placeholders.is_some_and(|map|map.contains_key(&address)) { false }
+                            else { remember_failure(bodies.push(body),&mut failure) }
+                        }
+                        ExpressionPart::Call(_)=>false,
+                    }
+                });
+            }
+        }
+        if let Some(error)=failure { return Err(error); }
+    }
+    Ok((bodies,operands))
+}
+
+fn remember_failure(result:Result<(),EvalError>,failure:&mut Option<EvalError>)->bool {
+    match result { Ok(())=>false,Err(error)=>{ *failure=Some(error);true } }
+}
+
+fn visit_lateral_operands_mut(
+    body:&mut GraphPattern,
+    visit:&mut impl FnMut(&mut Child<GraphPattern>,&mut crate::expr::CorrelatedMemory<'_>)->Result<bool,EvalError>,
+    memory:&mut crate::expr::CorrelatedMemory<'_>,
+)->Result<(),EvalError> {
+    let mut pending=AdmittedVec::new(memory.admission_mut().workspace());
+    pending.push(body)?;
+    while let Some(node)=pending.pop() {
+        match node {
+            GraphPattern::Lateral { left,right }=>{
+                if visit(right,memory)? { pending.push(&mut **right)?; }
+                pending.push(&mut **left)?;
+            }
+            node=>{
+                let mut failure=None;
+                crate::blank_scope::for_each_child_mut(node,&mut |child| {
+                    if failure.is_none() && let crate::blank_scope::ChildMut::Pattern(child)=child {
+                        if let Err(error)=pending.push(child) { failure=Some(error); }
+                    }
+                });
+                if let Some(error)=failure { return Err(error); }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn build_lateral_site<D:DatasetView+Sync>(operand:&GraphPattern,source:CorrelatedSource<'_>,deferrable:Deferrable,ctx:&EvalCtx<'_,D>)
+    ->Result<SharedWorkspace<LateralSite>,EvalError> {
+    struct Piece { body:Box<GraphPattern>,parent:Option<(usize,usize)> }
+    let workspace=&ctx.growth;
+    // Publish the actual empty frame control FIRST, so every subsequently
+    // created piece is destroyed before this shared original AST admission.
+    let owner=SharedWorkspace::new_admitted(std::sync::Mutex::new(crate::workspace::LexicalFrame::new(workspace)),workspace)?;
+    let copy={
+        let mut frame=owner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut memory=purrdf_lex::allocation::Memory::new(&mut *frame);
+        let copy=operand.clone_with_memory(&mut memory).map_err(|e|crate::expr::correlated_storage_error(&mut memory,e))?;
+        crate::expr::correlated_box(copy,&mut memory)?
+    };
+    #[cfg(test)]
+    crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(operand));
+    let mut mapping=SubstitutionSourceMap::default();
+    if ctx.ledger.is_some() { crate::enf::map_clone_admitted(operand,&copy,&mut mapping,workspace)?; }
+    let plan_map=SharedWorkspace::new_admitted(to_plan(&mapping,source.plan_map,workspace)?,workspace)?;
+    let mut pieces=AdmittedVec::new(workspace);
+    let mut queue=AdmittedVec::new(workspace);
+    queue.push(Piece { body:copy,parent:None })?;
+    while let Some(Piece { mut body,parent })=queue.pop() {
+        let index=pieces.len();
+        let mut frame=owner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let live=frame.live_bytes();
+        let mut memory=purrdf_lex::allocation::Memory::resume(&mut *frame,live);
+        visit_lateral_operands_mut(&mut body,&mut |right,memory| {
+            if !deferrable.operand(right,workspace)? { return Ok(true); }
+            let replacement=lateral_placeholder_with_memory(&[],memory)?;
+            let cut=std::mem::replace(right,replacement.into());
+            queue.push(Piece { body:cut.into_box(),parent:Some((index,std::ptr::from_ref::<GraphPattern>(&**right) as usize)) })?;
+            Ok(false)
+        },&mut memory)?;
+        pieces.push(Piece { body,parent })?;
+    }
+    let mut children_of=AdmittedVec::with_capacity(pieces.len(),workspace)?;
+    for _ in 0..pieces.len() { children_of.push(AdmittedVec::new(workspace))?; }
+    for (index,piece) in pieces.iter().enumerate() {
+        if let Some((parent,placeholder))=piece.parent { children_of.as_mut_slice()[parent].push((placeholder,index))?; }
+    }
+    let mut built=AdmittedVec::with_capacity(pieces.len(),workspace)?;
+    for _ in 0..pieces.len() { built.push(None)?; }
+    while let Some(Piece { mut body,.. })=pieces.pop() {
+        let index=pieces.len();
+        let mut children=AdmittedMap::default();
+        for &(placeholder,child) in children_of[index].iter() {
+            let site=built.as_mut_slice()[child].take().expect("children assembled before parents");
+            children.insert_admitted(placeholder,site,workspace)?;
+        }
+        if !children.is_empty() {
+            let mut frame=owner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let live=frame.live_bytes();
+            let mut memory=purrdf_lex::allocation::Memory::resume(&mut *frame,live);
+            visit_lateral_operands_mut(&mut body,&mut |right,memory| {
+                let address=std::ptr::from_ref::<GraphPattern>(&**right) as usize;
+                match (children.get(&address),&mut **right) {
+                    (Some(child),GraphPattern::Project { variables,.. })=>{
+                        let previous=std::mem::take(variables);
+                        memory.release_vec(previous).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+                        *variables=memory.collect(child.schema.vars().iter().cloned()).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+                        Ok(false)
+                    }
+                    _=>Ok(true),
+                }
+            },&mut memory)?;
+        }
+        let schema=(*crate::eval::syntactic_schema_admitted(&body,workspace)?).clone();
+        let mut vars=crate::solution::SchemaBuilder::new(workspace);
+        vars.try_extend(crate::expr::pattern_all_vars_admitted(&body,workspace)?.vars().iter().cloned())?;
+        for child in children.values() { vars.try_extend(child.vars.vars().iter().cloned())?; }
+        let vars=vars.finish()?;
+        let parallel_unsafe=!crate::parallel::is_parallel_safe_pattern_with_admitted(&body,ctx.safety_registries(),&|pattern| {
+            children.get(&(std::ptr::from_ref(pattern) as usize)).map(|child|child.parallel_unsafe)
+        },workspace)?;
+        built.as_mut_slice()[index]=Some(SharedWorkspace::new_admitted(LateralSite {
+            body,schema,vars,parallel_unsafe,plan_map:plan_map.clone(),children,sites:OnceLock::new(),body_owner:owner.clone(),
+        },workspace)?);
+    }
+    Ok(built.as_mut_slice()[0].take().expect("root is the first piece"))
+}
+
+fn build_site<D:DatasetView+Sync>(body:&GraphPattern,source:CorrelatedSource<'_>,ctx:&EvalCtx<'_,D>)->Result<ExistsSite,EvalError> {
+    let workspace=&ctx.growth;
+    let prepared=SharedWorkspace::new_admitted(PreparedExists::build_admitted(body,workspace)?,workspace)?;
+    let vars=crate::expr::pattern_all_vars_admitted(body,workspace)?;
+    let parallel_unsafe=!crate::parallel::is_parallel_safe_pattern_with_admitted(body,ctx.safety_registries(),&|_|None,workspace)?;
+    let service_uses=match ctx.endpoint_scan() {
+        crate::service_endpoints::EndpointScan::Absent=>AdmittedVec::new(workspace),
+        crate::service_endpoints::EndpointScan::Present(index)=>{
+            match ctx.plan_node(body).and_then(|body|index.exists_uses(body)) {
+                Some(uses)=>{ let mut out=AdmittedVec::new(workspace);out.try_extend(uses.iter().cloned())?;out },
+                None=>endpoint_uses(body,workspace)?,
+            }
+        }
+    };
+    let map=match (&ctx.ledger,prepared.as_ref()) {
+        (Some(_),PreparedExists::Pattern { ledger_source,.. })=>to_plan(ledger_source,source.plan_map,workspace)?,
+        _=>SubstitutionSourceMap::default(),
+    };
+    let plan_map=SharedWorkspace::new_admitted(map,workspace)?;
+    Ok(ExistsSite { prepared,vars,parallel_unsafe,service_uses,plan_map })
+}
+
+fn to_plan(map:&SubstitutionSourceMap,outer:Option<&SubstitutionSourceMap>,workspace:&WorkspaceCapability)->Result<SubstitutionSourceMap,EvalError> {
+    let mut output=SubstitutionSourceMap::default();
+    for (&address,entry) in map.iter() {
+        let source=outer.and_then(|outer|outer.get(&entry.source)).map_or(entry.source,|entry|entry.source);
+        output.insert_admitted(address,SubstitutionSource { source,counts_rows:entry.counts_rows },workspace)?;
+    }
+    Ok(output)
+}

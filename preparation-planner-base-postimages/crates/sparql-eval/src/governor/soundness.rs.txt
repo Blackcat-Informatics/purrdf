@@ -1,0 +1,68 @@
+        .map_err(|error| memory.admission_mut().storage_error(error, "plan spine walk"))?;
+    while let Some((node, context, depth)) = pending.pop() {
+        visit(node, context, depth)?;
+        let start = pending.len();
+        visit_classified_children_admitted(node, workspace, &mut |child, edge| {
+            let next = depth.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+            pending.try_push_admitted((child, context.descend(edge), next), &mut memory)
+                .map_err(|error| memory.admission_mut().storage_error(error, "plan spine walk"))?;
+            Ok(false)
+        })?;
+        pending.reverse_top(pending.len() - start);
+    }
+    pending.release_admitted(&mut memory)
+        .map_err(|error| memory.admission_mut().storage_error(error, "plan spine walk"))?;
+    Ok(())
+
+}
+
+/// Refuse an algebra too tall for the walks over it to fit the stack left here.
+///
+/// Every recursive step of the evaluation measures the stack it has left and refuses,
+/// typed, when it runs low; what this guards is the rest — the walks with no stack check
+/// that run once over the whole plan before its first operator (planning, blank-node
+/// scoping, the endpoint and parallel analyses). So the whole tree is measured,
+/// iteratively, against the stack the evaluation starts on ([`crate::stack::height`]): a
+/// parsed query, a prepared one run on another thread and a pattern built through
+/// [`crate::engine::PreparedQuery::rewritten`] alike are admitted exactly where
+/// that stack holds their walks, and refused with [`crate::EvalError::StackExhausted`]
+/// where it does not.
+///
+/// On `wasm32` the host engine's call stack, which no measurement reaches, bounds the
+/// evaluation's recursion too, so graph patterns nested deeper than
+/// [`crate::stack::height::WASM_GRAPH_PATTERN_DEPTH`] are refused there as well, with
+/// [`crate::EvalError::HostStackExhausted`].
+pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), crate::EvalError> {
+    crate::stack::height::admit_pattern(root)?;
+    if cfg!(target_arch = "wasm32") {
+        let limit = crate::stack::height::WASM_GRAPH_PATTERN_DEPTH;
+        let mut stack = vec![(root, 1_usize)];
+        while let Some((node, depth)) = stack.pop() {
+            if depth > limit {
+                return Err(crate::EvalError::HostStackExhausted {
+                    construct: "graph pattern",
+                });
+            }
+            visit_classified_children(node, &mut |child, _edge| {
+                stack.push((child, depth + 1));
+                false
+            });
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The answer-cap pushdown
+// ---------------------------------------------------------------------------
+
+/// The **arithmetic** of the cap pushdown: given that only the first `ceiling` rows of
+/// `pattern`'s output are needed, how many rows of the child at `ordinal` are enough?
+///
+/// `None` means "no finite prefix of that child is enough", which is the answer for every
+/// operator that can *drop* rows (`FILTER`, `DISTINCT`, `MINUS`, either arm of a `JOIN`)
+/// or *reorder* them (`ORDER BY`): to reach `k` rows out of a filter you may have to read
+/// the entire input, so there is no number to push.
+///
+/// # This is a second, independent condition — not a restatement of the licence
+///

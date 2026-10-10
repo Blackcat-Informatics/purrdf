@@ -1,0 +1,147 @@
+diff --git a/crates/sparql-eval/src/governor/soundness.rs b/crates/sparql-eval/src/governor/soundness.rs
+--- a/crates/sparql-eval/src/governor/soundness.rs
++++ b/crates/sparql-eval/src/governor/soundness.rs
+@@ -714,25 +714,47 @@
+ where
+     F: FnMut(&'a GraphPattern) -> bool,
+ {
+-    let mut pending: purrdf_core::SmallVec<[ExpressionPart<'a>; 16]> =
+-        purrdf_core::smallvec![ExpressionPart::Sub(expr)];
++
++    visit_exists_patterns_admitted(expr, &crate::WorkspaceCapability::resident(), &mut |body| Ok(visit(body)))
++        .expect("resident expression walk")
++}
++
++pub(crate) fn visit_exists_patterns_admitted<'a>(
++    expr: &'a Expression,
++    workspace: &crate::WorkspaceCapability,
++    visit: &mut impl FnMut(&'a GraphPattern) -> Result<bool, crate::EvalError>,
++) -> Result<bool, crate::EvalError> {
++    let mut storage = crate::workspace::LexicalFrame::new(workspace);
++    let mut pending = purrdf_lex::walk::WorkList::<ExpressionPart<'a>, 16>::new();
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++    pending.try_push_admitted(ExpressionPart::Sub(expr), &mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "EXISTS walk"))?;
++    let mut stopped = false;
+     while let Some(part) = pending.pop() {
+         match part {
+             ExpressionPart::Sub(sub) => {
+                 let start = pending.len();
++                let mut failure = None;
+                 visit_expression_parts(sub, &mut |child| {
+-                    pending.push(child);
+-                    false
++                    if let Err(error) = pending.try_push_admitted(child, &mut memory) {
++                        failure = Some(memory.admission_mut().storage_error(error, "EXISTS walk"));
++                        true
++                    } else { false }
+                 });
+-                // Preserve the recursive visitor's left-to-right order: child
+-                // ordinals are part of soundness certificates, not a work hint.
+-                pending[start..].reverse();
++                if let Some(error) = failure { return Err(error); }
++                // Reuse the same lexical work list's exact left-to-right order.
++                pending.reverse_top(pending.len() - start);
+             }
+-            ExpressionPart::Exists(pattern) if visit(pattern) => return true,
+-            ExpressionPart::Exists(_) | ExpressionPart::Call(_) => {}
++            ExpressionPart::Exists(pattern) => {
++                if visit(pattern)? { stopped = true; break; }
++            }
++            ExpressionPart::Call(_) => {}
+         }
+     }
+-    false
++    pending.release_admitted(&mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "EXISTS walk"))?;
++    Ok(stopped)
++
+ }
+ 
+ /// Visit every pattern that is a child of `pattern` for classification purposes: its
+@@ -746,12 +768,30 @@
+ where
+     F: FnMut(&'a GraphPattern, ChildEdge) -> bool,
+ {
+-    visit_pattern_parts(pattern, &mut |part| match part {
+-        PatternPart::Child(child, edge) => visit(child, edge),
+-        PatternPart::Expression(expr) => {
+-            visit_exists_patterns(expr, &mut |inner| visit(inner, ChildEdge::OPAQUE))
++
++    visit_classified_children_admitted(pattern, &crate::WorkspaceCapability::resident(), &mut |child, edge| Ok(visit(child, edge)))
++        .expect("resident classified child walk")
++}
++
++pub(crate) fn visit_classified_children_admitted<'a>(
++    pattern: &'a GraphPattern,
++    workspace: &crate::WorkspaceCapability,
++    visit: &mut impl FnMut(&'a GraphPattern, ChildEdge) -> Result<bool, crate::EvalError>,
++) -> Result<bool, crate::EvalError> {
++    let mut failure = None;
++    let stopped = visit_pattern_parts(pattern, &mut |part| {
++        let result = match part {
++            PatternPart::Child(child, edge) => visit(child, edge),
++            PatternPart::Expression(expr) =>
++                visit_exists_patterns_admitted(expr, workspace, &mut |inner| visit(inner, ChildEdge::OPAQUE)),
++        };
++        match result {
++            Ok(stop) => stop,
++            Err(error) => { failure = Some(error); true }
+         }
+-    })
++    });
++    match failure { Some(error) => Err(error), None => Ok(stopped) }
++
+ }
+ 
+ /// The classified edges of one node's children, indexed by the ordinal at which
+@@ -810,19 +850,38 @@
+ where
+     F: FnMut(&'a GraphPattern, SpineContext, usize),
+ {
+-    let mut stack: purrdf_core::SmallVec<[(&'a GraphPattern, SpineContext, usize); 16]> =
+-        purrdf_core::smallvec![(root, SpineContext::ROOT, 0_usize)];
+-    while let Some((node, context, depth)) = stack.pop() {
++
++    walk_spine_admitted(root, &crate::WorkspaceCapability::resident(), &mut |node, context, depth| {
+         visit(node, context, depth);
+-        let mut children = purrdf_core::SmallVec::<[(&GraphPattern, ChildEdge); 4]>::new();
+-        visit_classified_children(node, &mut |child, edge| {
+-            children.push((child, edge));
+-            false
+-        });
+-        for (child, edge) in children.into_iter().rev() {
+-            stack.push((child, context.descend(edge), depth + 1));
+-        }
++        Ok(())
++    }).expect("resident plan walk")
++}
++
++pub(crate) fn walk_spine_admitted<'a>(
++    root: &'a GraphPattern,
++    workspace: &crate::WorkspaceCapability,
++    visit: &mut impl FnMut(&'a GraphPattern, SpineContext, usize) -> Result<(), crate::EvalError>,
++) -> Result<(), crate::EvalError> {
++    let mut storage = crate::workspace::LexicalFrame::new(workspace);
++    let mut pending = purrdf_lex::walk::WorkList::<(&'a GraphPattern, SpineContext, usize), 16>::new();
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++    pending.try_push_admitted((root, SpineContext::ROOT, 0), &mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "plan spine walk"))?;
++    while let Some((node, context, depth)) = pending.pop() {
++        visit(node, context, depth)?;
++        let start = pending.len();
++        visit_classified_children_admitted(node, workspace, &mut |child, edge| {
++            let next = depth.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
++            pending.try_push_admitted((child, context.descend(edge), next), &mut memory)
++                .map_err(|error| memory.admission_mut().storage_error(error, "plan spine walk"))?;
++            Ok(false)
++        })?;
++        pending.reverse_top(pending.len() - start);
+     }
++    pending.release_admitted(&mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "plan spine walk"))?;
++    Ok(())
++
+ }
+ 
+ /// Refuse an algebra too tall for the walks over it to fit the stack left here.

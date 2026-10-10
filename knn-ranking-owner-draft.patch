@@ -1,0 +1,151 @@
+diff --git a/crates/sparql-eval/src/workspace.rs b/crates/sparql-eval/src/workspace.rs
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -56,6 +56,16 @@
+         Self { values: Vec::new(), allocation: None, workspace: workspace.clone() }
+     }
+ 
++    /// Transfer a buffer and its existing admission together after an in-place
++    /// representation change. Callers must retain the original allocation grant.
++    pub(crate) fn from_parts(
++        values: Vec<T>,
++        allocation: Option<WorkspaceAllocation>,
++        workspace: &WorkspaceCapability,
++    ) -> Self {
++        Self { values, allocation, workspace: workspace.clone() }
++    }
++
+     pub(crate) fn into_parts(self) -> (Vec<T>, Option<WorkspaceAllocation>) {
+         (self.values, self.allocation)
+     }
+diff --git a/crates/sparql-eval/src/knn/mod.rs b/crates/sparql-eval/src/knn/mod.rs
+--- a/crates/sparql-eval/src/knn/mod.rs
++++ b/crates/sparql-eval/src/knn/mod.rs
+@@ -669,35 +669,53 @@
+         query_row: usize,
+         k: usize,
+     ) -> Result<(Vec<Ranked>, u64), EvalError> {
+-        if k == 0 {
+-            // No neighbours were asked for, so no candidate is examined and no work is
+-            // reported. A zero request is a well-formed question with an empty answer.
+-            return Ok((Vec::new(), 0));
+-        }
+-        let arithmetic = resolve_here(declared)?;
+-        let rows = self.rows()?;
+-        let mut distances: Vec<Option<f64>> = vec![None; self.row_count()];
+-        arithmetic.distances(
+-            self.kernel.measure(),
+-            self.vector(query_row),
+-            self.norm_of(query_row),
+-            rows,
+-            &mut distances,
+-        );
+-        let mut scored: Vec<Ranked> = Vec::with_capacity(self.row_count());
+-        for (row, distance) in distances.into_iter().enumerate() {
+-            let distance = distance.ok_or_else(|| {
+-                EvalError::data(format!(
+-                    "the distance from row {query_row} to row {row} left the finite range \
+-                     under {:?}; the artifact's magnitudes cannot be ranked under this \
+-                     metric",
+-                    self.metric
+-                ))
+-            })?;
+-            scored.push(Ranked { distance, row });
+-        }
+-        let examined = scored.len() as u64;
+-        Ok((best(k, scored), examined))
++        let (ranked, examined) = self.search_admitted::<A>(
++            declared, query_row, k, &crate::WorkspaceCapability::default(),
++        )?;
++        Ok((ranked.into_parts().0, examined))
++    }
++
++    /// The same exhaustive batch kernel, with its actual buffers admitted before
++    /// allocation and the selected rows retaining their heap allocation.
++    fn search_admitted<A: Arithmetic>(
++        &self,
++        declared: Option<Selected<A>>,
++        query_row: usize,
++        k: usize,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<(crate::AdmittedVec<Ranked>, u64), EvalError> {
++        if k == 0 {
++            // No neighbours were asked for, so no candidate is examined and no work is
++            // reported. A zero request is a well-formed question with an empty answer.
++            return Ok((crate::AdmittedVec::new(workspace), 0));
++        }
++        let arithmetic = resolve_here(declared)?;
++        let rows = self.rows()?;
++        let mut distances = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
++        for _ in 0..self.row_count() {
++            distances.push(None)?;
++        }
++        arithmetic.distances(
++            self.kernel.measure(),
++            self.vector(query_row),
++            self.norm_of(query_row),
++            rows,
++            distances.as_mut_slice(),
++        );
++        let mut scored = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
++        for (row, distance) in distances.into_iter().enumerate() {
++            let distance = distance.ok_or_else(|| {
++                EvalError::data(format!(
++                    "the distance from row {query_row} to row {row} left the finite range \
++                     under {:?}; the artifact's magnitudes cannot be ranked under this \
++                     metric",
++                    self.metric
++                ))
++            })?;
++            scored.push(Ranked { distance, row })?;
++        }
++        let examined = u64::try_from(scored.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++        Ok((metric::best_admitted(k, scored, workspace)?, examined))
+     }
+ }
+ 
+diff --git a/crates/sparql-eval/src/knn/metric.rs b/crates/sparql-eval/src/knn/metric.rs
+--- a/crates/sparql-eval/src/knn/metric.rs
++++ b/crates/sparql-eval/src/knn/metric.rs
+@@ -350,7 +350,39 @@
+     if k == 0 {
+         return Vec::new();
+     }
+-    let mut heap: std::collections::BinaryHeap<Ranked> = std::collections::BinaryHeap::new();
++    select_best(k, candidates, std::collections::BinaryHeap::new())
++}
++
++/// Native selection retains the scored buffer while admitting the heap, then
++/// transfers the heap's allocation unchanged to the sorted result.
++/// Its capacity is bounded by the actual candidate count, even when k is huge.
++pub(crate) fn best_admitted(
++    k: usize,
++    candidates: crate::AdmittedVec<Ranked>,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<crate::AdmittedVec<Ranked>, crate::EvalError> {
++    let capacity = k.min(candidates.len());
++    if capacity == 0 {
++        return Ok(crate::AdmittedVec::new(workspace));
++    }
++    let layout = std::alloc::Layout::array::<Ranked>(capacity)
++        .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
++    let allocation = workspace.charge(u64::try_from(layout.size())
++        .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?)?;
++    let mut heap = std::collections::BinaryHeap::new();
++    heap.try_reserve_exact(capacity)
++        .map_err(|_| crate::EvalError::AllocationFailed { construct: "kNN ranking heap" })?;
++    let ranked = select_best(k, candidates, heap);
++    Ok(crate::AdmittedVec::from_parts(ranked, Some(allocation), workspace))
++}
++
++/// One ordering/selection body for resident and admitted callers. The native
++/// caller reserves min(k, candidate count), so this body cannot grow its heap.
++fn select_best(
++    k: usize,
++    candidates: impl IntoIterator<Item = Ranked>,
++    mut heap: std::collections::BinaryHeap<Ranked>,
++) -> Vec<Ranked> {
+     for candidate in candidates {
+         if heap.len() < k {
+             heap.push(candidate);
+

@@ -1,0 +1,14 @@
+    /// Transfer a native value through a trusted ownership-carrying publisher.
+    ///
+    /// There is no raw `(value, account)` extraction. On refusal, the remaining
+    /// payload dies before its original account; on success, the publisher's
+    /// result owns the transferred payload and its grant together.
+    ///
+    /// # Errors
+    /// Returns the publisher's original typed failure without erasing it.
+    pub fn publish_with<P: Publication<T, S>>(self, publisher: P) -> Result<P::Output, P::Error> {
+        let Self { value, storage } = self;
+        // Same field order as the original carrier; wrapping is allocation-free.
+        let mut pending = OwnedPatternValue::new(Some(value), storage);
+        publisher.publish(&mut pending.value, &mut pending.storage)
+    }

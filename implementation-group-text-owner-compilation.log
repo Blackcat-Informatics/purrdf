@@ -1,0 +1,30 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+error: unnecessary qualification
+   --> crates/xsd/src/numeric/exact_path.rs:131:9
+    |
+131 |         crate::exact::decimal::cmp_scaled_f64_admitted_using(coefficient, scale, ieee, storage, admit)
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+131 -         crate::exact::decimal::cmp_scaled_f64_admitted_using(coefficient, scale, ieee, storage, admit)
+131 +         exact::decimal::cmp_scaled_f64_admitted_using(coefficient, scale, ieee, storage, admit)
+    |
+
+error[E0618]: expected function, found `u64`
+   --> crates/xsd/src/exact/decimal.rs:668:13
+    |
+650 |         let drop = (scale - precision_wide).unsigned_abs();
+    |             ---- `drop` has type `u64`
+...
+668 |             drop(kept);
+    |             ^^^^------
+    |             |
+    |             call expression requires function
+
+For more information about this error, try `rustc --explain E0618`.
+error: could not compile `purrdf-xsd` (lib) due to 2 previous errors

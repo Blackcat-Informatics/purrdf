@@ -1,0 +1,32 @@
+    pub(crate) fn try_owned_value_of<D: DatasetView>(
+        &self,
+        dataset: &D,
+        term: SolutionTerm<D::Id>,
+        workspace: &crate::WorkspaceCapability,
+        source_error: impl Fn(D::ReadError) -> crate::EvalError,
+    ) -> Result<crate::WorkspaceTerm, crate::EvalError> {
+        if let SolutionTerm::Computed(id) = term {
+            return workspace.clone_term(self.computed_value(id));
+        }
+        let SolutionTerm::Existing(id) = term else {
+            unreachable!("computed terms returned above")
+        };
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        // This ordered carrier keeps the actual payload alive beneath its
+        // original frame until every fallible publication step has succeeded.
+        let mut value = {
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+            Some(dataset.term_value_with_memory(
+                id, &mut memory,
+                |error| match error {
+                    purrdf_core::TermLookupError::Read(error) => source_error(error),
+                    purrdf_core::TermLookupError::ForeignId => crate::NativeDiagnostic::error(
+                        crate::NativeDiagnosticKind::Internal,
+                        &"foreign dataset term id", workspace,
+                    ),
+                },
+                |error, memory| memory.admission_mut().storage_error(error, "resolved term value"),
+            )?)
+        };
+        frame.finish_term(|| value.take().expect("original term checked before publication"))
+    }

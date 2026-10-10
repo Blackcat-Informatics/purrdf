@@ -1,0 +1,33 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+error[E0433]: cannot find module or crate `alloc` in this scope
+ --> crates/lex/src/allocation.rs:6:5
+  |
+6 | use alloc::string::String;
+  |     ^^^^^ use of unresolved module or unlinked crate `alloc`
+  |
+  = help: add `extern crate alloc` to use the `alloc` crate
+
+error[E0433]: cannot find module or crate `alloc` in this scope
+ --> crates/lex/src/allocation.rs:7:5
+  |
+7 | use alloc::vec::Vec;
+  |     ^^^^^ use of unresolved module or unlinked crate `alloc`
+  |
+  = help: add `extern crate alloc` to use the `alloc` crate
+
+error: unnecessary qualification
+  --> crates/lex/src/allocation.rs:89:12
+   |
+89 |         if core::mem::size_of::<T>() != 0 && replacement.capacity() != required {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-qualifications` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+   |
+89 -         if core::mem::size_of::<T>() != 0 && replacement.capacity() != required {
+89 +         if size_of::<T>() != 0 && replacement.capacity() != required {
+   |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `purrdf-lex` (lib) due to 3 previous errors

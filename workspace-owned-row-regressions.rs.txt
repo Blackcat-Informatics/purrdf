@@ -1,0 +1,216 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Proposed workspace.rs unit tests. Not applied, compiled or executed. Exercises
+// actual QueryWorkspace/RowsBuilder APIs; public query/failure acceptance remains
+// required separately. The test provider intentionally does not latch refusal.
+#[cfg(test)]
+mod owned_row_regressions {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    use super::QueryWorkspace;
+    use crate::{
+        EvalError,
+        solution::{RowBag, RowsBuilder, Solution},
+    };
+    use purrdf_core::{TermId, WorkspaceReservation};
+
+    #[derive(Debug)]
+    struct Ledger {
+        live: AtomicU64,
+        clones: Arc<AtomicUsize>,
+        limit: u64,
+    }
+
+    #[derive(Debug)]
+    struct Refusal {
+        identity: u64,
+        clones: Arc<AtomicUsize>,
+    }
+    impl Clone for Refusal {
+        fn clone(&self) -> Self {
+            self.clones.fetch_add(1, Ordering::Relaxed);
+            Self {
+                identity: self.identity,
+                clones: self.clones.clone(),
+            }
+        }
+    }
+    impl std::fmt::Display for Refusal {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("non-latching reservation refusal")
+        }
+    }
+    impl std::error::Error for Refusal {}
+
+    #[derive(Debug)]
+    struct Reservation {
+        ledger: Arc<Ledger>,
+    }
+    impl WorkspaceReservation for Reservation {
+        type Error = Refusal;
+        fn resize(&mut self, bytes: u64) -> Result<(), Refusal> {
+            if bytes > self.ledger.limit {
+                return Err(Refusal {
+                    identity: 7,
+                    clones: self.ledger.clones.clone(),
+                });
+            }
+            self.ledger.live.store(bytes, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+    impl Drop for Reservation {
+        fn drop(&mut self) {
+            self.ledger.live.store(0, Ordering::Relaxed);
+        }
+    }
+
+    fn account(limit: u64) -> (QueryWorkspace<Refusal>, Arc<Ledger>, u64) {
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("concrete account layout");
+        assert!(base <= limit);
+        let ledger = Arc::new(Ledger {
+            live: AtomicU64::new(base),
+            clones: Arc::new(AtomicUsize::new(0)),
+            limit,
+        });
+        // This test fixture is constructed before exercising engine allocations.
+        let reservation: purrdf_core::OwnedWorkspaceReservation<Refusal> = Box::new(Reservation {
+            ledger: ledger.clone(),
+        });
+        (
+            QueryWorkspace::owned(reservation, 0).expect("pre-admitted account controls"),
+            ledger,
+            base,
+        )
+    }
+
+    #[test]
+    fn consuming_resident_iterator_moves_spilled_cells() {
+        let mut cells = Solution::<TermId>::new();
+        cells.try_reserve_exact(10).expect("resident test row");
+        cells.resize(10, None);
+        let original_buffer = cells.as_ptr();
+        let bag = RowBag::from(vec![cells]);
+        let mut rows = bag.into_iter();
+        let row = rows.next().expect("resident row");
+        assert_eq!(
+            row.as_ptr(),
+            original_buffer,
+            "consumption moves the original buffer"
+        );
+        drop(rows);
+        assert_eq!(row.len(), 10);
+        assert!(row.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn resident_reordering_moves_each_original_spill() {
+        let input: [Solution<TermId>; 4] = std::array::from_fn(|_| {
+            let mut cells = Solution::new();
+            cells.try_reserve_exact(10).expect("resident fixture cells");
+            cells.resize(10, None);
+            cells
+        });
+        let pointers = input.each_ref().map(|cells| cells.as_ptr());
+        let capability = crate::WorkspaceCapability::default();
+        let mut order = super::AdmittedVec::new(&capability);
+        for ordinal in [2, 0, 3, 1] {
+            order.push(ordinal).expect("resident permutation");
+        }
+        let reordered = RowBag::from(Vec::from(input))
+            .ordered_admitted(order, &capability)
+            .expect("row permutation");
+        for (row, original) in reordered.iter().zip([2, 0, 3, 1]) {
+            assert_eq!(
+                row.as_ptr(),
+                pointers[original],
+                "permutation moves the original spill"
+            );
+            assert_eq!(row.len(), 10);
+        }
+    }
+
+    #[test]
+    fn consuming_iterator_drop_keeps_extracted_spilled_row_admitted() {
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let mut builder = RowsBuilder::<TermId>::new(&capability);
+        // Cross the SmallVec inline capacity, exercising a real row-cell buffer.
+        for _ in 0..2 {
+            builder
+                .push_cells(10, std::iter::repeat_n(None, 10))
+                .expect("admitted row");
+        }
+        let bag = builder.finish().expect("admitted bag");
+        let all_rows = ledger.live.load(Ordering::Relaxed);
+        assert!(all_rows > base);
+        let shared = bag.clone();
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            all_rows,
+            "bag clone shares payload"
+        );
+        drop(bag);
+        let mut rows = shared.into_iter();
+        let first = rows.next().expect("first row");
+        drop(rows);
+        let extracted = ledger.live.load(Ordering::Relaxed);
+        assert!(extracted > base, "extracted row keeps its cell admission");
+        assert!(
+            extracted < all_rows,
+            "other row and bag storage are released"
+        );
+        assert_eq!(first.len(), 10);
+        assert!(first.iter().all(Option::is_none));
+        let clone = first.clone();
+        drop(first);
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            extracted,
+            "row clone keeps one payload"
+        );
+        drop(clone);
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            base,
+            "last row releases cell ownership"
+        );
+        drop(capability);
+        drop(workspace);
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            0,
+            "last account releases provider reservation"
+        );
+    }
+
+    #[test]
+    fn first_owned_refusal_moves_without_clone_and_account_stays_failed() {
+        let (workspace, ledger, _) = account(4096);
+        let capability = workspace.capability();
+        assert!(matches!(
+            capability.charge(4097),
+            Err(EvalError::WorkspaceStopped)
+        ));
+        assert!(workspace.has_failed());
+        let refusal = workspace.take_failure().expect("owned first cause");
+        assert_eq!(refusal.identity, 7);
+        assert_eq!(
+            ledger.clones.load(Ordering::Relaxed),
+            0,
+            "generic E was never cloned"
+        );
+        assert!(workspace.has_failed());
+        assert!(workspace.take_failure().is_none(), "cause moves once");
+        assert!(
+            matches!(capability.charge(0), Err(EvalError::WorkspaceStopped)),
+            "taking the cause cannot reopen a failed account"
+        );
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+}

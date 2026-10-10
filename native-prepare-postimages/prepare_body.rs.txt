@@ -1,0 +1,113 @@
+    #[allow(clippy::too_many_arguments, reason = "the existing cache identity and registry inputs remain separate borrowed components")]
+    fn prepare_keyed_admitted(
+        &mut self, text: &str, base_iri: Option<&str>, options: &ParserOptions,
+        relations: &crate::property_fn::PropertyFunctionRegistry,
+        aggregates: &crate::agg_fn::AggregateRegistry,
+        fingerprint: &str, agg_fingerprint: &str,
+        parameters: &[&str], exempt: &[&str], workspace: &crate::WorkspaceCapability,
+    ) -> Result<PreparedHandle, EvaluationFailure> {
+        let result = self.build_keyed_admitted(text, base_iri, options, relations,
+            aggregates, fingerprint, agg_fingerprint, parameters, exempt, workspace);
+        if result.is_err() && workspace.is_bounded() {
+            // A failed invocation leaves no new reusable array charged to its
+            // source. Existing successful cache entries retain their own grants.
+            drop(core::mem::take(&mut self.key_scratch));
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_arguments, reason = "the existing cache identity and registry inputs remain separate borrowed components")]
+    fn build_keyed_admitted(
+        &mut self, text: &str, base_iri: Option<&str>, options: &ParserOptions,
+        relations: &crate::property_fn::PropertyFunctionRegistry,
+        aggregates: &crate::agg_fn::AggregateRegistry,
+        fingerprint: &str, agg_fingerprint: &str,
+        parameters: &[&str], exempt: &[&str], workspace: &crate::WorkspaceCapability,
+    ) -> Result<PreparedHandle, EvaluationFailure> {
+        use purrdf_lex::allocation::Memory;
+        use crate::workspace::{AdmittedVec, LexicalFrame, SharedWorkspace};
+
+        PlanCacheKey { query: text, base_iri, options, relations: fingerprint,
+            aggregates: agg_fingerprint, parameters, exempt }
+            .write_into(&mut self.key_scratch, workspace)?;
+        if let Some(prepared) = self.entries.get(self.key_scratch.bytes.as_slice()) {
+            return Ok(prepared);
+        }
+        let key = PreparedCacheKey::copy_from(&self.key_scratch.bytes, workspace)?;
+        let count = parameters.len().checked_add(exempt.len())
+            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+        let mut names = AdmittedVec::with_capacity(count, workspace)?;
+        for name in parameters.iter().chain(exempt) { names.push(*name)?; }
+
+        let admitted = parse_admitted_query(text, options, base_iri, &names, workspace)?;
+        let (query, allocation, original_live) = admitted.into_parts();
+        let mut preparing = PreparingQuery {
+            query, source: None, source_schema: None, relations: String::new(), aggregates: String::new(),
+            frame: LexicalFrame::from_allocation(workspace, allocation, original_live),
+        };
+        let mut memory = Memory::resume(&mut preparing.frame, original_live);
+        let keep_source = crate::substitute::needs_assignment_join_with_memory(&preparing.query, &names, &mut memory)
+            .map_err(EvaluationFailure::from)?;
+        let source_begin = memory.live_bytes();
+        preparing.source = if keep_source {
+            let source = preparing.query.clone_with_memory(&mut memory)
+                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared source AST")))?;
+            let bytes = core::alloc::Layout::new::<Query>().size();
+            memory.add_bytes(bytes)
+                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared source box")))?;
+            let source = purrdf_lex::allocation::try_boxed(source)
+                .map_err(|_| crate::EvalError::AllocationFailed { construct: "prepared source box" })?;
+            Some(source)
+        } else { None };
+        let source_live = memory.live_bytes().checked_sub(source_begin)
+            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+        crate::substitute::join_assignments_with_prebinding_with_memory(&mut preparing.query, &names, &mut memory)
+            .map_err(EvaluationFailure::from)?;
+        drop(names);
+
+        admit_structure_with_memory::<true>(&preparing.query, &mut memory)?;
+        let before_plan = memory.live_bytes();
+        let planned = crate::property_fn_plan::plan_query_with_memory(
+            &preparing.query, relations, aggregates, parameters, &mut memory,
+        )?;
+        preparing.source_schema = changed_source_schema_admitted(&preparing.query, planned.as_ref(), workspace)?;
+        if let Some(planned) = planned {
+            let original_bytes = before_plan.checked_sub(source_live)
+                .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+            drop(core::mem::replace(&mut preparing.query, planned));
+            memory.release_bytes(original_bytes)
+                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared replaced AST")))?;
+        }
+        preparing.relations = memory.string(fingerprint)
+            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared relation identity")))?;
+        preparing.aggregates = memory.string(agg_fingerprint)
+            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared aggregate identity")))?;
+        // Retention statistics walk under the original memory, but confer no
+        // admission on the tree: every buffer above already holds its birth grant.
+        let bytes = prepared_payload_bytes_with_memory(
+            &preparing.query, preparing.source.as_deref(), preparing.source_schema.as_deref(),
+            preparing.relations.capacity(), preparing.aggregates.capacity(), &mut memory,
+        )?;
+        drop(memory);
+        let charge = PlanCharge::new(&self.memory, bytes);
+        let plan = crate::plan::PlanCache::default();
+        let value = PreparedQuery {
+            query: preparing.query, source: preparing.source, source_schema: preparing.source_schema,
+            relations: preparing.relations, aggregates: preparing.aggregates,
+            memory: charge, plan, certified_bytes: Some(bytes),
+            _allocation: preparing.frame.into_allocation(),
+        };
+        let prepared = if workspace.is_bounded() {
+            SharedWorkspace::new_admitted(value, workspace)?
+        } else {
+            Arc::new(value).into()
+        };
+        let retained = key.retained_size_bytes()
+            .checked_add(bytes)
+            .and_then(|n| n.checked_add(SharedWorkspace::<PreparedQuery>::control_bytes().saturating_sub(size_of::<PreparedQuery>())))
+            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+        if self.entries.insert_with_eviction_admitted(key, prepared.clone(), retained, workspace, |plan| plan.memory.detach())? {
+            prepared.memory.retain();
+        }
+        Ok(prepared)
+    }

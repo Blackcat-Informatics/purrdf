@@ -1,0 +1,797 @@
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -538,7 +538,8 @@
+         .expect("a typed literal without a language tag is well formed"))
+ }
+ 
+-/// Materialize a solution term to an owned value.
++/// Resident test interpreter adapter; production retains the owned carrier.
++#[cfg(test)]
+ pub(crate) fn value_of<D: DatasetView + Sync>(
+     ctx: &EvalCtx<'_, D>,
+     term: SolutionTerm<D::Id>,
+@@ -829,8 +830,8 @@
+     ta: SolutionTerm<D::Id>,
+     tb: SolutionTerm<D::Id>,
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let av = value_of(ctx, ta)?;
+-    let bv = value_of(ctx, tb)?;
++    let av = owned_value_of(ctx, ta)?;
++    let bv = owned_value_of(ctx, tb)?;
+     crate::cdt_fn::compare(relation, &av, &bv)
+         .map(|answer| intern_boolean(ctx, answer))
+         .transpose()
+@@ -947,8 +948,8 @@
+     // both sides to recurse componentwise (RDF 1.2 `op-2`: triple terms compare
+     // structurally under `=`, not sameTerm-or-unequal).
+     if term_is_triple(ctx, ta)? && term_is_triple(ctx, tb)? {
+-        let av = value_of(ctx, ta)?;
+-        let bv = value_of(ctx, tb)?;
++        let av = owned_value_of(ctx, ta)?;
++        let bv = owned_value_of(ctx, tb)?;
+         return rdf_equal_in(&av, &bv, ctx.language_strings)
+             .map(|eq| intern_boolean(ctx, eq))
+             .transpose();
+@@ -999,7 +1000,7 @@
+     if target == candidate {
+         return Ok(Some(!value_holds_nan(target_value)));
+     }
+-    let cv = value_of(ctx, candidate)?;
++    let cv = owned_value_of(ctx, candidate)?;
+     // Two numbers past the bounded variants align their coefficients to compare:
+     // priced from the lexical forms, which the comparison then reads.
+     if !(machine_word_lexical(target_value) && machine_word_lexical(&cv))
+@@ -1164,7 +1165,7 @@
+     term: SolutionTerm<D::Id>,
+ ) -> Result<bool, EvalError> {
+     if term_is_triple(ctx, term)? {
+-        return Ok(value_holds_nan(&value_of(ctx, term)?));
++        return Ok(value_holds_nan(&owned_value_of(ctx, term)?));
+     }
+     term_is_nan(ctx, term)
+ }
+@@ -5299,66 +5300,102 @@
+ /// and RDF 1.2 base direction.
+ pub(crate) type StringArg = (String, Option<String>, Option<RdfTextDirection>);
+ 
+-/// A term read as a string argument: its lexical form, language tag and base
+-/// direction, when it is a simple, `xsd:string`, `rdf:langString` or
+-/// `rdf:dirLangString` literal.
+-///
+-/// Out of line, so the per-row `String` it materializes is one compiled function
+-/// rather than a fragment of each expression-VM caller.
++/// A runtime string operand borrowing all text from its original admitted term.
++/// Program constants continue to use `StringArg` in the authored program pool.
++pub(crate) struct OwnedStringArg {
++    value: crate::WorkspaceTerm,
++    projection: StringProjection,
++}
++
++#[derive(Clone, Copy)]
++enum StringProjection { String, Str, Lang }
++
++impl std::fmt::Debug for OwnedStringArg {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("OwnedStringArg").finish_non_exhaustive()
++    }
++}
++
++impl OwnedStringArg {
++    fn read<D: DatasetView + Sync>(
++        ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::Id>, projection: StringProjection,
++    ) -> Result<Option<Self>, EvalError> {
++        // Preserve the original fast paths' type refusal BEFORE any payload copy
++        // or nested traversal. STR(blank/triple) and LANG(nonliteral) read no
++        // component strings and cannot turn a type error into extra I/O.
++        let valid = match term {
++            SolutionTerm::Existing(id) => ctx.dataset.with_term(id, |value| match (projection, value) {
++                (StringProjection::String, TermRef::Literal { datatype, .. }) =>
++                    ctx.dataset.with_term(datatype, |datatype| match datatype {
++                        TermRef::Iri(iri) => is_string_datatype(iri),
++                        _ => false,
++                    }),
++                (StringProjection::Str, TermRef::Iri(_) | TermRef::Literal { .. })
++                | (StringProjection::Lang, TermRef::Literal { .. }) => Ok(true),
++                _ => Ok(false),
++            }).map_err(|error| ctx.workspace.source_error(error))?
++                .map_err(|error| ctx.workspace.source_error(error))?,
++            SolutionTerm::Computed(id) => match (projection, ctx.scratch.computed_value(id)) {
++                (StringProjection::String, TermValue::Literal { datatype, .. }) => is_string_datatype(datatype),
++                (StringProjection::Str, TermValue::Iri(_) | TermValue::Literal { .. })
++                | (StringProjection::Lang, TermValue::Literal { .. }) => true,
++                _ => false,
++            },
++        };
++        if !valid { return Ok(None); }
++        Ok(Some(Self { value: owned_value_of(ctx, term)?, projection }))
++    }
++
++    /// Every slice remains borrowed from this immutable owner. STR and LANG
++    /// intentionally return the same plain-string facets as their old fast path.
++    pub(crate) fn parts(&self) -> (&str, Option<&str>, Option<RdfTextDirection>) {
++        match (self.projection, &*self.value) {
++            (StringProjection::String, TermValue::Literal { lexical_form, language, direction, .. }) =>
++                (lexical_form, language.as_deref(), *direction),
++            (StringProjection::Str, TermValue::Iri(iri)) => (iri, None, None),
++            (StringProjection::Str, TermValue::Literal { lexical_form, .. }) => (lexical_form, None, None),
++            (StringProjection::Lang, TermValue::Literal { language, .. }) =>
++                (language.as_deref().unwrap_or_default(), None, None),
++            _ => unreachable!("a runtime string carrier is classified before publication"),
++        }
++    }
++}
++
++fn is_string_datatype(datatype: &str) -> bool {
++    datatype == XSD_STRING || datatype == RDF_LANG_STRING || datatype == RDF_DIR_LANG_STRING
++}
++
++/// Materialize a transient term through the one native fallible fold/clone home.
++pub(crate) fn owned_value_of<D: DatasetView + Sync>(
++    ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::Id>,
++) -> Result<crate::WorkspaceTerm, EvalError> {
++    ctx.scratch.try_owned_value_of(ctx.dataset, term, &ctx.growth,
++        |error| ctx.workspace.source_error(error))
++}
++
+ #[inline(never)]
+ pub(crate) fn string_arg_of_term<D: DatasetView + Sync>(
+-    ctx: &EvalCtx<'_, D>,
+-    term: SolutionTerm<D::Id>,
+-) -> Result<Option<StringArg>, EvalError> {
+-    Ok(string_arg_value_owned(value_of(ctx, term)?))
+-}
+-
+-/// The lexical form `STR(term)` has, read straight off the term without minting it.
++    ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::Id>,
++) -> Result<Option<OwnedStringArg>, EvalError> {
++    OwnedStringArg::read(ctx, term, StringProjection::String)
++}
++
+ pub(crate) fn str_lexical_term<D: DatasetView + Sync>(
+-    ctx: &EvalCtx<'_, D>,
+-    term: SolutionTerm<D::Id>,
+-) -> Result<Option<String>, EvalError> {
+-    Ok(match term {
+-        SolutionTerm::Existing(id) => ctx
+-            .dataset
+-            .with_term(id, |term| match term {
+-                TermRef::Iri(iri) => Some(iri.to_owned()),
+-                TermRef::Literal { lexical, .. } => Some(lexical.to_owned()),
+-                TermRef::Blank { .. } | TermRef::Triple { .. } => None,
+-            })
+-            .map_err(EvalError::source_read)?,
+-        SolutionTerm::Computed(_) => match value_of(ctx, term)? {
+-            TermValue::Iri(iri) => Some(iri),
+-            TermValue::Literal { lexical_form, .. } => Some(lexical_form),
+-            TermValue::Blank { .. } | TermValue::Triple { .. } => None,
+-        },
+-    })
+-}
+-
+-/// The tag `LANG(term)` has, read straight off the term without minting it.
++    ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::Id>,
++) -> Result<Option<OwnedStringArg>, EvalError> {
++    OwnedStringArg::read(ctx, term, StringProjection::Str)
++}
++
+ pub(crate) fn lang_lexical_term<D: DatasetView + Sync>(
+-    ctx: &EvalCtx<'_, D>,
+-    term: SolutionTerm<D::Id>,
+-) -> Result<Option<String>, EvalError> {
+-    Ok(match term {
+-        SolutionTerm::Existing(id) => ctx
+-            .dataset
+-            .with_term(id, |term| match term {
+-                TermRef::Literal { language, .. } => Some(language.unwrap_or_default().to_owned()),
+-                _ => None,
+-            })
+-            .map_err(EvalError::source_read)?,
+-        SolutionTerm::Computed(_) => match value_of(ctx, term)? {
+-            TermValue::Literal { language, .. } => Some(language.unwrap_or_default()),
+-            _ => None,
+-        },
+-    })
++    ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::Id>,
++) -> Result<Option<OwnedStringArg>, EvalError> {
++    OwnedStringArg::read(ctx, term, StringProjection::Lang)
+ }
+ 
+ /// Extract `(lexical, language)` from a plain/`xsd:string`/`rdf:langString` literal
+ /// argument. `None` for any other term (a string-function type error).
+-fn string_arg(vals: &[Option<TermValue>], i: usize) -> Option<(String, Option<String>)> {
+-    string_arg_value(arg(vals, i)?).map(|(s, l, _)| (s, l))
++fn string_arg(vals: &[Option<TermValue>], i: usize) -> Option<(&str, Option<&str>)> {
++    string_arg3_ref(vals, i).map(|(lexical, language, _)| (lexical, language))
+ }
+ 
+ /// [`plain_string_arg`] without the copy: the lexical form of a simple literal or
+@@ -5392,15 +5429,6 @@
+ /// whose language would silently be discarded.
+ fn plain_string_arg(vals: &[Option<TermValue>], i: usize) -> Option<String> {
+     plain_string_arg_ref(vals, i).map(str::to_owned)
+-}
+-
+-/// Like [`string_arg`] but also returns the RDF 1.2 base direction (for functions
+-/// that must preserve or inspect it, e.g. `CONCAT`).
+-fn string_arg3(
+-    vals: &[Option<TermValue>],
+-    i: usize,
+-) -> Option<(String, Option<String>, Option<RdfTextDirection>)> {
+-    string_arg_value(arg(vals, i)?)
+ }
+ 
+ fn string_arg3_ref(vals: &[Option<TermValue>], i: usize) -> Option<(&str, Option<&str>, Option<RdfTextDirection>)> {
+@@ -5436,51 +5464,7 @@
+         language: language.map(|lang| crate::workspace::string(lang, "string result language")).transpose()?,
+         direction,
+     };
+-    let before = ctx.scratch.owned_value_count();
+-    let term = intern_leaf(ctx, value)?;
+-    if ctx.scratch.owned_value_count() > before { ctx.keep_computed(admission); }
+-    Ok(term)
+-}
+-
+-fn string_arg_value(
+-    value: &TermValue,
+-) -> Option<(String, Option<String>, Option<RdfTextDirection>)> {
+-    match value {
+-        TermValue::Literal {
+-            lexical_form,
+-            datatype,
+-            language,
+-            direction,
+-        } if datatype == XSD_STRING
+-            || datatype == RDF_LANG_STRING
+-            || datatype == RDF_DIR_LANG_STRING =>
+-        {
+-            Some((lexical_form.clone(), language.clone(), *direction))
+-        }
+-        _ => None,
+-    }
+-}
+-
+-/// By-value twin of [`string_arg_value`]: the same datatype guard, but MOVES the
+-/// lexical form and language out of an owned `TermValue` the caller is about to drop,
+-/// saving the two `String` clones per evaluated string argument.
+-fn string_arg_value_owned(
+-    value: TermValue,
+-) -> Option<(String, Option<String>, Option<RdfTextDirection>)> {
+-    match value {
+-        TermValue::Literal {
+-            lexical_form,
+-            datatype,
+-            language,
+-            direction,
+-        } if datatype == XSD_STRING
+-            || datatype == RDF_LANG_STRING
+-            || datatype == RDF_DIR_LANG_STRING =>
+-        {
+-            Some((lexical_form, language, direction))
+-        }
+-        _ => None,
+-    }
++    ctx.intern_workspace_term(crate::WorkspaceTerm::new(value, admission))
+ }
+ 
+ /// Apply a pure string transform to a single string argument, preserving its
+@@ -5540,10 +5524,7 @@
+         language: language.map(|lang| crate::workspace::string(lang, "case result language")).transpose()?,
+         direction,
+     };
+-    let before = ctx.scratch.owned_value_count();
+-    let term = intern_leaf(ctx, value)?;
+-    if ctx.scratch.owned_value_count() > before { ctx.keep_computed(admission); }
+-    Ok(term)
++    ctx.intern_workspace_term(crate::WorkspaceTerm::new(value, admission))
+ }
+ 
+ /// Intern a string literal, as `rdf:langString@lang` if a language is present, else
+@@ -5634,10 +5615,8 @@
+     }
+     let datatype = crate::workspace::string(datatype, "CONCAT datatype")?;
+     let language = language.map(|lang| crate::workspace::string(lang, "CONCAT language")).transpose()?;
+-    let before = ctx.scratch.owned_value_count();
+-    let term = intern_leaf(ctx, TermValue::Literal { lexical_form: out, datatype, language, direction })?;
+-    if ctx.scratch.owned_value_count() > before { ctx.keep_computed(admission); }
+-    Ok(term)
++    ctx.intern_workspace_term(crate::WorkspaceTerm::new(
++        TermValue::Literal { lexical_form: out, datatype, language, direction }, admission))
+ }
+ 
+ /// `SUBSTR(str, start[, length])`: XPath F&O `fn:substring` over SPARQL's
+@@ -5772,7 +5751,7 @@
+     vals: &[Option<TermValue>],
+     linked: Option<&crate::xpath_regex::LinkedPattern>,
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let Some((s, lang, dir)) = string_arg3(vals, 0) else {
++    let Some((s, lang, dir)) = string_arg3_ref(vals, 0) else {
+         return Ok(None);
+     };
+     let (Some(pattern), Some(replacement)) =
+@@ -5801,7 +5780,7 @@
+         return Ok(None);
+     };
+     let replaced = replaced.into_owned();
+-    make_string_dir(ctx, replaced, lang, dir)
++    make_string_dir(ctx, replaced, lang.map(str::to_owned), dir)
+ }
+ 
+ /// The compiled pattern for `(pattern, flags)`, from the per-query cache.
+@@ -6032,15 +6011,11 @@
+     ctx: &mut EvalCtx<'_, D>,
+     vals: &[Option<TermValue>],
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let triple = triple_value(
+-        arg(vals, 0).cloned(),
+-        arg(vals, 1).cloned(),
+-        arg(vals, 2).cloned(),
+-    );
+-    Ok(triple
+-        .map(|triple| intern(ctx, triple))
+-        .transpose()?
+-        .flatten())
++    let subject = arg(vals, 0).map(|value| ctx.growth.clone_term(value)).transpose()?;
++    let predicate = arg(vals, 1).map(|value| ctx.growth.clone_term(value)).transpose()?;
++    let object = arg(vals, 2).map(|value| ctx.growth.clone_term(value)).transpose()?;
++    let triple = triple_value_admitted(subject, predicate, object, &ctx.growth)?;
++    triple.map(|value| ctx.intern_workspace_term(value)).transpose().map(Option::flatten)
+ }
+ 
+ /// The triple term `TRIPLE(s, p, o)` builds from its operands' values, uninterned: unbound
+@@ -6048,6 +6023,7 @@
+ /// predicate an IRI. Under RDF 1.2 a triple term may nest only in *object* position, so
+ /// a triple term (or literal) in the subject/predicate slot is a type error, as is a
+ /// literal predicate — all of which yield an unbound result.
++#[cfg(test)]
+ pub(crate) fn triple_value(
+     s: Option<TermValue>,
+     p: Option<TermValue>,
+@@ -6067,16 +6043,53 @@
+     })
+ }
+ 
++/// Assemble the actual nested constructor from already admitted native operands.
++/// Ownership is transferred only after all three fallible boxes exist. The new
++/// payload grant covers the exact moved strings/child boxes and the three new
++/// native boxes while the original operand grants still cover those operands.
++pub(crate) fn triple_value_admitted(
++    s: Option<crate::WorkspaceTerm>, p: Option<crate::WorkspaceTerm>, o: Option<crate::WorkspaceTerm>,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
++    let (Some(s), Some(p), Some(o)) = (s, p, o) else { return Ok(None); };
++    if !matches!(&*s, TermValue::Iri(_) | TermValue::Blank { .. }) || !matches!(&*p, TermValue::Iri(_)) {
++        return Ok(None);
++    }
++    let mut bytes = 0u64;
++    for value in [&*s, &*p, &*o] {
++        bytes = bytes.checked_add(crate::retained::term_layout(value, workspace)?.bytes)
++            .ok_or(EvalError::WorkspaceBoundOverflow)?;
++    }
++    let boxes = std::alloc::Layout::array::<TermValue>(3).map_err(|_| EvalError::WorkspaceBoundOverflow)?.size();
++    bytes = bytes.checked_add(u64::try_from(boxes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)
++        .ok_or(EvalError::WorkspaceBoundOverflow)?;
++    let admission = workspace.charge(bytes)?;
++    let (s, s_owner) = s.into_parts();
++    let (p, p_owner) = p.into_parts();
++    let (o, o_owner) = o.into_parts();
++    let s = purrdf_core::small::try_boxed(s)
++        .map_err(|_| EvalError::AllocationFailed { construct: "TRIPLE subject box" })?;
++    let p = purrdf_core::small::try_boxed(p)
++        .map_err(|_| EvalError::AllocationFailed { construct: "TRIPLE predicate box" })?;
++    let o = purrdf_core::small::try_boxed(o)
++        .map_err(|_| EvalError::AllocationFailed { construct: "TRIPLE object box" })?;
++    let value = TermValue::Triple { s: s.into(), p: p.into(), o: o.into() };
++    let value = crate::WorkspaceTerm::new(value, admission);
++    drop((s_owner, p_owner, o_owner));
++    Ok(Some(value))
++}
++
++
+ /// Extract a component of a triple term (`SUBJECT`/`PREDICATE`/`OBJECT`).
+ fn triple_part<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>,
+     vals: &[Option<TermValue>],
+-    pick: impl Fn(TermValue, TermValue, TermValue) -> TermValue,
++    pick: impl for<'a> Fn(&'a TermValue, &'a TermValue, &'a TermValue) -> &'a TermValue,
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+     match arg(vals, 0) {
+         Some(TermValue::Triple { s, p, o }) => {
+-            let part = pick((**s).clone(), (**p).clone(), (**o).clone());
+-            Ok(intern(ctx, part)?)
++            let part = ctx.growth.clone_term(pick(s, p, o))?;
++            ctx.intern_workspace_term(part)
+         }
+         _ => Ok(None),
+     }
+--- a/crates/sparql-eval/src/vm/mod.rs
++++ b/crates/sparql-eval/src/vm/mod.rs
+@@ -103,19 +103,76 @@
+     /// An effective boolean value, or an error.
+     Ebv(Option<bool>),
+     /// A string argument (lexical form, lower-cased tag and base direction), or absent.
+-    Str(Option<helpers::StringArg>),
++    Str(Option<helpers::OwnedStringArg>),
+     /// The program's string constant at this index, read in place rather than copied.
+     StrConst(u32),
+     /// A triple term a constructor built for the constructor it is the object of, not
+     /// interned, or unbound.
+-    Value(Option<TermValue>),
++    Value(Option<crate::WorkspaceTerm>),
+     /// An `IN` in progress: the needle, its value, and whether a candidate raised.
+     In {
+         target: SolutionTerm<I>,
+-        value: TermValue,
++        value: crate::WorkspaceTerm,
+         saw_error: bool,
+     },
+ }
++
++/// Actual dispatch still reads its original native `[Option<TermValue>]` slice.
++/// This owner keeps every payload's original grant through that entire call,
++/// including a SPARQL-bodied suspension, without copying any argument values.
++pub(crate) struct Arguments {
++    values: crate::AdmittedVec<Option<TermValue>>,
++    // Declaration order drops all payloads before their original grants.
++    allocations: crate::AdmittedVec<Option<crate::WorkspaceAllocation>>,
++}
++
++impl std::fmt::Debug for Arguments {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("Arguments").field("len", &self.values.len()).finish_non_exhaustive()
++    }
++}
++
++impl std::ops::Deref for Arguments {
++    type Target = [Option<TermValue>];
++    fn deref(&self) -> &Self::Target { &self.values }
++}
++
++impl Arguments {
++    fn new(workspace: &crate::WorkspaceCapability) -> Self {
++        Self { values: crate::AdmittedVec::new(workspace), allocations: crate::AdmittedVec::new(workspace) }
++    }
++
++    fn with_capacity(capacity: usize, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
++        Ok(Self {
++            values: crate::AdmittedVec::with_capacity(capacity, workspace)?,
++            allocations: crate::AdmittedVec::with_capacity(capacity, workspace)?,
++        })
++    }
++
++    fn clear(&mut self) {
++        self.values.clear();
++        self.allocations.clear();
++    }
++
++    fn push(&mut self, value: Option<crate::WorkspaceTerm>) -> Result<(), EvalError> {
++        // Admit both metadata slots BEFORE separating the original payload owner.
++        // A refused push still drops WorkspaceTerm's payload before its grant.
++        self.allocations.push(None)?;
++        self.values.push(None)?;
++        if let Some(value) = value {
++            let (value, allocation) = value.into_parts();
++            let index = self.values.len() - 1;
++            self.allocations.as_mut_slice()[index] = Some(allocation);
++            self.values.as_mut_slice()[index] = Some(value);
++        }
++        Ok(())
++    }
++
++    fn take(&mut self, workspace: &crate::WorkspaceCapability) -> Self {
++        std::mem::replace(self, Self::new(workspace))
++    }
++}
++
+ 
+ /// The value stack. On the heap rather than inline: a link lives in the frame of the
+ /// operator it evaluates for, and an `EXISTS` it runs, or an `OPTIONAL` whose join it
+@@ -171,7 +228,7 @@
+         func: &'d crate::user_fn::UserFunction,
+         body: &'d Arc<crate::engine::PreparedQuery>,
+         call: u32,
+-        vals: Vec<Option<TermValue>>,
++        vals: Arguments,
+     },
+ }
+ 
+@@ -196,7 +253,7 @@
+     stack: ValStack<I>,
+     /// A function call's argument values, refilled by every call instruction, so a row
+     /// that calls a function reuses one buffer instead of allocating its own.
+-    args: Vec<Option<TermValue>>,
++    args: Arguments,
+     // The linked buffers are destroyed before their physical admission.
+     _allocation: Option<crate::WorkspaceAllocation>,
+     _exists_allocation: Option<crate::WorkspaceAllocation>,
+@@ -275,7 +332,6 @@
+             std::alloc::Layout::array::<ConstCell<I>>(if program.consts.len() > 4 { program.consts.len() } else { 0 }),
+             std::alloc::Layout::array::<RegexSlot>(program.regexes.len()),
+             std::alloc::Layout::array::<Val<I>>(stack_capacity),
+-            std::alloc::Layout::array::<Option<TermValue>>(args_capacity),
+         ];
+         let mut bytes = 0usize;
+         for layout in arrays {
+@@ -301,8 +357,7 @@
+         }
+         let mut stack = Vec::new();
+         stack.try_reserve_exact(stack_capacity).map_err(|_| EvalError::AllocationFailed { construct: "VM value stack" })?;
+-        let mut args = Vec::new();
+-        args.try_reserve_exact(args_capacity).map_err(|_| EvalError::AllocationFailed { construct: "VM argument cells" })?;
++        let args = Arguments::with_capacity(args_capacity, &ctx.growth)?;
+         Ok(Self {
+             consts,
+             slots,
+@@ -326,7 +381,7 @@
+             regexes: self.regexes.clone(),
+             exists: self.exists.clone(),
+             stack: Vec::new(),
+-            args: Vec::new(),
++            args: Arguments::new(&crate::WorkspaceCapability::resident()),
+             _allocation: None,
+             _exists_allocation: None,
+         }
+@@ -463,7 +518,7 @@
+                         pc = end as usize;
+                     }
+                     Some(target) => {
+-                        let value = helpers::value_of(ctx, target)?;
++                        let value = helpers::owned_value_of(ctx, target)?;
+                         stack.push(Val::In {
+                             target,
+                             value,
+@@ -550,42 +605,42 @@
+                 Op::Call { call, argc, regex } => {
+                     pop_values(stack, argc, ctx, args)?;
+                     let compiled = regex.and_then(|slot| regexes[slot as usize].linked());
+-                    let value = helpers::apply_function(
+-                        &program.calls[call as usize],
+-                        args,
+-                        ctx,
+-                        compiled,
+-                    )?;
+-                    stack.push(Val::Term(value));
++                    let result = helpers::apply_function(
++                        &program.calls[call as usize], args, ctx, compiled,
++                    );
++                    args.clear();
++                    stack.push(Val::Term(result?));
+                 }
+                 Op::CallCustom { call, argc } => {
+                     pop_values(stack, argc, ctx, args)?;
+-                    let value = match call_custom(program, call, args, ctx)? {
+-                        VmStep::Value(value) => value,
+-                        VmStep::Suspend(suspend) => resolve(suspend, program, row, schema, ctx)?,
+-                    };
+-                    stack.push(Val::Term(value));
++                    let result = match call_custom(program, call, args, ctx) {
++                        Ok(VmStep::Value(value)) => Ok(value),
++                        Ok(VmStep::Suspend(suspend)) => resolve(suspend, program, row, schema, ctx),
++                        Err(error) => Err(error),
++                    };
++                    args.clear();
++                    stack.push(Val::Term(result?));
+                 }
+                 Op::Triple { intern } => {
+                     let object = match stack.pop() {
+                         Some(Val::Term(term)) => {
+-                            term.map(|t| helpers::value_of(ctx, t)).transpose()?
++                            term.map(|t| helpers::owned_value_of(ctx, t)).transpose()?
+                         }
+                         Some(Val::Value(value)) => value,
+                         Some(_) => return Err(mistyped("a term or a triple term value")),
+                         None => return Err(underflow()),
+                     };
+                     let predicate = pop_term(stack)?
+-                        .map(|t| helpers::value_of(ctx, t))
++                        .map(|t| helpers::owned_value_of(ctx, t))
+                         .transpose()?;
+                     let subject = pop_term(stack)?
+-                        .map(|t| helpers::value_of(ctx, t))
++                        .map(|t| helpers::owned_value_of(ctx, t))
+                         .transpose()?;
+-                    let value = helpers::triple_value(subject, predicate, object);
++                    let value = helpers::triple_value_admitted(subject, predicate, object, &ctx.growth)?;
+                     stack.push(if intern {
+                         Val::Term(
+                             value
+-                                .map(|value| helpers::intern(ctx, value))
++                                .map(|value| ctx.intern_workspace_term(value))
+                                 .transpose()?
+                                 .flatten(),
+                         )
+@@ -610,8 +665,7 @@
+                     stack.push(Val::Str(
+                         term.map(|t| helpers::str_lexical_term(ctx, t))
+                             .transpose()?
+-                            .flatten()
+-                            .map(|s| (s, None, None)),
++                            .flatten(),
+                     ));
+                 }
+                 Op::ToLangLexical => {
+@@ -619,8 +673,7 @@
+                     stack.push(Val::Str(
+                         term.map(|t| helpers::lang_lexical_term(ctx, t))
+                             .transpose()?
+-                            .flatten()
+-                            .map(|s| (s, None, None)),
++                            .flatten(),
+                     ));
+                 }
+                 Op::StrPred(pred) => {
+@@ -630,13 +683,13 @@
+                         // §17.4.1.1: an incompatible pair is an error, not `false`.
+                         (Some(h), Some(n))
+                             if helpers::args_compatible(
+-                                h.1.as_deref(),
+-                                h.2,
+-                                n.1.as_deref(),
+-                                n.2,
++                                h.parts().1,
++                                h.parts().2,
++                                n.parts().1,
++                                n.parts().2,
+                             ) =>
+                         {
+-                            let (h, n) = (h.0.as_str(), n.0.as_str());
++                            let (h, n) = (h.parts().0, n.parts().0);
+                             let holds = match pred {
+                                 StrPred::Contains => h.contains(n),
+                                 StrPred::StrStarts => h.starts_with(n),
+@@ -654,25 +707,25 @@
+                     // string is an error, never "no flags". The stack holds the
+                     // operands text, pattern, flags, so they pop in reverse.
+                     let flags = if flags {
+-                        pop_str(stack, &program.strs)?.filter(|f| f.1.is_none())
++                        pop_str(stack, &program.strs)?.filter(|f| f.parts().1.is_none())
+                     } else {
+-                        Some(std::borrow::Cow::Borrowed(&NO_FLAGS))
++                        Some(StrArg::Borrowed(&NO_FLAGS))
+                     };
+                     // The pattern is a simple literal too; the text may be any string.
+-                    let pattern = pop_str(stack, &program.strs)?.filter(|p| p.1.is_none());
++                    let pattern = pop_str(stack, &program.strs)?.filter(|p| p.parts().1.is_none());
+                     let text = pop_str(stack, &program.strs)?;
+                     let value = match (text, pattern, flags) {
+                         (Some(text), Some(pattern), Some(flags)) => {
+-                            let flags = flags.0.as_str();
++                            let flags = flags.parts().0;
+                             let compiled = crate::xpath_regex::resolve(
+                                 ctx,
+-                                &pattern.0,
++                                pattern.parts().0,
+                                 flags,
+                                 regexes[slot as usize].linked(),
+                             )?;
+                             match compiled {
+                                 Some(re) => re
+-                                    .is_match(&text.0)?
++                                    .is_match(text.parts().0)?
+                                     .map(|holds| helpers::intern_boolean(ctx, holds))
+                                     .transpose()?,
+                                 None => None,
+@@ -687,8 +740,8 @@
+                     let tag = pop_str(stack, &program.strs)?;
+                     // Both are simple literals (§17.4.3.13); a tagged one is an error.
+                     let value = match (tag, range) {
+-                        (Some(tag), Some(range)) if tag.1.is_none() && range.1.is_none() => Some(
+-                            helpers::intern_boolean(ctx, helpers::lang_matches(&tag.0, &range.0))?,
++                        (Some(tag), Some(range)) if tag.parts().1.is_none() && range.parts().1.is_none() => Some(
++                            helpers::intern_boolean(ctx, helpers::lang_matches(tag.parts().0, range.parts().0))?,
+                         ),
+                         _ => None,
+                     };
+@@ -737,7 +790,7 @@
+ fn call_custom<'e, 'd, D: DatasetView + Sync>(
+     program: &ExprProgram,
+     call: u32,
+-    vals: &[Option<TermValue>],
++    vals: &mut Arguments,
+     ctx: &mut EvalCtx<'d, D>,
+ ) -> Result<VmStep<'e, 'd, D::Id>, EvalError> {
+     let Function::Custom(iri) = &program.calls[call as usize] else {
+@@ -751,7 +804,7 @@
+             func,
+             body,
+             call,
+-            vals: vals.to_vec(),
++            vals: vals.take(&ctx.growth),
+         }));
+     }
+     helpers::apply_custom_host(iri.as_str(), vals, ctx).map(VmStep::Value)
+@@ -796,7 +849,7 @@
+     stack: &mut ValStack<D::Id>,
+     argc: u32,
+     ctx: &EvalCtx<'_, D>,
+-    vals: &mut Vec<Option<TermValue>>,
++    vals: &mut Arguments,
+ ) -> Result<(), EvalError> {
+     let start = stack
+         .len()
+@@ -807,7 +860,7 @@
+         let Val::Term(term) = entry else {
+             return Err(mistyped("a term"));
+         };
+-        vals.push(term.map(|t| helpers::value_of(ctx, t)).transpose()?);
++        vals.push(term.map(|t| helpers::owned_value_of(ctx, t)).transpose()?)?;
+     }
+     Ok(())
+ }
+@@ -828,23 +881,31 @@
+     }
+ }
+ 
+-/// A string argument as an instruction reads it: its lexical form, lower-cased tag and
+-/// base direction, owned when the program computed it and borrowed when it is one of the program's
+-/// constants.
+-type StrArg<'p> = std::borrow::Cow<'p, helpers::StringArg>;
+-
+-/// The flags an omitted `REGEX` flags argument reads as.
++/// Constants are borrowed from the authored program; runtime operands preserve
++/// their own original term lease. Neither representation deep-clones on a pop.
++enum StrArg<'p> {
++    Borrowed(&'p helpers::StringArg),
++    Owned(helpers::OwnedStringArg),
++}
++
++impl StrArg<'_> {
++    fn parts(&self) -> (&str, Option<&str>, Option<purrdf_core::RdfTextDirection>) {
++        match self {
++            Self::Borrowed(value) => (&value.0, value.1.as_deref(), value.2),
++            Self::Owned(value) => value.parts(),
++        }
++    }
++}
++
++/// The flags an omitted REGEX argument reads as, without an allocation.
+ static NO_FLAGS: helpers::StringArg = (String::new(), None, None);
+ 
+-/// Pop a string argument: one the program computed, or one of its constants `strs`,
+-/// borrowed where it stands.
+ fn pop_str<'p, I: Copy>(
+-    stack: &mut ValStack<I>,
+-    strs: &'p [helpers::StringArg],
++    stack: &mut ValStack<I>, strs: &'p [helpers::StringArg],
+ ) -> Result<Option<StrArg<'p>>, EvalError> {
+     match stack.pop() {
+-        Some(Val::Str(value)) => Ok(value.map(std::borrow::Cow::Owned)),
+-        Some(Val::StrConst(k)) => Ok(Some(std::borrow::Cow::Borrowed(&strs[k as usize]))),
++        Some(Val::Str(value)) => Ok(value.map(StrArg::Owned)),
++        Some(Val::StrConst(k)) => Ok(Some(StrArg::Borrowed(&strs[k as usize]))),
+         Some(_) => Err(mistyped("a string argument")),
+         None => Err(underflow()),
+     }
+--- a/crates/sparql-eval/src/vm/tests.rs
++++ b/crates/sparql-eval/src/vm/tests.rs
+@@ -354,7 +354,8 @@
+                     Expression::Literal(lit) => Some(lit.value().to_owned()),
+                     other => self
+                         .term(other, row, schema, ctx)?
+-                        .and_then(|term| helpers::str_lexical_term(ctx, term).unwrap()),
++                        .and_then(|term| helpers::str_lexical_term(ctx, term).unwrap())
++                        .map(|value| value.parts().0.to_owned()),
+                 };
+                 Ok(lexical.map(|s| (s, None, None)))
+             }
+@@ -366,7 +367,8 @@
+                     ),
+                     other => self
+                         .term(other, row, schema, ctx)?
+-                        .and_then(|term| helpers::lang_lexical_term(ctx, term).unwrap()),
++                        .and_then(|term| helpers::lang_lexical_term(ctx, term).unwrap())
++                        .map(|value| value.parts().0.to_owned()),
+                 };
+                 Ok(lexical.map(|s| (s, None, None)))
+             }
+@@ -374,7 +376,10 @@
+                 let Some(term) = self.term(expr, row, schema, ctx)? else {
+                     return Ok(None);
+                 };
+-                Ok(helpers::string_arg_of_term(ctx, term).unwrap())
++                Ok(helpers::string_arg_of_term(ctx, term).unwrap().map(|value| {
++                    let (lexical, language, direction) = value.parts();
++                    (lexical.to_owned(), language.map(str::to_owned), direction)
++                }))
+             }
+         }
+     }

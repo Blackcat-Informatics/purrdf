@@ -1,0 +1,393 @@
+diff --git a/crates/iri/src/parse.rs b/crates/iri/src/parse.rs
+index 8b2943f04..f17ca3874 100644
+--- a/crates/iri/src/parse.rs
++++ b/crates/iri/src/parse.rs
+@@ -311,16 +311,85 @@ pub(crate) fn classify(s: &str) -> Result<IriForm> {
+ /// public diagnostic-producing parse APIs retain their original messages.
+ #[must_use]
+ pub fn absolute_verdict(s: &str) -> Option<bool> {
+-    scan_with(s, Mode::Iri, Diagnostics::Verdict).ok().map(|spans| spans.scheme.is_some())
++    scan_with(s, Mode::Iri, Diagnostics::Verdict)
++        .ok()
++        .map(|spans| spans.scheme.is_some())
++}
++
++/// A native lexical error or a physical diagnostic-storage refusal.
++#[derive(Debug)]
++pub enum IriReadError {
++    /// The same IRI grammar error and exact message as resident recognition.
++    Lexical(IriError),
++    /// Original physical refusal before diagnostic allocation.
++    Storage(purrdf_lex::allocation::StorageError),
++}
++impl From<IriError> for IriReadError {
++    fn from(error: IriError) -> Self {
++        Self::Lexical(error)
++    }
++}
++impl From<purrdf_lex::allocation::StorageError> for IriReadError {
++    fn from(error: purrdf_lex::allocation::StorageError) -> Self {
++        Self::Storage(error)
++    }
++}
++impl core::fmt::Display for IriReadError {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self {
++            Self::Lexical(error) => core::fmt::Display::fmt(error, f),
++            Self::Storage(error) => core::fmt::Display::fmt(error, f),
++        }
++    }
++}
++impl std::error::Error for IriReadError {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        match self {
++            Self::Lexical(error) => Some(error),
++            Self::Storage(error) => Some(error),
++        }
++    }
++}
++
++/// Run the existing IRI recognition law under original diagnostic admission.
++///
++/// Successful recognition owns no parsed-text copy. Any owned grammar-error text
++/// remains in `memory`; the caller retains its original grant until that error is
++/// destroyed or rendered into its independently admitted terminal carrier.
++///
++/// # Errors
++/// Returns the original grammar failure or typed physical refusal.
++pub fn is_absolute_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++    s: &str,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> core::result::Result<bool, IriReadError> {
++    let memory = core::cell::RefCell::new(memory);
++    let render = |message: core::fmt::Arguments<'_>| memory.borrow_mut().format(&message);
++    scan_with(s, Mode::Iri, Diagnostics::Admitted(&render)).map(|spans| spans.scheme.is_some())
+ }
+ 
+ /// Internal diagnostic storage policy; it does not change any grammar decision.
+ #[derive(Clone, Copy)]
+-pub(crate) enum Diagnostics { Owned, Verdict }
++pub(crate) enum Diagnostics<'a> {
++    Owned,
++    Verdict,
++    Admitted(
++        &'a dyn Fn(
++            core::fmt::Arguments<'_>,
++        ) -> core::result::Result<String, purrdf_lex::allocation::StorageError>,
++    ),
++}
+ 
+-impl Diagnostics {
+-    pub(crate) fn message(self, message: core::fmt::Arguments<'_>) -> String {
+-        match self { Self::Owned => message.to_string(), Self::Verdict => String::new() }
++impl Diagnostics<'_> {
++    pub(crate) fn message(
++        self,
++        message: core::fmt::Arguments<'_>,
++    ) -> core::result::Result<String, IriReadError> {
++        match self {
++            Self::Owned => Ok(message.to_string()),
++            Self::Verdict => Ok(String::new()),
++            Self::Admitted(render) => render(message).map_err(IriReadError::Storage),
++        }
+     }
+ }
+ 
+@@ -348,12 +417,22 @@ fn parse_inner(s: &str, mode: Mode) -> Result<Iri> {
+ /// Split and validate `s`'s components, returning their spans. The whole grammar
+ /// lives here; [`parse_inner`] adds the owned text and nothing else.
+ fn scan(s: &str, mode: Mode) -> Result<Spans> {
+-    scan_with(s, mode, Diagnostics::Owned)
++    match scan_with(s, mode, Diagnostics::Owned) {
++        Ok(spans) => Ok(spans),
++        Err(IriReadError::Lexical(error)) => Err(error),
++        Err(IriReadError::Storage(_)) => {
++            unreachable!("resident diagnostic rendering has no storage callback")
++        }
++    }
+ }
+ 
+-fn scan_with(s: &str, mode: Mode, diagnostics: Diagnostics) -> Result<Spans> {
++fn scan_with(
++    s: &str,
++    mode: Mode,
++    diagnostics: Diagnostics<'_>,
++) -> core::result::Result<Spans, IriReadError> {
+     if s.is_empty() {
+-        return Err(IriError::Empty);
++        return Err(IriError::Empty.into());
+     }
+ 
+     // ---- Component split (RFC-3986 Appendix B, hand-rolled) -------------------
+@@ -392,7 +471,7 @@ fn scan_with(s: &str, mode: Mode, diagnostics: Diagnostics) -> Result<Spans> {
+         let first_seg = &s[pstart..pend];
+         let seg = first_seg.split('/').next().unwrap_or("");
+         if let Some(rel) = seg.find(':') {
+-            return Err(IriError::DisallowedChar(':', pstart + rel));
++            return Err(IriError::DisallowedChar(':', pstart + rel).into());
+         }
+     }
+     let path = pstart..pend;
+@@ -441,18 +520,21 @@ fn find_scheme_colon(s: &str) -> Option<usize> {
+     }
+ }
+ 
+-fn validate_scheme_with(s: &str, diagnostics: Diagnostics) -> Result<()> {
++fn validate_scheme_with(
++    s: &str,
++    diagnostics: Diagnostics<'_>,
++) -> core::result::Result<(), IriReadError> {
+     let b = s.as_bytes();
+     if b.is_empty() {
+-        return Err(IriError::MissingScheme);
++        return Err(IriError::MissingScheme.into());
+     }
+     if !b[0].is_ascii_alphabetic() {
+-        return Err(IriError::BadScheme(diagnostics.message(format_args!("{s}"))));
++        return Err(IriError::BadScheme(diagnostics.message(format_args!("{s}"))?).into());
+     }
+     for &c in &b[1..] {
+         // scheme tail = ALPHA / DIGIT / `+` `-` `.` (ASCII-only by grammar).
+         if !ascii_class(c, SCHEME_TAIL) {
+-            return Err(IriError::BadScheme(diagnostics.message(format_args!("{s}"))));
++            return Err(IriError::BadScheme(diagnostics.message(format_args!("{s}"))?).into());
+         }
+     }
+     Ok(())
+@@ -725,7 +807,12 @@ fn clean_prefix_len(word: &[u8; CLEAN_WORD], extra_mask: u8) -> usize {
+     (u64::from_le_bytes(lanes).trailing_ones() / u8::BITS) as usize
+ }
+ 
+-fn validate_authority_with(s: &str, base_off: usize, mode: Mode, diagnostics: Diagnostics) -> Result<()> {
++fn validate_authority_with(
++    s: &str,
++    base_off: usize,
++    mode: Mode,
++    diagnostics: Diagnostics<'_>,
++) -> core::result::Result<(), IriReadError> {
+     // authority = [ userinfo "@" ] host [ ":" port ]
+     // Userinfo cannot contain an unescaped '@', so the first '@' delimits it.
+     let (userinfo, rest, host_off) = match find_byte(s.as_bytes(), b'@') {
+@@ -749,14 +836,17 @@ fn validate_authority_with(s: &str, base_off: usize, mode: Mode, diagnostics: Di
+                     (host, Some(host_off + close + 2), Some(stripped))
+                 } else {
+                     return Err(IriError::BadAuthority(
+-                        diagnostics.message(format_args!("trailing characters after IP-literal")),
+-                    ));
++                        diagnostics
++                            .message(format_args!("trailing characters after IP-literal"))?,
++                    )
++                    .into());
+                 }
+             }
+             None => {
+                 return Err(IriError::BadAuthority(
+-                    diagnostics.message(format_args!("unterminated IP-literal '['")),
+-                ));
++                    diagnostics.message(format_args!("unterminated IP-literal '['"))?,
++                )
++                .into());
+             }
+         }
+     } else {
+@@ -774,7 +864,7 @@ fn validate_authority_with(s: &str, base_off: usize, mode: Mode, diagnostics: Di
+     if let (Some(p), Some(poff)) = (port, port_off) {
+         for (k, c) in p.char_indices() {
+             if !c.is_ascii_digit() {
+-                return Err(IriError::DisallowedChar(c, poff + k));
++                return Err(IriError::DisallowedChar(c, poff + k).into());
+             }
+         }
+         // RFC 3986 §3.2.3 defines the generic syntax as `port = *DIGIT`.
+diff --git a/crates/iri/src/host.rs b/crates/iri/src/host.rs
+index a398b1720..1e21afff5 100644
+--- a/crates/iri/src/host.rs
++++ b/crates/iri/src/host.rs
+@@ -34,7 +34,7 @@
+ //! ```
+ 
+ use crate::error::{IriError, Result};
+-use crate::parse::{Diagnostics, validate_component};
++use crate::parse::{Diagnostics, IriReadError, validate_component};
+ 
+ /// Which grammar a production is read under.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -212,7 +212,12 @@ fn reg_name(s: &str, base_off: usize, mode: Mode) -> Result<()> {
+ 
+ /// Validate an authority's `host` (`s`, found at byte `base_off` of the whole
+ /// reference).
+-pub(crate) fn validate_host_with(s: &str, base_off: usize, mode: Mode, diagnostics: Diagnostics) -> Result<()> {
++pub(crate) fn validate_host_with(
++    s: &str,
++    base_off: usize,
++    mode: Mode,
++    diagnostics: Diagnostics<'_>,
++) -> core::result::Result<(), IriReadError> {
+     if let Some(inner) = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+         // IP-literal = "[" ( IPv6address / IPvFuture ) "]". Character
+         // membership alone does not establish either production.
+@@ -220,34 +225,40 @@ pub(crate) fn validate_host_with(s: &str, base_off: usize, mode: Mode, diagnosti
+     }
+     // IPv4address / reg-name. Every IPv4address is a reg-name spelling, so
+     // the reg-name check decides the union exactly.
+-    reg_name(s, base_off, mode)
++    reg_name(s, base_off, mode).map_err(IriReadError::Lexical)
+ }
+ 
+ /// Validate an IP-literal's contents (`inner`, found at byte `base_off`)
+ /// without normalizing its spelling.
+-fn validate_ip_literal_with(inner: &str, base_off: usize, diagnostics: Diagnostics) -> Result<()> {
++fn validate_ip_literal_with(
++    inner: &str,
++    base_off: usize,
++    diagnostics: Diagnostics<'_>,
++) -> core::result::Result<(), IriReadError> {
+     if matches!(inner.as_bytes().first(), Some(b'v' | b'V')) {
+         // IPvFuture = "v" 1*HEXDIG "." 1*( unreserved / sub-delims / ":" ).
+         // ABNF string literals are case-insensitive.
+-        let (version, address) = inner[1..].split_once('.').ok_or_else(|| {
+-            IriError::BadAuthority(diagnostics.message(format_args!(
++        let Some((version, address)) = inner[1..].split_once('.') else {
++            return Err(IriError::BadAuthority(diagnostics.message(format_args!(
+                 "IPvFuture at byte {base_off} requires a version and '.'"
+-            )))
+-        })?;
++            ))?)
++            .into());
++        };
+         if version.is_empty() || address.is_empty() {
+             return Err(IriError::BadAuthority(diagnostics.message(format_args!(
+                 "IPvFuture at byte {base_off} needs a nonempty version and address"
+-            ))));
++            ))?)
++            .into());
+         }
+         for (at, ch) in version.char_indices() {
+             if !ch.is_ascii_hexdigit() {
+-                return Err(IriError::DisallowedChar(ch, base_off + 1 + at));
++                return Err(IriError::DisallowedChar(ch, base_off + 1 + at).into());
+             }
+         }
+         let address_off = base_off + version.len() + 2;
+         for (at, ch) in address.char_indices() {
+             if !crate::terminals::is_ipvfuture_address_char(ch) {
+-                return Err(IriError::DisallowedChar(ch, address_off + at));
++                return Err(IriError::DisallowedChar(ch, address_off + at).into());
+             }
+         }
+         return Ok(());
+@@ -257,7 +268,8 @@ fn validate_ip_literal_with(inner: &str, base_off: usize, diagnostics: Diagnosti
+     } else {
+         Err(IriError::BadAuthority(diagnostics.message(format_args!(
+             "invalid IPv6 address {inner:?} at byte {base_off}"
+-        ))))
++        ))?)
++        .into())
+     }
+ }
+ 
+diff --git a/crates/iri/src/lib.rs b/crates/iri/src/lib.rs
+index 48758f1e1..878da74cb 100644
+--- a/crates/iri/src/lib.rs
++++ b/crates/iri/src/lib.rs
+@@ -173,5 +173,7 @@ pub use curie::{
+     split_local_name,
+ };
+ pub use error::{IriError, Result};
+-pub use parse::{Iri, absolute_verdict, is_absolute, parse, parse_uri};
++pub use parse::{
++    Iri, IriReadError, absolute_verdict, is_absolute, is_absolute_with_memory, parse, parse_uri,
++};
+ pub use pos::{LineIndex, Position, PositionError};
+diff --git a/crates/rdf-core/tests/native_regex_storage.rs b/crates/rdf-core/tests/native_regex_storage.rs
+index 00d868e2b..45f3b41d5 100644
+--- a/crates/rdf-core/tests/native_regex_storage.rs
++++ b/crates/rdf-core/tests/native_regex_storage.rs
+@@ -573,3 +573,87 @@ fn native_string_append_refusal_preserves_original_buffer_and_utf8() {
+     assert_eq!(measured.peak_working_bytes, 2);
+     assert_eq!(measured.retained_bytes, 2);
+ }
++
++#[test]
++fn native_iri_recognition_preserves_the_exact_resident_law_without_owned_success_text() {
++    use purrdf_lex::allocation::Memory;
++    for input in [
++        "http://example.org/é?q=é#é",
++        "urn:plain",
++        "/relative",
++        "http://host/%41",
++        "",
++        "urn:bad%",
++        "urn:<bad>",
++        "http://host:abc",
++        "1bad:scheme",
++    ] {
++        let expected = purrdf_iri::is_absolute(input);
++        let mut account = Account::new(0);
++        let window = CurrentThreadWindow::open();
++        let mut memory = Memory::new(&mut account);
++        let actual = purrdf_iri::is_absolute_with_memory(input, &mut memory);
++        match (actual, expected) {
++            (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
++            (Err(purrdf_iri::IriReadError::Lexical(actual)), Err(expected)) => {
++                assert_eq!(actual, expected);
++            }
++            _ => panic!("native and resident recognition differ for {input}"),
++        }
++        let measured = window.close();
++        assert_eq!(memory.live_bytes(), 0);
++        assert_eq!(
++            measured.allocations, 0,
++            "recognition owns no discarded text"
++        );
++        assert_eq!(measured.retained_bytes, 0);
++    }
++}
++
++#[test]
++fn native_iri_dynamic_error_keeps_its_exact_message_and_original_capacity() {
++    use purrdf_lex::allocation::Memory;
++    let input = format!("http://[{}]", "badé".repeat(2048));
++    let expected = purrdf_iri::is_absolute(&input).unwrap_err();
++    let mut account = Account::new(1_000_000);
++    let window = CurrentThreadWindow::open();
++    let mut memory = Memory::new(&mut account);
++    let purrdf_iri::IriReadError::Lexical(error) =
++        purrdf_iri::is_absolute_with_memory(&input, &mut memory).unwrap_err()
++    else {
++        panic!("generous physical admission must preserve lexical error");
++    };
++    let measured = window.close();
++    assert_eq!(error, expected);
++    let purrdf_iri::IriError::BadAuthority(text) = error else {
++        panic!("invalid IPv6 must retain its authority message");
++    };
++    assert_eq!(memory.live_bytes(), text.capacity());
++    assert_eq!(
++        usize::try_from(measured.retained_bytes).unwrap(),
++        text.capacity()
++    );
++    memory.release_string(text).unwrap();
++    assert_eq!(memory.live_bytes(), 0);
++    assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
++}
++
++#[test]
++fn native_iri_diagnostic_storage_refusal_is_not_a_lexical_failure_or_success() {
++    use purrdf_lex::allocation::Memory;
++    let input = format!("http://[{}]", "badé".repeat(2048));
++    for limit in [0, 16, 1024, 8192] {
++        let mut account = Account::new(limit);
++        let window = CurrentThreadWindow::open();
++        let failure = purrdf_iri::is_absolute_with_memory(&input, &mut Memory::new(&mut account))
++            .unwrap_err();
++        let measured = window.close();
++        assert!(matches!(
++            failure,
++            purrdf_iri::IriReadError::Storage(StorageError::AdmissionFailed)
++        ));
++        assert!(account.refused.unwrap() > limit);
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
++        assert_eq!(measured.retained_bytes, 0);
++    }
++}

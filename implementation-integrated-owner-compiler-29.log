@@ -1,0 +1,42 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+error: expected a pattern, found an expression
+   --> crates/sparql-results/src/json.rs:280:29
+    |
+280 |         SparqlResult::Graph(dataset.into()) => {
+    |                             ^^^^^^^^^^^^^^ not a pattern
+    |
+    = note: arbitrary expressions are not allowed in patterns: <https://doc.rust-lang.org/book/ch19-00-patterns.html>
+help: consider moving the expression to a match arm guard
+    |
+280 -         SparqlResult::Graph(dataset.into()) => {
+280 +         SparqlResult::Graph(val) if val == dataset.into() => {
+    |
+help: consider extracting the expression into a `const`
+    |
+272 +     const VAL: /* Type */ = dataset.into();
+273 |     match result {
+274 |         SparqlResult::Solutions {
+...
+280 |         ),
+281 ~         SparqlResult::Graph(VAL) => {
+    |
+
+error[E0425]: cannot find value `dataset` in this scope
+   --> crates/sparql-results/src/json.rs:281:37
+    |
+281 |             SKELETON.saturating_add(dataset.quad_count().saturating_mul(64))
+    |                                     ^^^^^^^ not found in this scope
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-sparql-results` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-results` (lib test) due to 2 previous errors

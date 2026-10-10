@@ -1,0 +1,133 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+error: hidden lifetime parameters in types are deprecated
+   --> crates/rdf-core/src/xsd_regex/scan.rs:279:36
+    |
+279 |         budget: &mut super::xpath::Budget,
+    |                      --------------^^^^^^
+    |                      |
+    |                      expected lifetime parameter
+    |
+    = note: `-D elided-lifetimes-in-paths` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(elided_lifetimes_in_paths)]`
+help: indicate the anonymous lifetime
+    |
+279 |         budget: &mut super::xpath::Budget<'_>,
+    |                                          ++++
+
+error: hidden lifetime parameters in types are deprecated
+   --> crates/rdf-core/src/xsd_regex/scan.rs:364:36
+    |
+364 |         budget: &mut super::xpath::Budget,
+    |                      --------------^^^^^^
+    |                      |
+    |                      expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+364 |         budget: &mut super::xpath::Budget<'_>,
+    |                                          ++++
+
+error: hidden lifetime parameters in types are deprecated
+  --> crates/rdf-core/src/xsd_regex/xflag.rs:95:32
+   |
+95 |     budget: &mut super::xpath::Budget,
+   |                  --------------^^^^^^
+   |                  |
+   |                  expected lifetime parameter
+   |
+help: indicate the anonymous lifetime
+   |
+95 |     budget: &mut super::xpath::Budget<'_>,
+   |                                      ++++
+
+error: hidden lifetime parameters in types are deprecated
+  --> crates/rdf-core/src/xsd_regex/xpath/compile.rs:30:58
+   |
+30 |     fn parse(profile: Profile, flags: &str, budget: &mut Budget) -> Result<Self, Error> {
+   |                                                          ^^^^^^ expected lifetime parameter
+   |
+help: indicate the anonymous lifetime
+   |
+30 |     fn parse(profile: Profile, flags: &str, budget: &mut Budget<'_>) -> Result<Self, Error> {
+   |                                                                ++++
+
+error: hidden lifetime parameters in types are deprecated
+   --> crates/rdf-core/src/xsd_regex/xpath/compile.rs:581:46
+    |
+581 | pub(super) fn owned(text: &str, budget: &mut Budget) -> Result<String, Error> {
+    |                                              ^^^^^^ expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+581 | pub(super) fn owned(text: &str, budget: &mut Budget<'_>) -> Result<String, Error> {
+    |                                                    ++++
+
+error: hidden lifetime parameters in types are deprecated
+   --> crates/rdf-core/src/xsd_regex/xpath/compile.rs:592:25
+    |
+592 | fn grow<T>(budget: &mut Budget, arena: &mut Vec<T>, cells: u64) -> Result<(), Error> {
+    |                         ^^^^^^ expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+592 | fn grow<T>(budget: &mut Budget<'_>, arena: &mut Vec<T>, cells: u64) -> Result<(), Error> {
+    |                               ++++
+
+error: hidden lifetime parameters in types are deprecated
+   --> crates/rdf-core/src/xsd_regex/xpath/pike.rs:241:65
+    |
+241 | pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget) -> Result<Links, Error> {
+    |                                                                 ^^^^^^ expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+241 | pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget<'_>) -> Result<Links, Error> {
+    |                                                                       ++++
+
+error: hidden lifetime parameters in types are deprecated
+  --> crates/rdf-core/src/xsd_regex/xpath/replace.rs:12:51
+   |
+12 | fn next<'a>(cursor: &mut Cursor<'a>, budget: &mut Budget) -> Result<Option<Part<'a>>, Error> {
+   |                                                   ^^^^^^ expected lifetime parameter
+   |
+help: indicate the anonymous lifetime
+   |
+12 | fn next<'a>(cursor: &mut Cursor<'a>, budget: &mut Budget<'_>) -> Result<Option<Part<'a>>, Error> {
+   |                                                         ++++
+
+error: hidden lifetime parameters in types are deprecated
+  --> crates/rdf-core/src/xsd_regex/xpath/replace.rs:21:54
+   |
+21 | fn append(out: &mut String, text: &str, budget: &mut Budget) -> Result<(), Error> {
+   |                                                      ^^^^^^ expected lifetime parameter
+   |
+help: indicate the anonymous lifetime
+   |
+21 | fn append(out: &mut String, text: &str, budget: &mut Budget<'_>) -> Result<(), Error> {
+   |                                                            ++++
+
+error: unreachable `pub` item
+   --> crates/rdf-core/src/ir/term_walk.rs:432:1
+    |
+432 |   pub fn try_fold_nested_with_storage<N: Copy, C: ?Sized, T, E>(
+    |   ^--
+    |   |
+    |  _help: consider restricting its visibility: `pub(super)`
+    | |
+433 | |     root: N,
+434 | |     ctx: &mut C,
+435 | |     mut enter: impl FnMut(&mut C, N) -> Result<Nested<N, T>, E>,
+436 | |     mut triple: impl FnMut(&mut C, N, T, T, T) -> Result<T, E>,
+437 | |     mut storage_error: impl FnMut(std::collections::TryReserveError) -> E,
+438 | | ) -> Result<T, E> {
+    | |_________________^
+    |
+    = help: or consider exporting it for use by other crates
+    = note: `-D unreachable-pub` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unreachable_pub)]`
+
+error: could not compile `purrdf-core` (lib) due to 10 previous errors
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,59 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0624]: method `term_count` is private
+    --> crates/rdf-core/tests/native_regex_storage.rs:1079:24
+     |
+1079 |     assert_eq!(builder.term_count(), 128);
+     |                        ^^^^^^^^^^ private method
+     |
+    ::: crates/rdf-core/src/ir/builder.rs:1829:5
+     |
+1829 |     pub(crate) fn term_count(&self) -> usize {
+     |     ---------------------------------------- private method defined here
+
+error[E0624]: method `term_count` is private
+    --> crates/rdf-core/tests/native_regex_storage.rs:1109:24
+     |
+1109 |     assert_eq!(builder.term_count(), 128);
+     |                        ^^^^^^^^^^ private method
+     |
+    ::: crates/rdf-core/src/ir/builder.rs:1829:5
+     |
+1829 |     pub(crate) fn term_count(&self) -> usize {
+     |     ---------------------------------------- private method defined here
+
+error[E0624]: method `term_count` is private
+    --> crates/rdf-core/tests/native_regex_storage.rs:1123:24
+     |
+1123 |     assert_eq!(builder.term_count(), 129);
+     |                        ^^^^^^^^^^ private method
+     |
+    ::: crates/rdf-core/src/ir/builder.rs:1829:5
+     |
+1829 |     pub(crate) fn term_count(&self) -> usize {
+     |     ---------------------------------------- private method defined here
+
+For more information about this error, try `rustc --explain E0624`.
+error: could not compile `purrdf-core` (test "native_regex_storage") due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: unnecessary qualification
+    --> crates/sparql-eval/src/modifier.rs:8926:9
+     |
+8926 |         purrdf_core::WorkspaceReservation::resize(
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+8926 -         purrdf_core::WorkspaceReservation::resize(
+8926 +         WorkspaceReservation::resize(
+     |
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 1 previous error

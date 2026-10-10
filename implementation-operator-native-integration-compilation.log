@@ -1,0 +1,3 @@
+error: package ID specification `purrdf-knn` did not match any packages
+
+help: a package with a similar name exists: `purrdf-cdt`

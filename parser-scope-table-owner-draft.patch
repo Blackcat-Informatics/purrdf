@@ -1,0 +1,2171 @@
+diff --git a/crates/sparql-algebra/src/parser/table.rs b/crates/sparql-algebra/src/parser/table.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/sparql-algebra/src/parser/table.rs
+@@ -0,0 +1,446 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Parser lookup storage with an exact, fallible native array allocation.
++//!
++//! Keys order lookup only; consumers keep declaration/output order separately.
++//! AVL links are array indices, so widening a query never allocates tree nodes
++//! through an opaque collection. Vacant slots are reused after removal.
++
++use core::{cmp::Ordering, mem};
++use purrdf_lex::allocation::{Admission, Memory, StorageError};
++
++#[derive(Clone)]
++struct Entry<K, V> {
++    key: K,
++    value: V,
++    parent: Option<usize>,
++    left: Option<usize>,
++    right: Option<usize>,
++    height: usize,
++}
++
++#[derive(Clone)]
++enum Slot<K, V> {
++    Live(Entry<K, V>),
++    Free(Option<usize>),
++}
++
++/// One balanced lookup tree in a caller-admitted reusable slot arena.
++///
++/// Both empty construction and every lookup are allocation-free. The memory
++/// supplied to growth/release must be the original memory of this arena.
++pub(super) struct ScopeTable<K, V> {
++    slots: Vec<Slot<K, V>>,
++    root: Option<usize>,
++    free: Option<usize>,
++    len: usize,
++}
++
++impl<K, V> Default for ScopeTable<K, V> {
++    fn default() -> Self {
++        Self { slots: Vec::new(), root: None, free: None, len: 0 }
++    }
++}
++
++impl<K, V> ScopeTable<K, V> {
++    pub(super) fn is_empty(&self) -> bool { self.len == 0 }
++
++    fn entry(&self, index: usize) -> &Entry<K, V> {
++        match &self.slots[index] {
++            Slot::Live(entry) => entry,
++            Slot::Free(_) => unreachable!("scope tree link points at a vacant slot"),
++        }
++    }
++
++    fn entry_mut(&mut self, index: usize) -> &mut Entry<K, V> {
++        match &mut self.slots[index] {
++            Slot::Live(entry) => entry,
++            Slot::Free(_) => unreachable!("scope tree link points at a vacant slot"),
++        }
++    }
++
++    fn find(&self, mut compare: impl FnMut(&K) -> Ordering) -> Option<usize> {
++        let mut at = self.root;
++        while let Some(index) = at {
++            let entry = self.entry(index);
++            at = match compare(&entry.key) {
++                Ordering::Less => entry.left,
++                Ordering::Greater => entry.right,
++                Ordering::Equal => return Some(index),
++            };
++        }
++        None
++    }
++
++    /// Lookup a borrowed spelling without manufacturing an owned key.
++    /// The comparator returns query-versus-stored-key ordering.
++    pub(super) fn get_by(&self, compare: impl FnMut(&K) -> Ordering) -> Option<&V> {
++        self.find(compare).map(|index| &self.entry(index).value)
++    }
++
++    /// Iterate live slots without a traversal allocation. This is arena order,
++    /// not key order; output/declaration order remains the consumer's own law.
++    pub(super) fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
++        self.slots.iter().filter_map(|slot| match slot {
++            Slot::Live(entry) => Some((&entry.key, &entry.value)),
++            Slot::Free(_) => None,
++        })
++    }
++
++    /// Drop all keys/values, retaining the already-admitted backing capacity.
++    pub(super) fn clear(&mut self) {
++        self.slots.clear();
++        self.root = None;
++        self.free = None;
++        self.len = 0;
++    }
++
++    /// Destroy this arena before releasing its original physical array layout.
++    pub(super) fn release<S: Admission + ?Sized>(
++        self, memory: &mut Memory<'_, S>,
++    ) -> Result<(), StorageError> {
++        memory.release_vec(self.slots)
++    }
++
++    /// Copy only slot metadata and shallow immutable native key/value owners.
++    /// K/V clones used by the parser must themselves allocate no payload.
++    pub(super) fn try_clone<S: Admission + ?Sized>(
++        &self, memory: &mut Memory<'_, S>,
++    ) -> Result<Self, StorageError>
++    where K: Clone, V: Clone {
++        let mut slots = Vec::new();
++        memory.reserve(&mut slots, self.slots.len())?;
++        slots.extend(self.slots.iter().cloned());
++        Ok(Self { slots, root: self.root, free: self.free, len: self.len })
++    }
++
++    fn height(&self, index: Option<usize>) -> usize {
++        index.map_or(0, |index| self.entry(index).height)
++    }
++
++    fn update_height(&mut self, index: usize) {
++        let entry = self.entry(index);
++        let height = self.height(entry.left).max(self.height(entry.right)) + 1;
++        self.entry_mut(index).height = height;
++    }
++
++    /// Replace one parent link (or the root), then install the same parent
++    /// on the replacement. Every structural operation goes through this home.
++    fn link(&mut self, parent: Option<usize>, old: usize, next: Option<usize>) {
++        if let Some(parent) = parent {
++            let entry = self.entry_mut(parent);
++            if entry.left == Some(old) {
++                entry.left = next;
++            } else {
++                assert_eq!(entry.right, Some(old), "scope tree parent link drifted");
++                entry.right = next;
++            }
++        } else {
++            assert_eq!(self.root, Some(old), "scope tree root link drifted");
++            self.root = next;
++        }
++        if let Some(next) = next { self.entry_mut(next).parent = parent; }
++    }
++
++    fn rotate_left(&mut self, index: usize) -> usize {
++        let pivot = self.entry(index).right.expect("a left rotation has a right child");
++        let middle = self.entry(pivot).left;
++        let parent = self.entry(index).parent;
++        self.link(parent, index, Some(pivot));
++        self.entry_mut(index).right = middle;
++        if let Some(middle) = middle { self.entry_mut(middle).parent = Some(index); }
++        self.entry_mut(pivot).left = Some(index);
++        self.entry_mut(index).parent = Some(pivot);
++        self.update_height(index);
++        self.update_height(pivot);
++        pivot
++    }
++
++    fn rotate_right(&mut self, index: usize) -> usize {
++        let pivot = self.entry(index).left.expect("a right rotation has a left child");
++        let middle = self.entry(pivot).right;
++        let parent = self.entry(index).parent;
++        self.link(parent, index, Some(pivot));
++        self.entry_mut(index).left = middle;
++        if let Some(middle) = middle { self.entry_mut(middle).parent = Some(index); }
++        self.entry_mut(pivot).right = Some(index);
++        self.entry_mut(index).parent = Some(pivot);
++        self.update_height(index);
++        self.update_height(pivot);
++        pivot
++    }
++
++    fn rebalance(&mut self, mut at: Option<usize>) {
++        while let Some(index) = at {
++            self.update_height(index);
++            let entry = self.entry(index);
++            let left = self.height(entry.left);
++            let right = self.height(entry.right);
++            let root = if left > right && left - right > 1 {
++                let child = entry.left.expect("the taller side is nonempty");
++                let child_entry = self.entry(child);
++                if self.height(child_entry.right) > self.height(child_entry.left) {
++                    self.rotate_left(child);
++                }
++                self.rotate_right(index)
++            } else if right > left && right - left > 1 {
++                let child = entry.right.expect("the taller side is nonempty");
++                let child_entry = self.entry(child);
++                if self.height(child_entry.left) > self.height(child_entry.right) {
++                    self.rotate_right(child);
++                }
++                self.rotate_left(index)
++            } else { index };
++            at = self.entry(root).parent;
++        }
++    }
++
++    fn swap_payloads(&mut self, first: usize, second: usize) {
++        let (first, second) = if first < second {
++            let (before, after) = self.slots.split_at_mut(second);
++            (&mut before[first], &mut after[0])
++        } else {
++            let (before, after) = self.slots.split_at_mut(first);
++            (&mut after[0], &mut before[second])
++        };
++        let (Slot::Live(first), Slot::Live(second)) = (first, second) else {
++            unreachable!("scope tree payload swap names a vacant slot");
++        };
++        mem::swap(&mut first.key, &mut second.key);
++        mem::swap(&mut first.value, &mut second.value);
++    }
++}
++
++impl<K: Ord, V> ScopeTable<K, V> {
++    pub(super) fn get(&self, key: &K) -> Option<&V> {
++        self.get_by(|candidate| key.cmp(candidate))
++    }
++
++    pub(super) fn get_mut(&mut self, key: &K) -> Option<&mut V> {
++        let index = self.find(|candidate| key.cmp(candidate))?;
++        Some(&mut self.entry_mut(index).value)
++    }
++
++    /// Reserve the actual next array layout without modifying any key/value.
++    /// Consumers may reserve their parallel output destination before insertion.
++    pub(super) fn reserve_insert<S: Admission + ?Sized>(
++        &mut self, memory: &mut Memory<'_, S>,
++    ) -> Result<(), StorageError> {
++        if self.free.is_none() {
++            let required = self.slots.len().checked_add(1).ok_or(StorageError::SizeOverflow)?;
++            if required > self.slots.capacity() {
++                let capacity = self.slots.capacity().checked_mul(2)
++                    .ok_or(StorageError::SizeOverflow)?.max(required);
++                memory.reserve(&mut self.slots, capacity)?;
++            }
++        }
++        Ok(())
++    }
++
++    /// Replace the value in place, or admit storage before adding a new key.
++    /// Refusal leaves every existing association unchanged.
++    pub(super) fn insert<S: Admission + ?Sized>(
++        &mut self, key: K, value: V, memory: &mut Memory<'_, S>,
++    ) -> Result<Option<V>, StorageError> {
++        let mut at = self.root;
++        let mut parent = None;
++        let mut left = false;
++        while let Some(index) = at {
++            let entry = self.entry(index);
++            parent = Some(index);
++            at = match key.cmp(&entry.key) {
++                Ordering::Less => { left = true; entry.left },
++                Ordering::Greater => { left = false; entry.right },
++                Ordering::Equal => return Ok(Some(mem::replace(&mut self.entry_mut(index).value, value))),
++            };
++        }
++        let len = self.len.checked_add(1).ok_or(StorageError::SizeOverflow)?;
++        self.reserve_insert(memory)?;
++        let entry = Entry { key, value, parent, left: None, right: None, height: 1 };
++        let index = if let Some(index) = self.free {
++            let Slot::Free(next) = &self.slots[index] else {
++                unreachable!("scope free list points at a live slot");
++            };
++            self.free = *next;
++            self.slots[index] = Slot::Live(entry);
++            index
++        } else {
++            let index = self.slots.len();
++            self.slots.push(Slot::Live(entry));
++            index
++        };
++        if let Some(parent) = parent {
++            if left { self.entry_mut(parent).left = Some(index); }
++            else { self.entry_mut(parent).right = Some(index); }
++        } else { self.root = Some(index); }
++        self.len = len;
++        self.rebalance(parent);
++        Ok(None)
++    }
++
++    /// Remove an association without allocation; reuse its original slot later.
++    pub(super) fn remove(&mut self, key: &K) -> Option<V> {
++        let mut index = self.find(|candidate| key.cmp(candidate))?;
++        let entry = self.entry(index);
++        if entry.left.is_some() && entry.right.is_some() {
++            let mut successor = entry.right.expect("checked nonempty right subtree");
++            while let Some(left) = self.entry(successor).left { successor = left; }
++            self.swap_payloads(index, successor);
++            index = successor;
++        }
++        let entry = self.entry(index);
++        let parent = entry.parent;
++        let child = entry.left.or(entry.right);
++        self.link(parent, index, child);
++        let Slot::Live(entry) = mem::replace(&mut self.slots[index], Slot::Free(self.free)) else {
++            unreachable!("scope removal names a vacant slot");
++        };
++        self.free = Some(index);
++        self.len -= 1;
++        self.rebalance(parent);
++        Some(entry.value)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::ScopeTable;
++    use core::{cell::Cell, cmp::Ordering};
++    use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
++    use std::collections::BTreeMap;
++
++    struct Limit {
++        live: usize,
++        maximum: usize,
++        refusals: usize,
++    }
++
++    impl Admission for Limit {
++        fn resize(&mut self, live: usize) -> Result<(), StorageError> {
++            if live > self.maximum {
++                self.refusals += 1;
++                return Err(StorageError::AdmissionFailed);
++            }
++            self.live = live;
++            Ok(())
++        }
++    }
++
++    #[test]
++    fn associations_survive_rotations_deletions_and_vacant_slot_reuse() {
++        let mut resident = Resident;
++        let mut memory = Memory::new(&mut resident);
++        let mut native = ScopeTable::default();
++        let mut oracle = BTreeMap::new();
++        // Ascending, descending, and interior deletions exercise both directions,
++        // two-child removal, root replacement, and recycled slots.
++        for key in 0..512 {
++            assert_eq!(native.insert(key, key * 7, &mut memory).unwrap(), oracle.insert(key, key * 7));
++        }
++        for key in (0..512).step_by(3).rev() {
++            assert_eq!(native.remove(&key), oracle.remove(&key));
++        }
++        for key in (0..768).rev() {
++            assert_eq!(native.insert(key, key * 11, &mut memory).unwrap(), oracle.insert(key, key * 11));
++        }
++        for key in 0..900 {
++            assert_eq!(native.get(&key), oracle.get(&key));
++        }
++        for key in (0..768).step_by(2) {
++            assert_eq!(native.remove(&key), oracle.remove(&key));
++        }
++        for key in (0..768).rev() {
++            assert_eq!(native.remove(&key), oracle.remove(&key));
++        }
++        assert!(native.is_empty());
++        assert_eq!(native.get(&0), None);
++        native.release(&mut memory).unwrap();
++        assert_eq!(memory.live_bytes(), 0);
++    }
++
++    #[test]
++    fn refused_growth_changes_no_live_association_and_release_destroys_first() {
++        let mut limit = Limit { live: 0, maximum: usize::MAX, refusals: 0 };
++        let mut memory = Memory::new(&mut limit);
++        let mut native = ScopeTable::default();
++        native.insert(10, 20, &mut memory).unwrap();
++        let admitted = memory.live_bytes();
++        memory.admission_mut().maximum = admitted;
++        assert_eq!(
++            native.insert(11, 21, &mut memory),
++            Err(StorageError::AdmissionFailed)
++        );
++        assert_eq!(native.get(&10), Some(&20));
++        assert_eq!(native.get(&11), None);
++        assert_eq!(memory.live_bytes(), admitted);
++        assert_eq!(memory.admission_mut().refusals, 1);
++        // Replacement, deletion, and reuse fit the original arena; a zero-growth
++        // operation must stay healthy even after the table's separate refusal.
++        assert_eq!(native.insert(10, 22, &mut memory).unwrap(), Some(20));
++        assert_eq!(native.remove(&10), Some(22));
++        assert_eq!(native.insert(11, 23, &mut memory).unwrap(), None);
++        native.release(&mut memory).unwrap();
++        assert_eq!(memory.admission_mut().live, 0);
++    }
++
++    struct Counted<'a> {
++        key: usize,
++        comparisons: &'a Cell<usize>,
++    }
++    impl PartialEq for Counted<'_> { fn eq(&self, other: &Self) -> bool { self.key == other.key } }
++    impl Eq for Counted<'_> {}
++    impl PartialOrd for Counted<'_> { fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) } }
++    impl Ord for Counted<'_> {
++        fn cmp(&self, other: &Self) -> Ordering {
++            self.comparisons.set(self.comparisons.get() + 1);
++            self.key.cmp(&other.key)
++        }
++    }
++
++    fn wide_comparisons(width: usize) -> usize {
++        let comparisons = Cell::new(0);
++        let mut resident = Resident;
++        let mut memory = Memory::new(&mut resident);
++        let mut native = ScopeTable::default();
++        // Sorted lexical identities are the degenerate input for an unbalanced
++        // tree, independently of the parser's whole-pattern consultation count.
++        for key in 0..width {
++            native.insert(Counted { key, comparisons: &comparisons }, key, &mut memory).unwrap();
++        }
++        for key in 0..width {
++            assert_eq!(
++                native.get(&Counted { key, comparisons: &comparisons }),
++                Some(&key)
++            );
++        }
++        native.release(&mut memory).unwrap();
++        comparisons.get()
++    }
++
++    #[test]
++    fn wide_sorted_lookup_does_not_degrade_to_quadratic_work() {
++        let narrow = wide_comparisons(1024);
++        let wide = wide_comparisons(8192);
++        // Eight times the width: quadratic lookup would require ~64x work.
++        // Logarithmic balanced lookup has room for its increased path height.
++        assert!(wide < narrow * 20, "comparison work: {narrow} -> {wide}");
++    }
++
++    #[test]
++    fn borrowed_lookup_and_clear_need_no_new_storage() {
++        let mut resident = Resident;
++        let mut memory = Memory::new(&mut resident);
++        let mut native = ScopeTable::default();
++        native.insert(String::from("ex"), 7, &mut memory).unwrap();
++        let live = memory.live_bytes();
++        assert_eq!(native.get_by(|stored| "ex".cmp(stored.as_str())), Some(&7));
++        assert_eq!(native.get_by(|stored| "absent".cmp(stored.as_str())), None);
++        assert_eq!(memory.live_bytes(), live);
++        native.clear();
++        assert!(native.is_empty());
++        assert_eq!(memory.live_bytes(), live, "clear retains covered arena capacity");
++        native.release(&mut memory).unwrap();
++        assert_eq!(memory.live_bytes(), 0);
++    }
++}
+diff --git a/crates/sparql-algebra/src/parser.rs b/crates/sparql-algebra/src/parser.rs
+--- a/crates/sparql-algebra/src/parser.rs
++++ b/crates/sparql-algebra/src/parser.rs
+@@ -28,15 +28,15 @@
+ //! without recursion too (see [`crate::walk`]).
+ 
+ mod machine;
++mod table;
+ mod triples;
+ 
+ use machine::Machine;
++use table::ScopeTable;
+ use triples::{PathLevel, TFrame};
+ 
+-use std::collections::{HashMap, HashSet};
+ use std::ops::Range;
+ 
+-use purrdf_hash::fixed::FixedState;
+ 
+ use crate::algebra::{
+     AggregateFunction, Expression, Function, GraphPattern, GraphTarget, GraphUpdateOperation,
+@@ -49,7 +49,7 @@
+ };
+ use crate::error::{ParseError, Result};
+ use crate::lexer::{Spanned, Token, tokenize_with_memory};
+-use purrdf_lex::allocation::{Admission, Memory, SharedText, StorageError, Resident};
++use purrdf_lex::allocation::{Admission, Memory, OwnedText, SharedText, StorageError, Resident};
+ 
+ /// Physical storage and immutable lexical publication for a native parser run.
+ ///
+@@ -576,7 +576,7 @@
+             pos: 0,
+             src: text,
+             end: text.len(),
+-            prefixes: HashMap::with_hasher(FixedState::new()),
++            prefixes: ScopeTable::default(),
+             base,
+             version: None,
+             agg_counter: 0,
+@@ -594,7 +594,7 @@
+             pending_exists_scope_checks: Vec::new(),
+             #[cfg(debug_assertions)]
+             scope_consultations: 0,
+-            blank_label_bgps: HashMap::with_hasher(FixedState::new()),
++            blank_label_bgps: ScopeTable::default(),
+             bgp_counter: 0,
+             bgp_scope: None,
+             machine: Machine::default(),
+@@ -653,7 +653,7 @@
+     /// The line table is built on that path alone, never on the happy path.
+     src: &'a str,
+     end: usize,
+-    prefixes: HashMap<String, String, FixedState>,
++    prefixes: ScopeTable<OwnedText, OwnedText>,
+     /// The base IRIs in scope: the caller-supplied base (if any) at the bottom,
+     /// rebound in place by every prologue `BASE` directive. Resolution itself is
+     /// [`BaseScope`]'s — this parser owns no RFC-3986 arithmetic.
+@@ -763,7 +763,7 @@
+     /// One map per query, so a label reused in a sub-`SELECT` or an `EXISTS`
+     /// body is caught too; one map per UPDATE operation, whose `WHERE` clauses
+     /// are separate patterns ([`Parser::parse_update`] clears it between them).
+-    blank_label_bgps: HashMap<String, usize, FixedState>,
++    blank_label_bgps: ScopeTable<OwnedText, usize>,
+     /// The next basic-graph-pattern ordinal a group's triples block is given.
+     bgp_counter: usize,
+     /// The basic graph pattern the triples block being parsed belongs to, or
+@@ -901,7 +901,7 @@
+             // A fork reads a template or quad-pattern block, which is not a basic
+             // graph pattern of the query: nothing it reads is scoped to one, so it
+             // starts with no scope and records nothing.
+-            blank_label_bgps: HashMap::with_hasher(FixedState::new()),
++            blank_label_bgps: ScopeTable::default(),
+             bgp_counter: 0,
+             bgp_scope: None,
+             machine: Machine::default(),
+@@ -974,16 +974,18 @@
+     /// Open a fresh, EMPTY in-scope-set frame — nothing precedes it. Used at
+     /// every query/update operation's own top-level `WHERE` clause and at a
+     /// sub-`SELECT`'s (the one real scope boundary; see the module doc above).
+-    fn push_exists_scope_boundary(&mut self) {
+-        self.exists_scope_stack.push_boundary();
++    fn push_exists_scope_boundary(&mut self) -> Result<()> {
++        self.exists_scope_stack.push_boundary(self.memory)?;
++        Ok(())
+     }
+ 
+     /// Open a fresh in-scope-set frame SEEDED with a copy of the frame beneath
+     /// it — reads see everything the enclosing rows already bound, but nothing
+     /// this frame goes on to introduce is written back once it is popped. Used
+     /// at an `EXISTS`/`NOT EXISTS`/`MINUS` body (see the module doc above).
+-    fn push_exists_scope_isolated(&mut self) {
+-        self.exists_scope_stack.push_isolated();
++    fn push_exists_scope_isolated(&mut self) -> Result<()> {
++        self.exists_scope_stack.push_isolated(self.memory)?;
++        Ok(())
+     }
+ 
+     /// Close the innermost in-scope-set frame, discarding it — the caller is
+@@ -1000,20 +1002,23 @@
+     /// nothing when called on ITS right operand — callers simply never call
+     /// this for a `Minus` right operand, matching the group loop's own
+     /// pre-existing non-call for its local `VarScope`).
+-    fn note_exists_scope(&mut self, pattern: &GraphPattern) {
++    fn note_exists_scope(&mut self, pattern: &GraphPattern) -> Result<()> {
+         if self.exists_scope_stack.is_open() {
+             let mut noted = VarScope::default();
+-            collect_vars(pattern, &mut noted);
+-            for v in noted.as_slice() {
+-                self.exists_scope_stack.note(v);
++            collect_vars(pattern, &mut noted, self.memory)?;
++            for variable in noted.as_slice() {
++                self.exists_scope_stack.note(variable, self.memory)?;
+             }
++            noted.release(self.memory)?;
+         }
++        Ok(())
+     }
+ 
+     /// Record a single fresh binding (a `BIND` target) into the current
+     /// in-scope-set frame.
+-    fn note_exists_scope_var(&mut self, variable: &Variable) {
+-        self.exists_scope_stack.note(variable);
++    fn note_exists_scope_var(&mut self, variable: &Variable) -> Result<()> {
++        self.exists_scope_stack.note(variable, self.memory)?;
++        Ok(())
+     }
+ 
+     /// Parse a query/update operation's own top-level `WHERE` group graph
+@@ -1027,11 +1032,12 @@
+     /// have anything of their own that needs to keep consulting it
+     /// afterward.
+     fn parse_where_clause(&mut self) -> Result<GraphPattern> {
+-        self.push_exists_scope_boundary();
++        self.push_exists_scope_boundary()?;
+         let group = self.parse_group()?;
+         for v in group.scope.as_slice() {
+-            self.note_exists_scope_var(v);
++            self.note_exists_scope_var(v)?;
+         }
++        group.scope.release(self.memory)?;
+         self.pop_exists_scope_boundary();
+         Ok(group.pattern)
+     }
+@@ -1177,7 +1183,9 @@
+             } else if self.eat_kw("PREFIX") {
+                 let (prefix, _) = self.expect_pname_ns()?;
+                 let iri = self.expect_iriref()?;
+-                self.prefixes.insert(prefix, iri);
++                let prefix: OwnedText = self.memory.admission_mut().text(&prefix)?.into();
++                let iri: OwnedText = self.memory.admission_mut().text(&iri)?.into();
++                self.prefixes.insert(prefix, iri, self.memory)?;
+             } else if self.eat_kw("VERSION") {
+                 // SPARQL 1.2 version declaration: `VERSION <string>` (SPARQL 1.2 Query
+                 // specification §4.4). Retained as `self.version`, last-wins across
+@@ -1278,7 +1286,7 @@
+     }
+ 
+     fn resolve_prefixed(&self, prefix: &str, local: &str) -> Result<NamedNode> {
+-        match self.prefixes.get(prefix) {
++        match self.prefixes.get_by(|candidate| prefix.cmp(candidate.as_ref())) {
+             Some(ns) => {
+                 // Exact-fit concatenation: one allocation per prefixed name where
+                 // `format!` grew a default buffer through the formatter.
+@@ -1365,8 +1373,8 @@
+             // incrementally; a fresh EMPTY-then-bulk-mirrored frame covers an
+             // `EXISTS` in the trailing `ORDER BY` exactly like the long form's
+             // incrementally-built one does.
+-            self.push_exists_scope_boundary();
+-            self.note_exists_scope(&where_pat);
++            self.push_exists_scope_boundary()?;
++            self.note_exists_scope(&where_pat)?;
+             let mut aggregates = Vec::new();
+             let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
+             if !aggregates.is_empty()
+@@ -1409,9 +1417,9 @@
+         let template = scope_template(template, default_graph.as_ref());
+         let dataset = self.parse_dataset_clauses()?;
+         self.eat_kw("WHERE");
+-        self.push_exists_scope_boundary();
++        self.push_exists_scope_boundary()?;
+         let where_pat = self.parse_group_graph_pattern()?;
+-        self.note_exists_scope(&where_pat);
++        self.note_exists_scope(&where_pat)?;
+         let mut aggregates = Vec::new();
+         let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
+         if !aggregates.is_empty() || !modifiers.group_by.is_empty() || !modifiers.having.is_empty()
+@@ -1673,11 +1681,9 @@
+         // W3C `basic-update` `insert-where-same-bnode`). `DELETE DATA` / DELETE
+         // templates are blank-free by invariant, and anonymous blanks carry
+         // process-unique ids, so only author-written `_:label`s can collide.
+-        let mut prior_bnode_labels: HashSet<String, FixedState> =
+-            HashSet::with_hasher(FixedState::new());
++        let mut prior_bnode_labels: ScopeTable<BlankNode, ()> = ScopeTable::default();
+         // Reused across iterations to avoid reallocating the set each loop.
+-        let mut this_op_labels: HashSet<String, FixedState> =
+-            HashSet::with_hasher(FixedState::new());
++        let mut this_op_labels: ScopeTable<BlankNode, ()> = ScopeTable::default();
+         loop {
+             if self.pos >= self.tokens.len() {
+                 break;
+@@ -1693,17 +1699,20 @@
+             ));
+             this_op_labels.clear();
+             if let GraphUpdateOperation::InsertData { data } = &op {
+-                collect_quad_bnode_labels(data, &mut this_op_labels);
++                collect_quad_bnode_labels(data, &mut this_op_labels, self.memory)?;
+             }
+-            for label in &this_op_labels {
+-                if prior_bnode_labels.contains(label) {
++            for (label, ()) in this_op_labels.iter() {
++                if prior_bnode_labels.get(label).is_some() {
+                     return Err(ParseError::syntax(
+-                        format!("blank node label _:{label} is reused across update operations"),
++                        format!("blank node label _:{} is reused across update operations", label.as_str()),
+                         self.span(),
+                     ));
+                 }
+             }
+-            prior_bnode_labels.extend(this_op_labels.drain());
++            for (label, ()) in this_op_labels.iter() {
++                prior_bnode_labels.insert(label.clone(), (), self.memory)?;
++            }
++            this_op_labels.clear();
+             operations.push(op);
+             // An operation separator. Without it, the request is done (a stray
+             // trailing token is caught by `expect_eof` at the public entry).
+@@ -1714,6 +1723,8 @@
+             // another operation, or by end-of-input.
+             self.parse_prologue()?;
+         }
++        this_op_labels.release(self.memory)?;
++        prior_bnode_labels.release(self.memory)?;
+         Ok(Update {
+             operations,
+             base_iri,
+@@ -2835,8 +2846,15 @@
+     /// nothing is recorded: a template's labels mint fresh nodes per solution
+     /// and are not the pattern's.
+     fn scoped_blank_label(&mut self, label: &str, at: usize) -> Result<BlankNode> {
++        let spelling = self.memory.admission_mut().text(&label)?;
+         if let Some(bgp) = self.bgp_scope {
+-            let first = *self.blank_label_bgps.entry(label.to_owned()).or_insert(bgp);
++            let first = match self.blank_label_bgps.get_by(|candidate| label.cmp(candidate.as_ref())) {
++                Some(first) => *first,
++                None => {
++                    self.blank_label_bgps.insert(spelling.clone().into(), bgp, self.memory)?;
++                    bgp
++                }
++            };
+             if first != bgp {
+                 return Err(ParseError::syntax(
+                     format!(
+@@ -2848,7 +2866,7 @@
+                 ));
+             }
+         }
+-        Ok(BlankNode::new(label))
++        Ok(BlankNode::from_admitted(spelling))
+     }
+ 
+     /// Mint a fresh, unique label for an anonymous blank node (`[]`). Each
+@@ -3193,299 +3211,294 @@
+     (pattern, filters.into_iter().rev().reduce(Expression::and))
+ }
+ 
+-/// An order-preserving set of [`Variable`]s with O(log n) membership and
+-/// insertion — the group-parsing loop's incremental in-scope set, and
+-/// [`visible_variables`]'s own collection buffer.
++/// First-appearance scope with logarithmic lexical membership.
+ ///
+-/// Two structures move together: `order` is the first-appearance sequence
+-/// SPARQL's "in scope" (`SELECT *`'s projection order, the LATERAL scope
+-/// walk's deterministic first-conflict order) needs, and `seen` is what makes
+-/// membership and insertion O(log n) instead of the O(n) linear scan a bare
+-/// `Vec<Variable>::contains` forces. That scan is what made both this loop
+-/// (recomputing it from scratch on every `BIND`/`LATERAL`, discussed at this
+-/// module's group-loop) and a single [`visible_variables`] call over a
+-/// `BIND`-heavy pattern quadratic; the `BTreeSet` (not a hash set — this
+-/// crate is wasm32-clean and deliberately depends on no hasher crate, and a
+-/// membership set that is never iterated for its OWN order — only `order`
+-/// ever is — needs no hash at all) removes both.
++/// The declaration order is separate from the balanced lookup arena. Both
++/// backing arrays are admitted at their concrete native layouts before growth;
++/// immutable variable spellings retain their original leaf owners.
+ #[derive(Default)]
+ struct VarScope {
+     order: Vec<Variable>,
+-    seen: std::collections::BTreeSet<Variable>,
++    seen: ScopeTable<Variable, ()>,
+ }
+ 
+ impl VarScope {
+-    /// Record `v` as in scope; a no-op if it already is (first-appearance
+-    /// order is preserved, so a later re-mention never moves it).
+-    fn note(&mut self, v: &Variable) {
+-        if !v.is_hidden() && self.seen.insert(v.clone()) {
+-            self.order.push(v.clone());
++    /// Record one visible variable; repeated mentions preserve the first order.
++    /// All destinations are reserved before changing logical scope membership.
++    fn note<S: Admission + ?Sized>(
++        &mut self, variable: &Variable, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<bool, StorageError> {
++        if variable.is_hidden() || self.seen.get(variable).is_some() {
++            return Ok(false);
+         }
++        let required = self.order.len().checked_add(1).ok_or(StorageError::SizeOverflow)?;
++        if required > self.order.capacity() {
++            let capacity = self.order.capacity().checked_mul(2)
++                .ok_or(StorageError::SizeOverflow)?.max(required);
++            memory.reserve(&mut self.order, capacity)?;
++        }
++        self.seen.insert(variable.clone(), (), memory)?;
++        self.order.push(variable.clone());
++        Ok(true)
+     }
+ 
+-    fn contains(&self, v: &Variable) -> bool {
+-        self.seen.contains(v)
++    fn contains(&self, variable: &Variable) -> bool {
++        self.seen.get(variable).is_some()
+     }
+ 
+-    fn as_slice(&self) -> &[Variable] {
+-        &self.order
++    fn as_slice(&self) -> &[Variable] { &self.order }
++
++    /// Publish the already-admitted projection array; the lookup arena dies first.
++    fn into_vec<S: Admission + ?Sized>(
++        self, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<Vec<Variable>, StorageError> {
++        self.seen.release(memory)?;
++        Ok(self.order)
+     }
+ 
+-    fn into_vec(self) -> Vec<Variable> {
+-        self.order
++    fn release<S: Admission + ?Sized>(
++        self, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<(), StorageError> {
++        memory.release_vec(self.order)?;
++        self.seen.release(memory)
+     }
+ }
+ 
+-/// Every open `EXISTS` in-scope-set frame (see [`Parser::exists_scope`]), stored once.
++/// Every open EXISTS in-scope-set frame, sharing one variable trail.
+ ///
+-/// Only the top frame is ever written, so the frames' variables form one trail: a
+-/// frame owns the trail's tail from its `mark` on, and sees the trail from its `start`
+-/// on. A boundary frame starts empty (`start` = `mark` = the trail's length); an
+-/// isolated frame sees everything the frame beneath it sees (`start` = that frame's
+-/// `start`) and owns only what it adds itself (`mark` = the trail's length). Popping a
+-/// frame truncates the trail to its `mark`. Seeding an isolated frame therefore copies
+-/// nothing, so `EXISTS`/`NOT EXISTS`/`MINUS` bodies nested `n` deep hold `O(n)`
+-/// variables in all rather than a copy of every enclosing frame per level.
++/// A boundary sees only its own trail tail; an isolated frame sees the enclosing
++/// tail without copying it. For each trail entry, previous links to the earlier
++/// occurrence of the same lexical identity. The lookup arena stores only its
++/// latest position. Popping restores those links without allocating or copying
++/// enclosing sets; all nested frames together occupy linear storage.
+ #[derive(Default)]
+ struct ExistsScopes {
+-    /// The variables of every open frame, each frame's own after the frame beneath's.
+     trail: Vec<Variable>,
+-    /// For every variable on the trail, its positions there, ascending.
+-    positions: std::collections::BTreeMap<Variable, Vec<usize>>,
+-    /// The open frames, innermost last.
++    previous: Vec<Option<usize>>,
++    positions: ScopeTable<Variable, usize>,
+     frames: Vec<ExistsFrame>,
+ }
+ 
+-/// One open frame of [`ExistsScopes`].
+ #[derive(Clone, Copy)]
+ struct ExistsFrame {
+-    /// Where on the trail the variables this frame sees begin.
+     start: usize,
+-    /// Where on the trail the variables this frame added begin.
+     mark: usize,
+ }
+ 
+ impl ExistsScopes {
+-    /// Whether any frame is open.
+-    fn is_open(&self) -> bool {
+-        !self.frames.is_empty()
+-    }
++    fn is_open(&self) -> bool { !self.frames.is_empty() }
+ 
+-    /// The variables the top frame sees, in first-appearance order; empty when no frame
+-    /// is open.
+     fn top(&self) -> &[Variable] {
+-        self.frames
+-            .last()
+-            .map_or(&[], |frame| &self.trail[frame.start..])
++        self.frames.last().map_or(&[], |frame| &self.trail[frame.start..])
+     }
+ 
+-    /// Open an empty frame.
+-    fn push_boundary(&mut self) {
++    fn push_boundary<S: Admission + ?Sized>(
++        &mut self, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<(), StorageError> {
+         let len = self.trail.len();
+-        self.frames.push(ExistsFrame {
+-            start: len,
+-            mark: len,
+-        });
++        memory.push(&mut self.frames, ExistsFrame { start: len, mark: len })
+     }
+ 
+-    /// Open a frame that sees everything the current top frame sees; with no frame open,
+-    /// an empty one.
+-    fn push_isolated(&mut self) {
++    fn push_isolated<S: Admission + ?Sized>(
++        &mut self, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<(), StorageError> {
+         let len = self.trail.len();
+         let start = self.frames.last().map_or(len, |frame| frame.start);
+-        self.frames.push(ExistsFrame { start, mark: len });
++        memory.push(&mut self.frames, ExistsFrame { start, mark: len })
+     }
+ 
+-    /// Close the top frame, discarding what it added.
++    /// Restore the latest-position index while discarding only this frame's tail.
++    /// Vector/arena capacities stay admitted and are reused by later frames.
+     fn pop(&mut self) {
+-        let Some(frame) = self.frames.pop() else {
+-            return;
+-        };
+-        for variable in self.trail.drain(frame.mark..) {
+-            if let Some(at) = self.positions.get_mut(&variable) {
+-                at.pop();
+-                if at.is_empty() {
+-                    self.positions.remove(&variable);
+-                }
++        let Some(frame) = self.frames.pop() else { return; };
++        while self.trail.len() > frame.mark {
++            let variable = self.trail.pop().expect("checked nonempty scope trail");
++            let previous = self.previous.pop().expect("scope trails have equal lengths");
++            if let Some(previous) = previous {
++                *self.positions.get_mut(&variable)
++                    .expect("every live trail identity has a latest position") = previous;
++            } else {
++                assert!(self.positions.remove(&variable).is_some(),
++                    "every first trail occurrence has a latest position");
+             }
+         }
++        debug_assert!(!self.frames.is_empty()
++            || (self.trail.is_empty() && self.previous.is_empty() && self.positions.is_empty()));
+     }
+ 
+-    /// Record `variable` in the top frame; a no-op when the top frame already sees it,
+-    /// or when no frame is open.
+-    fn note(&mut self, variable: &Variable) {
+-        let Some(frame) = self.frames.last() else {
+-            return;
+-        };
+-        let seen = self
+-            .positions
+-            .get(variable)
+-            .and_then(|at| at.last())
+-            .is_some_and(|&at| at >= frame.start);
+-        if !seen {
+-            self.positions
+-                .entry(variable.clone())
+-                .or_default()
+-                .push(self.trail.len());
+-            self.trail.push(variable.clone());
++    fn note<S: Admission + ?Sized>(
++        &mut self, variable: &Variable, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<(), StorageError> {
++        let Some(frame) = self.frames.last() else { return Ok(()); };
++        let previous = self.positions.get(variable).copied();
++        if previous.is_some_and(|previous| previous >= frame.start) { return Ok(()); }
++
++        let required = self.trail.len().checked_add(1).ok_or(StorageError::SizeOverflow)?;
++        if required > self.trail.capacity() {
++            let capacity = self.trail.capacity().checked_mul(2)
++                .ok_or(StorageError::SizeOverflow)?.max(required);
++            memory.reserve(&mut self.trail, capacity)?;
+         }
++        if required > self.previous.capacity() {
++            let capacity = self.previous.capacity().checked_mul(2)
++                .ok_or(StorageError::SizeOverflow)?.max(required);
++            memory.reserve(&mut self.previous, capacity)?;
++        }
++        // The lookup insertion is the last fallible step. Updating all parallel
++        // destinations afterward cannot allocate or lose the preceding frame.
++        self.positions.insert(variable.clone(), self.trail.len(), memory)?;
++        self.trail.push(variable.clone());
++        self.previous.push(previous);
++        Ok(())
+     }
++
++    fn release<S: Admission + ?Sized>(
++        self, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<(), StorageError> {
++        memory.release_vec(self.trail)?;
++        memory.release_vec(self.previous)?;
++        self.positions.release(memory)?;
++        memory.release_vec(self.frames)
++    }
+ }
+ 
+-/// Collect the in-scope variables of a pattern in first-appearance order
+-/// (used for `SELECT *` projection). Non-distinguished translation identities
+-/// are omitted; projection and grouping boundaries expose only their outputs.
+-/// Serializers and callers share this scope census rather than infer visibility
+-/// from every variable mentioned by an expression or a nested pattern.
++/// Collect the in-scope variables in first-appearance order. The resident API
++/// and bounded parser call this same visibility body.
+ #[must_use]
+-pub fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
++pub fn visible_variables(pattern: &GraphPattern) -> Vec<Variable> {
++    let mut resident = Resident;
++    visible_variables_with_memory(pattern, &mut Memory::new(&mut resident))
++        .expect("resident visible-variable storage allocation failed")
++}
++
++/// The native visibility census, retaining the output's original array admission.
++///
++/// # Errors
++/// Returns the original admission/allocator failure before storage growth.
++pub fn visible_variables_with_memory<S: Admission + ?Sized>(
++    pattern: &GraphPattern, memory: &mut Memory<'_, S>,
++) -> std::result::Result<Vec<Variable>, StorageError> {
+     let mut scope = VarScope::default();
+-    collect_vars(p, &mut scope);
+-    scope.into_vec()
++    collect_vars(pattern, &mut scope, memory)?;
++    scope.into_vec(memory)
+ }
+ 
+-/// The contextual star census includes the syntactic MINUS operand names.
+-fn contextual_visible_variables(pattern: &GraphPattern) -> Vec<Variable> {
++fn contextual_visible_variables<S: Admission + ?Sized>(
++    pattern: &GraphPattern, memory: &mut Memory<'_, S>,
++) -> std::result::Result<Vec<Variable>, StorageError> {
+     let mut scope = VarScope::default();
+-    note_vars::<true>(&mut vec![VarStep::Pattern(pattern)], &mut scope);
+-    scope.into_vec()
++    let mut pending = Vec::new();
++    memory.push(&mut pending, VarStep::Pattern(pattern))?;
++    note_vars::<true, S>(&mut pending, &mut scope, memory)?;
++    memory.release_vec(pending)?;
++    scope.into_vec(memory)
+ }
+ 
+-/// One entry of [`collect_vars`]'s work list.
+ enum VarStep<'a> {
+-    /// A pattern whose in-scope variables are still to be noted.
+     Pattern(&'a GraphPattern),
+-    /// A term whose variables are still to be noted.
+     Term(&'a TermPattern),
+-    /// A variable to note.
+     Note(&'a Variable),
+ }
+ 
+-/// Queue a triple pattern's variables: subject, predicate, object.
+-fn push_triple_vars<'a>(tp: &'a TriplePattern, pending: &mut Vec<VarStep<'a>>) {
+-    pending.push(VarStep::Term(&tp.object));
+-    if let NamedNodePattern::Variable(v) = &tp.predicate {
+-        pending.push(VarStep::Note(v));
++fn push_triple_vars<'a, S: Admission + ?Sized>(
++    triple: &'a TriplePattern, pending: &mut Vec<VarStep<'a>>,
++    memory: &mut Memory<'_, S>,
++) -> std::result::Result<(), StorageError> {
++    memory.push(pending, VarStep::Term(&triple.object))?;
++    if let NamedNodePattern::Variable(variable) = &triple.predicate {
++        memory.push(pending, VarStep::Note(variable))?;
+     }
+-    pending.push(VarStep::Term(&tp.subject));
++    memory.push(pending, VarStep::Term(&triple.subject))
+ }
+ 
+-/// Note the variables `p` makes visible in its enclosing group, in the order a
+-/// left-to-right reading of it introduces them.
+-fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
+-    let mut pending = vec![VarStep::Pattern(p)];
+-    note_vars::<false>(&mut pending, out);
++fn collect_vars<S: Admission + ?Sized>(
++    pattern: &GraphPattern, out: &mut VarScope, memory: &mut Memory<'_, S>,
++) -> std::result::Result<(), StorageError> {
++    let mut pending = Vec::new();
++    memory.push(&mut pending, VarStep::Pattern(pattern))?;
++    note_vars::<false, S>(&mut pending, out, memory)?;
++    memory.release_vec(pending)
+ }
+ 
+-/// Drain `pending`, noting each variable as it is reached. Every entry pushes what
+-/// follows it in reverse, so the work list pops them in written order.
+-fn note_vars<const RDFLIB: bool>(pending: &mut Vec<VarStep<'_>>, out: &mut VarScope) {
++/// Drain in written order, pushing subsequent work in reverse. Visibility,
++/// projection/grouping boundaries and contextual MINUS treatment are unchanged.
++fn note_vars<const RDFLIB: bool, S: Admission + ?Sized>(
++    pending: &mut Vec<VarStep<'_>>, out: &mut VarScope, memory: &mut Memory<'_, S>,
++) -> std::result::Result<(), StorageError> {
+     while let Some(step) = pending.pop() {
+-        let p = match step {
+-            VarStep::Note(v) => {
+-                out.note(v);
+-                continue;
+-            }
+-            VarStep::Term(t) => {
+-                match t {
+-                    TermPattern::Variable(v) => out.note(v),
+-                    TermPattern::Triple(tp) => push_triple_vars(tp, pending),
++        let pattern = match step {
++            VarStep::Note(variable) => { out.note(variable, memory)?; continue; }
++            VarStep::Term(term) => {
++                match term {
++                    TermPattern::Variable(variable) => { out.note(variable, memory)?; }
++                    TermPattern::Triple(triple) => push_triple_vars(triple, pending, memory)?,
+                     _ => {}
+                 }
+                 continue;
+             }
+-            VarStep::Pattern(p) => p,
++            VarStep::Pattern(pattern) => pattern,
+         };
+-        match p {
++        match pattern {
+             GraphPattern::Bgp { patterns } => {
+-                for tp in patterns.iter().rev() {
+-                    push_triple_vars(tp, pending);
++                for triple in patterns.iter().rev() {
++                    push_triple_vars(triple, pending, memory)?;
+                 }
+             }
+-            GraphPattern::Path {
+-                subject, object, ..
+-            } => {
+-                pending.extend([VarStep::Term(object), VarStep::Term(subject)]);
++            GraphPattern::Path { subject, object, .. } => {
++                memory.push(pending, VarStep::Term(object))?;
++                memory.push(pending, VarStep::Term(subject))?;
+             }
+-            // Every argument variable of a property function — on either side — is
+-            // in scope in the enclosing group: the arguments are the call's inputs
+-            // AND its bindings.
+             GraphPattern::PropertyFunction(call) => {
+-                pending.extend(
+-                    call.subject_args
+-                        .iter()
+-                        .chain(&call.object_args)
+-                        .rev()
+-                        .map(VarStep::Term),
+-                );
++                for term in call.subject_args.iter().chain(&call.object_args).rev() {
++                    memory.push(pending, VarStep::Term(term))?;
++                }
+             }
+             GraphPattern::Join { left, right }
+             | GraphPattern::Lateral { left, right }
+             | GraphPattern::Apply { left, right, .. }
+             | GraphPattern::LeftJoin { left, right, .. } => {
+-                pending.extend([VarStep::Pattern(right), VarStep::Pattern(left)]);
++                memory.push(pending, VarStep::Pattern(right))?;
++                memory.push(pending, VarStep::Pattern(left))?;
+             }
+             GraphPattern::Union { arms } => {
+-                pending.extend(arms.iter().rev().map(VarStep::Pattern));
++                for arm in arms.iter().rev() { memory.push(pending, VarStep::Pattern(arm))?; }
+             }
+-            // SPARQL §18.2.1: variables occurring only in the right operand of
+-            // MINUS are not in scope in the enclosing group graph pattern, so we
+-            // descend into `left` only.
+             GraphPattern::Minus { left, right } => {
+-                if RDFLIB {
+-                    pending.push(VarStep::Pattern(right));
+-                }
+-                pending.push(VarStep::Pattern(left));
++                if RDFLIB { memory.push(pending, VarStep::Pattern(right))?; }
++                memory.push(pending, VarStep::Pattern(left))?;
+             }
+             GraphPattern::Filter { inner, .. }
+             | GraphPattern::OrderBy { inner, .. }
+             | GraphPattern::Distinct { inner }
+             | GraphPattern::Reduced { inner }
+-            | GraphPattern::Slice { inner, .. } => pending.push(VarStep::Pattern(inner)),
++            | GraphPattern::Slice { inner, .. } => memory.push(pending, VarStep::Pattern(inner))?,
+             GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
+-                pending.push(VarStep::Pattern(inner));
+-                if let NamedNodePattern::Variable(v) = name {
+-                    pending.push(VarStep::Note(v));
++                memory.push(pending, VarStep::Pattern(inner))?;
++                if let NamedNodePattern::Variable(variable) = name {
++                    memory.push(pending, VarStep::Note(variable))?;
+                 }
+             }
+-            GraphPattern::Extend {
+-                inner, variable, ..
+-            } => {
+-                pending.extend([VarStep::Note(variable), VarStep::Pattern(inner)]);
++            GraphPattern::Extend { inner, variable, .. } => {
++                memory.push(pending, VarStep::Note(variable))?;
++                memory.push(pending, VarStep::Pattern(inner))?;
+             }
+-            // `UNFOLD`'s one or two targets are ordinary in-scope bindings of the
+-            // enclosing group, exactly like `BIND`'s single one: `SELECT *`
+-            // projects them and a later `FILTER` in the same group sees them.
+-            GraphPattern::Unfold {
+-                inner,
+-                element,
+-                companion,
+-                ..
+-            } => {
++            GraphPattern::Unfold { inner, element, companion, .. } => {
+                 if let Some(companion) = companion {
+-                    pending.push(VarStep::Note(companion));
++                    memory.push(pending, VarStep::Note(companion))?;
+                 }
+-                pending.extend([VarStep::Note(element), VarStep::Pattern(inner)]);
++                memory.push(pending, VarStep::Note(element))?;
++                memory.push(pending, VarStep::Pattern(inner))?;
+             }
+             GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
+-                for v in variables {
+-                    out.note(v);
+-                }
++                for variable in variables { out.note(variable, memory)?; }
+             }
+-            GraphPattern::Group {
+-                variables,
+-                aggregates,
+-                ..
+-            } => {
+-                for v in variables {
+-                    out.note(v);
+-                }
+-                for (v, _) in aggregates {
+-                    out.note(v);
+-                }
++            GraphPattern::Group { variables, aggregates, .. } => {
++                for variable in variables { out.note(variable, memory)?; }
++                for (variable, _) in aggregates { out.note(variable, memory)?; }
+             }
+         }
+     }
++    Ok(())
+ }
+ 
+ /// An `EXISTS`/`NOT EXISTS` scope check deferred out of
+@@ -3647,8 +3660,10 @@
+ /// omits the `SERVICE` endpoint variable from its own left-scope set; this
+ /// function does not follow it here, on the ground above. Pinned by
+ /// `lateral_left_scope_includes_a_service_endpoint_variable`.
+-fn compute_lateral_left_scope(p: &GraphPattern) -> Vec<Variable> {
+-    visible_variables(p)
++fn compute_lateral_left_scope<S: Admission + ?Sized>(
++    pattern: &GraphPattern, memory: &mut Memory<'_, S>,
++) -> std::result::Result<Vec<Variable>, StorageError> {
++    visible_variables_with_memory(pattern, memory)
+ }
+ 
+ /// Find the first variable `pattern` introduces (via `BIND`, a sub-`SELECT`'s
+@@ -3794,128 +3809,91 @@
+ /// first collision in a pre-order, left-to-right walk (and, within one node,
+ /// the introducing construct's own declaration order) is reported, so the
+ /// variable named in the error is reproducible across runs.
+-fn find_scope_conflict<'a>(
+-    scope: &[Variable],
+-    pattern: &'a GraphPattern,
+-) -> Option<(&'a Variable, ScopeIntro)> {
+-    // Nothing in an empty scope can be rebound.
+-    if scope.is_empty() {
+-        return None;
+-    }
+-    // The scopes in force: the outer one, and each narrowing a sub-SELECT's
+-    // projection made. A pending pattern names the scope it is checked against.
+-    let mut scopes: Vec<Vec<Variable>> = vec![scope.to_vec()];
+-    let mut pending: Vec<(&'a GraphPattern, usize)> = vec![(pattern, 0)];
+-    while let Some((pattern, at)) = pending.pop() {
+-        let scope = &scopes[at];
+-        match pattern {
+-            // Leaves: nothing is introduced.
+-            GraphPattern::Bgp { .. }
+-            | GraphPattern::Path { .. }
+-            | GraphPattern::PropertyFunction(_) => {}
+-            // Binary nodes are transparent to scope: both operands are checked at
+-            // the SAME scope level (see the scope-level argument above), left first.
+-            GraphPattern::Join { left, right }
+-            | GraphPattern::Lateral { left, right }
+-            | GraphPattern::Apply { left, right, .. }
+-            | GraphPattern::LeftJoin { left, right, .. } => {
+-                pending.extend([(&**right, at), (&**left, at)]);
+-            }
+-            GraphPattern::Union { arms } => pending.extend(arms.iter().rev().map(|arm| (arm, at))),
+-            // `MINUS` is the one binary node that is NOT scope-transparent on its
+-            // right operand: §18.2.1 puts a MINUS-right-only variable out of
+-            // scope, and §18.5's evaluation only ever uses the right side for the
+-            // compatibility test — its bindings are discarded, never carried
+-            // forward — so a `BIND`/`VALUES`/aggregate introduction confined to a
+-            // MINUS right operand can never be observed as a rebinding, at ANY
+-            // depth, not only under a `SELECT *` sub-select (which was one route
+-            // to this same shape, not a separate rule). Only the left operand is
+-            // walked.
+-            GraphPattern::Minus { left, .. } => pending.push((left, at)),
+-            // Unary wrappers are transparent to scope; any expression operand is
+-            // never visited.
+-            GraphPattern::Filter { inner, .. }
+-            | GraphPattern::Graph { inner, .. }
+-            | GraphPattern::Service { inner, .. }
+-            | GraphPattern::OrderBy { inner, .. }
+-            | GraphPattern::Distinct { inner }
+-            | GraphPattern::Reduced { inner }
+-            | GraphPattern::Slice { inner, .. } => pending.push((inner, at)),
+-            // `BIND`, a sub-SELECT's `(expr AS ?v)`, and a `GROUP BY (expr AS ?v)`
+-            // condition all lower to `Extend` — a fresh binding at this scope
+-            // level.
+-            GraphPattern::Extend {
+-                inner, variable, ..
+-            } => {
+-                if scope.contains(variable) {
+-                    return Some((variable, ScopeIntro::Bind));
++fn find_scope_conflict<'a, S: Admission + ?Sized>(
++    outer: &[Variable], pattern: &'a GraphPattern, memory: &mut Memory<'_, S>,
++) -> std::result::Result<Option<(&'a Variable, ScopeIntro)>, StorageError> {
++    if outer.is_empty() { return Ok(None); }
++    let mut root = VarScope::default();
++    for variable in outer { root.note(variable, memory)?; }
++    let mut scopes = Vec::new();
++    memory.push(&mut scopes, root)?;
++    let mut pending = Vec::new();
++    memory.push(&mut pending, (pattern, 0))?;
++    let found = (|| -> std::result::Result<Option<(&'a Variable, ScopeIntro)>, StorageError> {
++        while let Some((pattern, at)) = pending.pop() {
++            let scope = &scopes[at];
++            match pattern {
++                GraphPattern::Bgp { .. }
++                | GraphPattern::Path { .. }
++                | GraphPattern::PropertyFunction(_) => {}
++                GraphPattern::Join { left, right }
++                | GraphPattern::Lateral { left, right }
++                | GraphPattern::Apply { left, right, .. }
++                | GraphPattern::LeftJoin { left, right, .. } => {
++                    memory.push(&mut pending, (&**right, at))?;
++                    memory.push(&mut pending, (&**left, at))?;
+                 }
+-                pending.push((inner, at));
+-            }
+-            // `UNFOLD` introduces one or two fresh bindings at this scope level,
+-            // exactly as `BIND` introduces one — so a `LATERAL`/`EXISTS` right-hand
+-            // side that re-introduces an outer variable through `UNFOLD` is the
+-            // same conflict, reported in declaration order (element, then
+-            // companion). Its expression operand is never visited, for the reason
+-            // stated for `Extend`'s above.
+-            GraphPattern::Unfold {
+-                inner,
+-                element,
+-                companion,
+-                ..
+-            } => {
+-                for variable in std::iter::once(element).chain(companion.as_ref()) {
+-                    if scope.contains(variable) {
+-                        return Some((variable, ScopeIntro::Unfold));
+-                    }
++                GraphPattern::Union { arms } => {
++                    for arm in arms.iter().rev() { memory.push(&mut pending, (arm, at))?; }
+                 }
+-                pending.push((inner, at));
+-            }
+-            // `VALUES`: the first declared column that collides, in declaration
+-            // order.
+-            GraphPattern::Values { variables, .. } => {
+-                if let Some(v) = variables.iter().find(|v| scope.contains(v)) {
+-                    return Some((v, ScopeIntro::Values));
++                // MINUS-right bindings are never observable in the enclosing scope.
++                GraphPattern::Minus { left, .. } => memory.push(&mut pending, (&**left, at))?,
++                GraphPattern::Filter { inner, .. }
++                | GraphPattern::Graph { inner, .. }
++                | GraphPattern::Service { inner, .. }
++                | GraphPattern::OrderBy { inner, .. }
++                | GraphPattern::Distinct { inner }
++                | GraphPattern::Reduced { inner }
++                | GraphPattern::Slice { inner, .. } => memory.push(&mut pending, (&**inner, at))?,
++                GraphPattern::Extend { inner, variable, .. } => {
++                    if scope.contains(variable) { return Ok(Some((variable, ScopeIntro::Bind))); }
++                    memory.push(&mut pending, (&**inner, at))?;
+                 }
+-            }
+-            // A sub-SELECT's projection is the one scope boundary in the
+-            // grammar: narrow to the variables it actually carries out,
+-            // preserving `scope`'s own order, and stop once nothing survives
+-            // the narrowing — nothing beneath an empty narrowed scope could ever
+-            // be observed as a rebinding of an outer variable. Projecting is not
+-            // introducing: the projection's own `(expr AS ?v)` extends live
+-            // beneath it and are caught, narrowed, by the `Extend` arm above.
+-            GraphPattern::Project { inner, variables } => {
+-                let narrowed: Vec<Variable> = scope
+-                    .iter()
+-                    .filter(|v| variables.contains(*v))
+-                    .cloned()
+-                    .collect();
+-                if !narrowed.is_empty() {
+-                    scopes.push(narrowed);
+-                    pending.push((inner, scopes.len() - 1));
++                GraphPattern::Unfold { inner, element, companion, .. } => {
++                    for variable in std::iter::once(element).chain(companion.as_ref()) {
++                        if scope.contains(variable) { return Ok(Some((variable, ScopeIntro::Unfold))); }
++                    }
++                    memory.push(&mut pending, (&**inner, at))?;
+                 }
+-            }
+-            // `GROUP BY`'s aggregate output variables are fresh bindings at this
+-            // scope level (see "Group's synthetic targets" above); then the
+-            // lowered chain of expression-valued `GROUP BY (expr AS ?v)`
+-            // `Extend`s directly beneath `Group` — and nothing past it, the
+-            // pattern being grouped is never walked.
+-            GraphPattern::Group {
+-                inner,
+-                variables,
+-                aggregates,
+-            } => {
+-                if let Some((v, _)) = aggregates.iter().find(|(v, _)| scope.contains(v)) {
+-                    return Some((v, ScopeIntro::Bind));
++                GraphPattern::Values { variables, .. } => {
++                    if let Some(variable) = variables.iter().find(|variable| scope.contains(variable)) {
++                        return Ok(Some((variable, ScopeIntro::Values)));
++                    }
+                 }
+-                if let Some(conflict) = find_group_extend_conflict(inner, variables, scope) {
+-                    return Some(conflict);
++                GraphPattern::Project { inner, variables } => {
++                    // Build each projection's lookup once, preserving the enclosing
++                    // scope's written order in the narrowed scope.
++                    let mut projected = VarScope::default();
++                    for variable in variables { projected.note(variable, memory)?; }
++                    let mut narrowed = VarScope::default();
++                    for variable in scope.as_slice() {
++                        if projected.contains(variable) { narrowed.note(variable, memory)?; }
++                    }
++                    projected.release(memory)?;
++                    if narrowed.as_slice().is_empty() {
++                        narrowed.release(memory)?;
++                    } else {
++                        let at = scopes.len();
++                        memory.push(&mut scopes, narrowed)?;
++                        memory.push(&mut pending, (&**inner, at))?;
++                    }
+                 }
++                GraphPattern::Group { inner, variables, aggregates } => {
++                    if let Some((variable, _)) = aggregates.iter().find(|(variable, _)| scope.contains(variable)) {
++                        return Ok(Some((variable, ScopeIntro::Bind)));
++                    }
++                    if let Some(conflict) = find_group_extend_conflict(inner, variables, scope, memory)? {
++                        return Ok(Some(conflict));
++                    }
++                }
+             }
+         }
+-    }
+-    None
++        Ok(None)
++    })()?;
++    memory.release_vec(pending)?;
++    while let Some(scope) = scopes.pop() { scope.release(memory)?; }
++    memory.release_vec(scopes)?;
++    Ok(found)
+ }
+ 
+ /// Walk the chain of `Extend` nodes the parser lowers each expression-valued
+@@ -3932,51 +3910,54 @@
+ /// The first conflict reported is the earliest-DECLARED `GROUP BY (expr AS ?v)`
+ /// condition (the innermost `Extend`, closest to the ungrouped pattern),
+ /// preserving the walker's left-to-right determinism contract.
+-fn find_group_extend_conflict<'a>(
+-    mut inner: &'a GraphPattern,
+-    variables: &[Variable],
+-    lhs_scope: &[Variable],
+-) -> Option<(&'a Variable, ScopeIntro)> {
+-    let mut chain: Vec<&'a Variable> = Vec::new();
+-    while let GraphPattern::Extend {
+-        inner: next,
+-        variable,
+-        ..
+-    } = inner
+-    {
+-        if !variables.contains(variable) {
+-            break;
+-        }
+-        chain.push(variable);
++fn find_group_extend_conflict<'a, S: Admission + ?Sized>(
++    mut inner: &'a GraphPattern, variables: &[Variable], lhs_scope: &VarScope,
++    memory: &mut Memory<'_, S>,
++) -> std::result::Result<Option<(&'a Variable, ScopeIntro)>, StorageError> {
++    let mut grouped = VarScope::default();
++    for variable in variables { grouped.note(variable, memory)?; }
++    let mut chain = Vec::new();
++    while let GraphPattern::Extend { inner: next, variable, .. } = inner {
++        if !grouped.contains(variable) { break; }
++        memory.push(&mut chain, variable)?;
+         inner = next;
+     }
+-    chain
+-        .into_iter()
+-        .rev()
+-        .find(|variable| lhs_scope.contains(variable))
+-        .map(|variable| (variable, ScopeIntro::Bind))
++    let found = chain.iter().rev().copied().find(|variable| lhs_scope.contains(variable))
++        .map(|variable| (variable, ScopeIntro::Bind));
++    memory.release_vec(chain)?;
++    grouped.release(memory)?;
++    Ok(found)
+ }
+ 
+ /// Collect the labels of every blank node in a run of quad patterns, descending
+ /// into RDF-1.2 quoted triples. Used to enforce the §19.6 rule that a blank node
+ /// label may not be shared across two operations of one update request.
+-fn collect_quad_bnode_labels(quads: &[QuadPattern], out: &mut HashSet<String, FixedState>) {
+-    for q in quads {
+-        collect_triple_bnode_labels(&q.triple, out);
+-    }
++fn collect_quad_bnode_labels<S: Admission + ?Sized>(
++    quads: &[QuadPattern], out: &mut ScopeTable<BlankNode, ()>,
++    memory: &mut Memory<'_, S>,
++) -> std::result::Result<(), StorageError> {
++    for quad in quads { collect_triple_bnode_labels(&quad.triple, out, memory)?; }
++    Ok(())
+ }
+ 
+-fn collect_triple_bnode_labels(t: &TriplePattern, out: &mut HashSet<String, FixedState>) {
+-    let mut pending = vec![&t.object, &t.subject];
++fn collect_triple_bnode_labels<S: Admission + ?Sized>(
++    triple: &TriplePattern, out: &mut ScopeTable<BlankNode, ()>,
++    memory: &mut Memory<'_, S>,
++) -> std::result::Result<(), StorageError> {
++    let mut pending = Vec::new();
++    memory.reserve(&mut pending, 2)?;
++    pending.extend([&triple.object, &triple.subject]);
+     while let Some(term) = pending.pop() {
+         match term {
+-            TermPattern::BlankNode(b) => {
+-                out.insert(b.as_str().to_owned());
++            TermPattern::BlankNode(blank) => { out.insert(blank.clone(), (), memory)?; }
++            TermPattern::Triple(triple) => {
++                memory.push(&mut pending, &triple.object)?;
++                memory.push(&mut pending, &triple.subject)?;
+             }
+-            TermPattern::Triple(tp) => pending.extend([&tp.object, &tp.subject]),
+             _ => {}
+         }
+     }
++    memory.release_vec(pending)
+ }
+ 
+ /// Hard-fail if any subject/object position of a triple pattern (descending into
+@@ -8744,24 +8725,26 @@
+     fn exists_scope_frames_share_the_enclosing_variables_and_discard_their_own() {
+         let var = |name: &str| Variable::new(name);
+         let mut scopes = ExistsScopes::default();
+-        scopes.push_boundary();
+-        scopes.note(&var("a"));
+-        scopes.push_isolated();
++        let mut resident = Resident;
++        let mut memory = Memory::new(&mut resident);
++        scopes.push_boundary(&mut memory).unwrap();
++        scopes.note(&var("a"), &mut memory).unwrap();
++        scopes.push_isolated(&mut memory).unwrap();
+         assert_eq!(
+             scopes.top(),
+             [var("a")],
+             "an isolated frame sees the one beneath"
+         );
+-        scopes.note(&var("a"));
+-        scopes.note(&var("b"));
++        scopes.note(&var("a"), &mut memory).unwrap();
++        scopes.note(&var("b"), &mut memory).unwrap();
+         assert_eq!(
+             scopes.top(),
+             [var("a"), var("b")],
+             "a seen variable is not noted twice"
+         );
+-        scopes.push_boundary();
++        scopes.push_boundary(&mut memory).unwrap();
+         assert_eq!(scopes.top(), [], "a boundary frame sees nothing beneath it");
+-        scopes.note(&var("a"));
++        scopes.note(&var("a"), &mut memory).unwrap();
+         assert_eq!(
+             scopes.top(),
+             [var("a")],
+@@ -8774,7 +8757,7 @@
+             [var("a")],
+             "an isolated frame's own variables are discarded"
+         );
+-        scopes.note(&var("b"));
++        scopes.note(&var("b"), &mut memory).unwrap();
+         assert_eq!(
+             scopes.top(),
+             [var("a"), var("b")],
+@@ -8787,9 +8770,44 @@
+             scopes.positions.is_empty(),
+             "every position left the trail with its variable"
+         );
++        scopes.release(&mut memory).unwrap();
++        assert_eq!(memory.live_bytes(), 0);
+     }
+ 
+     #[test]
++    fn exists_scope_refusal_preserves_enclosing_identity_and_parallel_trails() {
++        struct Limit { maximum: usize }
++        impl Admission for Limit {
++            fn resize(&mut self, live: usize) -> std::result::Result<(), StorageError> {
++                if live > self.maximum { Err(StorageError::AdmissionFailed) } else { Ok(()) }
++            }
++        }
++        let a = Variable::new("a");
++        let b = Variable::new("b");
++        let mut storage = Limit { maximum: usize::MAX };
++        let mut memory = Memory::new(&mut storage);
++        let mut scopes = ExistsScopes::default();
++        scopes.push_boundary(&mut memory).unwrap();
++        scopes.note(&a, &mut memory).unwrap();
++        scopes.push_boundary(&mut memory).unwrap();
++        let live = memory.live_bytes();
++        memory.admission_mut().maximum = live;
++        assert_eq!(scopes.note(&b, &mut memory), Err(StorageError::AdmissionFailed));
++        assert!(scopes.top().is_empty(), "refusal publishes no new binding");
++        assert_eq!(scopes.trail, [a.clone()]);
++        assert_eq!(scopes.previous, [None]);
++        assert_eq!(scopes.positions.get(&a), Some(&0));
++        assert_eq!(scopes.positions.get(&b), None);
++        scopes.pop();
++        assert_eq!(scopes.top(), [a.clone()], "the enclosing frame still sees its original identity");
++        let before_duplicate = memory.live_bytes();
++        scopes.note(&a, &mut memory).unwrap();
++        assert_eq!(memory.live_bytes(), before_duplicate, "duplicate lookup needs no storage");
++        scopes.release(&mut memory).unwrap();
++        assert_eq!(memory.live_bytes(), 0);
++    }
++
++    #[test]
+     fn deeply_nested_not_exists_parses_and_still_checks_its_scope() {
+         let nested = |depth: usize, innermost: &str| {
+             let mut body = innermost.to_owned();
+diff --git a/crates/sparql-algebra/src/parser/machine.rs b/crates/sparql-algebra/src/parser/machine.rs
+--- a/crates/sparql-algebra/src/parser/machine.rs
++++ b/crates/sparql-algebra/src/parser/machine.rs
+@@ -34,13 +34,12 @@
+ use crate::error::{ParseError, Result};
+ use crate::lexer::Token;
+ use crate::tree::Child;
+-use purrdf_hash::fixed::FixedState;
+ 
+ use super::{
+     ExistsScopeBasis, Modifiers, Parser, PendingExistsScopeCheck, ScopeConstruct, SelectPosition,
+     VarScope, aggregate_function, builtin_function, collect_vars, compute_lateral_left_scope,
+     empty_modifier_clause, expect_arity, find_scope_conflict, repeated_bound_clause,
+-    split_trailing_filters, stray_dot, visible_variables,
++    split_trailing_filters, stray_dot, visible_variables_with_memory,
+ };
+ 
+ /// The refusal of an aggregate written where an expression may hold none.
+@@ -57,23 +56,33 @@
+ /// The first variable `expr` reads, outside any `EXISTS` body, that `readable`
+ /// rejects — the grouping constraint's witness for a SELECT expression of an
+ /// aggregate query — or `None` when every variable it reads is readable.
+-fn first_projection_read(
+-    expr: &Expression,
+-    readable: impl Fn(&Variable) -> bool,
+-) -> Option<&Variable> {
++fn first_projection_read<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
++    expression: &'a Expression, readable: impl Fn(&Variable) -> bool,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> std::result::Result<Option<&'a Variable>, purrdf_lex::allocation::StorageError> {
+     use crate::walk::NodeRef;
+-    let mut pending = vec![NodeRef::Expr(expr)];
++    let mut pending = Vec::new();
++    memory.push(&mut pending, NodeRef::Expr(expression))?;
++    let mut found = None;
+     while let Some(node) = pending.pop() {
+-        if let NodeRef::Expr(Expression::Variable(v) | Expression::Bound(v)) = node
+-            && !readable(v)
++        if let NodeRef::Expr(Expression::Variable(variable) | Expression::Bound(variable)) = node
++            && !readable(variable)
+         {
+-            return Some(v);
++            found = Some(variable);
++            break;
+         }
+         if !matches!(node, NodeRef::Expr(Expression::Exists(_))) {
+-            node.for_each_child(|child| pending.push(child));
++            let mut failure = None;
++            node.for_each_child(|child| {
++                if failure.is_none() {
++                    if let Err(error) = memory.push(&mut pending, child) { failure = Some(error); }
++                }
++            });
++            if let Some(failure) = failure { return Err(failure); }
+         }
+     }
+-    None
++    memory.release_vec(pending)?;
++    Ok(found)
+ }
+ 
+ /// How much of the expression grammar an activation reads.
+@@ -503,7 +512,9 @@
+ 
+     /// Read a group graph pattern, discarding what it puts in scope.
+     pub(super) fn parse_group_graph_pattern(&mut self) -> Result<GraphPattern> {
+-        Ok(self.parse_group()?.pattern)
++        let group = self.parse_group()?;
++        group.scope.release(self.memory)?;
++        Ok(group.pattern)
+     }
+ 
+     /// Read a whole query's `SELECT`.
+@@ -666,7 +677,7 @@
+                     unreachable!("a sub-SELECT returns a query")
+                 };
+                 self.expect(&Token::RBrace)?;
+-                Ok(Step::Return(Val::Group(self.sub_select_group(*sub, intro))))
++                Ok(Step::Return(Val::Group(self.sub_select_group(*sub, intro)?)))
+             }
+             Ctl::Element(element) => self.resume_element(element, val),
+             Ctl::Select(stage) => self.resume_select(stage, val),
+@@ -1338,7 +1349,7 @@
+         // Anchor the error at the body's own opening brace rather than wherever the
+         // cursor lands after parsing it, mirroring `LATERAL`'s own `at` capture.
+         let at = self.span();
+-        self.push_exists_scope_isolated();
++        self.push_exists_scope_isolated()?;
+         self.machine.ctl.push(Ctl::Exists { at, negated });
+         self.start_group()
+     }
+@@ -1387,8 +1398,10 @@
+         let GroupValue {
+             pattern: body,
+             intro,
++            scope,
+             ..
+         } = body;
++        scope.release(self.memory)?;
+         if !intro || RDFLIB {
+             return Ok(body);
+         }
+@@ -1412,7 +1425,9 @@
+                 });
+             return Ok(body);
+         }
+-        if let Some((var, intro)) = find_scope_conflict(self.exists_scope(), &body) {
++        if let Some((var, intro)) =
++            find_scope_conflict(self.exists_scope_stack.top(), &body, self.memory)? {
++
+             return Err(ParseError::syntax(
+                 format!(
+                     "{} ?{} inside {} is already in scope on {}",
+@@ -1467,7 +1482,7 @@
+     }
+ 
+     /// `{ SELECT … }`, read: its pattern, and the variables its projection puts in scope.
+-    fn sub_select_group(&self, sub: Query, intro: bool) -> GroupValue {
++    fn sub_select_group(&mut self, sub: Query, intro: bool) -> Result<GroupValue> {
+         // Destructured field by field rather than through `..`: a sub-select keeps only
+         // the pattern, and the other three have to be accounted for HERE, where the
+         // `Query` is discarded, or a field added to `Query::Select` later would start
+@@ -1500,13 +1515,13 @@
+                     "a sub-SELECT copies the request's one prologue VERSION"
+                 );
+                 let mut scope = VarScope::default();
+-                collect_vars(&pattern, &mut scope);
+-                GroupValue {
++                collect_vars(&pattern, &mut scope, self.memory)?;
++                Ok(GroupValue {
+                     pattern,
+                     scope,
+                     intro,
+                     filter_count: 0,
+-                }
++                })
+             }
+             _ => unreachable!("a sub-SELECT is a Query::Select"),
+         }
+@@ -1577,7 +1592,7 @@
+                 // EXISTS in-scope set (§18.2.1) — but an `EXISTS` INSIDE it must still
+                 // see whatever the row being tested already has bound, so the frame is
+                 // SEEDED, not fresh; it is popped and discarded, never merged back.
+-                self.push_exists_scope_isolated();
++                self.push_exists_scope_isolated()?;
+                 Element::Minus
+             } else if self.eat_kw("GRAPH") {
+                 Element::Graph(self.parse_var_or_iri_name()?)
+@@ -1604,8 +1619,8 @@
+                 return Ok(self.activate(Reach::Full, Sink::Refuse(AGGREGATE_OUTSIDE)));
+             } else if self.peek_kw("VALUES") {
+                 let values = self.parse_inline_data()?;
+-                collect_vars(&values, &mut group.scope);
+-                self.note_exists_scope(&values);
++                collect_vars(&values, &mut group.scope, self.memory)?;
++                self.note_exists_scope(&values)?;
+                 group.g = self.group_join(group.g, values);
+                 group.intro = true;
+                 group.dot_ok = true;
+@@ -1630,8 +1645,8 @@
+                 let block = self.parse_triples_block(super::TripleContext::Pattern);
+                 self.bgp_scope = enclosing;
+                 let block = block?;
+-                collect_vars(&block, &mut group.scope);
+-                self.note_exists_scope(&block);
++                collect_vars(&block, &mut group.scope, self.memory)?;
++                self.note_exists_scope(&block)?;
+                 group.g = self.group_join(group.g, block);
+                 group.dot_ok = false;
+                 continue;
+@@ -1660,8 +1675,9 @@
+                     None => arm,
+                     Some(mut chain) => {
+                         for v in arm.scope.as_slice() {
+-                            chain.scope.note(v);
++                            chain.scope.note(v, self.memory)?;
+                         }
++                        arm.scope.release(self.memory)?;
+                         GroupValue {
+                             pattern: GraphPattern::union(chain.pattern, arm.pattern),
+                             scope: chain.scope,
+@@ -1679,14 +1695,14 @@
+                 // A bracketed sub-group (possibly a `{ SELECT ... }`, whose contribution
+                 // is its OWN projection, not its inner WHERE pattern) or a chain of
+                 // `UNION` arms.
+-                self.note_element_vars(&mut group.scope, &node.scope);
++                self.note_element_vars(&mut group.scope, node.scope)?;
+                 group.g = self.group_join(group.g, node.pattern);
+                 group.intro |= node.intro;
+             }
+             Element::Optional => {
+                 let inner = val.group();
+                 let (right, expression) = split_trailing_filters(inner.pattern, inner.filter_count);
+-                self.note_element_vars(&mut group.scope, &inner.scope);
++                self.note_element_vars(&mut group.scope, inner.scope)?;
+                 group.g = GraphPattern::LeftJoin {
+                     left: Child::new(group.g),
+                     right: Child::new(right),
+@@ -1702,14 +1718,18 @@
+                 // against a fresh walk (the non-counting entry point) under
+                 // `debug_assertions` only.
+                 self.note_scope_consultation();
+-                debug_assert_eq!(
+-                    group.scope.as_slice(),
+-                    compute_lateral_left_scope(&group.g).as_slice(),
+-                    "the incremental LATERAL left-scope drifted from a fresh visible_variables walk"
+-                );
++                #[cfg(debug_assertions)]
++                {
++                    let checked = compute_lateral_left_scope(&group.g, self.memory)?;
++                    debug_assert_eq!(
++                        group.scope.as_slice(), checked.as_slice(),
++                        "the incremental LATERAL left-scope drifted from a fresh visible_variables walk"
++                    );
++                    self.memory.release_vec(checked)?;
++                }
+                 if right.intro
+                     && let Some((var, intro)) =
+-                        find_scope_conflict(group.scope.as_slice(), &right.pattern)
++                        find_scope_conflict(group.scope.as_slice(), &right.pattern, self.memory)?
+                 {
+                     return Err(ParseError::syntax(
+                         format!(
+@@ -1722,7 +1742,7 @@
+                         at,
+                     ));
+                 }
+-                self.note_element_vars(&mut group.scope, &right.scope);
++                self.note_element_vars(&mut group.scope, right.scope)?;
+                 group.g = GraphPattern::Lateral {
+                     left: Child::new(group.g),
+                     right: Child::new(right.pattern),
+@@ -1731,6 +1751,7 @@
+             }
+             Element::Minus => {
+                 let right = val.group();
++                right.scope.release(self.memory)?;
+                 self.pop_exists_scope_boundary();
+                 // SPARQL §18.2.1: `MINUS`'s right operand contributes NOTHING to the
+                 // enclosing group's scope, and `find_scope_conflict` never walks it.
+@@ -1742,10 +1763,10 @@
+             Element::Graph(name) => {
+                 let inner = val.group();
+                 if let NamedNodePattern::Variable(v) = &name {
+-                    group.scope.note(v);
+-                    self.note_exists_scope_var(v);
++                    group.scope.note(v, self.memory)?;
++                    self.note_exists_scope_var(v)?;
+                 }
+-                self.note_element_vars(&mut group.scope, &inner.scope);
++                self.note_element_vars(&mut group.scope, inner.scope)?;
+                 let graph = GraphPattern::Graph {
+                     name,
+                     inner: Child::new(inner.pattern),
+@@ -1757,10 +1778,10 @@
+                 let inner = val.group();
+                 let is_var_endpoint = matches!(name, NamedNodePattern::Variable(_));
+                 if let NamedNodePattern::Variable(v) = &name {
+-                    group.scope.note(v);
+-                    self.note_exists_scope_var(v);
++                    group.scope.note(v, self.memory)?;
++                    self.note_exists_scope_var(v)?;
+                 }
+-                self.note_element_vars(&mut group.scope, &inner.scope);
++                self.note_element_vars(&mut group.scope, inner.scope)?;
+                 let service = GraphPattern::Service {
+                     name,
+                     inner: Child::new(inner.pattern),
+@@ -1794,11 +1815,15 @@
+                 // called here: it fires once per `BIND` and must not scale the count
+                 // with the group's element count). The equivalence check still runs,
+                 // through the free-function (non-counting) `visible_variables`.
+-                debug_assert_eq!(
+-                    group.scope.contains(&variable),
+-                    visible_variables(&group.g).contains(&variable),
+-                    "the incremental BIND-scope check drifted from a fresh visible_variables walk"
+-                );
++                #[cfg(debug_assertions)]
++                {
++                    let checked = visible_variables_with_memory(&group.g, self.memory)?;
++                    debug_assert_eq!(
++                        group.scope.contains(&variable), checked.contains(&variable),
++                        "the incremental BIND-scope check drifted from a fresh visible_variables walk"
++                    );
++                    self.memory.release_vec(checked)?;
++                }
+                 if !RDFLIB && group.scope.contains(&variable) {
+                     return Err(ParseError::syntax(
+                         format!(
+@@ -1808,8 +1833,8 @@
+                         self.span(),
+                     ));
+                 }
+-                group.scope.note(&variable);
+-                self.note_exists_scope_var(&variable);
++                group.scope.note(&variable, self.memory)?;
++                self.note_exists_scope_var(&variable)?;
+                 group.g = GraphPattern::Extend {
+                     inner: Child::new(group.g),
+                     variable,
+@@ -1829,12 +1854,16 @@
+                 self.expect(&Token::RParen)?;
+                 // `BIND`'s §19.6 scope rule, verbatim, on BOTH targets.
+                 for variable in std::iter::once(&element).chain(companion.as_ref()) {
+-                    debug_assert_eq!(
+-                        group.scope.contains(variable),
+-                        visible_variables(&group.g).contains(variable),
+-                        "the incremental UNFOLD-scope check drifted from a fresh \
+-                         visible_variables walk"
+-                    );
++                    #[cfg(debug_assertions)]
++                    {
++                        let checked = visible_variables_with_memory(&group.g, self.memory)?;
++                        debug_assert_eq!(
++                            group.scope.contains(variable), checked.contains(variable),
++                            "the incremental UNFOLD-scope check drifted from a fresh \
++                             visible_variables walk"
++                        );
++                        self.memory.release_vec(checked)?;
++                    }
+                     if group.scope.contains(variable) {
+                         return Err(ParseError::syntax(
+                             format!(
+@@ -1859,8 +1888,8 @@
+                     ));
+                 }
+                 for variable in std::iter::once(&element).chain(companion.as_ref()) {
+-                    group.scope.note(variable);
+-                    self.note_exists_scope_var(variable);
++                    group.scope.note(variable, self.memory)?;
++                    self.note_exists_scope_var(variable)?;
+                 }
+                 group.g = GraphPattern::Unfold {
+                     inner: Child::new(group.g),
+@@ -1879,11 +1908,13 @@
+     /// Note the variables a finished element puts in scope — its own set, in its order —
+     /// into the group's set and into the innermost `EXISTS` in-scope frame, exactly as a
+     /// walk of the element's pattern would.
+-    fn note_element_vars(&mut self, scope: &mut VarScope, element: &VarScope) {
+-        for v in element.as_slice() {
+-            scope.note(v);
+-            self.note_exists_scope_var(v);
++    fn note_element_vars(&mut self, scope: &mut VarScope, element: VarScope) -> Result<()> {
++        for variable in element.as_slice() {
++            scope.note(variable, self.memory)?;
++            self.note_exists_scope_var(variable)?;
+         }
++        element.release(self.memory)?;
++        Ok(())
+     }
+ 
+     // ── SELECT / sub-SELECT ──────────────────────────────────────────────────
+@@ -1909,7 +1940,7 @@
+         // this one is nested inside (a sub-SELECT is not correlated with its outer
+         // query). Stays open through `WHERE` and the solution modifiers, and is popped
+         // once the SELECT is built.
+-        self.push_exists_scope_boundary();
++        self.push_exists_scope_boundary()?;
+ 
+         // This SELECT's OWN deferred-EXISTS-scope window (SEP-0007 Part 3's
+         // projection-list position — see `Parser::projection_scope_pending`'s doc):
+@@ -2044,8 +2075,9 @@
+                 // solution modifiers see it whatever built it — a group's elements, or a
+                 // WHERE clause that IS just `{ SELECT ... }`.
+                 for v in scope.as_slice() {
+-                    self.note_exists_scope_var(v);
++                    self.note_exists_scope_var(v)?;
+                 }
++                scope.release(self.memory)?;
+                 let state = self.top_select();
+                 state.where_pattern = Some((pattern, intro));
+                 let aggregates = std::mem::take(&mut state.aggregates);
+@@ -2102,10 +2134,10 @@
+             // A PRODUCTION consultation of the whole WHERE pattern's scope — once per
+             // SELECT with expression-valued GROUP BY conditions.
+             self.note_scope_consultation();
+-            let mut in_scope: std::collections::HashSet<Variable, FixedState> =
+-                visible_variables(&where_pat).into_iter().collect();
++            let mut in_scope = VarScope::default();
++            collect_vars(&where_pat, &mut in_scope, self.memory)?;
+             for (variable, _) in &modifiers.group_extends {
+-                if !in_scope.insert(variable.clone()) {
++                if !in_scope.note(variable, self.memory)? {
+                     return Err(ParseError::syntax(
+                         format!(
+                             "GROUP BY target ?{} is already in scope in the WHERE clause or \
+@@ -2116,6 +2148,7 @@
+                     ));
+                 }
+             }
++            in_scope.release(self.memory)?;
+         }
+ 
+         // §19.8: each SELECT `(expr AS ?v)` target must be fresh — not already in scope.
+@@ -2128,20 +2161,16 @@
+             let aggregating = !modifiers.group_by.is_empty()
+                 || !modifiers.group_extends.is_empty()
+                 || !aggregates.is_empty();
+-            let mut in_scope: std::collections::HashSet<Variable, FixedState> = if aggregating {
+-                modifiers
+-                    .group_by
+-                    .iter()
+-                    .cloned()
+-                    .chain(modifiers.group_extends.iter().map(|(v, _)| v.clone()))
+-                    .collect()
++            let mut in_scope = VarScope::default();
++            if aggregating {
++                for variable in &modifiers.group_by { in_scope.note(variable, self.memory)?; }
++                for (variable, _) in &modifiers.group_extends {
++                    in_scope.note(variable, self.memory)?;
++                }
+             } else {
+-                // A PRODUCTION consultation of the whole WHERE pattern's scope — once
+-                // per SELECT with `(expr AS ?v)` targets, never once per element of that
+-                // WHERE pattern.
+                 self.note_scope_consultation();
+-                visible_variables(&where_pat).into_iter().collect()
+-            };
++                collect_vars(&where_pat, &mut in_scope, self.memory)?;
++            }
+ 
+             // SEP-0007 Part 3's projection-list position: resolve every `EXISTS`/`NOT
+             // EXISTS` deferred while this projection list was being parsed — BEFORE the
+@@ -2155,45 +2184,34 @@
+             // if this SELECT actually deferred an aggregate-argument `EXISTS`) since it
+             // differs from `in_scope` only when the query aggregates.
+             if !self.pending_exists_scope_checks.is_empty() {
+-                let pending_checks = std::mem::take(&mut self.pending_exists_scope_checks);
+-                let mut agg_arg_scope: Option<std::collections::HashSet<Variable, FixedState>> =
+-                    None;
+-                for pending in pending_checks {
+-                    let root: &std::collections::HashSet<Variable, FixedState> = match pending.basis
+-                    {
++                let mut pending_checks = std::mem::take(&mut self.pending_exists_scope_checks);
++                let mut agg_arg_scope: Option<VarScope> = None;
++                for pending in pending_checks.drain(..) {
++                    let root = match pending.basis {
+                         ExistsScopeBasis::Projection => &in_scope,
+                         ExistsScopeBasis::AggregateArgument => {
+                             if aggregating {
+                                 if agg_arg_scope.is_none() {
+                                     self.note_scope_consultation();
+-                                    let scope: std::collections::HashSet<Variable, FixedState> =
+-                                        visible_variables(&where_pat)
+-                                            .into_iter()
+-                                            .chain(
+-                                                modifiers
+-                                                    .group_extends
+-                                                    .iter()
+-                                                    .map(|(v, _)| v.clone()),
+-                                            )
+-                                            .collect();
++                                    let mut scope = VarScope::default();
++                                    collect_vars(&where_pat, &mut scope, self.memory)?;
++                                    for (variable, _) in &modifiers.group_extends {
++                                        scope.note(variable, self.memory)?;
++                                    }
+                                     agg_arg_scope = Some(scope);
+                                 }
+                                 agg_arg_scope.as_ref().expect("just populated above")
+-                            } else {
+-                                // Not aggregating: the raw `WHERE` scope IS the
+-                                // projection's own root already (no grouping-extend
+-                                // targets exist to add).
+-                                &in_scope
+-                            }
++                            } else { &in_scope }
+                         }
+                     };
+-                    let scope: Vec<Variable> = pending
+-                        .local_scope
+-                        .iter()
+-                        .cloned()
+-                        .chain(root.iter().cloned())
+-                        .collect();
+-                    if let Some((var, intro)) = find_scope_conflict(&scope, &pending.body) {
++                    let mut scope = VarScope::default();
++                    for variable in pending.local_scope.iter().chain(root.as_slice()) {
++                        scope.note(variable, self.memory)?;
++                    }
++                    let found = find_scope_conflict(scope.as_slice(), &pending.body, self.memory)?;
++                    scope.release(self.memory)?;
++                    self.memory.release_vec(pending.local_scope)?;
++                    if let Some((var, intro)) = found {
+                         return Err(ParseError::syntax(
+                             format!(
+                                 "{} ?{} inside {} is already in scope on {}",
+@@ -2206,10 +2224,12 @@
+                         ));
+                     }
+                 }
++                if let Some(scope) = agg_arg_scope { scope.release(self.memory)?; }
++                self.memory.release_vec(pending_checks)?;
+             }
+ 
+             for (var, _) in &select_exprs {
+-                if !in_scope.insert(var.clone()) {
++                if !in_scope.note(var, self.memory)? {
+                     return Err(ParseError::syntax(
+                         format!(
+                             "SELECT expression target ?{} is already in scope",
+@@ -2219,6 +2239,7 @@
+                     ));
+                 }
+             }
++            in_scope.release(self.memory)?;
+         }
+ 
+         // §11.1 grammar note: the `SELECT *` shorthand is illegal in an aggregate query —
+@@ -2250,15 +2271,16 @@
+         if !RDFLIB && !star {
+             let is_aggregating = !modifiers.group_by.is_empty() || !aggregates.is_empty();
+             if is_aggregating {
+-                let as_targets: std::collections::HashSet<&Variable, FixedState> =
+-                    select_exprs.iter().map(|(v, _)| v).collect();
++                let mut as_targets = VarScope::default();
++                for (variable, _) in &select_exprs { as_targets.note(variable, self.memory)?; }
+                 // A variable the caller binds before evaluation
+                 // (`SparqlParser::with_prebound_variables`) holds one value for the
+                 // whole evaluation, so every group reads the same value: it is as good
+                 // as a key. No other variable is exempt.
+-                let mut group_vars: std::collections::HashSet<&Variable, FixedState> =
+-                    modifiers.group_by.iter().collect();
+-                group_vars.extend(self.prebound.iter());
++                let mut group_vars = VarScope::default();
++                for variable in modifiers.group_by.iter().chain(&self.prebound) {
++                    group_vars.note(variable, self.memory)?;
++                }
+                 for var in &projected {
+                     if !as_targets.contains(var) && !group_vars.contains(var) {
+                         return Err(ParseError::syntax(
+@@ -2281,9 +2303,9 @@
+                 // never binds, or binds only inside `MINUS`. An `EXISTS` body is not
+                 // read: a variable that occurs only there is local to it.
+                 let mut readable = group_vars;
+-                readable.extend(aggregates.iter().map(|(v, _)| v));
++                for (variable, _) in &aggregates { readable.note(variable, self.memory)?; }
+                 for (target, expr) in &select_exprs {
+-                    if let Some(var) = first_projection_read(expr, |v| readable.contains(v)) {
++                    if let Some(var) = first_projection_read(expr, |v| readable.contains(v), self.memory)? {
+                         return Err(ParseError::syntax(
+                             format!(
+                                 "SELECT expression for ?{} reads ?{}, which is neither a \
+@@ -2294,8 +2316,10 @@
+                             self.span(),
+                         ));
+                     }
+-                    readable.insert(target);
++                    readable.note(target, self.memory)?;
+                 }
++                as_targets.release(self.memory)?;
++                readable.release(self.memory)?;
+             }
+         }
+ 
+@@ -2318,7 +2342,7 @@
+         let has_group = !modifiers.group_by.is_empty() || !aggregates.is_empty();
+         let intro = where_intro || has_group || !select_exprs.is_empty() || trailing_values;
+         let contextual_star = if RDFLIB && star {
+-            Some(super::contextual_visible_variables(&where_pat))
++            Some(super::contextual_visible_variables(&where_pat, self.memory)?)
+         } else {
+             None
+         };
+@@ -2426,7 +2450,7 @@
+             if RDFLIB {
+                 contextual_star.expect("a contextual star captured its source projection")
+             } else {
+-                visible_variables(&p)
++                visible_variables_with_memory(&p, self.memory)?
+             }
+         } else {
+             projected
+diff --git a/crates/sparql-algebra/src/ast.rs b/crates/sparql-algebra/src/ast.rs
+--- a/crates/sparql-algebra/src/ast.rs
++++ b/crates/sparql-algebra/src/ast.rs
+@@ -97,7 +97,7 @@
+ /// form: `Clone` is a refcount bump, so a blank-node outer binding fanning out
+ /// to several `VALUES`-join sites in a correlated substitution costs no
+ /// per-site text allocation.
+-#[derive(Clone, PartialEq, Eq, Hash)]
++#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+ pub struct BlankNode {
+     id: OwnedText,
+ }

@@ -1,0 +1,521 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Proposed addition to tests/segmented_query.rs, using its existing imports and
+// support fixture. Not applied, compiled or executed. This SELECT matrix is one
+// part of acceptance; graph forms, RDF 1.2, configured producers, ownership,
+// EXPLAIN and independent failure cases remain required.
+
+#[test]
+fn bounded_select_algebra_matches_resident_bags_across_public_entries() {
+    const CASES: &[(&str, &str, usize)] = &[
+        (
+            "zero-column bag",
+            "SELECT * WHERE { VALUES () { () () } }",
+            2,
+        ),
+        (
+            "wide schema join",
+            "SELECT ?a ?b ?c ?d ?e ?f ?g ?h ?i ?j WHERE { VALUES (?a ?b ?c ?d ?e) { (1 2 3 4 5) } VALUES (?f ?g ?h ?i ?j) { (6 7 8 9 10) } }",
+            1,
+        ),
+        (
+            "wide union padding",
+            "SELECT ?a ?b ?c ?d ?e ?f ?g ?h ?i ?j WHERE { { VALUES (?a ?b ?c ?d ?e ?f ?g ?h ?i ?j) { (1 2 3 4 5 6 7 8 9 10) } } UNION { VALUES ?a { 2 } } } ORDER BY ?a",
+            2,
+        ),
+        (
+            "duplicate union",
+            "SELECT ?x WHERE { { VALUES ?x { 1 } } UNION { VALUES ?x { 1 } } }",
+            2,
+        ),
+        (
+            "all undef bag",
+            "SELECT ?x WHERE { VALUES ?x { UNDEF UNDEF } }",
+            2,
+        ),
+        (
+            "unbound optional",
+            "SELECT ?s ?x WHERE { VALUES ?s { <https://example.org/target> } OPTIONAL { ?s <https://example.org/missing> ?x } }",
+            1,
+        ),
+        (
+            "correlated optional bind",
+            "SELECT ?s ?x WHERE { VALUES ?s { <https://example.org/target> } OPTIONAL { BIND(STR(?s) AS ?x) } }",
+            1,
+        ),
+        (
+            "computed bind",
+            "SELECT ?x WHERE { VALUES ?s { <https://example.org/target> } BIND(CONCAT(STR(?s), '/computed') AS ?x) }",
+            1,
+        ),
+        (
+            "filter",
+            "SELECT ?s WHERE { ?s <https://example.org/p> ?o FILTER(?s = <https://example.org/target>) }",
+            1,
+        ),
+        (
+            "ordered slice",
+            "SELECT ?s WHERE { ?s <https://example.org/p> ?o } ORDER BY ?s OFFSET 1 LIMIT 3",
+            3,
+        ),
+        (
+            "distinct",
+            "SELECT DISTINCT ?x WHERE { VALUES ?x { 1 1 2 } } ORDER BY ?x",
+            2,
+        ),
+        (
+            "reduced upper bag",
+            "SELECT REDUCED ?x WHERE { VALUES ?x { 1 2 } } ORDER BY ?x",
+            2,
+        ),
+        (
+            "group",
+            "SELECT ?s (COUNT(?o) AS ?n) WHERE { VALUES ?s { <https://example.org/target> } ?s <https://example.org/p> ?o } GROUP BY ?s",
+            1,
+        ),
+        (
+            "empty global aggregate",
+            "SELECT (COUNT(*) AS ?n) WHERE { FILTER(false) }",
+            1,
+        ),
+        (
+            "subquery",
+            "SELECT ?s WHERE { { SELECT ?s WHERE { ?s <https://example.org/p> ?o } ORDER BY ?s LIMIT 2 } } ORDER BY ?s",
+            2,
+        ),
+        (
+            "path alternative preserves bag",
+            "SELECT ?o WHERE { <https://example.org/target> (<https://example.org/p>|<https://example.org/p>) ?o }",
+            2,
+        ),
+        (
+            "path reflexive reach",
+            "SELECT ?o WHERE { <https://example.org/target> <https://example.org/p>* ?o } ORDER BY ?o",
+            2,
+        ),
+        (
+            "inverse path",
+            "SELECT ?s WHERE { ?s ^<https://example.org/p> <https://example.org/target> }",
+            1,
+        ),
+        (
+            "absent named graph",
+            "SELECT ?s WHERE { GRAPH <https://example.org/missing> { ?s ?p ?o } }",
+            0,
+        ),
+        (
+            "explicit empty default",
+            "SELECT ?s FROM <https://example.org/missing> WHERE { ?s ?p ?o }",
+            0,
+        ),
+    ];
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    for &(name, query, expected_count) in CASES {
+        let prepared = engine
+            .prepare_query(query, None)
+            .unwrap_or_else(|error| panic!("{name}: parse: {error:?}"));
+        let expected = engine
+            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .unwrap_or_else(|error| panic!("{name}: resident: {error:?}"));
+        if name == "zero-column bag" {
+            let (variables, rows) = expected.solutions().expect("SELECT");
+            assert!(variables.is_empty());
+            assert!(rows.iter().all(Vec::is_empty));
+        }
+        if name == "wide schema join" || name == "wide union padding" {
+            let (variables, rows) = expected.solutions().expect("SELECT");
+            assert_eq!(variables.len(), 10);
+            for (column, value) in rows[0].iter().enumerate() {
+                let Some(TermValue::Literal { lexical_form, .. }) = value else {
+                    panic!("wide first row must bind every column");
+                };
+                assert_eq!(lexical_form, &(column + 1).to_string());
+            }
+            if name == "wide union padding" {
+                assert!(rows[1][1..].iter().all(Option::is_none));
+            }
+        }
+        if name == "empty global aggregate" || name == "group" {
+            let (variables, rows) = expected.solutions().expect("aggregate SELECT");
+            let column = variables
+                .iter()
+                .position(|variable| variable == "n")
+                .expect("count column");
+            let Some(TermValue::Literal { lexical_form, .. }) = &rows[0][column] else {
+                panic!("COUNT must yield a literal");
+            };
+            assert_eq!(lexical_form, if name == "group" { "1" } else { "0" });
+        }
+        let expected_rows = support::sorted_rows(&expected, |value| format!("{value:?}"));
+        assert_eq!(
+            expected_rows.len(),
+            expected_count,
+            "{name}: independent bag cardinality"
+        );
+        for route in 0..3 {
+            let source = open(&image, CEILING);
+            let result = match route {
+                0 => {
+                    engine
+                        .query_fallible_view(
+                            &source,
+                            SparqlRequest {
+                                query,
+                                base_iri: None,
+                                substitutions: &[],
+                            },
+                            QueryOptions::EMPTY,
+                        )
+                        .unwrap_or_else(|error| panic!("{name}: direct: {error:?}"))
+                        .result
+                }
+                1 => {
+                    engine
+                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .unwrap_or_else(|error| panic!("{name}: prepared: {error:?}"))
+                        .result
+                }
+                _ => {
+                    engine
+                        .query_prepared_governed_fallible_view(
+                            &source,
+                            &prepared,
+                            &[],
+                            QueryOptions::EMPTY,
+                            &QueryGovernors::METERED,
+                        )
+                        .unwrap_or_else(|error| panic!("{name}: governed: {error:?}"))
+                        .result
+                }
+            };
+            assert_eq!(
+                support::sorted_rows(&result, |value| format!("{value:?}")),
+                expected_rows,
+                "{name}: route {route}: exact bag parity"
+            );
+            assert!(source.read_error().is_none(), "{name}: route {route}");
+            assert!(
+                source.evidence().peak_bytes() <= CEILING,
+                "{name}: route {route}"
+            );
+        }
+    }
+}
+
+#[test]
+fn duplicate_computed_payload_releases_temporaries_and_retains_extracted_output() {
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    // Prepared outside the execution allocation window. The variable-dependent
+    // empty substring prevents constant folding the complete CONCAT. Every one
+    // of the fixture's 201 p rows computes the same 48 KiB output; DISTINCT does
+    // not authorize cumulative charging of discarded duplicate payloads.
+    let payload = "x".repeat(48 * 1024);
+    let query = format!(
+        "SELECT DISTINCT ?value WHERE {{ ?subject <https://example.org/p> ?object . \
+         BIND(CONCAT(SUBSTR(STR(?object), 1, 0), \"{payload}\") AS ?value) }}"
+    );
+    let prepared = engine.prepare_query(&query, None).expect("computed query");
+    let expected = engine
+        .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+        .expect("resident computed result");
+    let (_, expected_rows) = expected.solutions().expect("SELECT");
+    assert_eq!(expected_rows.len(), 1);
+    assert_eq!(
+        expected_rows[0][0],
+        Some(TermValue::simple_literal(payload.as_str()))
+    );
+
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let source = open(&image, CEILING);
+    let answer = engine
+        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+        .expect("live temporary ownership must fit independently of row count");
+    assert_eq!(answer.result.solutions().expect("SELECT").1, expected_rows);
+    let output = answer.result;
+    drop(answer.evidence);
+    let retained = source.evidence().live_bytes();
+    let shared = output.clone();
+    assert_eq!(source.evidence().live_bytes(), retained, "shallow clone");
+    drop(output);
+    assert_eq!(
+        source.evidence().live_bytes(),
+        retained,
+        "last owner remains"
+    );
+    let extracted = shared.into_solutions().expect("SELECT extraction");
+    assert_eq!(extracted.as_parts().1, expected_rows);
+    assert_eq!(
+        source.evidence().live_bytes(),
+        retained,
+        "extraction keeps lease"
+    );
+    drop(extracted);
+    assert!(
+        source.evidence().live_bytes() < retained,
+        "final output releases admission"
+    );
+    let peak = source.evidence().peak_bytes();
+    let measured = window.close();
+    assert!(peak <= CEILING);
+    assert!(u64::try_from(measured.peak_working_bytes).expect("measured peak fits") <= peak);
+    assert!(source.read_error().is_none());
+}
+
+#[test]
+fn bounded_ask_construct_describe_match_resident_across_public_entries() {
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    for (query, expected_size) in [
+        (
+            "ASK { <https://example.org/target> <https://example.org/p> ?o }",
+            1,
+        ),
+        (
+            "ASK { <https://example.org/target> <https://example.org/missing> ?o }",
+            0,
+        ),
+        (
+            "CONSTRUCT { <https://example.org/target> <https://example.org/p> ?o } WHERE { <https://example.org/target> <https://example.org/p> ?o }",
+            1,
+        ),
+        ("DESCRIBE <https://example.org/target>", 2),
+    ] {
+        let prepared = engine.prepare_query(query, None).expect("graph-form query");
+        let expected = engine
+            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .expect("resident graph-form result");
+        for route in 0..3 {
+            let source = open(&image, CEILING);
+            let found = match route {
+                0 => {
+                    engine
+                        .query_fallible_view(
+                            &source,
+                            SparqlRequest {
+                                query,
+                                base_iri: None,
+                                substitutions: &[],
+                            },
+                            QueryOptions::EMPTY,
+                        )
+                        .expect("direct bounded form")
+                        .result
+                }
+                1 => {
+                    engine
+                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .expect("prepared bounded form")
+                        .result
+                }
+                _ => {
+                    engine
+                        .query_prepared_governed_fallible_view(
+                            &source,
+                            &prepared,
+                            &[],
+                            QueryOptions::EMPTY,
+                            &QueryGovernors::METERED,
+                        )
+                        .expect("governed bounded form")
+                        .result
+                }
+            };
+            match &expected {
+                SparqlResult::Boolean(answer) => {
+                    assert_eq!(usize::from(*answer), expected_size);
+                    assert_eq!(found.boolean(), Some(*answer), "route {route}");
+                }
+                SparqlResult::Graph(expected_graph) => {
+                    assert_eq!(expected_graph.quad_count(), expected_size);
+                    let found_graph = found.graph().expect("retained graph");
+                    let render = |graph: &purrdf_core::RdfDataset| {
+                        let mut rows: Vec<_> = graph
+                            .owned_quads()
+                            .map(|quad| format!("{quad:?}"))
+                            .collect();
+                        rows.sort_unstable();
+                        rows
+                    };
+                    assert_eq!(render(found_graph), render(expected_graph), "route {route}");
+                }
+                SparqlResult::Solutions { .. } => panic!("expected graph or boolean"),
+            }
+            assert!(source.read_error().is_none());
+            assert!(source.evidence().peak_bytes() <= CEILING);
+        }
+    }
+}
+
+fn rdf12_graph_fixture() -> (purrdf_core::SegmentedImage, Arc<purrdf_core::RdfDataset>) {
+    use purrdf_core::{
+        QuadIds, RdfDatasetBuilder, SegmentedBuildLimits, SegmentedBuilder, TermBox,
+    };
+    let limits = SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4)
+        .expect("limits")
+        .with_first_term_index((1_u64 << 53) + 1)
+        .expect("wide ids");
+    let mut persistent = SegmentedBuilder::new(limits);
+    let mut resident = RdfDatasetBuilder::new();
+    let values = [
+        TermValue::iri("https://example.org/target"),
+        TermValue::iri("https://example.org/p"),
+        TermValue::simple_literal("root"),
+        TermValue::iri("https://example.org/g"),
+        TermValue::lang_literal("named", "en"),
+        TermValue::iri("https://example.org/empty"),
+        TermValue::iri("https://example.org/claim"),
+        TermValue::Triple {
+            s: TermBox::new(TermValue::iri("https://example.org/target")),
+            p: TermBox::new(TermValue::iri("https://example.org/q")),
+            o: TermBox::new(TermValue::simple_literal("v")),
+        },
+        TermValue::iri("https://example.org/flag"),
+        TermValue::simple_literal("yes"),
+    ];
+    let mut global = Vec::new();
+    persistent
+        .intern_batch(&values, |_, id| global.push(id))
+        .expect("terms");
+    let native: Vec<_> = values
+        .iter()
+        .map(|value| purrdf_core::term_fixture::intern_value(&mut resident, value))
+        .collect();
+    for (s, p, o, g) in [(0, 1, 2, None), (0, 1, 4, Some(3))] {
+        persistent
+            .push_quad(QuadIds {
+                s: global[s],
+                p: global[p],
+                o: global[o],
+                g: g.map(|graph| global[graph]),
+            })
+            .expect("ordinary row");
+        resident.push_quad(
+            native[s],
+            native[p],
+            native[o],
+            g.map(|graph| native[graph]),
+        );
+    }
+    persistent
+        .push_reifier(global[6], global[7], None)
+        .expect("reifier stream");
+    resident.push_reifier_in_graph(native[6], native[7], None);
+    persistent
+        .push_annotation(QuadIds {
+            s: global[6],
+            p: global[8],
+            o: global[9],
+            g: None,
+        })
+        .expect("annotation stream");
+    resident.push_annotation_in_graph(native[6], native[8], native[9], None);
+    persistent
+        .declare_named_graph(global[5])
+        .expect("empty graph");
+    resident.declare_named_graph(native[5]);
+    (
+        persistent.seal().expect("persisted fixture"),
+        resident.freeze().expect("resident fixture"),
+    )
+}
+
+#[test]
+fn bounded_virtual_streams_and_empty_graph_declarations_match_resident() {
+    let (image, resident) = rdf12_graph_fixture();
+    let reifies = purrdf_iri::vocab::rdf::REIFIES;
+    let triple_query = format!(
+        "SELECT ?claim WHERE {{ ?claim <{reifies}> <<( <https://example.org/target> <https://example.org/q> \"v\" )>> }}"
+    );
+    let cases = [
+        ("SELECT ?s ?p ?o WHERE { ?s ?p ?o }", 3),
+        (
+            "SELECT ?claim ?flag WHERE { ?claim <https://example.org/flag> ?flag }",
+            1,
+        ),
+        (triple_query.as_str(), 1),
+        ("SELECT ?g WHERE { GRAPH ?g {} } ORDER BY ?g", 2),
+        ("SELECT * WHERE { GRAPH <https://example.org/empty> {} }", 1),
+        (
+            "SELECT * WHERE { GRAPH <https://example.org/missing> {} }",
+            0,
+        ),
+        (
+            "SELECT ?s ?o WHERE { GRAPH <https://example.org/g> { ?s <https://example.org/p> ?o } }",
+            1,
+        ),
+        (
+            "SELECT ?s ?o FROM <https://example.org/g> WHERE { ?s <https://example.org/p> ?o }",
+            1,
+        ),
+        (
+            "SELECT ?s FROM NAMED <https://example.org/g> WHERE { ?s ?p ?o }",
+            0,
+        ),
+        (
+            "SELECT ?g FROM NAMED <https://example.org/empty> WHERE { GRAPH ?g {} }",
+            1,
+        ),
+    ];
+    let engine = NativeSparqlEngine::new();
+    for (query, count) in cases {
+        let prepared = engine
+            .prepare_query(query, None)
+            .expect("RDF 1.2 graph query");
+        let expected = engine
+            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .expect("resident graph scope");
+        let expected = support::sorted_rows(&expected, |value| format!("{value:?}"));
+        assert_eq!(
+            expected.len(),
+            count,
+            "independent graph/stream cardinality: {query}"
+        );
+        for route in 0..3 {
+            let source = open(&image, CEILING);
+            let found = match route {
+                0 => {
+                    engine
+                        .query_fallible_view(
+                            &source,
+                            SparqlRequest {
+                                query,
+                                base_iri: None,
+                                substitutions: &[],
+                            },
+                            QueryOptions::EMPTY,
+                        )
+                        .expect("direct graph scope")
+                        .result
+                }
+                1 => {
+                    engine
+                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .expect("prepared graph scope")
+                        .result
+                }
+                _ => {
+                    engine
+                        .query_prepared_governed_fallible_view(
+                            &source,
+                            &prepared,
+                            &[],
+                            QueryOptions::EMPTY,
+                            &QueryGovernors::METERED,
+                        )
+                        .expect("governed graph scope")
+                        .result
+                }
+            };
+            assert_eq!(
+                support::sorted_rows(&found, |value| format!("{value:?}")),
+                expected,
+                "route {route}: {query}"
+            );
+            assert!(source.read_error().is_none());
+            assert!(source.evidence().peak_bytes() <= CEILING);
+        }
+    }
+}

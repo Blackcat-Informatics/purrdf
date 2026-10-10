@@ -1,0 +1,10 @@
+reading file ".stage/sparql-eval-complete-bounded-workspace/prepared-baseline-memo-real.zst" - please wait, this might take some time...
+Debuggee command was: /opt/purrdf-text-ranking-qualification/build/debug/build/purrdf-sparql-eval/b9c28de31d5e7f81/out/prepared_execution-b9c28de31d5e7f81 --exact re_running_a_prepared_execution_costs_23_allocations --nocapture --test-threads=1
+finished reading file, now analyzing data:
+
+total runtime: 0.011000s.
+calls to allocation functions: 621 (56454/s)
+temporary memory allocations: 105 (9545/s)
+peak heap memory consumption: 89.88K
+peak RSS (including heaptrack overhead): 14.05M
+total memory leaked: 1.04K

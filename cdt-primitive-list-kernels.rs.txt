@@ -1,0 +1,113 @@
+fn integer_argument(term: &CdtTerm, memory: &mut Memory<'_>) -> Result<Option<i128>, StorageError> {
+    let CdtTerm::Literal(literal) = term else { return Ok(None); };
+    if literal.language.is_some() { return Ok(None); }
+    let value = crate::literal::resolve_literal_with_memory(&literal.lexical, &literal.datatype, memory)?;
+    Ok(match value {
+        crate::literal::NativeLiteralValue::Xsd(value) => {
+            let integer = match &value { XsdValue::Integer { value, .. } => Some(*value), _ => None };
+            let bytes = value.owned_heap_bytes().ok_or(StorageError::SizeOverflow)?;
+            drop(value);
+            memory.release_bytes(bytes)?;
+            integer
+        }
+        crate::literal::NativeLiteralValue::Cdt(value) => { value.release_with_memory(memory)?; None }
+        crate::literal::NativeLiteralValue::IllTyped | crate::literal::NativeLiteralValue::Opaque => None,
+    })
+}
+
+fn clone_terms<'a>(items: impl IntoIterator<Item = &'a CdtTerm>, memory: &mut Memory<'_>) -> Result<Vec<CdtTerm>, StorageError> {
+    let iterator = items.into_iter();
+    let mut output = Vec::new();
+    memory.reserve(&mut output, iterator.size_hint().0)?;
+    for item in iterator {
+        let term = item.clone_with_memory(memory)?;
+        memory.push(&mut output, term)?;
+    }
+    Ok(output)
+}
+
+fn list_constructor_with_memory(items: Vec<CdtTerm>, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    Ok(match CdtValue::list_with_memory(items, memory)? {
+        Ok(value) => CdtOutcome::Value(value),
+        Err(error) => CdtOutcome::Bound(error),
+    })
+}
+
+fn list_get_with_memory(items: &[CdtTerm], index: &CdtTerm, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtTerm>, StorageError> {
+    let Some(index) = integer_argument(index, memory)? else {
+        return Ok(raise("cdt:get on a cdt:List needs an xsd:integer index"));
+    };
+    if index < 1 { return Ok(raise("cdt:get on a cdt:List needs an index of at least 1")); }
+    let Ok(offset) = usize::try_from(index - 1) else {
+        return Ok(raise("cdt:get on a cdt:List was given an index beyond any list"));
+    };
+    let Some(item) = items.get(offset) else {
+        return Ok(raise("cdt:get on a cdt:List was given an index past the end"));
+    };
+    if item.is_null() { return Ok(raise("cdt:get on a cdt:List addressed a null element")); }
+    Ok(CdtOutcome::Value(item.clone_with_memory(memory)?))
+}
+
+fn list_head_with_memory(items: &[CdtTerm], memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtTerm>, StorageError> {
+    let Some(item) = items.first() else { return Ok(raise("cdt:head on an empty cdt:List")); };
+    if item.is_null() { return Ok(raise("cdt:head on a cdt:List whose first element is null")); }
+    Ok(CdtOutcome::Value(item.clone_with_memory(memory)?))
+}
+
+fn list_tail_with_memory(items: &[CdtTerm], memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let Some((_, rest)) = items.split_first() else { return Ok(raise("cdt:tail on an empty cdt:List")); };
+    let extent = try_list_extent(rest.iter(), memory)?;
+    let items = clone_terms(rest, memory)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_items(items, extent)))
+}
+
+fn list_reverse_with_memory(items: &[CdtTerm], memory: &mut Memory<'_>) -> Result<CdtValue, StorageError> {
+    let mut reversed = clone_terms(items, memory)?;
+    reversed.reverse();
+    let extent = try_list_extent(reversed.iter(), memory)?;
+    Ok(CdtValue::from_checked_items(reversed, extent))
+}
+
+fn list_subseq_with_memory(items: &[CdtTerm], start: &CdtTerm, length: Option<&CdtTerm>, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let Some(start) = integer_argument(start, memory)? else { return Ok(raise("cdt:subseq needs an xsd:integer start position")); };
+    if start < 1 { return Ok(raise("cdt:subseq needs a start position of at least 1")); }
+    let Ok(from) = usize::try_from(start - 1) else { return Ok(raise("cdt:subseq was given a start position beyond any list")); };
+    if from > items.len() { return Ok(raise("cdt:subseq was given a start position past the end of the list")); }
+    let to = match length {
+        None => items.len(),
+        Some(length) => {
+            let Some(length) = integer_argument(length, memory)? else { return Ok(raise("cdt:subseq needs an xsd:integer length")); };
+            let Ok(length) = usize::try_from(length) else { return Ok(raise("cdt:subseq needs a length of at least 0")); };
+            let Some(to) = from.checked_add(length) else { return Ok(raise("cdt:subseq was given a length beyond any list")); };
+            if to > items.len() { return Ok(raise("cdt:subseq was given a range that ends past the end of the list")); }
+            to
+        }
+    };
+    let taken = &items[from..to];
+    let extent = try_list_extent(taken.iter(), memory)?;
+    if let Err(error) = check_extent(&extent) { return Ok(CdtOutcome::Bound(error)); }
+    let items = clone_terms(taken, memory)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_items(items, extent)))
+}
+
+fn list_concat_with_memory(lists: &[&[CdtTerm]], memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let extent = try_list_extent(lists.iter().copied().flatten(), memory)?;
+    if let Err(error) = check_extent(&extent) { return Ok(CdtOutcome::Bound(error)); }
+    let items = clone_terms(lists.iter().copied().flatten(), memory)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_items(items, extent)))
+}
+
+fn list_contains_with_memory(items: &[CdtTerm], term: &CdtTerm, memory: &mut Memory<'_>) -> Result<CdtOutcome<bool>, StorageError> {
+    let mut withheld: Option<CdtTypeError> = None;
+    for item in items {
+        match crate::ops::membership_equal_with_memory(item, term, memory)? {
+            Ok(true) => return Ok(CdtOutcome::Value(true)),
+            Ok(false) => {}
+            Err(error) => if withheld.is_none() { withheld = Some(error); },
+        }
+    }
+    Ok(match withheld {
+        Some(error) => CdtOutcome::Error(error),
+        None => CdtOutcome::Value(false),
+    })
+}

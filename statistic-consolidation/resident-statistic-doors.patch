@@ -1,0 +1,447 @@
+--- a/crates/sparql-eval/src/stat_agg.rs
++++ b/crates/sparql-eval/src/stat_agg.rs
+@@ -1346,6 +1346,52 @@
+     }
+ }
+ 
++// The seven native statistical factories expose the same resident trait doors.
++// Keep their publication law in one source body; admitted implementations stay typed.
++macro_rules! resident_statistic_doors {
++    () => {
++        fn exact_numeric_cost(
++            &self,
++            survivors: &[Vec<TermValue>],
++            scalarvals: &[(String, TermValue)],
++        ) -> Cost {
++            self.exact_numeric_cost_under(
++                survivors,
++                scalarvals,
++                purrdf_xsd::exact::DivisionPolicy::xsd_default(),
++            )
++        }
++        fn exact_numeric_cost_under(
++            &self,
++            survivors: &[Vec<TermValue>],
++            scalarvals: &[(String, TermValue)],
++            division: purrdf_xsd::exact::DivisionPolicy,
++        ) -> Cost {
++            self.exact_numeric_cost_admitted(
++                survivors,
++                scalarvals,
++                division,
++                &crate::WorkspaceCapability::resident(),
++            )
++            .expect("resident statistical cost")
++        }
++        fn init_under(
++            &self,
++            scalarvals: &[(String, TermValue)],
++            division: purrdf_xsd::exact::DivisionPolicy,
++        ) -> Box<dyn AggregateAccumulator> {
++            self.init_admitted(
++                scalarvals,
++                division,
++                &crate::WorkspaceCapability::resident(),
++            )
++            .expect("resident statistical factory")
++            .into_resident()
++            .unwrap_or_else(|_| unreachable!("resident statistical owner"))
++        }
++    };
++}
++
+ struct MedianAggregate;
+ impl CustomAggregate for MedianAggregate {
+     fn arity(&self) -> Arity {
+@@ -1361,31 +1407,8 @@
+         VALUE_PROPORTIONAL_STATE_BOUND
+     }
+ 
+-    fn exact_numeric_cost(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-    ) -> Cost {
+-        self.exact_numeric_cost_under(
+-            survivors,
+-            scalarvals,
+-            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+-        )
+-    }
+-    fn exact_numeric_cost_under(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Cost {
+-        self.exact_numeric_cost_admitted(
+-            survivors,
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical cost")
+-    }
++    resident_statistic_doors!();
++
+     fn exact_numeric_cost_admitted(
+         &self,
+         survivors: &[Vec<TermValue>],
+@@ -1398,20 +1421,7 @@
+     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+         self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
+     }
+-    fn init_under(
+-        &self,
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Box<dyn AggregateAccumulator> {
+-        self.init_admitted(
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical factory")
+-        .into_resident()
+-        .unwrap_or_else(|_| unreachable!("resident statistical owner"))
+-    }
++
+     fn init_admitted(
+         &self,
+         _scalarvals: &[(String, TermValue)],
+@@ -1448,31 +1458,8 @@
+         &SPEC
+     }
+ 
+-    fn exact_numeric_cost(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-    ) -> Cost {
+-        self.exact_numeric_cost_under(
+-            survivors,
+-            scalarvals,
+-            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+-        )
+-    }
+-    fn exact_numeric_cost_under(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Cost {
+-        self.exact_numeric_cost_admitted(
+-            survivors,
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical cost")
+-    }
++    resident_statistic_doors!();
++
+     fn exact_numeric_cost_admitted(
+         &self,
+         survivors: &[Vec<TermValue>],
+@@ -1488,20 +1475,7 @@
+     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+         self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
+     }
+-    fn init_under(
+-        &self,
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Box<dyn AggregateAccumulator> {
+-        self.init_admitted(
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical factory")
+-        .into_resident()
+-        .unwrap_or_else(|_| unreachable!("resident statistical owner"))
+-    }
++
+     fn init_admitted(
+         &self,
+         scalarvals: &[(String, TermValue)],
+@@ -1536,31 +1510,8 @@
+         MOMENTS_STATE_BOUND
+     }
+ 
+-    fn exact_numeric_cost(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-    ) -> Cost {
+-        self.exact_numeric_cost_under(
+-            survivors,
+-            scalarvals,
+-            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+-        )
+-    }
+-    fn exact_numeric_cost_under(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Cost {
+-        self.exact_numeric_cost_admitted(
+-            survivors,
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical cost")
+-    }
++    resident_statistic_doors!();
++
+     fn exact_numeric_cost_admitted(
+         &self,
+         survivors: &[Vec<TermValue>],
+@@ -1578,20 +1529,7 @@
+     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+         self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
+     }
+-    fn init_under(
+-        &self,
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Box<dyn AggregateAccumulator> {
+-        self.init_admitted(
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical factory")
+-        .into_resident()
+-        .unwrap_or_else(|_| unreachable!("resident statistical owner"))
+-    }
++
+     fn init_admitted(
+         &self,
+         _scalarvals: &[(String, TermValue)],
+@@ -1625,31 +1563,8 @@
+         VALUE_PROPORTIONAL_STATE_BOUND
+     }
+ 
+-    fn exact_numeric_cost(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-    ) -> Cost {
+-        self.exact_numeric_cost_under(
+-            survivors,
+-            scalarvals,
+-            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+-        )
+-    }
+-    fn exact_numeric_cost_under(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Cost {
+-        self.exact_numeric_cost_admitted(
+-            survivors,
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical cost")
+-    }
++    resident_statistic_doors!();
++
+     fn exact_numeric_cost_admitted(
+         &self,
+         survivors: &[Vec<TermValue>],
+@@ -1668,20 +1583,7 @@
+     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+         self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
+     }
+-    fn init_under(
+-        &self,
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Box<dyn AggregateAccumulator> {
+-        self.init_admitted(
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical factory")
+-        .into_resident()
+-        .unwrap_or_else(|_| unreachable!("resident statistical owner"))
+-    }
++
+     fn init_admitted(
+         &self,
+         _scalarvals: &[(String, TermValue)],
+@@ -1713,31 +1615,8 @@
+         SCALAR_STATE_BOUND
+     }
+ 
+-    fn exact_numeric_cost(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-    ) -> Cost {
+-        self.exact_numeric_cost_under(
+-            survivors,
+-            scalarvals,
+-            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+-        )
+-    }
+-    fn exact_numeric_cost_under(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Cost {
+-        self.exact_numeric_cost_admitted(
+-            survivors,
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical cost")
+-    }
++    resident_statistic_doors!();
++
+     fn exact_numeric_cost_admitted(
+         &self,
+         _survivors: &[Vec<TermValue>],
+@@ -1750,20 +1629,7 @@
+     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+         self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
+     }
+-    fn init_under(
+-        &self,
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Box<dyn AggregateAccumulator> {
+-        self.init_admitted(
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical factory")
+-        .into_resident()
+-        .unwrap_or_else(|_| unreachable!("resident statistical owner"))
+-    }
++
+     fn init_admitted(
+         &self,
+         _scalarvals: &[(String, TermValue)],
+@@ -1796,31 +1662,8 @@
+         SCALAR_STATE_BOUND
+     }
+ 
+-    fn exact_numeric_cost(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-    ) -> Cost {
+-        self.exact_numeric_cost_under(
+-            survivors,
+-            scalarvals,
+-            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+-        )
+-    }
+-    fn exact_numeric_cost_under(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Cost {
+-        self.exact_numeric_cost_admitted(
+-            survivors,
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical cost")
+-    }
++    resident_statistic_doors!();
++
+     fn exact_numeric_cost_admitted(
+         &self,
+         _survivors: &[Vec<TermValue>],
+@@ -1833,20 +1676,7 @@
+     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+         self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
+     }
+-    fn init_under(
+-        &self,
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Box<dyn AggregateAccumulator> {
+-        self.init_admitted(
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical factory")
+-        .into_resident()
+-        .unwrap_or_else(|_| unreachable!("resident statistical owner"))
+-    }
++
+     fn init_admitted(
+         &self,
+         _scalarvals: &[(String, TermValue)],
+@@ -1883,31 +1713,8 @@
+         &SPEC
+     }
+ 
+-    fn exact_numeric_cost(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-    ) -> Cost {
+-        self.exact_numeric_cost_under(
+-            survivors,
+-            scalarvals,
+-            purrdf_xsd::exact::DivisionPolicy::xsd_default(),
+-        )
+-    }
+-    fn exact_numeric_cost_under(
+-        &self,
+-        survivors: &[Vec<TermValue>],
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Cost {
+-        self.exact_numeric_cost_admitted(
+-            survivors,
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical cost")
+-    }
++    resident_statistic_doors!();
++
+     fn exact_numeric_cost_admitted(
+         &self,
+         survivors: &[Vec<TermValue>],
+@@ -1937,20 +1744,7 @@
+     fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+         self.init_under(scalarvals, purrdf_xsd::exact::DivisionPolicy::xsd_default())
+     }
+-    fn init_under(
+-        &self,
+-        scalarvals: &[(String, TermValue)],
+-        division: purrdf_xsd::exact::DivisionPolicy,
+-    ) -> Box<dyn AggregateAccumulator> {
+-        self.init_admitted(
+-            scalarvals,
+-            division,
+-            &crate::WorkspaceCapability::resident(),
+-        )
+-        .expect("resident statistical factory")
+-        .into_resident()
+-        .unwrap_or_else(|_| unreachable!("resident statistical owner"))
+-    }
++
+     fn init_admitted(
+         &self,
+         scalarvals: &[(String, TermValue)],

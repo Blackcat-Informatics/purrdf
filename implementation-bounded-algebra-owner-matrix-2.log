@@ -1,0 +1,23 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0599]: no method named `read_error` found for struct `SegmentedSession` in the current scope
+   --> crates/sparql-eval/tests/numeric_aggregate_ownership.rs:110:20
+    |
+110 |     assert!(source.read_error().is_none(), "non-terminating AVG is not a storage refusal");
+    |                    ^^^^^^^^^^ method not found in `SegmentedSession`
+    |
+   ::: crates/rdf-core/src/dataset_view.rs:387:8
+    |
+387 |     fn read_error(&self) -> Option<Self::ReadError> {
+    |        ---------- the method is available for `SegmentedSession` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `DatasetView` which provides `read_error` is implemented but not in scope; perhaps you want to import it
+    |
+  6 + use purrdf_core::DatasetView;
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-sparql-eval` (test "numeric_aggregate_ownership") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

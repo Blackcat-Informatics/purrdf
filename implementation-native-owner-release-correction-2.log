@@ -1,0 +1,184 @@
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/testkit)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Checking wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/wasm-link)
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/alloc-probe)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-events)
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash-conformance)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/columnar)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/entail)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/helper-census)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/stack)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/deflate)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/ed25519)
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/bgp.rs:4584:39
+     |
+4584 |         let scope = GraphScope::Merge(vec![graph.hub, graph.hot]);
+     |                     ----------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `GraphIds<_>`, found `Vec<TermId>`
+     |                     |
+     |                     arguments to this enum variant are incorrect
+     |
+     = note: expected struct `dataset_spec::GraphIds<_>`
+                found struct `std::vec::Vec<purrdf_core::TermId>`
+note: tuple variant defined here
+    --> crates/sparql-eval/src/dataset_spec.rs:125:5
+     |
+ 125 |     Merge(GraphIds<I>),
+     |     ^^^^^
+
+error[E0425]: cannot find function `replay_cost_estimate_from` in this scope
+    --> crates/sparql-eval/src/bgp.rs:4719:24
+     |
+4719 |         let expected = replay_cost_estimate_from(&compiled, &*graph.ds, &scope, &order, &[], 7);
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `replay_cost_estimate_from` in this scope
+    --> crates/sparql-eval/src/bgp.rs:4720:22
+     |
+4720 |         let actual = replay_cost_estimate_from(&compiled, &host, &scope, &order, &[], 7);
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0061]: this function takes 6 arguments but 5 arguments were supplied
+    --> crates/sparql-eval/src/bgp.rs:4743:29
+     |
+4743 |                   let order = plan_or_cached_order(
+     |  _____________________________^^^^^^^^^^^^^^^^^^^^-
+4744 | |                     &compiled,
+4745 | |                     view,
+4746 | |                     &scope,
+4747 | |                     &[],
+4748 | |                     Some(crate::plan_cache::OrderCacheRef::Legacy(&cache)),
+4749 | |                 );
+     | |_________________- argument #6 of type `&workspace::WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/bgp.rs:919:4
+     |
+ 919 | fn plan_or_cached_order<D: DatasetView>(
+     |    ^^^^^^^^^^^^^^^^^^^^
+...
+ 925 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+4743 |                 let order = plan_or_cached_order(
+ ...
+4748 |                     Some(crate::plan_cache::OrderCacheRef::Legacy(&cache)),
+4749 ~                     /* &WorkspaceCapability */,
+4750 ~                 );
+     |
+
+error[E0614]: type `std::result::Result<bgp::BgpOrder, error::EvalError>` cannot be dereferenced
+    --> crates/sparql-eval/src/bgp.rs:4750:29
+     |
+4750 |                 assert_eq!(&*order, &expected);
+     |                             ^^^^^^ can't be dereferenced
+
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/geo)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/retrieval)
+error[E0308]: mismatched types
+   --> crates/retrieval/tests/candidate_union.rs:415:21
+    |
+415 |             reason: "missing shard".to_owned(),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `SharedText`, found `String`
+
+error[E0308]: mismatched types
+   --> crates/retrieval/tests/candidate_union.rs:436:21
+    |
+436 |             reason: "missing shard".to_owned()
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `SharedText`, found `String`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-retrieval` (test "candidate_union") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/slice)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/bench)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/json)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shapes)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/markdown)
+Some errors have detailed explanations: E0061, E0308, E0425, E0614.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 5 previous errors
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/conformance-kit)
+error[E0425]: cannot find function `set_memo_verification_enabled` in crate `purrdf_sparql_eval`
+   --> crates/sparql-eval/tests/prepared_execution.rs:150:25
+    |
+150 |     purrdf_sparql_eval::set_memo_verification_enabled(false);
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `purrdf_sparql_eval`
+    |
+note: found an item that was configured out
+   --> crates/sparql-eval/src/lib.rs:212:20
+    |
+211 | #[cfg(debug_assertions)]
+    |       ---------------- the item is gated here
+212 | pub use execution::set_memo_verification_enabled;
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0425]: cannot find function `set_memo_verification_enabled` in crate `purrdf_sparql_eval`
+   --> crates/sparql-eval/tests/prepared_execution.rs:152:25
+    |
+152 |     purrdf_sparql_eval::set_memo_verification_enabled(true);
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `purrdf_sparql_eval`
+    |
+note: found an item that was configured out
+   --> crates/sparql-eval/src/lib.rs:212:20
+    |
+211 | #[cfg(debug_assertions)]
+    |       ---------------- the item is gated here
+212 | pub use execution::set_memo_verification_enabled;
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-sparql-eval` (test "prepared_execution") due to 2 previous errors
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/validate)
+    Checking purrdf-envelope-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/envelope-probe)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cli)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-conformance)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-capi)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-wasm)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/bindings/python)
+error[E0425]: cannot find function `set_memo_verification_enabled` in crate `purrdf_sparql_eval`
+   --> crates/shapes/tests/sparql_path_alloc.rs:838:46
+    |
+838 |     rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(false));
+    |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `purrdf_sparql_eval`
+    |
+note: found an item that was configured out
+   --> crates/sparql-eval/src/lib.rs:212:20
+    |
+211 | #[cfg(debug_assertions)]
+    |       ---------------- the item is gated here
+212 | pub use execution::set_memo_verification_enabled;
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0425]: cannot find function `set_memo_verification_enabled` in crate `purrdf_sparql_eval`
+   --> crates/shapes/tests/sparql_path_alloc.rs:845:46
+    |
+845 |     rayon::broadcast(|_| purrdf_sparql_eval::set_memo_verification_enabled(true));
+    |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in `purrdf_sparql_eval`
+    |
+note: found an item that was configured out
+   --> crates/sparql-eval/src/lib.rs:212:20
+    |
+211 | #[cfg(debug_assertions)]
+    |       ---------------- the item is gated here
+212 | pub use execution::set_memo_verification_enabled;
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-shapes` (test "sparql_path_alloc") due to 2 previous errors

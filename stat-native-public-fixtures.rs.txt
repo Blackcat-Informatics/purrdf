@@ -1,0 +1,250 @@
+fn statistical_env() -> purrdf_sparql_eval::extension_env::ExtensionEnv {
+    let mut aggregates = purrdf_sparql_eval::AggregateRegistry::default();
+    aggregates.register_statistical_aggregates("http://example.org/stat#");
+    purrdf_sparql_eval::extension_env::ExtensionEnv::new(
+        purrdf_sparql_algebra::ParserOptions::default(),
+        purrdf_sparql_eval::PropertyFunctionRegistry::default(),
+        aggregates,
+    )
+    .unwrap()
+}
+
+#[test]
+fn all_ten_native_statistics_keep_original_owners_through_every_query_door() {
+    use purrdf_core::SparqlRequest;
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let env = statistical_env();
+    let options = QueryOptions::EMPTY.with_env(&env);
+    let query = "SELECT (AGG(<http://example.org/stat#MEDIAN>, ?x) AS ?median) (AGG(<http://example.org/stat#PERCENTILE>, ?x; P=0.5) AS ?percentile) (AGG(<http://example.org/stat#STDDEV>, ?x) AS ?stddev) (AGG(<http://example.org/stat#STDDEV_POP>, ?x) AS ?stddevpop) (AGG(<http://example.org/stat#VARIANCE>, ?x) AS ?variance) (AGG(<http://example.org/stat#VAR_POP>, ?x) AS ?varpop) (AGG(<http://example.org/stat#MODE>, ?x) AS ?mode) (AGG(<http://example.org/stat#FIRST>, ?x) AS ?first) (AGG(<http://example.org/stat#LAST>, ?x) AS ?last) (AGG(<http://example.org/stat#TOPK>, ?x; K=2) AS ?topk) WHERE { VALUES ?x { 3 1 2 } }";
+    let prepared = engine
+        .prepare_query_with_options(query, None, options)
+        .unwrap();
+    let expected = engine
+        .query_prepared_view(&*resident, &prepared, &[], options)
+        .unwrap();
+    let expected_rows = expected.solutions().unwrap().1;
+    assert_eq!(
+        expected_rows[0][0],
+        Some(TermValue::typed_literal("2", XSD_DECIMAL))
+    );
+    assert_eq!(expected_rows[0][1], expected_rows[0][0]);
+    assert_eq!(
+        expected_rows[0][6],
+        Some(TermValue::typed_literal("1", XSD_INTEGER))
+    );
+    assert_eq!(
+        expected_rows[0][7],
+        Some(TermValue::typed_literal("3", XSD_INTEGER))
+    );
+    assert_eq!(
+        expected_rows[0][8],
+        Some(TermValue::typed_literal("2", XSD_INTEGER))
+    );
+    assert_eq!(expected_rows[0][9], Some(TermValue::simple_literal("3 2")));
+    for door in 0..4 {
+        let source = open(&image, CEILING);
+        let request = SparqlRequest {
+            query,
+            base_iri: None,
+            substitutions: &[],
+        };
+        let window = CurrentThreadWindow::open();
+        let result = match door {
+            0 => engine
+                .query_fallible_view(&source, request, options)
+                .map(|complete| complete.result),
+            1 => engine
+                .query_prepared_fallible_view(&source, &prepared, &[], options)
+                .map(|complete| complete.result),
+            2 => engine
+                .query_governed_fallible_view(&source, request, options, &QueryGovernors::METERED)
+                .map(|complete| complete.result)
+                .map_err(|failure| failure.map_evidence(|evidence| evidence.view)),
+            _ => engine
+                .query_prepared_governed_fallible_view(
+                    &source,
+                    &prepared,
+                    &[],
+                    options,
+                    &QueryGovernors::METERED,
+                )
+                .map(|complete| complete.result)
+                .map_err(|failure| failure.map_evidence(|evidence| evidence.view)),
+        }
+        .expect("every native statistical door is supported");
+        let measured = window.close();
+        assert_eq!(result.solutions().unwrap().1, expected_rows);
+        assert!(
+            u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes()
+        );
+        assert!(source.evidence().peak_bytes() <= CEILING);
+        let live = source.evidence().live_bytes();
+        let window = CurrentThreadWindow::open();
+        let clone = result.clone();
+        assert_eq!(window.close().allocations, 0);
+        drop(result);
+        assert_eq!(source.evidence().live_bytes(), live);
+        assert_eq!(clone.solutions().unwrap().1, expected_rows);
+        drop(clone);
+        assert!(source.evidence().live_bytes() < live);
+    }
+}
+
+#[test]
+fn statistical_duration_interpolation_and_exact_variance_codes_use_native_kernels() {
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let env = statistical_env();
+    let options = QueryOptions::EMPTY
+        .with_env(&env)
+        .with_division(DivisionPolicy::Exact);
+    let query = format!(
+        "SELECT (AGG(<http://example.org/stat#MEDIAN>, ?x) AS ?median) (AGG(<http://example.org/stat#PERCENTILE>, ?x; P=0.25) AS ?percentile) WHERE {{ VALUES ?x {{ \"P1D\"^^<{XSD_DURATION}> \"P3D\"^^<{XSD_DURATION}> }} }}"
+    );
+    let prepared = engine
+        .prepare_query_with_options(&query, None, options)
+        .unwrap();
+    let expected = engine
+        .query_prepared_view(&*resident, &prepared, &[], options)
+        .unwrap();
+    let source = open(&image, CEILING);
+    let window = CurrentThreadWindow::open();
+    let complete = engine
+        .query_prepared_governed_fallible_view(
+            &source,
+            &prepared,
+            &[],
+            options,
+            &QueryGovernors::METERED,
+        )
+        .unwrap();
+    let measured = window.close();
+    assert_eq!(
+        complete.result.solutions().unwrap().1,
+        expected.solutions().unwrap().1
+    );
+    assert_eq!(
+        complete.result.solutions().unwrap().1[0][0],
+        Some(TermValue::typed_literal("P2D", XSD_DURATION))
+    );
+    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
+    drop(complete);
+    let query = "SELECT (AGG(<http://example.org/stat#VAR_POP>, ?x) AS ?variance) WHERE { VALUES ?x { 1 0 0 } }";
+    let prepared = engine
+        .prepare_query_with_options(query, None, options)
+        .unwrap();
+    let source = open(&image, CEILING);
+    let complete = engine
+        .query_prepared_governed_fallible_view(
+            &source,
+            &prepared,
+            &[],
+            options,
+            &QueryGovernors::METERED,
+        )
+        .unwrap();
+    assert_eq!(complete.result.solutions().unwrap().1, vec![vec![None]]);
+    assert_eq!(
+        complete.evidence.governors.expression_errors(),
+        &[(purrdf_xsd::ErrorCode::Foar0002, 1)]
+    );
+    assert!(source.read_error().is_none());
+}
+
+#[test]
+fn statistical_large_state_refusal_never_publishes_poison_or_partial_success() {
+    let (image, _) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let env = statistical_env();
+    let options = QueryOptions::EMPTY.with_env(&env);
+    let query_for = |integer: &str| {
+        format!(
+            "SELECT (AGG(<http://example.org/stat#MEDIAN>, ?x) AS ?median) (AGG(<http://example.org/stat#TOPK>, ?x; K=2) AS ?topk) WHERE {{ VALUES ?x {{ {integer} {integer} }} }}"
+        )
+    };
+    let small = engine
+        .prepare_query_with_options(&query_for("1"), None, options)
+        .unwrap();
+    let calibration = open(&image, CEILING);
+    let small_result = engine
+        .query_prepared_fallible_view(&calibration, &small, &[], options)
+        .unwrap();
+    let ceiling = calibration.evidence().peak_bytes();
+    drop(small_result);
+    drop(calibration);
+    let large = query_for(&format!(
+        "1{}",
+        "0".repeat(usize::try_from(ceiling).unwrap() + 1)
+    ));
+    let prepared = engine
+        .prepare_query_with_options(&large, None, options)
+        .unwrap();
+    let source = open(&image, ceiling);
+    let window = CurrentThreadWindow::open();
+    let result = engine.query_prepared_fallible_view(&source, &prepared, &[], options);
+    let measured = window.close();
+    assert!(matches!(
+        result,
+        Err(FallibleSparqlError::Operational {
+            error: SegmentedError::Residency { .. },
+            ..
+        })
+    ));
+    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
+    assert!(source.evidence().peak_bytes() <= ceiling);
+}
+
+#[test]
+fn statistical_big_integer_states_and_outputs_are_physically_admitted() {
+    let (image, _) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let env = statistical_env();
+    let options = QueryOptions::EMPTY
+        .with_env(&env)
+        .with_division(DivisionPolicy::Exact);
+    let zeros = "0".repeat(4096);
+    let first = format!("1{zeros}");
+    let last = format!("3{zeros}");
+    let expected = vec![vec![
+        Some(TermValue::typed_literal(format!("2{zeros}"), XSD_DECIMAL)),
+        Some(TermValue::typed_literal(
+            format!("1{}", "0".repeat(8192)),
+            XSD_DECIMAL,
+        )),
+        Some(TermValue::typed_literal(first.clone(), XSD_INTEGER)),
+        Some(TermValue::simple_literal(format!("{last} {first}"))),
+    ]];
+    let query = format!(
+        "SELECT (AGG(<http://example.org/stat#MEDIAN>, ?x) AS ?median) (AGG(<http://example.org/stat#VAR_POP>, ?x) AS ?variance) (AGG(<http://example.org/stat#MODE>, ?x) AS ?mode) (AGG(<http://example.org/stat#TOPK>, ?x; K=2) AS ?topk) WHERE {{ VALUES ?x {{ {first} {last} }} }}"
+    );
+    let prepared = engine
+        .prepare_query_with_options(&query, None, options)
+        .unwrap();
+    let source = open(&image, CEILING);
+    let window = CurrentThreadWindow::open();
+    let complete = engine
+        .query_prepared_governed_fallible_view(
+            &source,
+            &prepared,
+            &[],
+            options,
+            &QueryGovernors::METERED,
+        )
+        .unwrap();
+    let measured = window.close();
+    assert_eq!(complete.result.solutions().unwrap().1, expected);
+    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
+    assert!(source.evidence().peak_bytes() <= CEILING);
+    let (result, evidence) = complete.into_parts();
+    drop(evidence);
+    let live = source.evidence().live_bytes();
+    let window = CurrentThreadWindow::open();
+    let clone = result.clone();
+    assert_eq!(window.close().allocations, 0);
+    drop(result);
+    assert_eq!(source.evidence().live_bytes(), live);
+    assert_eq!(clone.solutions().unwrap().1, expected);
+    drop(clone);
+    assert!(source.evidence().live_bytes() < live);
+}

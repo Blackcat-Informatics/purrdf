@@ -1,0 +1,134 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
+    iri: &str,
+    agg: &AggregateExpression,
+    links: &mut [crate::vm::Linked<'_, D::Id>],
+    idxs: &[usize],
+    rows: &[RetainedRow<D::Id>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let custom = ctx.aggregates.resolve(iri).cloned().ok_or_else(|| {
+        missing_custom_aggregate(iri, &ctx.growth)
+    })?;
+
+    // The existing governor charge is a declared host-state meter; physical
+    // factories and growth are separately admitted at their native lifecycle.
+    let state_bound = crate::agg_fn::state_bound_contained_admitted(
+        custom.as_ref(), iri, &ctx.growth,
+    )?;
+    if let Err(tripped) =
+        ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, state_bound)
+    {
+        ctx.record_barrier(tripped);
+        return Ok(None);
+    }
+
+    let mut seen = agg.distinct.then(AggregateTupleWitnesses::default);
+    let capacity = if agg.distinct { 0 } else { idxs.len() };
+    // Locals drop in reverse declaration order: all survivor values and their
+    // containing array die before the independent original payload grants.
+    let mut survivor_owners = AdmittedVec::with_capacity(capacity, &ctx.growth)?;
+    let mut survivors = AdmittedVec::<Vec<TermValue>>::with_capacity(capacity, &ctx.growth)?;
+    let mut checkpoint =
+        crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
+    for &i in idxs {
+        let mut tuple = AggregateSurvivors::new(&ctx.growth);
+        let mut every_position_bound = true;
+        for argument in &mut links[..agg.args().len()] {
+            let Some(term) = argument.term(&rows[i], schema, ctx)? else {
+                every_position_bound = false;
+                break;
+            };
+            tuple.reserve_next()?;
+            tuple.push(ctx.scratch.try_owned_value_of(
+                ctx.dataset,
+                term,
+                &ctx.growth,
+                |error| ctx.workspace.source_error(error),
+            )?)?;
+        }
+        if !every_position_bound {
+            continue;
+        }
+        // Preserve callback/governor order: every bound tuple is charged before
+        // DISTINCT, even when the identity witness then rejects a duplicate.
+        if let Err(tripped) = checkpoint.pass(ctx) {
+            ctx.record_barrier(tripped);
+            return Ok(None);
+        }
+        if let Some(seen) = &mut seen
+            && !seen.keep(&tuple, &survivors, &ctx.growth)?
+        {
+            continue;
+        }
+        let tuple_bytes = tuple
+            .iter()
+            .map(crate::scratch::value_bytes)
+            .fold(0u64, u64::saturating_add);
+        if let Err(tripped) =
+            ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, tuple_bytes)
+        {
+            ctx.record_barrier(tripped);
+            return Ok(None);
+        }
+        survivors.reserve_next()?;
+        survivor_owners.reserve_next()?;
+        let (values, owners) = tuple.into_parts();
+        survivors.push_reserved(values);
+        survivor_owners.push_reserved(owners);
+    }
+
+    // Keep the exact existing chunk plan and chunk-index reduction/error order.
+    let stable = crate::agg_fn::volatility_contained_admitted(
+        custom.as_ref(), iri, &ctx.growth,
+    )? == Volatility::Stable;
+    let sequential = ctx.sequential_operation_required() || !stable;
+    let chunk_count = crate::parallel::planned_aggregate_chunk_count(sequential, survivors.len());
+    if chunk_count > 1 {
+        let extra = state_bound.saturating_mul(u64::try_from(chunk_count - 1).unwrap_or(u64::MAX));
+        if let Err(tripped) = ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, extra)
+        {
+            ctx.record_barrier(tripped);
+            return Ok(None);
+        }
+    }
+    let scalarvals = AggregateScalarvals::resolve(agg, &ctx.growth)?;
+    let cost = crate::agg_fn::exact_numeric_cost_contained_admitted(
+        custom.as_ref(),
+        iri,
+        &survivors,
+        &scalarvals,
+        ctx.division,
+        &ctx.growth,
+    )?;
+    if !crate::expr::numeric_step_admitted(ctx, cost) {
+        return Ok(None);
+    }
+    let accumulator = crate::parallel::par_chunk_reduce_init_admitted(
+        sequential,
+        &survivors,
+        &ctx.growth,
+        || crate::agg_fn::init_contained_admitted(
+            custom.as_ref(), iri, &scalarvals, ctx.division, &ctx.growth,
+        ),
+        |accumulator, tuple| crate::agg_fn::step_contained_admitted(
+            accumulator, iri, tuple, &ctx.growth,
+        ),
+        |accumulator, other| crate::agg_fn::combine_contained_admitted(
+            accumulator, iri, other, &ctx.growth,
+        ),
+    )?;
+    let value = crate::agg_fn::finish_contained_admitted(
+        accumulator,
+        iri,
+        &mut |code| { ctx.record_expression_error(Some(code)); },
+        &ctx.growth,
+    )?;
+    Ok(value
+        .map(|value| ctx.intern_workspace_term(value))
+        .transpose()?
+        .flatten())
+}

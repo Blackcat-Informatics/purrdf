@@ -1,0 +1,137 @@
+fn substitute_expr<const PRESERVE: bool>(
+    expr: &Expression, row: &SubstitutionRow,
+    map: &mut Option<&mut SubstitutionTracking<'_>>, defer: &mut Deferral<'_>,
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Expression, EvalError> {
+    crate::stack::check("correlated substitution")?;
+    #[cfg(test)]
+    crate::op_count::bump(crate::op_count::Op::Substituted);
+    Ok(match expr {
+        Expression::Variable(v) => {
+            let source = row.expr.iter().find(|(bv, _)| bv == v).map_or(expr, |(_, value)| value);
+            source.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory, e))?
+        }
+        Expression::Bound(v) if row.term.iter().any(|(bv, _)| bv == v) => {
+            Expression::Literal(correlated_boolean(true, memory.admission_mut().workspace())?)
+        }
+        Expression::Bound(_) | Expression::NamedNode(_) | Expression::Literal(_) => {
+            expr.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory, e))?
+        }
+        Expression::Or(operands) | Expression::And(operands) => {
+            let mut copied = Vec::new();
+            memory.reserve(&mut copied, operands.len()).map_err(|e| correlated_storage_error(memory, e))?;
+            for operand in operands {
+                copied.push(substitute_expr::<PRESERVE>(operand, row, map, defer, memory)?);
+            }
+            let copied = Chain::try_from(copied).expect("one operand per original chain operand");
+            if matches!(expr, Expression::Or(_)) { Expression::Or(copied) } else { Expression::And(copied) }
+        }
+        Expression::Arithmetic(first, steps) => {
+            let first = substitute_expr::<PRESERVE>(first, row, map, defer, memory)?;
+            let first = correlated_box(first, memory)?;
+            let mut copied = Vec::new();
+            memory.reserve(&mut copied, steps.len()).map_err(|e| correlated_storage_error(memory, e))?;
+            for (operator, operand) in steps {
+                copied.push((*operator, substitute_expr::<PRESERVE>(operand, row, map, defer, memory)?));
+            }
+            Expression::Arithmetic(first.into(), Chain::try_from(copied).expect("one arithmetic step per source step"))
+        }
+        Expression::Equal(a, b) | Expression::SameTerm(a, b) | Expression::Greater(a, b)
+        | Expression::GreaterOrEqual(a, b) | Expression::Less(a, b) | Expression::LessOrEqual(a, b) => {
+            let a = substitute_expr::<PRESERVE>(a, row, map, defer, memory)?;
+            let a = Child::from(correlated_box(a, memory)?);
+            let b = substitute_expr::<PRESERVE>(b, row, map, defer, memory)?;
+            let b = Child::from(correlated_box(b, memory)?);
+            match expr {
+                Expression::Equal(_, _) => Expression::Equal(a,b),
+                Expression::SameTerm(_, _) => Expression::SameTerm(a,b),
+                Expression::Greater(_, _) => Expression::Greater(a,b),
+                Expression::GreaterOrEqual(_, _) => Expression::GreaterOrEqual(a,b),
+                Expression::Less(_, _) => Expression::Less(a,b),
+                Expression::LessOrEqual(_, _) => Expression::LessOrEqual(a,b),
+                _ => unreachable!("the outer exhaustive match selected a binary comparison"),
+            }
+        }
+        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+            let a = substitute_expr::<PRESERVE>(a, row, map, defer, memory)?;
+            let a = Child::from(correlated_box(a, memory)?);
+            match expr {
+                Expression::UnaryPlus(_) => Expression::UnaryPlus(a),
+                Expression::UnaryMinus(_) => Expression::UnaryMinus(a),
+                Expression::Not(_) => Expression::Not(a),
+                _ => unreachable!("the outer exhaustive match selected a unary operator"),
+            }
+        }
+        Expression::If(c,t,e) => {
+            let c = substitute_expr::<PRESERVE>(c, row, map, defer, memory)?;
+            let c = Child::from(correlated_box(c,memory)?);
+            let t = substitute_expr::<PRESERVE>(t, row, map, defer, memory)?;
+            let t = Child::from(correlated_box(t,memory)?);
+            let e = substitute_expr::<PRESERVE>(e, row, map, defer, memory)?;
+            Expression::If(c,t,correlated_box(e,memory)?.into())
+        }
+        Expression::In(needle,haystack) => {
+            let needle = substitute_expr::<PRESERVE>(needle,row,map,defer,memory)?;
+            let needle = Child::from(correlated_box(needle,memory)?);
+            let items = substitute_expression_list::<PRESERVE>(haystack,row,map,defer,memory)?;
+            Expression::In(needle,items)
+        }
+        Expression::Coalesce(items) => {
+            Expression::Coalesce(substitute_expression_list::<PRESERVE>(items,row,map,defer,memory)?)
+        }
+        Expression::FunctionCall(function,args) => {
+            Expression::FunctionCall(function.clone(),substitute_expression_list::<PRESERVE>(args,row,map,defer,memory)?)
+        }
+        Expression::Exists(body) => {
+            let body = match defer.defer(body,row,memory)? {
+                Some(placeholder) => placeholder,
+                None => substitute_pattern_impl::<PRESERVE>(body,row,map,defer,memory)?,
+            };
+            Expression::Exists(body.into())
+        }
+    })
+}
+
+fn substitute_expression_list<const PRESERVE: bool>(
+    source: &[Expression], row: &SubstitutionRow,
+    map: &mut Option<&mut SubstitutionTracking<'_>>, defer: &mut Deferral<'_>,
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Vec<Expression>, EvalError> {
+    let mut copied = Vec::new();
+    memory.reserve(&mut copied,source.len()).map_err(|e| correlated_storage_error(memory,e))?;
+    for expression in source { copied.push(substitute_expr::<PRESERVE>(expression,row,map,defer,memory)?); }
+    Ok(copied)
+}
+
+fn substitute_order_list<const PRESERVE: bool>(
+    source: &[purrdf_sparql_algebra::OrderExpression], row: &SubstitutionRow,
+    map: &mut Option<&mut SubstitutionTracking<'_>>, defer: &mut Deferral<'_>,
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Vec<purrdf_sparql_algebra::OrderExpression>, EvalError> {
+    let mut copied = Vec::new();
+    memory.reserve(&mut copied,source.len()).map_err(|e| correlated_storage_error(memory,e))?;
+    for order in source {
+        copied.push(crate::modifier::rebuild_order(order,
+            substitute_expr::<PRESERVE>(order.expression(),row,map,defer,memory)?));
+    }
+    Ok(copied)
+}
+
+fn substitute_aggregates<const PRESERVE: bool>(
+    source: &[(Variable,purrdf_sparql_algebra::AggregateExpression)], row: &SubstitutionRow,
+    map: &mut Option<&mut SubstitutionTracking<'_>>, defer: &mut Deferral<'_>,
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Vec<(Variable,purrdf_sparql_algebra::AggregateExpression)>, EvalError> {
+    let mut copied = Vec::new();
+    memory.reserve(&mut copied,source.len()).map_err(|e| correlated_storage_error(memory,e))?;
+    for (variable,aggregate) in source {
+        let args = substitute_expression_list::<PRESERVE>(aggregate.args(),row,map,defer,memory)?;
+        let order = substitute_order_list::<PRESERVE>(aggregate.order_by(),row,map,defer,memory)?;
+        // The sole native scalar-values clone preserves key order, spelling and
+        // literal identity; checked original arity/count cannot change here.
+        let aggregate = aggregate.rebuild_with_memory(args,order,memory)
+            .map_err(|e| correlated_storage_error(memory,e))?;
+        copied.push((variable.clone(),aggregate));
+    }
+    Ok(copied)
+}

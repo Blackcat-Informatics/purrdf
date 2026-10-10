@@ -1,0 +1,92 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+error[E0433]: cannot find type `TriplePattern` in this scope
+    --> crates/sparql-eval/src/remote.rs:1035:61
+     |
+1035 |             patterns: clone_service_slice(patterns, memory, TriplePattern::clone_with_memory)?,
+     |                                                             ^^^^^^^^^^^^^ use of undeclared type `TriplePattern`
+     |
+help: an enum with a similar name exists
+     |
+1035 -             patterns: clone_service_slice(patterns, memory, TriplePattern::clone_with_memory)?,
+1035 +             patterns: clone_service_slice(patterns, memory, GraphPattern::clone_with_memory)?,
+     |
+help: consider importing this struct
+     |
+  81 + use purrdf_sparql_algebra::TriplePattern;
+     |
+
+error: redundant field names in struct initialization
+   --> crates/sparql-eval/src/remote.rs:504:13
+    |
+504 |             control: control,
+    |             ^^^^^^^^^^^^^^^^ help: replace it with: `control`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_field_names
+    = note: `-D clippy::redundant-field-names` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_field_names)]`
+
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/entail)
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+    --> crates/sparql-results/src/json_read.rs:2407:13
+     |
+2407 |             drop(memory);
+     |             ^^^^^^^^^^^^
+     |
+note: argument has type `purrdf_lex::allocation::Memory<'_, json_read::tests::native_select_keeps_exact_original_payload_grant_and_refuses_before_birth::Grant>`
+    --> crates/sparql-results/src/json_read.rs:2407:18
+     |
+2407 |             drop(memory);
+     |                  ^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#drop_non_drop
+     = note: `-D clippy::drop-non-drop` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::drop_non_drop)]`
+
+error: could not compile `purrdf-sparql-results` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0433]: cannot find type `TriplePattern` in this scope
+    --> crates/sparql-eval/src/remote.rs:1035:61
+     |
+1035 |             patterns: clone_service_slice(patterns, memory, TriplePattern::clone_with_memory)?,
+     |                                                             ^^^^^^^^^^^^^ use of undeclared type `TriplePattern`
+     |
+     = note: struct `crate::substitute::walk_tests::TriplePattern` exists but is inaccessible
+help: an enum with a similar name exists
+     |
+1035 -             patterns: clone_service_slice(patterns, memory, TriplePattern::clone_with_memory)?,
+1035 +             patterns: clone_service_slice(patterns, memory, GraphPattern::clone_with_memory)?,
+     |
+help: consider importing this struct
+     |
+  81 + use purrdf_sparql_algebra::TriplePattern;
+     |
+
+error: variable does not need to be mutable
+    --> crates/sparql-eval/src/engine.rs:4774:9
+     |
+4774 |     let mut owner = match workspace {
+     |         ----^^^^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `-D unused-mut` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_mut)]`
+
+error[E0382]: use of moved value
+   --> crates/sparql-eval/src/plan_cache.rs:112:28
+    |
+112 |             while let Some(current) = key {
+    |                            ^^^^^^^ value moved here, in previous iteration of loop
+    |
+    = note: move occurs because value has type `K`, which does not implement the `Copy` trait
+help: borrow this binding in the pattern to avoid moving the value
+    |
+112 |             while let Some(ref current) = key {
+    |                            +++
+
+Some errors have detailed explanations: E0382, E0433.
+For more information about an error, try `rustc --explain E0382`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 4 previous errors
+error: could not compile `purrdf-sparql-eval` (lib test) due to 4 previous errors

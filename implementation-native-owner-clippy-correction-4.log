@@ -1,0 +1,68 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/columnar)
+error: deref on an immutable reference
+   --> crates/sparql-results/src/json_read.rs:271:19
+    |
+271 |             match &*key {
+    |                   ^^^^^ help: if you would like to reborrow, try removing `&*`: `key`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_deref_ref
+    = note: `-D clippy::borrow-deref-ref` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::borrow_deref_ref)]`
+
+error: deref on an immutable reference
+   --> crates/sparql-results/src/json_read.rs:445:15
+    |
+445 |         match &*key {
+    |               ^^^^^ help: if you would like to reborrow, try removing `&*`: `key`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_deref_ref
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-results/src/json_read.rs:889:17
+    |
+889 | /                 if let Some(lang) = language.as_deref() {
+890 | |                     if let Err(error) = purrdf_iri::langtag::parse_with(
+891 | |                         lang,
+892 | |                         purrdf_iri::langtag::Profile::ConcreteSyntaxLangtagBounded,
+...   |
+903 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+889 ~                 if let Some(lang) = language.as_deref()
+890 ~                     && let Err(error) = purrdf_iri::langtag::parse_with(
+891 |                         lang,
+...
+901 |                         ));
+902 ~                     }
+    |
+
+error: deref on an immutable reference
+    --> crates/sparql-results/src/json_read.rs:1043:34
+     |
+1043 |                 let slot = match &*key {
+     |                                  ^^^^^ help: if you would like to reborrow, try removing `&*`: `key`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_deref_ref
+
+error: deref on an immutable reference
+    --> crates/sparql-results/src/json_read.rs:1091:39
+     |
+1091 |                 let component = match &*key {
+     |                                       ^^^^^ help: if you would like to reborrow, try removing `&*`: `key`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_deref_ref
+
+error: could not compile `purrdf-sparql-results` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...

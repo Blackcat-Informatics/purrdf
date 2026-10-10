@@ -1,0 +1,3856 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! **Prepare-time feasibility ordering** for property-function calls: the rewrite that
+//! turns a group's textual order into one the registered relations can actually serve.
+//!
+//! A relation is rarely computable in every direction (see
+//! [`crate::property_fn`]). `split(?whole, ?part)` enumerates parts from a whole and
+//! not the reverse; a full-text relation wants its needle bound. So the order a query
+//! author writes is not necessarily an order the engine can run:
+//!
+//! ```text
+//! { ?doc ex:contains ("needle" ?score) . ?doc ex:section ex:intro }
+//! ```
+//!
+//! reads left to right as "invoke the relation with everything free, then filter", and
+//! for an `fb`-only relation that is not merely slow — it is infeasible. Ordering the
+//! data pattern first makes `?doc` bound and the call `bf`.
+//!
+//! # What this pass is, and is deliberately not
+//!
+//! It is **statistics-free and deterministic**. It reads only the algebra and the
+//! registry's declarations — never the dataset, never a cardinality estimate — so the
+//! order a query gets is a pure function of its text and the host's configuration, and
+//! two runs of the same query against different data plan identically. It is not a
+//! cost-based join planner: `crate::bgp` already reorders triple patterns inside a BGP
+//! using real cardinalities, and this pass never reaches inside one.
+//!
+//! # Where it runs, and why there
+//!
+//! At **prepare** time, on the parsed algebra, before evaluation begins — so the
+//! admission failures below (an unregistered IRI, an arity mismatch, an order no
+//! relation can serve) are raised before a governed execution has spent a single unit
+//! of its budget on a query that could never have run. A caller's ceiling is for the
+//! work its query does, not for discovering that the query is misconfigured.
+
+use purrdf_cdt::CdtFn;
+use purrdf_core::ContentDigest;
+use purrdf_core::binding_pattern::BindingPattern;
+use purrdf_hash::Domain;
+use purrdf_sparql_algebra::Child;
+use purrdf_sparql_algebra::{
+    AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, Literal,
+    NamedNodePattern, OrderExpression, PropertyFunctionCall, PurrdfFn, Query, TermPattern,
+    TriplePattern, Variable,
+};
+
+use crate::DetHashSet;
+use crate::WorkspaceCapability;
+use crate::agg_fn::{AggregateRegistry, ScalarvalKind, ScalarvalSpec};
+use crate::error::EvalError;
+use crate::property_fn::{NOT_RANKED_CANONICAL, PfArity, PropertyFunctionRegistry};
+use crate::registry_id::append_framed_part_with_memory;
+use crate::solution::{SchemaBuilder, VarSchema};
+use crate::workspace::{AdmittedVec, AdmittedVecIntoIter, AdmittedMap, LexicalFrame};
+use purrdf_lex::allocation::{Memory, StorageError};
+
+/// Which admission seam a [`plan_query`]/[`plan_where_pattern`] failure came from.
+///
+/// The planner admits two independent hazards in the same walk — a property-function
+/// call and a custom-aggregate call — and they are reported under two different
+/// diagnostic codes. A caller that reduced both to one opaque error (as this module
+/// used to) could only guess which contract to check a failure against; this is what a
+/// planner failure carries instead, so `crate::engine` and `crate::update`'s two
+/// admission call sites read it rather than hard-coding the property-function code for
+/// every failure this module can raise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlanSeam {
+    /// A property-function call could not be admitted: an unregistered predicate IRI,
+    /// an arity mismatch between the call site and the relation's declaration, or a
+    /// chain no relation's declared modes can serve.
+    PropertyFunction,
+    /// A custom-aggregate call could not be admitted: an unregistered
+    /// `AggregateFunction::Custom` IRI, or a positional-argument count its registered
+    /// entry does not declare.
+    Aggregate,
+}
+
+/// A [`plan_query`]/[`plan_where_pattern`] admission failure, tagged with the
+/// [`PlanSeam`] that raised it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PlanError {
+    pub(crate) seam: PlanSeam,
+    pub(crate) error: EvalError,
+}
+
+impl PlanError {
+    /// Tag `error` as a property-function admission failure.
+    fn property_function(error: EvalError) -> Self {
+        Self {
+            seam: PlanSeam::PropertyFunction,
+            error,
+        }
+    }
+
+    /// Tag `error` as a custom-aggregate admission failure.
+    fn aggregate(error: EvalError) -> Self {
+        Self {
+            seam: PlanSeam::Aggregate,
+            error,
+        }
+    }
+
+    /// Preserve an operational cause's code, falling back to the ordinary admission
+    /// seam only when the cause has no distinct code. The single chokepoint
+    /// both `crate::engine::PlanCache::prepare_with_relations` and
+    /// `crate::update::delete_insert` read, so the two admission call sites can never
+    /// again drift into hard-coding the wrong seam's code.
+    pub(crate) fn diagnostic_code(&self) -> &str {
+        self.error.code().unwrap_or(match self.seam {
+            PlanSeam::PropertyFunction => "native-sparql-property-function",
+            PlanSeam::Aggregate => "native-sparql-aggregate-function",
+        })
+    }
+}
+
+impl core::fmt::Display for PlanError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.error, f)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod diagnostic_code_tests {
+    use purrdf_core::RdfDiagnostic;
+    use purrdf_core::xsd_regex::xpath::{Error, Resource};
+
+    use super::{EvalError, PlanError};
+
+    #[test]
+    fn admission_keeps_operational_codes_and_ordinary_seam_fallbacks() {
+        for error in [
+            EvalError::function_operational("host metadata panic"),
+            EvalError::source_read("source refused"),
+            EvalError::XPathRegex(Error::Allocation {
+                resource: Resource::CompileSlots,
+                units: 1,
+            }),
+        ] {
+            let property = PlanError::property_function(error.clone());
+            let aggregate = PlanError::aggregate(error.clone());
+            assert_eq!(Some(property.diagnostic_code()), error.code());
+            assert_eq!(Some(aggregate.diagnostic_code()), error.code());
+        }
+        assert_eq!(
+            PlanError::property_function(EvalError::function("wrong arity")).diagnostic_code(),
+            "native-sparql-property-function"
+        );
+        assert_eq!(
+            PlanError::aggregate(EvalError::function("missing registration")).diagnostic_code(),
+            "native-sparql-aggregate-function"
+        );
+    }
+
+    #[test]
+    fn a_borrowed_dataset_code_becomes_an_owned_diagnostic() {
+        let diagnostic = {
+            let error = PlanError::property_function(EvalError::Dataset(RdfDiagnostic::error(
+                String::from("caller-storage-failed"),
+                "source refused",
+            )));
+            RdfDiagnostic::error(error.diagnostic_code(), error.to_string())
+        };
+        assert_eq!(diagnostic.code, "caller-storage-failed");
+    }
+}
+
+/// Native preparation preserves the seam, operational cause and physical refusal.
+#[derive(Debug)]
+pub(crate) enum PreparationError {
+    Plan(PlanError),
+    Evaluation(EvalError),
+    Storage(purrdf_lex::allocation::StorageError),
+}
+impl From<PlanError> for PreparationError {
+    fn from(error: PlanError) -> Self { Self::Plan(error) }
+}
+impl From<EvalError> for PreparationError {
+    fn from(error: EvalError) -> Self { Self::Evaluation(error) }
+}
+impl From<purrdf_lex::allocation::StorageError> for PreparationError {
+    fn from(error: purrdf_lex::allocation::StorageError) -> Self { Self::Storage(error) }
+}
+pub(crate) type PrepResult<T> = Result<T, PreparationError>;
+
+impl PreparationError {
+    fn into_failure(
+        self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+    ) -> crate::engine::EvaluationFailure {
+        match self {
+            Self::Storage(error) => crate::engine::EvaluationFailure::Evaluation(
+                memory.admission_mut().storage_error(error, "query preparation"),
+            ),
+            Self::Evaluation(error) => crate::engine::EvaluationFailure::Evaluation(error),
+            Self::Plan(error) => {
+                if let Some(cause) = memory.admission_mut().take_failure() {
+                    return crate::engine::EvaluationFailure::Evaluation(cause);
+                }
+                crate::engine::EvaluationFailure::native_diagnostic(
+                    error.diagnostic_code(), &error, memory.admission_mut().workspace(),
+                )
+            }
+        }
+    }
+    fn into_plan(self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>) -> PlanError {
+        match self {
+            Self::Plan(error) => error,
+            Self::Evaluation(error) => PlanError::property_function(error),
+            Self::Storage(error) => PlanError::property_function(
+                memory.admission_mut().storage_error(error, "query preparation"),
+            ),
+        }
+    }
+}
+
+
+fn plan_message(
+    seam: PlanSeam, message: impl core::fmt::Display, workspace: &WorkspaceCapability,
+) -> PlanError {
+    let error = crate::error::NativeDiagnostic::error(crate::error::NativeDiagnosticKind::Function, message, workspace);
+    PlanError { seam, error }
+}
+
+/// The promised-parameter set [`plan_query`] and [`plan_where_pattern`] take, built
+/// from the names a prepare declared.
+///
+/// Derived here rather than at each caller so "a declared parameter" has one spelling:
+/// the name without its sigil, exactly as
+/// [`NativeSparqlEngine::prepare_execution`](crate::NativeSparqlEngine::prepare_execution)
+/// declares it and `crate::substitute` binds it.
+pub(crate) fn parameter_set(names: &[&str]) -> DetHashSet<Variable> {
+    names.iter().map(|name| Variable::new(*name)).collect()
+}
+
+/// Rewrite every property-function chain in `query` into a feasible order, after
+/// joining every blank node label shared between the pieces of one basic graph pattern
+/// (`crate::blank_scope`).
+///
+/// The query is returned unchanged — after one read-only walk — when it carries no call
+/// node and no such shared label, which is every query on a host that has not
+/// configured the seam and writes no blank node into two pieces of one block.
+///
+/// `parameters` are the variables an execution has PROMISED to supply through the
+/// substitution channel. They are treated as bound where the substitution really binds
+/// them — see [`plan_where_pattern`] — so a call whose argument is one of them is
+/// admitted in the access pattern it will actually be invoked in rather than in the
+/// all-free one the text alone shows. An empty set is the ordinary prepare, where
+/// nothing is promised and nothing is assumed.
+///
+/// # Errors
+///
+/// A [`PlanError`] tagged [`PlanSeam::PropertyFunction`] for an unregistered predicate
+/// IRI, an arity mismatch between the call site and the relation's declaration, or a
+/// chain no total order can serve. The same class of refusal, tagged
+/// [`PlanSeam::Aggregate`], for an `AggregateFunction::Custom(iri)` reached anywhere in
+/// `query`: an unregistered IRI, or a positional-argument count `agg_registry`'s
+/// registered entry does not declare — refused HERE, at prepare time, before any governor
+/// charge (see [`Planner::enter_aggregate`]).
+pub(crate) fn plan_query(
+    query: &Query, relations: &PropertyFunctionRegistry, agg_registry: &AggregateRegistry,
+    parameters: &DetHashSet<Variable>,
+) -> Result<Option<Query>, PlanError> {
+    legacy_query_plan(query, relations, agg_registry, parameters, true)
+}
+
+/// Immutable prepared plans retain their positive topology. Registry and promised
+/// parameter feasibility still run, without normalizing an already admitted tree.
+pub(crate) fn recheck_query(
+    query: &Query, relations: &PropertyFunctionRegistry, agg_registry: &AggregateRegistry,
+    parameters: &DetHashSet<Variable>,
+) -> Result<Option<Query>, PlanError> {
+    legacy_query_plan(query, relations, agg_registry, parameters, false)
+}
+
+fn legacy_query_plan(
+    query: &Query, relations: &PropertyFunctionRegistry, aggregates: &AggregateRegistry,
+    parameters: &DetHashSet<Variable>, normalize: bool,
+) -> Result<Option<Query>, PlanError> {
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let names = memory.collect(parameters.iter().map(Variable::as_str))
+        .map_err(|error| PreparationError::Storage(error).into_plan(&mut memory))?;
+    plan_query_native(query, relations, aggregates, &names, normalize, &mut memory)
+        .map_err(|error| error.into_plan(&mut memory))
+}
+
+/// Prepare through the original allocation admission, retaining only new AST buffers.
+pub(crate) fn plan_query_with_memory(
+    query: &Query, relations: &PropertyFunctionRegistry, aggregates: &AggregateRegistry,
+    parameters: &[&str], memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<Option<Query>, crate::engine::EvaluationFailure> {
+    plan_query_native(query, relations, aggregates, parameters, true, memory)
+        .map_err(|error| error.into_failure(memory))
+}
+
+/// Recheck feasibility without renormalizing an immutable prepared topology.
+pub(crate) fn recheck_query_with_memory(
+    query: &Query, relations: &PropertyFunctionRegistry, aggregates: &AggregateRegistry,
+    parameters: &[&str], memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<Option<Query>, crate::engine::EvaluationFailure> {
+    plan_query_native(query, relations, aggregates, parameters, false, memory)
+        .map_err(|error| error.into_failure(memory))
+}
+
+fn promised_parameters(
+    parameters: &[&str], workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    let mut builder = SchemaBuilder::new(workspace);
+    for name in parameters {
+        let _ = builder.push(Variable::from_admitted(workspace.authored_text(name)?))?;
+    }
+    builder.finish()
+}
+
+fn plan_query_native(
+    query: &Query, relations: &PropertyFunctionRegistry, aggregates: &AggregateRegistry,
+    parameters: &[&str], normalize: bool, memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Option<Query>> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let promised = promised_parameters(parameters, &workspace)?;
+    let pattern = match query {
+        Query::Select { pattern, .. } | Query::Ask { pattern, .. }
+        | Query::Construct { pattern, .. } | Query::Describe { pattern, .. } => pattern,
+    };
+    let Some(planned) = plan_where_pattern_native(
+        pattern, relations, aggregates, &promised, normalize, memory,
+    )? else { return Ok(None); };
+    Ok(Some(query.clone_with_pattern_with_memory(planned, memory)?))
+}
+
+/// [`plan_query`] on a standalone [`GraphPattern`] rather than a full [`Query`] — the
+/// entry an UPDATE's `WHERE` clause uses, because a `DELETE`/`INSERT … WHERE`
+/// operation has no `Query` wrapper to hand in. Same admission (unregistered IRI,
+/// arity mismatch, an infeasible chain), same shared-blank join and feasibility
+/// rewrite, same "untouched when the pattern carries neither a call node nor a shared
+/// blank label" contract — an UPDATE WHERE is a triple-pattern context exactly like a
+/// query's, so it is planned exactly like one.
+///
+/// Returns `Ok(None)` unchanged (not merely equal) in that case, so a caller can keep
+/// evaluating its own borrowed `pattern` rather than a clone that happens to match
+/// it.
+///
+/// # Where a promised parameter counts as bound
+///
+/// `parameters` names the variables a prepared execution binds on every run. The one
+/// pre-binding rewrite every run applies writes them into every property-function
+/// call in the query, so each counts as bound everywhere ([`Promise::Everywhere`]).
+///
+/// # Errors
+///
+/// A [`PlanError`] tagged [`PlanSeam::PropertyFunction`] for an unregistered predicate
+/// IRI, an arity mismatch between the call site and the relation's declaration, or a
+/// chain no total order can serve. The same class of refusal, tagged
+/// [`PlanSeam::Aggregate`], for a reachable `AggregateFunction::Custom` — see
+/// [`plan_query`]'s doc.
+pub(crate) fn plan_where_pattern(
+    pattern: &GraphPattern, relations: &PropertyFunctionRegistry, agg_registry: &AggregateRegistry,
+    parameters: &DetHashSet<Variable>,
+) -> Result<Option<GraphPattern>, PlanError> {
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let promised = VarSchema::from_vars_admitted(parameters.iter().cloned(), &workspace)
+        .map_err(PlanError::property_function)?;
+    plan_where_pattern_native(pattern, relations, agg_registry, &promised, true, &mut memory)
+        .map_err(|error| error.into_plan(&mut memory))
+}
+
+fn plan_where_pattern_native(
+    pattern: &GraphPattern, relations: &PropertyFunctionRegistry, aggregates: &AggregateRegistry,
+    parameters: &VarSchema, normalize_positive: bool, memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Option<GraphPattern>> {
+    let start = memory.live_bytes();
+    let joined = crate::blank_scope::join_shared_blanks_with_memory(pattern, memory)?;
+    let joined_bytes = memory.live_bytes().checked_sub(start).ok_or(StorageError::SizeOverflow)?;
+    let pattern = joined.as_ref().unwrap_or(pattern);
+    let normalized_start = memory.live_bytes();
+    let normalized = if normalize_positive {
+        crate::join_plan::normalize_with_memory(pattern, memory)?
+    } else { None };
+    let normalized_bytes = memory.live_bytes().checked_sub(normalized_start)
+        .ok_or(StorageError::SizeOverflow)?;
+    let effective = normalized.as_ref().unwrap_or(pattern);
+    if !crate::property_fn_eval::pattern_needs_admission_with_memory(effective, memory)? {
+        if normalized.is_some() {
+            drop(joined);
+            memory.release_bytes(joined_bytes)?;
+            return Ok(normalized);
+        }
+        return Ok(joined);
+    }
+    crate::governor::soundness::validate_graph_pattern_depth_with_memory(effective, memory)?;
+    let planned = plan_pattern_native(
+        effective, relations, aggregates, &VarSchema::default(), NativePromise::descent(parameters),
+        memory,
+    )?;
+    drop(normalized);
+    memory.release_bytes(normalized_bytes)?;
+    drop(joined);
+    memory.release_bytes(joined_bytes)?;
+    Ok(Some(planned))
+}
+
+/// The same promise law borrowing an immutable, admitted membership owner.
+#[derive(Clone, Copy)]
+enum NativePromise<'a> {
+    None,
+    Everywhere(&'a VarSchema),
+}
+impl<'a> NativePromise<'a> {
+    fn descent(parameters: &'a VarSchema) -> Self {
+        if parameters.is_empty() { Self::None } else { Self::Everywhere(parameters) }
+    }
+    const fn for_calls(self) -> Option<&'a VarSchema> {
+        match self { Self::None => None, Self::Everywhere(values) => Some(values) }
+    }
+    fn writes(self, variable: &Variable) -> bool {
+        self.for_calls().is_some_and(|values| values.contains(variable))
+    }
+}
+
+/// Where a prepared execution's declared parameters count as bound while a call is
+/// admitted.
+///
+/// Every run binds its parameters through the one pre-binding rewrite
+/// (`crate::substitute::apply_shacl_probes`): the `VALUES` seed and the pushdown, PLUS
+/// a walk with no boundary that writes an IRI or literal parameter into every
+/// property-function argument and every expression that names it — an `OPTIONAL`'s
+/// or a `MINUS`'s right arm, a sub-`SELECT`, an `EXISTS` body — and drives every other
+/// value (a blank node, a quoted triple) into the same calls through a one-row
+/// `VALUES`. So a call ANYWHERE receives a parameter bound, and admitting it as free
+/// would refuse, at prepare, a call every run serves: that is [`Self::Everywhere`].
+///
+/// A promise never extends `outer`, which stays the set of variables the pattern
+/// ITSELF certainly binds: it is consulted only where a call is admitted, and where a
+/// `BIND` or an aggregate reads a parameter (see [`Written`]).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+enum Promise<'a> {
+    /// Nothing is promised: the execution declares no parameters.
+    None,
+    /// Anywhere in the query, because every run writes these in.
+    Everywhere(&'a DetHashSet<Variable>),
+}
+
+#[cfg(test)]
+impl<'a> Promise<'a> {
+    /// The promise a plan starts from: every declared parameter, everywhere, or
+    /// nothing when none is declared.
+    fn descent(parameters: &'a DetHashSet<Variable>) -> Self {
+        if parameters.is_empty() {
+            Self::None
+        } else {
+            Self::Everywhere(parameters)
+        }
+    }
+
+    /// What the run writes into the rows and expressions of a pattern evaluated at
+    /// this node — see [`Written`].
+    const fn written(self) -> Written<'a> {
+        Written {
+            everywhere: self.for_calls(),
+        }
+    }
+
+    /// The parameters a call admitted at this node may count as bound.
+    const fn for_calls(self) -> Option<&'a DetHashSet<Variable>> {
+        match self {
+            Self::Everywhere(parameters) => Some(parameters),
+            Self::None => None,
+        }
+    }
+}
+
+/// `bound`, widened by the parameters `promise` lets a call count as bound here.
+///
+/// Borrowed whenever there is nothing to add, so an ordinary prepare — which promises
+/// nothing — builds no set.
+#[cfg(test)]
+fn call_scope<'s>(
+    bound: &'s DetHashSet<Variable>,
+    promise: Promise<'_>,
+) -> std::borrow::Cow<'s, DetHashSet<Variable>> {
+    match promise.for_calls() {
+        Some(parameters) if !parameters.iter().all(|variable| bound.contains(variable)) => {
+            let mut widened = bound.clone();
+            widened.extend(parameters.iter().cloned());
+            std::borrow::Cow::Owned(widened)
+        }
+        _ => std::borrow::Cow::Borrowed(bound),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The chain
+// ---------------------------------------------------------------------------
+
+/// One member of a chain: the operand, and how it re-attaches when the chain is
+/// rebuilt.
+#[derive(Debug)]
+struct Atom<'a> {
+    /// The pattern itself.
+    pattern: &'a GraphPattern,
+    /// The call, when this atom is one — the only kind that can be infeasible.
+    call: Option<&'a PropertyFunctionCall>,
+    /// The atom's position in the chain as written, the last tie-break.
+    position: usize,
+}
+
+/// Rewrite `pattern`, and everything under it, into a feasible order.
+///
+/// `outer` is the set of variables CERTAINLY bound by the enclosing context — see
+/// [`collect_certainly_bound`] for what earns a variable a place in it.
+///
+/// `promise` is where a prepared execution's declared parameters count as bound — see
+/// [`Promise`].
+///
+/// The rewrite runs on a [`Planner`], over work lists rather than by recursion, so a
+/// plan of any depth needs no more machine stack. Every node is entered once — the
+/// admission it performs before its parts are planned (a bare call's, a chain's
+/// order, a custom aggregate's) runs then — and assembled once every part under it
+/// is planned, the parts rebuilt in the order the node's fields are written. The
+/// first admission failure met in that order is the one returned.
+#[cfg(test)]
+fn plan_pattern(
+    pattern: &GraphPattern, relations: &PropertyFunctionRegistry, aggregates: &AggregateRegistry,
+    outer: &DetHashSet<Variable>, promise: Promise<'_>,
+) -> Result<GraphPattern, PlanError> {
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let outer = VarSchema::from_vars_admitted(outer.iter().cloned(), &workspace)
+        .map_err(PlanError::property_function)?;
+    let promised = match promise.for_calls() {
+        None => VarSchema::default(),
+        Some(values) => VarSchema::from_vars_admitted(values.iter().cloned(), &workspace)
+            .map_err(PlanError::property_function)?,
+    };
+    plan_pattern_native(pattern, relations, aggregates, &outer, NativePromise::descent(&promised), &mut memory)
+        .map_err(|error| error.into_plan(&mut memory))
+}
+
+fn plan_pattern_native<'a>(
+    pattern: &'a GraphPattern, relations: &PropertyFunctionRegistry, aggregates: &AggregateRegistry,
+    outer: &'a VarSchema, promise: NativePromise<'a>, memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<GraphPattern> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let mut planner = Planner {
+        relations, agg_registry: aggregates,
+        steps: AdmittedVec::new(&workspace), values: AdmittedVec::new(&workspace),
+        scopes: AdmittedVec::new(&workspace), workspace, memory,
+    };
+    planner.steps.push(Step::Pattern(pattern, SetRef::Given(outer), Prom::of(promise)))?;
+    while let Some(step) = planner.steps.pop() {
+        match step {
+            Step::Pattern(node, scope, promise) => planner.enter_pattern(node, scope, promise)?,
+            Step::Expression(expr, scope, promise) => planner.enter_expression(expr, scope, promise)?,
+            Step::Aggregate(aggregate, scope, promise) => planner.enter_aggregate(aggregate, scope, promise)?,
+            Step::Order(order, scope, promise) => planner.enter_order(order, scope, promise)?,
+            Step::Assemble(assemble) => planner.assemble(assemble)?,
+        }
+    }
+    Ok(planner.finish())
+}
+
+/// One node of a chain's spine: a call's join, or the residual data written between
+/// two calls.
+enum ChainNode<'a> {
+    /// A `Lateral` whose right operand plans to a call: the operand to its left, then
+    /// the node holding the call and the call itself.
+    Lateral {
+        left: &'a GraphPattern,
+        node: &'a GraphPattern,
+        call: &'a PropertyFunctionCall,
+    },
+    /// A `Join` whose right operand is not a bare call.
+    Join {
+        left: &'a GraphPattern,
+        right: &'a GraphPattern,
+    },
+}
+
+/// `pattern` read as a node of a chain's spine, or `None` when it is not one.
+///
+/// A `Lateral` whose right operand does not plan to a call is not a chain node: its
+/// right operand is evaluated once per left row with that row in hand, a dependency a
+/// `Join` does not carry, so flattening it into a chain would rebuild it through a
+/// `Join` and evaluate the right operand without the left rows. A call under a `Join`
+/// rather than a `Lateral` would lose the dependency the `Lateral` encodes, so it is
+/// not a chain member either. The structural rebuild handles both.
+fn chain_node(pattern: &GraphPattern) -> Option<ChainNode<'_>> {
+    match pattern {
+        GraphPattern::Lateral { left, right } => {
+            planned_lateral_call(right).map(|(node, call)| ChainNode::Lateral { left, node, call })
+        }
+        GraphPattern::Join { left, right }
+            if !matches!(&**right, GraphPattern::PropertyFunction(_)) =>
+        {
+            Some(ChainNode::Join { left, right })
+        }
+        _ => None,
+    }
+}
+
+/// Peel the chain spine, pushing its atoms in TEXTUAL order (base first).
+///
+/// Returns whether `pattern` is a chain node at all: a bare `Bgp` or any other leaf is
+/// not, so an ordinary query never allocates past the empty vector above.
+///
+/// The peel runs over a work list, so a spine of any length needs no more machine
+/// stack: a chain node's operands are pushed to be peeled in turn, an operand that is
+/// itself a chain node is peeled the same way, and any other operand is an atom.
+///
+/// # What joins into one chain
+///
+/// Every member of a chain is joined to every other, and a join is associative and
+/// commutative — which is what licenses [`order_chain`] to reorder them at all. So a
+/// `Join` whose operand is ITSELF a chain spine is one chain with it, not an opaque
+/// member: `{ VALUES ?q { … } ?q ex:rel ?out }` parses to `Join(VALUES, Lateral(Z,
+/// call))`, and the call is fed by the `VALUES` exactly as it would be by a triple
+/// written in its own block. Treating the right operand as a sealed atom evaluated on
+/// its own would leave the call seeing none of it, and refuse at prepare a query the
+/// data can serve.
+///
+/// A `LATERAL` whose right operand is NOT a call is the opposite case, and is not a
+/// chain node: see [`chain_node`].
+#[cfg(test)]
+fn collect_chain<'a>(pattern: &'a GraphPattern, atoms: &mut Vec<Atom<'a>>) -> bool {
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let mut owner = AdmittedVec::from_resident(core::mem::take(atoms));
+    let found = collect_chain_native(pattern, &mut owner, &mut memory)
+        .expect("resident chain traversal allocation failed");
+    *atoms = owner.try_into_resident().unwrap_or_else(|_| unreachable!("resident owner"));
+    found
+}
+
+fn collect_chain_native<'a>(pattern: &'a GraphPattern, atoms: &mut AdmittedVec<Atom<'a>>, memory: &mut Memory<'_, LexicalFrame>) -> PrepResult<bool> {
+    /// One pending step of the peel.
+    enum Step<'a> {
+        /// A chain node whose operands are still to be peeled.
+        Node(ChainNode<'a>),
+        /// An operand: a chain node to peel further, or an atom.
+        Operand(&'a GraphPattern),
+        /// A call, pushed once everything written before it is.
+        Call(&'a GraphPattern, &'a PropertyFunctionCall),
+    }
+    let Some(root) = chain_node(pattern) else {
+        return Ok(false);
+    };
+    let mut pending: purrdf_lex::walk::WorkList<_, 16> = purrdf_lex::walk::WorkList::with(Step::Node(root));
+    while let Some(step) = pending.pop() {
+        match step {
+            Step::Node(ChainNode::Lateral { left, node, call }) => {
+                pending.try_push_admitted(Step::Call(node, call), memory)?;
+                pending.try_push_admitted(Step::Operand(left), memory)?;
+            }
+            Step::Node(ChainNode::Join { left, right }) => {
+                pending.try_push_admitted(Step::Operand(right), memory)?;
+                pending.try_push_admitted(Step::Operand(left), memory)?;
+            }
+            Step::Operand(operand) => match chain_node(operand) {
+                Some(node) => pending.try_push_admitted(Step::Node(node), memory)?,
+                None => push_atom_native(operand, None, atoms)?,
+            },
+            Step::Call(node, call) => push_atom_native(node, Some(call), atoms)?,
+        }
+    }
+    pending.release_admitted(memory)?;
+    Ok(true)
+}
+
+/// The call a `Lateral`'s right operand becomes once planned, when it becomes one — and
+/// the node that holds it.
+///
+/// The pushdown writes a pre-bound value into a call that is a `Lateral`'s right
+/// operand in place ([`crate::substitute::lateral_call`]), and recurses into any other
+/// right operand — and it runs on the PLANNED query, not the text. The two differ in
+/// exactly one way this pass controls: a group whose only member is a call parses to
+/// `Lateral(Z, call)`
+/// (the empty `Bgp` the parser opens every block with), and [`order_chain`] rebuilds
+/// that chain as the bare call, because [`push_atom`] drops `Z`. So
+/// `?s ?p ?o LATERAL { ?q <rel> ?out }` is PLANNED as `Lateral(?s ?p ?o, call)` — the
+/// position the pushdown writes into — though its text puts a `Lateral` between the
+/// two.
+///
+/// Admitting that call as though the pushdown did not reach it refused, at prepare, a
+/// call every run invokes bound. Reading the right operand through the identity
+/// wrappers the rebuild removes — and then asking the pushdown's own predicate — makes
+/// the admission and the write the same decision: `Lateral(Z, r)` is `r` for every
+/// `r` (the identity table joined laterally with anything is that thing), so the peel
+/// changes no answer, and the call becomes a member of the enclosing chain, admitted
+/// under the promise the pushdown keeps there. The wrappers are peeled in a loop, one
+/// per iteration.
+fn planned_lateral_call(right: &GraphPattern) -> Option<(&GraphPattern, &PropertyFunctionCall)> {
+    let mut operand = right;
+    while let GraphPattern::Lateral { left, right } = operand
+        && left.is_empty_bgp()
+    {
+        operand = right;
+    }
+    crate::substitute::lateral_call(operand).map(|call| (operand, call))
+}
+
+/// Push one chain member, dropping the EMPTY `Bgp` the parser leaves where a call opens
+/// its block. It is the identity table `Z`, so joining it back in would only widen the
+/// rebuilt tree with a node that binds nothing and matches everything.
+#[cfg(test)]
+fn push_atom<'a>(
+    pattern: &'a GraphPattern, call: Option<&'a PropertyFunctionCall>, atoms: &mut Vec<Atom<'a>>,
+) {
+    let mut owner = AdmittedVec::from_resident(core::mem::take(atoms));
+    push_atom_native(pattern, call, &mut owner).expect("resident atom storage failed");
+    *atoms = owner.try_into_resident().unwrap_or_else(|_| unreachable!("resident owner"));
+}
+
+fn push_atom_native<'a>(
+    pattern: &'a GraphPattern, call: Option<&'a PropertyFunctionCall>,
+    atoms: &mut AdmittedVec<Atom<'a>>,
+) -> Result<(), EvalError> {
+    if !pattern.is_empty_bgp() {
+        let position = atoms.len();
+        atoms.push(Atom { pattern, call, position })?;
+    }
+    Ok(())
+}
+
+/// One chain's feasible order: its atoms as they re-attach, each with whether it is a
+/// call and — for the calls — the variables bound when it was chosen.
+#[cfg(test)]
+struct ChainOrder<'a> {
+    /// The atoms, in the chosen order.
+    ordered: Vec<&'a GraphPattern>,
+    /// Whether each atom of `ordered` is a call.
+    is_call: Vec<bool>,
+    /// The set `bound` held at the moment each atom was CHOSEN — i.e. exactly the
+    /// variables a CALL atom is driven with when it is planned. Captured here (rather
+    /// than read from the fully-accumulated `bound` after the loop) is what keeps a call
+    /// from being admitted as though sibling atoms chosen AFTER it — and everything they
+    /// bind — were already in scope.
+    bound_before: Vec<DetHashSet<Variable>>,
+}
+
+/// The greedy feasibility order over one chain's atoms.
+///
+/// The algorithm, in full:
+///
+/// 1. Start with the variables certainly bound by the enclosing context (`outer`).
+/// 2. Repeatedly pick the next atom that is FEASIBLE given what is bound so far. A
+///    non-call atom is always feasible; a call is feasible iff its relation
+///    [`admits`](crate::property_fn::PropertyFunction::admits) the access pattern in
+///    which a position is bound exactly when its term is a constant, or a variable
+///    already bound by an earlier atom.
+/// 3. Break ties by lowest declared `rows_per_invocation`, then by IRI, then by textual
+///    position — every one of them total, so the chosen order is a pure function of the
+///    input.
+/// 4. Add the chosen atom's certainly-bound variables to the bound set and repeat.
+///
+/// A non-call atom sorts as `rows_per_invocation = 0` under an empty IRI, so data
+/// patterns are scheduled ahead of calls. That is the whole point of the pass: a data
+/// atom can never be infeasible and can only ever ADD bindings, so running it first
+/// maximizes the access patterns available to the calls that follow — and it costs
+/// nothing, because a chain member is evaluated once regardless of where it sits.
+///
+/// A call is admitted with `promise`'s parameters counted as bound too: every atom of
+/// a chain is a place the pushdown writes into — the first atom and each `Join`
+/// operand, and each call a `Lateral` drives — so they are handed on to every atom.
+///
+/// The atoms are then planned each in turn and the spine rebuilt in this order by the
+/// [`Planner`] ([`Assemble::Chain`]).
+#[cfg(test)]
+fn order_chain<'a>(
+    atoms: Vec<Atom<'a>>, relations: &PropertyFunctionRegistry,
+    outer: &DetHashSet<Variable>, promise: Promise<'_>,
+) -> Result<ChainOrder<'a>, PlanError> {
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let outer = VarSchema::from_vars_admitted(outer.iter().cloned(), &workspace)
+        .map_err(PlanError::property_function)?;
+    let promised = match promise.for_calls() {
+        None => VarSchema::default(),
+        Some(values) => VarSchema::from_vars_admitted(values.iter().cloned(), &workspace)
+            .map_err(PlanError::property_function)?,
+    };
+    let native = order_chain_native(AdmittedVec::from_resident(atoms), relations, &outer,
+        NativePromise::descent(&promised), &mut memory)
+        .map_err(|error| error.into_plan(&mut memory))?;
+    Ok(ChainOrder {
+        ordered: native.ordered.into_iter().collect(),
+        is_call: native.is_call.into_iter().collect(),
+        bound_before: native.bound_before.into_iter()
+            .map(|schema| schema.vars().iter().cloned().collect()).collect(),
+    })
+}
+
+struct NativeChainOrder<'a> {
+    ordered: AdmittedVec<&'a GraphPattern>,
+    is_call: AdmittedVec<bool>,
+    bound_before: AdmittedVec<VarSchema>,
+}
+
+fn order_chain_native<'a>(
+    mut remaining: AdmittedVec<Atom<'a>>, relations: &PropertyFunctionRegistry,
+    outer: &VarSchema, promise: NativePromise<'_>, memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<NativeChainOrder<'a>> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let mut bound = outer.clone();
+    let mut ordered = AdmittedVec::with_capacity(remaining.len(), &workspace)?;
+    let mut is_call = AdmittedVec::with_capacity(remaining.len(), &workspace)?;
+    let mut bound_before = AdmittedVec::with_capacity(remaining.len(), &workspace)?;
+    while !remaining.is_empty() {
+        let mut best: Option<(usize, (u64, &str, usize))> = None;
+        for (index, atom) in remaining.iter().enumerate() {
+            let key = match atom.call {
+                None => (0_u64, "", atom.position),
+                Some(call) => {
+                    let Some(rows_bound) = admitted_row_bound_native(
+                        call, relations, &|variable| bound.contains(variable) || promise.writes(variable),
+                        memory,
+                    )? else { continue; };
+                    (rows_bound, call.iri.as_str(), atom.position)
+                }
+            };
+            if best.is_none_or(|(_, current)| key < current) { best = Some((index, key)); }
+        }
+        let Some((index, _)) = best else {
+            return Err(stuck_native(
+                &remaining, relations, &|variable| bound.contains(variable) || promise.writes(variable),
+                memory,
+            )?.into());
+        };
+        let atom = remaining.remove(index);
+        bound_before.push(bound.clone())?;
+        let added = collect_bound_admitted(atom.pattern, outer, promise.for_calls(), &workspace)?;
+        bound = bound.union_admitted(&added, &workspace)?;
+        ordered.push(atom.pattern)?;
+        is_call.push(atom.call.is_some())?;
+    }
+    Ok(NativeChainOrder { ordered, is_call, bound_before })
+}
+
+/// The invocation access pattern a call would have with `bound` already established: a
+/// position is bound iff its term is fully determined by constants and bound variables.
+///
+/// Shared with the plan survey (`crate::bgp::survey_pattern_plans`), which needs the same
+/// answer to read the relation's declared row bound for the mode a call is actually
+/// invoked in: a relation that is cheap bound and expensive free would otherwise be
+/// admitted, or refused, against a mode the query never uses.
+pub(crate) fn invocation_mode(
+    call: &PropertyFunctionCall,
+    bound: &DetHashSet<Variable>,
+) -> BindingPattern {
+    invocation_mode_with_memory(
+        call,
+        &|variable| bound.contains(variable),
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .expect("resident invocation-mode traversal allocation failed")
+}
+
+/// The same invocation law under the original physical walk admission.
+/// Membership borrows the caller's certainty owner rather than copying its set.
+pub(crate) fn invocation_mode_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    call: &PropertyFunctionCall,
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<BindingPattern, purrdf_lex::allocation::StorageError> {
+    // The existing BindingPattern contract is a 64-bit pure value. Its positions
+    // need no heap storage while each argument's traversal admits actual spill.
+    let mut bits = [false; BindingPattern::MAX_ARITY];
+    let mut arity = 0usize;
+    for (position, term) in call
+        .subject_args
+        .iter()
+        .chain(&call.object_args)
+        .enumerate()
+    {
+        assert!(
+            position < BindingPattern::MAX_ARITY,
+            "BindingPattern arity exceeds its bitset"
+        );
+        bits[position] = term_is_bound_with_memory(term, bound, memory)?;
+        arity = position + 1;
+    }
+    Ok(BindingPattern::from_bools(bits[..arity].iter().copied()))
+}
+
+/// Resident test entry for the same native term-boundness body.
+#[cfg(test)]
+fn term_is_bound(term: &TermPattern, bound: &DetHashSet<Variable>) -> bool {
+    term_is_bound_with_memory(
+        term,
+        &|variable| bound.contains(variable),
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .expect("resident term-boundness traversal allocation failed")
+}
+
+/// Whether a term denotes a known value under the borrowed membership law.
+///
+/// Blank nodes remain non-distinguished variables. Every quoted-triple component
+/// must be bound; the original walk order uses the shared inline/spill work list.
+fn term_is_bound_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    term: &TermPattern,
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<bool, purrdf_lex::allocation::StorageError> {
+    let mut pending: purrdf_lex::walk::WorkList<_, 8> = purrdf_lex::walk::WorkList::with(term);
+    let mut answer = true;
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
+            TermPattern::BlankNode(_) => {
+                answer = false;
+                break;
+            }
+            TermPattern::Variable(variable) => {
+                if !bound(variable) {
+                    answer = false;
+                    break;
+                }
+            }
+            TermPattern::Triple(triple) => {
+                if let NamedNodePattern::Variable(variable) = &triple.predicate
+                    && !bound(variable)
+                {
+                    answer = false;
+                    break;
+                }
+                pending.try_push_admitted(&triple.object, memory)?;
+                pending.try_push_admitted(&triple.subject, memory)?;
+            }
+        }
+    }
+    pending.release_admitted(memory)?;
+    Ok(answer)
+}
+
+/// The admission failure for a chain with no feasible total order, naming the stuck
+/// atoms, the positions they cannot fill, and the modes they declare.
+#[cfg(test)]
+fn stuck(
+    remaining: &[Atom<'_>], relations: &PropertyFunctionRegistry, bound: &DetHashSet<Variable>,
+) -> PlanError {
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    stuck_native(remaining, relations, &|variable| bound.contains(variable), &mut memory)
+        .unwrap_or_else(|error| error.into_plan(&mut memory))
+}
+
+fn stuck_native(
+    remaining: &[Atom<'_>], relations: &PropertyFunctionRegistry,
+    bound: &dyn Fn(&Variable) -> bool, memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<PlanError> {
+    struct Description<'a> {
+        call: &'a PropertyFunctionCall,
+        mode: BindingPattern,
+        declared: &'a [BindingPattern],
+    }
+    struct Message<'a>(&'a [Description<'a>]);
+    impl core::fmt::Display for Message<'_> {
+        fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            out.write_str("no feasible evaluation order exists for this group's property-function call(s): ")?;
+            for (index, description) in self.0.iter().enumerate() {
+                if index != 0 { out.write_str("; ")?; }
+                write!(out, "<{}> reachable only as `{}` (free position(s) ",
+                    description.call.iri, description.mode)?;
+                let mut first = true;
+                for position in 0..description.mode.arity() {
+                    if !description.mode.is_bound(position) {
+                        if !first { out.write_str(", ")?; }
+                        write!(out, "{position}")?;
+                        first = false;
+                    }
+                }
+                if first { out.write_str("none")?; }
+                out.write_str("), declaring [")?;
+                for (index, mode) in description.declared.iter().enumerate() {
+                    if index != 0 { out.write_str(", ")?; }
+                    write!(out, "{mode}")?;
+                }
+                out.write_str("]")?;
+            }
+            Ok(())
+        }
+    }
+    let workspace = memory.admission_mut().workspace().clone();
+    let mut described = AdmittedVec::new(&workspace);
+    for atom in remaining {
+        let Some(call) = atom.call else { continue; };
+        let mode = invocation_mode_with_memory(call, bound, memory)?;
+        // Preserve the original best-effort declared-modes suffix on an
+        // already-infeasible chain. No diagnostic is allocated and discarded.
+        let declared = relations.resolve(&call.iri)
+            .and_then(|relation| crate::contain::declaration_best_effort(|| relation.modes()))
+            .unwrap_or(&[]);
+        described.push(Description { call, mode, declared })?;
+    }
+    Ok(plan_message(PlanSeam::PropertyFunction, Message(&described), &workspace))
+}
+
+/// Resolve a call's IRI, or report the admission failure that an unregistered IRI is.
+///
+/// An EMPTY registry is the same failure: the parser mints a call node only under a
+/// caller-configured namespace, so a call with nothing to resolve against is a host
+/// configuration that names a relation it never supplied — never a silently empty one.
+fn resolve_native<'r>(
+    call: &PropertyFunctionCall, relations: &'r PropertyFunctionRegistry,
+    workspace: &WorkspaceCapability,
+) -> Result<&'r std::sync::Arc<dyn crate::property_fn::PropertyFunction>, PlanError> {
+    relations.resolve(&call.iri).ok_or_else(|| plan_message(
+        PlanSeam::PropertyFunction,
+        format_args!("no property function is registered for <{}>", call.iri), workspace,
+    ))
+}
+
+/// Resolve and admit a call under its actual lexical binding scope. `None` means
+/// its access mode is infeasible; a chain may first bind more variables.
+#[cfg(test)]
+fn admitted_row_bound(
+    call: &PropertyFunctionCall, relations: &PropertyFunctionRegistry, bound: &DetHashSet<Variable>,
+) -> Result<Option<u64>, PlanError> {
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    admitted_row_bound_native(call, relations, &|variable| bound.contains(variable), &mut memory)
+        .map_err(|error| error.into_plan(&mut memory))
+}
+
+fn admitted_row_bound_native(
+    call: &PropertyFunctionCall, relations: &PropertyFunctionRegistry,
+    bound: &dyn Fn(&Variable) -> bool, memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Option<u64>> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let relation = resolve_native(call, relations, &workspace)?;
+    let arity = crate::contain::declaration_contained_admitted(
+        "property function", call.iri.as_str(), "arity", || relation.arity(), &workspace,
+    ).map_err(PlanError::property_function)?;
+    check_arity_native(call, arity, &workspace)?;
+    let mode = invocation_mode_with_memory(call, bound, memory)?;
+    let admitted = crate::contain::declaration_contained_admitted(
+        "property function", call.iri.as_str(), "declared modes",
+        || relation.modes().iter().any(|declared| declared.subsumes(mode)), &workspace,
+    ).map_err(PlanError::property_function)?;
+    if !admitted { return Ok(None); }
+    let rows = crate::contain::declaration_contained_admitted(
+        "property function", call.iri.as_str(), "row bound",
+        || relation.rows_per_invocation(mode), &workspace,
+    ).map_err(PlanError::property_function)?;
+    Ok(Some(rows))
+}
+
+/// Check a call site's argument counts against the relation's declaration.
+fn check_arity_native(
+    call: &PropertyFunctionCall, declared: PfArity, workspace: &WorkspaceCapability,
+) -> Result<(), PlanError> {
+    let supplied = PfArity::new(call.subject_args.len(), call.object_args.len());
+    if declared == supplied { return Ok(()); }
+    Err(plan_message(PlanSeam::PropertyFunction, format_args!(
+        "property function <{}> is declared with {declared} argument(s); the call site supplies {supplied}",
+        call.iri,
+    ), workspace))
+}
+
+// ---------------------------------------------------------------------------
+// The rebuild
+// ---------------------------------------------------------------------------
+
+/// A variable set a planner frame reads: one [`plan_pattern`]'s caller holds, or one a
+/// node built for the parts under it and the planner owns ([`Planner::scopes`]).
+#[derive(Clone, Copy)]
+enum SetRef<'a> {
+    /// A set the caller holds.
+    Given(&'a VarSchema),
+    /// The set at this index of the planner's arena.
+    Owned(usize),
+}
+
+impl<'a> SetRef<'a> {
+    /// The set itself, read from `scopes` when the planner owns it.
+    fn get<'s>(self, scopes: &'s [VarSchema]) -> &'s VarSchema
+    where
+        'a: 's,
+    {
+        match self {
+            Self::Given(set) => set,
+            Self::Owned(index) => &scopes[index],
+        }
+    }
+}
+
+/// A [`Promise`] whose parameter set is a [`SetRef`]: what a planner frame stores, since
+/// a set a node narrowed for the parts under it lives in the planner's arena, and a
+/// frame cannot borrow from an arena that grows while the frame waits.
+#[derive(Clone, Copy)]
+enum Prom<'a> {
+    /// [`NativePromise::None`].
+    None,
+    /// [`NativePromise::Everywhere`].
+    Everywhere(SetRef<'a>),
+}
+
+impl<'a> Prom<'a> {
+    /// `promise`, its set held as given.
+    const fn of(promise: NativePromise<'a>) -> Self {
+        match promise {
+            NativePromise::None => Self::None,
+            NativePromise::Everywhere(parameters) => Self::Everywhere(SetRef::Given(parameters)),
+        }
+    }
+
+    /// The [`Promise`] this stands for, its set read from `scopes` when the planner owns
+    /// it.
+    fn view<'s>(self, scopes: &'s [VarSchema]) -> NativePromise<'s>
+    where
+        'a: 's,
+    {
+        match self {
+            Self::None => NativePromise::None,
+            Self::Everywhere(parameters) => NativePromise::Everywhere(parameters.get(scopes)),
+        }
+    }
+}
+
+/// One planned part on the planner's value stack.
+enum Planned {
+    Pattern(GraphPattern),
+    Expression(Expression),
+    Aggregate(AggregateExpression),
+    Order(OrderExpression),
+}
+
+impl Planned {
+    /// The pattern this part is; a pattern is planned wherever one was entered.
+    fn pattern(self) -> GraphPattern {
+        match self {
+            Self::Pattern(pattern) => pattern,
+            Self::Expression(_) | Self::Aggregate(_) | Self::Order(_) => {
+                unreachable!("a pattern was entered here, so a pattern is planned here")
+            }
+        }
+    }
+
+    /// The expression this part is; an expression is planned wherever one was entered.
+    fn expression(self) -> Expression {
+        match self {
+            Self::Expression(expression) => expression,
+            Self::Pattern(_) | Self::Aggregate(_) | Self::Order(_) => {
+                unreachable!("an expression was entered here, so an expression is planned here")
+            }
+        }
+    }
+
+    /// The aggregate this part is; an aggregate is planned wherever one was entered.
+    fn aggregate(self) -> AggregateExpression {
+        match self {
+            Self::Aggregate(aggregate) => aggregate,
+            Self::Pattern(_) | Self::Expression(_) | Self::Order(_) => {
+                unreachable!("an aggregate was entered here, so an aggregate is planned here")
+            }
+        }
+    }
+
+    /// The sort key this part is; a sort key is planned wherever one was entered.
+    fn order(self) -> OrderExpression {
+        match self {
+            Self::Order(order) => order,
+            Self::Pattern(_) | Self::Expression(_) | Self::Aggregate(_) => {
+                unreachable!("a sort key was entered here, so a sort key is planned here")
+            }
+        }
+    }
+}
+
+/// The next planned pattern of `parts`, which holds one for every pattern entered.
+fn next_pattern(parts: &mut impl Iterator<Item = Planned>) -> GraphPattern {
+    parts
+        .next()
+        .expect("every part a node entered is planned before the node is assembled")
+        .pattern()
+}
+
+/// The next planned expression of `parts`, which holds one for every expression entered.
+fn next_expression(parts: &mut impl Iterator<Item = Planned>) -> Expression {
+    parts
+        .next()
+        .expect("every part a node entered is planned before the node is assembled")
+        .expression()
+}
+
+/// One step of the planner's work list.
+enum Step<'a> {
+    /// Enter a pattern: admit what it admits before its parts, and push them.
+    Pattern(&'a GraphPattern, SetRef<'a>, Prom<'a>),
+    /// Enter an expression: plan it as written, or push its operands.
+    Expression(&'a Expression, SetRef<'a>, Prom<'a>),
+    /// Enter an aggregate: admit a custom one, and push its arguments and sort keys.
+    Aggregate(&'a AggregateExpression, SetRef<'a>, Prom<'a>),
+    /// Enter a sort key: push its expression.
+    Order(&'a OrderExpression, SetRef<'a>, Prom<'a>),
+    /// Rebuild a node from the planned parts under it.
+    Assemble(Assemble<'a>),
+}
+
+/// A node to rebuild once every part under it is planned.
+enum Assemble<'a> {
+    /// A non-chain pattern node. The arena is cut back to `mark`, releasing the sets the
+    /// node built for its parts.
+    Pattern { node: &'a GraphPattern, mark: usize },
+    /// A chain: its atoms re-attach in the chosen order, a call through a `Lateral` (it
+    /// depends on what is to its left), everything else through a `Join`. `is_call`
+    /// says which each atom is; the arena is cut back to `mark`.
+    Chain { is_call: AdmittedVec<bool>, mark: usize },
+    /// An expression, over its planned operands.
+    Expression(&'a Expression),
+    /// An aggregate, over its planned arguments and sort keys.
+    Aggregate(&'a AggregateExpression),
+    /// A sort key, over its planned expression.
+    Order(&'a OrderExpression),
+}
+
+/// The feasibility rewrite's state: a step stack, a value stack of the planned parts,
+/// and an arena of the variable sets nodes build for the parts under them.
+///
+/// The arena is used as a stack. A node pushes the sets its parts read when it is
+/// entered and cuts the arena back when it is assembled, and every part is assembled
+/// before the node it is under, so a set is released exactly when the last frame
+/// reading it is gone.
+struct Planner<'a, 'r, 'm, 's> {
+    relations: &'r PropertyFunctionRegistry,
+    agg_registry: &'r AggregateRegistry,
+    steps: AdmittedVec<Step<'a>>,
+    values: AdmittedVec<Planned>,
+    scopes: AdmittedVec<VarSchema>,
+    workspace: WorkspaceCapability,
+    memory: &'m mut Memory<'s, LexicalFrame>,
+}
+
+impl<'a> Planner<'a, '_, '_, '_> {
+    /// Own `set` in the arena, and the reference to read it by.
+    fn own(&mut self, set: VarSchema) -> PrepResult<SetRef<'a>> {
+        self.scopes.push(set)?;
+        Ok(SetRef::Owned(self.scopes.len() - 1))
+    }
+
+    /// Widen `scope` by what `pattern` certainly binds under `promise`: the scope an
+    /// expression evaluated over `pattern`'s rows sees.
+    fn widen(
+        &self, scope: &mut VarSchema, outer: SetRef<'a>,
+        pattern: &GraphPattern, promise: Prom<'a>,
+    ) -> PrepResult<()> {
+        let added = collect_bound_admitted(pattern, outer.get(&self.scopes),
+            promise.view(&self.scopes).for_calls(), &self.workspace)?;
+        *scope = scope.union_admitted(&added, &self.workspace)?;
+        Ok(())
+    }
+
+    /// The top `count` planned parts, in the order they were planned.
+    fn take(&mut self, count: usize) -> PrepResult<AdmittedVecIntoIter<Planned>> {
+        let at = self.values.len() - count;
+        let mut parts = AdmittedVec::with_capacity(count, &self.workspace)?;
+        for part in self.values.drain_from(at) { parts.push_reserved(part); }
+        Ok(parts.into_iter())
+    }
+
+    /// The root's plan: the one value left once every step has run.
+    fn finish(mut self) -> GraphPattern {
+        let root = self
+            .values
+            .pop()
+            .expect("the root is assembled last")
+            .pattern();
+        debug_assert!(
+            self.values.is_empty(),
+            "every planned part is consumed by the node it is under"
+        );
+        root
+    }
+
+    /// Enter `node`: admit a bare call and plan it as written; order a chain and push its
+    /// atoms; or push a structural node's parts.
+    fn enter_pattern(
+        &mut self, node: &'a GraphPattern, scope: SetRef<'a>, promise: Prom<'a>,
+    ) -> PrepResult<()> {
+        if let GraphPattern::PropertyFunction(call) = node {
+            let bound = scope.get(&self.scopes);
+            let promised = promise.view(&self.scopes);
+            let membership = |variable: &Variable| bound.contains(variable) || promised.writes(variable);
+            if admitted_row_bound_native(call, self.relations, &membership, self.memory)?.is_none() {
+                return Err(stuck_native(
+                    &[Atom { pattern: node, call: Some(call), position: 0 }],
+                    self.relations, &membership, self.memory,
+                )?.into());
+            }
+            self.values.push(Planned::Pattern(node.clone_with_memory(self.memory)?))?;
+            return Ok(());
+        }
+        let mut atoms = AdmittedVec::new(&self.workspace);
+        if collect_chain_native(node, &mut atoms, self.memory)?
+            && atoms.iter().any(|atom| atom.call.is_some()) {
+            return self.enter_chain(atoms, scope, promise);
+        }
+        self.enter_parts(node, scope, promise)
+    }
+
+    /// Order a chain's atoms and push each to be planned: a call against the variables
+    /// bound when it was chosen, anything else against the chain's enclosing context.
+    fn enter_chain(
+        &mut self, atoms: AdmittedVec<Atom<'a>>, scope: SetRef<'a>, promise: Prom<'a>,
+    ) -> PrepResult<()> {
+        let NativeChainOrder { ordered, is_call, bound_before } = order_chain_native(
+            atoms, self.relations, scope.get(&self.scopes),
+            promise.view(&self.scopes), self.memory,
+        )?;
+        let mark = self.scopes.len();
+        for bound in bound_before { self.scopes.push(bound)?; }
+        let operand_start = self.steps.len();
+        self.steps.reserve_additional(ordered.len().checked_add(1)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?)?;
+        // The original reverse source order, without cloning the call flags.
+        for index in (0..ordered.len()).rev() {
+            let atom_scope = if is_call[index] { SetRef::Owned(mark + index) } else { scope };
+            self.steps.push_reserved(Step::Pattern(ordered[index], atom_scope, promise));
+        }
+        self.steps.push_reserved(Step::Assemble(Assemble::Chain { is_call, mark }));
+        self.steps.as_mut_slice()[operand_start..].rotate_right(1);
+        Ok(())
+    }
+
+    /// Push the parts of a non-chain node, threading to each the variables its left
+    /// siblings certainly bind and the promise that reaches it.
+    fn enter_parts(&mut self, node: &'a GraphPattern, scope: SetRef<'a>, promise: Prom<'a>) -> PrepResult<()> {
+        // The one rewrite writes the parameters everywhere, so every part of the node
+        // inherits the same promise. See [`Promise`].
+        let mark = self.scopes.len();
+        let assemble = Step::Assemble(Assemble::Pattern { node, mark });
+        match node {
+            GraphPattern::Apply {
+                left,
+                right,
+                policy,
+            } => {
+                let mut certain = scope.get(&self.scopes).clone();
+                self.widen(&mut certain, scope, left, promise)?;
+                let promised = promise.view(&self.scopes);
+                let inputs = VarSchema::from_vars_admitted(
+                    policy.inputs.iter().map(|(input, _)| input.clone()), &self.workspace,
+                )?;
+                let mut right_scope_builder = SchemaBuilder::new(&self.workspace);
+                let mut supplied = SchemaBuilder::new(&self.workspace);
+                for variable in scope.get(&self.scopes).vars() {
+                    if !inputs.contains(variable) { let _ = right_scope_builder.push(variable.clone())?; }
+                }
+                if let Some(parameters) = promised.for_calls() {
+                    for variable in parameters.vars() {
+                        if !inputs.contains(variable) { let _ = supplied.push(variable.clone())?; }
+                    }
+                }
+                for (input, driver) in &policy.inputs {
+                    if (certain.contains(driver) || promised.writes(driver))
+                        && policy.optional.as_ref().is_none_or(|optional| {
+                            optional.retry_inputs.iter().any(|(retry_input, retry_driver)| {
+                                retry_input == input
+                                    && (certain.contains(retry_driver) || promised.writes(retry_driver))
+                            })
+                        }) {
+                        let _ = right_scope_builder.push(input.clone())?;
+                        let _ = supplied.push(input.clone())?;
+                    }
+                }
+                if let Some(optional) = &policy.optional {
+                    let _ = right_scope_builder.push(optional.forget_marker.clone())?;
+                    let _ = supplied.push(optional.forget_marker.clone())?;
+                }
+                let right_scope = right_scope_builder.finish()?;
+                let supplied = supplied.finish()?;
+                let right_scope = self.own(right_scope)?;
+                // Apply substitutes these values into the whole RHS, through
+                // projections too; they are writes, not narrowable outer context.
+                let right_promise = Prom::Everywhere(self.own(supplied)?);
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(right, right_scope, right_promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
+            }
+            // A leaf is planned as written. So is a `SERVICE`: its body is forwarded to a
+            // remote endpoint rather than evaluated promise, and `crate::remote` refuses to
+            // forward a call at all — so its body is left exactly as written.
+            GraphPattern::Bgp { .. }
+            | GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::PropertyFunction(_)
+            | GraphPattern::Service { .. } => {
+                self.values.push(Planned::Pattern(node.clone_with_memory(self.memory)?))?;
+            }
+            // An ordinary `Join` evaluates its operands independently and joins the
+            // results, so a call inside the right operand is invoked with nothing the
+            // left operand binds: it sees what the enclosing context binds and no more.
+            // Only a `Lateral` hands its right operand the left rows — which is why a
+            // call that depends on an earlier atom is rebuilt through one (see
+            // [`order_chain`]).
+            GraphPattern::Join { left, right } => {
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(right, scope, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
+            }
+            // The right side of a `Lateral` is evaluated once per left row with that row
+            // in hand, so it sees what the left side certainly binds. A `Lateral` whose
+            // right operand plans to a call is a chain ([`planned_lateral_call`]) and
+            // never reaches this arm; any other right operand is one the pushdown
+            // recurses into: it is re-evaluated per left row and inner-joined with it,
+            // so restricting a leaf inside it restricts the node (see
+            // `crate::substitute`'s `push_probes`).
+            GraphPattern::Lateral { left, right } => {
+                let mut inner = scope.get(&self.scopes).clone();
+                self.widen(&mut inner, scope, left, promise)?;
+                let inner = self.own(inner)?;
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(right, inner, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
+            }
+            // `OPTIONAL`'s right side and `MINUS`'s right side are evaluated
+            // independently of the left and then matched against it, exactly as a
+            // `Join`'s right operand is, so a call inside either sees only what the
+            // enclosing context binds. Their own bindings do not escape as certain
+            // either, which `certainly_bound` accounts for.
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } => {
+                // The inline condition is evaluated only on candidate JOINED rows, so
+                // both sides' bindings are available to it.
+                let mut condition_scope = scope.get(&self.scopes).clone();
+                self.widen(&mut condition_scope, scope, left, promise)?;
+                self.widen(&mut condition_scope, scope, right, promise)?;
+                let condition_scope = self.own(condition_scope)?;
+                self.steps.push(assemble)?;
+                if let Some(expression) = expression {
+                    self.steps.push(Step::Expression(expression, condition_scope, promise))?;
+                }
+                self.steps.push(Step::Pattern(right, scope, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
+            }
+            GraphPattern::Minus { left, right } => {
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(right, scope, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
+            }
+            // A `UNION` branch cannot rely on its sibling.
+            GraphPattern::Union { arms } => {
+                self.steps.push(assemble)?;
+                for arm in arms.iter().rev() {
+                    self.steps.push(Step::Pattern(arm, scope, promise))?;
+                }
+            }
+            // A `FILTER`'s expression is evaluated over the rows its inner pattern
+            // produced, so an `EXISTS` inside it sees everything that pattern certainly
+            // binds — which is exactly what makes a relation inside a correlated `EXISTS`
+            // invocable with the outer row's values. The expression is planned first,
+            // then the inner pattern.
+            GraphPattern::Filter { expr, inner } => {
+                let mut rows = scope.get(&self.scopes).clone();
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
+                self.steps.push(Step::Expression(expr, rows, promise))?;
+            }
+            GraphPattern::Extend {
+                inner, expression, ..
+            } => {
+                let mut rows = scope.get(&self.scopes).clone();
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Expression(expression, rows, promise))?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
+            }
+            GraphPattern::Unfold {
+                inner, expression, ..
+            } => {
+                let mut rows = scope.get(&self.scopes).clone();
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Expression(expression, rows, promise))?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
+            }
+            GraphPattern::Graph { inner, .. } => {
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
+            }
+            GraphPattern::OrderBy { inner, expression } => {
+                let mut rows = scope.get(&self.scopes).clone();
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
+                for key in expression.iter().rev() {
+                    self.steps.push(Step::Order(key, rows, promise))?;
+                }
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
+            }
+            // A sub-`SELECT` is its own scope: a variable bound outside it is visible
+            // inside only when it projects it — the correlated substitution (a
+            // `LATERAL`'s right operand, an `EXISTS` body) writes the outer row into it
+            // for exactly the projected variables — so the correlation set is narrowed
+            // to them on the way in. A prepared execution's parameters are written past
+            // the projection, so the promise passes unchanged.
+            GraphPattern::Project { inner, variables } => {
+                let narrowed = narrowed_to_admitted(scope.get(&self.scopes), variables, &self.workspace)?;
+                let narrowed = self.own(narrowed)?;
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, narrowed, promise))?;
+            }
+            GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
+            }
+            GraphPattern::Slice { inner, .. } => {
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
+            }
+            GraphPattern::Group {
+                inner, aggregates, ..
+            } => {
+                let mut rows = scope.get(&self.scopes).clone();
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
+                for (_, aggregate) in aggregates.iter().rev() {
+                    self.steps.push(Step::Aggregate(aggregate, rows, promise))?;
+                }
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Enter `expr`: an expression that reaches neither a property-function call nor a
+    /// custom aggregate is planned as written; any other has its operands pushed, and an
+    /// `EXISTS` its pattern.
+    fn enter_expression(&mut self, expr: &'a Expression, scope: SetRef<'a>, promise: Prom<'a>) -> PrepResult<()> {
+        // Either hazard alone must still walk `expr` — see `plan_where_pattern`'s
+        // identical widening for the same reason: an `EXISTS` whose inner `GROUP BY`
+        // has a `Custom` aggregate but no property-function call must still reach
+        // that aggregate's admission (through the `Expression::Exists` arm).
+        if !crate::property_fn_eval::expression_reaches_property_function_with_memory(expr, self.memory)?
+            && !crate::property_fn_eval::expression_reaches_custom_aggregate_with_memory(expr, self.memory)?
+        {
+            self.values.push(Planned::Expression(expr.clone_with_memory(self.memory)?))?;
+            return Ok(());
+        }
+        let assemble = Step::Assemble(Assemble::Expression(expr));
+        match expr {
+            // A correlated `EXISTS` sees its enclosing group's bindings, so the scope
+            // carries straight in: that is what lets a relation inside one be invoked
+            // bound. A prepared execution's parameters reach it too: the pre-binding
+            // rewrite binds them in every call everywhere (see [`NativePromise::Everywhere`]).
+            Expression::Exists(pattern) => {
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(pattern, scope, promise))?;
+            }
+            Expression::Or(operands) | Expression::And(operands) => {
+                self.steps.push(assemble)?;
+                for operand in operands.iter().rev() {
+                    self.steps.push(Step::Expression(operand, scope, promise))?;
+                }
+            }
+            Expression::Arithmetic(first, steps) => {
+                self.steps.push(assemble)?;
+                for (_, operand) in steps.iter().rev() {
+                    self.steps.push(Step::Expression(operand, scope, promise))?;
+                }
+                self.steps.push(Step::Expression(first, scope, promise))?;
+            }
+            Expression::Equal(a, b)
+            | Expression::SameTerm(a, b)
+            | Expression::Greater(a, b)
+            | Expression::GreaterOrEqual(a, b)
+            | Expression::Less(a, b)
+            | Expression::LessOrEqual(a, b) => {
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Expression(b, scope, promise))?;
+                self.steps.push(Step::Expression(a, scope, promise))?;
+            }
+            Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Expression(a, scope, promise))?;
+            }
+            Expression::If(condition, then, otherwise) => {
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Expression(otherwise, scope, promise))?;
+                self.steps.push(Step::Expression(then, scope, promise))?;
+                self.steps.push(Step::Expression(condition, scope, promise))?;
+            }
+            Expression::In(needle, haystack) => {
+                self.steps.push(assemble)?;
+                for item in haystack.iter().rev() {
+                    self.steps.push(Step::Expression(item, scope, promise))?;
+                }
+                self.steps.push(Step::Expression(needle, scope, promise))?;
+            }
+            Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
+                self.steps.push(assemble)?;
+                for item in items.iter().rev() {
+                    self.steps.push(Step::Expression(item, scope, promise))?;
+                }
+            }
+            Expression::NamedNode(_)
+            | Expression::Literal(_)
+            | Expression::Variable(_)
+            | Expression::Bound(_) => {
+                self.values.push(Planned::Expression(expr.clone_with_memory(self.memory)?))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Enter `aggregate`: for [`AggregateFunction::Custom`], ADMIT the call at prepare
+    /// time — refuse an unregistered IRI, a positional-argument count the registry's
+    /// entry does not declare, or an invalid `; NAME=value` scalarval clause (see
+    /// [`validate_scalarvals`]), before any governor charge — then push the expression
+    /// it reduces over and its sort keys. The built-in-vs-custom admission asymmetry
+    /// mirrors a relation's: a built-in's arity is checked structurally by the parser
+    /// (`SUM`/`AVG`/… accept exactly one expression), so only `Custom`'s host-declared
+    /// arity and scalarvals need checking here.
+    ///
+    /// # Errors
+    ///
+    /// A [`PlanError`] tagged [`PlanSeam::Aggregate`] naming the IRI, for an
+    /// unregistered `AggregateFunction::Custom` IRI, a supplied argument count its
+    /// registered entry's declared [`crate::user_fn::Arity`] does not accept, or an
+    /// invalid scalarval (see [`validate_scalarvals`]'s docs for the four ways one is
+    /// refused).
+    fn enter_aggregate(
+        &mut self,
+        aggregate: &'a AggregateExpression,
+        scope: SetRef<'a>,
+        promise: Prom<'a>,
+    ) -> PrepResult<()> {
+        if let AggregateFunction::Custom(iri) = aggregate.function() {
+            let iri_str = iri.as_str();
+            let Some(custom) = self.agg_registry.resolve(iri_str) else {
+                return Err(plan_message(PlanSeam::Aggregate,
+                    format_args!("no custom aggregate is registered for <{iri_str}>"),
+                    &self.workspace).into());
+            };
+            let declared = crate::contain::declaration_contained_admitted(
+                "custom aggregate", iri_str, "arity", || custom.arity(), &self.workspace,
+            ).map_err(PlanError::aggregate)?;
+            let supplied = aggregate.args().len();
+            if !declared.accepts(supplied) {
+                return Err(plan_message(PlanSeam::Aggregate, format_args!(
+                    "custom aggregate <{iri_str}> is declared with {declared} argument(s); the call site supplies {supplied}",
+                ), &self.workspace).into());
+            }
+            let declared_scalarvals = crate::contain::declaration_contained_admitted(
+                "custom aggregate", iri_str, "scalarval declaration", || custom.scalarvals(), &self.workspace,
+            ).map_err(PlanError::aggregate)?;
+            validate_scalarvals_native(iri_str, aggregate.scalarvals(), declared_scalarvals, &self.workspace)
+                .map_err(PlanError::aggregate)?;
+        }
+        self.steps.push(Step::Assemble(Assemble::Aggregate(aggregate)))?;
+        // A `FOLD`'s own sort keys are per-row expressions read from the same
+        // solutions its arguments are, so they are planned too: a property function or
+        // custom aggregate reachable from `FOLD(?v ORDER BY f(?w))` would otherwise
+        // skip this walk's prepare-time admission entirely. Pushed after the arguments'
+        // reverse, so the arguments are planned first.
+        for order in aggregate.order_by().iter().rev() {
+            self.steps.push(Step::Order(order, scope, promise))?;
+        }
+        for arg in aggregate.args().iter().rev() {
+            self.steps.push(Step::Expression(arg, scope, promise))?;
+        }
+        Ok(())
+    }
+
+    /// Enter a sort key: its expression is planned, and the key rebuilt with its
+    /// `ASC`/`DESC` direction.
+    fn enter_order(&mut self, order: &'a OrderExpression, scope: SetRef<'a>, promise: Prom<'a>) -> PrepResult<()> {
+        self.steps.push(Step::Assemble(Assemble::Order(order)))?;
+        let (OrderExpression::Asc(expr) | OrderExpression::Desc(expr)) = order;
+        self.steps.push(Step::Expression(expr, scope, promise))?;
+        Ok(())
+    }
+
+    /// Rebuild one node from the planned parts under it, in the order its fields are
+    /// written.
+    fn assemble(&mut self, assemble: Assemble<'a>) -> PrepResult<()> {
+        match assemble {
+            Assemble::Pattern { node, mark } => {
+                let planned = self.assemble_pattern(node)?;
+                self.scopes.truncate(mark);
+                self.values.push(Planned::Pattern(planned))?;
+            }
+            // Rebuild the left-deep spine in the chosen order: a call re-attaches
+            // through a `Lateral` (it depends on what is to its left), everything else
+            // through a `Join`.
+            Assemble::Chain { is_call, mark } => {
+                let mut chain: Option<GraphPattern> = None;
+                for (part, call) in self.take(is_call.len())?.zip(is_call) {
+                    let planned = part.pattern();
+                    chain = Some(match chain {
+                        None => planned,
+                        Some(left) => {
+                            if call {
+                                GraphPattern::Lateral {
+                                    left: Child::try_new(left, self.memory)?,
+                                    right: Child::try_new(planned, self.memory)?,
+                                }
+                            } else {
+                                GraphPattern::Join {
+                                    left: Child::try_new(left, self.memory)?,
+                                    right: Child::try_new(planned, self.memory)?,
+                                }
+                            }
+                        }
+                    });
+                }
+                self.scopes.truncate(mark);
+                self.values.push(Planned::Pattern(
+                    chain.unwrap_or(GraphPattern::Bgp { patterns: vec![] }),
+                ))?;
+            }
+            Assemble::Expression(expr) => {
+                let planned = self.assemble_expression(expr)?;
+                self.values.push(Planned::Expression(planned))?;
+            }
+            Assemble::Aggregate(aggregate) => {
+                let count = aggregate.args().len().checked_add(aggregate.order_by().len())
+                    .ok_or(StorageError::SizeOverflow)?;
+                let mut parts = self.take(count)?;
+                let args = self.memory.collect(parts.by_ref().take(aggregate.args().len()).map(Planned::expression))?;
+                let order_by = self.memory.collect(parts.map(Planned::order))?;
+                // Planning an argument rewrites it in place and never changes the
+                // argument COUNT, and planning a sort key never removes one, so this can
+                // never turn a valid `aggregate` into an invalid one — the
+                // `AggregateExpression::new` call below cannot fail.
+                let planned = AggregateExpression::new(
+                    aggregate.function().clone(),
+                    args,
+                    aggregate.clone_scalarvals_with_memory(self.memory)?,
+                    order_by,
+                    aggregate.distinct,
+                )
+                .expect("planning preserves argument count, so arity stays valid");
+                self.values.push(Planned::Aggregate(planned))?;
+            }
+            Assemble::Order(order) => {
+                let expr = next_expression(&mut self.take(1)?);
+                self.values.push(Planned::Order(match order {
+                    OrderExpression::Asc(_) => OrderExpression::Asc(expr),
+                    OrderExpression::Desc(_) => OrderExpression::Desc(expr),
+                }))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `node` rebuilt over its planned parts, taken in the order they were planned.
+    fn assemble_pattern(&mut self, node: &'a GraphPattern) -> PrepResult<GraphPattern> {
+        Ok(match node {
+            GraphPattern::Apply { policy, .. } => {
+                let mut parts = self.take(2)?;
+                let left = next_pattern(&mut parts);
+                let right = next_pattern(&mut parts);
+                GraphPattern::Apply {
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
+                    policy: policy.clone_box_with_memory(self.memory)?,
+                }
+            }
+            GraphPattern::Join { .. } => {
+                let mut parts = self.take(2)?;
+                let left = next_pattern(&mut parts);
+                let right = next_pattern(&mut parts);
+                GraphPattern::Join {
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
+                }
+            }
+            GraphPattern::Lateral { .. } => {
+                let mut parts = self.take(2)?;
+                let left = next_pattern(&mut parts);
+                let right = next_pattern(&mut parts);
+                GraphPattern::Lateral {
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
+                }
+            }
+            GraphPattern::LeftJoin { expression, .. } => {
+                let mut parts = self.take(2 + usize::from(expression.is_some()))?;
+                let left = next_pattern(&mut parts);
+                let right = next_pattern(&mut parts);
+                let expression = expression.as_ref().map(|_| next_expression(&mut parts));
+                GraphPattern::LeftJoin {
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
+                    expression,
+                }
+            }
+            GraphPattern::Minus { .. } => {
+                let mut parts = self.take(2)?;
+                let left = next_pattern(&mut parts);
+                let right = next_pattern(&mut parts);
+                GraphPattern::Minus {
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
+                }
+            }
+            GraphPattern::Union { arms } => {
+                let mut parts = self.take(arms.len())?;
+                GraphPattern::Union {
+                    arms: purrdf_sparql_algebra::Chain::try_from(
+                        self.memory.collect((0..arms.len()).map(|_| next_pattern(&mut parts)))?,
+                    ).unwrap_or_else(|_| unreachable!("planning preserves UNION arity")),
+                }
+            }
+            GraphPattern::Filter { .. } => {
+                let mut parts = self.take(2)?;
+                let expr = next_expression(&mut parts);
+                let inner = next_pattern(&mut parts);
+                GraphPattern::Filter {
+                    expr,
+                    inner: Child::try_new(inner, self.memory)?,
+                }
+            }
+            GraphPattern::Extend { variable, .. } => {
+                let mut parts = self.take(2)?;
+                let inner = next_pattern(&mut parts);
+                let expression = next_expression(&mut parts);
+                GraphPattern::Extend {
+                    inner: Child::try_new(inner, self.memory)?,
+                    variable: variable.clone(),
+                    expression,
+                }
+            }
+            GraphPattern::Unfold {
+                element, companion, ..
+            } => {
+                let mut parts = self.take(2)?;
+                let inner = next_pattern(&mut parts);
+                let expression = next_expression(&mut parts);
+                GraphPattern::Unfold {
+                    inner: Child::try_new(inner, self.memory)?,
+                    expression,
+                    element: element.clone(),
+                    companion: companion.clone(),
+                }
+            }
+            GraphPattern::Graph { name, .. } => GraphPattern::Graph {
+                name: name.clone(),
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
+            },
+            GraphPattern::OrderBy { expression, .. } => {
+                let mut parts = self.take(expression.len().checked_add(1).ok_or(StorageError::SizeOverflow)?)?;
+                let inner = next_pattern(&mut parts);
+                GraphPattern::OrderBy {
+                    inner: Child::try_new(inner, self.memory)?,
+                    expression: self.memory.collect(parts.map(Planned::order))?,
+                }
+            }
+            GraphPattern::Project { variables, .. } => GraphPattern::Project {
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
+                variables: self.memory.collect(variables.iter().cloned())?,
+            },
+            GraphPattern::Distinct { .. } => GraphPattern::Distinct {
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
+            },
+            GraphPattern::Reduced { .. } => GraphPattern::Reduced {
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
+            },
+            GraphPattern::Slice { start, length, .. } => GraphPattern::Slice {
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
+                start: *start,
+                length: *length,
+            },
+            GraphPattern::Group {
+                variables,
+                aggregates,
+                ..
+            } => {
+                let mut parts = self.take(aggregates.len().checked_add(1).ok_or(StorageError::SizeOverflow)?)?;
+                let inner = next_pattern(&mut parts);
+                GraphPattern::Group {
+                    inner: Child::try_new(inner, self.memory)?,
+                    variables: self.memory.collect(variables.iter().cloned())?,
+                    aggregates: self.memory.collect(aggregates.iter().zip(parts)
+                        .map(|((variable, _), part)| (variable.clone(), part.aggregate())))?,
+                }
+            }
+            GraphPattern::Bgp { .. }
+            | GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::PropertyFunction(_)
+            | GraphPattern::Service { .. } => {
+                unreachable!("a leaf is planned as it is entered and never assembled")
+            }
+        })
+    }
+
+    /// `expr` rebuilt over its planned operands, taken in the order they were planned.
+    fn assemble_expression(&mut self, expr: &'a Expression) -> PrepResult<Expression> {
+        Ok(match expr {
+            Expression::Exists(_) => {
+                Expression::Exists(Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?)
+            }
+            Expression::Or(operands) => {
+                let mut parts = self.take(operands.len())?;
+                Expression::Or(purrdf_sparql_algebra::Chain::try_from(
+                    self.memory.collect((0..operands.len()).map(|_| next_expression(&mut parts)))?,
+                ).unwrap_or_else(|_| unreachable!("planning preserves OR arity")))
+            }
+            Expression::And(operands) => {
+                let mut parts = self.take(operands.len())?;
+                Expression::And(purrdf_sparql_algebra::Chain::try_from(
+                    self.memory.collect((0..operands.len()).map(|_| next_expression(&mut parts)))?,
+                ).unwrap_or_else(|_| unreachable!("planning preserves AND arity")))
+            }
+            Expression::Arithmetic(_, steps) => {
+                let mut parts = self.take(steps.len().checked_add(1).ok_or(StorageError::SizeOverflow)?)?;
+                let first = next_expression(&mut parts);
+                Expression::Arithmetic(
+                    Child::try_new(first, self.memory)?,
+                    purrdf_sparql_algebra::NonEmpty::try_from(
+                        self.memory.collect(steps.iter()
+                            .map(|(operator, _)| (*operator, next_expression(&mut parts))))?,
+                    ).unwrap_or_else(|_| unreachable!("planning preserves arithmetic step arity")),
+                )
+            }
+            Expression::Equal(..) => {
+                let (a, b) = self.take_pair()?;
+                Expression::Equal(a, b)
+            }
+            Expression::SameTerm(..) => {
+                let (a, b) = self.take_pair()?;
+                Expression::SameTerm(a, b)
+            }
+            Expression::Greater(..) => {
+                let (a, b) = self.take_pair()?;
+                Expression::Greater(a, b)
+            }
+            Expression::GreaterOrEqual(..) => {
+                let (a, b) = self.take_pair()?;
+                Expression::GreaterOrEqual(a, b)
+            }
+            Expression::Less(..) => {
+                let (a, b) = self.take_pair()?;
+                Expression::Less(a, b)
+            }
+            Expression::LessOrEqual(..) => {
+                let (a, b) = self.take_pair()?;
+                Expression::LessOrEqual(a, b)
+            }
+            Expression::UnaryPlus(_) => {
+                Expression::UnaryPlus(Child::try_new(next_expression(&mut self.take(1)?), self.memory)?)
+            }
+            Expression::UnaryMinus(_) => {
+                Expression::UnaryMinus(Child::try_new(next_expression(&mut self.take(1)?), self.memory)?)
+            }
+            Expression::Not(_) => Expression::Not(Child::try_new(next_expression(&mut self.take(1)?), self.memory)?),
+            Expression::If(..) => {
+                let mut parts = self.take(3)?;
+                let condition = next_expression(&mut parts);
+                let then = next_expression(&mut parts);
+                let otherwise = next_expression(&mut parts);
+                Expression::If(
+                    Child::try_new(condition, self.memory)?,
+                    Child::try_new(then, self.memory)?,
+                    Child::try_new(otherwise, self.memory)?,
+                )
+            }
+            Expression::In(_, haystack) => {
+                let mut parts = self.take(haystack.len().checked_add(1).ok_or(StorageError::SizeOverflow)?)?;
+                let needle = next_expression(&mut parts);
+                Expression::In(Child::try_new(needle, self.memory)?, self.memory.collect(parts.map(Planned::expression))?)
+            }
+            Expression::Coalesce(items) => {
+                {
+                    let parts = self.take(items.len())?;
+                    Expression::Coalesce(self.memory.collect(parts.map(Planned::expression))?)
+                }
+            }
+            Expression::FunctionCall(function, args) => {
+                let parts = self.take(args.len())?;
+                Expression::FunctionCall(function.clone_with_memory(self.memory)?,
+                    self.memory.collect(parts.map(Planned::expression))?)
+            },
+            Expression::NamedNode(_)
+            | Expression::Literal(_)
+            | Expression::Variable(_)
+            | Expression::Bound(_) => {
+                unreachable!("a constant or a variable is planned as it is entered")
+            }
+        })
+    }
+
+    /// The two planned operands of a binary operator, in order.
+    fn take_pair(&mut self) -> PrepResult<(Child<Expression>, Child<Expression>)> {
+        let mut parts = self.take(2)?;
+        let a = next_expression(&mut parts);
+        let b = next_expression(&mut parts);
+        Ok((Child::try_new(a, self.memory)?, Child::try_new(b, self.memory)?))
+    }
+}
+
+/// Validate a [`AggregateFunction::Custom`] call's `; NAME=value` scalarval
+/// clauses (`supplied`) against `<iri>`'s registered
+/// [`crate::agg_fn::CustomAggregate::scalarvals`] declaration (`declared`), at
+/// PREPARE time — called from [`Planner::enter_aggregate`], before any governor charge.
+///
+/// Four ways a call is refused, checked in this order:
+/// 1. **Duplicate name** — the same upper-cased `NAME` supplied twice.
+/// 2. **Unknown name** — a supplied name `declared` does not list.
+/// 3. **Wrong-typed value** — a supplied value whose datatype does not match
+///    its [`ScalarvalSpec::kind`] (e.g. a string where [`ScalarvalKind::Numeric`]
+///    is declared).
+/// 4. **Missing required name** — every declared name is required (see
+///    [`crate::agg_fn::CustomAggregate::scalarvals`]'s docs): a `declared` name
+///    with no matching entry in `supplied`.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] naming `iri` and the offending scalarval, for any of
+/// the four cases above.
+#[cfg(test)]
+fn validate_scalarvals(
+    iri: &str, supplied: &[(String, Literal)], declared: &[ScalarvalSpec],
+) -> Result<(), EvalError> {
+    validate_scalarvals_native(iri, supplied, declared, &WorkspaceCapability::resident())
+}
+
+fn validate_scalarvals_native(
+    iri: &str, supplied: &[(String, Literal)], declared: &[ScalarvalSpec],
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut seen = AdmittedMap::default();
+    for (name, value) in supplied {
+        if seen.get(&name.as_str()).is_some() {
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!("custom aggregate <{iri}> was supplied the scalarval `{name}` more than once"),
+                workspace,
+            ));
+        }
+        let _ = seen.insert_admitted(name.as_str(), (), workspace)?;
+        let Some(spec) = declared.iter().find(|spec| spec.name == name) else {
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!("custom aggregate <{iri}> does not accept a scalarval named `{name}`"),
+                workspace,
+            ));
+        };
+        if !scalarval_value_matches_kind_native(value, spec.kind, workspace)? {
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!("custom aggregate <{iri}>'s scalarval `{name}` must be {}, found datatype <{}>",
+                    spec.kind.label(), value.datatype().as_str()),
+                workspace,
+            ));
+        }
+    }
+    for spec in declared {
+        if !supplied.iter().any(|(name, _)| name == spec.name) {
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!("custom aggregate <{iri}> requires a scalarval named `{}`, which the call site did not supply", spec.name),
+                workspace,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether `value`'s datatype matches `kind` — the per-literal check
+/// [`validate_scalarvals`] applies to each supplied scalarval. Goes through the
+/// SAME [`purrdf_xsd`] numeric-tower classification (`xsd_of` + `XsdValue::is_numeric`)
+/// the evaluator itself uses to classify a runtime `TermValue`, rather than a
+/// hand-rolled datatype-IRI string comparison, so a numeric scalarval's
+/// admission rule can never drift from what the numeric tower actually accepts
+/// elsewhere in this crate.
+#[cfg(test)]
+fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
+    scalarval_value_matches_kind_native(value, kind, &WorkspaceCapability::resident())
+        .expect("resident scalarval parsing allocation failed")
+}
+
+fn scalarval_value_matches_kind_native(
+    value: &Literal, kind: ScalarvalKind, workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    Ok(match kind {
+        ScalarvalKind::Numeric => {
+            if value.language().is_some() { return Ok(false); }
+            let Some(datatype) = purrdf_xsd::XsdDatatype::from_iri(value.datatype().as_str())
+                else { return Ok(false); };
+            crate::parsed_value::ParsedValue::parse(value.value(), datatype, false, workspace)?
+                .as_deref().is_some_and(purrdf_xsd::XsdValue::is_numeric)
+        }
+        ScalarvalKind::String => value.language().is_none()
+            && value.datatype().as_str() == purrdf_sparql_algebra::ast::XSD_STRING,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Certainly-bound variables
+// ---------------------------------------------------------------------------
+
+/// Add to `out` every variable `pattern` binds in **every** solution it produces, save
+/// only a solution in which a `BIND`'s own expression raised an error, or an aggregate
+/// failed on the values its group handed it.
+///
+/// This is deliberately narrower than a scope walk. A variable that is merely *in
+/// scope* may be unbound in a row for a reason the query text fixes — `OPTIONAL`'s
+/// right side, a `UNION` branch that does not mention it, an `UNDEF` cell of a `VALUES`
+/// column, a `SAMPLE` over the one implicit group an aggregate without `GROUP BY`
+/// forms over an empty input — and treating one of those as bound would admit an
+/// invocation the text itself guarantees some row cannot make.
+///
+/// # The rule, exactly
+///
+/// A variable is a binding source here when it is:
+///
+/// * a variable of a triple pattern, a path's endpoints, or a property-function
+///   argument;
+/// * a `VALUES` column with a term — no `UNDEF` — in every row;
+/// * the target of a `BIND` whose expression reads only variables its inner pattern
+///   binds by this same rule, or variables the context it is evaluated in holds bound
+///   — the left operand of an enclosing `LATERAL` (see [`expression_reads_only_bound_admitted`]
+///   and [`collect_certainly_bound_in`]);
+/// * a variable a `FILTER`'s condition requires bound for it to be true
+///   ([`Outcome::Truth`]): `FILTER(BOUND(?v))`, `FILTER(sameTerm(?v, ?o))`,
+///   `FILTER(isIRI(?v))`, a built-in strict in `?v` such as
+///   `FILTER(REGEX(STR(?v), "x"))`, and their conjunctions bind `?v`; a disjunction
+///   binds only what both of its sides do, and `FILTER(!BOUND(?v))` binds nothing;
+/// * the variable naming a `GRAPH`;
+/// * a grouping key every row of the grouped pattern binds;
+/// * an aggregate's output when [`aggregate_certainly_binds_admitted`] says every group row
+///   holds one save a row whose aggregate failed on present values — `COUNT`, `SUM`,
+///   `AVG`, `GROUP_CONCAT` and `FOLD` always, `SAMPLE`/`MIN`/`MAX` and a custom
+///   aggregate under an explicit `GROUP BY` of arguments reading only what every row
+///   binds;
+/// * bound by both operands of a `UNION`, by either operand of a `Join` or a
+///   `LATERAL` (the right one judged with the left one's bindings in hand), by the
+///   left operand of an `OPTIONAL` or a `MINUS`, by the inner pattern of a `FILTER`,
+///   `BIND`, `UNFOLD`, `ORDER BY`, `DISTINCT`, `REDUCED` or slice, or by the inner
+///   pattern of a sub-`SELECT` that projects it.
+///
+/// # Why a `BIND` or an aggregate counts although it can fail
+///
+/// An expression that errors leaves its variable unbound in that row (SPARQL 1.1
+/// §18.6). When every variable it reads is bound, that is an outcome of evaluating one
+/// row, not a shape of the query: the same `BIND(CONCAT(?a, ?b) AS ?q)` binds `?q` on
+/// every row its operands are strings, and whether any row errors is a fact about the
+/// data. Refusing it here would refuse, at prepare, every call fed by a computed value
+/// — including every run that would never have erred. So such a `BIND` target counts,
+/// and a row that did err is handled where rows are: the evaluator re-derives every
+/// invocation's access pattern from the row in hand and refuses one its relation does
+/// not declare, with a typed error naming both patterns (`admit_mode` in
+/// `crate::property_fn_eval`). A relation is therefore never invoked with a position
+/// free that its declared modes require bound; a relation that ALSO declares the free
+/// mode is invoked free on that row, as the row's own access pattern is.
+///
+/// An aggregate's output follows the same rule: it counts when every value it is
+/// computed from is certainly present, and a group whose aggregate failed on those
+/// values — a `MAX(STR(?x))` whose every `?x` is a blank node, a `SUM` over a string —
+/// is a row refused (or, for a relation that also serves the free mode, invoked free)
+/// exactly as a row whose `BIND` erred. [`aggregate_certainly_binds_admitted`] states which
+/// absences of input the text itself fixes.
+///
+/// A `BIND` that reads a variable its inner pattern does NOT certainly bind —
+/// `BIND(?x AS ?q)` after an `OPTIONAL` that may leave `?x` unbound, or over an
+/// aggregate's output that may be unbound (a `MIN` with no `GROUP BY`, over an input
+/// that may be empty) — inherits that structural absence, and its target does not
+/// count.
+///
+/// An `UNFOLD` target is not the same case, and does not count: a SEP-0009 `null`
+/// element is a legitimate member of the composite, not an error, and the row it yields
+/// with the target unbound is a normal answer.
+///
+/// Erring on the narrow side is otherwise harmless: at worst a feasible order is
+/// missed and the query is refused at prepare time with a message that names exactly
+/// what could not be bound.
+#[cfg(test)]
+pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+    collect_certainly_bound_in(pattern, &DetHashSet::default(), out);
+}
+
+/// The same certainty law with every engine-created owner admitted before growth.
+/// The returned immutable schema keeps its original payload admission alive.
+pub(crate) fn collect_certainly_bound_admitted(
+    pattern: &GraphPattern,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    collect_certainly_bound_in_admitted(pattern, &VarSchema::default(), workspace)
+}
+
+/// Contextual certainty, without adding the caller's context to the result.
+pub(crate) fn collect_certainly_bound_in_admitted(
+    pattern: &GraphPattern,
+    context: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    collect_bound_admitted(pattern, context, None, workspace)
+}
+
+/// [`collect_certainly_bound`] for a pattern evaluated with `context` already bound:
+/// every variable of `context` holds a value in every row the pattern is evaluated
+/// over, written into it before it runs.
+///
+/// That is what the right operand of a `LATERAL` is — evaluated once per left row with
+/// that row substituted in — and what a correlated `EXISTS` body is. So a `BIND` there
+/// reading only `context` (or what its own inner pattern binds) binds its target on
+/// every row: `?s ?p ?v LATERAL { BIND(?v AS ?q) }` binds `?q` exactly as
+/// `?s ?p ?v BIND(?v AS ?q)` does. `context` itself is never added to `out` — the
+/// pattern does not bind it, its enclosing context does.
+///
+/// `context` reaches everywhere the substitution does: both operands of a `Join`, a
+/// `UNION`, an `OPTIONAL` and a `MINUS`, every wrapper's inner pattern, and the inner
+/// pattern of a sub-`SELECT` for the variables it projects — a variable it does not
+/// project is a different variable inside it. A nested `LATERAL`'s right operand sees
+/// `context` and its own left operand's certain bindings.
+#[cfg(test)]
+pub(crate) fn collect_certainly_bound_in(
+    pattern: &GraphPattern,
+    context: &DetHashSet<Variable>,
+    out: &mut DetHashSet<Variable>,
+) {
+    collect_bound(pattern, context, Written::NOTHING, out);
+}
+
+/// What a prepared execution's run writes into a pattern the planner is judging, beyond
+/// the pattern's own bindings. See [`Promise`].
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+struct Written<'a> {
+    /// The parameters the one pre-binding rewrite writes into EVERY expression of the
+    /// query (a constant for an IRI or a literal, a driven value for a blank node or a
+    /// quoted triple — `crate::substitute`'s `drive_expression_reads`), sub-`SELECT`s
+    /// included.
+    everywhere: Option<&'a DetHashSet<Variable>>,
+}
+
+#[cfg(test)]
+impl Written<'_> {
+    /// Nothing is written: the pattern is judged by its own bindings and its context.
+    #[cfg(test)]
+    const NOTHING: Self = Self { everywhere: None };
+
+    /// Whether an expression reads `variable` as a value the run wrote in.
+    fn writes(self, variable: &Variable) -> bool {
+        self.everywhere
+            .is_some_and(|parameters| parameters.contains(variable))
+    }
+}
+
+/// [`collect_certainly_bound_in`], with what the run writes in — see [`Written`].
+///
+/// A post-order walk over a work list, so a pattern of any depth needs no more machine
+/// stack: each node's certainly-bound set is computed from its children's, under the
+/// context and the writes that reach it, and the root's is added to `out`. A `LATERAL`
+/// binds its left operand first, then its right operand under the context the left one
+/// widens.
+#[cfg(test)]
+fn collect_bound(
+    pattern: &GraphPattern,
+    context: &DetHashSet<Variable>,
+    given_written: Written<'_>,
+    out: &mut DetHashSet<Variable>,
+) {
+    // These sets are caller-owned resident planner inputs and output. Bounded
+    // callers keep the VarSchema returned by collect_bound_admitted instead.
+    let workspace = WorkspaceCapability::default();
+    let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
+        .expect("resident certainty context");
+    let written = given_written.everywhere.map(|set| {
+        VarSchema::from_vars_admitted(set.iter().cloned(), &workspace)
+            .expect("resident certainty writes")
+    });
+    let bound = collect_bound_admitted(pattern, &context, written.as_ref(), &workspace)
+        .expect("resident certainly-bound allocation");
+    out.extend(bound.vars().iter().cloned());
+}
+
+/// Contextual certainty with optional promised bindings and retained schema owners.
+pub(crate) fn collect_bound_admitted(
+    pattern: &GraphPattern,
+    context: &VarSchema,
+    given_written: Option<&VarSchema>,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    /// The context a node is evaluated under: the caller's, or one a `LATERAL` or a
+    /// sub-`SELECT` built for its operand, held in the arena.
+    #[derive(Clone, Copy)]
+    enum Context {
+        Given,
+        Owned(usize),
+    }
+    #[derive(Clone, Copy)]
+    enum Writes {
+        Given,
+        Owned(std::num::NonZeroUsize),
+    }
+    // The original caller writes remain outside the worklist. A one-based arena
+    // index uses its zero niche, preserving the former per-frame pointer width.
+    const _: () = assert!(size_of::<Writes>() == size_of::<Option<&VarSchema>>());
+    impl Writes {
+        fn set<'s>(
+            self,
+            given: Option<&'s VarSchema>,
+            arena: &'s [VarSchema],
+        ) -> Option<&'s VarSchema> {
+            match self {
+                Self::Given => given,
+                Self::Owned(index) => Some(&arena[index.get() - 1]),
+            }
+        }
+        fn writes(
+            self,
+            variable: &Variable,
+            given: Option<&VarSchema>,
+            arena: &[VarSchema],
+        ) -> bool {
+            self.set(given, arena)
+                .is_some_and(|set| set.contains(variable))
+        }
+    }
+    /// One step of the walk.
+    enum Step<'p> {
+        /// Enter a node: a leaf's set is computed at once, a node's children are pushed.
+        Enter(&'p GraphPattern, Context, Writes),
+        /// Combine a node's set from its children's; the arena is cut back to `mark`.
+        Exit(&'p GraphPattern, Context, Writes, usize),
+        /// A `LATERAL` whose left operand is bound: widen the context for its right
+        /// operand, which is named.
+        LateralLeft(&'p GraphPattern, Context, Writes),
+        /// A contextual driver is bound before its renamed inputs reach the RHS.
+        ApplyLeft(
+            &'p GraphPattern,
+            &'p purrdf_sparql_algebra::algebra::ApplicationPolicy,
+            Context,
+            Writes,
+        ),
+        /// A `LATERAL` whose right operand is bound too: its set is the union of both,
+        /// the left operand's carried here; the arena is cut back to `mark`.
+        LateralRight(VarSchema, usize),
+    }
+    /// The set `context` names, read from `arena` when a node built it.
+    fn resolve<'c>(
+        context: Context,
+        given: &'c VarSchema,
+        arena: &'c [VarSchema],
+    ) -> &'c VarSchema {
+        match context {
+            Context::Given => given,
+            Context::Owned(index) => &arena[index],
+        }
+    }
+    let mut arena = AdmittedVec::<VarSchema>::new(workspace);
+    let mut values = AdmittedVec::<VarSchema>::new(workspace);
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(Step::Enter(pattern, Context::Given, Writes::Given))?;
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Enter(node, ctx, written) => {
+                let mark = arena.len();
+                match node {
+                    GraphPattern::Bgp { patterns } => {
+                        let mut bound = SchemaBuilder::new(workspace);
+                        for triple in patterns {
+                            collect_triple_vars_admitted(triple, &mut bound, workspace)?;
+                        }
+                        values.push(bound.finish()?)?;
+                    }
+                    GraphPattern::Path {
+                        subject,
+                        path: _,
+                        object,
+                    } => {
+                        let mut bound = SchemaBuilder::new(workspace);
+                        collect_term_vars_admitted(subject, &mut bound, workspace)?;
+                        collect_term_vars_admitted(object, &mut bound, workspace)?;
+                        values.push(bound.finish()?)?;
+                    }
+                    // Every flattened argument position of a call receives a value on
+                    // every row it emits, so its variables are certainly bound by it.
+                    GraphPattern::PropertyFunction(call) => {
+                        let mut bound = SchemaBuilder::new(workspace);
+                        for term in call.subject_args.iter().chain(&call.object_args) {
+                            collect_term_vars_admitted(term, &mut bound, workspace)?;
+                        }
+                        values.push(bound.finish()?)?;
+                    }
+                    // A `VALUES` column binds its variable in every row exactly when no
+                    // row holds `UNDEF` there. An empty table produces no row at all, so
+                    // every column of it qualifies vacuously — and nothing downstream is
+                    // ever invoked from it.
+                    GraphPattern::Values {
+                        variables,
+                        bindings,
+                    } => {
+                        let bound = VarSchema::from_vars_admitted(
+                            variables
+                                .iter()
+                                .enumerate()
+                                .filter(|(column, _)| {
+                                    bindings
+                                        .iter()
+                                        .all(|row| row.get(*column).is_some_and(Option::is_some))
+                                })
+                                .map(|(_, variable)| variable.clone()),
+                            workspace,
+                        )?;
+                        values.push(bound)?;
+                    }
+                    // A remote endpoint may omit a column, so it promises nothing.
+                    GraphPattern::Service { .. } => {
+                        values.push(VarSchema::default())?;
+                    }
+                    GraphPattern::Join { left, right } => {
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(right, ctx, written))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
+                    }
+                    GraphPattern::Apply {
+                        left,
+                        right,
+                        policy,
+                    } => {
+                        if policy.optional.is_some() {
+                            steps.push(Step::Exit(node, ctx, written, mark))?;
+                        } else {
+                            steps.push(Step::ApplyLeft(right, policy, ctx, written))?;
+                        }
+                        steps.push(Step::Enter(left, ctx, written))?;
+                    }
+                    // The right operand is evaluated once per left row with that row in
+                    // hand, so it sees the left operand's certain bindings as well as the
+                    // enclosing context's: the left operand is bound first.
+                    GraphPattern::Lateral { left, right } => {
+                        steps.push(Step::LateralLeft(right, ctx, written))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
+                    }
+                    // The right side may contribute nothing to a row.
+                    GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. } => {
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
+                    }
+                    GraphPattern::Union { arms } => {
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        for arm in arms.iter().rev() {
+                            steps.push(Step::Enter(arm, ctx, written))?;
+                        }
+                    }
+                    // The solution-modifier wrappers the seed descends through keep
+                    // `written`.
+                    GraphPattern::Filter { inner, .. }
+                    | GraphPattern::OrderBy { inner, .. }
+                    | GraphPattern::Distinct { inner }
+                    | GraphPattern::Reduced { inner }
+                    | GraphPattern::Slice { inner, .. }
+                    | GraphPattern::Unfold { inner, .. }
+                    | GraphPattern::Extend { inner, .. }
+                    | GraphPattern::Group { inner, .. } => {
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, ctx, written))?;
+                    }
+                    GraphPattern::Graph { inner, .. } => {
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, ctx, written))?;
+                    }
+                    // The context reaches a sub-`SELECT`'s inner pattern only through the
+                    // variables the projection names; what the SHACL pre-binding rewrite
+                    // writes is written past the projection too.
+                    GraphPattern::Project { inner, variables } => {
+                        let narrowed = narrowed_to_admitted(
+                            resolve(ctx, context, &arena),
+                            variables,
+                            workspace,
+                        )?;
+                        arena.push(narrowed)?;
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, Context::Owned(mark), written))?;
+                    }
+                }
+            }
+            Step::ApplyLeft(right, policy, ctx, written) => {
+                let left_bound = values.pop().expect("the driver is bound first");
+                let outer = resolve(ctx, context, &arena);
+                let shadowed = VarSchema::from_vars_admitted(
+                    policy.inputs.iter().map(|(input, _)| input.clone()),
+                    workspace,
+                )?;
+                let mut right_context = SchemaBuilder::new(workspace);
+                for variable in outer
+                    .vars()
+                    .iter()
+                    .filter(|variable| !shadowed.contains(variable))
+                {
+                    right_context.push(variable.clone())?;
+                }
+                let written_set = written.set(given_written, &arena);
+                let mut supplied = SchemaBuilder::new(workspace);
+                for variable in written_set
+                    .into_iter()
+                    .flat_map(|set| set.vars().iter())
+                    .filter(|variable| !shadowed.contains(variable))
+                {
+                    supplied.push(variable.clone())?;
+                }
+                for (input, driver) in &policy.inputs {
+                    if left_bound.contains(driver)
+                        || outer.contains(driver)
+                        || written.writes(driver, given_written, &arena)
+                    {
+                        right_context.push(input.clone())?;
+                        supplied.push(input.clone())?;
+                    }
+                }
+                let mark = arena.len();
+                arena.push(right_context.finish()?)?;
+                arena.push(supplied.finish()?)?;
+                steps.push(Step::LateralRight(left_bound, mark))?;
+                steps.push(Step::Enter(
+                    right,
+                    Context::Owned(mark),
+                    Writes::Owned(
+                        std::num::NonZeroUsize::new(
+                            mark.checked_add(2)
+                                .ok_or(EvalError::WorkspaceBoundOverflow)?,
+                        )
+                        .expect("one-based arena index"),
+                    ),
+                ))?;
+            }
+            Step::LateralLeft(right, ctx, written) => {
+                let left_bound = values.pop().expect("the left operand is bound first");
+                let right_context =
+                    resolve(ctx, context, &arena).union_admitted(&left_bound, workspace)?;
+                let mark = arena.len();
+                arena.push(right_context)?;
+                steps.push(Step::LateralRight(left_bound, mark))?;
+                steps.push(Step::Enter(right, Context::Owned(mark), written))?;
+            }
+            Step::LateralRight(left_bound, mark) => {
+                let mut bound = values.pop().expect("the right operand is bound second");
+                bound = bound.union_admitted(&left_bound, workspace)?;
+                arena.truncate(mark);
+                values.push(bound)?;
+            }
+            Step::Exit(node, ctx, written, mark) => {
+                let bound = match node {
+                    GraphPattern::Apply { policy, .. } => {
+                        if policy.optional.is_some() {
+                            values.pop().expect("the driver is bound")
+                        } else {
+                            let right = values.pop().expect("the operand is bound");
+                            let mut left = values.pop().expect("the driver is bound");
+                            left = left.union_admitted(&right, workspace)?;
+                            left
+                        }
+                    }
+                    GraphPattern::Join { .. } => {
+                        let right = values.pop().expect("the right operand is bound");
+                        let mut bound = values.pop().expect("the left operand is bound");
+                        bound = bound.union_admitted(&right, workspace)?;
+                        bound
+                    }
+                    GraphPattern::LeftJoin { .. } | GraphPattern::Minus { .. } => {
+                        values.pop().expect("the left operand is bound")
+                    }
+                    // Only what EVERY arm binds is bound in every row.
+                    GraphPattern::Union { arms } => {
+                        let at = values
+                            .len()
+                            .checked_sub(arms.len())
+                            .expect("each UNION arm produced its certainty value");
+                        let mut arms_bound = values.drain_from(at);
+                        let mut common = arms_bound.next().unwrap_or_default();
+                        for bound in arms_bound {
+                            common = intersection_admitted(&common, &bound, workspace)?;
+                        }
+                        common
+                    }
+                    // A `FILTER` passes only rows its condition is true on, and every
+                    // variable the condition requires bound for that is therefore bound
+                    // in each row it passes — see [`Outcome::Truth`]. A variable the run
+                    // writes into the condition itself (under the SHACL pre-binding
+                    // rewrite) is read there as the written value, not from the row, so
+                    // the condition constrains nothing about the row's binding of it. A
+                    // condition that is never true passes no row; it is taken to bind
+                    // nothing, the narrow answer.
+                    GraphPattern::Filter { expr, .. } => {
+                        let mut bound = values.pop().expect("the inner pattern is bound");
+                        let required =
+                            requires_admitted(expr, Outcome::Truth, workspace)?.unwrap_or_default();
+                        let constrained = VarSchema::from_vars_admitted(
+                            required
+                                .vars()
+                                .iter()
+                                .filter(|variable| !written.writes(variable, given_written, &arena))
+                                .cloned(),
+                            workspace,
+                        )?;
+                        bound = bound.union_admitted(&constrained, workspace)?;
+                        bound
+                    }
+                    // `UNFOLD`s own targets are NOT certainly bound: a SEP-0009 `null`
+                    // element (or a null map value) yields the row with that variable
+                    // unbound, so only what the inner pattern certainly binds escapes.
+                    GraphPattern::OrderBy { .. }
+                    | GraphPattern::Distinct { .. }
+                    | GraphPattern::Reduced { .. }
+                    | GraphPattern::Slice { .. }
+                    | GraphPattern::Unfold { .. } => {
+                        values.pop().expect("the inner pattern is bound")
+                    }
+                    // A `BIND`'s target counts when its expression reads only what the
+                    // inner pattern certainly binds, what the enclosing context already
+                    // holds, or what the run writes in: it is then unbound only in a row
+                    // whose expression errored on the data, and that row is refused per
+                    // row by the evaluator rather than invoked free. See
+                    // [`collect_certainly_bound`]'s doc for the whole argument.
+                    GraphPattern::Extend {
+                        variable,
+                        expression,
+                        ..
+                    } => {
+                        let mut bound = values.pop().expect("the inner pattern is bound");
+                        let context = resolve(ctx, context, &arena);
+                        if expression_reads_only_bound_admitted(
+                            expression,
+                            &|read| {
+                                bound.contains(read)
+                                    || context.contains(read)
+                                    || written.writes(read, given_written, &arena)
+                            },
+                            workspace,
+                        )? {
+                            bound.push_admitted(variable.clone(), workspace)?;
+                        }
+                        bound
+                    }
+                    GraphPattern::Graph { name, .. } => {
+                        let mut bound = values.pop().expect("the inner pattern is bound");
+                        if let NamedNodePattern::Variable(variable) = name {
+                            bound.push_admitted(variable.clone(), workspace)?;
+                        }
+                        bound
+                    }
+                    // Only what the projection keeps escapes, and only if the inner
+                    // pattern bound it certainly.
+                    GraphPattern::Project { variables, .. } => {
+                        let inner_bound = values.pop().expect("the inner pattern is bound");
+                        VarSchema::from_vars_admitted(
+                            variables
+                                .iter()
+                                .filter(|variable| inner_bound.contains(variable))
+                                .cloned(),
+                            workspace,
+                        )?
+                    }
+                    // A grouping key is bound in a group's row when every row of the
+                    // group binds it; an aggregate's output by
+                    // [`aggregate_certainly_binds_admitted`].
+                    GraphPattern::Group {
+                        variables,
+                        aggregates,
+                        ..
+                    } => {
+                        let inner_bound = values.pop().expect("the inner pattern is bound");
+                        let context = resolve(ctx, context, &arena);
+                        let row_binds =
+                            |read: &Variable| inner_bound.contains(read) || context.contains(read);
+                        let mut bound = SchemaBuilder::new(workspace);
+                        for variable in variables.iter().filter(|key| row_binds(key)) {
+                            bound.push(variable.clone())?;
+                        }
+                        let grouped = !variables.is_empty();
+                        for (variable, aggregate) in aggregates {
+                            if aggregate_certainly_binds_admitted(
+                                aggregate,
+                                grouped,
+                                &|read| {
+                                    row_binds(read) || written.writes(read, given_written, &arena)
+                                },
+                                workspace,
+                            )? {
+                                bound.push(variable.clone())?;
+                            }
+                        }
+                        bound.finish()?
+                    }
+                    GraphPattern::Bgp { .. }
+                    | GraphPattern::Path { .. }
+                    | GraphPattern::PropertyFunction(_)
+                    | GraphPattern::Values { .. }
+                    | GraphPattern::Service { .. }
+                    | GraphPattern::Lateral { .. } => {
+                        unreachable!(
+                            "a leaf is bound as it is entered, and a LATERAL through its own \
+                             two steps"
+                        )
+                    }
+                };
+                arena.truncate(mark);
+                values.push(bound)?;
+            }
+        }
+    }
+    Ok(values.pop().expect("the root's set is computed last"))
+}
+
+/// Whether an aggregate's output is bound in every row its `GROUP BY` produces, save
+/// only a row whose aggregate failed on the values it was handed — given `row_binds`,
+/// what every row of every group binds.
+///
+/// # One rule for every computed value
+///
+/// A value computed from inputs counts as certainly bound when every input it is
+/// computed from is certainly PRESENT: then it is unbound only where its evaluation
+/// failed on present values, which is a fact about the data met one row at a time,
+/// not a shape of the query. That is the rule a `BIND` target follows (see
+/// [`collect_certainly_bound`]), and an aggregate's output follows it exactly: a
+/// group row whose aggregate failed reaches a call with the input unbound, where the
+/// evaluator re-derives the invocation's access pattern from the row in hand and
+/// refuses one the relation does not declare, with a typed error (`admit_mode` in
+/// `crate::property_fn_eval`). That check reads the call's arguments off whatever row
+/// arrives, so it covers a row a `GROUP BY` produced as it covers any other: a
+/// relation serving only the bound mode is never invoked free, and one that also
+/// serves the free mode is invoked free on that row, as the row's own access pattern
+/// is.
+///
+/// What an aggregate is computed from is its group's argument values. Absence of
+/// those — as opposed to a failure on them — has two causes the query text fixes:
+/// an argument reading a variable the grouped pattern may leave unbound (the right
+/// side of an `OPTIONAL`, an `UNDEF` column), and the one implicit group an aggregate
+/// WITHOUT `GROUP BY` forms even over an empty input. Whether either matters depends
+/// on what the aggregate answers when handed no value at all:
+///
+/// * `COUNT`, `SUM`, `AVG`, `GROUP_CONCAT` and `FOLD` answer a value over no values —
+///   `0`, `0`, `0`, `""` and the empty composite — and skip (or, for `FOLD`, keep as
+///   a `null` element) a row whose argument is unbound. Absence therefore never
+///   leaves them unbound, and they count with or without `GROUP BY`, whatever their
+///   argument reads. `SUM` and `AVG` are unbound only when a present value is not a
+///   number or the arithmetic fails, and `GROUP_CONCAT` only when a present value is
+///   a blank node or a quoted triple, which has no lexical form: failures on present
+///   values, met per row. `COUNT` and `FOLD` never answer unbound.
+/// * `SAMPLE`, `MIN`, `MAX` and a custom aggregate may answer unbound over no values —
+///   the first three always do, and a host's aggregate may. They count only under an
+///   explicit `GROUP BY`, whose every group holds at least one row, and only over
+///   arguments that read nothing but what every row binds (or constants —
+///   [`expression_reads_only_bound_admitted`], the test a `BIND` expression passes). Every row
+///   of a group then hands the aggregate a value unless its argument errored on
+///   present values — `STR(?x)` on a blank node, `IRI(STR(?x))` on a string that is
+///   not an IRI — and the aggregate is unbound only if every row's argument errored,
+///   or a custom aggregate declined to answer over the values it was given. So
+///   `MAX(STR(?q))` and `SAMPLE(IRI(STR(?q)))` count exactly as
+///   `BIND(IRI(STR(?q)) AS ?y)` followed by `SAMPLE(?y)` does, and `SAMPLE(?w)` over
+///   an `OPTIONAL`'s `?w` does not, as `BIND(?w AS ?y)` does not. WITHOUT a
+///   `GROUP BY` the implicit group may hold no row, where these answer unbound for
+///   want of any input: the same structural absence, so none of them counts there.
+fn aggregate_certainly_binds_admitted(
+    aggregate: &AggregateExpression,
+    grouped: bool,
+    row_binds: &dyn Fn(&Variable) -> bool,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    match aggregate.function() {
+        AggregateFunction::Count
+        | AggregateFunction::Sum
+        | AggregateFunction::Avg
+        | AggregateFunction::GroupConcat
+        | AggregateFunction::Fold => Ok(true),
+        AggregateFunction::Sample
+        | AggregateFunction::Min
+        | AggregateFunction::Max
+        | AggregateFunction::Custom(_) => {
+            if !grouped {
+                return Ok(false);
+            }
+            for arg in aggregate.args() {
+                if !expression_reads_only_bound_admitted(arg, row_binds, workspace)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+    }
+}
+
+/// The part of `context` a sub-`SELECT` projecting `variables` lets into its inner
+/// pattern: an enclosing binding is substituted into it only for a variable it
+/// projects.
+fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHashSet<Variable> {
+    let workspace = WorkspaceCapability::default();
+    let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
+        .expect("resident projected certainty context");
+    narrowed_to_admitted(&context, variables, &workspace)
+        .expect("resident projected certainty allocation")
+        .vars()
+        .iter()
+        .cloned()
+        .collect()
+}
+
+fn narrowed_to_admitted(
+    context: &VarSchema,
+    variables: &[Variable],
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    VarSchema::from_vars_admitted(
+        context
+            .vars()
+            .iter()
+            .filter(|variable| variables.contains(variable))
+            .cloned(),
+        workspace,
+    )
+}
+
+fn intersection_admitted(
+    left: &VarSchema,
+    right: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    VarSchema::from_vars_admitted(
+        left.vars()
+            .iter()
+            .filter(|variable| right.contains(variable))
+            .cloned(),
+        workspace,
+    )
+}
+
+/// Whether `expr` can be left without a value only by the data it reads — never
+/// because the query text leaves a variable it reads unbound.
+///
+/// `is_bound` answers for each variable `expr` reads whether it holds a value in every
+/// row `expr` is evaluated over: what those rows certainly bind, what the enclosing
+/// context holds, or what the run writes in. A variable read outside all three — the
+/// right side of an `OPTIONAL`, an `UNDEF` column, an aggregate's output over a
+/// possibly empty group — makes the expression error on exactly the rows the text
+/// leaves it unbound in, which is a structural absence, not a per-row one.
+///
+/// Exact where an operator's evaluation reads every operand (arithmetic, comparisons,
+/// function calls), and narrow where it may not: `||`, `&&`, `IF` and `IN` require
+/// every operand to qualify even though SPARQL's error-masking can sometimes spare one,
+/// while `COALESCE` qualifies when any argument does, because it answers with the first
+/// argument that evaluates. `BOUND` and `EXISTS` never error on an unbound variable, so
+/// they always qualify.
+///
+/// A post-order walk over a work list, so an expression of any depth needs no more
+/// machine stack: every operand answers before the operator over it does.
+#[cfg(test)]
+fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -> bool) -> bool {
+    expression_reads_only_bound_admitted(expr, is_bound, &WorkspaceCapability::default())
+        .expect("resident expression certainty allocation")
+}
+
+fn expression_reads_only_bound_admitted(
+    expr: &Expression,
+    is_bound: &dyn Fn(&Variable) -> bool,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    /// One step of the walk.
+    enum Step<'e> {
+        /// Enter an expression: a leaf answers at once, an operator pushes its operands.
+        Enter(&'e Expression),
+        /// Combine an operator's answer from its operands', `count` of them.
+        Exit(&'e Expression, usize),
+    }
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(Step::Enter(expr))?;
+    let mut values = AdmittedVec::<bool>::new(workspace);
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Enter(expr) => match expr {
+                Expression::NamedNode(_)
+                | Expression::Literal(_)
+                | Expression::Bound(_)
+                | Expression::Exists(_) => values.push(true)?,
+                Expression::Variable(variable) => values.push(is_bound(variable))?,
+                Expression::Or(operands) | Expression::And(operands) => {
+                    steps.push(Step::Exit(expr, operands.len()))?;
+                    for operand in operands.iter().rev() {
+                        steps.push(Step::Enter(operand))?;
+                    }
+                }
+                Expression::Arithmetic(first, rest) => {
+                    steps.push(Step::Exit(
+                        expr,
+                        rest.len()
+                            .checked_add(1)
+                            .ok_or(EvalError::WorkspaceBoundOverflow)?,
+                    ))?;
+                    for (_, operand) in rest.iter().rev() {
+                        steps.push(Step::Enter(operand))?;
+                    }
+                    steps.push(Step::Enter(first))?;
+                }
+                Expression::Equal(a, b)
+                | Expression::SameTerm(a, b)
+                | Expression::Greater(a, b)
+                | Expression::GreaterOrEqual(a, b)
+                | Expression::Less(a, b)
+                | Expression::LessOrEqual(a, b) => {
+                    steps.push(Step::Exit(expr, 2))?;
+                    steps.push(Step::Enter(b))?;
+                    steps.push(Step::Enter(a))?;
+                }
+                Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+                    steps.push(Step::Exit(expr, 1))?;
+                    steps.push(Step::Enter(a))?;
+                }
+                Expression::If(condition, then, otherwise) => {
+                    steps.push(Step::Exit(expr, 3))?;
+                    steps.push(Step::Enter(otherwise))?;
+                    steps.push(Step::Enter(then))?;
+                    steps.push(Step::Enter(condition))?;
+                }
+                Expression::In(needle, haystack) => {
+                    steps.push(Step::Exit(
+                        expr,
+                        haystack
+                            .len()
+                            .checked_add(1)
+                            .ok_or(EvalError::WorkspaceBoundOverflow)?,
+                    ))?;
+                    for item in haystack.iter().rev() {
+                        steps.push(Step::Enter(item))?;
+                    }
+                    steps.push(Step::Enter(needle))?;
+                }
+                Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
+                    steps.push(Step::Exit(expr, items.len()))?;
+                    for item in items.iter().rev() {
+                        steps.push(Step::Enter(item))?;
+                    }
+                }
+            },
+            Step::Exit(expr, count) => {
+                let at = values
+                    .len()
+                    .checked_sub(count)
+                    .expect("every operand answered");
+                let answer = {
+                    let mut operands = values.drain_from(at);
+                    // `COALESCE` qualifies when any argument does; every other operator
+                    // when every operand does.
+                    if matches!(expr, Expression::Coalesce(_)) {
+                        operands.any(|reads| reads)
+                    } else {
+                        operands.all(|reads| reads)
+                    }
+                };
+                values.push(answer)?;
+            }
+        }
+    }
+    Ok(values
+        .pop()
+        .expect("the root's answer is the last one computed"))
+}
+
+/// Whether `function` is a type test: total over terms, answering a boolean.
+const fn is_type_test(function: &Function) -> bool {
+    matches!(
+        function,
+        Function::IsIri
+            | Function::IsUri
+            | Function::IsBlank
+            | Function::IsLiteral
+            | Function::IsNumeric
+            | Function::IsTriple
+    )
+}
+
+/// Whether a call of `function` has no value when its argument at `position` is
+/// unbound, whatever its other arguments hold — the argument positions the function is
+/// STRICT in.
+///
+/// Read off the evaluator (`crate::expr`'s `apply_function` and the dispatch tables it
+/// hands on to), and held to it by a drift test there that evaluates every built-in
+/// with each argument unbound in turn: a position classified strict must yield no value
+/// on every sample, and one classified otherwise must yield a value on at least one —
+/// so the classification is neither wider nor narrower than the evaluator.
+///
+/// What is NOT strict, and why (`REGEX`'s and `REPLACE`'s flags and `SUBSTR`'s
+/// length are optional, but a supplied one that is unbound is an error, so all three
+/// are strict in every position):
+///
+/// * a type test (`isIRI` and its kin) answers `false` for an unbound argument;
+/// * `cdt:List` and `cdt:Map` keep an unbound argument as a `null` element, and
+///   `cdt:put` an unbound value as a `null` entry;
+/// * a custom function is resolved at run time against what the host registered — a
+///   SPARQL-bodied function may accept an unbound argument, and a registration may
+///   even shadow an XSD cast's IRI — so nothing is known about it here, and it is taken
+///   to need nothing.
+///
+/// A function taking no arguments (`RAND`, `NOW`, `UUID`, `STRUUID`, `BNODE()`) has no
+/// position to be strict in; it is listed with the strict ones only because the answer
+/// for a position it does not have is never asked.
+pub(crate) const fn strict_in_argument(function: &Function, position: usize) -> bool {
+    match function {
+        Function::IsIri
+        | Function::IsUri
+        | Function::IsBlank
+        | Function::IsLiteral
+        | Function::IsNumeric
+        | Function::IsTriple
+        | Function::Custom(_) => false,
+        Function::Cdt(call) => match call.fn_kind {
+            CdtFn::ListConstructor | CdtFn::MapConstructor => false,
+            CdtFn::Put => position < 2,
+            CdtFn::Concat
+            | CdtFn::Contains
+            | CdtFn::Get
+            | CdtFn::Head
+            | CdtFn::Tail
+            | CdtFn::Reverse
+            | CdtFn::Size
+            | CdtFn::Subseq
+            | CdtFn::ContainsKey
+            | CdtFn::Keys
+            | CdtFn::Merge
+            | CdtFn::Remove => true,
+        },
+        Function::Purrdf(call) => match call.fn_kind {
+            PurrdfFn::HeldIn
+            | PurrdfFn::ListLength
+            | PurrdfFn::ListGet
+            | PurrdfFn::ListIndexOf
+            | PurrdfFn::ListContains
+            | PurrdfFn::ListSlice
+            | PurrdfFn::ListConcat => true,
+        },
+        Function::Str
+        | Function::Regex
+        | Function::Replace
+        | Function::SubStr
+        | Function::Lang
+        | Function::LangMatches
+        | Function::Datatype
+        | Function::Iri
+        | Function::Uri
+        | Function::BNode
+        | Function::Rand
+        | Function::Abs
+        | Function::Ceil
+        | Function::Floor
+        | Function::Round
+        | Function::Concat
+        | Function::StrLen
+        | Function::UCase
+        | Function::LCase
+        | Function::EncodeForUri
+        | Function::Contains
+        | Function::StrStarts
+        | Function::StrEnds
+        | Function::StrBefore
+        | Function::StrAfter
+        | Function::Year
+        | Function::Month
+        | Function::Day
+        | Function::Hours
+        | Function::Minutes
+        | Function::Seconds
+        | Function::Timezone
+        | Function::Tz
+        | Function::Adjust
+        | Function::Now
+        | Function::Uuid
+        | Function::StrUuid
+        | Function::Md5
+        | Function::Sha1
+        | Function::Sha256
+        | Function::Sha384
+        | Function::Sha512
+        | Function::Sha3_224
+        | Function::Sha3_256
+        | Function::Sha3_384
+        | Function::Sha3_512
+        | Function::StrLang
+        | Function::StrDt
+        | Function::Triple
+        | Function::Subject
+        | Function::Predicate
+        | Function::Object
+        | Function::LangDir
+        | Function::StrLangDir
+        | Function::HasLang
+        | Function::HasLangDir => true,
+    }
+}
+
+/// What an expression needs bound to reach an outcome — to be true, to be false, or to
+/// have a value — or `None` when it can never reach it.
+///
+/// `None` is what a constant that is never true (`false`, `0`, an IRI, which has no
+/// effective boolean value) answers for truth, and anything that reaches the outcome
+/// only through it inherits it: it absorbs a conjunction of requirements
+/// ([`all_of_admitted`]) and is the identity of an alternative between them ([`one_of_admitted`]). So
+/// `IF(BOUND(?v), ?v = ?v, false)` is true only through its first branch, and needs
+/// `?v`.
+#[cfg(test)]
+type Requires = Option<DetHashSet<Variable>>;
+
+/// Needs nothing.
+#[cfg(test)]
+fn needs_nothing() -> Requires {
+    Some(DetHashSet::default())
+}
+
+/// Needs `variable`.
+#[cfg(test)]
+fn needs(variable: &Variable) -> Requires {
+    Some(std::iter::once(variable.clone()).collect())
+}
+
+/// Both requirements hold: the union, and never if either is never.
+#[cfg(test)]
+fn all_of(left: Requires, right: Requires) -> Requires {
+    let (mut left, right) = (left?, right?);
+    left.extend(right);
+    Some(left)
+}
+
+/// One of the requirements holds, and which is not known: the intersection, over the
+/// ones that can hold at all.
+#[cfg(test)]
+fn one_of(left: Requires, right: Requires) -> Requires {
+    match (left, right) {
+        (None, other) | (other, None) => other,
+        (Some(mut left), Some(right)) => {
+            left.retain(|variable| right.contains(variable));
+            Some(left)
+        }
+    }
+}
+
+/// A reachable requirement owns its original schema; None means impossible.
+type AdmittedRequires = Option<VarSchema>;
+
+fn needs_admitted(
+    variable: &Variable,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    Ok(Some(VarSchema::from_vars_admitted(
+        std::iter::once(variable.clone()),
+        workspace,
+    )?))
+}
+
+fn all_of_admitted(
+    left: AdmittedRequires,
+    right: AdmittedRequires,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    let (Some(left), Some(right)) = (left, right) else {
+        return Ok(None);
+    };
+    Ok(Some(left.union_admitted(&right, workspace)?))
+}
+
+fn one_of_admitted(
+    left: AdmittedRequires,
+    right: AdmittedRequires,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    match (left, right) {
+        (None, other) | (other, None) => Ok(other),
+        (Some(left), Some(right)) => Ok(Some(intersection_admitted(&left, &right, workspace)?)),
+    }
+}
+
+/// The outcome an expression is asked what it must have bound for — see [`AdmittedRequires`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outcome {
+    /// TRUE — which a `FILTER` over the expression therefore binds in every row it
+    /// passes.
+    ///
+    /// # The rule, and why each case is sound
+    ///
+    /// A variable read where the expression has no value unless it is bound — an operand
+    /// of `=`, `sameTerm`, a comparison or arithmetic, an argument a built-in function is
+    /// strict in ([`strict_in_argument`]), or the expression itself — errors when
+    /// unbound, and an error is not true. So:
+    ///
+    /// * `?v` alone, `BOUND(?v)`: `?v`;
+    /// * a constant: nothing if its effective boolean value is true, never otherwise;
+    /// * `a && b`: both are true, so the union of what each requires;
+    /// * `a || b`: at least one is true, and which is not known, so the INTERSECTION of
+    ///   what each requires — `BOUND(?a) || BOUND(?b)` binds neither;
+    /// * `!a`: `a` is false — what `a` needs to be false ([`Self::Falsity`]), so
+    ///   `!BOUND(?v)` binds nothing and `!!BOUND(?v)` binds `?v`;
+    /// * a type test `isIRI(a)` and its kin: `a` has a value of that type, so what `a`
+    ///   needs for a value;
+    /// * `IF(c, t, e)`: `c` has a value, and either `c` is true and `t` is, or `c` is
+    ///   false and `e` is — so `IF(BOUND(?v), true, true)` binds nothing, and
+    ///   `IF(BOUND(?v), ?v = ?v, false)` binds `?v`;
+    /// * `COALESCE(…)`: the first argument with a value is true, so the intersection over
+    ///   the arguments;
+    /// * `a IN (…)`: `a` has a value;
+    /// * every other operator, comparison and function call: its value needs its
+    ///   operands' values, so what the whole expression needs for a value
+    ///   ([`Self::Value`]) — `REGEX(STR(?v), "x")` and `STRLEN(STR(?v)) > 0` bind `?v`.
+    ///
+    /// `EXISTS` requires nothing. Every case needs a value somewhere, so no answer is
+    /// wider than the evaluator's; a custom function, whose strictness the host decides,
+    /// is taken to need nothing of its arguments.
+    Truth,
+    /// FALSE — the dual of [`Self::Truth`], which reads it through `!`.
+    ///
+    /// `BOUND(?v)` is false exactly when `?v` is unbound, and a type test is false on an
+    /// unbound argument too, so neither requires anything; `EXISTS` requires nothing. A
+    /// constant requires nothing if its effective boolean value is false, and is never
+    /// false otherwise. `!a` is false when `a` is true ([`Self::Truth`]); `a && b` when
+    /// at least one is false, so what both require; `a || b` when both are, so what
+    /// either requires. `IF`, `COALESCE` and `IN` follow [`Self::Truth`]'s reasoning,
+    /// and every other expression needs what it needs for any value ([`Self::Value`]).
+    Falsity,
+    /// Any value at all.
+    ///
+    /// `BOUND`, `EXISTS`, a constant and a type test answer for any row. `&&` and `||`
+    /// can answer with one operand in error (`false && error` is false, `true || error`
+    /// is true), so they need only what BOTH operands need; `IF` needs its condition and
+    /// what the branch it takes needs; `COALESCE` what all its arguments need in common;
+    /// `IN` its needle. A built-in function call needs what its arguments in the
+    /// positions it is strict in need ([`strict_in_argument`]), so `STRLEN(STR(?v))`
+    /// needs `?v`. Every other operator — a comparison, `sameTerm`, arithmetic, a unary
+    /// sign — needs every operand.
+    Value,
+}
+
+/// How an operator's requirement is combined from its operands'.
+#[derive(Clone, Copy)]
+enum Combine {
+    /// Every operand's requirement holds: [`all_of_admitted`], folded from nothing needed.
+    All,
+    /// One operand's requirement holds, and which is not known: [`one_of_admitted`], folded from
+    /// never.
+    One,
+    /// [`Self::One`] over the operands there are, or nothing needed when there are none —
+    /// an empty chain is its identity constant, which has a value for any row.
+    OneOrNothing,
+    /// `IF`: its condition has a value, and either the condition is true and the first
+    /// branch reaches the outcome, or it is false and the second does — over the five
+    /// operand requirements pushed in that order.
+    Conditional,
+}
+
+/// One step of [`requires_admitted`]'s walk.
+enum RequirementStep<'e> {
+    /// Ask `expr` what it needs to reach the outcome.
+    Enter(&'e Expression, Outcome),
+    /// Combine the top `count` requirements as `Combine` says.
+    Exit(Combine, usize),
+}
+
+/// The variables `expr` must have bound to reach `outcome`, or `None` when it never does
+/// — see [`AdmittedRequires`], and the rules on each [`Outcome`].
+///
+/// A post-order walk over a work list, so an expression of any depth needs no more
+/// machine stack: an operator asks each operand what it needs in the mode that operand
+/// is read in, and combines the answers as its rule says.
+#[cfg(test)]
+fn requires(expr: &Expression, outcome: Outcome) -> Requires {
+    requires_admitted(expr, outcome, &WorkspaceCapability::default())
+        .expect("resident expression requirement allocation")
+        .map(|bound| bound.vars().iter().cloned().collect())
+}
+
+fn requires_admitted(
+    expr: &Expression,
+    outcome: Outcome,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(RequirementStep::Enter(expr, outcome))?;
+    let mut values = AdmittedVec::<AdmittedRequires>::new(workspace);
+    while let Some(step) = steps.pop() {
+        match step {
+            RequirementStep::Enter(expr, outcome) => {
+                enter_requirement(expr, outcome, &mut steps, &mut values, workspace)?;
+            }
+            RequirementStep::Exit(combine, count) => {
+                let at = values
+                    .len()
+                    .checked_sub(count)
+                    .expect("each requested outcome produced one requirement");
+                let combined = {
+                    let mut operands = values.drain_from(at);
+                    match combine {
+                        Combine::All => {
+                            let mut required = SchemaBuilder::new(workspace);
+                            let mut possible = true;
+                            for operand in operands {
+                                match operand {
+                                    Some(bound) if possible => {
+                                        for variable in bound.vars() {
+                                            required.push(variable.clone())?;
+                                        }
+                                    }
+                                    None => possible = false,
+                                    Some(_) => {}
+                                }
+                            }
+                            if possible {
+                                Some(required.finish()?)
+                            } else {
+                                None
+                            }
+                        }
+                        Combine::One => {
+                            let mut combined = None;
+                            for operand in operands {
+                                combined = one_of_admitted(combined, operand, workspace)?;
+                            }
+                            combined
+                        }
+                        Combine::OneOrNothing => {
+                            let mut combined = operands
+                                .next()
+                                .unwrap_or_else(|| Some(VarSchema::default()));
+                            for operand in operands {
+                                combined = one_of_admitted(combined, operand, workspace)?;
+                            }
+                            combined
+                        }
+                        Combine::Conditional => {
+                            let mut next = || {
+                                operands
+                                    .next()
+                                    .expect("an IF asks five operand requirements")
+                            };
+                            let condition_value = next();
+                            let condition_true = next();
+                            let then = next();
+                            let condition_false = next();
+                            let otherwise = next();
+                            let then = all_of_admitted(condition_true, then, workspace)?;
+                            let otherwise = all_of_admitted(condition_false, otherwise, workspace)?;
+                            let branch = one_of_admitted(then, otherwise, workspace)?;
+                            all_of_admitted(condition_value, branch, workspace)?
+                        }
+                    }
+                };
+                values.push(combined)?;
+            }
+        }
+    }
+    Ok(values
+        .pop()
+        .expect("the root's requirement is the last one combined"))
+}
+
+/// Ask `expr` what it needs to reach `outcome`: a leaf's requirement is pushed onto
+/// `values` at once; an operator's operands are pushed onto `steps`, each in the mode it
+/// is read in, behind the step that combines their requirements.
+fn enter_requirement<'e>(
+    expr: &'e Expression,
+    outcome: Outcome,
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
+    values: &mut AdmittedVec<AdmittedRequires>,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut outcome = outcome;
+    loop {
+        match (outcome, expr) {
+            (Outcome::Truth, Expression::Variable(variable) | Expression::Bound(variable)) => {
+                values.push(needs_admitted(variable, workspace)?)?;
+            }
+            (Outcome::Truth, Expression::Exists(_)) => values.push(Some(VarSchema::default()))?,
+            (Outcome::Truth, Expression::NamedNode(_)) => values.push(None)?,
+            (Outcome::Truth, Expression::Literal(literal)) => values.push(
+                (crate::expr::constant_ebv_admitted(literal, workspace)? == Some(true))
+                    .then(VarSchema::default),
+            )?,
+            // A chain is its binary operator folded from the operator's identity, whose
+            // requirement is the fold's: `true` (`&&`) needs nothing, `false` (`||`) is
+            // never true.
+            (Outcome::Truth, Expression::And(operands)) => push_operands(
+                steps,
+                Combine::All,
+                operands.iter().map(|operand| (operand, Outcome::Truth)),
+            )?,
+            (Outcome::Truth, Expression::Or(operands)) => push_operands(
+                steps,
+                Combine::One,
+                operands.iter().map(|operand| (operand, Outcome::Truth)),
+            )?,
+            (Outcome::Truth, Expression::Not(operand)) => {
+                steps.push(RequirementStep::Enter(operand, Outcome::Falsity))?;
+            }
+            (Outcome::Truth, Expression::FunctionCall(function, args))
+                if is_type_test(function) =>
+            {
+                push_operands(
+                    steps,
+                    Combine::All,
+                    args.iter().map(|arg| (arg, Outcome::Value)),
+                )?;
+            }
+            (Outcome::Truth, Expression::Coalesce(items)) => push_operands(
+                steps,
+                Combine::One,
+                items.iter().map(|item| (item, Outcome::Truth)),
+            )?,
+            (Outcome::Falsity, Expression::Variable(variable)) => {
+                values.push(needs_admitted(variable, workspace)?)?
+            }
+            (Outcome::Falsity, Expression::Bound(_) | Expression::Exists(_)) => {
+                values.push(Some(VarSchema::default()))?;
+            }
+            (Outcome::Falsity, Expression::NamedNode(_)) => values.push(None)?,
+            (Outcome::Falsity, Expression::Literal(literal)) => values.push(
+                (crate::expr::constant_ebv_admitted(literal, workspace)? == Some(false))
+                    .then(VarSchema::default),
+            )?,
+            (Outcome::Falsity, Expression::FunctionCall(function, _)) if is_type_test(function) => {
+                values.push(Some(VarSchema::default()))?;
+            }
+            (Outcome::Falsity, Expression::Not(operand)) => {
+                steps.push(RequirementStep::Enter(operand, Outcome::Truth))?;
+            }
+            (Outcome::Falsity, Expression::And(operands)) => push_operands(
+                steps,
+                Combine::One,
+                operands.iter().map(|operand| (operand, Outcome::Falsity)),
+            )?,
+            (Outcome::Falsity, Expression::Or(operands)) => push_operands(
+                steps,
+                Combine::All,
+                operands.iter().map(|operand| (operand, Outcome::Falsity)),
+            )?,
+            (Outcome::Falsity, Expression::Coalesce(items)) => push_operands(
+                steps,
+                Combine::One,
+                items.iter().map(|item| (item, Outcome::Falsity)),
+            )?,
+            (Outcome::Truth | Outcome::Falsity, Expression::If(condition, then, otherwise)) => {
+                push_conditional(steps, condition, then, otherwise, outcome)?;
+            }
+            (Outcome::Truth | Outcome::Falsity, Expression::In(needle, _)) => {
+                steps.push(RequirementStep::Enter(needle, Outcome::Value))?;
+            }
+            // Every other operator, comparison and function call reaches the outcome
+            // only through a value, so it needs what it needs for one.
+            (
+                Outcome::Truth | Outcome::Falsity,
+                Expression::Arithmetic(..)
+                | Expression::Equal(..)
+                | Expression::SameTerm(..)
+                | Expression::Greater(..)
+                | Expression::GreaterOrEqual(..)
+                | Expression::Less(..)
+                | Expression::LessOrEqual(..)
+                | Expression::UnaryPlus(_)
+                | Expression::UnaryMinus(_)
+                | Expression::FunctionCall(..),
+            ) => {
+                outcome = Outcome::Value;
+                continue;
+            }
+            (Outcome::Value, Expression::Variable(variable)) => {
+                values.push(needs_admitted(variable, workspace)?)?
+            }
+            (
+                Outcome::Value,
+                Expression::NamedNode(_)
+                | Expression::Literal(_)
+                | Expression::Bound(_)
+                | Expression::Exists(_),
+            ) => values.push(Some(VarSchema::default()))?,
+            (Outcome::Value, Expression::FunctionCall(function, args)) => push_operands(
+                steps,
+                Combine::All,
+                args.iter()
+                    .enumerate()
+                    .filter(|(position, _)| strict_in_argument(function, *position))
+                    .map(|(_, arg)| (arg, Outcome::Value)),
+            )?,
+            // The pairwise `one_of`, folded; an empty chain is its identity constant,
+            // which has a value for any row.
+            (Outcome::Value, Expression::And(operands) | Expression::Or(operands)) => {
+                push_operands(
+                    steps,
+                    Combine::OneOrNothing,
+                    operands.iter().map(|operand| (operand, Outcome::Value)),
+                )?;
+            }
+            (Outcome::Value, Expression::Arithmetic(first, rest)) => push_operands(
+                steps,
+                Combine::All,
+                std::iter::once(&**first)
+                    .chain(rest.iter().map(|(_, operand)| operand))
+                    .map(|operand| (operand, Outcome::Value)),
+            )?,
+            (
+                Outcome::Value,
+                Expression::Equal(a, b)
+                | Expression::SameTerm(a, b)
+                | Expression::Greater(a, b)
+                | Expression::GreaterOrEqual(a, b)
+                | Expression::Less(a, b)
+                | Expression::LessOrEqual(a, b),
+            ) => push_operands(
+                steps,
+                Combine::All,
+                [(&**a, Outcome::Value), (&**b, Outcome::Value)].into_iter(),
+            )?,
+            (
+                Outcome::Value,
+                Expression::UnaryPlus(operand)
+                | Expression::UnaryMinus(operand)
+                | Expression::Not(operand),
+            ) => steps.push(RequirementStep::Enter(operand, Outcome::Value))?,
+            (Outcome::Value, Expression::If(condition, then, otherwise)) => {
+                push_conditional(steps, condition, then, otherwise, Outcome::Value)?;
+            }
+            (Outcome::Value, Expression::Coalesce(items)) => push_operands(
+                steps,
+                Combine::One,
+                items.iter().map(|item| (item, Outcome::Value)),
+            )?,
+            (Outcome::Value, Expression::In(needle, _)) => {
+                steps.push(RequirementStep::Enter(needle, Outcome::Value))?;
+            }
+        }
+        return Ok(());
+    }
+}
+
+/// Push `operands` to be asked, in reading order, behind the step combining their
+/// requirements as `combine` says.
+fn push_operands<'e>(
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
+    combine: Combine,
+    operands: impl Iterator<Item = (&'e Expression, Outcome)>,
+) -> Result<(), EvalError> {
+    let exit = steps.len();
+    steps.push(RequirementStep::Exit(combine, 0))?;
+    for (operand, outcome) in operands {
+        steps.push(RequirementStep::Enter(operand, outcome))?;
+    }
+    let count = steps.len() - exit - 1;
+    steps.as_mut_slice()[exit] = RequirementStep::Exit(combine, count);
+    // Pushed in reading order, so reversed to pop in it.
+    steps.as_mut_slice()[exit + 1..].reverse();
+    Ok(())
+}
+
+/// Push an `IF`'s five operand requirements ([`Combine::Conditional`]): the condition's
+/// value, its truth, the first branch's `outcome`, the condition's falsity, and the
+/// second branch's `outcome`.
+fn push_conditional<'e>(
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
+    condition: &'e Expression,
+    then: &'e Expression,
+    otherwise: &'e Expression,
+    outcome: Outcome,
+) -> Result<(), EvalError> {
+    push_operands(
+        steps,
+        Combine::Conditional,
+        [
+            (condition, Outcome::Value),
+            (condition, Outcome::Truth),
+            (then, outcome),
+            (condition, Outcome::Falsity),
+            (otherwise, outcome),
+        ]
+        .into_iter(),
+    )
+}
+
+/// Add a triple pattern's variables, its nested quoted triples walked over a work list.
+fn collect_triple_vars_admitted(
+    triple: &TriplePattern,
+    out: &mut SchemaBuilder,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push(triple)?;
+    while let Some(triple) = pending.pop() {
+        for term in [&triple.subject, &triple.object] {
+            match term {
+                TermPattern::Variable(variable) => {
+                    out.push(variable.clone())?;
+                }
+                TermPattern::Triple(nested) => pending.push(nested)?,
+                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+                }
+            }
+        }
+        if let NamedNodePattern::Variable(variable) = &triple.predicate {
+            out.push(variable.clone())?;
+        }
+    }
+    Ok(())
+}
+
+/// Add a term position's variables through the same admitted nested-triple walk.
+fn collect_term_vars_admitted(
+    term: &TermPattern,
+    out: &mut SchemaBuilder,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    match term {
+        TermPattern::Variable(variable) => {
+            out.push(variable.clone())?;
+        }
+        TermPattern::Triple(triple) => collect_triple_vars_admitted(triple, out, workspace)?,
+        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
+    let workspace = WorkspaceCapability::default();
+    let mut bound = SchemaBuilder::new(&workspace);
+    collect_term_vars_admitted(term, &mut bound, &workspace).expect("resident term variable walk");
+    out.extend(
+        bound
+            .finish()
+            .expect("resident term variable schema")
+            .vars()
+            .iter()
+            .cloned(),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The registry fingerprint
+// ---------------------------------------------------------------------------
+
+/// A deterministic fingerprint of everything about `relations` that can change either
+/// the plan this module produces OR the answer/parallel-safety of the execution that
+/// runs it: the registry's own [`RegistryId`](crate::registry_id::RegistryId), followed
+/// by every registered IRI's arity, its declared volatility, and its declared modes with
+/// their row bounds, IRI-sorted.
+///
+/// # The instance id comes first, and is load-bearing
+///
+/// Declared metadata alone cannot tell two registries apart when they happen to agree on
+/// every declaration for a shared IRI while resolving it to two DIFFERENT
+/// [`PropertyFunction`](crate::property_fn::PropertyFunction) implementations — two
+/// relations can declare the identical arity, volatility, and modes while returning
+/// entirely different rows. The [`RegistryId`](crate::registry_id::RegistryId) each
+/// registry mints at construction ([`PropertyFunctionRegistry::instance_id`]) closes
+/// that hole: two registries can never share a fingerprint unless they are the SAME
+/// instance (or a [`Clone`] of it, which shares the identical
+/// `Arc<dyn PropertyFunction>` implementations — see that type's docs), regardless of
+/// how identical their declarations read.
+///
+/// This belongs in the plan cache's key. The rewrite above is a function of the query
+/// text AND the registry's declarations, so two differently-configured — or merely
+/// differently CONSTRUCTED — registries can order the same text differently, and a cache
+/// keyed on the text alone would hand the second host the first host's plan. Volatility
+/// belongs here for a reason the ORDERING pass never sees: it is not read while
+/// planning, but it IS read at evaluation time to decide whether a call may run on a
+/// fork-join worker (see [`Volatility`](crate::user_fn::Volatility)), so two registries
+/// that agree on every arity and mode but disagree about which relation is stable must
+/// still be treated as two distinct configurations — sharing a cache entry between them
+/// would be silent only until one relation actually depended on sequential evaluation.
+///
+/// # The content half is [`content_fingerprint`], rendered
+///
+/// Everything after the instance id is [`content_fingerprint`]'s digest in hex, not a
+/// second walk over the same declarations. One fold means the two tiers can never come
+/// to disagree about which declared fields matter: a field added to the durable digest
+/// is, in the same edit, a field this fingerprint separates plans on. It also makes the
+/// join unambiguous by construction — a hex digest is a fixed-width alphabet that cannot
+/// contain the delimiter, so no registry's declarations can forge the boundary between
+/// the two halves.
+///
+/// Derived from [`PropertyFunctionRegistry::describe`], which is already IRI-sorted, so
+/// the content half of the fingerprint is a pure function of the registry's contents
+/// rather than of its construction order (the instance id half is, by construction, a
+/// pure function of WHICH construction). Also the identity a governed receipt carries
+/// (see `RelationIdentity` in `crate::governed`) — the same reason it belongs in the
+/// cache key applies to the receipt: two registries that produce different fingerprints
+/// can produce different answers, so a receipt that cannot tell them apart is not a
+/// receipt.
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] if a registered relation's declaration methods panic —
+/// [`PropertyFunctionRegistry::describe`]'s own failure, propagated unchanged. Never
+/// raised when `relations` is empty (which [`PropertyFunctionRegistry::EMPTY`] — the
+/// canonical "no registry" value — always is): that case returns before any
+/// relation's declaration is read at all.
+pub(crate) fn registry_fingerprint(
+    relations: &PropertyFunctionRegistry,
+) -> Result<String, EvalError> {
+    let capability = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&capability);
+    registry_fingerprint_with_memory(relations, &mut Memory::new(&mut frame))
+}
+
+/// Recompute the live declaration identity through its original physical account.
+pub(crate) fn registry_fingerprint_with_memory(
+    relations: &PropertyFunctionRegistry, memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<String, EvalError> {
+    if relations.is_empty() { return Ok(String::new()); }
+    let digest = content_fingerprint_with_memory(relations, memory)?;
+    memory.format(&format_args!("{}\u{5}{digest}", relations.instance_id().stable_encoding()))
+        .map_err(|error| memory.admission_mut().storage_error(error, "relation fingerprint"))
+}
+
+/// The domain separator every property-function content fingerprint opens with, so
+/// a digest of this registry kind can never equal a digest of another kind that
+/// happens to fold a structurally identical field sequence (an empty
+/// property-function registry and an empty aggregate registry would otherwise
+/// collide, and a caller binding both would be unable to tell which it had).
+const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/property-function-registry");
+
+/// The schema version of the field sequence this fingerprint folds.
+///
+/// The domain separator above keeps a property-function digest from colliding
+/// with *another kind* of registry's digest. It does nothing about a collision
+/// between two *versions of this one*, and that is a real gap: the fields below
+/// are length-framed, which makes each version's encoding self-delimiting and
+/// injective **within** a version, but says nothing across versions. A field
+/// added between two existing ones shifts every byte after it, and there is no
+/// argument that the resulting string cannot equal some older declaration's —
+/// only the observation that nobody has found a pair. A digest that two
+/// different schemas can produce is a digest a caller cannot rely on, so the
+/// version is folded in and the question stops being open.
+///
+/// Bumped to 2 when a ranked declaration gained its fidelity term: what a
+/// producer promises about the completeness and order of its own rows now
+/// changes the registry's identity, because a plan drawn from producers that
+/// approximate is not the plan drawn from producers that do not.
+const CONTENT_VERSION: u16 = 2;
+
+/// A **content-only** fingerprint of `relations`: every registered IRI's subject
+/// and object arity, its declared volatility, its declared modes with their row
+/// bounds, and its ranked-retrieval declaration, IRI-sorted — with the registry's
+/// instance id **omitted**, digested as a [`ContentDigest`].
+///
+/// This is the one fold of a property-function registry's declarations in this
+/// crate. The crate-internal plan-cache fingerprint renders it in hex behind the
+/// instance id rather than walking the descriptors a second time, and
+/// [`PropertyFunctionRegistry::content_fingerprint`] hands hosts the same hex, so
+/// "which declared fields make two registries different?" has exactly one answer
+/// and cannot drift into two.
+///
+/// # Why a second fingerprint rather than a change to the first
+///
+/// `registry_fingerprint` leads with the registry's
+/// `RegistryId` (`crate::registry_id::RegistryId`), and must keep doing so: that id
+/// is the only thing that can tell apart two registries which declare identically
+/// but resolve an IRI to two different implementations, and it is what stops a plan
+/// prepared against one registry from silently running against another. But the id
+/// is a process-lifetime counter. Written into a persisted artifact and read back in
+/// another process, it compares two readings of two unrelated sequences — a
+/// comparison whose outcome is meaningless in both directions. So an artifact that
+/// must name the host registries it requires, and have that requirement checked
+/// somewhere else, cannot use `registry_fingerprint` at all; it needs a value that
+/// is a pure function of declarations. The two answer different questions and both
+/// remain: this one is additive and changes nothing about the first.
+///
+/// # What it binds, and what it deliberately does not
+///
+/// It binds **declarations**, not implementations. Two independently built
+/// registries that declare the same IRIs with the same arities, volatilities,
+/// modes and ranked-retrieval declarations produce the same digest even when their
+/// [`PropertyFunction`](crate::property_fn::PropertyFunction) implementations return
+/// entirely different rows — exactly the hole the instance id closes in-process, and
+/// one no content-derived value can close, because a trait object exposes no content
+/// to digest. A caller crossing a process boundary must therefore pair this digest
+/// with whatever separately identifies the implementations behind the declarations,
+/// and must not read a match as proof that two registries compute the same answers.
+///
+/// # The rejected alternative: a hash of the instance id's persisted rendering
+///
+/// Persisting `RegistryId::stable_encoding` and comparing it on restore was rejected
+/// outright. It does not merely fail to help — it fails in the shape that is hardest
+/// to see: the restoring process's registries carry ids drawn from a counter that
+/// restarted at `1`, so a bare `2` may match a completely unrelated registry
+/// (accepting an artifact that should be refused) while an identically-declared
+/// rebuild of the exact registry the artifact was produced against gets a different
+/// id and is refused (refusing one that should be accepted). Both failures are silent
+/// and neither is reproducible.
+///
+/// # Encoding
+///
+/// Framed through `append_framed_part` (`crate::registry_id::append_framed_part`),
+/// whose length-prefixing makes the byte sequence injective, then digested. An empty
+/// registry is not special-cased: it digests the domain separator alone, so
+/// [`PropertyFunctionRegistry::EMPTY`](crate::property_fn::PropertyFunctionRegistry::EMPTY)
+/// and any other empty registry agree, exactly as they do under
+/// `registry_fingerprint`'s empty-string short circuit.
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] if a registered relation's declaration methods panic —
+/// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe)'s
+/// own failure, propagated unchanged.
+pub fn content_fingerprint(
+    relations: &PropertyFunctionRegistry,
+) -> Result<ContentDigest, EvalError> {
+    let capability = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&capability);
+    content_fingerprint_with_memory(relations, &mut Memory::new(&mut frame))
+}
+
+fn content_fingerprint_with_memory(
+    relations: &PropertyFunctionRegistry, memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<ContentDigest, EvalError> {
+    let capability = memory.admission_mut().workspace().clone();
+    let descriptors = relations.describe_admitted(&capability)?;
+    let result = (|| -> Result<ContentDigest, StorageError> {
+        let mut bytes = Vec::new();
+        append_framed_part_with_memory(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes(), memory)?;
+        append_framed_part_with_memory(&mut bytes, "version", &CONTENT_VERSION.to_be_bytes(), memory)?;
+        for descriptor in descriptors.iter() {
+            append_framed_part_with_memory(&mut bytes, "iri", descriptor.iri.as_bytes(), memory)?;
+            append_framed_part_with_memory(&mut bytes, "subject-arity",
+                &(descriptor.subject_arity as u64).to_be_bytes(), memory)?;
+            append_framed_part_with_memory(&mut bytes, "object-arity",
+                &(descriptor.object_arity as u64).to_be_bytes(), memory)?;
+            append_framed_part_with_memory(&mut bytes, "volatility",
+                descriptor.volatility.label().as_bytes(), memory)?;
+            append_framed_part_with_memory(&mut bytes, "mode-count",
+                &(descriptor.modes.len() as u64).to_be_bytes(), memory)?;
+            for mode in &descriptor.modes {
+                append_framed_part_with_memory(&mut bytes, "mode-code", mode.code.as_bytes(), memory)?;
+                append_framed_part_with_memory(&mut bytes, "mode-rows",
+                    &mode.rows_per_invocation.to_be_bytes(), memory)?;
+            }
+            match descriptor.ranked.as_ref() {
+                None => append_framed_part_with_memory(&mut bytes, "ranked",
+                    NOT_RANKED_CANONICAL.as_bytes(), memory)?,
+                Some(declaration) => {
+                    let spelling = memory.format(&declaration.canonical_display())?;
+                    append_framed_part_with_memory(&mut bytes, "ranked", spelling.as_bytes(), memory)?;
+                    memory.release_string(spelling)?;
+                }
+            }
+        }
+        let digest = ContentDigest::of(&bytes);
+        memory.release_vec(bytes)?;
+        Ok(digest)
+    })();
+    result.map_err(|error| memory.admission_mut().storage_error(error, "relation fingerprint"))
+}
+
+#[cfg(test)]
+mod registry_fingerprint_tests {

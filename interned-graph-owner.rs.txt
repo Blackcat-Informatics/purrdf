@@ -1,0 +1,48 @@
+/// A graph borrowed inside the evaluator's read scope. Retaining it transfers
+/// its original execution account with the shared frozen dataset, so an Arc
+/// handle cannot escape while its admission is destroyed.
+///
+/// ```compile_fail
+/// use std::sync::Arc;
+/// use purrdf_core::RdfDataset;
+/// use purrdf_sparql_eval::InternedGraph;
+/// fn escape(graph: InternedGraph<'_>) -> Arc<RdfDataset> {
+///     Arc::clone(&graph)
+/// }
+/// ```
+///
+/// ```
+/// use purrdf_sparql_eval::{EvalError, InternedGraph, RetainedGraph};
+/// fn retain(graph: InternedGraph<'_>) -> Result<RetainedGraph, EvalError> {
+///     graph.retain()
+/// }
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct InternedGraph<'a> {
+    graph: &'a Arc<RdfDataset>,
+    workspace: &'a crate::WorkspaceCapability,
+}
+
+impl<'a> InternedGraph<'a> {
+    pub(crate) const fn new(graph: &'a Arc<RdfDataset>, workspace: &'a crate::WorkspaceCapability) -> Self {
+        Self { graph, workspace }
+    }
+
+    /// Retain the existing frozen graph and its original account without
+    /// copying the dataset. The new shared control is admitted before allocation.
+    ///
+    /// # Errors
+    /// Returns physical admission, overflow or native allocator refusal.
+    pub fn retain(self) -> Result<crate::RetainedGraph, crate::EvalError> {
+        let result = crate::RetainedSparqlResult::new(
+            purrdf_core::SparqlResult::Graph(Arc::clone(self.graph)),
+            self.workspace.clone(), self.workspace,
+        )?;
+        Ok(crate::RetainedGraph::from_result(result))
+    }
+}
+
+impl std::ops::Deref for InternedGraph<'_> {
+    type Target = RdfDataset;
+    fn deref(&self) -> &Self::Target { self.graph }
+}

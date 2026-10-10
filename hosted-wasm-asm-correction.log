@@ -1,0 +1,26 @@
+python3 scripts/check-simd-asm.py --doc --config wasm32 --config wasm32-simd128 --report .stage/sparql-eval-complete-bounded-workspace/hosted-wasm-asm-report.json
+== wasm32: 4 Cargo jobs
+== wasm32 graph 0: /opt/purrdf-508-qualification/target/simd-asm/contexts/43368d258467bbe64b352c6f3fdc3bc994787427c3835eb36eee7871142c3580/cargo.graph-0.stderr.log
+== wasm32-simd128: 4 Cargo jobs
+== wasm32-simd128 graph 0: /opt/purrdf-508-qualification/target/simd-asm/contexts/2f76db3ffc5e9bc8a289f7ed91dc529de25097e629ace42a844392716b65ead1/cargo.graph-0.stderr.log
+== wasm32 graph 1: /opt/purrdf-508-qualification/target/simd-asm/contexts/43368d258467bbe64b352c6f3fdc3bc994787427c3835eb36eee7871142c3580/cargo.graph-1.stderr.log
+== wasm32-simd128 graph 1: /opt/purrdf-508-qualification/target/simd-asm/contexts/2f76db3ffc5e9bc8a289f7ed91dc529de25097e629ace42a844392716b65ead1/cargo.graph-1.stderr.log
+FAIL: `eval.aggregate-fold` [step] on wasm32: no function of crate `purrdf_sparql_eval` has `<purrdf_sparql_eval::modifier::NumericFold>::step_xsd` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`eval.aggregate-fold` [combine] on wasm32: no function of crate `purrdf_sparql_eval` has `<purrdf_sparql_eval::modifier::NumericFold>::combine_owned` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`hnsw.search-build` [search] on wasm32: no function of crate `purrdf_hnsw` has `purrdf_hnsw::search::search_layer::<purrdf_core::distance::Exact>` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`hnsw.search-build` [search reassociated] on wasm32: no function of crate `purrdf_hnsw` has `purrdf_hnsw::search::search_layer::<purrdf_core::distance::Reassociated>` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`hnsw.distance-cache` on wasm32: no function of crate `purrdf_hnsw` has `purrdf_hnsw::search::search_layer::<purrdf_core::distance::Exact>` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`facade.multimodal-read` [text lookup] on wasm32: no function of crate `purrdf_text` has `<purrdf_text::relation::TextSearchRelation>::holdings` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`xsd.whitespace` [collapse simd128] on wasm32-simd128: `purrdf_xsd::simple::normalize_whitespace_collapse` has 0 vector ops, below the floor of 2
+`xsd.whitespace` [collapse simd128] on wasm32-simd128: `purrdf_xsd::simple::normalize_whitespace_collapse` lacks the required `i8x16.eq`
+`xsd.whitespace` [collapse simd128] on wasm32-simd128: `purrdf_xsd::simple::normalize_whitespace_collapse` lacks the required `v128.any_true`
+`xsd.whitespace` [collapse simd128] on wasm32-simd128: `purrdf_xsd::simple::normalize_whitespace_collapse` has 0 vector ops, below the floor of 2
+`xsd.whitespace` [collapse simd128] on wasm32-simd128: `purrdf_xsd::simple::normalize_whitespace_collapse` lacks the required `i8x16.eq`
+`xsd.whitespace` [collapse simd128] on wasm32-simd128: `purrdf_xsd::simple::normalize_whitespace_collapse` lacks the required `v128.any_true`
+`eval.aggregate-fold` [step] on wasm32-simd128: no function of crate `purrdf_sparql_eval` has `<purrdf_sparql_eval::modifier::NumericFold>::step_xsd` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`eval.aggregate-fold` [combine] on wasm32-simd128: no function of crate `purrdf_sparql_eval` has `<purrdf_sparql_eval::modifier::NumericFold>::combine_owned` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`hnsw.search-build` [search] on wasm32-simd128: no function of crate `purrdf_hnsw` has `purrdf_hnsw::search::search_layer::<purrdf_core::distance::Exact>` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`hnsw.search-build` [search reassociated] on wasm32-simd128: no function of crate `purrdf_hnsw` has `purrdf_hnsw::search::search_layer::<purrdf_core::distance::Reassociated>` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`hnsw.distance-cache` on wasm32-simd128: no function of crate `purrdf_hnsw` has `purrdf_hnsw::search::search_layer::<purrdf_core::distance::Exact>` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`facade.multimodal-read` [text lookup] on wasm32-simd128: no function of crate `purrdf_text` has `<purrdf_text::relation::TextSearchRelation>::holdings` in its path -- the symbol was renamed or inlined away, and the evidence with it
+make: *** [Makefile:683: simd-asm] Error 1

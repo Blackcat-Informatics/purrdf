@@ -1,0 +1,803 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0277]: a value of type `RowBag<_>` cannot be built from an iterator over elements of type `SmallVec<_>`
+    --> crates/sparql-eval/src/binop.rs:2887:18
+     |
+2887 |                 .collect(),
+     |                  ^^^^^^^ value of type `RowBag<_>` cannot be built from `std::iter::Iterator<Item=SmallVec<_>>`
+     |
+help: the trait `FromIterator<SmallVec<_>>` is not implemented for `RowBag<_>`
+    --> crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+error[E0277]: a value of type `RowBag<_>` cannot be built from an iterator over elements of type `SmallVec<_>`
+    --> crates/sparql-eval/src/binop.rs:2893:18
+     |
+2893 |                 .collect(),
+     |                  ^^^^^^^ value of type `RowBag<_>` cannot be built from `std::iter::Iterator<Item=SmallVec<_>>`
+     |
+help: the trait `FromIterator<SmallVec<_>>` is not implemented for `RowBag<_>`
+    --> crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+error[E0277]: a value of type `RowBag<_>` cannot be built from an iterator over elements of type `SmallVec<_>`
+    --> crates/sparql-eval/src/binop.rs:2980:18
+     |
+2980 |                 .collect(),
+     |                  ^^^^^^^ value of type `RowBag<_>` cannot be built from `std::iter::Iterator<Item=SmallVec<_>>`
+     |
+help: the trait `FromIterator<SmallVec<_>>` is not implemented for `RowBag<_>`
+    --> crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+error[E0599]: no method named `push` found for struct `RowBag<_>` in the current scope
+    --> crates/sparql-eval/src/binop.rs:2983:19
+     |
+2983 |         left.rows.push(purrdf_core::smallvec![
+     |         ----------^^^^ method not found in `RowBag<_>`
+     |
+    ::: crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ----------------------------------------- method `push` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following traits define an item `push`, perhaps you need to implement one of them:
+             candidate #1: `metric::RankHeap`
+             candidate #2: `Stage`
+             candidate #3: `TextOut`
+
+error[E0599]: no method named `capacity` found for struct `RowBag` in the current scope
+    --> crates/sparql-eval/src/binop.rs:3003:33
+     |
+3003 |             assert!(joined.rows.capacity() <= 4, "{:?}", joined.rows.capacity());
+     |                                 ^^^^^^^^ method not found in `RowBag`
+     |
+    ::: crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ----------------------------------------- method `capacity` not found for this struct
+
+error[E0599]: no method named `capacity` found for struct `RowBag` in the current scope
+    --> crates/sparql-eval/src/binop.rs:3003:70
+     |
+3003 |             assert!(joined.rows.capacity() <= 4, "{:?}", joined.rows.capacity());
+     |                                                                      ^^^^^^^^ method not found in `RowBag`
+     |
+    ::: crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ----------------------------------------- method `capacity` not found for this struct
+
+error[E0599]: no method named `capacity` found for struct `RowBag` in the current scope
+    --> crates/sparql-eval/src/binop.rs:3009:33
+     |
+3009 |             assert!(joined.rows.capacity() <= 4, "{:?}", joined.rows.capacity());
+     |                                 ^^^^^^^^ method not found in `RowBag`
+     |
+    ::: crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ----------------------------------------- method `capacity` not found for this struct
+
+error[E0599]: no method named `capacity` found for struct `RowBag` in the current scope
+    --> crates/sparql-eval/src/binop.rs:3009:70
+     |
+3009 |             assert!(joined.rows.capacity() <= 4, "{:?}", joined.rows.capacity());
+     |                                                                      ^^^^^^^^ method not found in `RowBag`
+     |
+    ::: crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ----------------------------------------- method `capacity` not found for this struct
+
+error[E0599]: no method named `capacity` found for struct `RowBag` in the current scope
+    --> crates/sparql-eval/src/binop.rs:3015:33
+     |
+3015 |             assert!(joined.rows.capacity() <= left.rows.len().next_power_of_two());
+     |                                 ^^^^^^^^ method not found in `RowBag`
+     |
+    ::: crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ----------------------------------------- method `capacity` not found for this struct
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/binop.rs:3176:19
+     |
+3176 |               rows: vec![
+     |  ___________________^
+3177 | |                 purrdf_core::smallvec![t(1)],
+3178 | |                 purrdf_core::smallvec![t(2)],
+3179 | |                 purrdf_core::smallvec![None],
+3180 | |             ],
+     | |_____________^ expected `RowBag<_>`, found `Vec<SmallVec<_>>`
+     |
+     = note: expected struct `RowBag<_>`
+                found struct `Vec<SmallVec<_>>`
+
+error[E0061]: this function takes 3 arguments but 2 arguments were supplied
+    --> crates/sparql-eval/src/binop.rs:3186:29
+     |
+3186 |         let (keyed, wild) = build_index(&inner, &shared);
+     |                             ^^^^^^^^^^^----------------- argument #3 of type `&WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/binop.rs:1568:15
+     |
+1568 | pub(crate) fn build_index<I: ViewTermId>(
+     |               ^^^^^^^^^^^
+...
+1571 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+3186 |         let (keyed, wild) = build_index(&inner, &shared, /* &WorkspaceCapability */);
+     |                                                        ++++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/binop.rs:3186:13
+     |
+3186 |         let (keyed, wild) = build_index(&inner, &shared);
+     |             ^^^^^^^^^^^^^   ---------------------------- this expression has type `Result<(JoinIndex<_>, AdmittedVec<usize>), error::EvalError>`
+     |             |
+     |             expected `Result<(JoinIndex<_>, _), _>`, found `(_, _)`
+     |
+     = note: expected enum `Result<(JoinIndex<_>, AdmittedVec<usize>), error::EvalError>`
+               found tuple `(_, _)`
+help: try wrapping the pattern in `Ok`
+     |
+3186 |         let Ok((keyed, wild)) = build_index(&inner, &shared);
+     |             +++             +
+
+error[E0061]: this function takes 6 arguments but 5 arguments were supplied
+    --> crates/sparql-eval/src/binop.rs:3190:17
+     |
+3190 |           assert!(probe_has_match(
+     |  _________________^^^^^^^^^^^^^^^-
+3191 | |             &[t(1), None],
+3192 | |             &shared,
+3193 | |             &keyed,
+3194 | |             &wild,
+3195 | |             &inner.rows
+3196 | |         ));
+     | |_________- argument #6 of type `&WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/binop.rs:1612:15
+     |
+1612 | pub(crate) fn probe_has_match<I: ViewTermId>(
+     |               ^^^^^^^^^^^^^^^
+...
+1618 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+3190 |         assert!(probe_has_match(
+ ...
+3194 |             &wild,
+3195 ~             &inner.rows,
+3196 +             /* &WorkspaceCapability */,
+     |
+
+error[E0600]: cannot apply unary operator `!` to type `Result<bool, error::EvalError>`
+    --> crates/sparql-eval/src/binop.rs:3190:9
+     |
+3190 | /         assert!(probe_has_match(
+3191 | |             &[t(1), None],
+3192 | |             &shared,
+3193 | |             &keyed,
+3194 | |             &wild,
+3195 | |             &inner.rows
+3196 | |         ));
+     | |__________^ cannot apply unary operator `!`
+     |
+note: `Result<bool, error::EvalError>` does not implement `std::ops::Not`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:558:1
+     |
+ 558 | pub enum Result<T, E> {
+     | ^^^^^^^^^^^^^^^^^^^^^ `Result<bool, error::EvalError>` is defined in another crate
+
+error[E0061]: this function takes 6 arguments but 5 arguments were supplied
+    --> crates/sparql-eval/src/binop.rs:3198:17
+     |
+3198 |           assert!(probe_has_match(
+     |  _________________^^^^^^^^^^^^^^^-
+3199 | |             &[t(9), None],
+3200 | |             &shared,
+3201 | |             &keyed,
+3202 | |             &wild,
+3203 | |             &inner.rows
+3204 | |         ));
+     | |_________- argument #6 of type `&WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/binop.rs:1612:15
+     |
+1612 | pub(crate) fn probe_has_match<I: ViewTermId>(
+     |               ^^^^^^^^^^^^^^^
+...
+1618 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+3198 |         assert!(probe_has_match(
+ ...
+3202 |             &wild,
+3203 ~             &inner.rows,
+3204 +             /* &WorkspaceCapability */,
+     |
+
+error[E0600]: cannot apply unary operator `!` to type `Result<bool, error::EvalError>`
+    --> crates/sparql-eval/src/binop.rs:3198:9
+     |
+3198 | /         assert!(probe_has_match(
+3199 | |             &[t(9), None],
+3200 | |             &shared,
+3201 | |             &keyed,
+3202 | |             &wild,
+3203 | |             &inner.rows
+3204 | |         ));
+     | |__________^ cannot apply unary operator `!`
+     |
+note: `Result<bool, error::EvalError>` does not implement `std::ops::Not`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:558:1
+     |
+ 558 | pub enum Result<T, E> {
+     | ^^^^^^^^^^^^^^^^^^^^^ `Result<bool, error::EvalError>` is defined in another crate
+
+error[E0061]: this function takes 6 arguments but 5 arguments were supplied
+    --> crates/sparql-eval/src/binop.rs:3206:17
+     |
+3206 |           assert!(probe_has_match(
+     |  _________________^^^^^^^^^^^^^^^-
+3207 | |             &[None, t(5)],
+3208 | |             &shared,
+3209 | |             &keyed,
+3210 | |             &wild,
+3211 | |             &inner.rows
+3212 | |         ));
+     | |_________- argument #6 of type `&WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/binop.rs:1612:15
+     |
+1612 | pub(crate) fn probe_has_match<I: ViewTermId>(
+     |               ^^^^^^^^^^^^^^^
+...
+1618 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+3206 |         assert!(probe_has_match(
+ ...
+3210 |             &wild,
+3211 ~             &inner.rows,
+3212 +             /* &WorkspaceCapability */,
+     |
+
+error[E0600]: cannot apply unary operator `!` to type `Result<bool, error::EvalError>`
+    --> crates/sparql-eval/src/binop.rs:3206:9
+     |
+3206 | /         assert!(probe_has_match(
+3207 | |             &[None, t(5)],
+3208 | |             &shared,
+3209 | |             &keyed,
+3210 | |             &wild,
+3211 | |             &inner.rows
+3212 | |         ));
+     | |__________^ cannot apply unary operator `!`
+     |
+note: `Result<bool, error::EvalError>` does not implement `std::ops::Not`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:558:1
+     |
+ 558 | pub enum Result<T, E> {
+     | ^^^^^^^^^^^^^^^^^^^^^ `Result<bool, error::EvalError>` is defined in another crate
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/binop.rs:3217:19
+     |
+3217 |             rows: vec![purrdf_core::smallvec![t(1)], purrdf_core::smallvec![t(2)]],
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RowBag<_>`, found `Vec<SmallVec<_>>`
+     |
+     = note: expected struct `RowBag<_>`
+                found struct `Vec<SmallVec<_>>`
+
+error[E0061]: this function takes 3 arguments but 2 arguments were supplied
+    --> crates/sparql-eval/src/binop.rs:3219:31
+     |
+3219 |         let (keyed2, wild2) = build_index(&inner2, &shared);
+     |                               ^^^^^^^^^^^------------------ argument #3 of type `&WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/binop.rs:1568:15
+     |
+1568 | pub(crate) fn build_index<I: ViewTermId>(
+     |               ^^^^^^^^^^^
+...
+1571 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+3219 |         let (keyed2, wild2) = build_index(&inner2, &shared, /* &WorkspaceCapability */);
+     |                                                           ++++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/binop.rs:3219:13
+     |
+3219 |         let (keyed2, wild2) = build_index(&inner2, &shared);
+     |             ^^^^^^^^^^^^^^^   ----------------------------- this expression has type `Result<(JoinIndex<_>, AdmittedVec<usize>), error::EvalError>`
+     |             |
+     |             expected `Result<(JoinIndex<_>, _), _>`, found `(_, _)`
+     |
+     = note: expected enum `Result<(JoinIndex<_>, AdmittedVec<usize>), error::EvalError>`
+               found tuple `(_, _)`
+help: try wrapping the pattern in `Ok`
+     |
+3219 |         let Ok((keyed2, wild2)) = build_index(&inner2, &shared);
+     |             +++               +
+
+error[E0061]: this function takes 6 arguments but 5 arguments were supplied
+    --> crates/sparql-eval/src/binop.rs:3222:14
+     |
+3222 |             !probe_has_match(&[t(9), None], &shared, &keyed2, &wild2, &inner2.rows),
+     |              ^^^^^^^^^^^^^^^------------------------------------------------------- argument #6 of type `&WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/binop.rs:1612:15
+     |
+1612 | pub(crate) fn probe_has_match<I: ViewTermId>(
+     |               ^^^^^^^^^^^^^^^
+...
+1618 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+3222 |             !probe_has_match(&[t(9), None], &shared, &keyed2, &wild2, &inner2.rows, /* &WorkspaceCapability */),
+     |                                                                                   ++++++++++++++++++++++++++++
+
+error[E0600]: cannot apply unary operator `!` to type `Result<bool, error::EvalError>`
+    --> crates/sparql-eval/src/binop.rs:3222:13
+     |
+3222 |             !probe_has_match(&[t(9), None], &shared, &keyed2, &wild2, &inner2.rows),
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot apply unary operator `!`
+     |
+note: `Result<bool, error::EvalError>` does not implement `std::ops::Not`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:558:1
+     |
+ 558 | pub enum Result<T, E> {
+     | ^^^^^^^^^^^^^^^^^^^^^ `Result<bool, error::EvalError>` is defined in another crate
+
+error[E0061]: this function takes 6 arguments but 5 arguments were supplied
+    --> crates/sparql-eval/src/binop.rs:3226:17
+     |
+3226 |           assert!(probe_has_match(
+     |  _________________^^^^^^^^^^^^^^^-
+3227 | |             &[None, t(5)],
+3228 | |             &shared,
+3229 | |             &keyed2,
+3230 | |             &wild2,
+3231 | |             &inner2.rows
+3232 | |         ));
+     | |_________- argument #6 of type `&WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/binop.rs:1612:15
+     |
+1612 | pub(crate) fn probe_has_match<I: ViewTermId>(
+     |               ^^^^^^^^^^^^^^^
+...
+1618 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+3226 |         assert!(probe_has_match(
+ ...
+3230 |             &wild2,
+3231 ~             &inner2.rows,
+3232 +             /* &WorkspaceCapability */,
+     |
+
+error[E0600]: cannot apply unary operator `!` to type `Result<bool, error::EvalError>`
+    --> crates/sparql-eval/src/binop.rs:3226:9
+     |
+3226 | /         assert!(probe_has_match(
+3227 | |             &[None, t(5)],
+3228 | |             &shared,
+3229 | |             &keyed2,
+3230 | |             &wild2,
+3231 | |             &inner2.rows
+3232 | |         ));
+     | |__________^ cannot apply unary operator `!`
+     |
+note: `Result<bool, error::EvalError>` does not implement `std::ops::Not`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:558:1
+     |
+ 558 | pub enum Result<T, E> {
+     | ^^^^^^^^^^^^^^^^^^^^^ `Result<bool, error::EvalError>` is defined in another crate
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/binop.rs:3235:19
+     |
+3235 |             rows: vec![],
+     |                   ^^^^^^ expected `RowBag<_>`, found `Vec<_>`
+     |
+     = note: expected struct `RowBag<_>`
+                found struct `Vec<_>`
+
+error[E0061]: this function takes 3 arguments but 2 arguments were supplied
+    --> crates/sparql-eval/src/binop.rs:3237:24
+     |
+3237 |         let (ek, ew) = build_index(&empty, &shared);
+     |                        ^^^^^^^^^^^----------------- argument #3 of type `&WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/binop.rs:1568:15
+     |
+1568 | pub(crate) fn build_index<I: ViewTermId>(
+     |               ^^^^^^^^^^^
+...
+1571 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+3237 |         let (ek, ew) = build_index(&empty, &shared, /* &WorkspaceCapability */);
+     |                                                   ++++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/binop.rs:3237:13
+     |
+3237 |         let (ek, ew) = build_index(&empty, &shared);
+     |             ^^^^^^^^   ---------------------------- this expression has type `Result<(JoinIndex<_>, AdmittedVec<usize>), error::EvalError>`
+     |             |
+     |             expected `Result<(JoinIndex<_>, _), _>`, found `(_, _)`
+     |
+     = note: expected enum `Result<(JoinIndex<_>, AdmittedVec<usize>), error::EvalError>`
+               found tuple `(_, _)`
+help: try wrapping the pattern in `Ok`
+     |
+3237 |         let Ok((ek, ew)) = build_index(&empty, &shared);
+     |             +++        +
+
+error[E0061]: this function takes 6 arguments but 5 arguments were supplied
+    --> crates/sparql-eval/src/binop.rs:3238:18
+     |
+3238 |           assert!(!probe_has_match(
+     |  __________________^^^^^^^^^^^^^^^-
+3239 | |             &[None, t(5)],
+3240 | |             &shared,
+3241 | |             &ek,
+3242 | |             &ew,
+3243 | |             &empty.rows
+3244 | |         ));
+     | |_________- argument #6 of type `&WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/binop.rs:1612:15
+     |
+1612 | pub(crate) fn probe_has_match<I: ViewTermId>(
+     |               ^^^^^^^^^^^^^^^
+...
+1618 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+3238 |         assert!(!probe_has_match(
+ ...
+3242 |             &ew,
+3243 ~             &empty.rows,
+3244 +             /* &WorkspaceCapability */,
+     |
+
+error[E0600]: cannot apply unary operator `!` to type `Result<bool, error::EvalError>`
+    --> crates/sparql-eval/src/binop.rs:3238:17
+     |
+3238 |           assert!(!probe_has_match(
+     |  _________________^
+3239 | |             &[None, t(5)],
+3240 | |             &shared,
+3241 | |             &ek,
+3242 | |             &ew,
+3243 | |             &empty.rows
+3244 | |         ));
+     | |_________^ cannot apply unary operator `!`
+     |
+note: `Result<bool, error::EvalError>` does not implement `std::ops::Not`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:558:1
+     |
+ 558 | pub enum Result<T, E> {
+     | ^^^^^^^^^^^^^^^^^^^^^ `Result<bool, error::EvalError>` is defined in another crate
+
+error[E0369]: binary operation `==` cannot be applied to type `purrdf_core::small::Shared<solution::VarSchema>`
+    --> crates/sparql-eval/src/binop.rs:3698:13
+     |
+3698 |             assert_eq!(via_channel.schema, via_entry.schema);
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |             |
+     |             purrdf_core::small::Shared<solution::VarSchema>
+     |             purrdf_core::small::Shared<solution::VarSchema>
+     |
+note: `purrdf_core::small::Shared<solution::VarSchema>` does not implement `PartialEq`
+    --> crates/rdf-core/src/small/shared.rs:43:1
+     |
+  43 | pub struct Shared<T> {
+     | ^^^^^^^^^^^^^^^^^^^^ `purrdf_core::small::Shared<solution::VarSchema>` is defined in another crate
+
+error[E0369]: binary operation `==` cannot be applied to type `RowBag`
+    --> crates/sparql-eval/src/binop.rs:3699:13
+     |
+3699 | /             assert_eq!(
+3700 | |                 via_channel.rows, via_entry.rows,
+3701 | |                 "the channel must not change a single row of an ungoverned result"
+3702 | |             );
+     | |             ^
+     | |             |
+     | |_____________RowBag
+     |               RowBag
+     |
+note: an implementation of `PartialEq` might be missing for `RowBag`
+    --> crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `RowBag` with `#[derive(PartialEq)]`
+    -->  crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 + #[derive(PartialEq)]
+ 397 | pub struct RowBag<I: ViewTermId = TermId> {
+     |
+
+error[E0369]: binary operation `==` cannot be applied to type `RowBag`
+    --> crates/sparql-eval/src/eval.rs:5342:9
+     |
+5342 | /         assert_eq!(
+5343 | |             rows_par, rows_seq,
+5344 | |             "parallel and sequential paths must produce byte-identical row order"
+5345 | |         );
+     | |         ^
+     | |         |
+     | |_________RowBag
+     |           RowBag
+     |
+note: an implementation of `PartialEq` might be missing for `RowBag`
+    --> crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `RowBag` with `#[derive(PartialEq)]`
+    -->  crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 + #[derive(PartialEq)]
+ 397 | pub struct RowBag<I: ViewTermId = TermId> {
+     |
+
+error[E0369]: binary operation `==` cannot be applied to type `RowBag`
+    --> crates/sparql-eval/src/eval.rs:5442:9
+     |
+5442 | /         assert_eq!(
+5443 | |             rows_par, rows_seq,
+5444 | |             "parallel and sequential FILTER paths must produce byte-identical row order"
+5445 | |         );
+     | |         ^
+     | |         |
+     | |_________RowBag
+     |           RowBag
+     |
+note: an implementation of `PartialEq` might be missing for `RowBag`
+    --> crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `RowBag` with `#[derive(PartialEq)]`
+    -->  crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 + #[derive(PartialEq)]
+ 397 | pub struct RowBag<I: ViewTermId = TermId> {
+     |
+
+error[E0369]: binary operation `==` cannot be applied to type `RowBag`
+    --> crates/sparql-eval/src/eval.rs:5511:9
+     |
+5511 | /         assert_eq!(
+5512 | |             rows_par, rows_seq,
+5513 | |             "parallel and sequential FILTER EXISTS paths must produce byte-identical row order"
+5514 | |         );
+     | |         ^
+     | |         |
+     | |_________RowBag
+     |           RowBag
+     |
+note: an implementation of `PartialEq` might be missing for `RowBag`
+    --> crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `RowBag` with `#[derive(PartialEq)]`
+    -->  crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 + #[derive(PartialEq)]
+ 397 | pub struct RowBag<I: ViewTermId = TermId> {
+     |
+
+error[E0369]: binary operation `==` cannot be applied to type `RowBag`
+    --> crates/sparql-eval/src/eval.rs:5599:9
+     |
+5599 | /         assert_eq!(
+5600 | |             rows_par, rows_seq,
+5601 | |             "parallel and sequential OPTIONAL-FILTER paths must produce byte-identical row order"
+5602 | |         );
+     | |         ^
+     | |         |
+     | |_________RowBag
+     |           RowBag
+     |
+note: an implementation of `PartialEq` might be missing for `RowBag`
+    --> crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `RowBag` with `#[derive(PartialEq)]`
+    -->  crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 + #[derive(PartialEq)]
+ 397 | pub struct RowBag<I: ViewTermId = TermId> {
+     |
+
+error[E0369]: binary operation `==` cannot be applied to type `RowBag`
+    --> crates/sparql-eval/src/eval.rs:5722:21
+     |
+5722 | /                     assert_eq!(
+5723 | |                         seq.rows, full.rows,
+5724 | |                         "a completed governed run must be byte-identical to the \
+5725 | |                          ungoverned one"
+5726 | |                     );
+     | |                     ^
+     | |                     |
+     | |_____________________RowBag
+     |                       RowBag
+     |
+note: an implementation of `PartialEq` might be missing for `RowBag`
+    --> crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `RowBag` with `#[derive(PartialEq)]`
+    -->  crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 + #[derive(PartialEq)]
+ 397 | pub struct RowBag<I: ViewTermId = TermId> {
+     |
+
+error[E0369]: binary operation `==` cannot be applied to type `RowBag`
+     --> crates/sparql-eval/src/expr.rs:10106:17
+      |
+10106 | /                 assert_eq!(
+10107 | |                     entry.inner.rows, reference.rows,
+10108 | |                     "fuel {fuel}: a memoized EXISTS inner must be the complete inner bag"
+10109 | |                 );
+      | |                 ^
+      | |                 |
+      | |_________________RowBag
+      |                   RowBag
+      |
+note: an implementation of `PartialEq` might be missing for `RowBag`
+     --> crates/sparql-eval/src/solution.rs:396:1
+      |
+  396 | pub struct RowBag<I: ViewTermId = TermId> {
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `RowBag` with `#[derive(PartialEq)]`
+     -->   crates/sparql-eval/src/solution.rs:396:1
+      |
+  396 + #[derive(PartialEq)]
+  397 | pub struct RowBag<I: ViewTermId = TermId> {
+      |
+
+error[E0369]: binary operation `==` cannot be applied to type `RowBag`
+     --> crates/sparql-eval/src/expr.rs:10174:13
+      |
+10174 | /             assert_eq!(
+10175 | |                 again.rows, baseline.rows,
+10176 | |                 "fuel {fuel}: an execution stopped by a governor changed what a later, \
+10177 | |                  ungoverned execution of the same plan answered"
+10178 | |             );
+      | |             ^
+      | |             |
+      | |_____________RowBag
+      |               RowBag
+      |
+note: an implementation of `PartialEq` might be missing for `RowBag`
+     --> crates/sparql-eval/src/solution.rs:396:1
+      |
+  396 | pub struct RowBag<I: ViewTermId = TermId> {
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `RowBag` with `#[derive(PartialEq)]`
+     -->   crates/sparql-eval/src/solution.rs:396:1
+      |
+  396 + #[derive(PartialEq)]
+  397 | pub struct RowBag<I: ViewTermId = TermId> {
+      |
+
+error[E0369]: binary operation `==` cannot be applied to type `RowBag`
+   --> crates/sparql-eval/src/governor/charge_points.rs:599:5
+    |
+599 |     assert_eq!(governed.rows, ungoverned.rows);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |     |
+    |     RowBag
+    |     RowBag
+    |
+note: an implementation of `PartialEq` might be missing for `RowBag`
+   --> crates/sparql-eval/src/solution.rs:396:1
+    |
+396 | pub struct RowBag<I: ViewTermId = TermId> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `RowBag` with `#[derive(PartialEq)]`
+   --> crates/sparql-eval/src/solution.rs:396:1
+    |
+396 + #[derive(PartialEq)]
+397 | pub struct RowBag<I: ViewTermId = TermId> {
+    |
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/governor/lift.rs:637:19
+    |
+637 |               rows: vec![purrdf_core::smallvec![Some(
+    |  ___________________^
+638 | |                 crate::scratch::SolutionTerm::Existing(TermId::from_index(0))
+639 | |             )]],
+    | |_______________^ expected `RowBag`, found `Vec<SmallVec<_>>`
+    |
+    = note: expected struct `RowBag`
+               found struct `Vec<SmallVec<_>>`
+help: call `Into::into` on this expression to convert `Vec<SmallVec<_>>` into `RowBag`
+    |
+639 |             )]].into(),
+    |                +++++++
+
+error[E0369]: binary operation `==` cannot be applied to type `RowBag`
+    --> crates/sparql-eval/src/modifier.rs:6297:9
+     |
+6297 | /         assert_eq!(
+6298 | |             rows_par, rows_seq,
+6299 | |             "parallel and sequential per-group aggregate paths must produce byte-identical rows"
+6300 | |         );
+     | |         ^
+     | |         |
+     | |_________RowBag
+     |           RowBag
+     |
+note: an implementation of `PartialEq` might be missing for `RowBag`
+    --> crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `RowBag` with `#[derive(PartialEq)]`
+    -->  crates/sparql-eval/src/solution.rs:396:1
+     |
+ 396 + #[derive(PartialEq)]
+ 397 | pub struct RowBag<I: ViewTermId = TermId> {
+     |
+
+Some errors have detailed explanations: E0061, E0277, E0308, E0369, E0599, E0600.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 42 previous errors

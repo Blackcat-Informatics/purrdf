@@ -1,0 +1,25 @@
+--- a/crates/lex/src/allocation.rs
++++ b/crates/lex/src/allocation.rs
+@@ -85,8 +85,9 @@
+ }
+ 
+ /// Amortized array capacity shared by native vectors and UTF-8 buffers.
+-/// Small buffers retain the original vector policy: eight byte elements, four
+-/// elements up to 1 KiB each, or one larger element. The returned concrete layout
++/// Empty buffers start with eight byte elements, four elements up to 1 KiB
++/// each, or one larger element. Nonempty buffers double their existing capacity.
++/// The returned concrete layout
+ /// must be admitted before allocating; this function itself allocates nothing.
+ ///
+ /// # Errors
+@@ -95,7 +96,9 @@
+     if required <= capacity {
+         return Ok(capacity);
+     }
+-    let first = if size_of::<T>() == 1 {
++    let first = if capacity != 0 {
++        0
++    } else if size_of::<T>() == 1 {
+         8
+     } else if size_of::<T>() <= 1024 {
+         4

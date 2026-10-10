@@ -1,0 +1,306 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+fn rewrite_walk<'a>(
+    root: purrdf_sparql_algebra::walk::NodeRef<'a>,
+    mut visit: impl FnMut(purrdf_sparql_algebra::walk::Visit, purrdf_sparql_algebra::walk::NodeRef<'a>)
+        -> purrdf_sparql_algebra::walk::Flow,
+    workspace: &crate::WorkspaceCapability,
+) -> RewriteResult<bool> {
+    use purrdf_sparql_algebra::walk::WalkError;
+    match purrdf_sparql_algebra::walk::try_walk_pre_post(
+        root, |when, node| Ok::<_, GroundFailure>(visit(when, node)),
+        |bytes| Ok(workspace.charge(u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?)?),
+    ) {
+        Ok(completed) => Ok(completed),
+        Err(WalkError::Visitor(error)) => Err(error),
+        Err(WalkError::Allocation(_)) => Err(crate::EvalError::AllocationFailed {
+            construct: "prebinding read-only walk",
+        }.into()),
+        Err(WalkError::LayoutOverflow) => Err(crate::EvalError::WorkspaceBoundOverflow.into()),
+    }
+}
+
+fn for_each_expression_with_memory<'e>(
+    roots: impl IntoIterator<Item = &'e Expression>,
+    mut visit: impl FnMut(&'e Expression, &mut RewriteMemory<'_>) -> RewriteResult<()>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit, WalkError};
+    let workspace = rewrite_workspace(memory);
+    for root in roots {
+        let result = purrdf_sparql_algebra::walk::try_walk_pre_post(
+            NodeRef::Expr(root),
+            |when, node| {
+                if when == Visit::Enter {
+                    let NodeRef::Expr(expression) = node else {
+                        unreachable!("EXISTS body traversal is skipped at the expression")
+                    };
+                    visit(expression, memory)?;
+                    if matches!(expression, Expression::Exists(_)) { return Ok(Flow::Skip); }
+                }
+                Ok(Flow::Descend)
+            },
+            |bytes| Ok(workspace.charge(u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?)?),
+        );
+        match result {
+            Ok(_) => {}
+            Err(WalkError::Visitor(error)) => return Err(error),
+            Err(WalkError::Allocation(_)) => return Err(crate::EvalError::AllocationFailed {
+                construct: "prebinding expression reads",
+            }.into()),
+            Err(WalkError::LayoutOverflow) => return Err(crate::EvalError::WorkspaceBoundOverflow.into()),
+        }
+    }
+    Ok(())
+}
+
+fn operand_schema_with_memory(
+    node: &GraphPattern, memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<purrdf_core::small::Shared<crate::solution::VarSchema>> {
+    let source = match node {
+        GraphPattern::Extend { inner, .. } | GraphPattern::Unfold { inner, .. }
+        | GraphPattern::Filter { inner, .. } | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Group { inner, .. } => &**inner,
+        other => other,
+    };
+    Ok(crate::eval::syntactic_schema_admitted(source, &rewrite_workspace(memory))?)
+}
+
+fn carried_columns_with_memory(
+    node: &GraphPattern, expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    reads: &Reads<impl std::ops::Deref<Target = [usize]>>, scope: WalkScope,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Vec<Variable>> {
+    let workspace = rewrite_workspace(memory);
+    let exposed = crate::eval::syntactic_schema_admitted(node, &workspace)?;
+    let mut carried = rewrite_vec(exposed.vars().iter().cloned(), memory)?;
+    if scope != WalkScope::Descent {
+        let named = crate::expr::pattern_all_vars_admitted(node, &workspace)?;
+        let driven = |variable: &Variable| reads.in_exists.iter()
+            .any(|&index| &expr_subs.entries()[index].0 == variable);
+        let mut extra = rewrite_scratch(named.vars().iter()
+            .filter(|variable| !exposed.contains(variable) && !driven(variable)).cloned(), memory)?;
+        extra.as_mut_slice().sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+        for variable in extra {
+            let result = memory.push(&mut carried, variable);
+            native_storage(memory, result)?;
+        }
+    }
+    Ok(carried)
+}
+
+fn note_reads_with_memory(
+    expression: &Expression, expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    reads: &mut Reads<crate::AdmittedVec<usize>>, memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    for_each_expression_with_memory([expression], |expression, memory| {
+        match expression {
+            Expression::Variable(variable) => {
+                if let Some(index) = expr_subs.entries().iter().position(|(candidate, _)| candidate == variable)
+                    && !reads.plain.contains(&index)
+                { reads.plain.push(index)?; }
+            }
+            Expression::Exists(body) => {
+                let named = crate::expr::pattern_all_vars_admitted(body, &rewrite_workspace(memory))?;
+                for (index, (variable, _)) in expr_subs.entries().iter().enumerate() {
+                    if named.contains(variable) && !reads.in_exists.contains(&index) {
+                        reads.in_exists.push(index)?;
+                    }
+                }
+            }
+            Expression::NamedNode(_) | Expression::Literal(_) | Expression::Bound(_)
+            | Expression::Or(_) | Expression::And(_) | Expression::Arithmetic(..)
+            | Expression::Equal(..) | Expression::SameTerm(..) | Expression::Greater(..)
+            | Expression::GreaterOrEqual(..) | Expression::Less(..) | Expression::LessOrEqual(..)
+            | Expression::UnaryPlus(_) | Expression::UnaryMinus(_) | Expression::Not(_)
+            | Expression::In(..) | Expression::If(..) | Expression::Coalesce(_)
+            | Expression::FunctionCall(..) => {}
+        }
+        Ok(())
+    }, memory)
+}
+
+fn rename_reads_with_memory(
+    expression: &mut Expression, renames: &[(Variable, Variable)], memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    for_each_expression_mut_with_memory([expression], memory, |expression, _| {
+        if let Expression::Variable(variable) = expression
+            && let Some((_, to)) = renames.iter().find(|(from, _)| from == variable)
+        { *variable = to.clone(); }
+        Ok(())
+    })
+}
+
+struct StandInText<'a>(&'a Variable);
+impl std::fmt::Display for StandInText<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{STAND_IN_PREFIX}{}", self.0.as_str())
+    }
+}
+
+fn drive_expression_reads_with_memory(
+    node: &mut GraphPattern, expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    scope: WalkScope, operand: SeedColumns, memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    if scope == WalkScope::Descent && (0..expr_subs.entries().len()).all(|index| operand.carries(index)) {
+        return Ok(());
+    }
+    let workspace = rewrite_workspace(memory);
+    let mut reads = Reads { plain: crate::AdmittedVec::new(&workspace), in_exists: crate::AdmittedVec::new(&workspace) };
+    let roots = node_expressions_with_memory(node, memory)?;
+    for expression in roots { note_reads_with_memory(expression, expr_subs, &mut reads, memory)?; }
+    if scope == WalkScope::Descent {
+        reads.plain.retain(|&index| !operand.carries(index));
+        reads.in_exists.retain(|&index| !operand.carries(index));
+    } else if !reads.in_exists.is_empty() {
+        let exposed = operand_schema_with_memory(node, memory)?;
+        reads.in_exists.retain(|&index| !exposed.contains(&expr_subs.entries()[index].0));
+    }
+    if reads.plain.is_empty() && reads.in_exists.is_empty() { return Ok(()); }
+    let hides_operand = matches!(node, GraphPattern::Group { .. });
+    let carried = if hides_operand { None } else { Some(carried_columns_with_memory(node, expr_subs, &reads, scope, memory)?) };
+    let mut renames = crate::AdmittedVec::new(&workspace);
+    for &index in reads.plain.iter() {
+        let variable = &expr_subs.entries()[index].0;
+        renames.push((variable.clone(), rewrite_variable(&StandInText(variable), memory)?))?;
+    }
+    if !renames.is_empty() {
+        for_each_node_expression_mut_with_memory(node, memory, |expression, memory| {
+            rename_reads_with_memory(expression, &renames, memory)
+        })?;
+    }
+    let mut variables = Vec::new();
+    let mut row = Vec::new();
+    let count = renames.len().checked_add(reads.in_exists.len())
+        .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+    let result = memory.reserve(&mut variables, count);
+    native_storage(memory, result)?;
+    let result = memory.reserve(&mut row, count);
+    native_storage(memory, result)?;
+    for (&index, (_, stand_in)) in reads.plain.iter().zip(renames) {
+        variables.push(stand_in);
+        row.push(Some(clone_ground_with_memory(&expr_subs.entries()[index].1, memory)?));
+    }
+    for &index in reads.in_exists.iter() {
+        variables.push(expr_subs.entries()[index].0.clone());
+        row.push(Some(clone_ground_with_memory(&expr_subs.entries()[index].1, memory)?));
+    }
+    let bindings = rewrite_vec([row], memory)?;
+    let seed = GraphPattern::Values { variables, bindings };
+    match node {
+        GraphPattern::Extend { inner, .. } | GraphPattern::Unfold { inner, .. }
+        | GraphPattern::Filter { inner, .. } | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Group { inner, .. } | GraphPattern::LeftJoin { left: inner, .. } => {
+            plant_left_driver_with_memory(inner, seed, memory)?;
+        }
+        _ => unreachable!("only expression-bearing nodes can record expression reads"),
+    }
+    if let Some(variables) = carried {
+        *node = GraphPattern::Project { inner: rewrite_child(take_child(node), memory)?, variables };
+    }
+    Ok(())
+}
+
+fn node_expressions_with_memory<'n>(
+    node: &'n GraphPattern, memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<crate::AdmittedVec<&'n Expression>> {
+    let mut out = crate::AdmittedVec::new(&rewrite_workspace(memory));
+    match node {
+        GraphPattern::Extend { expression, .. } | GraphPattern::Unfold { expression, .. }
+        | GraphPattern::Filter { expr: expression, .. }
+        | GraphPattern::LeftJoin { expression: Some(expression), .. } => out.push(expression)?,
+        GraphPattern::OrderBy { expression, .. } => {
+            for order in expression { out.push(order.expression())?; }
+        }
+        GraphPattern::Group { aggregates, .. } => {
+            for (_, aggregate) in aggregates {
+                for expression in aggregate.args().iter().chain(aggregate.order_by().iter().map(OrderExpression::expression)) {
+                    out.push(expression)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(out)
+}
+
+fn carry_past_group_with_memory(
+    node: &mut GraphPattern, expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    keys: &[Variable], carried: SeedColumns, memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<SeedColumns> {
+    let mut restored = carried.0;
+    let mut indices = crate::AdmittedVec::new(&rewrite_workspace(memory));
+    for (index, (variable, _)) in expr_subs.entries().iter().enumerate() {
+        if keys.contains(variable) || indices.iter().any(|&seen| expr_subs.entries()[seen].0 == *variable) { continue; }
+        indices.push(index)?;
+        if index < 64 { restored |= 1_u64 << index; }
+    }
+    if indices.is_empty() { return Ok(carried); }
+    let seed = seed_entries_with_memory(indices.iter().map(|&index| &expr_subs.entries()[index]), memory)?;
+    *node = rewrite_join(seed, take_child(node), memory)?;
+    Ok(SeedColumns(restored))
+}
+
+fn finish_own_expressions_with_memory(
+    frame: &mut SubstituteFrame, expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<SeedColumns> {
+    let operand = frame.operand;
+    match &frame.node {
+        GraphPattern::LeftJoin { expression: None, .. } => Ok(operand),
+        GraphPattern::Group { variables, .. } => {
+            let keys = rewrite_scratch(variables.iter().cloned(), memory)?;
+            let carried = operand.kept(expr_subs, &keys);
+            drive_expression_reads_with_memory(&mut frame.node, expr_subs, frame.scope, operand, memory)?;
+            if frame.scope == WalkScope::ExistsBody { Ok(carried) }
+            else { carry_past_group_with_memory(&mut frame.node, expr_subs, &keys, carried, memory) }
+        }
+        _ => {
+            drive_expression_reads_with_memory(&mut frame.node, expr_subs, frame.scope, operand, memory)?;
+            Ok(operand)
+        }
+    }
+}
+
+fn substitute_in_expressions_with_memory<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    expr_subs: &ExprSubs<impl AsRef<[(Variable, GroundTerm)]>>,
+    bodies: &mut crate::AdmittedVec<GraphPattern>, memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    for_each_expression_mut_with_memory(roots, memory, |expression, memory| {
+        match expression {
+            Expression::Variable(variable) => {
+                if let Some(replacement) = expr_subs.get(variable.as_str()).and_then(expression_from_ground) {
+                    *expression = replacement;
+                }
+            }
+            Expression::Bound(variable) => {
+                if expr_subs.contains_key(variable.as_str()) { *expression = true_literal_with_memory(memory)?; }
+            }
+            Expression::Exists(inner) => bodies.push(take_child(inner))?,
+            Expression::NamedNode(_) | Expression::Literal(_) | Expression::Or(_) | Expression::And(_)
+            | Expression::Arithmetic(..) | Expression::Equal(..) | Expression::SameTerm(..)
+            | Expression::Greater(..) | Expression::GreaterOrEqual(..) | Expression::Less(..)
+            | Expression::LessOrEqual(..) | Expression::UnaryPlus(_) | Expression::UnaryMinus(_)
+            | Expression::Not(_) | Expression::In(..) | Expression::If(..) | Expression::Coalesce(_)
+            | Expression::FunctionCall(..) => {}
+        }
+        Ok(())
+    })
+}
+
+fn replace_exists_bodies_with_memory<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>, bodies: crate::AdmittedVec<GraphPattern>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let mut bodies = bodies.into_iter();
+    for_each_expression_mut_with_memory(roots, memory, |expression, _| {
+        if let Expression::Exists(inner) = expression {
+            **inner = bodies.next().expect("every EXISTS body was taken out in source order");
+        }
+        Ok(())
+    })?;
+    debug_assert!(bodies.next().is_none(), "every taken body goes back");
+    Ok(())
+}

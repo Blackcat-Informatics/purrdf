@@ -1,0 +1,64 @@
+fn parse_admitted_query(
+    text: &str, options: &ParserOptions, base: Option<&str>, names: &[&str],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedQuery, EvaluationFailure> {
+    use purrdf_lex::allocation::Memory;
+    use purrdf_sparql_algebra::ParseError;
+    use crate::workspace::LexicalFrame;
+    let mut frame = LexicalFrame::new(workspace);
+    let result = {
+        let admission: &mut dyn purrdf_sparql_algebra::parser::ParserAdmission = &mut frame;
+        let mut memory = Memory::new(admission);
+        SparqlParser::parse_query_admitted(text, options, base, names, &mut memory)
+    };
+    match result {
+        Ok(query) => {
+            let live_bytes = frame.live_bytes();
+            let allocation = match frame.into_allocation() {
+                Some(allocation) => allocation,
+                None => workspace.charge(0)?,
+            };
+            Ok(AdmittedQuery { query, allocation, live_bytes })
+        }
+        Err(ParseError::Storage(error)) => Err(frame.storage_error(error, "native query parser").into()),
+        Err(error) => {
+            let error_bytes = frame.live_bytes();
+            let mut memory = Memory::resume(&mut frame, error_bytes);
+            let presentation = error.try_presentation_with_memory(&mut memory)
+                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "query parse presentation")))?;
+            let mut diagnostic = purrdf_core::RdfDiagnostic::try_error_with_memory(
+                "native-sparql-query-parse", &"", &mut memory,
+            ).map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "query parse diagnostic")))?
+                .with_presentation(presentation);
+            diagnostic.detail = None;
+            drop(error);
+            memory.release_bytes(error_bytes)
+                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "query parse error payload")))?;
+            memory.add_bytes(crate::RetainedDiagnostic::control_bytes())
+                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "query parse diagnostic control")))?;
+            drop(memory);
+            let allocation = frame.into_allocation().expect("retained diagnostic control has an original grant");
+            Err(crate::RetainedDiagnostic::from_admitted(diagnostic, allocation)?.into())
+        }
+    }
+}
+
+fn prepared_payload_bytes_with_memory(
+    query: &Query, source: Option<&Query>, schema: Option<&crate::solution::VarSchema>,
+    relations: usize, aggregates: usize,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<usize, EvaluationFailure> {
+    let query = query.retained_size_bytes_with_memory(memory)
+        .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared query retention observation")))?;
+    let source = match source {
+        Some(source) => source.retained_size_bytes_with_memory(memory)
+            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared source retention observation")))?,
+        None => 0,
+    };
+    size_of::<PreparedQuery>().checked_add(query.saturating_sub(size_of::<Query>()))
+        .and_then(|n| n.checked_add(source))
+        .and_then(|n| n.checked_add(relations))
+        .and_then(|n| n.checked_add(aggregates))
+        .and_then(|n| n.checked_add(schema.map_or(0, |schema| schema.retained_size_bytes().saturating_add(2 * size_of::<usize>()))))
+        .ok_or_else(|| crate::EvalError::WorkspaceBoundOverflow.into())
+}

@@ -1,0 +1,70 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/ast.rs:296:20
+    |
+296 |             value: value.into(),
+    |                    ^^^^^^^^^^^^ expected `OwnedText`, found `String`
+    |
+help: call `Into::into` on this expression to convert `std::string::String` into `OwnedText`
+    |
+296 |             value: value.into().into(),
+    |                                +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/ast.rs:306:20
+    |
+306 |             value: value.into(),
+    |                    ^^^^^^^^^^^^ expected `OwnedText`, found `String`
+    |
+help: call `Into::into` on this expression to convert `std::string::String` into `OwnedText`
+    |
+306 |             value: value.into().into(),
+    |                                +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/ast.rs:324:20
+    |
+324 |             value: value.into(),
+    |                    ^^^^^^^^^^^^ expected `OwnedText`, found `String`
+    |
+help: call `Into::into` on this expression to convert `std::string::String` into `OwnedText`
+    |
+324 |             value: value.into().into(),
+    |                                +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/ast.rs:326:28
+    |
+326 |             language: Some(language.into()),
+    |                       ---- ^^^^^^^^^^^^^^^ expected `OwnedText`, found `String`
+    |                       |
+    |                       arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `std::string::String` due to the type of the argument passed
+   --> crates/sparql-algebra/src/ast.rs:326:23
+    |
+326 |             language: Some(language.into()),
+    |                       ^^^^^---------------^
+    |                            |
+    |                            this argument influences the type of `Some`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/option.rs:606:5
+    |
+606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+    |     ^^^^
+help: call `Into::into` on this expression to convert `std::string::String` into `OwnedText`
+    |
+326 |             language: Some(language.into().into()),
+    |                                           +++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-algebra` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-algebra` (lib test) due to 4 previous errors

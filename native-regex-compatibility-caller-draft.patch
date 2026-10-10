@@ -1,0 +1,481 @@
+diff --git a/crates/sparql-eval/src/xpath_regex.rs b/crates/sparql-eval/src/xpath_regex.rs
+--- a/crates/sparql-eval/src/xpath_regex.rs
++++ b/crates/sparql-eval/src/xpath_regex.rs
+@@ -5,11 +5,12 @@
+ use std::borrow::Cow;
+ use std::hash::BuildHasher;
+ use std::marker::PhantomData;
++#[cfg(test)]
+ use std::sync::Arc;
+ 
+ use purrdf_core::small::Shared;
+ use purrdf_core::{DatasetView, RdfTextDirection, TermValue};
+-use purrdf_core::xsd_regex::{self, xpath};
++use purrdf_core::xsd_regex::xpath;
+ use purrdf_iri::vocab::rdf::{DIR_LANG_STRING, LANG_STRING};
+ use purrdf_lex::allocation::StorageError;
+ use purrdf_xsd::datatype::XSD_STRING;
+@@ -78,7 +79,8 @@
+                 resource: *resource, units: *units,
+             })),
+             xpath::Error::Storage(error) => Err(storage.storage_error(*error)),
+-            xpath::Error::Flags { .. } | xpath::Error::Syntax { .. }
++            xpath::Error::Flags { .. } | xpath::Error::CompatibilityFlags { .. }
++                | xpath::Error::CompatibilitySource { .. } | xpath::Error::Syntax { .. }
+                 | xpath::Error::EmptyMatch | xpath::Error::Replacement(_) => Ok(None),
+             _ => Err(NativeDiagnostic::error(NativeDiagnosticKind::Internal,
+                 "unclassified native XPath failure", storage.workspace())),
+@@ -86,9 +88,50 @@
+     }
+ }
+ 
++// Replace NativeProgram through the Cache/Program declarations at their real
++// existing home; reuse the shipping FailureOwner/ErrorPublication unchanged
++// except classifying CompatibilityFlags/CompatibilitySource as lexical.
++#[derive(Debug)]
++enum NativePattern {
++    Dated(xpath::CompiledPattern),
++    Compatibility(xpath::CompatibilityPattern),
++}
++
++impl NativePattern {
++    fn matches_source(&self, profile: Option<xpath::Profile>, pattern: &str, flags: &str) -> bool {
++        match (self, profile) {
++            (Self::Dated(value), Some(profile)) => value.matches_source(profile, pattern, flags),
++            (Self::Compatibility(value), None) => value.matches_source(pattern, flags),
++            _ => false,
++        }
++    }
++    fn admit(&self, limits: xpath::Limits) -> Result<(), xpath::Error> {
++        match self { Self::Dated(value) => value.admit(limits), Self::Compatibility(value) => value.admit(limits) }
++    }
++    fn is_match_with_storage(
++        &self, input: &str, limits: xpath::Limits, storage: LexicalFrame,
++    ) -> Result<xpath::OwnedPatternValue<bool, LexicalFrame>, xpath::OwnedPatternError<LexicalFrame>> {
++        match self {
++            Self::Dated(value) => value.is_match_with_storage(input, limits, storage),
++            Self::Compatibility(value) => value.is_match_with_storage(input, limits, storage),
++        }
++    }
++    fn replace_all_with_storage<'h>(
++        &self, input: &'h str, replacement: &str, limits: xpath::Limits,
++        matcher: LexicalFrame, output: LexicalFrame,
++    ) -> Result<xpath::OwnedReplacement<'h, LexicalFrame, LexicalFrame>,
++        xpath::OwnedPatternError<(LexicalFrame, LexicalFrame)>> {
++        match self {
++            Self::Dated(value) => value.replace_all_with_storage(input, replacement, limits, matcher, output),
++            Self::Compatibility(value) => value.replace_all_with_storage(input, replacement, limits, matcher, output),
++        }
++    }
++}
++
+ pub(crate) struct NativeProgram {
+-    // The program dies before the original compiler/control grant.
+-    pattern: xpath::CompiledPattern,
++    // Both public law carriers delegate to one program body. The payload dies
++    // before the original compiler/control grant, including a shallow clone.
++    pattern: NativePattern,
+     storage: LexicalFrame,
+ }
+ impl std::fmt::Debug for NativeProgram {
+@@ -96,19 +139,21 @@
+         f.debug_struct("NativeProgram").field("storage", &self.storage).finish_non_exhaustive()
+     }
+ }
+-struct ProgramPublication;
+-impl xpath::Publication<xpath::CompiledPattern, LexicalFrame> for ProgramPublication {
++struct ProgramPublication<T> {
++    wrap: fn(T) -> NativePattern,
++}
++impl<T> xpath::Publication<T, LexicalFrame> for ProgramPublication<T> {
+     type Output = Shared<NativeProgram>;
+     type Error = EvalError;
+-    fn publish(self, value: &mut Option<xpath::CompiledPattern>, storage: &mut LexicalFrame) -> Result<Self::Output, EvalError> {
++    fn publish(self, value: &mut Option<T>, storage: &mut LexicalFrame) -> Result<Self::Output, EvalError> {
+         let control = Shared::<NativeProgram>::allocation_layout().size();
+         let total = storage.live_bytes().checked_add(control).ok_or(EvalError::WorkspaceBoundOverflow)?;
+         storage.resize_live(total)?;
+         let workspace = storage.workspace().clone();
+-        // Allocate the final control BEFORE removing either original payload or
+-        // original grant. Refusal does not invoke this infallible factory.
++        // The final control is allocated before either original owner is
++        // removed. The factory only moves the payload and original grant.
+         Shared::try_new_with(|| NativeProgram {
+-            pattern: value.take().expect("native program remains enclosed"),
++            pattern: (self.wrap)(value.take().expect("native program remains enclosed")),
+             storage: std::mem::replace(storage, LexicalFrame::new(&workspace)),
+         }).map_err(|_| EvalError::AllocationFailed { construct: "native XPath shared program" })
+     }
+@@ -118,19 +163,36 @@
+     profile: xpath::Profile, pattern: &str, flags: &str, limits: xpath::Limits,
+     workspace: &WorkspaceCapability,
+ ) -> Result<Option<Shared<NativeProgram>>, EvalError> {
++    let publication = ProgramPublication { wrap: NativePattern::Dated };
+     match xpath::compile_with_storage(profile, pattern, flags, limits, LexicalFrame::new(workspace)) {
+-        Ok(compiled) => compiled.publish_with(ProgramPublication).map(Some),
++        Ok(compiled) => compiled.publish_with(publication).map(Some),
+         Err(error) => error.publish_with(ErrorPublication::new()),
+     }
+ }
+ 
+-/// Bounded retention of successful programs; the complete identity is rechecked.
++fn compile_compatibility_owned(
++    pattern: &str, flags: &str, limits: xpath::Limits, workspace: &WorkspaceCapability,
++) -> Result<Option<Shared<NativeProgram>>, EvalError> {
++    let publication = ProgramPublication { wrap: NativePattern::Compatibility };
++    match xpath::compile_compatibility_with_storage(pattern, flags, limits, LexicalFrame::new(workspace)) {
++        Ok(compiled) => compiled.publish_with(publication).map(Some),
++        Err(error) => error.publish_with(ErrorPublication::new()),
++    }
++}
++
++/// Successful programs only; full original source/flags/law are rechecked.
+ pub(crate) type Cache = BoundedCache<u64, Shared<NativeProgram>>;
+ 
+ #[derive(Clone)]
+-pub(crate) enum Program {
+-    Compatibility(Arc<xsd_regex::CompiledPattern>),
+-    Native(Shared<NativeProgram>, xpath::Limits),
++pub(crate) struct Program {
++    compiled: Shared<NativeProgram>,
++    limits: xpath::Limits,
++}
++
++impl Program {
++    fn new(compiled: Shared<NativeProgram>, limits: xpath::Limits) -> Self {
++        Self { compiled, limits }
++    }
+ }
+ 
+ // Trusted one-step native String -> RDF literal publication. A borrowed Cow is
+@@ -179,12 +241,9 @@
+ impl Program {
+     #[inline(never)]
+     pub(crate) fn is_match(&self, text: &str, workspace: &WorkspaceCapability) -> Result<Option<bool>, EvalError> {
+-        match self {
+-            Self::Compatibility(pattern) => Ok(Some(pattern.is_match(text))),
+-            Self::Native(pattern, limits) => match pattern.pattern.is_match_with_storage(text, *limits, LexicalFrame::new(workspace)) {
+-                Ok(result) => Ok(Some(*result.value())),
+-                Err(error) => error.publish_with(ErrorPublication::new()),
+-            },
++        match self.compiled.pattern.is_match_with_storage(text, self.limits, LexicalFrame::new(workspace)) {
++            Ok(result) => Ok(Some(*result.value())),
++            Err(error) => error.publish_with(ErrorPublication::new()),
+         }
+     }
+ 
+@@ -193,23 +252,10 @@
+         &self, text: &str, replacement: &str, language: Option<&str>, direction: Option<RdfTextDirection>,
+         workspace: &WorkspaceCapability,
+     ) -> Result<Option<WorkspaceTerm>, EvalError> {
+-        let publication = StringLiteralPublication { language, direction };
+-        match self {
+-            Self::Native(pattern, limits) => match pattern.pattern.replace_all_with_storage(
+-                text, replacement, *limits, LexicalFrame::new(workspace), LexicalFrame::new(workspace),
+-            ) {
+-                Ok(result) => result.publish_with(publication).map(Some),
+-                Err(error) => error.publish_with(ErrorPublication::new()),
+-            },
+-            Self::Compatibility(pattern) => {
+-                // Existing compatibility engine law is preserved in this native
+-                // caller unit. Its producer is replaced by the separately staged
+-                // same-program compatibility-law unit before #508 qualification.
+-                let Ok(result) = pattern.replace_all(text, replacement) else { return Ok(None); };
+-                let mut original = Some(Cow::Borrowed(result.as_ref()));
+-                let mut storage = (LexicalFrame::new(workspace), LexicalFrame::new(workspace));
+-                xpath::Publication::publish(publication, &mut original, &mut storage).map(Some)
+-            }
++        match self.compiled.pattern.replace_all_with_storage(text, replacement, self.limits,
++            LexicalFrame::new(workspace), LexicalFrame::new(workspace)) {
++            Ok(result) => result.publish_with(StringLiteralPublication { language, direction }).map(Some),
++            Err(error) => error.publish_with(ErrorPublication::new()),
+         }
+     }
+ }
+@@ -217,53 +263,55 @@
+ /// Linked request verdicts retain successful native programs and their accounts.
+ #[derive(Clone)]
+ pub(crate) struct LinkedPattern {
+-    selection: Option<Selection>,
+     verdict: Result<Option<Program>, EvalError>,
+ }
+ impl LinkedPattern {
+     pub(crate) fn link<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, pattern: &str, flags: &str) -> Self {
+-        Self { selection: ctx.xpath_regex, verdict: cached(ctx, pattern, flags) }
+-    }
++        Self { verdict: cached(ctx, pattern, flags) }
++    }
++}
++
++fn request(selection: Option<Selection>) -> (Option<xpath::Profile>, xpath::Limits) {
++    selection.map_or((None, xpath::Limits::without_presets()),
++        |Selection { profile, limits }| (Some(profile), limits))
+ }
+ 
+ #[inline(never)]
+ pub(crate) fn resolve<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>, pattern: &str, flags: &str, linked: Option<&LinkedPattern>,
+ ) -> Result<Option<Program>, EvalError> {
+-    if let Some(selection) = ctx.xpath_regex {
+-        selection.limits.admit_pattern(pattern).map_err(|refusal| EvalError::XPathRegex(refusal.into()))?;
+-    }
+-    if let Some(linked) = linked {
+-        match (&linked.verdict, ctx.xpath_regex) {
+-            (Ok(Some(Program::Native(compiled, _))), Some(Selection { profile, limits }))
+-                if compiled.pattern.matches_source(profile, pattern, flags) => {
+-                    compiled.pattern.admit(limits).map_err(EvalError::XPathRegex)?;
+-                    return Ok(Some(Program::Native(compiled.clone(), limits)));
+-                }
+-            (_, None) if linked.selection.is_none() => return linked.verdict.clone(),
+-            _ => {}
+-        }
+-    }
++    let (profile, limits) = request(ctx.xpath_regex);
++    limits.admit_pattern(pattern).map_err(|refusal| EvalError::XPathRegex(refusal.into()))?;
++    if let Some(linked) = linked
++        && let Ok(Some(program)) = &linked.verdict
++        && program.compiled.pattern.matches_source(profile, pattern, flags) {
++        program.compiled.pattern.admit(limits).map_err(EvalError::XPathRegex)?;
++        return Ok(Some(Program::new(program.compiled.clone(), limits)));
++    }
++    // Request failures are not artifacts. A changed law/current request or a
++    // failed original request is resolved again in the current physical owner.
+     cached(ctx, pattern, flags)
+ }
+ 
+ fn cached<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, pattern: &str, flags: &str) -> Result<Option<Program>, EvalError> {
+-    let Some(Selection { profile, limits }) = ctx.xpath_regex else {
+-        return Ok(crate::expr::cached_regex(ctx, pattern, flags).map(Program::Compatibility));
+-    };
++    let (profile, limits) = request(ctx.xpath_regex);
+     limits.admit_pattern(pattern).map_err(|refusal| EvalError::XPathRegex(refusal.into()))?;
+-    // Flags are not hashed before the native parser admits them. Each lookup is
+-    // a hint only; mismatched profile/source/flags cannot select a program.
++    // Original flags are compared after lookup. The hint cannot select another
++    // source or law, and no per-row owned pattern/flag key is allocated.
+     let key = purrdf_hash::fixed::FixedState::default().hash_one((profile, pattern));
+     if let Some(compiled) = ctx.xpath_regex_cache.get(&key)
+         && compiled.pattern.matches_source(profile, pattern, flags) {
+         compiled.pattern.admit(limits).map_err(EvalError::XPathRegex)?;
+-        return Ok(Some(Program::Native(compiled, limits)));
+-    }
+-    let Some(compiled) = compile_owned(profile, pattern, flags, limits, &ctx.growth)? else { return Ok(None); };
++        return Ok(Some(Program::new(compiled, limits)));
++    }
++    let compiled = match profile {
++        Some(profile) => compile_owned(profile, pattern, flags, limits, &ctx.growth)?,
++        None => compile_compatibility_owned(pattern, flags, limits, &ctx.growth)?,
++    };
++    let Some(compiled) = compiled else { return Ok(None); };
+     let bytes = compiled.storage.live_bytes().checked_add(size_of::<u64>()).ok_or(EvalError::WorkspaceBoundOverflow)?;
+     ctx.xpath_regex_cache.insert_admitted(key, compiled.clone(), bytes, &ctx.growth)?;
+-    Ok(Some(Program::Native(compiled, limits)))
++    Ok(Some(Program::new(compiled, limits)))
+ }
+ 
+ #[cfg(all(test, not(target_arch = "wasm32")))]
+@@ -456,7 +504,7 @@
+         let data = empty_dataset();
+         let mut ctx = EvalCtx::new(&*data).with_xpath_regex(Profile::Xpath31, Limits::new());
+         let different = compile_owned(Profile::Xpath20, "z", "", Limits::new(), &ctx.growth).unwrap().unwrap();
+-        let key = purrdf_hash::fixed::FixedState::default().hash_one((Profile::Xpath31, "a"));
++        let key = purrdf_hash::fixed::FixedState::default().hash_one((Some(Profile::Xpath31), "a"));
+         ctx.xpath_regex_cache
+             .insert_admitted(key, different.clone(), different.storage.live_bytes(), &ctx.growth).unwrap();
+         assert_eq!(
+@@ -542,7 +590,7 @@
+         drop(capability);
+         drop(workspace);
+         assert_eq!(source.evidence().live_bytes(), loaded);
+-        assert!(cloned.pattern.matches_source(xpath::Profile::Xpath31, "(a|b){1,20}[c-z-[d-f]]", "i"));
++        assert!(cloned.pattern.matches_source(Some(xpath::Profile::Xpath31), "(a|b){1,20}[c-z-[d-f]]", "i"));
+         drop(cloned);
+         assert_eq!(source.evidence().live_bytes(), baseline);
+     }
+@@ -603,7 +651,7 @@
+         let compiled = compile_owned(xpath::Profile::Xpath31, "(a)", "",
+             xpath::Limits::new(), &capability).unwrap().unwrap();
+         let baseline = source.evidence().live_bytes();
+-        let program = Program::Native(compiled, xpath::Limits::new());
++        let program = Program::new(compiled, xpath::Limits::new());
+         assert_eq!(program.is_match("aba", &capability).unwrap(), Some(true));
+         assert_eq!(source.evidence().live_bytes(), baseline);
+         for pattern in ["[", "(?<bad>", "\\7"] {
+diff --git a/crates/sparql-eval/src/eval.rs b/crates/sparql-eval/src/eval.rs
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -565,24 +565,6 @@
+     /// (read and write both) while [`Self::in_substituted_exists`] is set, for the same ABA
+     /// reason.
+     pub(crate) exists_definition_memo: DetHashMap<ExistsDefinitionMemoKey<D::Id>, bool>,
+-    /// Per-query cache for SPARQL `REGEX`/`REPLACE` pattern+flag compilations,
+-    /// keyed pattern-then-flags so a hit probes with **borrowed** strings (no
+-    /// per-row key allocation). The compiled pattern is behind an `Arc`, so a hit
+-    /// hands out a cheap pointer clone that **shares** the regex's lazy-DFA cache
+-    /// pool instead of minting a fresh one per row. Dynamic pattern expressions
+-    /// still compile per distinct value, but a filter over many rows no longer
+-    /// rebuilds the same automata (or their DFA caches) for every row.
+-    ///
+-    /// The value is a [`purrdf_core::xsd_regex::CompiledPattern`] rather than a
+-    /// bare [`regex::Regex`] because `REPLACE()` needs one more bit than the
+-    /// automaton carries: whether the pattern was compiled under the XPath `q`
+-    /// (literal) flag, which decides whether `$`/`\` in the *replacement* string
+-    /// keep their special meaning (XPath F&O 3.1 §5.6.2). Caching the regex
+-    /// alone would strand that bit at the compile site.
+-    pub(crate) regex_cache: DetHashMap<
+-        String,
+-        DetHashMap<String, Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
+-    >,
+     /// Explicit native law and current finite bounds; absent means compatibility.
+     pub(crate) xpath_regex: Option<Selection>,
+     /// Successful native programs only, with bounded retained payload and entries.
+@@ -1146,7 +1128,6 @@
+             exists_inner_cache: DetHashMap::default(),
+             exists_prepared_cache: DetHashMap::default(),
+             exists_definition_memo: DetHashMap::default(),
+-            regex_cache: DetHashMap::default(),
+             xpath_regex: None,
+             xpath_regex_cache: crate::xpath_regex::Cache::default(),
+             cached_bool_terms: [None, None],
+@@ -2471,7 +2452,7 @@
+     ///   id is valid in the parent's space (a raw child `ScratchId` is never
+     ///   reused in the parent — only the id space, not individual ids, is
+     ///   shared by the clone).
+-    /// - **Fresh** (`regex_cache`, `cached_bool_terms`, `xsd_parse_cache`,
++    /// - **Fresh** (`xpath_regex_cache`, `cached_bool_terms`, `xsd_parse_cache`,
+     ///   `constructed`): per-worker mutable state that must
+     ///   NOT be shared, so each worker mints its own constructed-quad buffer
+     ///   without contending on a lock. The caller
+@@ -2560,7 +2541,6 @@
+             exists_inner_cache: self.exists_inner_cache.clone(),
+             exists_prepared_cache: self.exists_prepared_cache.clone(),
+             exists_definition_memo: self.exists_definition_memo.clone(),
+-            regex_cache: DetHashMap::default(),
+             xpath_regex: self.xpath_regex,
+             xpath_regex_cache: crate::xpath_regex::Cache::default(),
+             cached_bool_terms: [None, None],
+@@ -2896,7 +2876,6 @@
+             exists_inner_cache: DetHashMap::default(),
+             exists_prepared_cache: DetHashMap::default(),
+             exists_definition_memo: DetHashMap::default(),
+-            regex_cache: DetHashMap::default(),
+             xpath_regex: self.xpath_regex,
+             xpath_regex_cache: crate::xpath_regex::Cache::default(),
+             cached_bool_terms: [None, None],
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -5784,63 +5784,11 @@
+     ctx.intern_workspace_term(replaced)
+ }
+ 
+-/// The compiled pattern for `(pattern, flags)`, from the per-query cache.
+-///
+-/// The hit path probes with the **borrowed** strings (the two-level map avoids
+-/// allocating a `(String, String)` key per row) and returns an `Arc` clone — the
+-/// rows of one filter share a single compiled regex and therefore its lazy-DFA
+-/// cache pool, instead of each row cloning a fresh one. Compile failures are
+-/// cached as `None` (same errors, compiled once).
+-pub(crate) fn cached_regex<D: DatasetView + Sync>(
+-    ctx: &mut EvalCtx<'_, D>,
+-    pattern: &str,
+-    flags: &str,
+-) -> Option<Arc<purrdf_core::xsd_regex::CompiledPattern>> {
+-    if let Some(cached) = ctx
+-        .regex_cache
+-        .get(pattern)
+-        .and_then(|by_flags| by_flags.get(flags))
+-    {
+-        return cached.clone();
+-    }
+-    let compiled = build_regex(pattern, flags).map(Arc::new);
+-    ctx.regex_cache
+-        .entry(pattern.to_owned())
+-        .or_default()
+-        .insert(flags.to_owned(), compiled.clone());
+-    compiled
+-}
+-
+-/// Build a compiled pattern from a SPARQL `REGEX`/`REPLACE` pattern plus its
+-/// flag string (`i`, `s`, `m`, `x`, `q`).
+-///
+-/// SPARQL `REGEX` and `REPLACE` use XPath `fn:matches` and `fn:replace`.
+-/// Unselected calls retain this compatibility translation through
+-/// [`purrdf_core::xsd_regex::compile`]. An explicitly selected dated law uses
+-/// [`purrdf_core::xsd_regex::xpath`] through the fallible expression boundary.
+-///
+-/// Two behaviours change as a result, both deliberate:
+-///
+-/// * `x` is XPath's flag — remove `#x9`, `#xA`, `#xD` and `#x20` outside
+-///   character-class expressions — not `RegexBuilder::ignore_whitespace`, which
+-///   removes the 26-member Unicode `White_Space` property, treats `#` as a
+-///   comment introducer, and strips whitespace *inside* character classes that
+-///   XPath explicitly exempts.
+-/// * `q` (match the pattern literally) is accepted rather than rejected, and
+-///   the returned [`CompiledPattern`](purrdf_core::xsd_regex::CompiledPattern)
+-///   carries that bit so `REPLACE()` honours it in the replacement string —
+-///   through `CompiledPattern::replace_all`, which owns both the `q` switch
+-///   and XPath's `$N`/`\$`/`\\` replacement syntax.
+-///
+-/// # Contract
+-///
+-/// `None` — never an `EvalError` — for any flag or pattern that does not
+-/// compile, because SPARQL's evaluation rules make an ill-formed `REGEX`/
+-/// `REPLACE` argument a type error that leaves the expression unbound rather
+-/// than failing the query. The specific [`XsdRegexError`](purrdf_core::xsd_regex::XsdRegexError)
+-/// is therefore discarded here, exactly as the pre-existing `builder.build().ok()`
+-/// discarded `regex::Error`.
+-fn build_regex(pattern: &str, flags: &str) -> Option<purrdf_core::xsd_regex::CompiledPattern> {
++/// The original resident compatibility compiler, retained only as a test oracle.
++/// Production REGEX/REPLACE use the one admitted native program through
++/// `xpath_regex::resolve`; this helper never participates in a bounded query.
++#[cfg(test)]
++pub(crate) fn build_regex(pattern: &str, flags: &str) -> Option<purrdf_core::xsd_regex::CompiledPattern> {
+     purrdf_core::xsd_regex::compile(pattern, flags).ok()
+ }
+ 
+@@ -7054,7 +7002,7 @@
+     }
+ 
+     #[test]
+-    fn regex_cache_reuses_compiled_pattern_and_failures() {
++    fn regex_cache_reuses_success_and_never_caches_request_failure() {
+         let ds = empty_ds();
+         let schema = VarSchema::default();
+         let mut ctx = EvalCtx::new(&ds);
+@@ -7066,13 +7014,7 @@
+             Function::Regex,
+             vec![lit("Hello"), lit("^h"), lit("z")].into(),
+         );
+-        // Total `(pattern, flags)` entries across the pattern-keyed two-level map.
+-        let entries = |ctx: &EvalCtx<'_, Arc<RdfDataset>>| {
+-            ctx.regex_cache
+-                .values()
+-                .map(crate::DetHashMap::len)
+-                .sum::<usize>()
+-        };
++        let entries = |ctx: &EvalCtx<'_, Arc<RdfDataset>>| ctx.xpath_regex_cache.stats().entries;
+ 
+         assert_eq!(
+             eval_ebv(&re, &[], &schema, &mut ctx).expect("first regex"),
+@@ -7092,7 +7034,7 @@
+             eval_ebv(&bad, &[], &schema, &mut ctx).expect("invalid regex cached"),
+             None
+         );
+-        assert_eq!(entries(&ctx), 2);
++        assert_eq!(entries(&ctx), 1);
+     }
+ 
+     /// A `q`-flagged pattern compiles and is cached like any other, where it
+diff --git a/crates/sparql-eval/src/vm/tests.rs b/crates/sparql-eval/src/vm/tests.rs
+--- a/crates/sparql-eval/src/vm/tests.rs
++++ b/crates/sparql-eval/src/vm/tests.rs
+@@ -268,7 +268,7 @@
+                 else {
+                     return Ok(None);
+                 };
+-                return Ok(helpers::cached_regex(ctx, &pattern, &flags).map(|re| {
++                return Ok(helpers::build_regex(&pattern, &flags).map(|re| {
+                     helpers::intern_boolean(ctx, re.as_regex().is_match(&text)).unwrap()
+                 }));
+             }

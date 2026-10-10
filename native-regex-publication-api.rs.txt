@@ -1,0 +1,22 @@
+/// A trusted ownership transformation at a native publication boundary.
+///
+/// Implementations must finish every fallible allocation and grant resize while
+/// `value` remains covered by `storage`. Removing the original payload and its
+/// grant is the final, infallible construction of an ownership-carrying output.
+/// An independent copied output must acquire its own admission before allocation.
+///
+/// On an error, this method leaves any surviving original payload admitted. The
+/// enclosing carrier destroys the remaining value before its original account.
+pub trait Publication<T, S> {
+    /// The published ownership-carrying result.
+    type Output;
+    /// The original typed allocation, admission or transformation failure.
+    type Error;
+
+    /// Transform the enclosed payload without a public raw extraction operation.
+    ///
+    /// # Errors
+    /// Returns the publisher's original typed failure. All surviving native
+    /// payload storage remains covered until the enclosing carrier is destroyed.
+    fn publish(self, value: &mut Option<T>, storage: &mut S) -> Result<Self::Output, Self::Error>;
+}

@@ -1,0 +1,256 @@
+
+enum ValueSeries {
+    Empty,
+    Ok(crate::AdmittedVec<crate::parsed_value::ParsedValue>),
+    Poisoned,
+}
+impl ValueSeries {
+    fn step(&mut self, args: &[TermValue], workspace: &crate::WorkspaceCapability) -> Result<(), EvalError> {
+        if matches!(self, Self::Poisoned) { return Ok(()); }
+        let value = args.first().map(|value| parse_stat_value(value, workspace)).transpose()?.flatten().filter(|value| is_numeric_or_duration_xsd(value));
+        let Some(value) = value else { *self = Self::Poisoned; return Ok(()); };
+        *self = match mem::replace(self, Self::Empty) {
+            Self::Empty => { let mut values = crate::AdmittedVec::new(workspace); values.push(value)?; Self::Ok(values) },
+            Self::Ok(mut values) if same_value_family(&values[0], &value) => { values.push(value)?; Self::Ok(values) },
+            Self::Ok(_) | Self::Poisoned => Self::Poisoned,
+        };
+        Ok(())
+    }
+    fn combine(&mut self, other: Self) -> Result<(), EvalError> {
+        *self = match (mem::replace(self, Self::Empty), other) {
+            (Self::Poisoned, _) | (_, Self::Poisoned) => Self::Poisoned,
+            (Self::Empty, other) | (other, Self::Empty) => other,
+            (Self::Ok(mut values), Self::Ok(other)) => {
+                if same_value_family(&values[0], &other[0]) { values.try_extend(other)?; Self::Ok(values) }
+                else { Self::Poisoned }
+            }
+        };
+        Ok(())
+    }
+}
+
+struct PercentileAccumulator {
+    p: Option<crate::parsed_value::ParsedValue>,
+    state: ValueSeries,
+    workspace: crate::WorkspaceCapability,
+}
+impl AggregateAccumulator for PercentileAccumulator {
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> { Some(&self.workspace) }
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if self.p.is_none() { self.state = ValueSeries::Poisoned; return Ok(()); }
+        self.state.step(args, &self.workspace)
+    }
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        let other = downcast_combine_partial::<Self>(other)?;
+        self.state.combine(other.state)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> { self }
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        let workspace = self.workspace.clone();
+        native_resident_answer(self.finish_admitted(&workspace))
+    }
+    fn finish_admitted(self: Box<Self>, workspace: &crate::WorkspaceCapability) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        let Self { p, state, workspace: original } = *self;
+        let (Some(p), ValueSeries::Ok(values)) = (p, state) else { return Ok(None); };
+        let order = series_order(&values, &original)?;
+        percentile_native(&values, &order, &p, &original)?.map(|value| crate::expr::xsd_workspace_value(&value, workspace)).transpose()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MomentsKind { Stddev, StddevPop, Variance, VarPop }
+enum MomentsState {
+    Empty,
+    Ok { n: u64, sum: crate::parsed_value::ParsedValue, sumsq: crate::parsed_value::ParsedValue },
+    Poisoned,
+}
+
+fn moments_step(n: u64, sum: &XsdValue, sumsq: &XsdValue, x: &XsdValue, workspace: &crate::WorkspaceCapability) -> Result<Option<(u64, crate::parsed_value::ParsedValue, crate::parsed_value::ParsedValue)>, EvalError> {
+    use purrdf_xsd::numeric::NumericBinaryOperator::{Add, Multiply};
+    let Some(n) = n.checked_add(1) else { return Ok(None); };
+    let policy = purrdf_xsd::exact::DivisionPolicy::xsd_default();
+    let Ok(sum) = crate::modifier::numeric_fold_binary(sum, x, Add, policy, workspace)? else { return Ok(None); };
+    let Ok(square) = crate::modifier::numeric_fold_binary(x, x, Multiply, policy, workspace)? else { return Ok(None); };
+    let Ok(sumsq) = crate::modifier::numeric_fold_binary(sumsq, &square, Add, policy, workspace)? else { return Ok(None); };
+    Ok(Some((n, sum, sumsq)))
+}
+
+struct MomentsAccumulator {
+    kind: MomentsKind,
+    state: MomentsState,
+    division: purrdf_xsd::exact::DivisionPolicy,
+    workspace: crate::WorkspaceCapability,
+}
+impl AggregateAccumulator for MomentsAccumulator {
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> { Some(&self.workspace) }
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        use purrdf_xsd::numeric::NumericBinaryOperator::Subtract;
+        if matches!(self.state, MomentsState::Poisoned) { return Ok(()); }
+        let value = args.first().map(|value| parse_stat_value(value, &self.workspace)).transpose()?.flatten().filter(|value| value.is_numeric());
+        let Some(value) = value else { self.state = MomentsState::Poisoned; return Ok(()); };
+        let next = match &self.state {
+            MomentsState::Empty => match crate::modifier::numeric_fold_binary(&value, &value, Subtract, purrdf_xsd::exact::DivisionPolicy::xsd_default(), &self.workspace)? {
+                Ok(zero) => moments_step(0, &zero, &zero, &value, &self.workspace)?,
+                Err(_) => None,
+            },
+            MomentsState::Ok { n, sum, sumsq } => moments_step(*n, sum, sumsq, &value, &self.workspace)?,
+            MomentsState::Poisoned => None,
+        };
+        self.state = match next { Some((n, sum, sumsq)) => MomentsState::Ok { n, sum, sumsq }, None => MomentsState::Poisoned };
+        Ok(())
+    }
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        use purrdf_xsd::numeric::NumericBinaryOperator::Add;
+        let other = downcast_combine_partial::<Self>(other)?;
+        self.state = match (mem::replace(&mut self.state, MomentsState::Empty), other.state) {
+            (MomentsState::Poisoned, _) | (_, MomentsState::Poisoned) => MomentsState::Poisoned,
+            (MomentsState::Empty, other) | (other, MomentsState::Empty) => other,
+            (MomentsState::Ok { n, sum, sumsq }, MomentsState::Ok { n: other_n, sum: other_sum, sumsq: other_sumsq }) => {
+                let Some(n) = n.checked_add(other_n) else { self.state = MomentsState::Poisoned; return Ok(()); };
+                let policy = purrdf_xsd::exact::DivisionPolicy::xsd_default();
+                match (crate::modifier::numeric_fold_binary(&sum, &other_sum, Add, policy, &self.workspace)?, crate::modifier::numeric_fold_binary(&sumsq, &other_sumsq, Add, policy, &self.workspace)?) {
+                    (Ok(sum), Ok(sumsq)) => MomentsState::Ok { n, sum, sumsq },
+                    _ => MomentsState::Poisoned,
+                }
+            }
+        };
+        Ok(())
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> { self }
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> { self.finish_absorbing(&mut |_| {}) }
+    fn finish_absorbing(self: Box<Self>, absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode)) -> Result<Option<TermValue>, EvalError> {
+        let workspace = self.workspace.clone();
+        native_resident_answer(self.finish_absorbing_admitted(absorb, &workspace))
+    }
+    fn finish_admitted(self: Box<Self>, workspace: &crate::WorkspaceCapability) -> Result<Option<crate::WorkspaceTerm>, EvalError> { self.finish_absorbing_admitted(&mut |_| {}, workspace) }
+    fn finish_absorbing_admitted(self: Box<Self>, absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode), workspace: &crate::WorkspaceCapability) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        use purrdf_xsd::numeric::NumericBinaryOperator::{Divide, Multiply, Subtract};
+        let Self { kind, state, division, workspace: original } = *self;
+        let MomentsState::Ok { n, sum, sumsq } = state else { return Ok(None); };
+        let population = matches!(kind, MomentsKind::StddevPop | MomentsKind::VarPop);
+        let denominator = if population { Some(n) } else { n.checked_sub(1).filter(|value| *value > 0) };
+        let Some(denominator) = denominator else { return Ok(None); };
+        let n_value = XsdValue::Integer { value: i128::from(n), datatype: XsdDatatype::Integer };
+        let denominator_value = XsdValue::Integer { value: i128::from(denominator), datatype: XsdDatatype::Integer };
+        let ordinary = purrdf_xsd::exact::DivisionPolicy::xsd_default();
+        let variance = if sum.is_exact_numeric() && sumsq.is_exact_numeric() {
+            let Ok(scaled) = crate::modifier::numeric_fold_binary(&n_value, &sumsq, Multiply, ordinary, &original)? else { return Ok(None); };
+            let Ok(square) = crate::modifier::numeric_fold_binary(&sum, &sum, Multiply, ordinary, &original)? else { return Ok(None); };
+            let Ok(numerator) = crate::modifier::numeric_fold_binary(&scaled, &square, Subtract, ordinary, &original)? else { return Ok(None); };
+            let Ok(divisor) = crate::modifier::numeric_fold_binary(&n_value, &denominator_value, Multiply, ordinary, &original)? else { return Ok(None); };
+            match crate::modifier::numeric_fold_binary(&numerator, &divisor, Divide, division, &original)? {
+                Ok(value) => value,
+                Err(code) => { if let Some(code) = code { absorb(code); } return Ok(None); },
+            }
+        } else {
+            let Ok(square) = crate::modifier::numeric_fold_binary(&sum, &sum, Multiply, ordinary, &original)? else { return Ok(None); };
+            let Ok(correction) = crate::modifier::numeric_fold_binary(&square, &n_value, Divide, ordinary, &original)? else { return Ok(None); };
+            let Ok(numerator) = crate::modifier::numeric_fold_binary(&sumsq, &correction, Subtract, ordinary, &original)? else { return Ok(None); };
+            let Ok(variance) = crate::modifier::numeric_fold_binary(&numerator, &denominator_value, Divide, ordinary, &original)? else { return Ok(None); };
+            variance
+        };
+        match kind {
+            MomentsKind::Variance | MomentsKind::VarPop => crate::expr::xsd_workspace_value(&variance, workspace).map(Some),
+            MomentsKind::Stddev | MomentsKind::StddevPop => {
+                let mut frame = crate::native_numeric::NumericFrame::new(&original);
+                let number = purrdf_xsd::numeric::numeric_to_f64_admitted(&variance, &mut |layout| frame.admit(layout));
+                let Some(number) = frame.finish_scalar(number)? else { return Ok(None); };
+                let root = purrdf_xsd::ieee::f64_sqrt(number.max(0.0));
+                crate::expr::xsd_workspace_value(&XsdValue::Double(root), workspace).map(Some)
+            }
+        }
+    }
+}
+
+struct ModeAccumulator { values: crate::AdmittedVec<crate::WorkspaceTerm>, workspace: crate::WorkspaceCapability }
+impl AggregateAccumulator for ModeAccumulator {
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> { Some(&self.workspace) }
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if let Some(value) = args.first() { self.values.push(self.workspace.clone_term(value)?)?; }
+        Ok(())
+    }
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        let other = downcast_combine_partial::<Self>(other)?;
+        self.values.try_extend(other.values)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> { self }
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        let workspace = self.workspace.clone();
+        native_resident_answer(self.finish_admitted(&workspace))
+    }
+    fn finish_admitted(self: Box<Self>, _workspace: &crate::WorkspaceCapability) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        let Self { mut values, workspace } = *self;
+        if values.is_empty() { return Ok(None); }
+        let order = crate::modifier::order_permutation(values.len(), &workspace, |left, right| workspace.terms_cmp(&values[left], &values[right]))?;
+        let mut best: Option<(usize, u64)> = None;
+        let mut begin = 0;
+        while begin < order.len() {
+            let mut end = begin + 1;
+            while end < order.len() && workspace.terms_equal(&values[order[begin]], &values[order[end]])? { end += 1; }
+            let count = u64::try_from(end - begin).unwrap_or(u64::MAX);
+            let index = order[begin];
+            let better = match best {
+                None => true,
+                Some((winner, largest)) => count > largest || (count == largest && native_term_order(&values[index], &values[winner], &workspace)? == Ordering::Less),
+            };
+            if better { best = Some((index, count)); }
+            begin = end;
+        }
+        Ok(best.map(|(index, _)| values.remove(index)))
+    }
+}
+
+struct EdgeAccumulator { value: Option<crate::WorkspaceTerm>, last: bool, workspace: crate::WorkspaceCapability }
+impl AggregateAccumulator for EdgeAccumulator {
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> { Some(&self.workspace) }
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        if self.last || self.value.is_none() { self.value = args.first().map(|value| self.workspace.clone_term(value)).transpose()?; }
+        Ok(())
+    }
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        if self.last || self.value.is_none() {
+            if let Some(value) = other.finish_admitted(&self.workspace)? { self.value = Some(value); }
+        }
+        Ok(())
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> { self }
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        let workspace = self.workspace.clone();
+        native_resident_answer(self.finish_admitted(&workspace))
+    }
+    fn finish_admitted(self: Box<Self>, _workspace: &crate::WorkspaceCapability) -> Result<Option<crate::WorkspaceTerm>, EvalError> { Ok(self.value) }
+}
+
+enum TopKState { Valid { k: usize, values: crate::AdmittedVec<crate::WorkspaceTerm> }, Poisoned }
+struct TopKAccumulator { state: TopKState, workspace: crate::WorkspaceCapability }
+impl AggregateAccumulator for TopKAccumulator {
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> { Some(&self.workspace) }
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        let TopKState::Valid { k, values } = &mut self.state else { return Ok(()); };
+        let Some(value) = args.first() else { self.state = TopKState::Poisoned; return Ok(()); };
+        insert_bounded(values, *k, self.workspace.clone_term(value)?, &self.workspace)
+    }
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+        let other = downcast_combine_partial::<Self>(other)?;
+        self.state = match (mem::replace(&mut self.state, TopKState::Poisoned), other.state) {
+            (TopKState::Poisoned, _) | (_, TopKState::Poisoned) => TopKState::Poisoned,
+            (TopKState::Valid { k, mut values }, TopKState::Valid { values: other, .. }) => {
+                for value in other { insert_bounded(&mut values, k, value, &self.workspace)?; }
+                TopKState::Valid { k, values }
+            }
+        };
+        Ok(())
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> { self }
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        let workspace = self.workspace.clone();
+        native_resident_answer(self.finish_admitted(&workspace))
+    }
+    fn finish_admitted(self: Box<Self>, workspace: &crate::WorkspaceCapability) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        let Self { state, workspace: original } = *self;
+        let TopKState::Valid { values, .. } = state else { return Ok(None); };
+        if values.is_empty() || values.iter().any(|value| borrowed_lexical(value).is_none()) { return Ok(None); }
+        let order = crate::modifier::order_permutation(values.len(), &original, |left, right| native_term_order(&values[right], &values[left], &original))?;
+        workspace.literal(TopKText { values: &values, order: &order }, XSD_STRING).map(Some)
+    }
+}

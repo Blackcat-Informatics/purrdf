@@ -1,0 +1,1408 @@
+// Certainly-bound variables
+// ---------------------------------------------------------------------------
+
+/// Add to `out` every variable `pattern` binds in **every** solution it produces, save
+/// only a solution in which a `BIND`'s own expression raised an error, or an aggregate
+/// failed on the values its group handed it.
+///
+/// This is deliberately narrower than a scope walk. A variable that is merely *in
+/// scope* may be unbound in a row for a reason the query text fixes — `OPTIONAL`'s
+/// right side, a `UNION` branch that does not mention it, an `UNDEF` cell of a `VALUES`
+/// column, a `SAMPLE` over the one implicit group an aggregate without `GROUP BY`
+/// forms over an empty input — and treating one of those as bound would admit an
+/// invocation the text itself guarantees some row cannot make.
+///
+/// # The rule, exactly
+///
+/// A variable is a binding source here when it is:
+///
+/// * a variable of a triple pattern, a path's endpoints, or a property-function
+///   argument;
+/// * a `VALUES` column with a term — no `UNDEF` — in every row;
+/// * the target of a `BIND` whose expression reads only variables its inner pattern
+///   binds by this same rule, or variables the context it is evaluated in holds bound
+///   — the left operand of an enclosing `LATERAL` (see [`expression_reads_only_bound_admitted`]
+///   and [`collect_certainly_bound_in`]);
+/// * a variable a `FILTER`'s condition requires bound for it to be true
+///   ([`Outcome::Truth`]): `FILTER(BOUND(?v))`, `FILTER(sameTerm(?v, ?o))`,
+///   `FILTER(isIRI(?v))`, a built-in strict in `?v` such as
+///   `FILTER(REGEX(STR(?v), "x"))`, and their conjunctions bind `?v`; a disjunction
+///   binds only what both of its sides do, and `FILTER(!BOUND(?v))` binds nothing;
+/// * the variable naming a `GRAPH`;
+/// * a grouping key every row of the grouped pattern binds;
+/// * an aggregate's output when [`aggregate_certainly_binds_admitted`] says every group row
+///   holds one save a row whose aggregate failed on present values — `COUNT`, `SUM`,
+///   `AVG`, `GROUP_CONCAT` and `FOLD` always, `SAMPLE`/`MIN`/`MAX` and a custom
+///   aggregate under an explicit `GROUP BY` of arguments reading only what every row
+///   binds;
+/// * bound by both operands of a `UNION`, by either operand of a `Join` or a
+///   `LATERAL` (the right one judged with the left one's bindings in hand), by the
+///   left operand of an `OPTIONAL` or a `MINUS`, by the inner pattern of a `FILTER`,
+///   `BIND`, `UNFOLD`, `ORDER BY`, `DISTINCT`, `REDUCED` or slice, or by the inner
+///   pattern of a sub-`SELECT` that projects it.
+///
+/// # Why a `BIND` or an aggregate counts although it can fail
+///
+/// An expression that errors leaves its variable unbound in that row (SPARQL 1.1
+/// §18.6). When every variable it reads is bound, that is an outcome of evaluating one
+/// row, not a shape of the query: the same `BIND(CONCAT(?a, ?b) AS ?q)` binds `?q` on
+/// every row its operands are strings, and whether any row errors is a fact about the
+/// data. Refusing it here would refuse, at prepare, every call fed by a computed value
+/// — including every run that would never have erred. So such a `BIND` target counts,
+/// and a row that did err is handled where rows are: the evaluator re-derives every
+/// invocation's access pattern from the row in hand and refuses one its relation does
+/// not declare, with a typed error naming both patterns (`admit_mode` in
+/// `crate::property_fn_eval`). A relation is therefore never invoked with a position
+/// free that its declared modes require bound; a relation that ALSO declares the free
+/// mode is invoked free on that row, as the row's own access pattern is.
+///
+/// An aggregate's output follows the same rule: it counts when every value it is
+/// computed from is certainly present, and a group whose aggregate failed on those
+/// values — a `MAX(STR(?x))` whose every `?x` is a blank node, a `SUM` over a string —
+/// is a row refused (or, for a relation that also serves the free mode, invoked free)
+/// exactly as a row whose `BIND` erred. [`aggregate_certainly_binds_admitted`] states which
+/// absences of input the text itself fixes.
+///
+/// A `BIND` that reads a variable its inner pattern does NOT certainly bind —
+/// `BIND(?x AS ?q)` after an `OPTIONAL` that may leave `?x` unbound, or over an
+/// aggregate's output that may be unbound (a `MIN` with no `GROUP BY`, over an input
+/// that may be empty) — inherits that structural absence, and its target does not
+/// count.
+///
+/// An `UNFOLD` target is not the same case, and does not count: a SEP-0009 `null`
+/// element is a legitimate member of the composite, not an error, and the row it yields
+/// with the target unbound is a normal answer.
+///
+/// Erring on the narrow side is otherwise harmless: at worst a feasible order is
+/// missed and the query is refused at prepare time with a message that names exactly
+/// what could not be bound.
+pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+    collect_certainly_bound_in(pattern, &DetHashSet::default(), out);
+}
+
+/// The same certainty law with every engine-created owner admitted before growth.
+/// The returned immutable schema keeps its original payload admission alive.
+pub(crate) fn collect_certainly_bound_admitted(
+    pattern: &GraphPattern,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    collect_certainly_bound_in_admitted(pattern, &VarSchema::default(), workspace)
+}
+
+/// Contextual certainty, without adding the caller's context to the result.
+pub(crate) fn collect_certainly_bound_in_admitted(
+    pattern: &GraphPattern,
+    context: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    collect_bound_admitted(pattern, context, None, workspace)
+}
+
+/// [`collect_certainly_bound`] for a pattern evaluated with `context` already bound:
+/// every variable of `context` holds a value in every row the pattern is evaluated
+/// over, written into it before it runs.
+///
+/// That is what the right operand of a `LATERAL` is — evaluated once per left row with
+/// that row substituted in — and what a correlated `EXISTS` body is. So a `BIND` there
+/// reading only `context` (or what its own inner pattern binds) binds its target on
+/// every row: `?s ?p ?v LATERAL { BIND(?v AS ?q) }` binds `?q` exactly as
+/// `?s ?p ?v BIND(?v AS ?q)` does. `context` itself is never added to `out` — the
+/// pattern does not bind it, its enclosing context does.
+///
+/// `context` reaches everywhere the substitution does: both operands of a `Join`, a
+/// `UNION`, an `OPTIONAL` and a `MINUS`, every wrapper's inner pattern, and the inner
+/// pattern of a sub-`SELECT` for the variables it projects — a variable it does not
+/// project is a different variable inside it. A nested `LATERAL`'s right operand sees
+/// `context` and its own left operand's certain bindings.
+pub(crate) fn collect_certainly_bound_in(
+    pattern: &GraphPattern,
+    context: &DetHashSet<Variable>,
+    out: &mut DetHashSet<Variable>,
+) {
+    collect_bound(pattern, context, Written::NOTHING, out);
+}
+
+/// What a prepared execution's run writes into a pattern the planner is judging, beyond
+/// the pattern's own bindings. See [`Promise`].
+#[derive(Clone, Copy, Debug)]
+struct Written<'a> {
+    /// The parameters the one pre-binding rewrite writes into EVERY expression of the
+    /// query (a constant for an IRI or a literal, a driven value for a blank node or a
+    /// quoted triple — `crate::substitute`'s `drive_expression_reads`), sub-`SELECT`s
+    /// included.
+    everywhere: Option<&'a DetHashSet<Variable>>,
+}
+
+impl Written<'_> {
+    /// Nothing is written: the pattern is judged by its own bindings and its context.
+    const NOTHING: Self = Self { everywhere: None };
+
+    /// Whether an expression reads `variable` as a value the run wrote in.
+    fn writes(self, variable: &Variable) -> bool {
+        self.everywhere
+            .is_some_and(|parameters| parameters.contains(variable))
+    }
+}
+
+/// [`collect_certainly_bound_in`], with what the run writes in — see [`Written`].
+///
+/// A post-order walk over a work list, so a pattern of any depth needs no more machine
+/// stack: each node's certainly-bound set is computed from its children's, under the
+/// context and the writes that reach it, and the root's is added to `out`. A `LATERAL`
+/// binds its left operand first, then its right operand under the context the left one
+/// widens.
+fn collect_bound(
+    pattern: &GraphPattern,
+    context: &DetHashSet<Variable>,
+    given_written: Written<'_>,
+    out: &mut DetHashSet<Variable>,
+) {
+    // These sets are caller-owned resident planner inputs and output. Bounded
+    // callers keep the VarSchema returned by collect_bound_admitted instead.
+    let workspace = WorkspaceCapability::default();
+    let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
+        .expect("resident certainty context");
+    let written = given_written.everywhere.map(|set| {
+        VarSchema::from_vars_admitted(set.iter().cloned(), &workspace)
+            .expect("resident certainty writes")
+    });
+    let bound = collect_bound_admitted(pattern, &context, written.as_ref(), &workspace)
+        .expect("resident certainly-bound allocation");
+    out.extend(bound.vars().iter().cloned());
+}
+
+/// Contextual certainty with optional promised bindings and retained schema owners.
+pub(crate) fn collect_bound_admitted(
+    pattern: &GraphPattern,
+    context: &VarSchema,
+    given_written: Option<&VarSchema>,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    /// The context a node is evaluated under: the caller's, or one a `LATERAL` or a
+    /// sub-`SELECT` built for its operand, held in the arena.
+    #[derive(Clone, Copy)]
+    enum Context {
+        Given,
+        Owned(usize),
+    }
+    #[derive(Clone, Copy)]
+    enum Writes {
+        Given,
+        Owned(std::num::NonZeroUsize),
+    }
+    // The original caller writes remain outside the worklist. A one-based arena
+    // index uses its zero niche, preserving the former per-frame pointer width.
+    const _: () = assert!(size_of::<Writes>() == size_of::<Written<'_>>());
+    impl Writes {
+        fn set<'s>(
+            self,
+            given: Option<&'s VarSchema>,
+            arena: &'s [VarSchema],
+        ) -> Option<&'s VarSchema> {
+            match self {
+                Self::Given => given,
+                Self::Owned(index) => Some(&arena[index.get() - 1]),
+            }
+        }
+        fn writes(
+            self,
+            variable: &Variable,
+            given: Option<&VarSchema>,
+            arena: &[VarSchema],
+        ) -> bool {
+            self.set(given, arena)
+                .is_some_and(|set| set.contains(variable))
+        }
+    }
+    /// One step of the walk.
+    enum Step<'p> {
+        /// Enter a node: a leaf's set is computed at once, a node's children are pushed.
+        Enter(&'p GraphPattern, Context, Writes),
+        /// Combine a node's set from its children's; the arena is cut back to `mark`.
+        Exit(&'p GraphPattern, Context, Writes, usize),
+        /// A `LATERAL` whose left operand is bound: widen the context for its right
+        /// operand, which is named.
+        LateralLeft(&'p GraphPattern, Context, Writes),
+        /// A contextual driver is bound before its renamed inputs reach the RHS.
+        ApplyLeft(
+            &'p GraphPattern,
+            &'p purrdf_sparql_algebra::algebra::ApplicationPolicy,
+            Context,
+            Writes,
+        ),
+        /// A `LATERAL` whose right operand is bound too: its set is the union of both,
+        /// the left operand's carried here; the arena is cut back to `mark`.
+        LateralRight(VarSchema, usize),
+    }
+    /// The set `context` names, read from `arena` when a node built it.
+    fn resolve<'c>(
+        context: Context,
+        given: &'c VarSchema,
+        arena: &'c [VarSchema],
+    ) -> &'c VarSchema {
+        match context {
+            Context::Given => given,
+            Context::Owned(index) => &arena[index],
+        }
+    }
+    let mut arena = AdmittedVec::<VarSchema>::new(workspace);
+    let mut values = AdmittedVec::<VarSchema>::new(workspace);
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(Step::Enter(pattern, Context::Given, Writes::Given))?;
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Enter(node, ctx, written) => {
+                let mark = arena.len();
+                match node {
+                    GraphPattern::Bgp { patterns } => {
+                        let mut bound = SchemaBuilder::new(workspace);
+                        for triple in patterns {
+                            collect_triple_vars_admitted(triple, &mut bound, workspace)?;
+                        }
+                        values.push(bound.finish()?)?;
+                    }
+                    GraphPattern::Path {
+                        subject,
+                        path: _,
+                        object,
+                    } => {
+                        let mut bound = SchemaBuilder::new(workspace);
+                        collect_term_vars_admitted(subject, &mut bound, workspace)?;
+                        collect_term_vars_admitted(object, &mut bound, workspace)?;
+                        values.push(bound.finish()?)?;
+                    }
+                    // Every flattened argument position of a call receives a value on
+                    // every row it emits, so its variables are certainly bound by it.
+                    GraphPattern::PropertyFunction(call) => {
+                        let mut bound = SchemaBuilder::new(workspace);
+                        for term in call.subject_args.iter().chain(&call.object_args) {
+                            collect_term_vars_admitted(term, &mut bound, workspace)?;
+                        }
+                        values.push(bound.finish()?)?;
+                    }
+                    // A `VALUES` column binds its variable in every row exactly when no
+                    // row holds `UNDEF` there. An empty table produces no row at all, so
+                    // every column of it qualifies vacuously — and nothing downstream is
+                    // ever invoked from it.
+                    GraphPattern::Values {
+                        variables,
+                        bindings,
+                    } => {
+                        let bound = VarSchema::from_vars_admitted(
+                            variables.iter().enumerate().filter(|(column, _)| {
+                                bindings.iter().all(|row| row.get(*column).is_some_and(Option::is_some))
+                            }).map(|(_, variable)| variable.clone()),
+                            workspace,
+                        )?;
+                        values.push(bound)?;
+                    }
+                    // A remote endpoint may omit a column, so it promises nothing.
+                    GraphPattern::Service { .. } => {
+                        values.push(VarSchema::default())?;
+                    }
+                    GraphPattern::Join { left, right } => {
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(right, ctx, written))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
+                    }
+                    GraphPattern::Apply {
+                        left,
+                        right,
+                        policy,
+                    } => {
+                        if policy.optional.is_some() {
+                            steps.push(Step::Exit(node, ctx, written, mark))?;
+                        } else {
+                            steps.push(Step::ApplyLeft(right, policy, ctx, written))?;
+                        }
+                        steps.push(Step::Enter(left, ctx, written))?;
+                    }
+                    // The right operand is evaluated once per left row with that row in
+                    // hand, so it sees the left operand's certain bindings as well as the
+                    // enclosing context's: the left operand is bound first.
+                    GraphPattern::Lateral { left, right } => {
+                        steps.push(Step::LateralLeft(right, ctx, written))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
+                    }
+                    // The right side may contribute nothing to a row.
+                    GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. } => {
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
+                    }
+                    GraphPattern::Union { arms } => {
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        for arm in arms.iter().rev() {
+                            steps.push(Step::Enter(arm, ctx, written))?;
+                        }
+                    }
+                    // The solution-modifier wrappers the seed descends through keep
+                    // `written`.
+                    GraphPattern::Filter { inner, .. }
+                    | GraphPattern::OrderBy { inner, .. }
+                    | GraphPattern::Distinct { inner }
+                    | GraphPattern::Reduced { inner }
+                    | GraphPattern::Slice { inner, .. }
+                    | GraphPattern::Unfold { inner, .. }
+                    | GraphPattern::Extend { inner, .. }
+                    | GraphPattern::Group { inner, .. } => {
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, ctx, written))?;
+                    }
+                    GraphPattern::Graph { inner, .. } => {
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, ctx, written))?;
+                    }
+                    // The context reaches a sub-`SELECT`'s inner pattern only through the
+                    // variables the projection names; what the SHACL pre-binding rewrite
+                    // writes is written past the projection too.
+                    GraphPattern::Project { inner, variables } => {
+                        let narrowed = narrowed_to_admitted(resolve(ctx, context, &arena), variables, workspace)?;
+                        arena.push(narrowed)?;
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, Context::Owned(mark), written))?;
+                    }
+                }
+            }
+            Step::ApplyLeft(right, policy, ctx, written) => {
+                let left_bound = values.pop().expect("the driver is bound first");
+                let outer = resolve(ctx, context, &arena);
+                let shadowed = VarSchema::from_vars_admitted(
+                    policy.inputs.iter().map(|(input, _)| input.clone()), workspace,
+                )?;
+                let mut right_context = SchemaBuilder::new(workspace);
+                for variable in outer.vars().iter().filter(|variable| !shadowed.contains(variable)) {
+                    right_context.push(variable.clone())?;
+                }
+                let written_set = written.set(given_written, &arena);
+                let mut supplied = SchemaBuilder::new(workspace);
+                for variable in written_set.into_iter().flat_map(|set| set.vars().iter())
+                    .filter(|variable| !shadowed.contains(variable)) {
+                    supplied.push(variable.clone())?;
+                }
+                for (input, driver) in &policy.inputs {
+                    if left_bound.contains(driver)
+                        || outer.contains(driver)
+                        || written.writes(driver, given_written, &arena)
+                    {
+                        right_context.push(input.clone())?;
+                        supplied.push(input.clone())?;
+                    }
+                }
+                let mark = arena.len();
+                arena.push(right_context.finish()?)?;
+                arena.push(supplied.finish()?)?;
+                steps.push(Step::LateralRight(left_bound, mark))?;
+                steps.push(Step::Enter(
+                    right,
+                    Context::Owned(mark),
+                    Writes::Owned(
+                        std::num::NonZeroUsize::new(
+                            mark.checked_add(2).ok_or(EvalError::WorkspaceBoundOverflow)?,
+                        )
+                        .expect("one-based arena index"),
+                    ),
+                ))?;
+            }
+            Step::LateralLeft(right, ctx, written) => {
+                let left_bound = values.pop().expect("the left operand is bound first");
+                let right_context = resolve(ctx, context, &arena)
+                    .union_admitted(&left_bound, workspace)?;
+                let mark = arena.len();
+                arena.push(right_context)?;
+                steps.push(Step::LateralRight(left_bound, mark))?;
+                steps.push(Step::Enter(right, Context::Owned(mark), written))?;
+            }
+            Step::LateralRight(left_bound, mark) => {
+                let mut bound = values.pop().expect("the right operand is bound second");
+                bound = bound.union_admitted(&left_bound, workspace)?;
+                arena.truncate(mark);
+                values.push(bound)?;
+            }
+            Step::Exit(node, ctx, written, mark) => {
+                let bound = match node {
+                    GraphPattern::Apply { policy, .. } => {
+                        if policy.optional.is_some() {
+                            values.pop().expect("the driver is bound")
+                        } else {
+                            let right = values.pop().expect("the operand is bound");
+                            let mut left = values.pop().expect("the driver is bound");
+                            left = left.union_admitted(&right, workspace)?;
+                            left
+                        }
+                    }
+                    GraphPattern::Join { .. } => {
+                        let right = values.pop().expect("the right operand is bound");
+                        let mut bound = values.pop().expect("the left operand is bound");
+                        bound = bound.union_admitted(&right, workspace)?;
+                        bound
+                    }
+                    GraphPattern::LeftJoin { .. } | GraphPattern::Minus { .. } => {
+                        values.pop().expect("the left operand is bound")
+                    }
+                    // Only what EVERY arm binds is bound in every row.
+                    GraphPattern::Union { arms } => {
+                        let at = values.len().checked_sub(arms.len())
+                            .expect("each UNION arm produced its certainty value");
+                        let mut arms_bound = values.drain_from(at);
+                        let mut common = arms_bound.next().unwrap_or_default();
+                        for bound in arms_bound {
+                            common = intersection_admitted(&common, &bound, workspace)?;
+                        }
+                        common
+                    }
+                    // A `FILTER` passes only rows its condition is true on, and every
+                    // variable the condition requires bound for that is therefore bound
+                    // in each row it passes — see [`Outcome::Truth`]. A variable the run
+                    // writes into the condition itself (under the SHACL pre-binding
+                    // rewrite) is read there as the written value, not from the row, so
+                    // the condition constrains nothing about the row's binding of it. A
+                    // condition that is never true passes no row; it is taken to bind
+                    // nothing, the narrow answer.
+                    GraphPattern::Filter { expr, .. } => {
+                        let mut bound = values.pop().expect("the inner pattern is bound");
+                        let required = requires_admitted(expr, Outcome::Truth, workspace)?
+                            .unwrap_or_default();
+                        let constrained = VarSchema::from_vars_admitted(
+                            required.vars().iter().filter(|variable| {
+                                !written.writes(variable, given_written, &arena)
+                            }).cloned(), workspace,
+                        )?;
+                        bound = bound.union_admitted(&constrained, workspace)?;
+                        bound
+                    }
+                    // `UNFOLD`s own targets are NOT certainly bound: a SEP-0009 `null`
+                    // element (or a null map value) yields the row with that variable
+                    // unbound, so only what the inner pattern certainly binds escapes.
+                    GraphPattern::OrderBy { .. }
+                    | GraphPattern::Distinct { .. }
+                    | GraphPattern::Reduced { .. }
+                    | GraphPattern::Slice { .. }
+                    | GraphPattern::Unfold { .. } => {
+                        values.pop().expect("the inner pattern is bound")
+                    }
+                    // A `BIND`'s target counts when its expression reads only what the
+                    // inner pattern certainly binds, what the enclosing context already
+                    // holds, or what the run writes in: it is then unbound only in a row
+                    // whose expression errored on the data, and that row is refused per
+                    // row by the evaluator rather than invoked free. See
+                    // [`collect_certainly_bound`]'s doc for the whole argument.
+                    GraphPattern::Extend {
+                        variable,
+                        expression,
+                        ..
+                    } => {
+                        let mut bound = values.pop().expect("the inner pattern is bound");
+                        let context = resolve(ctx, context, &arena);
+                        if expression_reads_only_bound_admitted(expression, &|read| {
+                            bound.contains(read)
+                                || context.contains(read)
+                                || written.writes(read, given_written, &arena)
+                        }, workspace)? {
+                            bound.push_admitted(variable.clone(), workspace)?;
+                        }
+                        bound
+                    }
+                    GraphPattern::Graph { name, .. } => {
+                        let mut bound = values.pop().expect("the inner pattern is bound");
+                        if let NamedNodePattern::Variable(variable) = name {
+                            bound.push_admitted(variable.clone(), workspace)?;
+                        }
+                        bound
+                    }
+                    // Only what the projection keeps escapes, and only if the inner
+                    // pattern bound it certainly.
+                    GraphPattern::Project { variables, .. } => {
+                        let inner_bound = values.pop().expect("the inner pattern is bound");
+                        VarSchema::from_vars_admitted(
+                            variables.iter().filter(|variable| inner_bound.contains(variable)).cloned(),
+                            workspace,
+                        )?
+                    }
+                    // A grouping key is bound in a group's row when every row of the
+                    // group binds it; an aggregate's output by
+                    // [`aggregate_certainly_binds_admitted`].
+                    GraphPattern::Group {
+                        variables,
+                        aggregates,
+                        ..
+                    } => {
+                        let inner_bound = values.pop().expect("the inner pattern is bound");
+                        let context = resolve(ctx, context, &arena);
+                        let row_binds =
+                            |read: &Variable| inner_bound.contains(read) || context.contains(read);
+                        let mut bound = SchemaBuilder::new(workspace);
+                        for variable in variables.iter().filter(|key| row_binds(key)) {
+                            bound.push(variable.clone())?;
+                        }
+                        let grouped = !variables.is_empty();
+                        for (variable, aggregate) in aggregates {
+                            if aggregate_certainly_binds_admitted(aggregate, grouped, &|read| {
+                                row_binds(read) || written.writes(read, given_written, &arena)
+                            }, workspace)? {
+                                bound.push(variable.clone())?;
+                            }
+                        }
+                        bound.finish()?
+                    }
+                    GraphPattern::Bgp { .. }
+                    | GraphPattern::Path { .. }
+                    | GraphPattern::PropertyFunction(_)
+                    | GraphPattern::Values { .. }
+                    | GraphPattern::Service { .. }
+                    | GraphPattern::Lateral { .. } => {
+                        unreachable!(
+                            "a leaf is bound as it is entered, and a LATERAL through its own \
+                             two steps"
+                        )
+                    }
+                };
+                arena.truncate(mark);
+                values.push(bound)?;
+            }
+        }
+    }
+    Ok(values.pop().expect("the root's set is computed last"))
+}
+
+/// Whether an aggregate's output is bound in every row its `GROUP BY` produces, save
+/// only a row whose aggregate failed on the values it was handed — given `row_binds`,
+/// what every row of every group binds.
+///
+/// # One rule for every computed value
+///
+/// A value computed from inputs counts as certainly bound when every input it is
+/// computed from is certainly PRESENT: then it is unbound only where its evaluation
+/// failed on present values, which is a fact about the data met one row at a time,
+/// not a shape of the query. That is the rule a `BIND` target follows (see
+/// [`collect_certainly_bound`]), and an aggregate's output follows it exactly: a
+/// group row whose aggregate failed reaches a call with the input unbound, where the
+/// evaluator re-derives the invocation's access pattern from the row in hand and
+/// refuses one the relation does not declare, with a typed error (`admit_mode` in
+/// `crate::property_fn_eval`). That check reads the call's arguments off whatever row
+/// arrives, so it covers a row a `GROUP BY` produced as it covers any other: a
+/// relation serving only the bound mode is never invoked free, and one that also
+/// serves the free mode is invoked free on that row, as the row's own access pattern
+/// is.
+///
+/// What an aggregate is computed from is its group's argument values. Absence of
+/// those — as opposed to a failure on them — has two causes the query text fixes:
+/// an argument reading a variable the grouped pattern may leave unbound (the right
+/// side of an `OPTIONAL`, an `UNDEF` column), and the one implicit group an aggregate
+/// WITHOUT `GROUP BY` forms even over an empty input. Whether either matters depends
+/// on what the aggregate answers when handed no value at all:
+///
+/// * `COUNT`, `SUM`, `AVG`, `GROUP_CONCAT` and `FOLD` answer a value over no values —
+///   `0`, `0`, `0`, `""` and the empty composite — and skip (or, for `FOLD`, keep as
+///   a `null` element) a row whose argument is unbound. Absence therefore never
+///   leaves them unbound, and they count with or without `GROUP BY`, whatever their
+///   argument reads. `SUM` and `AVG` are unbound only when a present value is not a
+///   number or the arithmetic fails, and `GROUP_CONCAT` only when a present value is
+///   a blank node or a quoted triple, which has no lexical form: failures on present
+///   values, met per row. `COUNT` and `FOLD` never answer unbound.
+/// * `SAMPLE`, `MIN`, `MAX` and a custom aggregate may answer unbound over no values —
+///   the first three always do, and a host's aggregate may. They count only under an
+///   explicit `GROUP BY`, whose every group holds at least one row, and only over
+///   arguments that read nothing but what every row binds (or constants —
+///   [`expression_reads_only_bound_admitted`], the test a `BIND` expression passes). Every row
+///   of a group then hands the aggregate a value unless its argument errored on
+///   present values — `STR(?x)` on a blank node, `IRI(STR(?x))` on a string that is
+///   not an IRI — and the aggregate is unbound only if every row's argument errored,
+///   or a custom aggregate declined to answer over the values it was given. So
+///   `MAX(STR(?q))` and `SAMPLE(IRI(STR(?q)))` count exactly as
+///   `BIND(IRI(STR(?q)) AS ?y)` followed by `SAMPLE(?y)` does, and `SAMPLE(?w)` over
+///   an `OPTIONAL`'s `?w` does not, as `BIND(?w AS ?y)` does not. WITHOUT a
+///   `GROUP BY` the implicit group may hold no row, where these answer unbound for
+///   want of any input: the same structural absence, so none of them counts there.
+fn aggregate_certainly_binds_admitted(
+    aggregate: &AggregateExpression,
+    grouped: bool,
+    row_binds: &dyn Fn(&Variable) -> bool,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    match aggregate.function() {
+        AggregateFunction::Count
+        | AggregateFunction::Sum
+        | AggregateFunction::Avg
+        | AggregateFunction::GroupConcat
+        | AggregateFunction::Fold => Ok(true),
+        AggregateFunction::Sample
+        | AggregateFunction::Min
+        | AggregateFunction::Max
+        | AggregateFunction::Custom(_) => {
+            if !grouped { return Ok(false); }
+            for arg in aggregate.args() {
+                if !expression_reads_only_bound_admitted(arg, row_binds, workspace)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+    }
+}
+
+/// The part of `context` a sub-`SELECT` projecting `variables` lets into its inner
+/// pattern: an enclosing binding is substituted into it only for a variable it
+/// projects.
+fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHashSet<Variable> {
+    let workspace = WorkspaceCapability::default();
+    let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
+        .expect("resident projected certainty context");
+    narrowed_to_admitted(&context, variables, &workspace)
+        .expect("resident projected certainty allocation").vars().iter().cloned().collect()
+}
+
+fn narrowed_to_admitted(
+    context: &VarSchema,
+    variables: &[Variable],
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    VarSchema::from_vars_admitted(
+        context.vars().iter().filter(|variable| variables.contains(variable)).cloned(), workspace,
+    )
+}
+
+fn intersection_admitted(
+    left: &VarSchema, right: &VarSchema, workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    VarSchema::from_vars_admitted(
+        left.vars().iter().filter(|variable| right.contains(variable)).cloned(), workspace,
+    )
+}
+
+/// Whether `expr` can be left without a value only by the data it reads — never
+/// because the query text leaves a variable it reads unbound.
+///
+/// `is_bound` answers for each variable `expr` reads whether it holds a value in every
+/// row `expr` is evaluated over: what those rows certainly bind, what the enclosing
+/// context holds, or what the run writes in. A variable read outside all three — the
+/// right side of an `OPTIONAL`, an `UNDEF` column, an aggregate's output over a
+/// possibly empty group — makes the expression error on exactly the rows the text
+/// leaves it unbound in, which is a structural absence, not a per-row one.
+///
+/// Exact where an operator's evaluation reads every operand (arithmetic, comparisons,
+/// function calls), and narrow where it may not: `||`, `&&`, `IF` and `IN` require
+/// every operand to qualify even though SPARQL's error-masking can sometimes spare one,
+/// while `COALESCE` qualifies when any argument does, because it answers with the first
+/// argument that evaluates. `BOUND` and `EXISTS` never error on an unbound variable, so
+/// they always qualify.
+///
+/// A post-order walk over a work list, so an expression of any depth needs no more
+/// machine stack: every operand answers before the operator over it does.
+#[cfg(test)]
+fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -> bool) -> bool {
+    expression_reads_only_bound_admitted(expr, is_bound, &WorkspaceCapability::default())
+        .expect("resident expression certainty allocation")
+}
+
+fn expression_reads_only_bound_admitted(
+    expr: &Expression, is_bound: &dyn Fn(&Variable) -> bool,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    /// One step of the walk.
+    enum Step<'e> {
+        /// Enter an expression: a leaf answers at once, an operator pushes its operands.
+        Enter(&'e Expression),
+        /// Combine an operator's answer from its operands', `count` of them.
+        Exit(&'e Expression, usize),
+    }
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(Step::Enter(expr))?;
+    let mut values = AdmittedVec::<bool>::new(workspace);
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Enter(expr) => match expr {
+                Expression::NamedNode(_)
+                | Expression::Literal(_)
+                | Expression::Bound(_)
+                | Expression::Exists(_) => values.push(true)?,
+                Expression::Variable(variable) => values.push(is_bound(variable))?,
+                Expression::Or(operands) | Expression::And(operands) => {
+                    steps.push(Step::Exit(expr, operands.len()))?;
+                    for operand in operands.iter().rev() {
+                        steps.push(Step::Enter(operand))?;
+                    }
+                }
+                Expression::Arithmetic(first, rest) => {
+                    steps.push(Step::Exit(expr, rest.len().checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?))?;
+                    for (_, operand) in rest.iter().rev() {
+                        steps.push(Step::Enter(operand))?;
+                    }
+                    steps.push(Step::Enter(first))?;
+                }
+                Expression::Equal(a, b)
+                | Expression::SameTerm(a, b)
+                | Expression::Greater(a, b)
+                | Expression::GreaterOrEqual(a, b)
+                | Expression::Less(a, b)
+                | Expression::LessOrEqual(a, b) => {
+                    steps.push(Step::Exit(expr, 2))?;
+                    steps.push(Step::Enter(b))?;
+                    steps.push(Step::Enter(a))?;
+                }
+                Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+                    steps.push(Step::Exit(expr, 1))?;
+                    steps.push(Step::Enter(a))?;
+                }
+                Expression::If(condition, then, otherwise) => {
+                    steps.push(Step::Exit(expr, 3))?;
+                    steps.push(Step::Enter(otherwise))?;
+                    steps.push(Step::Enter(then))?;
+                    steps.push(Step::Enter(condition))?;
+                }
+                Expression::In(needle, haystack) => {
+                    steps.push(Step::Exit(expr, haystack.len().checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?))?;
+                    for item in haystack.iter().rev() {
+                        steps.push(Step::Enter(item))?;
+                    }
+                    steps.push(Step::Enter(needle))?;
+                }
+                Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
+                    steps.push(Step::Exit(expr, items.len()))?;
+                    for item in items.iter().rev() {
+                        steps.push(Step::Enter(item))?;
+                    }
+                }
+            },
+            Step::Exit(expr, count) => {
+                let at = values.len().checked_sub(count).expect("every operand answered");
+                let answer = {
+                    let mut operands = values.drain_from(at);
+                    // `COALESCE` qualifies when any argument does; every other operator
+                    // when every operand does.
+                    if matches!(expr, Expression::Coalesce(_)) {
+                        operands.any(|reads| reads)
+                    } else {
+                        operands.all(|reads| reads)
+                    }
+                };
+                values.push(answer)?;
+            }
+        }
+    }
+    Ok(values.pop().expect("the root's answer is the last one computed"))
+}
+
+/// Whether `function` is a type test: total over terms, answering a boolean.
+const fn is_type_test(function: &Function) -> bool {
+    matches!(
+        function,
+        Function::IsIri
+            | Function::IsUri
+            | Function::IsBlank
+            | Function::IsLiteral
+            | Function::IsNumeric
+            | Function::IsTriple
+    )
+}
+
+/// Whether a call of `function` has no value when its argument at `position` is
+/// unbound, whatever its other arguments hold — the argument positions the function is
+/// STRICT in.
+///
+/// Read off the evaluator (`crate::expr`'s `apply_function` and the dispatch tables it
+/// hands on to), and held to it by a drift test there that evaluates every built-in
+/// with each argument unbound in turn: a position classified strict must yield no value
+/// on every sample, and one classified otherwise must yield a value on at least one —
+/// so the classification is neither wider nor narrower than the evaluator.
+///
+/// What is NOT strict, and why (`REGEX`'s and `REPLACE`'s flags and `SUBSTR`'s
+/// length are optional, but a supplied one that is unbound is an error, so all three
+/// are strict in every position):
+///
+/// * a type test (`isIRI` and its kin) answers `false` for an unbound argument;
+/// * `cdt:List` and `cdt:Map` keep an unbound argument as a `null` element, and
+///   `cdt:put` an unbound value as a `null` entry;
+/// * a custom function is resolved at run time against what the host registered — a
+///   SPARQL-bodied function may accept an unbound argument, and a registration may
+///   even shadow an XSD cast's IRI — so nothing is known about it here, and it is taken
+///   to need nothing.
+///
+/// A function taking no arguments (`RAND`, `NOW`, `UUID`, `STRUUID`, `BNODE()`) has no
+/// position to be strict in; it is listed with the strict ones only because the answer
+/// for a position it does not have is never asked.
+pub(crate) const fn strict_in_argument(function: &Function, position: usize) -> bool {
+    match function {
+        Function::IsIri
+        | Function::IsUri
+        | Function::IsBlank
+        | Function::IsLiteral
+        | Function::IsNumeric
+        | Function::IsTriple
+        | Function::Custom(_) => false,
+        Function::Cdt(call) => match call.fn_kind {
+            CdtFn::ListConstructor | CdtFn::MapConstructor => false,
+            CdtFn::Put => position < 2,
+            CdtFn::Concat
+            | CdtFn::Contains
+            | CdtFn::Get
+            | CdtFn::Head
+            | CdtFn::Tail
+            | CdtFn::Reverse
+            | CdtFn::Size
+            | CdtFn::Subseq
+            | CdtFn::ContainsKey
+            | CdtFn::Keys
+            | CdtFn::Merge
+            | CdtFn::Remove => true,
+        },
+        Function::Purrdf(call) => match call.fn_kind {
+            PurrdfFn::HeldIn
+            | PurrdfFn::ListLength
+            | PurrdfFn::ListGet
+            | PurrdfFn::ListIndexOf
+            | PurrdfFn::ListContains
+            | PurrdfFn::ListSlice
+            | PurrdfFn::ListConcat => true,
+        },
+        Function::Str
+        | Function::Regex
+        | Function::Replace
+        | Function::SubStr
+        | Function::Lang
+        | Function::LangMatches
+        | Function::Datatype
+        | Function::Iri
+        | Function::Uri
+        | Function::BNode
+        | Function::Rand
+        | Function::Abs
+        | Function::Ceil
+        | Function::Floor
+        | Function::Round
+        | Function::Concat
+        | Function::StrLen
+        | Function::UCase
+        | Function::LCase
+        | Function::EncodeForUri
+        | Function::Contains
+        | Function::StrStarts
+        | Function::StrEnds
+        | Function::StrBefore
+        | Function::StrAfter
+        | Function::Year
+        | Function::Month
+        | Function::Day
+        | Function::Hours
+        | Function::Minutes
+        | Function::Seconds
+        | Function::Timezone
+        | Function::Tz
+        | Function::Adjust
+        | Function::Now
+        | Function::Uuid
+        | Function::StrUuid
+        | Function::Md5
+        | Function::Sha1
+        | Function::Sha256
+        | Function::Sha384
+        | Function::Sha512
+        | Function::Sha3_224
+        | Function::Sha3_256
+        | Function::Sha3_384
+        | Function::Sha3_512
+        | Function::StrLang
+        | Function::StrDt
+        | Function::Triple
+        | Function::Subject
+        | Function::Predicate
+        | Function::Object
+        | Function::LangDir
+        | Function::StrLangDir
+        | Function::HasLang
+        | Function::HasLangDir => true,
+    }
+}
+
+/// What an expression needs bound to reach an outcome — to be true, to be false, or to
+/// have a value — or `None` when it can never reach it.
+///
+/// `None` is what a constant that is never true (`false`, `0`, an IRI, which has no
+/// effective boolean value) answers for truth, and anything that reaches the outcome
+/// only through it inherits it: it absorbs a conjunction of requirements
+/// ([`all_of_admitted`]) and is the identity of an alternative between them ([`one_of_admitted`]). So
+/// `IF(BOUND(?v), ?v = ?v, false)` is true only through its first branch, and needs
+/// `?v`.
+#[cfg(test)]
+type Requires = Option<DetHashSet<Variable>>;
+
+/// Needs nothing.
+#[cfg(test)]
+fn needs_nothing() -> Requires {
+    Some(DetHashSet::default())
+}
+
+/// Needs `variable`.
+#[cfg(test)]
+fn needs(variable: &Variable) -> Requires {
+    Some(std::iter::once(variable.clone()).collect())
+}
+
+/// Both requirements hold: the union, and never if either is never.
+#[cfg(test)]
+fn all_of(left: Requires, right: Requires) -> Requires {
+    let (mut left, right) = (left?, right?);
+    left.extend(right);
+    Some(left)
+}
+
+/// One of the requirements holds, and which is not known: the intersection, over the
+/// ones that can hold at all.
+#[cfg(test)]
+fn one_of(left: Requires, right: Requires) -> Requires {
+    match (left, right) {
+        (None, other) | (other, None) => other,
+        (Some(mut left), Some(right)) => {
+            left.retain(|variable| right.contains(variable));
+            Some(left)
+        }
+    }
+}
+
+/// A reachable requirement owns its original schema; None means impossible.
+type AdmittedRequires = Option<VarSchema>;
+
+fn needs_admitted(variable: &Variable, workspace: &WorkspaceCapability) -> Result<AdmittedRequires, EvalError> {
+    Ok(Some(VarSchema::from_vars_admitted(std::iter::once(variable.clone()), workspace)?))
+}
+
+fn all_of_admitted(
+    left: AdmittedRequires, right: AdmittedRequires, workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    let (Some(left), Some(right)) = (left, right) else { return Ok(None); };
+    Ok(Some(left.union_admitted(&right, workspace)?))
+}
+
+fn one_of_admitted(
+    left: AdmittedRequires, right: AdmittedRequires, workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    match (left, right) {
+        (None, other) | (other, None) => Ok(other),
+        (Some(left), Some(right)) => Ok(Some(intersection_admitted(&left, &right, workspace)?)),
+    }
+}
+
+/// The outcome an expression is asked what it must have bound for — see [`AdmittedRequires`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outcome {
+    /// TRUE — which a `FILTER` over the expression therefore binds in every row it
+    /// passes.
+    ///
+    /// # The rule, and why each case is sound
+    ///
+    /// A variable read where the expression has no value unless it is bound — an operand
+    /// of `=`, `sameTerm`, a comparison or arithmetic, an argument a built-in function is
+    /// strict in ([`strict_in_argument`]), or the expression itself — errors when
+    /// unbound, and an error is not true. So:
+    ///
+    /// * `?v` alone, `BOUND(?v)`: `?v`;
+    /// * a constant: nothing if its effective boolean value is true, never otherwise;
+    /// * `a && b`: both are true, so the union of what each requires;
+    /// * `a || b`: at least one is true, and which is not known, so the INTERSECTION of
+    ///   what each requires — `BOUND(?a) || BOUND(?b)` binds neither;
+    /// * `!a`: `a` is false — what `a` needs to be false ([`Self::Falsity`]), so
+    ///   `!BOUND(?v)` binds nothing and `!!BOUND(?v)` binds `?v`;
+    /// * a type test `isIRI(a)` and its kin: `a` has a value of that type, so what `a`
+    ///   needs for a value;
+    /// * `IF(c, t, e)`: `c` has a value, and either `c` is true and `t` is, or `c` is
+    ///   false and `e` is — so `IF(BOUND(?v), true, true)` binds nothing, and
+    ///   `IF(BOUND(?v), ?v = ?v, false)` binds `?v`;
+    /// * `COALESCE(…)`: the first argument with a value is true, so the intersection over
+    ///   the arguments;
+    /// * `a IN (…)`: `a` has a value;
+    /// * every other operator, comparison and function call: its value needs its
+    ///   operands' values, so what the whole expression needs for a value
+    ///   ([`Self::Value`]) — `REGEX(STR(?v), "x")` and `STRLEN(STR(?v)) > 0` bind `?v`.
+    ///
+    /// `EXISTS` requires nothing. Every case needs a value somewhere, so no answer is
+    /// wider than the evaluator's; a custom function, whose strictness the host decides,
+    /// is taken to need nothing of its arguments.
+    Truth,
+    /// FALSE — the dual of [`Self::Truth`], which reads it through `!`.
+    ///
+    /// `BOUND(?v)` is false exactly when `?v` is unbound, and a type test is false on an
+    /// unbound argument too, so neither requires anything; `EXISTS` requires nothing. A
+    /// constant requires nothing if its effective boolean value is false, and is never
+    /// false otherwise. `!a` is false when `a` is true ([`Self::Truth`]); `a && b` when
+    /// at least one is false, so what both require; `a || b` when both are, so what
+    /// either requires. `IF`, `COALESCE` and `IN` follow [`Self::Truth`]'s reasoning,
+    /// and every other expression needs what it needs for any value ([`Self::Value`]).
+    Falsity,
+    /// Any value at all.
+    ///
+    /// `BOUND`, `EXISTS`, a constant and a type test answer for any row. `&&` and `||`
+    /// can answer with one operand in error (`false && error` is false, `true || error`
+    /// is true), so they need only what BOTH operands need; `IF` needs its condition and
+    /// what the branch it takes needs; `COALESCE` what all its arguments need in common;
+    /// `IN` its needle. A built-in function call needs what its arguments in the
+    /// positions it is strict in need ([`strict_in_argument`]), so `STRLEN(STR(?v))`
+    /// needs `?v`. Every other operator — a comparison, `sameTerm`, arithmetic, a unary
+    /// sign — needs every operand.
+    Value,
+}
+
+/// How an operator's requirement is combined from its operands'.
+#[derive(Clone, Copy)]
+enum Combine {
+    /// Every operand's requirement holds: [`all_of_admitted`], folded from nothing needed.
+    All,
+    /// One operand's requirement holds, and which is not known: [`one_of_admitted`], folded from
+    /// never.
+    One,
+    /// [`Self::One`] over the operands there are, or nothing needed when there are none —
+    /// an empty chain is its identity constant, which has a value for any row.
+    OneOrNothing,
+    /// `IF`: its condition has a value, and either the condition is true and the first
+    /// branch reaches the outcome, or it is false and the second does — over the five
+    /// operand requirements pushed in that order.
+    Conditional,
+}
+
+/// One step of [`requires_admitted`]'s walk.
+enum RequirementStep<'e> {
+    /// Ask `expr` what it needs to reach the outcome.
+    Enter(&'e Expression, Outcome),
+    /// Combine the top `count` requirements as `Combine` says.
+    Exit(Combine, usize),
+}
+
+/// The variables `expr` must have bound to reach `outcome`, or `None` when it never does
+/// — see [`AdmittedRequires`], and the rules on each [`Outcome`].
+///
+/// A post-order walk over a work list, so an expression of any depth needs no more
+/// machine stack: an operator asks each operand what it needs in the mode that operand
+/// is read in, and combines the answers as its rule says.
+#[cfg(test)]
+fn requires(expr: &Expression, outcome: Outcome) -> Requires {
+    requires_admitted(expr, outcome, &WorkspaceCapability::default())
+        .expect("resident expression requirement allocation")
+        .map(|bound| bound.vars().iter().cloned().collect())
+}
+
+fn requires_admitted(
+    expr: &Expression, outcome: Outcome, workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(RequirementStep::Enter(expr, outcome))?;
+    let mut values = AdmittedVec::<AdmittedRequires>::new(workspace);
+    while let Some(step) = steps.pop() {
+        match step {
+            RequirementStep::Enter(expr, outcome) => {
+                enter_requirement(expr, outcome, &mut steps, &mut values, workspace)?;
+            }
+            RequirementStep::Exit(combine, count) => {
+                let at = values.len().checked_sub(count)
+                    .expect("each requested outcome produced one requirement");
+                let combined = {
+                    let mut operands = values.drain_from(at);
+                    match combine {
+                        Combine::All => {
+                            let mut required = SchemaBuilder::new(workspace);
+                            let mut possible = true;
+                            for operand in operands {
+                                match operand {
+                                    Some(bound) if possible => {
+                                        for variable in bound.vars() {
+                                            required.push(variable.clone())?;
+                                        }
+                                    }
+                                    None => possible = false,
+                                    Some(_) => {}
+                                }
+                            }
+                            if possible { Some(required.finish()?) } else { None }
+                        }
+                        Combine::One => {
+                            let mut combined = None;
+                            for operand in operands {
+                                combined = one_of_admitted(combined, operand, workspace)?;
+                            }
+                            combined
+                        }
+                        Combine::OneOrNothing => {
+                            let mut combined = operands.next().unwrap_or_else(|| Some(VarSchema::default()));
+                            for operand in operands {
+                                combined = one_of_admitted(combined, operand, workspace)?;
+                            }
+                            combined
+                        }
+                        Combine::Conditional => {
+                            let mut next = || operands.next().expect("an IF asks five operand requirements");
+                            let condition_value = next();
+                            let condition_true = next();
+                            let then = next();
+                            let condition_false = next();
+                            let otherwise = next();
+                            let then = all_of_admitted(condition_true, then, workspace)?;
+                            let otherwise = all_of_admitted(condition_false, otherwise, workspace)?;
+                            let branch = one_of_admitted(then, otherwise, workspace)?;
+                            all_of_admitted(condition_value, branch, workspace)?
+                        }
+                    }
+                };
+                values.push(combined)?;
+            }
+        }
+    }
+    Ok(values.pop().expect("the root's requirement is the last one combined"))
+}
+
+/// Ask `expr` what it needs to reach `outcome`: a leaf's requirement is pushed onto
+/// `values` at once; an operator's operands are pushed onto `steps`, each in the mode it
+/// is read in, behind the step that combines their requirements.
+fn enter_requirement<'e>(
+    expr: &'e Expression,
+    outcome: Outcome,
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
+    values: &mut AdmittedVec<AdmittedRequires>,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut outcome = outcome;
+    loop {
+        match (outcome, expr) {
+            (Outcome::Truth, Expression::Variable(variable) | Expression::Bound(variable)) => {
+                values.push(needs_admitted(variable, workspace)?)?;
+            }
+            (Outcome::Truth, Expression::Exists(_)) => values.push(Some(VarSchema::default()))?,
+            (Outcome::Truth, Expression::NamedNode(_)) => values.push(None)?,
+            (Outcome::Truth, Expression::Literal(literal)) => values.push((crate::expr::constant_ebv_admitted(literal, workspace)? == Some(true)).then(VarSchema::default))?,
+            // A chain is its binary operator folded from the operator's identity, whose
+            // requirement is the fold's: `true` (`&&`) needs nothing, `false` (`||`) is
+            // never true.
+            (Outcome::Truth, Expression::And(operands)) => push_operands(
+                steps,
+                Combine::All,
+                operands.iter().map(|operand| (operand, Outcome::Truth)),
+            )?,
+            (Outcome::Truth, Expression::Or(operands)) => push_operands(
+                steps,
+                Combine::One,
+                operands.iter().map(|operand| (operand, Outcome::Truth)),
+            )?,
+            (Outcome::Truth, Expression::Not(operand)) => {
+                steps.push(RequirementStep::Enter(operand, Outcome::Falsity))?;
+            }
+            (Outcome::Truth, Expression::FunctionCall(function, args))
+                if is_type_test(function) =>
+            {
+                push_operands(
+                    steps,
+                    Combine::All,
+                    args.iter().map(|arg| (arg, Outcome::Value)),
+                )?;
+            }
+            (Outcome::Truth, Expression::Coalesce(items)) => push_operands(
+                steps,
+                Combine::One,
+                items.iter().map(|item| (item, Outcome::Truth)),
+            )?,
+            (Outcome::Falsity, Expression::Variable(variable)) => values.push(needs_admitted(variable, workspace)?)?,
+            (Outcome::Falsity, Expression::Bound(_) | Expression::Exists(_)) => {
+                values.push(Some(VarSchema::default()))?;
+            }
+            (Outcome::Falsity, Expression::NamedNode(_)) => values.push(None)?,
+            (Outcome::Falsity, Expression::Literal(literal)) => values.push(
+                (crate::expr::constant_ebv_admitted(literal, workspace)? == Some(false)).then(VarSchema::default),
+            )?,
+            (Outcome::Falsity, Expression::FunctionCall(function, _)) if is_type_test(function) => {
+                values.push(Some(VarSchema::default()))?;
+            }
+            (Outcome::Falsity, Expression::Not(operand)) => {
+                steps.push(RequirementStep::Enter(operand, Outcome::Truth))?;
+            }
+            (Outcome::Falsity, Expression::And(operands)) => push_operands(
+                steps,
+                Combine::One,
+                operands.iter().map(|operand| (operand, Outcome::Falsity)),
+            )?,
+            (Outcome::Falsity, Expression::Or(operands)) => push_operands(
+                steps,
+                Combine::All,
+                operands.iter().map(|operand| (operand, Outcome::Falsity)),
+            )?,
+            (Outcome::Falsity, Expression::Coalesce(items)) => push_operands(
+                steps,
+                Combine::One,
+                items.iter().map(|item| (item, Outcome::Falsity)),
+            )?,
+            (Outcome::Truth | Outcome::Falsity, Expression::If(condition, then, otherwise)) => {
+                push_conditional(steps, condition, then, otherwise, outcome)?;
+            }
+            (Outcome::Truth | Outcome::Falsity, Expression::In(needle, _)) => {
+                steps.push(RequirementStep::Enter(needle, Outcome::Value))?;
+            }
+            // Every other operator, comparison and function call reaches the outcome
+            // only through a value, so it needs what it needs for one.
+            (
+                Outcome::Truth | Outcome::Falsity,
+                Expression::Arithmetic(..)
+                | Expression::Equal(..)
+                | Expression::SameTerm(..)
+                | Expression::Greater(..)
+                | Expression::GreaterOrEqual(..)
+                | Expression::Less(..)
+                | Expression::LessOrEqual(..)
+                | Expression::UnaryPlus(_)
+                | Expression::UnaryMinus(_)
+                | Expression::FunctionCall(..),
+            ) => {
+                outcome = Outcome::Value;
+                continue;
+            }
+            (Outcome::Value, Expression::Variable(variable)) => values.push(needs_admitted(variable, workspace)?)?,
+            (
+                Outcome::Value,
+                Expression::NamedNode(_)
+                | Expression::Literal(_)
+                | Expression::Bound(_)
+                | Expression::Exists(_),
+            ) => values.push(Some(VarSchema::default()))?,
+            (Outcome::Value, Expression::FunctionCall(function, args)) => push_operands(
+                steps,
+                Combine::All,
+                args.iter()
+                    .enumerate()
+                    .filter(|(position, _)| strict_in_argument(function, *position))
+                    .map(|(_, arg)| (arg, Outcome::Value)),
+            )?,
+            // The pairwise `one_of`, folded; an empty chain is its identity constant,
+            // which has a value for any row.
+            (Outcome::Value, Expression::And(operands) | Expression::Or(operands)) => {
+                push_operands(
+                    steps,
+                    Combine::OneOrNothing,
+                    operands.iter().map(|operand| (operand, Outcome::Value)),
+                )?;
+            }
+            (Outcome::Value, Expression::Arithmetic(first, rest)) => push_operands(
+                steps,
+                Combine::All,
+                std::iter::once(&**first)
+                    .chain(rest.iter().map(|(_, operand)| operand))
+                    .map(|operand| (operand, Outcome::Value)),
+            )?,
+            (
+                Outcome::Value,
+                Expression::Equal(a, b)
+                | Expression::SameTerm(a, b)
+                | Expression::Greater(a, b)
+                | Expression::GreaterOrEqual(a, b)
+                | Expression::Less(a, b)
+                | Expression::LessOrEqual(a, b),
+            ) => push_operands(
+                steps,
+                Combine::All,
+                [(&**a, Outcome::Value), (&**b, Outcome::Value)].into_iter(),
+            )?,
+            (
+                Outcome::Value,
+                Expression::UnaryPlus(operand)
+                | Expression::UnaryMinus(operand)
+                | Expression::Not(operand),
+            ) => steps.push(RequirementStep::Enter(operand, Outcome::Value))?,
+            (Outcome::Value, Expression::If(condition, then, otherwise)) => {
+                push_conditional(steps, condition, then, otherwise, Outcome::Value)?;
+            }
+            (Outcome::Value, Expression::Coalesce(items)) => push_operands(
+                steps,
+                Combine::One,
+                items.iter().map(|item| (item, Outcome::Value)),
+            )?,
+            (Outcome::Value, Expression::In(needle, _)) => {
+                steps.push(RequirementStep::Enter(needle, Outcome::Value))?;
+            }
+        }
+        return Ok(());
+    }
+}
+
+/// Push `operands` to be asked, in reading order, behind the step combining their
+/// requirements as `combine` says.
+fn push_operands<'e>(
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
+    combine: Combine,
+    operands: impl Iterator<Item = (&'e Expression, Outcome)>,
+) -> Result<(), EvalError> {
+    let exit = steps.len();
+    steps.push(RequirementStep::Exit(combine, 0))?;
+    for (operand, outcome) in operands {
+        steps.push(RequirementStep::Enter(operand, outcome))?;
+    }
+    let count = steps.len() - exit - 1;
+    steps.as_mut_slice()[exit] = RequirementStep::Exit(combine, count);
+    // Pushed in reading order, so reversed to pop in it.
+    steps.as_mut_slice()[exit + 1..].reverse();
+    Ok(())
+}
+
+/// Push an `IF`'s five operand requirements ([`Combine::Conditional`]): the condition's
+/// value, its truth, the first branch's `outcome`, the condition's falsity, and the
+/// second branch's `outcome`.
+fn push_conditional<'e>(
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
+    condition: &'e Expression,
+    then: &'e Expression,
+    otherwise: &'e Expression,
+    outcome: Outcome,
+) -> Result<(), EvalError> {
+    push_operands(
+        steps,
+        Combine::Conditional,
+        [
+            (condition, Outcome::Value),
+            (condition, Outcome::Truth),
+            (then, outcome),
+            (condition, Outcome::Falsity),
+            (otherwise, outcome),
+        ]
+        .into_iter(),
+    )
+}
+
+/// Add a triple pattern's variables, its nested quoted triples walked over a work list.
+fn collect_triple_vars_admitted(
+    triple: &TriplePattern, out: &mut SchemaBuilder, workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push(triple)?;
+    while let Some(triple) = pending.pop() {
+        for term in [&triple.subject, &triple.object] {
+            match term {
+                TermPattern::Variable(variable) => {
+                    out.push(variable.clone())?;
+                }
+                TermPattern::Triple(nested) => pending.push(nested)?,
+                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+                }
+            }
+        }
+        if let NamedNodePattern::Variable(variable) = &triple.predicate {
+            out.push(variable.clone())?;
+        }
+    }
+    Ok(())
+}
+
+/// Add a term position's variables through the same admitted nested-triple walk.
+fn collect_term_vars_admitted(
+    term: &TermPattern, out: &mut SchemaBuilder, workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    match term {
+        TermPattern::Variable(variable) => {
+            out.push(variable.clone())?;
+        }
+        TermPattern::Triple(triple) => collect_triple_vars_admitted(triple, out, workspace)?,
+        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
+    let workspace = WorkspaceCapability::default();
+    let mut bound = SchemaBuilder::new(&workspace);
+    collect_term_vars_admitted(term, &mut bound, &workspace)
+        .expect("resident term variable walk");
+    out.extend(bound.finish().expect("resident term variable schema").vars().iter().cloned());
+}
+
+// ---------------------------------------------------------------------------

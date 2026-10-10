@@ -1,0 +1,517 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! PROPOSED integration unit for engine/bounded_workspace/certificate.rs.
+//! Not compiled or tested. Shipping source has not been changed.
+//!
+//! This is a certificate traversal, not a second evaluator. It borrows the
+//! authored AST, admits its own metadata before allocation, preserves unknown
+//! row bounds and lists mandatory execution-owner hooks. Its row certificate
+//! never stands in for allocation of values, hash tables, schemas or graph builds.
+
+use std::alloc::Layout;
+
+use purrdf_core::{DatasetView, GraphMatch, ViewTermId};
+use purrdf_sparql_algebra::{
+    Flow, GraphPattern, NamedNodePattern, NodeRef,
+    PropertyPathExpression, Query, TermPattern, Variable, Visit, WalkError,
+    try_walk_pre_post,
+};
+
+use crate::{EvalError, WorkspaceAllocation, WorkspaceCapability};
+use crate::solution::Solution;
+
+use super::{AdmissionError, AdmissionResult};
+
+/// Overflow of an OPTIONAL row certificate is Unknown, not a physical grant.
+/// Overflow of an actual requested allocation below is a hard typed failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Rows {
+    Known(u64),
+    Unknown,
+}
+
+impl Rows {
+    fn from_optional(value: Option<u64>) -> Self {
+        value.map_or(Self::Unknown, Self::Known)
+    }
+
+    fn add(self, rhs: Self) -> Self {
+        match (self, rhs) {
+            (Self::Known(a), Self::Known(b)) => Self::from_optional(a.checked_add(b)),
+            _ => Self::Unknown,
+        }
+    }
+
+    fn mul(self, rhs: Self) -> Self {
+        // A zero stage is zero even when an earlier product was unrepresentable.
+        match (self, rhs) {
+            (Self::Known(0), _) | (_, Self::Known(0)) => Self::Known(0),
+            (Self::Known(a), Self::Known(b)) => Self::from_optional(a.checked_mul(b)),
+            _ => Self::Unknown,
+        }
+    }
+
+    fn optional(self) -> Self {
+        match self {
+            Self::Known(n) => Self::Known(n.max(1)),
+            Self::Unknown => Self::Unknown,
+        }
+    }
+
+    fn slice(self, start: usize, length: Option<usize>) -> Result<Self, EvalError> {
+        let start = logical(start)?;
+        let length = length.map(logical).transpose()?;
+        Ok(match self {
+            Self::Known(n) => {
+                let after_offset = if start >= n { 0 } else { n - start };
+                Self::Known(length.map_or(after_offset, |take| after_offset.min(take)))
+            }
+            Self::Unknown => length.map_or(Self::Unknown, Self::Known),
+        })
+    }
+}
+
+fn logical(value: usize) -> Result<u64, EvalError> {
+    u64::try_from(value).map_err(|_| EvalError::WorkspaceBoundOverflow)
+}
+
+fn array_bytes<T>(capacity: usize) -> Result<u64, EvalError> {
+    let layout = Layout::array::<T>(capacity)
+        .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+    logical(layout.size())
+}
+
+/// Actual capacity calculation for the existing SmallVec row representation.
+/// `spilled_cell_capacity` is the ACTUAL selected heap capacity; None is inline.
+/// The caller must not pass visible width in place of physical cell capacity.
+pub(super) fn bag_layout<I: ViewTermId>(
+    row_capacity: usize,
+    spilled_cell_capacity: Option<usize>,
+) -> Result<u64, EvalError> {
+    let rows = array_bytes::<Solution<I>>(row_capacity)?;
+    let spill = spilled_cell_capacity
+        .map(array_bytes::<Option<crate::scratch::SolutionTerm<I>>>)
+        .transpose()?
+        .unwrap_or(0);
+    rows.checked_add(
+        logical(row_capacity)?.checked_mul(spill)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?
+    ).ok_or(EvalError::WorkspaceBoundOverflow)
+}
+
+/// An exact chosen vector capacity, with replacement overlap charged first.
+/// No allocation is made by new; borrowed AST payloads are never cloned here.
+struct AdmittedVec<T> {
+    values: Vec<T>,
+    allocation: Option<WorkspaceAllocation>, // drops AFTER covered Vec
+    workspace: WorkspaceCapability,
+}
+
+impl<T> AdmittedVec<T> {
+    fn new(workspace: &WorkspaceCapability) -> Self {
+        Self { values: Vec::new(), allocation: None, workspace: workspace.clone() }
+    }
+
+    fn push(&mut self, value: T) -> Result<(), EvalError> {
+        if self.values.len() == self.values.capacity() {
+            let needed = self.values.len().checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let capacity = self.values.capacity().checked_mul(2)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?.max(needed);
+            // Old Vec + old grant stay live while the new allocation is created.
+            let allocation = self.workspace.charge(array_bytes::<T>(capacity)?)?;
+            let mut replacement = crate::workspace::vector::<T>(
+                capacity, "algebra admission metadata",
+            )?;
+            replacement.append(&mut self.values); // enough capacity; no reserve
+            let previous = std::mem::replace(&mut self.values, replacement);
+            drop(previous);
+            self.allocation = Some(allocation);
+        }
+        self.values.push(value);
+        Ok(())
+    }
+
+    fn pop(&mut self) -> Option<T> { self.values.pop() }
+}
+
+impl<'q> AdmittedVec<&'q Variable> {
+    fn unique(&mut self, variable: &'q Variable) -> Result<(), EvalError> {
+        if !self.values.contains(&variable) { self.push(variable)?; }
+        Ok(())
+    }
+
+    fn union_from(&mut self, other: &Self) -> Result<(), EvalError> {
+        for &variable in &other.values { self.unique(variable)?; }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Scope { Default, Named, Remote }
+
+#[derive(Clone, Copy)]
+struct ScopeRows {
+    default: Rows,
+    all_graphs: Rows,
+    named_graphs: Rows,
+}
+
+impl ScopeRows {
+    fn candidates(self, scope: Scope) -> Rows {
+        match scope {
+            Scope::Default => self.default,
+            Scope::Named => self.all_graphs,
+            Scope::Remote => Rows::Unknown,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Publication { Select, Ask, Construct, Describe }
+
+/// Required local owners: flags are obligations, NEVER completion evidence.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct LocalOwners(u32);
+
+impl LocalOwners {
+    pub(super) const ROWS: u32 = 1 << 0;
+    pub(super) const SCHEMA: u32 = 1 << 1;
+    pub(super) const BGP: u32 = 1 << 2;
+    pub(super) const JOIN: u32 = 1 << 3;
+    pub(super) const CORRELATION: u32 = 1 << 4;
+    pub(super) const EXPRESSION: u32 = 1 << 5;
+    pub(super) const PATH: u32 = 1 << 6;
+    pub(super) const GRAPH_ENUMERATION: u32 = 1 << 7;
+    pub(super) const VALUES: u32 = 1 << 8;
+    pub(super) const ORDER: u32 = 1 << 9;
+    pub(super) const GROUP: u32 = 1 << 10;
+    pub(super) const DISTINCT: u32 = 1 << 11;
+    pub(super) const UNFOLD: u32 = 1 << 12;
+    pub(super) const PRODUCER: u32 = 1 << 13;
+    pub(super) const REMOTE: u32 = 1 << 14;
+    pub(super) const CONSTRUCT: u32 = 1 << 15;
+    pub(super) const DESCRIBE: u32 = 1 << 16;
+    pub(super) const ACTIVE_DATASET: u32 = 1 << 17;
+    pub(super) const REPORTING: u32 = 1 << 18;
+
+    pub(super) fn contains(self, owner: u32) -> bool { self.0 & owner != 0 }
+
+    fn visit(&mut self, node: NodeRef<'_>) {
+        match node {
+            NodeRef::Expr(_) | NodeRef::Order(_) | NodeRef::Aggregate(_) => {
+                self.0 |= Self::EXPRESSION;
+            }
+            NodeRef::Pattern(pattern) => {
+                self.0 |= Self::ROWS | Self::SCHEMA;
+                self.0 |= match pattern {
+                    GraphPattern::Bgp { .. } => Self::BGP,
+                    GraphPattern::Path { .. } => Self::PATH,
+                    GraphPattern::Join { .. } | GraphPattern::LeftJoin { .. }
+                    | GraphPattern::Minus { .. } => Self::JOIN,
+                    GraphPattern::Lateral { .. } | GraphPattern::Apply { .. } => Self::CORRELATION,
+                    GraphPattern::Filter { .. } | GraphPattern::Extend { .. } => Self::EXPRESSION,
+                    GraphPattern::Graph { .. } => Self::GRAPH_ENUMERATION,
+                    GraphPattern::Service { .. } => Self::REMOTE,
+                    GraphPattern::Values { .. } => Self::VALUES,
+                    GraphPattern::OrderBy { .. } => Self::ORDER,
+                    GraphPattern::Group { .. } => Self::GROUP,
+                    GraphPattern::Distinct { .. } | GraphPattern::Reduced { .. } => Self::DISTINCT,
+                    GraphPattern::Unfold { .. } => Self::UNFOLD,
+                    GraphPattern::PropertyFunction(_) => Self::PRODUCER,
+                    GraphPattern::Project { .. } | GraphPattern::Slice { .. }
+                    | GraphPattern::Union { .. } => 0,
+                };
+            }
+            NodeRef::Path(_) | NodeRef::Triple(_) | NodeRef::Term(_)
+            | NodeRef::Ground(_) => {}
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind { Pattern, Path, Other }
+
+struct Facts<'q> {
+    kind: Kind,
+    rows: Rows,
+    columns: AdmittedVec<&'q Variable>,
+}
+
+impl<'q> Facts<'q> {
+    fn new(kind: Kind, workspace: &WorkspaceCapability) -> Self {
+        Self { kind, rows: Rows::Unknown, columns: AdmittedVec::new(workspace) }
+    }
+}
+
+struct Frame { values_at: usize, scope: Scope, child_scope: Scope }
+
+struct Traversal<'q> {
+    workspace: WorkspaceCapability,
+    scopes: ScopeRows,
+    frames: AdmittedVec<Frame>,
+    values: AdmittedVec<Facts<'q>>,
+    owners: LocalOwners,
+}
+
+impl<'q> Traversal<'q> {
+    fn new(workspace: WorkspaceCapability, scopes: ScopeRows, owners: LocalOwners) -> Self {
+        Self {
+            scopes, frames: AdmittedVec::new(&workspace),
+            values: AdmittedVec::new(&workspace), workspace, owners,
+        }
+    }
+
+    fn visit(&mut self, phase: Visit, node: NodeRef<'q>) -> Result<Flow, EvalError> {
+        match phase {
+            Visit::Enter => {
+                self.owners.visit(node);
+                let scope = self.frames.values.last().map_or(Scope::Default, |frame| frame.child_scope);
+                let child_scope = match node {
+                    NodeRef::Pattern(GraphPattern::Graph { .. })
+                        if !matches!(scope, Scope::Remote) => Scope::Named,
+                    NodeRef::Pattern(GraphPattern::Service { .. }) => Scope::Remote,
+                    _ => scope,
+                };
+                self.frames.push(Frame { values_at: self.values.values.len(), scope, child_scope })?;
+            }
+            Visit::Exit => {
+                let frame = self.frames.pop().expect("the algebra walker pairs enter and exit");
+                let facts = combine(
+                    node, &self.values.values[frame.values_at..], frame.scope,
+                    self.scopes, &self.workspace,
+                )?;
+                // Children stay charged throughout new parent schema construction.
+                self.values.values.truncate(frame.values_at);
+                self.values.push(facts)?;
+            }
+        }
+        Ok(Flow::Descend)
+    }
+}
+
+fn rows_of(children: &[Facts<'_>], kind: Kind, ordinal: usize) -> Rows {
+    children.iter().filter(|child| child.kind == kind).nth(ordinal)
+        .map_or(Rows::Unknown, |child| child.rows)
+}
+
+fn combine<'q>(
+    node: NodeRef<'q>, children: &[Facts<'q>], scope: Scope,
+    scopes: ScopeRows, workspace: &WorkspaceCapability,
+) -> Result<Facts<'q>, EvalError> {
+    let mut out = Facts::new(Kind::Other, workspace);
+    match node {
+        NodeRef::Term(TermPattern::Variable(variable)) => out.columns.unique(variable)?,
+        NodeRef::Term(TermPattern::Triple(_)) => {
+            for child in children { out.columns.union_from(&child.columns)?; }
+        }
+        NodeRef::Triple(triple) => {
+            // Match syntactic_schema's subject, predicate, object first-seen order.
+            if let Some(subject) = children.first() { out.columns.union_from(&subject.columns)?; }
+            if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                out.columns.unique(variable)?;
+            }
+            if let Some(object) = children.get(1) { out.columns.union_from(&object.columns)?; }
+        }
+        NodeRef::Path(path) => {
+            out.kind = Kind::Path;
+            out.rows = match path {
+                PropertyPathExpression::NamedNode(_) => scopes.candidates(scope),
+                PropertyPathExpression::Reverse(_) => rows_of(children, Kind::Path, 0),
+                PropertyPathExpression::Sequence(_) if !children.is_empty() => {
+                    children.iter().fold(Rows::Known(1), |rows, child| rows.mul(child.rows))
+                }
+                PropertyPathExpression::Alternative(_) => {
+                    children.iter().fold(Rows::Known(0), |rows, child| rows.add(child.rows))
+                }
+                PropertyPathExpression::Sequence(_)
+                | PropertyPathExpression::NegatedPropertySet(_)
+                | PropertyPathExpression::Wildcard { .. }
+                | PropertyPathExpression::ZeroOrMore(_)
+                | PropertyPathExpression::OneOrMore(_)
+                | PropertyPathExpression::ZeroOrOne(_)
+                | PropertyPathExpression::Range { .. } => Rows::Unknown,
+            };
+        }
+        NodeRef::Pattern(pattern) => {
+            out.kind = Kind::Pattern;
+            let left = rows_of(children, Kind::Pattern, 0);
+            let right = rows_of(children, Kind::Pattern, 1);
+            out.rows = match pattern {
+                GraphPattern::Bgp { patterns } => {
+                    patterns.iter().fold(Rows::Known(1), |rows, _| rows.mul(scopes.candidates(scope)))
+                }
+                GraphPattern::Path { .. } => rows_of(children, Kind::Path, 0),
+                GraphPattern::Join { .. } | GraphPattern::Lateral { .. } => left.mul(right),
+                GraphPattern::LeftJoin { .. } => left.mul(right.optional()),
+                GraphPattern::Apply { policy, .. } => {
+                    left.mul(if policy.optional.is_some() { right.optional() } else { right })
+                }
+                GraphPattern::Union { .. } => children.iter()
+                    .filter(|child| child.kind == Kind::Pattern)
+                    .fold(Rows::Known(0), |rows, child| rows.add(child.rows)),
+                GraphPattern::Graph { name: NamedNodePattern::Variable(_), .. } => {
+                    left.mul(scopes.named_graphs)
+                }
+                GraphPattern::Graph { name: NamedNodePattern::NamedNode(_), .. } => left,
+                GraphPattern::Values { bindings, .. } => Rows::Known(logical(bindings.len())?),
+                GraphPattern::Slice { start, length, .. } => left.slice(*start, *length)?,
+                GraphPattern::Group { variables, aggregates, .. }
+                    if variables.is_empty() && !aggregates.is_empty() => Rows::Known(1),
+                GraphPattern::Filter { .. } | GraphPattern::Extend { .. }
+                | GraphPattern::Minus { .. } | GraphPattern::OrderBy { .. }
+                | GraphPattern::Project { .. } | GraphPattern::Distinct { .. }
+                | GraphPattern::Reduced { .. } | GraphPattern::Group { .. } => left,
+                GraphPattern::Unfold { .. } => {
+                    if left == Rows::Known(0) { Rows::Known(0) } else { Rows::Unknown }
+                }
+                // No local-data bound is inferred for a remote or opaque producer.
+                GraphPattern::Service { .. } | GraphPattern::PropertyFunction(_) => Rows::Unknown,
+            };
+
+            match pattern {
+                GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
+                    for variable in variables { out.columns.unique(variable)?; }
+                }
+                GraphPattern::Group { variables, aggregates, .. } => {
+                    for variable in variables { out.columns.unique(variable)?; }
+                    for (variable, _) in aggregates { out.columns.unique(variable)?; }
+                }
+                GraphPattern::Minus { .. } => {
+                    if let Some(left) = children.iter().find(|child| child.kind == Kind::Pattern) {
+                        out.columns.union_from(&left.columns)?;
+                    }
+                }
+                GraphPattern::Bgp { .. } | GraphPattern::Path { .. }
+                | GraphPattern::PropertyFunction(_) => {
+                    for child in children { out.columns.union_from(&child.columns)?; }
+                }
+                GraphPattern::Join { .. } | GraphPattern::LeftJoin { .. }
+                | GraphPattern::Lateral { .. } | GraphPattern::Apply { .. }
+                | GraphPattern::Filter { .. } | GraphPattern::Union { .. }
+                | GraphPattern::Graph { .. } | GraphPattern::Extend { .. }
+                | GraphPattern::Service { .. } | GraphPattern::OrderBy { .. }
+                | GraphPattern::Distinct { .. } | GraphPattern::Reduced { .. }
+                | GraphPattern::Slice { .. } | GraphPattern::Unfold { .. } => {
+                    for child in children.iter().filter(|child| child.kind == Kind::Pattern) {
+                        out.columns.union_from(&child.columns)?;
+                    }
+                    match pattern {
+                        GraphPattern::Graph { name: NamedNodePattern::Variable(variable), .. }
+                        | GraphPattern::Extend { variable, .. } => out.columns.unique(variable)?,
+                        GraphPattern::Unfold { element, companion, .. } => {
+                            out.columns.unique(element)?;
+                            if let Some(variable) = companion { out.columns.unique(variable)?; }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // EXISTS is visited fully (including its local owners), but an expression's
+        // private schema never leaks into its enclosing graph pattern's columns.
+        NodeRef::Expr(_) | NodeRef::Order(_) | NodeRef::Aggregate(_)
+        | NodeRef::Ground(_)
+        | NodeRef::Term(TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_)) => {}
+    }
+    Ok(out)
+}
+
+pub(super) struct QueryCertificate<'q> {
+    pub(super) publication: Publication,
+    /// Query pattern solution rows, before ASK/CONSTRUCT/DESCRIBE publication.
+    pub(super) pattern_rows: Rows,
+    /// Borrowed known syntactic columns; runtime service/driver columns still need
+    /// the actual schema owner's pre-growth admission, not this Vec's layout.
+    columns: AdmittedVec<&'q Variable>,
+    pub(super) owners: LocalOwners,
+}
+
+impl QueryCertificate<'_> {
+    pub(super) fn visible_columns(&self) -> &[&Variable] { &self.columns.values }
+}
+
+/// Pass a cheap certified declaration-only graph upper bound when available.
+/// None is not zero and does not call allocating named_graphs() to guess one.
+pub(super) fn certify_query<'q, D: DatasetView>(
+    view: &D, query: &'q Query, workspace: WorkspaceCapability,
+    declared_named_graph_bound: Option<u64>,
+) -> AdmissionResult<D, QueryCertificate<'q>> {
+    let all_graphs = Rows::from_optional(
+        view.workspace_candidate_bound(None, None, None, GraphMatch::Any)
+            .map_err(AdmissionError::Operational)?,
+    );
+    let dataset = query.dataset();
+    let explicit_dataset = !dataset.default.is_empty() || !dataset.named.is_empty();
+    let default = if dataset.default.is_empty() && !dataset.named.is_empty() {
+        Rows::Known(0) // FROM NAMED only has an empty active default.
+    } else if explicit_dataset {
+        // Resolved FROM graphs are deduplicated by the actual dataset owner.
+        // A subset's merged stream is bounded by the complete ANY stream before
+        // merge dedup; duplicate authored FROM occurrences do not multiply it.
+        all_graphs
+    } else {
+        Rows::from_optional(
+            view.workspace_candidate_bound(None, None, None, GraphMatch::Default)
+                .map_err(AdmissionError::Operational)?,
+        )
+    };
+    let named_graphs = if explicit_dataset {
+        Rows::Known(logical(dataset.named.len())?)
+    } else { Rows::from_optional(declared_named_graph_bound) };
+    if let Some(error) = view.read_error() { return Err(AdmissionError::Operational(error)); }
+
+    let mut owners = LocalOwners(LocalOwners::ACTIVE_DATASET | LocalOwners::REPORTING);
+    let publication = match query {
+        Query::Select { .. } => Publication::Select,
+        Query::Ask { .. } => Publication::Ask,
+        Query::Construct { .. } => {
+            owners.0 |= LocalOwners::CONSTRUCT;
+            Publication::Construct
+        }
+        Query::Describe { .. } => {
+            owners.0 |= LocalOwners::DESCRIBE;
+            Publication::Describe
+        }
+    };
+    let scopes = ScopeRows { default, all_graphs, named_graphs };
+    let mut traversal = Traversal::new(workspace.clone(), scopes, owners);
+    try_walk_pre_post(
+        NodeRef::Pattern(query.pattern()),
+        |phase, node| traversal.visit(phase, node),
+        |bytes| workspace.charge(logical(bytes)?),
+    ).map_err(|error| -> AdmissionError<D::ReadError> {
+        match error {
+            WalkError::Visitor(error) => error.into(),
+            WalkError::LayoutOverflow => EvalError::WorkspaceBoundOverflow.into(),
+            WalkError::Allocation(_) => EvalError::AllocationFailed {
+                construct: "algebra admission work list",
+            }.into(),
+        }
+    })?;
+    let root = traversal.values.pop().expect("a completed walk produces its root certificate");
+    Ok(QueryCertificate {
+        publication, pattern_rows: root.rows, columns: root.columns,
+        owners: traversal.owners,
+    })
+}
+
+// INTEGRATION: retain the typed reporting/workspace account already constructed
+// by reserve_reporting, call certify_query with its capability and keep its
+// metadata owner for as long as the metadata is used. Map a charge refusal back
+// through Account<E>'s first typed error at the complete publication boundary.
+//
+// MANDATORY HOOKS before removing the old reserve_checked form/context refusal:
+// - ActiveDataset resolve/sort/sets/scope clones; actual VarSchema/interner tables;
+// - compiled BGP constants, nested-term lookup copies, plan/probe states, every
+//   actual prefix bag (all possible join orders), row spills and compatibility;
+// - joins/MINUS/UNION alignment/hash/flags, correlated per-driver/substituted AST
+//   buffers and Apply first/retry lifetimes (retry is not another emitted bag);
+// - all expression/EXISTS/aggregate/native-producer/remote before-growth owners;
+// - path program/frontier/memo/set/temporary bags; unknown repetition bounds do
+//   not license an allocation and do not justify rejecting supported execution;
+// - CONSTRUCT builder/template/list/reifier/annotation/freeze and whole-view
+//   DESCRIBE SCBD adjacency; all retained results/partial/explanation/evidence.
+// This code prices only its concrete metadata allocations. No 32768-byte base,
+// eightfold authored text, 256-byte cell, or row-count-times-stored-term proof.

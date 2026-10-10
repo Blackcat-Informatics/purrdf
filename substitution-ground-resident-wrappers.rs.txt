@@ -1,0 +1,41 @@
+/// Convert a caller-owned term through the same native grounding body.
+/// The resident allocation contract is unchanged; bounded callers use the typed door.
+fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic> {
+    ground_term_from_value_admitted(value, &crate::WorkspaceCapability::default())
+        .map(|ground| ground.try_into_resident().expect("resident grounding has no external lease"))
+        .map_err(GroundFailure::into_resident_diagnostic)
+}
+
+/// Resolve directly into the same grounding body, without materializing TermValue.
+pub(crate) fn ground_term_from_id<D: DatasetView>(
+    dataset: &D,
+    id: D::Id,
+) -> Result<GroundTerm, RdfDiagnostic> {
+    let workspace = crate::WorkspaceCapability::default();
+    ground_term_from_id_admitted(dataset, id, &workspace, |error| {
+        GroundFailure::diagnostic("native-sparql-source-read", &error, &workspace)
+    })
+    .map(|ground| ground.try_into_resident().expect("resident grounding has no external lease"))
+    .map_err(GroundFailure::into_resident_diagnostic)
+}
+
+/// Resident reference fixtures share the production literal-facet admission law.
+#[cfg(test)]
+fn literal_from_value(
+    lexical_form: &str,
+    datatype: &str,
+    language: Option<&str>,
+    direction: Option<RdfTextDirection>,
+) -> Result<Literal, RdfDiagnostic> {
+    literal_from_value_admitted(
+        lexical_form, datatype, language, direction, &crate::WorkspaceCapability::default(),
+    ).map_err(GroundFailure::into_resident_diagnostic)
+}
+
+/// Resident reference fixtures share the same borrowed IRI recognition body.
+#[cfg(test)]
+fn node(iri: &str) -> Result<NamedNode, RdfDiagnostic> {
+    node_admitted(iri, &crate::WorkspaceCapability::default())
+        .map_err(GroundFailure::into_resident_diagnostic)
+}
+

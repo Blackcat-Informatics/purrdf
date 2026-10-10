@@ -1,0 +1,992 @@
+--- a/crates/sparql-eval/src/bgp/positive.rs
++++ b/crates/sparql-eval/src/bgp/positive.rs
+@@ -373,7 +373,7 @@
+                         rows = rows.saturating_add(arm.estimate.rows);
+                         peak_rows = peak_rows.max(arm.estimate.peak_rows);
+                         certain = Some(match certain {
+-                            None => arm.certain.clone(),
++                            None => arm.certain,
+                             Some(previous) => VarSchema::from_vars_admitted(
+                                 previous
+                                     .vars()
+@@ -641,8 +641,7 @@
+             dataset,
+             active_dataset,
+             active_graph,
+-            root,
+-            None,
++            (root, None),
+             survey,
+             account,
+         )
+@@ -654,11 +653,11 @@
+         dataset: &D,
+         active_dataset: &ActiveDataset<D::Id>,
+         active_graph: GraphMatch<D::Id>,
+-        root: &GraphPattern,
+-        input: Option<&SeedEstimate>,
++        seeded: (&GraphPattern, Option<&SeedEstimate>),
+         survey: &mut PlanSurvey,
+         account: &QueryWorkspace<D::ReadError>,
+     ) -> Result<(), EvalError> {
++        let (root, input) = seeded;
+         let workspace = account.capability();
+         enum Step<'a> {
+             Visit(&'a GraphPattern, SharedWorkspace<SeedEstimate>, bool),
+@@ -693,7 +692,6 @@
+                                 active_dataset,
+                                 active_graph,
+                                 node,
+-                                patterns,
+                                 &seed,
+                                 survey,
+                                 account,
+--- a/crates/sparql-eval/src/governor/charge_points.rs
++++ b/crates/sparql-eval/src/governor/charge_points.rs
+@@ -636,7 +636,7 @@
+     for context in [&parent, &worker, &callee] {
+         assert!(
+             std::ptr::eq(
+-                &**context.governor_state().expect("governed"),
++                &raw const **context.governor_state().expect("governed"),
+                 Arc::as_ptr(&state)
+             ),
+             "a per-worker copy would multiply the budget by the thread count"
+--- a/crates/sparql-eval/src/bgp.rs
++++ b/crates/sparql-eval/src/bgp.rs
+@@ -175,7 +175,7 @@
+ 
+ struct DetachedTriplePos<I: ViewTermId> {
+     node: Box<TriplePos<I>>,
+-    _allocation: Option<crate::workspace::WorkspaceAllocation>,
++    allocation: Option<crate::workspace::WorkspaceAllocation>,
+ }
+ 
+ impl<I: ViewTermId> OwnedTriplePos<I> {
+@@ -202,7 +202,7 @@
+     fn take(&mut self) -> Option<DetachedTriplePos<I>> {
+         self.node.take().map(|node| DetachedTriplePos {
+             node,
+-            _allocation: self.allocation.take(),
++            allocation: self.allocation.take(),
+         })
+     }
+ }
+@@ -244,7 +244,7 @@
+             .expect("the selected child slot is vacant");
+         if let Some(parent) = parent {
+             child.parent = Some(parent.node);
+-            child.parent_allocation = parent._allocation;
++            child.parent_allocation = parent.allocation;
+         }
+     }
+ 
+@@ -255,7 +255,7 @@
+             .expect("the resumed parent has a vacant child");
+         child.parent.take().map(|node| Self {
+             node,
+-            _allocation: child.parent_allocation.take(),
++            allocation: child.parent_allocation.take(),
+         })
+     }
+ }
+@@ -467,14 +467,14 @@
+     // A singleton has only one order, regardless of nullable bindings. Retained
+     // preparation needs no per-occurrence mask allocation for that fixed order.
+     let mut initial = AdmittedVec::new(&ctx.growth);
+-    if !(program.projection.is_some() && compiled.len() == 1) {
+-        if let Some(input) = borrowed {
+-            initial = AdmittedVec::with_capacity(working.len(), &ctx.growth)?;
+-            for variable in working.vars() {
+-                initial.push_reserved(input.schema.index_of(variable).is_some_and(|column| {
+-                    !input.rows.is_empty() && input.rows.iter().all(|row| row[column].is_some())
+-                }));
+-            }
++    if !(program.projection.is_some() && compiled.len() == 1)
++        && let Some(input) = borrowed
++    {
++        initial = AdmittedVec::with_capacity(working.len(), &ctx.growth)?;
++        for variable in working.vars() {
++            initial.push_reserved(input.schema.index_of(variable).is_some_and(|column| {
++                !input.rows.is_empty() && input.rows.iter().all(|row| row[column].is_some())
++            }));
+         }
+     }
+     // An empty producer cannot extend this relation. Keep the full logical
+@@ -689,7 +689,6 @@
+                             Ok(None) => {}
+                             Err(error) => {
+                                 acc.fail(error);
+-                                return;
+                             }
+                         }
+                     });
+@@ -953,10 +952,10 @@
+             .map(BgpOrder::Caller),
+         OrderCacheRef::Bounded(cache) => cache.lock().expect("order cache lock poisoned").get(&key),
+     };
+-    if let Some(order) = cached {
+-        if order.len() == compiled.len() {
+-            return Ok(order);
+-        }
++    if let Some(order) = cached
++        && order.len() == compiled.len()
++    {
++        return Ok(order);
+     }
+     let order = BgpOrder::from_admitted(
+         cost_based_order_from_admitted(compiled, dataset, scope, initial, workspace)?,
+@@ -1051,7 +1050,8 @@
+ /// machine stack to the same value.
+ #[cfg(test)]
+ fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
+-    hash_pos_admitted(pos, h, &crate::WorkspaceCapability::resident()).expect("resident shape hash")
++    hash_pos_admitted(pos, h, &crate::WorkspaceCapability::resident())
++        .expect("resident shape hash");
+ }
+ 
+ fn hash_pos_admitted<I: ViewTermId, H: std::hash::Hasher>(
+@@ -1518,9 +1518,9 @@
+             mark_bound_admitted(&compiled[index], bound.as_mut_slice(), workspace)?;
+         }
+         let mut any_connected = false;
+-        for index in 0..n {
++        for (index, pattern) in compiled.iter().enumerate() {
+             if mask & (1_usize << index) == 0
+-                && pattern_connected_admitted(&compiled[index], &bound, workspace)?
++                && pattern_connected_admitted(pattern, &bound, workspace)?
+             {
+                 any_connected = true;
+                 break;
+@@ -1603,7 +1603,7 @@
+ #[cfg(test)]
+ fn mark_bound<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &mut [bool]) {
+     mark_bound_admitted(cp, bound, &crate::WorkspaceCapability::resident())
+-        .expect("resident bound mask")
++        .expect("resident bound mask");
+ }
+ 
+ fn mark_bound_admitted<I: ViewTermId>(
+@@ -1632,7 +1632,7 @@
+             Ok(())
+         },
+     )
+-    .expect("resident slot walk")
++    .expect("resident slot walk");
+ }
+ 
+ fn for_each_slot_admitted<I: ViewTermId>(
+@@ -1756,10 +1756,10 @@
+         match position {
+             SlotPosition::Predicate(NamedNodePattern::Variable(variable))
+             | SlotPosition::Term(TermPattern::Variable(variable)) => {
+-                visit(SlotKey::Variable(variable))?
++                visit(SlotKey::Variable(variable))?;
+             }
+             SlotPosition::Term(TermPattern::BlankNode(blank)) => {
+-                visit(SlotKey::Blank(blank.as_str()))?
++                visit(SlotKey::Blank(blank.as_str()))?;
+             }
+             SlotPosition::Term(TermPattern::Triple(triple)) => {
+                 for position in [
+@@ -2310,7 +2310,7 @@
+ ) -> Result<bool, EvalError> {
+     // Inline for a plain position and for a quoted triple of plain positions, so
+     // binding a row allocates nothing beyond the row it writes.
+-    let mut _allocation = None;
++    let mut allocation = None;
+     let mut pending: PosWork<'_, D::Id> = purrdf_core::smallvec![(pos, id)];
+     while let Some((pos, id)) = pending.pop() {
+         match pos {
+@@ -2364,7 +2364,7 @@
+                             .map_err(|_| EvalError::AllocationFailed {
+                                 construct: "nested position work list",
+                             })?;
+-                        _allocation = Some(next);
++                        allocation = Some(next);
+                     }
+                     pending.extend([(&t.o, o), (&t.p, p), (&t.s, s)]);
+                 }
+@@ -2374,6 +2374,9 @@
+             },
+         }
+     }
++    // Destroy the spilled work list before releasing its original admission.
++    drop(pending);
++    drop(allocation);
+     Ok(true)
+ }
+ 
+@@ -2889,8 +2892,7 @@
+                         dataset,
+                         active_dataset,
+                         graph,
+-                        right,
+-                        Some(&seed),
++                        (right, Some(&seed)),
+                         survey,
+                         account,
+                     )?;
+@@ -3109,7 +3111,6 @@
+         active_dataset,
+         active_graph,
+         node,
+-        patterns,
+         &SeedEstimate::default(),
+         survey,
+         account,
+@@ -3195,11 +3196,13 @@
+     active_dataset: &ActiveDataset<D::Id>,
+     active_graph: GraphMatch<D::Id>,
+     node: &GraphPattern,
+-    patterns: &[TriplePattern],
+     seed: &SeedEstimate,
+     survey: &mut PlanSurvey,
+     account: &crate::workspace::QueryWorkspace<D::ReadError>,
+ ) -> Result<(), EvalError> {
++    let GraphPattern::Bgp { patterns } = node else {
++        unreachable!("BGP survey receives a BGP node");
++    };
+     let (_, estimate, order) = forecast_bgp(
+         dataset,
+         active_dataset,
+@@ -5599,8 +5602,7 @@
+             dataset,
+             active_dataset,
+             graph,
+-            right,
+-            Some(&seed),
++            (right, Some(&seed)),
+             survey,
+             &crate::workspace::QueryWorkspace::resident(),
+         )?;
+--- a/crates/sparql-eval/src/native_numeric.rs
++++ b/crates/sparql-eval/src/native_numeric.rs
+@@ -49,9 +49,8 @@
+         if self.failure.is_some() {
+             return Err(LimbScratchError::AllocationFailed);
+         }
+-        let bytes = match u64::try_from(layout.peak_bytes()) {
+-            Ok(bytes) => bytes,
+-            Err(_) => return Err(LimbScratchError::SizeOverflow),
++        let Ok(bytes) = u64::try_from(layout.peak_bytes()) else {
++            return Err(LimbScratchError::SizeOverflow);
+         };
+         let admitted = if let Some(allocation) = &mut self.allocation {
+             allocation.resize(bytes)
+--- a/crates/sparql-eval/src/property_fn_plan.rs
++++ b/crates/sparql-eval/src/property_fn_plan.rs
+@@ -632,10 +632,10 @@
+         match step {
+             Step::Pattern(node, scope, promise) => planner.enter_pattern(node, scope, promise)?,
+             Step::Expression(expr, scope, promise) => {
+-                planner.enter_expression(expr, scope, promise)?
++                planner.enter_expression(expr, scope, promise)?;
+             }
+             Step::Aggregate(aggregate, scope, promise) => {
+-                planner.enter_aggregate(aggregate, scope, promise)?
++                planner.enter_aggregate(aggregate, scope, promise)?;
+             }
+             Step::Order(order, scope, promise) => planner.enter_order(order, scope, promise)?,
+             Step::Assemble(assemble) => planner.assemble(assemble)?,
+@@ -1558,9 +1558,10 @@
+                                 .retry_inputs
+                                 .iter()
+                                 .any(|(retry_input, retry_driver)| {
+-                                    retry_input == input
+-                                        && (certain.contains(retry_driver)
+-                                            || promised.writes(retry_driver))
++                                    if retry_input != input {
++                                        return false;
++                                    }
++                                    certain.contains(retry_driver) || promised.writes(retry_driver)
+                                 })
+                         })
+                     {
+@@ -3724,7 +3725,7 @@
+                 items.iter().map(|item| (item, Outcome::Truth)),
+             )?,
+             (Outcome::Falsity, Expression::Variable(variable)) => {
+-                values.push(needs_admitted(variable, workspace)?)?
++                values.push(needs_admitted(variable, workspace)?)?;
+             }
+             (Outcome::Falsity, Expression::Bound(_) | Expression::Exists(_)) => {
+                 values.push(Some(VarSchema::default()))?;
+@@ -3780,7 +3781,7 @@
+                 continue;
+             }
+             (Outcome::Value, Expression::Variable(variable)) => {
+-                values.push(needs_admitted(variable, workspace)?)?
++                values.push(needs_admitted(variable, workspace)?)?;
+             }
+             (
+                 Outcome::Value,
+--- a/crates/sparql-eval/src/blank_scope.rs
++++ b/crates/sparql-eval/src/blank_scope.rs
+@@ -338,8 +338,8 @@
+         return Ok(output);
+     }
+     let mut leaf_counts = AdmittedMap::<&str, usize>::default();
+-    for labels in per_leaf.iter() {
+-        for &label in labels.iter() {
++    for labels in &per_leaf {
++        for &label in labels {
+             if let Some(count) = leaf_counts.get_mut(label) {
+                 *count = count
+                     .checked_add(1)
+@@ -544,7 +544,7 @@
+             },
+             Node::Expression(expr) => match expr {
+                 Expression::Exists(pattern) => {
+-                    pending.try_push_admitted(Node::Pattern(pattern), memory)?
++                    pending.try_push_admitted(Node::Pattern(pattern), memory)?;
+                 }
+                 Expression::Or(operands) | Expression::And(operands) => {
+                     extend_pending(
+@@ -814,10 +814,18 @@
+             args: args_len,
+             descending,
+         })?;
++        #[expect(
++            clippy::iter_with_drain,
++            reason = "The original vector stays allocated until Memory destroys it and refunds its grant; drain preserves authored transfer order."
++        )]
+         for argument in args.drain(..) {
+             out.push(argument)?;
+         }
+         memory.release_vec(args)?;
++        #[expect(
++            clippy::iter_with_drain,
++            reason = "The original vector stays allocated until Memory destroys it and refunds its grant; drain preserves authored transfer order."
++        )]
+         for order in order_by.drain(..) {
+             let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) = order;
+             out.push(expression)?;
+@@ -841,7 +849,7 @@
+         let args = memory.collect(rewritten.by_ref().take(aggregate.args))?;
+         let mut order_by = Vec::new();
+         memory.reserve(&mut order_by, aggregate.descending.len())?;
+-        for &descending in aggregate.descending.iter() {
++        for &descending in &aggregate.descending {
+             let expression = rewritten.next().expect("each taken sort key comes back");
+             order_by.push(if descending {
+                 OrderExpression::Desc(expression)
+@@ -868,16 +876,10 @@
+ }
+ 
+ /// A node whose children are away being rewritten, and how many of them there are.
+-enum Shell {
+-    Pattern {
+-        node: GraphPattern,
+-        children: usize,
+-        aggregates: AdmittedVec<TakenAggregate>,
+-    },
+-    Expression {
+-        node: Expression,
+-        children: usize,
+-    },
++struct Shell {
++    node: Rewritten,
++    children: usize,
++    aggregates: AdmittedVec<TakenAggregate>,
+ }
+ 
+ /// One step of the rewrite.
+@@ -924,6 +926,10 @@
+     mut names: Vec<String>,
+     memory: &mut Memory<'_, LexicalFrame>,
+ ) -> PrepResult<()> {
++    #[expect(
++        clippy::iter_with_drain,
++        reason = "The original vector stays allocated until Memory destroys it and refunds its grant; drain preserves authored transfer order."
++    )]
+     for text in names.drain(..) {
+         memory.release_string(text)?;
+     }
+@@ -1038,7 +1044,7 @@
+     let mut memory = Memory::new(&mut frame);
+     let query = Query::Ask {
+         pattern,
+-        dataset: Default::default(),
++        dataset: purrdf_sparql_algebra::QueryDataset::default(),
+         base_iri: None,
+         version: None,
+     };
+@@ -1108,8 +1114,8 @@
+                 for expression in aggregate_exprs {
+                     children.push(Step::Expression(expression))?;
+                 }
+-                steps.push(Step::Assemble(Shell::Pattern {
+-                    node,
++                steps.push(Step::Assemble(Shell {
++                    node: Rewritten::Pattern(node),
+                     children: children.len(),
+                     aggregates,
+                 }))?;
+@@ -1138,20 +1144,21 @@
+                 if let Some(error) = failure {
+                     return Err(error.into());
+                 }
+-                steps.push(Step::Assemble(Shell::Expression {
+-                    node,
++                steps.push(Step::Assemble(Shell {
++                    node: Rewritten::Expression(node),
+                     children: children.len(),
++                    aggregates: AdmittedVec::new(&capability),
+                 }))?;
+                 while let Some(child) = children.pop() {
+                     steps.push(child)?;
+                 }
+             }
+             Step::Assemble(shell) => {
+-                let count = match &shell {
+-                    Shell::Pattern { children, .. } | Shell::Expression { children, .. } => {
+-                        *children
+-                    }
+-                };
++                let Shell {
++                    node,
++                    children: count,
++                    aggregates,
++                } = shell;
+                 let start = done.len() - count;
+                 let mut rewritten = done.drain_from(start);
+                 let mut refill = |child: ChildMut<'_>| match (child, rewritten.next()) {
+@@ -1161,12 +1168,8 @@
+                     }
+                     _ => unreachable!("every child comes back as the kind it was taken as"),
+                 };
+-                match shell {
+-                    Shell::Pattern {
+-                        mut node,
+-                        aggregates,
+-                        ..
+-                    } => {
++                match node {
++                    Rewritten::Pattern(mut node) => {
+                         for_each_child_mut(&mut node, &mut refill);
+                         drop(refill);
+                         let mut expressions = rewritten.map(|child| match child {
+@@ -1186,7 +1189,7 @@
+                         drop(expressions);
+                         done.push(Rewritten::Pattern(node))?;
+                     }
+-                    Shell::Expression { mut node, .. } => {
++                    Rewritten::Expression(mut node) => {
+                         for_each_operand_mut(&mut node, &mut refill);
+                         drop(refill);
+                         let leftover = rewritten.next();
+--- a/crates/sparql-eval/src/expr/cast_rounding_tests.rs
++++ b/crates/sparql-eval/src/expr/cast_rounding_tests.rs
+@@ -429,7 +429,7 @@
+         let bits = value.to_bits();
+         let back = |exact: &Rational| exact.to_f64().to_bits();
+         assert_round_trip(
+-            &xpath_double_text(value).as_str(),
++            xpath_double_text(value).as_str(),
+             back,
+             bits,
+             in_plain_range(value.abs()),
+@@ -440,7 +440,7 @@
+             bits,
+             false,
+         );
+-        match purrdf_xsd::parse(&xpath_double_text(value).as_str(), XsdDatatype::Double) {
++        match purrdf_xsd::parse(xpath_double_text(value).as_str(), XsdDatatype::Double) {
+             Ok(XsdValue::Double(parsed)) => assert_eq!(parsed.to_bits(), bits),
+             other => panic!("{value:e}: {other:?}"),
+         }
+@@ -465,7 +465,7 @@
+         let bits = u64::from(value.to_bits());
+         let back = |exact: &Rational| u64::from(exact.to_f32().to_bits());
+         assert_round_trip(
+-            &xpath_float_text(value).as_str(),
++            xpath_float_text(value).as_str(),
+             back,
+             bits,
+             in_plain_range(f64::from(value.abs())),
+@@ -476,7 +476,7 @@
+             bits,
+             false,
+         );
+-        match purrdf_xsd::parse(&xpath_float_text(value).as_str(), XsdDatatype::Float) {
++        match purrdf_xsd::parse(xpath_float_text(value).as_str(), XsdDatatype::Float) {
+             Ok(XsdValue::Float(parsed)) => assert_eq!(u64::from(parsed.to_bits()), bits),
+             other => panic!("{value:e}: {other:?}"),
+         }
+--- a/crates/sparql-eval/src/governor/soundness.rs
++++ b/crates/sparql-eval/src/governor/soundness.rs
+@@ -820,7 +820,7 @@
+ pub(crate) struct ChildEdges {
+     values: purrdf_core::SmallVec<[ChildEdge; 4]>,
+     // The original spilled buffer dies before its admission.
+-    _allocation: Option<crate::WorkspaceAllocation>,
++    allocation: Option<crate::WorkspaceAllocation>,
+ }
+ 
+ impl ChildEdges {
+@@ -853,7 +853,7 @@
+ ) -> Result<ChildEdges, EvalError> {
+     let mut out = ChildEdges {
+         values: purrdf_core::SmallVec::new(),
+-        _allocation: None,
++        allocation: None,
+     };
+     visit_classified_children_admitted(pattern, workspace, &mut |_child, edge| {
+         if out.values.len() == out.values.capacity() {
+@@ -879,7 +879,7 @@
+                 })?;
+             // Reallocation has freed the previous backing layout before its
+             // grant is replaced; admission included both while both could live.
+-            out._allocation = Some(allocation);
++            out.allocation = Some(allocation);
+         }
+         out.values.push(edge);
+         Ok(false)
+@@ -915,7 +915,7 @@
+             Ok(())
+         },
+     )
+-    .expect("resident plan walk")
++    .expect("resident plan walk");
+ }
+ 
+ pub(crate) fn walk_spine_admitted<'a>(
+@@ -2823,10 +2823,10 @@
+ /// `Extend`'s or `Unfold`'s inner before its expression — and the walk ends at the
+ /// first refusal. Over a work list, so a pattern of any depth needs no more machine
+ /// stack.
+-fn pattern_probe_admissible<'p, 't>(
+-    pattern: &'p GraphPattern,
++fn pattern_probe_admissible(
++    pattern: &GraphPattern,
+     current_row_vars: &VarSchema,
+-    table: &'t NodeAnalysisTable,
++    table: &NodeAnalysisTable,
+     workspace: &WorkspaceCapability,
+ ) -> Result<bool, EvalError> {
+     let mut pending = AdmittedVec::new(workspace);
+--- a/crates/sparql-eval/src/parsed_value.rs
++++ b/crates/sparql-eval/src/parsed_value.rs
+@@ -87,15 +87,12 @@
+             return Err(EvalError::WorkspaceBoundOverflow);
+         };
+         let header = Shared::<ParsedPayload>::allocation_layout().size();
+-        let retained = match bytes
++        let Some(retained) = bytes
+             .checked_add(header)
+             .and_then(|bytes| u64::try_from(bytes).ok())
+-        {
+-            Some(bytes) => bytes,
+-            None => {
+-                drop(value);
+-                return Err(EvalError::WorkspaceBoundOverflow);
+-            }
++        else {
++            drop(value);
++            return Err(EvalError::WorkspaceBoundOverflow);
+         };
+         if let Err(error) = allocation.resize(retained) {
+             drop(value);
+@@ -167,10 +164,28 @@
+     }
+ }
+ 
++/// A present cache entry, preserving invalid/opaque values separately from a miss.
++#[derive(Debug)]
++pub(crate) enum ParsedCacheHit {
++    Invalid,
++    Value(ParsedValue),
++}
++
++impl ParsedCacheHit {
++    pub(crate) fn into_value(self) -> Option<ParsedValue> {
++        match self {
++            Self::Invalid => None,
++            Self::Value(value) => Some(value),
++        }
++    }
++}
++
+ impl<K: Copy + Eq + Hash> ParsedCache<K> {
+-    /// The outer option distinguishes a miss from cached malformed/opaque None.
+-    pub(crate) fn get(&self, key: K) -> Option<Option<ParsedValue>> {
+-        self.entries.get(&key).cloned()
++    pub(crate) fn get(&self, key: K) -> Option<ParsedCacheHit> {
++        self.entries.get(&key).map(|entry| match entry {
++            None => ParsedCacheHit::Invalid,
++            Some(value) => ParsedCacheHit::Value(value.clone()),
++        })
+     }
+ 
+     pub(crate) fn insert_admitted(
+--- a/crates/sparql-eval/src/stack/height.rs
++++ b/crates/sparql-eval/src/stack/height.rs
+@@ -153,10 +153,10 @@
+             let below = depth.below(node);
+             let mut failure = None;
+             node.for_each_child(|child| {
+-                if failure.is_none() {
+-                    if let Err(error) = stack.try_push_admitted((child, below), memory) {
+-                        failure = Some(error);
+-                    }
++                if failure.is_none()
++                    && let Err(error) = stack.try_push_admitted((child, below), memory)
++                {
++                    failure = Some(error);
+                 }
+             });
+             if let Some(error) = failure {
+--- a/crates/sparql-eval/src/solution.rs
++++ b/crates/sparql-eval/src/solution.rs
+@@ -508,7 +508,7 @@
+     pub(crate) fn into_resident(self) -> Result<Solution<I>, Self> {
+         match self.storage {
+             RowStorage::Resident(cells) => Ok(cells),
+-            storage => Err(Self { storage }),
++            storage @ RowStorage::Shared(_) => Err(Self { storage }),
+         }
+     }
+ 
+@@ -736,7 +736,7 @@
+             storage => {
+                 let source = Self { storage };
+                 let mut rows = RowsBuilder::new(workspace);
+-                for &ordinal in order.iter() {
++                for &ordinal in &order {
+                     rows.push_row(source[ordinal].clone_admitted(workspace)?)?;
+                 }
+                 rows.finish()
+@@ -1346,7 +1346,7 @@
+         let first = VarSchema::interned(&dup);
+         let second = VarSchema::interned(&dup);
+         assert!(
+-            core::ptr::eq(&*first, &*second),
++            core::ptr::eq(&raw const *first, &raw const *second),
+             "a repeated `SELECT ?s ?s` request must hit the same memo entry twice"
+         );
+         assert_eq!(
+@@ -1360,7 +1360,7 @@
+         let layout_ab = VarSchema::interned(&ab);
+         let layout_ba = VarSchema::interned(&ba);
+         assert!(
+-            !core::ptr::eq(&*layout_ab, &*layout_ba),
++            !core::ptr::eq(&raw const *layout_ab, &raw const *layout_ba),
+             "[?a, ?b] and [?b, ?a] are different column orders and must not share a layout"
+         );
+         assert_eq!(layout_ab.vars(), &[var("e6_a"), var("e6_b")]);
+--- a/crates/sparql-eval/src/plan/mod.rs
++++ b/crates/sparql-eval/src/plan/mod.rs
+@@ -496,108 +496,109 @@
+         let mut sites = AdmittedVec::new(workspace);
+         let mut storage = crate::workspace::LexicalFrame::new(workspace);
+         let mut open = purrdf_lex::walk::WorkList::<Open, 8>::new();
+-        let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+-        walk_spine_admitted(root, workspace, &mut |node, _, level| {
+-            while open
+-                .iter()
+-                .next_back()
+-                .is_some_and(|ancestor| ancestor.depth >= level)
+-            {
+-                open.pop();
+-            }
+-            let id = NodeId::from_index(rows.len());
+-            let (up, edge, via) = match open.top_mut() {
+-                Some(ancestor) => {
+-                    let (edge, via) = ancestor.children[ancestor.visited];
+-                    ancestor.visited += 1;
+-                    (Some(ancestor.id), edge, via)
++        {
++            let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++            walk_spine_admitted(root, workspace, &mut |node, _, level| {
++                while open
++                    .iter()
++                    .next_back()
++                    .is_some_and(|ancestor| ancestor.depth >= level)
++                {
++                    open.pop();
+                 }
+-                None => (None, ChildEdge::MONOTONE, None),
+-            };
+-            if matches!(node, GraphPattern::Path { .. }) {
+-                paths.push(id)?;
+-            }
+-            if let Some(expr) = via {
+-                sites.push(ExistsSite {
+-                    body: id,
+-                    expr,
+-                    prepared: OnceLock::new(),
+-                })?;
+-            }
+-            let first_expr =
+-                u32::try_from(exprs.len()).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
+-            let mut children = AdmittedVec::new(workspace);
+-            let mut failure = None;
+-            visit_pattern_parts(node, &mut |part| {
+-                let result = (|| {
+-                    match part {
+-                        PatternPart::Child(_, edge) => children.push((edge, None))?,
+-                        PatternPart::Expression(expr) => {
+-                            let expr_id = ExprId(
+-                                u32::try_from(exprs.len())
+-                                    .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+-                            );
+-                            exprs.push_reserved(ExprSlot {
+-                                owner: id,
+-                                program: OnceLock::new(),
+-                            });
+-                            visit_exists_patterns_admitted(expr, workspace, &mut |_| {
+-                                children.push((ChildEdge::OPAQUE, Some(expr_id)))?;
+-                                Ok(false)
+-                            })?;
++                let id = NodeId::from_index(rows.len());
++                let (up, edge, via) = match open.top_mut() {
++                    Some(ancestor) => {
++                        let (edge, via) = ancestor.children[ancestor.visited];
++                        ancestor.visited += 1;
++                        (Some(ancestor.id), edge, via)
++                    }
++                    None => (None, ChildEdge::MONOTONE, None),
++                };
++                if matches!(node, GraphPattern::Path { .. }) {
++                    paths.push(id)?;
++                }
++                if let Some(expr) = via {
++                    sites.push(ExistsSite {
++                        body: id,
++                        expr,
++                        prepared: OnceLock::new(),
++                    })?;
++                }
++                let first_expr = u32::try_from(exprs.len())
++                    .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
++                let mut children = AdmittedVec::new(workspace);
++                let mut failure = None;
++                visit_pattern_parts(node, &mut |part| {
++                    let result = (|| {
++                        match part {
++                            PatternPart::Child(_, edge) => children.push((edge, None))?,
++                            PatternPart::Expression(expr) => {
++                                let expr_id = ExprId(
++                                    u32::try_from(exprs.len())
++                                        .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
++                                );
++                                exprs.push_reserved(ExprSlot {
++                                    owner: id,
++                                    program: OnceLock::new(),
++                                });
++                                visit_exists_patterns_admitted(expr, workspace, &mut |_| {
++                                    children.push((ChildEdge::OPAQUE, Some(expr_id)))?;
++                                    Ok(false)
++                                })?;
++                            }
+                         }
++                        Ok::<_, crate::EvalError>(())
++                    })();
++                    if let Err(error) = result {
++                        failure = Some(error);
++                        true
++                    } else {
++                        false
+                     }
+-                    Ok::<_, crate::EvalError>(())
+-                })();
+-                if let Err(error) = result {
+-                    failure = Some(error);
+-                    true
+-                } else {
+-                    false
++                });
++                if let Some(error) = failure {
++                    return Err(error);
+                 }
+-            });
+-            if let Some(error) = failure {
+-                return Err(error);
+-            }
+-            rows.push_reserved(NodeRow {
+-                kind: NodeKind::of(node),
+-                depth: u32::try_from(level)
+-                    .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+-                subtree_end: NodeId::from_index(
+-                    id.index()
+-                        .checked_add(1)
+-                        .ok_or(crate::EvalError::WorkspaceBoundOverflow)?,
+-                ),
+-                exprs: first_expr
+-                    ..u32::try_from(exprs.len())
++                rows.push_reserved(NodeRow {
++                    kind: NodeKind::of(node),
++                    depth: u32::try_from(level)
+                         .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+-                parent: up,
+-                address: std::ptr::from_ref(node) as usize,
+-                by_address: id,
+-                edge_in: edge,
+-            });
+-            open.try_push_admitted(
+-                Open {
+-                    id,
+-                    depth: level,
+-                    visited: 0,
+-                    children,
+-                },
+-                &mut memory,
+-            )
+-            .map_err(|error| {
++                    subtree_end: NodeId::from_index(
++                        id.index()
++                            .checked_add(1)
++                            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?,
++                    ),
++                    exprs: first_expr
++                        ..u32::try_from(exprs.len())
++                            .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
++                    parent: up,
++                    address: std::ptr::from_ref(node) as usize,
++                    by_address: id,
++                    edge_in: edge,
++                });
++                open.try_push_admitted(
++                    Open {
++                        id,
++                        depth: level,
++                        visited: 0,
++                        children,
++                    },
++                    &mut memory,
++                )
++                .map_err(|error| {
++                    memory
++                        .admission_mut()
++                        .storage_error(error, "plan open ancestors")
++                })?;
++                Ok(())
++            })?;
++            open.release_admitted(&mut memory).map_err(|error| {
+                 memory
+                     .admission_mut()
+                     .storage_error(error, "plan open ancestors")
+             })?;
+-            Ok(())
+-        })?;
+-        open.release_admitted(&mut memory).map_err(|error| {
+-            memory
+-                .admission_mut()
+-                .storage_error(error, "plan open ancestors")
+-        })?;
+-        drop(memory);
++        }
+         drop(storage);
+ 
+         for index in (1..rows.len()).rev() {
+@@ -608,7 +609,7 @@
+             }
+         }
+         let mut ranked = AdmittedVec::with_capacity(rows.len(), workspace)?;
+-        for row in rows.iter() {
++        for row in &rows {
+             ranked.push_reserved((row.address, row.by_address));
+         }
+         ranked
+@@ -1035,6 +1036,9 @@
+         let second = Tree::build(&root);
+         assert_ne!(first.handle().key(), second.handle().key());
+         assert_eq!(first.handle().key(), first.key);
+-        assert!(std::ptr::eq(&**first.handle().shape(), &**first.shape()));
++        assert!(std::ptr::eq(
++            &raw const **first.handle().shape(),
++            &raw const **first.shape()
++        ));
+     }
+ }
+--- a/crates/sparql-eval/src/template.rs
++++ b/crates/sparql-eval/src/template.rs
+@@ -237,7 +237,7 @@
+                     terms.push(TermOrdinal::Ground)?;
+                 }
+                 TermPattern::Variable(v) => {
+-                    terms.push(TermOrdinal::Variable(schema.index_of(v)))?
++                    terms.push(TermOrdinal::Variable(schema.index_of(v)))?;
+                 }
+                 TermPattern::Triple(t) => steps.try_extend([
+                     Step::Assemble,
+@@ -400,10 +400,10 @@
+         match step {
+             Step::Term(term) => match term {
+                 TermPattern::NamedNode(n) => {
+-                    values.push(named_node_to_workspace_value(n, workspace)?)?
++                    values.push(named_node_to_workspace_value(n, workspace)?)?;
+                 }
+                 TermPattern::Literal(l) => {
+-                    values.push(literal_to_workspace_value(l, workspace)?)?
++                    values.push(literal_to_workspace_value(l, workspace)?)?;
+                 }
+                 // The destination selects a disjoint namespace before DATA instantiation.
+                 TermPattern::BlankNode(b) => {
+@@ -419,7 +419,7 @@
+             },
+             Step::Predicate(predicate) => match predicate {
+                 NamedNodePattern::NamedNode(n) => {
+-                    values.push(named_node_to_workspace_value(n, workspace)?)?
++                    values.push(named_node_to_workspace_value(n, workspace)?)?;
+                 }
+                 NamedNodePattern::Variable(_) => return Ok(None),
+             },
+@@ -492,10 +492,10 @@
+         match step {
+             Step::Term(term, ordinal) => match term {
+                 TermPattern::NamedNode(n) => {
+-                    values.push(named_node_to_workspace_value(n, &workspace)?)?
++                    values.push(named_node_to_workspace_value(n, &workspace)?)?;
+                 }
+                 TermPattern::Literal(l) => {
+-                    values.push(literal_to_workspace_value(l, &workspace)?)?
++                    values.push(literal_to_workspace_value(l, &workspace)?)?;
+                 }
+                 TermPattern::Variable(_) => {
+                     let TermOrdinal::Variable(ord) = ordinal else {
+@@ -715,8 +715,6 @@
+     Ok(false)
+ }
+ 
+-/// The [`TriplePattern`] half of [`template_has_blank_node`]'s scan.
+-
+ /// The [`TermPattern`] half of [`template_has_blank_node`]'s scan, through nested
+ /// quoted-triple positions — subject before object, over a work list rather than the
+ /// call stack, ending at the first blank node found.
+--- a/crates/sparql-eval/src/join_plan.rs
++++ b/crates/sparql-eval/src/join_plan.rs
+@@ -374,6 +374,10 @@
+     }
+     let mut groups = AdmittedMap::default();
+     let mut out = AdmittedVec::new(&capability);
++    #[expect(
++        clippy::iter_with_drain,
++        reason = "The original vector stays allocated until Memory destroys it and refunds its grant; drain preserves authored transfer order."
++    )]
+     for (index, triple) in triples.drain(..).enumerate() {
+         let representative = root(roots.as_mut_slice(), index);
+         let group = if let Some(&group) = groups.get(&representative) {
+--- a/crates/sparql-eval/src/governor/ledger.rs
++++ b/crates/sparql-eval/src/governor/ledger.rs
+@@ -610,7 +610,7 @@
+             let _ = writeln!(out, "  {label}\t{cost}");
+         }
+         let _ = writeln!(out, "ledger");
+-        for node in self.ledger.iter() {
++        for node in &self.ledger {
+             let indent = "  ".repeat(node.depth + 1);
+             let _ = write!(
+                 out,
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -769,7 +769,7 @@
+     match term {
+         SolutionTerm::Existing(id) => {
+             if let Some(cached) = ctx.xsd_parse_cache.get(id) {
+-                return Ok(cached);
++                return Ok(cached.into_value());
+             }
+             let parsed = ctx
+                 .dataset

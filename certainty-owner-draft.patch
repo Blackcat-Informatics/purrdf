@@ -1,0 +1,1379 @@
+diff --git a/crates/sparql-eval/src/property_fn_plan.rs b/crates/sparql-eval/src/property_fn_plan.rs
+--- a/crates/sparql-eval/src/property_fn_plan.rs
++++ b/crates/sparql-eval/src/property_fn_plan.rs
+@@ -46,6 +46,9 @@
+ };
+ 
+ use crate::DetHashSet;
++use crate::solution::{SchemaBuilder, VarSchema};
++use crate::workspace::AdmittedVec;
++use crate::WorkspaceCapability;
+ use crate::agg_fn::{AggregateRegistry, ScalarvalKind, ScalarvalSpec};
+ use crate::convert::literal_to_value;
+ use crate::error::EvalError;
+@@ -1978,7 +1981,7 @@
+ /// * a `VALUES` column with a term — no `UNDEF` — in every row;
+ /// * the target of a `BIND` whose expression reads only variables its inner pattern
+ ///   binds by this same rule, or variables the context it is evaluated in holds bound
+-///   — the left operand of an enclosing `LATERAL` (see [`expression_reads_only_bound`]
++///   — the left operand of an enclosing `LATERAL` (see [`expression_reads_only_bound_admitted`]
+ ///   and [`collect_certainly_bound_in`]);
+ /// * a variable a `FILTER`'s condition requires bound for it to be true
+ ///   ([`Outcome::Truth`]): `FILTER(BOUND(?v))`, `FILTER(sameTerm(?v, ?o))`,
+@@ -1987,7 +1990,7 @@
+ ///   binds only what both of its sides do, and `FILTER(!BOUND(?v))` binds nothing;
+ /// * the variable naming a `GRAPH`;
+ /// * a grouping key every row of the grouped pattern binds;
+-/// * an aggregate's output when [`aggregate_certainly_binds`] says every group row
++/// * an aggregate's output when [`aggregate_certainly_binds_admitted`] says every group row
+ ///   holds one save a row whose aggregate failed on present values — `COUNT`, `SUM`,
+ ///   `AVG`, `GROUP_CONCAT` and `FOLD` always, `SAMPLE`/`MIN`/`MAX` and a custom
+ ///   aggregate under an explicit `GROUP BY` of arguments reading only what every row
+@@ -2017,7 +2020,7 @@
+ /// computed from is certainly present, and a group whose aggregate failed on those
+ /// values — a `MAX(STR(?x))` whose every `?x` is a blank node, a `SUM` over a string —
+ /// is a row refused (or, for a relation that also serves the free mode, invoked free)
+-/// exactly as a row whose `BIND` erred. [`aggregate_certainly_binds`] states which
++/// exactly as a row whose `BIND` erred. [`aggregate_certainly_binds_admitted`] states which
+ /// absences of input the text itself fixes.
+ ///
+ /// A `BIND` that reads a variable its inner pattern does NOT certainly bind —
+@@ -2035,6 +2038,24 @@
+ /// what could not be bound.
+ pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+     collect_certainly_bound_in(pattern, &DetHashSet::default(), out);
++}
++
++/// The same certainty law with every engine-created owner admitted before growth.
++/// The returned immutable schema keeps its original payload admission alive.
++pub(crate) fn collect_certainly_bound_admitted(
++    pattern: &GraphPattern,
++    workspace: &WorkspaceCapability,
++) -> Result<VarSchema, EvalError> {
++    collect_certainly_bound_in_admitted(pattern, &VarSchema::default(), workspace)
++}
++
++/// Contextual certainty, without adding the caller's context to the result.
++pub(crate) fn collect_certainly_bound_in_admitted(
++    pattern: &GraphPattern,
++    context: &VarSchema,
++    workspace: &WorkspaceCapability,
++) -> Result<VarSchema, EvalError> {
++    collect_bound_admitted(pattern, context, None, workspace)
+ }
+ 
+ /// [`collect_certainly_bound`] for a pattern evaluated with `context` already bound:
+@@ -2096,6 +2117,27 @@
+     given_written: Written<'_>,
+     out: &mut DetHashSet<Variable>,
+ ) {
++    // These sets are caller-owned resident planner inputs and output. Bounded
++    // callers keep the VarSchema returned by collect_bound_admitted instead.
++    let workspace = WorkspaceCapability::default();
++    let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
++        .expect("resident certainty context");
++    let written = given_written.everywhere.map(|set| {
++        VarSchema::from_vars_admitted(set.iter().cloned(), &workspace)
++            .expect("resident certainty writes")
++    });
++    let bound = collect_bound_admitted(pattern, &context, written.as_ref(), &workspace)
++        .expect("resident certainly-bound allocation");
++    out.extend(bound.vars().iter().cloned());
++}
++
++/// Contextual certainty with optional promised bindings and retained schema owners.
++pub(crate) fn collect_bound_admitted(
++    pattern: &GraphPattern,
++    context: &VarSchema,
++    given_written: Option<&VarSchema>,
++    workspace: &WorkspaceCapability,
++) -> Result<VarSchema, EvalError> {
+     /// The context a node is evaluated under: the caller's, or one a `LATERAL` or a
+     /// sub-`SELECT` built for its operand, held in the arena.
+     #[derive(Clone, Copy)]
+@@ -2114,19 +2156,19 @@
+     impl Writes {
+         fn set<'s>(
+             self,
+-            given: Written<'s>,
+-            arena: &'s [DetHashSet<Variable>],
+-        ) -> Option<&'s DetHashSet<Variable>> {
++            given: Option<&'s VarSchema>,
++            arena: &'s [VarSchema],
++        ) -> Option<&'s VarSchema> {
+             match self {
+-                Self::Given => given.everywhere,
++                Self::Given => given,
+                 Self::Owned(index) => Some(&arena[index.get() - 1]),
+             }
+         }
+         fn writes(
+             self,
+             variable: &Variable,
+-            given: Written<'_>,
+-            arena: &[DetHashSet<Variable>],
++            given: Option<&VarSchema>,
++            arena: &[VarSchema],
+         ) -> bool {
+             self.set(given, arena)
+                 .is_some_and(|set| set.contains(variable))
+@@ -2150,52 +2192,53 @@
+         ),
+         /// A `LATERAL` whose right operand is bound too: its set is the union of both,
+         /// the left operand's carried here; the arena is cut back to `mark`.
+-        LateralRight(DetHashSet<Variable>, usize),
++        LateralRight(VarSchema, usize),
+     }
+     /// The set `context` names, read from `arena` when a node built it.
+     fn resolve<'c>(
+         context: Context,
+-        given: &'c DetHashSet<Variable>,
+-        arena: &'c [DetHashSet<Variable>],
+-    ) -> &'c DetHashSet<Variable> {
++        given: &'c VarSchema,
++        arena: &'c [VarSchema],
++    ) -> &'c VarSchema {
+         match context {
+             Context::Given => given,
+             Context::Owned(index) => &arena[index],
+         }
+     }
+-    let mut arena: Vec<DetHashSet<Variable>> = Vec::new();
+-    let mut values: Vec<DetHashSet<Variable>> = Vec::new();
+-    let mut steps = vec![Step::Enter(pattern, Context::Given, Writes::Given)];
++    let mut arena = AdmittedVec::<VarSchema>::new(workspace);
++    let mut values = AdmittedVec::<VarSchema>::new(workspace);
++    let mut steps = AdmittedVec::new(workspace);
++    steps.push(Step::Enter(pattern, Context::Given, Writes::Given))?;
+     while let Some(step) = steps.pop() {
+         match step {
+             Step::Enter(node, ctx, written) => {
+                 let mark = arena.len();
+                 match node {
+                     GraphPattern::Bgp { patterns } => {
+-                        let mut bound = DetHashSet::default();
++                        let mut bound = SchemaBuilder::new(workspace);
+                         for triple in patterns {
+-                            collect_triple_vars(triple, &mut bound);
++                            collect_triple_vars_admitted(triple, &mut bound, workspace)?;
+                         }
+-                        values.push(bound);
++                        values.push(bound.finish()?)?;
+                     }
+                     GraphPattern::Path {
+                         subject,
+                         path: _,
+                         object,
+                     } => {
+-                        let mut bound = DetHashSet::default();
+-                        collect_term_vars(subject, &mut bound);
+-                        collect_term_vars(object, &mut bound);
+-                        values.push(bound);
++                        let mut bound = SchemaBuilder::new(workspace);
++                        collect_term_vars_admitted(subject, &mut bound, workspace)?;
++                        collect_term_vars_admitted(object, &mut bound, workspace)?;
++                        values.push(bound.finish()?)?;
+                     }
+                     // Every flattened argument position of a call receives a value on
+                     // every row it emits, so its variables are certainly bound by it.
+                     GraphPattern::PropertyFunction(call) => {
+-                        let mut bound = DetHashSet::default();
++                        let mut bound = SchemaBuilder::new(workspace);
+                         for term in call.subject_args.iter().chain(&call.object_args) {
+-                            collect_term_vars(term, &mut bound);
++                            collect_term_vars_admitted(term, &mut bound, workspace)?;
+                         }
+-                        values.push(bound);
++                        values.push(bound.finish()?)?;
+                     }
+                     // A `VALUES` column binds its variable in every row exactly when no
+                     // row holds `UNDEF` there. An empty table produces no row at all, so
+@@ -2205,26 +2248,22 @@
+                         variables,
+                         bindings,
+                     } => {
+-                        let bound = variables
+-                            .iter()
+-                            .enumerate()
+-                            .filter(|(column, _)| {
+-                                bindings
+-                                    .iter()
+-                                    .all(|row| row.get(*column).is_some_and(Option::is_some))
+-                            })
+-                            .map(|(_, variable)| variable.clone())
+-                            .collect();
+-                        values.push(bound);
++                        let bound = VarSchema::from_vars_admitted(
++                            variables.iter().enumerate().filter(|(column, _)| {
++                                bindings.iter().all(|row| row.get(*column).is_some_and(Option::is_some))
++                            }).map(|(_, variable)| variable.clone()),
++                            workspace,
++                        )?;
++                        values.push(bound)?;
+                     }
+                     // A remote endpoint may omit a column, so it promises nothing.
+                     GraphPattern::Service { .. } => {
+-                        values.push(DetHashSet::default());
++                        values.push(VarSchema::default())?;
+                     }
+                     GraphPattern::Join { left, right } => {
+-                        steps.push(Step::Exit(node, ctx, written, mark));
+-                        steps.push(Step::Enter(right, ctx, written));
+-                        steps.push(Step::Enter(left, ctx, written));
++                        steps.push(Step::Exit(node, ctx, written, mark))?;
++                        steps.push(Step::Enter(right, ctx, written))?;
++                        steps.push(Step::Enter(left, ctx, written))?;
+                     }
+                     GraphPattern::Apply {
+                         left,
+@@ -2232,28 +2271,28 @@
+                         policy,
+                     } => {
+                         if policy.optional.is_some() {
+-                            steps.push(Step::Exit(node, ctx, written, mark));
++                            steps.push(Step::Exit(node, ctx, written, mark))?;
+                         } else {
+-                            steps.push(Step::ApplyLeft(right, policy, ctx, written));
++                            steps.push(Step::ApplyLeft(right, policy, ctx, written))?;
+                         }
+-                        steps.push(Step::Enter(left, ctx, written));
++                        steps.push(Step::Enter(left, ctx, written))?;
+                     }
+                     // The right operand is evaluated once per left row with that row in
+                     // hand, so it sees the left operand's certain bindings as well as the
+                     // enclosing context's: the left operand is bound first.
+                     GraphPattern::Lateral { left, right } => {
+-                        steps.push(Step::LateralLeft(right, ctx, written));
+-                        steps.push(Step::Enter(left, ctx, written));
++                        steps.push(Step::LateralLeft(right, ctx, written))?;
++                        steps.push(Step::Enter(left, ctx, written))?;
+                     }
+                     // The right side may contribute nothing to a row.
+                     GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. } => {
+-                        steps.push(Step::Exit(node, ctx, written, mark));
+-                        steps.push(Step::Enter(left, ctx, written));
++                        steps.push(Step::Exit(node, ctx, written, mark))?;
++                        steps.push(Step::Enter(left, ctx, written))?;
+                     }
+                     GraphPattern::Union { arms } => {
+-                        steps.push(Step::Exit(node, ctx, written, mark));
++                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                         for arm in arms.iter().rev() {
+-                            steps.push(Step::Enter(arm, ctx, written));
++                            steps.push(Step::Enter(arm, ctx, written))?;
+                         }
+                     }
+                     // The solution-modifier wrappers the seed descends through keep
+@@ -2266,75 +2305,78 @@
+                     | GraphPattern::Unfold { inner, .. }
+                     | GraphPattern::Extend { inner, .. }
+                     | GraphPattern::Group { inner, .. } => {
+-                        steps.push(Step::Exit(node, ctx, written, mark));
+-                        steps.push(Step::Enter(inner, ctx, written));
++                        steps.push(Step::Exit(node, ctx, written, mark))?;
++                        steps.push(Step::Enter(inner, ctx, written))?;
+                     }
+                     GraphPattern::Graph { inner, .. } => {
+-                        steps.push(Step::Exit(node, ctx, written, mark));
+-                        steps.push(Step::Enter(inner, ctx, written));
++                        steps.push(Step::Exit(node, ctx, written, mark))?;
++                        steps.push(Step::Enter(inner, ctx, written))?;
+                     }
+                     // The context reaches a sub-`SELECT`'s inner pattern only through the
+                     // variables the projection names; what the SHACL pre-binding rewrite
+                     // writes is written past the projection too.
+                     GraphPattern::Project { inner, variables } => {
+-                        let narrowed = narrowed_to(resolve(ctx, context, &arena), variables);
+-                        arena.push(narrowed);
+-                        steps.push(Step::Exit(node, ctx, written, mark));
+-                        steps.push(Step::Enter(inner, Context::Owned(mark), written));
++                        let narrowed = narrowed_to_admitted(resolve(ctx, context, &arena), variables, workspace)?;
++                        arena.push(narrowed)?;
++                        steps.push(Step::Exit(node, ctx, written, mark))?;
++                        steps.push(Step::Enter(inner, Context::Owned(mark), written))?;
+                     }
+                 }
+             }
+             Step::ApplyLeft(right, policy, ctx, written) => {
+                 let left_bound = values.pop().expect("the driver is bound first");
+                 let outer = resolve(ctx, context, &arena);
+-                let mut right_context = outer.clone();
+-                let mut supplied = written
+-                    .set(given_written, &arena)
+-                    .cloned()
+-                    .unwrap_or_default();
+-                for (input, _) in &policy.inputs {
+-                    right_context.remove(input);
+-                    supplied.remove(input);
++                let shadowed = VarSchema::from_vars_admitted(
++                    policy.inputs.iter().map(|(input, _)| input.clone()), workspace,
++                )?;
++                let mut right_context = SchemaBuilder::new(workspace);
++                for variable in outer.vars().iter().filter(|variable| !shadowed.contains(variable)) {
++                    right_context.push(variable.clone())?;
++                }
++                let written_set = written.set(given_written, &arena);
++                let mut supplied = SchemaBuilder::new(workspace);
++                for variable in written_set.into_iter().flat_map(|set| set.vars().iter())
++                    .filter(|variable| !shadowed.contains(variable)) {
++                    supplied.push(variable.clone())?;
+                 }
+                 for (input, driver) in &policy.inputs {
+                     if left_bound.contains(driver)
+                         || outer.contains(driver)
+                         || written.writes(driver, given_written, &arena)
+                     {
+-                        right_context.insert(input.clone());
+-                        supplied.insert(input.clone());
++                        right_context.push(input.clone())?;
++                        supplied.push(input.clone())?;
+                     }
+                 }
+                 let mark = arena.len();
+-                arena.push(right_context);
+-                arena.push(supplied);
+-                steps.push(Step::LateralRight(left_bound, mark));
++                arena.push(right_context.finish()?)?;
++                arena.push(supplied.finish()?)?;
++                steps.push(Step::LateralRight(left_bound, mark))?;
+                 steps.push(Step::Enter(
+                     right,
+                     Context::Owned(mark),
+                     Writes::Owned(
+                         std::num::NonZeroUsize::new(
+-                            mark.checked_add(2)
+-                                .expect("an allocated arena index is representable"),
++                            mark.checked_add(2).ok_or(EvalError::WorkspaceBoundOverflow)?,
+                         )
+                         .expect("one-based arena index"),
+                     ),
+-                ));
++                ))?;
+             }
+             Step::LateralLeft(right, ctx, written) => {
+                 let left_bound = values.pop().expect("the left operand is bound first");
+-                let mut right_context = resolve(ctx, context, &arena).clone();
+-                right_context.extend(left_bound.iter().cloned());
++                let right_context = resolve(ctx, context, &arena)
++                    .union_admitted(&left_bound, workspace)?;
+                 let mark = arena.len();
+-                arena.push(right_context);
+-                steps.push(Step::LateralRight(left_bound, mark));
+-                steps.push(Step::Enter(right, Context::Owned(mark), written));
++                arena.push(right_context)?;
++                steps.push(Step::LateralRight(left_bound, mark))?;
++                steps.push(Step::Enter(right, Context::Owned(mark), written))?;
+             }
+             Step::LateralRight(left_bound, mark) => {
+                 let mut bound = values.pop().expect("the right operand is bound second");
+-                bound.extend(left_bound);
++                bound = bound.union_admitted(&left_bound, workspace)?;
+                 arena.truncate(mark);
+-                values.push(bound);
++                values.push(bound)?;
+             }
+             Step::Exit(node, ctx, written, mark) => {
+                 let bound = match node {
+@@ -2344,14 +2386,14 @@
+                         } else {
+                             let right = values.pop().expect("the operand is bound");
+                             let mut left = values.pop().expect("the driver is bound");
+-                            left.extend(right);
++                            left = left.union_admitted(&right, workspace)?;
+                             left
+                         }
+                     }
+                     GraphPattern::Join { .. } => {
+                         let right = values.pop().expect("the right operand is bound");
+                         let mut bound = values.pop().expect("the left operand is bound");
+-                        bound.extend(right);
++                        bound = bound.union_admitted(&right, workspace)?;
+                         bound
+                     }
+                     GraphPattern::LeftJoin { .. } | GraphPattern::Minus { .. } => {
+@@ -2359,12 +2401,14 @@
+                     }
+                     // Only what EVERY arm binds is bound in every row.
+                     GraphPattern::Union { arms } => {
+-                        let at = values.len() - arms.len();
+-                        let mut arms_bound = values.drain(at..);
+-                        let first = arms_bound.next().unwrap_or_default();
+-                        arms_bound.fold(first, |common, bound| {
+-                            common.intersection(&bound).cloned().collect()
+-                        })
++                        let at = values.len().checked_sub(arms.len())
++                            .expect("each UNION arm produced its certainty value");
++                        let mut arms_bound = values.drain_from(at);
++                        let mut common = arms_bound.next().unwrap_or_default();
++                        for bound in arms_bound {
++                            common = intersection_admitted(&common, &bound, workspace)?;
++                        }
++                        common
+                     }
+                     // A `FILTER` passes only rows its condition is true on, and every
+                     // variable the condition requires bound for that is therefore bound
+@@ -2376,14 +2420,14 @@
+                     // nothing, the narrow answer.
+                     GraphPattern::Filter { expr, .. } => {
+                         let mut bound = values.pop().expect("the inner pattern is bound");
+-                        bound.extend(
+-                            requires(expr, Outcome::Truth)
+-                                .unwrap_or_default()
+-                                .into_iter()
+-                                .filter(|variable| {
+-                                    !written.writes(variable, given_written, &arena)
+-                                }),
+-                        );
++                        let required = requires_admitted(expr, Outcome::Truth, workspace)?
++                            .unwrap_or_default();
++                        let constrained = VarSchema::from_vars_admitted(
++                            required.vars().iter().filter(|variable| {
++                                !written.writes(variable, given_written, &arena)
++                            }).cloned(), workspace,
++                        )?;
++                        bound = bound.union_admitted(&constrained, workspace)?;
+                         bound
+                     }
+                     // `UNFOLD`s own targets are NOT certainly bound: a SEP-0009 `null`
+@@ -2409,19 +2453,19 @@
+                     } => {
+                         let mut bound = values.pop().expect("the inner pattern is bound");
+                         let context = resolve(ctx, context, &arena);
+-                        if expression_reads_only_bound(expression, &|read| {
++                        if expression_reads_only_bound_admitted(expression, &|read| {
+                             bound.contains(read)
+                                 || context.contains(read)
+                                 || written.writes(read, given_written, &arena)
+-                        }) {
+-                            bound.insert(variable.clone());
++                        }, workspace)? {
++                            bound.push_admitted(variable.clone(), workspace)?;
+                         }
+                         bound
+                     }
+                     GraphPattern::Graph { name, .. } => {
+                         let mut bound = values.pop().expect("the inner pattern is bound");
+                         if let NamedNodePattern::Variable(variable) = name {
+-                            bound.insert(variable.clone());
++                            bound.push_admitted(variable.clone(), workspace)?;
+                         }
+                         bound
+                     }
+@@ -2429,15 +2473,14 @@
+                     // pattern bound it certainly.
+                     GraphPattern::Project { variables, .. } => {
+                         let inner_bound = values.pop().expect("the inner pattern is bound");
+-                        variables
+-                            .iter()
+-                            .filter(|variable| inner_bound.contains(*variable))
+-                            .cloned()
+-                            .collect()
++                        VarSchema::from_vars_admitted(
++                            variables.iter().filter(|variable| inner_bound.contains(variable)).cloned(),
++                            workspace,
++                        )?
+                     }
+                     // A grouping key is bound in a group's row when every row of the
+                     // group binds it; an aggregate's output by
+-                    // [`aggregate_certainly_binds`].
++                    // [`aggregate_certainly_binds_admitted`].
+                     GraphPattern::Group {
+                         variables,
+                         aggregates,
+@@ -2447,20 +2490,19 @@
+                         let context = resolve(ctx, context, &arena);
+                         let row_binds =
+                             |read: &Variable| inner_bound.contains(read) || context.contains(read);
+-                        let mut bound: DetHashSet<Variable> = variables
+-                            .iter()
+-                            .filter(|key| row_binds(key))
+-                            .cloned()
+-                            .collect();
++                        let mut bound = SchemaBuilder::new(workspace);
++                        for variable in variables.iter().filter(|key| row_binds(key)) {
++                            bound.push(variable.clone())?;
++                        }
+                         let grouped = !variables.is_empty();
+                         for (variable, aggregate) in aggregates {
+-                            if aggregate_certainly_binds(aggregate, grouped, &|read| {
++                            if aggregate_certainly_binds_admitted(aggregate, grouped, &|read| {
+                                 row_binds(read) || written.writes(read, given_written, &arena)
+-                            }) {
+-                                bound.insert(variable.clone());
++                            }, workspace)? {
++                                bound.push(variable.clone())?;
+                             }
+                         }
+-                        bound
++                        bound.finish()?
+                     }
+                     GraphPattern::Bgp { .. }
+                     | GraphPattern::Path { .. }
+@@ -2475,11 +2517,11 @@
+                     }
+                 };
+                 arena.truncate(mark);
+-                values.push(bound);
+-            }
+-        }
+-    }
+-    out.extend(values.pop().expect("the root's set is computed last"));
++                values.push(bound)?;
++            }
++        }
++    }
++    Ok(values.pop().expect("the root's set is computed last"))
+ }
+ 
+ /// Whether an aggregate's output is bound in every row its `GROUP BY` produces, save
+@@ -2521,7 +2563,7 @@
+ ///   the first three always do, and a host's aggregate may. They count only under an
+ ///   explicit `GROUP BY`, whose every group holds at least one row, and only over
+ ///   arguments that read nothing but what every row binds (or constants —
+-///   [`expression_reads_only_bound`], the test a `BIND` expression passes). Every row
++///   [`expression_reads_only_bound_admitted`], the test a `BIND` expression passes). Every row
+ ///   of a group then hands the aggregate a value unless its argument errored on
+ ///   present values — `STR(?x)` on a blank node, `IRI(STR(?x))` on a string that is
+ ///   not an IRI — and the aggregate is unbound only if every row's argument errored,
+@@ -2531,26 +2573,29 @@
+ ///   an `OPTIONAL`'s `?w` does not, as `BIND(?w AS ?y)` does not. WITHOUT a
+ ///   `GROUP BY` the implicit group may hold no row, where these answer unbound for
+ ///   want of any input: the same structural absence, so none of them counts there.
+-fn aggregate_certainly_binds(
++fn aggregate_certainly_binds_admitted(
+     aggregate: &AggregateExpression,
+     grouped: bool,
+     row_binds: &dyn Fn(&Variable) -> bool,
+-) -> bool {
++    workspace: &WorkspaceCapability,
++) -> Result<bool, EvalError> {
+     match aggregate.function() {
+         AggregateFunction::Count
+         | AggregateFunction::Sum
+         | AggregateFunction::Avg
+         | AggregateFunction::GroupConcat
+-        | AggregateFunction::Fold => true,
++        | AggregateFunction::Fold => Ok(true),
+         AggregateFunction::Sample
+         | AggregateFunction::Min
+         | AggregateFunction::Max
+         | AggregateFunction::Custom(_) => {
+-            grouped
+-                && aggregate
+-                    .args()
+-                    .iter()
+-                    .all(|arg| expression_reads_only_bound(arg, row_binds))
++            if !grouped { return Ok(false); }
++            for arg in aggregate.args() {
++                if !expression_reads_only_bound_admitted(arg, row_binds, workspace)? {
++                    return Ok(false);
++                }
++            }
++            Ok(true)
+         }
+     }
+ }
+@@ -2559,11 +2604,29 @@
+ /// pattern: an enclosing binding is substituted into it only for a variable it
+ /// projects.
+ fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHashSet<Variable> {
+-    context
+-        .iter()
+-        .filter(|variable| variables.contains(*variable))
+-        .cloned()
+-        .collect()
++    let workspace = WorkspaceCapability::default();
++    let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
++        .expect("resident projected certainty context");
++    narrowed_to_admitted(&context, variables, &workspace)
++        .expect("resident projected certainty allocation").vars().iter().cloned().collect()
++}
++
++fn narrowed_to_admitted(
++    context: &VarSchema,
++    variables: &[Variable],
++    workspace: &WorkspaceCapability,
++) -> Result<VarSchema, EvalError> {
++    VarSchema::from_vars_admitted(
++        context.vars().iter().filter(|variable| variables.contains(variable)).cloned(), workspace,
++    )
++}
++
++fn intersection_admitted(
++    left: &VarSchema, right: &VarSchema, workspace: &WorkspaceCapability,
++) -> Result<VarSchema, EvalError> {
++    VarSchema::from_vars_admitted(
++        left.vars().iter().filter(|variable| right.contains(variable)).cloned(), workspace,
++    )
+ }
+ 
+ /// Whether `expr` can be left without a value only by the data it reads — never
+@@ -2585,7 +2648,16 @@
+ ///
+ /// A post-order walk over a work list, so an expression of any depth needs no more
+ /// machine stack: every operand answers before the operator over it does.
++#[cfg(test)]
+ fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -> bool) -> bool {
++    expression_reads_only_bound_admitted(expr, is_bound, &WorkspaceCapability::default())
++        .expect("resident expression certainty allocation")
++}
++
++fn expression_reads_only_bound_admitted(
++    expr: &Expression, is_bound: &dyn Fn(&Variable) -> bool,
++    workspace: &WorkspaceCapability,
++) -> Result<bool, EvalError> {
+     /// One step of the walk.
+     enum Step<'e> {
+         /// Enter an expression: a leaf answers at once, an operator pushes its operands.
+@@ -2593,28 +2665,29 @@
+         /// Combine an operator's answer from its operands', `count` of them.
+         Exit(&'e Expression, usize),
+     }
+-    let mut steps = vec![Step::Enter(expr)];
+-    let mut values: Vec<bool> = Vec::new();
++    let mut steps = AdmittedVec::new(workspace);
++    steps.push(Step::Enter(expr))?;
++    let mut values = AdmittedVec::<bool>::new(workspace);
+     while let Some(step) = steps.pop() {
+         match step {
+             Step::Enter(expr) => match expr {
+                 Expression::NamedNode(_)
+                 | Expression::Literal(_)
+                 | Expression::Bound(_)
+-                | Expression::Exists(_) => values.push(true),
+-                Expression::Variable(variable) => values.push(is_bound(variable)),
++                | Expression::Exists(_) => values.push(true)?,
++                Expression::Variable(variable) => values.push(is_bound(variable))?,
+                 Expression::Or(operands) | Expression::And(operands) => {
+-                    steps.push(Step::Exit(expr, operands.len()));
++                    steps.push(Step::Exit(expr, operands.len()))?;
+                     for operand in operands.iter().rev() {
+-                        steps.push(Step::Enter(operand));
++                        steps.push(Step::Enter(operand))?;
+                     }
+                 }
+                 Expression::Arithmetic(first, rest) => {
+-                    steps.push(Step::Exit(expr, 1 + rest.len()));
++                    steps.push(Step::Exit(expr, rest.len().checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?))?;
+                     for (_, operand) in rest.iter().rev() {
+-                        steps.push(Step::Enter(operand));
++                        steps.push(Step::Enter(operand))?;
+                     }
+-                    steps.push(Step::Enter(first));
++                    steps.push(Step::Enter(first))?;
+                 }
+                 Expression::Equal(a, b)
+                 | Expression::SameTerm(a, b)
+@@ -2622,38 +2695,38 @@
+                 | Expression::GreaterOrEqual(a, b)
+                 | Expression::Less(a, b)
+                 | Expression::LessOrEqual(a, b) => {
+-                    steps.push(Step::Exit(expr, 2));
+-                    steps.push(Step::Enter(b));
+-                    steps.push(Step::Enter(a));
++                    steps.push(Step::Exit(expr, 2))?;
++                    steps.push(Step::Enter(b))?;
++                    steps.push(Step::Enter(a))?;
+                 }
+                 Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+-                    steps.push(Step::Exit(expr, 1));
+-                    steps.push(Step::Enter(a));
++                    steps.push(Step::Exit(expr, 1))?;
++                    steps.push(Step::Enter(a))?;
+                 }
+                 Expression::If(condition, then, otherwise) => {
+-                    steps.push(Step::Exit(expr, 3));
+-                    steps.push(Step::Enter(otherwise));
+-                    steps.push(Step::Enter(then));
+-                    steps.push(Step::Enter(condition));
++                    steps.push(Step::Exit(expr, 3))?;
++                    steps.push(Step::Enter(otherwise))?;
++                    steps.push(Step::Enter(then))?;
++                    steps.push(Step::Enter(condition))?;
+                 }
+                 Expression::In(needle, haystack) => {
+-                    steps.push(Step::Exit(expr, 1 + haystack.len()));
++                    steps.push(Step::Exit(expr, haystack.len().checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?))?;
+                     for item in haystack.iter().rev() {
+-                        steps.push(Step::Enter(item));
++                        steps.push(Step::Enter(item))?;
+                     }
+-                    steps.push(Step::Enter(needle));
++                    steps.push(Step::Enter(needle))?;
+                 }
+                 Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
+-                    steps.push(Step::Exit(expr, items.len()));
++                    steps.push(Step::Exit(expr, items.len()))?;
+                     for item in items.iter().rev() {
+-                        steps.push(Step::Enter(item));
++                        steps.push(Step::Enter(item))?;
+                     }
+                 }
+             },
+             Step::Exit(expr, count) => {
+-                let at = values.len() - count;
++                let at = values.len().checked_sub(count).expect("every operand answered");
+                 let answer = {
+-                    let mut operands = values.drain(at..);
++                    let mut operands = values.drain_from(at);
+                     // `COALESCE` qualifies when any argument does; every other operator
+                     // when every operand does.
+                     if matches!(expr, Expression::Coalesce(_)) {
+@@ -2662,13 +2735,11 @@
+                         operands.all(|reads| reads)
+                     }
+                 };
+-                values.push(answer);
+-            }
+-        }
+-    }
+-    values
+-        .pop()
+-        .expect("the root's answer is the last one computed")
++                values.push(answer)?;
++            }
++        }
++    }
++    Ok(values.pop().expect("the root's answer is the last one computed"))
+ }
+ 
+ /// Whether `function` is a type test: total over terms, answering a boolean.
+@@ -2808,22 +2879,26 @@
+ /// `None` is what a constant that is never true (`false`, `0`, an IRI, which has no
+ /// effective boolean value) answers for truth, and anything that reaches the outcome
+ /// only through it inherits it: it absorbs a conjunction of requirements
+-/// ([`all_of`]) and is the identity of an alternative between them ([`one_of`]). So
++/// ([`all_of_admitted`]) and is the identity of an alternative between them ([`one_of_admitted`]). So
+ /// `IF(BOUND(?v), ?v = ?v, false)` is true only through its first branch, and needs
+ /// `?v`.
++#[cfg(test)]
+ type Requires = Option<DetHashSet<Variable>>;
+ 
+ /// Needs nothing.
++#[cfg(test)]
+ fn needs_nothing() -> Requires {
+     Some(DetHashSet::default())
+ }
+ 
+ /// Needs `variable`.
++#[cfg(test)]
+ fn needs(variable: &Variable) -> Requires {
+     Some(std::iter::once(variable.clone()).collect())
+ }
+ 
+ /// Both requirements hold: the union, and never if either is never.
++#[cfg(test)]
+ fn all_of(left: Requires, right: Requires) -> Requires {
+     let (mut left, right) = (left?, right?);
+     left.extend(right);
+@@ -2832,6 +2907,7 @@
+ 
+ /// One of the requirements holds, and which is not known: the intersection, over the
+ /// ones that can hold at all.
++#[cfg(test)]
+ fn one_of(left: Requires, right: Requires) -> Requires {
+     match (left, right) {
+         (None, other) | (other, None) => other,
+@@ -2842,7 +2918,30 @@
+     }
+ }
+ 
+-/// The outcome an expression is asked what it must have bound for — see [`Requires`].
++/// A reachable requirement owns its original schema; None means impossible.
++type AdmittedRequires = Option<VarSchema>;
++
++fn needs_admitted(variable: &Variable, workspace: &WorkspaceCapability) -> Result<AdmittedRequires, EvalError> {
++    Ok(Some(VarSchema::from_vars_admitted(std::iter::once(variable.clone()), workspace)?))
++}
++
++fn all_of_admitted(
++    left: AdmittedRequires, right: AdmittedRequires, workspace: &WorkspaceCapability,
++) -> Result<AdmittedRequires, EvalError> {
++    let (Some(left), Some(right)) = (left, right) else { return Ok(None); };
++    Ok(Some(left.union_admitted(&right, workspace)?))
++}
++
++fn one_of_admitted(
++    left: AdmittedRequires, right: AdmittedRequires, workspace: &WorkspaceCapability,
++) -> Result<AdmittedRequires, EvalError> {
++    match (left, right) {
++        (None, other) | (other, None) => Ok(other),
++        (Some(left), Some(right)) => Ok(Some(intersection_admitted(&left, &right, workspace)?)),
++    }
++}
++
++/// The outcome an expression is asked what it must have bound for — see [`AdmittedRequires`].
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ enum Outcome {
+     /// TRUE — which a `FILTER` over the expression therefore binds in every row it
+@@ -2904,9 +3003,9 @@
+ /// How an operator's requirement is combined from its operands'.
+ #[derive(Clone, Copy)]
+ enum Combine {
+-    /// Every operand's requirement holds: [`all_of`], folded from nothing needed.
++    /// Every operand's requirement holds: [`all_of_admitted`], folded from nothing needed.
+     All,
+-    /// One operand's requirement holds, and which is not known: [`one_of`], folded from
++    /// One operand's requirement holds, and which is not known: [`one_of_admitted`], folded from
+     /// never.
+     One,
+     /// [`Self::One`] over the operands there are, or nothing needed when there are none —
+@@ -2918,7 +3017,7 @@
+     Conditional,
+ }
+ 
+-/// One step of [`requires`]'s walk.
++/// One step of [`requires_admitted`]'s walk.
+ enum RequirementStep<'e> {
+     /// Ask `expr` what it needs to reach the outcome.
+     Enter(&'e Expression, Outcome),
+@@ -2927,57 +3026,84 @@
+ }
+ 
+ /// The variables `expr` must have bound to reach `outcome`, or `None` when it never does
+-/// — see [`Requires`], and the rules on each [`Outcome`].
++/// — see [`AdmittedRequires`], and the rules on each [`Outcome`].
+ ///
+ /// A post-order walk over a work list, so an expression of any depth needs no more
+ /// machine stack: an operator asks each operand what it needs in the mode that operand
+ /// is read in, and combines the answers as its rule says.
++#[cfg(test)]
+ fn requires(expr: &Expression, outcome: Outcome) -> Requires {
+-    let mut steps = vec![RequirementStep::Enter(expr, outcome)];
+-    let mut values: Vec<Requires> = Vec::new();
++    requires_admitted(expr, outcome, &WorkspaceCapability::default())
++        .expect("resident expression requirement allocation")
++        .map(|bound| bound.vars().iter().cloned().collect())
++}
++
++fn requires_admitted(
++    expr: &Expression, outcome: Outcome, workspace: &WorkspaceCapability,
++) -> Result<AdmittedRequires, EvalError> {
++    let mut steps = AdmittedVec::new(workspace);
++    steps.push(RequirementStep::Enter(expr, outcome))?;
++    let mut values = AdmittedVec::<AdmittedRequires>::new(workspace);
+     while let Some(step) = steps.pop() {
+         match step {
+             RequirementStep::Enter(expr, outcome) => {
+-                enter_requirement(expr, outcome, &mut steps, &mut values);
++                enter_requirement(expr, outcome, &mut steps, &mut values, workspace)?;
+             }
+             RequirementStep::Exit(combine, count) => {
+-                let at = values.len() - count;
++                let at = values.len().checked_sub(count)
++                    .expect("each requested outcome produced one requirement");
+                 let combined = {
+-                    let mut operands = values.drain(at..);
++                    let mut operands = values.drain_from(at);
+                     match combine {
+-                        Combine::All => operands.fold(needs_nothing(), all_of),
+-                        Combine::One => operands.fold(None, one_of),
++                        Combine::All => {
++                            let mut required = SchemaBuilder::new(workspace);
++                            let mut possible = true;
++                            for operand in operands {
++                                match operand {
++                                    Some(bound) if possible => {
++                                        for variable in bound.vars() {
++                                            required.push(variable.clone())?;
++                                        }
++                                    }
++                                    None => possible = false,
++                                    Some(_) => {}
++                                }
++                            }
++                            if possible { Some(required.finish()?) } else { None }
++                        }
++                        Combine::One => {
++                            let mut combined = None;
++                            for operand in operands {
++                                combined = one_of_admitted(combined, operand, workspace)?;
++                            }
++                            combined
++                        }
+                         Combine::OneOrNothing => {
+-                            operands.reduce(one_of).unwrap_or_else(needs_nothing)
++                            let mut combined = operands.next().unwrap_or_else(|| Some(VarSchema::default()));
++                            for operand in operands {
++                                combined = one_of_admitted(combined, operand, workspace)?;
++                            }
++                            combined
+                         }
+                         Combine::Conditional => {
+-                            let mut next = || {
+-                                operands
+-                                    .next()
+-                                    .expect("an IF asks five operand requirements")
+-                            };
++                            let mut next = || operands.next().expect("an IF asks five operand requirements");
+                             let condition_value = next();
+                             let condition_true = next();
+                             let then = next();
+                             let condition_false = next();
+                             let otherwise = next();
+-                            all_of(
+-                                condition_value,
+-                                one_of(
+-                                    all_of(condition_true, then),
+-                                    all_of(condition_false, otherwise),
+-                                ),
+-                            )
++                            let then = all_of_admitted(condition_true, then, workspace)?;
++                            let otherwise = all_of_admitted(condition_false, otherwise, workspace)?;
++                            let branch = one_of_admitted(then, otherwise, workspace)?;
++                            all_of_admitted(condition_value, branch, workspace)?
+                         }
+                     }
+                 };
+-                values.push(combined);
+-            }
+-        }
+-    }
+-    values
+-        .pop()
+-        .expect("the root's requirement is the last one combined")
++                values.push(combined)?;
++            }
++        }
++    }
++    Ok(values.pop().expect("the root's requirement is the last one combined"))
+ }
+ 
+ /// Ask `expr` what it needs to reach `outcome`: a leaf's requirement is pushed onto
+@@ -2986,19 +3112,19 @@
+ fn enter_requirement<'e>(
+     expr: &'e Expression,
+     outcome: Outcome,
+-    steps: &mut Vec<RequirementStep<'e>>,
+-    values: &mut Vec<Requires>,
+-) {
++    steps: &mut AdmittedVec<RequirementStep<'e>>,
++    values: &mut AdmittedVec<AdmittedRequires>,
++    workspace: &WorkspaceCapability,
++) -> Result<(), EvalError> {
+     let mut outcome = outcome;
+     loop {
+         match (outcome, expr) {
+             (Outcome::Truth, Expression::Variable(variable) | Expression::Bound(variable)) => {
+-                values.push(needs(variable));
+-            }
+-            (Outcome::Truth, Expression::Exists(_)) => values.push(needs_nothing()),
+-            (Outcome::Truth, Expression::NamedNode(_)) => values.push(None),
+-            (Outcome::Truth, Expression::Literal(literal)) => values
+-                .push((crate::expr::constant_ebv(literal) == Some(true)).then(DetHashSet::default)),
++                values.push(needs_admitted(variable, workspace)?)?;
++            }
++            (Outcome::Truth, Expression::Exists(_)) => values.push(Some(VarSchema::default()))?,
++            (Outcome::Truth, Expression::NamedNode(_)) => values.push(None)?,
++            (Outcome::Truth, Expression::Literal(literal)) => values.push((crate::expr::constant_ebv_admitted(literal, workspace)? == Some(true)).then(VarSchema::default))?,
+             // A chain is its binary operator folded from the operator's identity, whose
+             // requirement is the fold's: `true` (`&&`) needs nothing, `false` (`||`) is
+             // never true.
+@@ -3006,14 +3132,14 @@
+                 steps,
+                 Combine::All,
+                 operands.iter().map(|operand| (operand, Outcome::Truth)),
+-            ),
++            )?,
+             (Outcome::Truth, Expression::Or(operands)) => push_operands(
+                 steps,
+                 Combine::One,
+                 operands.iter().map(|operand| (operand, Outcome::Truth)),
+-            ),
++            )?,
+             (Outcome::Truth, Expression::Not(operand)) => {
+-                steps.push(RequirementStep::Enter(operand, Outcome::Falsity));
++                steps.push(RequirementStep::Enter(operand, Outcome::Falsity))?;
+             }
+             (Outcome::Truth, Expression::FunctionCall(function, args))
+                 if is_type_test(function) =>
+@@ -3022,47 +3148,47 @@
+                     steps,
+                     Combine::All,
+                     args.iter().map(|arg| (arg, Outcome::Value)),
+-                );
++                )?;
+             }
+             (Outcome::Truth, Expression::Coalesce(items)) => push_operands(
+                 steps,
+                 Combine::One,
+                 items.iter().map(|item| (item, Outcome::Truth)),
+-            ),
+-            (Outcome::Falsity, Expression::Variable(variable)) => values.push(needs(variable)),
++            )?,
++            (Outcome::Falsity, Expression::Variable(variable)) => values.push(needs_admitted(variable, workspace)?)?,
+             (Outcome::Falsity, Expression::Bound(_) | Expression::Exists(_)) => {
+-                values.push(needs_nothing());
+-            }
+-            (Outcome::Falsity, Expression::NamedNode(_)) => values.push(None),
++                values.push(Some(VarSchema::default()))?;
++            }
++            (Outcome::Falsity, Expression::NamedNode(_)) => values.push(None)?,
+             (Outcome::Falsity, Expression::Literal(literal)) => values.push(
+-                (crate::expr::constant_ebv(literal) == Some(false)).then(DetHashSet::default),
+-            ),
++                (crate::expr::constant_ebv_admitted(literal, workspace)? == Some(false)).then(VarSchema::default),
++            )?,
+             (Outcome::Falsity, Expression::FunctionCall(function, _)) if is_type_test(function) => {
+-                values.push(needs_nothing());
++                values.push(Some(VarSchema::default()))?;
+             }
+             (Outcome::Falsity, Expression::Not(operand)) => {
+-                steps.push(RequirementStep::Enter(operand, Outcome::Truth));
++                steps.push(RequirementStep::Enter(operand, Outcome::Truth))?;
+             }
+             (Outcome::Falsity, Expression::And(operands)) => push_operands(
+                 steps,
+                 Combine::One,
+                 operands.iter().map(|operand| (operand, Outcome::Falsity)),
+-            ),
++            )?,
+             (Outcome::Falsity, Expression::Or(operands)) => push_operands(
+                 steps,
+                 Combine::All,
+                 operands.iter().map(|operand| (operand, Outcome::Falsity)),
+-            ),
++            )?,
+             (Outcome::Falsity, Expression::Coalesce(items)) => push_operands(
+                 steps,
+                 Combine::One,
+                 items.iter().map(|item| (item, Outcome::Falsity)),
+-            ),
++            )?,
+             (Outcome::Truth | Outcome::Falsity, Expression::If(condition, then, otherwise)) => {
+-                push_conditional(steps, condition, then, otherwise, outcome);
++                push_conditional(steps, condition, then, otherwise, outcome)?;
+             }
+             (Outcome::Truth | Outcome::Falsity, Expression::In(needle, _)) => {
+-                steps.push(RequirementStep::Enter(needle, Outcome::Value));
++                steps.push(RequirementStep::Enter(needle, Outcome::Value))?;
+             }
+             // Every other operator, comparison and function call reaches the outcome
+             // only through a value, so it needs what it needs for one.
+@@ -3082,14 +3208,14 @@
+                 outcome = Outcome::Value;
+                 continue;
+             }
+-            (Outcome::Value, Expression::Variable(variable)) => values.push(needs(variable)),
++            (Outcome::Value, Expression::Variable(variable)) => values.push(needs_admitted(variable, workspace)?)?,
+             (
+                 Outcome::Value,
+                 Expression::NamedNode(_)
+                 | Expression::Literal(_)
+                 | Expression::Bound(_)
+                 | Expression::Exists(_),
+-            ) => values.push(needs_nothing()),
++            ) => values.push(Some(VarSchema::default()))?,
+             (Outcome::Value, Expression::FunctionCall(function, args)) => push_operands(
+                 steps,
+                 Combine::All,
+@@ -3097,7 +3223,7 @@
+                     .enumerate()
+                     .filter(|(position, _)| strict_in_argument(function, *position))
+                     .map(|(_, arg)| (arg, Outcome::Value)),
+-            ),
++            )?,
+             // The pairwise `one_of`, folded; an empty chain is its identity constant,
+             // which has a value for any row.
+             (Outcome::Value, Expression::And(operands) | Expression::Or(operands)) => {
+@@ -3105,7 +3231,7 @@
+                     steps,
+                     Combine::OneOrNothing,
+                     operands.iter().map(|operand| (operand, Outcome::Value)),
+-                );
++                )?;
+             }
+             (Outcome::Value, Expression::Arithmetic(first, rest)) => push_operands(
+                 steps,
+@@ -3113,7 +3239,7 @@
+                 std::iter::once(&**first)
+                     .chain(rest.iter().map(|(_, operand)| operand))
+                     .map(|operand| (operand, Outcome::Value)),
+-            ),
++            )?,
+             (
+                 Outcome::Value,
+                 Expression::Equal(a, b)
+@@ -3126,57 +3252,58 @@
+                 steps,
+                 Combine::All,
+                 [(&**a, Outcome::Value), (&**b, Outcome::Value)].into_iter(),
+-            ),
++            )?,
+             (
+                 Outcome::Value,
+                 Expression::UnaryPlus(operand)
+                 | Expression::UnaryMinus(operand)
+                 | Expression::Not(operand),
+-            ) => steps.push(RequirementStep::Enter(operand, Outcome::Value)),
++            ) => steps.push(RequirementStep::Enter(operand, Outcome::Value))?,
+             (Outcome::Value, Expression::If(condition, then, otherwise)) => {
+-                push_conditional(steps, condition, then, otherwise, Outcome::Value);
++                push_conditional(steps, condition, then, otherwise, Outcome::Value)?;
+             }
+             (Outcome::Value, Expression::Coalesce(items)) => push_operands(
+                 steps,
+                 Combine::One,
+                 items.iter().map(|item| (item, Outcome::Value)),
+-            ),
++            )?,
+             (Outcome::Value, Expression::In(needle, _)) => {
+-                steps.push(RequirementStep::Enter(needle, Outcome::Value));
+-            }
+-        }
+-        return;
++                steps.push(RequirementStep::Enter(needle, Outcome::Value))?;
++            }
++        }
++        return Ok(());
+     }
+ }
+ 
+ /// Push `operands` to be asked, in reading order, behind the step combining their
+ /// requirements as `combine` says.
+ fn push_operands<'e>(
+-    steps: &mut Vec<RequirementStep<'e>>,
++    steps: &mut AdmittedVec<RequirementStep<'e>>,
+     combine: Combine,
+     operands: impl Iterator<Item = (&'e Expression, Outcome)>,
+-) {
++) -> Result<(), EvalError> {
+     let exit = steps.len();
+-    steps.push(RequirementStep::Exit(combine, 0));
++    steps.push(RequirementStep::Exit(combine, 0))?;
+     for (operand, outcome) in operands {
+-        steps.push(RequirementStep::Enter(operand, outcome));
++        steps.push(RequirementStep::Enter(operand, outcome))?;
+     }
+     let count = steps.len() - exit - 1;
+-    steps[exit] = RequirementStep::Exit(combine, count);
++    steps.as_mut_slice()[exit] = RequirementStep::Exit(combine, count);
+     // Pushed in reading order, so reversed to pop in it.
+-    steps[exit + 1..].reverse();
++    steps.as_mut_slice()[exit + 1..].reverse();
++    Ok(())
+ }
+ 
+ /// Push an `IF`'s five operand requirements ([`Combine::Conditional`]): the condition's
+ /// value, its truth, the first branch's `outcome`, the condition's falsity, and the
+ /// second branch's `outcome`.
+ fn push_conditional<'e>(
+-    steps: &mut Vec<RequirementStep<'e>>,
++    steps: &mut AdmittedVec<RequirementStep<'e>>,
+     condition: &'e Expression,
+     then: &'e Expression,
+     otherwise: &'e Expression,
+     outcome: Outcome,
+-) {
++) -> Result<(), EvalError> {
+     push_operands(
+         steps,
+         Combine::Conditional,
+@@ -3188,38 +3315,54 @@
+             (otherwise, outcome),
+         ]
+         .into_iter(),
+-    );
++    )
+ }
+ 
+ /// Add a triple pattern's variables, its nested quoted triples walked over a work list.
+-fn collect_triple_vars(triple: &TriplePattern, out: &mut DetHashSet<Variable>) {
+-    let mut pending = vec![triple];
++fn collect_triple_vars_admitted(
++    triple: &TriplePattern, out: &mut SchemaBuilder, workspace: &WorkspaceCapability,
++) -> Result<(), EvalError> {
++    let mut pending = AdmittedVec::new(workspace);
++    pending.push(triple)?;
+     while let Some(triple) = pending.pop() {
+         for term in [&triple.subject, &triple.object] {
+             match term {
+                 TermPattern::Variable(variable) => {
+-                    out.insert(variable.clone());
+-                }
+-                TermPattern::Triple(nested) => pending.push(nested),
++                    out.push(variable.clone())?;
++                }
++                TermPattern::Triple(nested) => pending.push(nested)?,
+                 TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+                 }
+             }
+         }
+         if let NamedNodePattern::Variable(variable) = &triple.predicate {
+-            out.insert(variable.clone());
+-        }
+-    }
+-}
+-
+-/// Add a term position's variables, a quoted triple's through [`collect_triple_vars`].
+-fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
++            out.push(variable.clone())?;
++        }
++    }
++    Ok(())
++}
++
++/// Add a term position's variables through the same admitted nested-triple walk.
++fn collect_term_vars_admitted(
++    term: &TermPattern, out: &mut SchemaBuilder, workspace: &WorkspaceCapability,
++) -> Result<(), EvalError> {
+     match term {
+         TermPattern::Variable(variable) => {
+-            out.insert(variable.clone());
+-        }
+-        TermPattern::Triple(triple) => collect_triple_vars(triple, out),
++            out.push(variable.clone())?;
++        }
++        TermPattern::Triple(triple) => collect_triple_vars_admitted(triple, out, workspace)?,
+         TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+     }
++    Ok(())
++}
++
++#[cfg(test)]
++fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
++    let workspace = WorkspaceCapability::default();
++    let mut bound = SchemaBuilder::new(&workspace);
++    collect_term_vars_admitted(term, &mut bound, &workspace)
++        .expect("resident term variable walk");
++    out.extend(bound.finish().expect("resident term variable schema").vars().iter().cloned());
+ }
+ 
+ // ---------------------------------------------------------------------------
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -619,13 +619,20 @@
+ /// — [`ebv_term`]'s answer for it, reached without a dataset, for the prepare-time
+ /// planner (`crate::property_fn_plan`'s `requires`). A language-tagged string has
+ /// none; every other literal has its XSD value's.
++#[cfg(test)]
+ pub(crate) fn constant_ebv(literal: &purrdf_sparql_algebra::Literal) -> Option<bool> {
+-    if literal.language().is_some() {
+-        return None;
+-    }
+-    xsd_of(&crate::convert::literal_to_value(literal))
+-        .as_ref()
+-        .and_then(effective_boolean_value)
++    constant_ebv_admitted(literal, &crate::WorkspaceCapability::default())
++        .expect("resident constant EBV allocation")
++}
++
++/// The same constant law over borrowed authored spelling and admitted parsed owners.
++pub(crate) fn constant_ebv_admitted(
++    literal: &purrdf_sparql_algebra::Literal, workspace: &crate::WorkspaceCapability,
++) -> Result<Option<bool>, EvalError> {
++    if literal.language().is_some() { return Ok(None); }
++    let Some(datatype) = XsdDatatype::from_iri(literal.datatype().as_str()) else { return Ok(None); };
++    let parsed = crate::parsed_value::ParsedValue::parse(literal.value(), datatype, false, workspace)?;
++    Ok(parsed.as_deref().and_then(effective_boolean_value))
+ }
+ 
+ /// The effective boolean value of a concrete term (`None` = type error).
+diff --git a/crates/sparql-eval/src/solution.rs b/crates/sparql-eval/src/solution.rs
+--- a/crates/sparql-eval/src/solution.rs
++++ b/crates/sparql-eval/src/solution.rs
+@@ -288,9 +288,9 @@
+     }
+ 
+     pub(crate) fn union_admitted(&self, other: &Self, workspace: &crate::WorkspaceCapability) -> Result<Self, crate::EvalError> {
+-        let mut out = self.clone();
+-        for variable in other.vars() { out.push_admitted(variable.clone(), workspace)?; }
+-        Ok(out)
++        if self.is_empty() { return Ok(other.clone()); }
++        if other.vars().iter().all(|variable| self.contains(variable)) { return Ok(self.clone()); }
++        Self::from_vars_admitted(self.vars().iter().chain(other.vars()).cloned(), workspace)
+     }
+ 
+     /// Extend an owned schema without copying the already accumulated prefix.
+diff --git a/crates/sparql-eval/src/workspace.rs b/crates/sparql-eval/src/workspace.rs
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -1320,4 +1320,86 @@
+         drop(workspace);
+         assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+     }
+-}
++    #[test]
++    fn certainty_schema_keeps_original_grant_after_workspace_and_shallow_clone() {
++        use purrdf_sparql_algebra::{GraphPattern, Variable};
++        let variables: Vec<_> = (0..128).map(|ordinal| Variable::new(format!("v{ordinal}"))).collect();
++        let pattern = GraphPattern::Values { variables: variables.clone(), bindings: Vec::new() };
++        let (workspace, ledger, base) = account(1_000_000);
++        let capability = workspace.capability();
++        let bound = crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability)
++            .expect("empty VALUES certainly binds each declared column");
++        assert_eq!(bound.vars(), variables);
++        let retained = ledger.live.load(Ordering::Relaxed);
++        assert!(retained > base);
++        let kept = bound.clone();
++        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
++        drop(bound);
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
++        assert!(variables.iter().all(|variable| kept.contains(variable)));
++        drop(kept);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn certainty_refusal_releases_all_native_worklists_and_preserves_first_typed_cause() {
++        use purrdf_sparql_algebra::{GraphPattern, Variable};
++        let pattern = GraphPattern::Values {
++            variables: (0..512).map(|ordinal| Variable::new(format!("v{ordinal}"))).collect(),
++            bindings: Vec::new(),
++        };
++        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
++        for extra in [0, 1, 128, 512] {
++            let (workspace, ledger, _) = account(base + extra);
++            let capability = workspace.capability();
++            assert!(matches!(
++                crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability),
++                Err(EvalError::WorkspaceStopped)
++            ));
++            assert_eq!(ledger.live.load(Ordering::Relaxed), base, "every partial owner is released");
++            let cause = workspace.take_failure().expect("first original reservation failure");
++            assert_eq!(cause.identity, 7);
++            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++            assert!(matches!(
++                crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability),
++                Err(EvalError::WorkspaceStopped)
++            ));
++            assert!(workspace.take_failure().is_none());
++            drop(capability);
++            drop(workspace);
++            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++        }
++    }
++
++    #[test]
++    fn certainty_lateral_context_and_filter_requirements_use_original_admitted_home() {
++        use purrdf_sparql_algebra::{Child, Expression, GraphPattern, Variable};
++        let driver = Variable::new("driver");
++        let output = Variable::new("output");
++        let required = Variable::new("required");
++        let pattern = GraphPattern::Lateral {
++            left: Child::new(GraphPattern::Values { variables: vec![driver.clone()], bindings: Vec::new() }),
++            right: Child::new(GraphPattern::Filter {
++                inner: Child::new(GraphPattern::Extend {
++                    inner: Child::new(GraphPattern::empty_bgp()),
++                    variable: output.clone(),
++                    expression: Expression::Variable(driver.clone()),
++                }),
++                expr: Expression::Bound(required.clone()),
++            }),
++        };
++        let (workspace, ledger, base) = account(1_000_000);
++        let capability = workspace.capability();
++        let bound = crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability).unwrap();
++        assert_eq!(bound.len(), 3);
++        assert!(bound.contains(&driver) && bound.contains(&output) && bound.contains(&required));
++        drop(bound);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), base, "context and expression scratch is gone");
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++}

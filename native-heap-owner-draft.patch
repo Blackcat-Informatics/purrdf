@@ -1,0 +1,84 @@
+diff --git a/crates/sparql-eval/src/workspace.rs b/crates/sparql-eval/src/workspace.rs
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -101,3 +101,71 @@
+ 
++/// A native binary heap whose capacity and sorted output retain admission.
++/// Growth reserves a replacement before moving the original heap buffer.
++#[derive(Debug)]
++pub struct AdmittedHeap<T: Ord> {
++    values: std::collections::BinaryHeap<T>,
++    allocation: Option<WorkspaceAllocation>,
++    workspace: WorkspaceCapability,
++}
++
++impl<T: Ord> AdmittedHeap<T> {
++    /// An empty heap associated with this execution.
++    #[must_use]
++    pub fn new(workspace: &WorkspaceCapability) -> Self {
++        Self { values: std::collections::BinaryHeap::new(), allocation: None, workspace: workspace.clone() }
++    }
++
++    /// A concrete element array admitted before allocation.
++    /// # Errors
++    /// Returns layout overflow, admission refusal or allocator failure.
++    pub fn with_capacity(capacity: usize, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
++        let (values, allocation) = AdmittedVec::<T>::with_capacity(capacity, workspace)?.into_parts();
++        Ok(Self { values: std::collections::BinaryHeap::from(values), allocation, workspace: workspace.clone() })
++    }
++
++    /// Append after fallibly acquiring any required replacement buffer.
++    /// # Errors
++    /// Returns layout overflow, admission refusal or allocator failure.
++    pub fn push(&mut self, value: T) -> Result<(), EvalError> {
++        if self.values.len() == self.values.capacity() {
++            let needed = self.values.len().checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
++            let capacity = self.values.capacity().checked_mul(2)
++                .ok_or(EvalError::WorkspaceBoundOverflow)?.max(needed);
++            let replacement = AdmittedVec::<T>::with_capacity(capacity, &self.workspace)?;
++            let (mut values, allocation) = replacement.into_parts();
++            // Both old and replacement arrays remain admitted during transfer.
++            // These operations move elements; none clones an element payload.
++            let mut old = std::mem::take(&mut self.values).into_vec();
++            values.append(&mut old);
++            self.values = std::collections::BinaryHeap::from(values);
++            drop(old);
++            self.allocation = allocation;
++        }
++        self.values.push(value);
++        Ok(())
++    }
++
++    /// Remove the greatest item without growing or detaching storage.
++    pub fn pop(&mut self) -> Option<T> { self.values.pop() }
++
++    /// Borrow the greatest item.
++    #[must_use]
++    pub fn peek(&self) -> Option<&T> { self.values.peek() }
++
++    /// The number of retained items.
++    #[must_use]
++    pub fn len(&self) -> usize { self.values.len() }
++
++    /// Whether the heap contains no items.
++    #[must_use]
++    pub fn is_empty(&self) -> bool { self.values.is_empty() }
++
++    /// Sort in place and transfer the same array together with its grant.
++    #[must_use]
++    pub fn into_sorted_vec(self) -> AdmittedVec<T> {
++        AdmittedVec::from_parts(self.values.into_sorted_vec(), self.allocation, &self.workspace)
++    }
++}
++
+ /// A consuming iterator retaining its original metadata buffer admission.
+ pub struct AdmittedVecIntoIter<T> {
+diff --git a/crates/sparql-eval/src/lib.rs b/crates/sparql-eval/src/lib.rs
+--- a/crates/sparql-eval/src/lib.rs
++++ b/crates/sparql-eval/src/lib.rs
+@@ -172,3 +172,3 @@
+ mod workspace;
+-pub use workspace::{AdmittedVec, AdmittedVecIntoIter, WorkspaceAllocation, WorkspaceCapability, WorkspaceTerm};
++pub use workspace::{AdmittedHeap, AdmittedVec, AdmittedVecIntoIter, WorkspaceAllocation, WorkspaceCapability, WorkspaceTerm};
+ // The per-query record of what the relations a query invoked attested about the
+

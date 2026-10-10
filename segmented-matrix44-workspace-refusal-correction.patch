@@ -1,0 +1,34 @@
+--- a/crates/rdf-core/src/ir/segmented/session.rs
++++ b/crates/rdf-core/src/ir/segmented/session.rs
+@@ -249,7 +249,6 @@
+             } else {
+                 SegmentedError::PinnedBlocks
+             };
+-            state.error.get_or_insert_with(|| error.clone());
+             return Err(error);
+         }
+     }
+@@ -568,9 +567,6 @@
+                 reservation.cache = Some(Arc::downgrade(&self.state));
+                 reservation
+             })
+-            .inspect_err(|error| {
+-                state.error = Some(error.clone());
+-            })
+     }
+ 
+     fn make_room(&self, state: &mut State, charge: u64, slot: bool) -> Result<(), SegmentedError> {
+@@ -580,6 +576,13 @@
+             charge,
+             slot.then_some(self.limits.cache_blocks),
+         )
++        .inspect_err(|error| {
++            // A refused workspace resize leaves the readable snapshot valid.
++            // Block-load failures remain sticky so omitted facts cannot succeed.
++            if slot {
++                state.error.get_or_insert_with(|| error.clone());
++            }
++        })
+     }
+ 
+     fn request(

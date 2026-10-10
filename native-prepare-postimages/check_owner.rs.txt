@@ -1,0 +1,73 @@
+fn admit_structure_with_memory<const CONTEXTUAL: bool>(
+    query: &Query,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvaluationFailure> {
+    crate::stack::height::admit_query_with_memory(query, memory)?;
+    let validation = if CONTEXTUAL {
+        query.validate_with_memory(memory)
+    } else {
+        query.validate_ordinary_with_memory(memory)
+    };
+    validation.map_err(|error| match error {
+        purrdf_sparql_algebra::ValidationError::Storage(error) => {
+            memory.admission_mut().storage_error(error, "prepared algebra validation").into()
+        }
+        error => EvaluationFailure::native_diagnostic(
+            "native-sparql-algebra", &error, memory.admission_mut().workspace(),
+        ),
+    })
+}
+
+fn check_plan_matches_registries_with_memory(
+    prepared: &PreparedQuery,
+    options: QueryOptions<'_>,
+    parameters: &[&str],
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvaluationFailure> {
+    let before = memory.live_bytes();
+    let planned = crate::property_fn_plan::recheck_query_with_memory(
+        &prepared.query, options.property_functions(), options.aggregates(), parameters, memory,
+    )?;
+    let equal = match &planned {
+        Some(query) => query.eq_with_memory(&prepared.query, memory)
+            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared algebra comparison")))?,
+        None => true,
+    };
+    if !equal {
+        return Err(EvaluationFailure::native_diagnostic(
+            "native-sparql-algebra",
+            &"prepared algebra requires feasibility replanning; prepare the changed algebra before execution",
+            memory.admission_mut().workspace(),
+        ));
+    }
+    let temporary = memory.live_bytes().checked_sub(before)
+        .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+    drop(planned);
+    memory.release_bytes(temporary)
+        .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared recheck temporaries")))?;
+    // These are live declaration reads, not a cached environment identity.
+    check_prepared_registries_with_memory(prepared, options, memory)
+}
+
+fn check_prepared_registries_with_memory(
+    prepared: &PreparedQuery, options: QueryOptions<'_>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvaluationFailure> {
+    let supplied = crate::property_fn_plan::registry_fingerprint_with_memory(options.property_functions(), memory)?;
+    if supplied != prepared.relations {
+        return Err(EvaluationFailure::native_diagnostic(
+            "native-sparql-property-function",
+            &"this plan was prepared against a different property-function registry than the one supplied for its evaluation; prepare it under the SAME QueryOptions, because the registry is what decides which predicates are calls",
+            memory.admission_mut().workspace(),
+        ));
+    }
+    let supplied_aggregates = crate::agg_fn::registry_fingerprint_with_memory(options.aggregates(), memory)?;
+    if supplied_aggregates != prepared.aggregates {
+        return Err(EvaluationFailure::native_diagnostic(
+            "native-sparql-aggregate-function",
+            &"this plan was prepared against a different custom-aggregate registry than the one supplied for its evaluation; prepare it under the SAME QueryOptions, because the registry is what a Custom aggregate IRI resolves against",
+            memory.admission_mut().workspace(),
+        ));
+    }
+    Ok(())
+}

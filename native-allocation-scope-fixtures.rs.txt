@@ -1,0 +1,54 @@
+
+#[cfg(test)]
+mod original_scope_regressions {
+    use super::{Admission, Memory, StorageError};
+    use std::cell::Cell;
+
+    struct DropWitness<'a>(&'a Cell<bool>);
+    impl Drop for DropWitness<'_> {
+        fn drop(&mut self) { self.0.set(true); }
+    }
+    struct Grant<'a> { live: usize, scope_floor: usize, destroyed: &'a Cell<bool> }
+    impl Admission for Grant<'_> {
+        fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+            if next < self.live && next == self.scope_floor {
+                assert!(self.destroyed.get(), "the original child allocation must die before its grant is released");
+            }
+            self.live = next;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn native_failed_child_dies_before_refund_without_releasing_parent() {
+        let destroyed = Cell::new(false);
+        let mut grant = Grant { live: 0, scope_floor: 0, destroyed: &destroyed };
+        let mut memory = Memory::new(&mut grant);
+        let parent = memory.string("original parent payload").unwrap();
+        let parent_bytes = memory.live_bytes();
+        memory.admission_mut().scope_floor = parent_bytes;
+        let result: Result<(), StorageError> = memory.scope(|memory| {
+            let _child = memory.boxed(DropWitness(&destroyed))?;
+            let _text = memory.string("temporary original child string")?;
+            Err(StorageError::AllocationFailed)
+        });
+        assert_eq!(result, Err(StorageError::AllocationFailed));
+        assert!(destroyed.get());
+        assert_eq!(memory.live_bytes(), parent_bytes);
+        assert_eq!(parent, "original parent payload");
+        memory.admission_mut().scope_floor = 0;
+        memory.release_string(parent).unwrap();
+        assert_eq!(memory.live_bytes(), 0);
+    }
+
+    #[test]
+    fn native_success_keeps_original_output_grant_after_scope_returns() {
+        let destroyed = Cell::new(true);
+        let mut grant = Grant { live: 0, scope_floor: 0, destroyed: &destroyed };
+        let mut memory = Memory::new(&mut grant);
+        let output = memory.scope(|memory| memory.string("successful original payload")).unwrap();
+        assert_eq!(memory.live_bytes(), output.capacity());
+        memory.release_string(output).unwrap();
+        assert_eq!(memory.live_bytes(), 0);
+    }
+}

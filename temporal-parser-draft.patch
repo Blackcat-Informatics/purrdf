@@ -1,0 +1,1530 @@
+diff --git a/crates/xsd/src/temporal.rs b/crates/xsd/src/temporal.rs
+--- a/crates/xsd/src/temporal.rs
++++ b/crates/xsd/src/temporal.rs
+@@ -530,726 +530,796 @@
+ 
+ // ── Parsing ──────────────────────────────────────────────────────────────────────
+ 
+-/// Split a trailing timezone (`Z`, `+hh:mm`, `-hh:mm`) off the time portion. Returns
+-/// `(body_without_tz, tz_minutes_option)`.
+-fn split_tz(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(String, Option<i32>), XsdError> {
+-    if let Some(body) = s.strip_suffix('Z') {
+-        return Ok((body.to_string(), Some(0)));
+-    }
+-    // A tz sign is the last '+' or '-' AND must look like "±hh:mm" (len 6). The
+-    // split is checked, so an offset inside a multi-byte character is no
+-    // timezone and the body's own parse refuses the lexical. Past that split,
+-    // the ASCII sign and ':' make every field slice below a char boundary.
+-    if let Some((body, tail)) = s.len().checked_sub(6).and_then(|at| s.split_at_checked(at)) {
+-        let sign = tail.as_bytes()[0];
+-        if (sign == b'+' || sign == b'-') && tail.as_bytes()[3] == b':' {
+-            // `i32::from_str` also takes a sign, so "+-1:00" would read an hour
+-            // of -1: both fields are exactly two ASCII digits.
+-            if !all_ascii_digits(&tail[1..3]) || !all_ascii_digits(&tail[4..6]) {
+-                return Err(XsdError::invalid(
+-                    dt,
+-                    lexical,
+-                    "timezone fields must be two digits",
+-                ));
+-            }
+-            let hh: i32 = tail[1..3]
+-                .parse()
+-                .map_err(|_| XsdError::invalid(dt, lexical, "bad timezone hour"))?;
+-            let mm: i32 = tail[4..6]
+-                .parse()
+-                .map_err(|_| XsdError::invalid(dt, lexical, "bad timezone minute"))?;
+-            if hh > 14 || mm > 59 {
+-                return Err(XsdError::invalid(dt, lexical, "timezone out of range"));
+-            }
+-            let mut off = hh * 60 + mm;
+-            if sign == b'-' {
+-                off = -off;
+-            }
+-            if off.abs() > MAX_TZ_MIN {
+-                return Err(XsdError::invalid(dt, lexical, "timezone exceeds ±14:00"));
+-            }
+-            return Ok((body.to_string(), Some(off)));
+-        }
+-    }
+-    Ok((s.to_string(), None))
+-}
+-
+-/// Whether `text` is non-empty and all ASCII digits.
+-fn all_ascii_digits(text: &str) -> bool {
+-    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
+-}
+-
+-/// A lexically valid numeral (`digits`, every byte an ASCII digit) read into a
+-/// native integer. A numeral too wide for `T` is still in the lexical space —
+-/// XSD's years and duration fields are unbounded — so that failure is
+-/// [`XsdError::OutOfRange`], never [`XsdError::InvalidLexical`].
+-fn parse_numeral<T: std::str::FromStr>(
+-    dt: XsdDatatype,
+-    lexical: &str,
+-    digits: &str,
+-    reason: &'static str,
+-) -> Result<T, XsdError> {
+-    debug_assert!(all_ascii_digits(digits), "{digits:?} is a numeral");
+-    digits.parse().map_err(|_| XsdError::OutOfRange {
+-        datatype: dt,
+-        lexical: lexical.to_string(),
+-        reason,
+-    })
+-}
+-
+-/// A field that is in the lexical space but whose value may lie beyond this
+-/// crate's representable range. Its [`XsdError::OutOfRange`] is held until the
+-/// rest of the lexical form has been checked, so a malformed lexical is never
+-/// reported as merely out of range.
+-type Deferred<T> = Result<T, XsdError>;
+-
+-/// A seconds field read by [`parse_decimal`], reported against the temporal
+-/// datatype `dt`. A malformed field is [`XsdError::InvalidLexical`] at once. XSD
+-/// allows any number of fractional digits, so a well-formed field past the
+-/// decimal's scale is first read again without its trailing zeros (the same
+-/// value), and only a field whose significant digits still do not fit is a
+-/// deferred [`XsdError::OutOfRange`] — never a zero.
+-fn parse_seconds(
+-    dt: XsdDatatype,
+-    lexical: &str,
+-    text: &str,
+-) -> Result<Deferred<Decimal>, XsdError> {
+-    let out_of_range = || XsdError::OutOfRange {
+-        datatype: dt,
+-        lexical: lexical.to_string(),
+-        reason: "seconds beyond the representable decimal scale",
+-    };
+-    match parse_decimal(text) {
+-        Ok(seconds) => Ok(Ok(seconds)),
+-        Err(XsdError::OutOfRange { .. }) => {
+-            let trimmed = match text.split_once('.') {
+-                Some((whole, fraction)) => {
+-                    let fraction = fraction.trim_end_matches('0');
+-                    if fraction.is_empty() {
+-                        whole.to_string()
+-                    } else {
+-                        format!("{whole}.{fraction}")
+-                    }
+-                }
+-                None => text.to_string(),
+-            };
+-            Ok(parse_decimal(&trimmed).map_err(|_| out_of_range()))
+-        }
+-        Err(_) => Err(XsdError::invalid(dt, lexical, "bad seconds")),
+-    }
+-}
+-
+-/// A year numeral (`digits`, four or more ASCII digits, negated when `neg`): its
+-/// value, deferred when it does not fit `i64`, and a year with the same leap-ness
+-/// for the calendar checks — 400 divides 10 000, so the last four digits decide it.
+-fn read_year(dt: XsdDatatype, lexical: &str, neg: bool, digits: &str) -> (Deferred<i64>, i64) {
+-    let sign = |magnitude: i64| if neg { -magnitude } else { magnitude };
+-    let value = parse_numeral::<i64>(dt, lexical, digits, "year beyond i64").map(sign);
+-    let calendar_year = value.as_ref().map_or_else(
+-        |_| {
+-            sign(
+-                digits[digits.len().saturating_sub(4)..]
+-                    .parse()
+-                    .unwrap_or(0),
+-            )
+-        },
+-        |year| *year,
+-    );
+-    (value, calendar_year)
+-}
+-
+-/// Whether `year` is a leap year of the proleptic Gregorian calendar: divisible
+-/// by 4, except centuries unless also divisible by 400 (XSD 1.1 Part 2
+-/// Appendix D.3, whose calendar every date grammar in the workspace uses).
+-/// Negative years follow the same rule; year 0 (1 BCE) is a leap year.
+-#[must_use]
+-pub const fn is_leap(year: i64) -> bool {
+-    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+-}
+-
+-/// Number of days in a given month for a proleptic-Gregorian year.
+-/// Uses the signed year directly; negative years follow the same leap-year rule as
+-/// positive ones ([`is_leap`]). A `month` outside 1..=12 answers `0`, which no
+-/// day number satisfies, so a caller range-checking a day against it refuses.
+-#[must_use]
+-pub const fn days_in_month(year: i64, month: u8) -> u8 {
+-    match month {
+-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+-        4 | 6 | 9 | 11 => 30,
+-        2 if is_leap(year) => 29,
+-        2 => 28,
+-        _ => 0, // invalid month — caught by caller before reaching here
+-    }
+-}
+-
+-/// Parse `[-]YYYY[Y...]-MM-DD` into `(year, month, day)`, the year deferred.
+-fn parse_ymd(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(Deferred<i64>, u8, u8), XsdError> {
+-    let neg = s.starts_with('-');
+-    let body = if neg { &s[1..] } else { s };
+-    let Some((year_text, month_day)) = body.split_once('-') else {
+-        return Err(XsdError::invalid(dt, lexical, "expected YYYY-MM-DD"));
+-    };
+-    let Some((month_text, day_text)) = month_day.split_once('-') else {
+-        return Err(XsdError::invalid(dt, lexical, "expected YYYY-MM-DD"));
+-    };
+-    if day_text.contains('-') {
+-        return Err(XsdError::invalid(dt, lexical, "expected YYYY-MM-DD"));
+-    }
+-    if year_text.len() < 4 || month_text.len() != 2 || day_text.len() != 2 {
+-        return Err(XsdError::invalid(dt, lexical, "bad date field widths"));
+-    }
+-    // `from_str` also takes a leading `+`, which no date field carries.
+-    if !all_ascii_digits(year_text) || !all_ascii_digits(month_text) || !all_ascii_digits(day_text)
+-    {
+-        return Err(XsdError::invalid(
+-            dt,
+-            lexical,
+-            "date fields must be ASCII digits",
+-        ));
+-    }
+-    // XSD 1.1 §3.3.7: a year wider than 4 digits must not have a leading zero.
+-    // Exactly 4 digits with a leading zero (e.g. "0044", "0000") are valid.
+-    if year_text.len() > 4 && year_text.starts_with('0') {
+-        return Err(XsdError::invalid(
+-            dt,
+-            lexical,
+-            "year wider than 4 digits must not have a leading zero",
+-        ));
+-    }
+-    let (year, calendar_year) = read_year(dt, lexical, neg, year_text);
+-    let month: u8 = month_text
+-        .parse()
+-        .map_err(|_| XsdError::invalid(dt, lexical, "bad month"))?;
+-    let day: u8 = day_text
+-        .parse()
+-        .map_err(|_| XsdError::invalid(dt, lexical, "bad day"))?;
+-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+-        return Err(XsdError::invalid(dt, lexical, "month/day out of range"));
+-    }
+-    if day > days_in_month(calendar_year, month) {
+-        return Err(XsdError::invalid(dt, lexical, "day out of range for month"));
+-    }
+-    Ok((year, month, day))
+-}
+-
+-/// Parse `hh:mm:ss(.fff)?` into `(hour, minute, second)`, the second deferred.
+-fn parse_hms(
+-    dt: XsdDatatype,
+-    lexical: &str,
+-    s: &str,
+-) -> Result<(u8, u8, Deferred<Decimal>), XsdError> {
+-    let Some((hour_text, minute_second)) = s.split_once(':') else {
+-        return Err(XsdError::invalid(dt, lexical, "expected hh:mm:ss"));
+-    };
+-    let Some((minute_text, second_text)) = minute_second.split_once(':') else {
+-        return Err(XsdError::invalid(dt, lexical, "expected hh:mm:ss"));
+-    };
+-    if second_text.contains(':') {
+-        return Err(XsdError::invalid(dt, lexical, "expected hh:mm:ss"));
+-    }
+-    if hour_text.len() != 2 || minute_text.len() != 2 {
+-        return Err(XsdError::invalid(dt, lexical, "bad time field widths"));
+-    }
+-    // `from_str` also takes a leading `+`; the seconds field is two digits and
+-    // an optional fraction (`ss(.s+)?`), never `5` or `005`.
+-    let (whole_seconds, _) = second_text.split_once('.').unwrap_or((second_text, ""));
+-    if !all_ascii_digits(hour_text)
+-        || !all_ascii_digits(minute_text)
+-        || whole_seconds.len() != 2
+-        || !all_ascii_digits(whole_seconds)
+-    {
+-        return Err(XsdError::invalid(
+-            dt,
+-            lexical,
+-            "time fields must be two ASCII digits",
+-        ));
+-    }
+-    let hour: u8 = hour_text
+-        .parse()
+-        .map_err(|_| XsdError::invalid(dt, lexical, "bad hour"))?;
+-    let minute: u8 = minute_text
+-        .parse()
+-        .map_err(|_| XsdError::invalid(dt, lexical, "bad minute"))?;
+-    // Reject a trailing-dot seconds lexical (e.g. "00.") — parse_decimal accepts it
+-    // as a valid decimal ("1.0") but it is not a valid XSD time seconds field.
+-    if second_text.ends_with('.') {
+-        return Err(XsdError::invalid(
+-            dt,
+-            lexical,
+-            "seconds has trailing decimal point",
+-        ));
+-    }
+-    // Reject a leading sign in the seconds field — seconds must be non-negative.
+-    if second_text.starts_with('-') || second_text.starts_with('+') {
+-        return Err(XsdError::invalid(
+-            dt,
+-            lexical,
+-            "seconds must not have a sign",
+-        ));
+-    }
+-    let second = parse_seconds(dt, lexical, second_text)?;
+-    // XSD has no leap seconds: seconds must be in [0, 60). Whole part >= 60 is
+-    // invalid; it is read off the two digits, which a deferred second still has.
+-    if whole_seconds >= "60" {
+-        return Err(XsdError::invalid(
+-            dt,
+-            lexical,
+-            "seconds out of range (must be < 60)",
+-        ));
+-    }
+-    if minute > 59 {
+-        return Err(XsdError::invalid(dt, lexical, "minute out of range"));
+-    }
+-    if hour > 24 {
+-        return Err(XsdError::invalid(dt, lexical, "hour out of range"));
+-    }
+-    // Hour 24 is only valid as exactly 24:00:00 (end-of-day sentinel). A deferred
+-    // second has significant digits past the decimal's scale, so it is not zero.
+-    if hour == 24 && (minute != 0 || !second.as_ref().is_ok_and(Decimal::is_zero)) {
+-        return Err(XsdError::invalid(
+-            dt,
+-            lexical,
+-            "hour 24 is only valid as 24:00:00",
+-        ));
+-    }
+-    Ok((hour, minute, second))
+-}
+-
+-/// `xsd:dateTime` = `date 'T' time tz?`.
+-pub fn parse_datetime(s: &str) -> Result<DateTime, XsdError> {
+-    let dt = XsdDatatype::DateTime;
+-    let (date_part, time_part) = s
+-        .split_once('T')
+-        .ok_or_else(|| XsdError::invalid(dt, s, "missing 'T'"))?;
+-    let (time_no_tz, tz) = split_tz(dt, s, time_part)?;
+-    let (year, month, day) = parse_ymd(dt, s, date_part)?;
+-    let (hour, minute, second) = parse_hms(dt, s, &time_no_tz)?;
+-    let (year, second) = (year?, second?);
+-    Ok(DateTime {
+-        year,
+-        month,
+-        day,
+-        hour,
+-        minute,
+-        second,
+-        tz,
+-    })
+-}
+-
+-/// `xsd:date` = `date tz?`.
+-pub fn parse_date(s: &str) -> Result<Date, XsdError> {
+-    let dt = XsdDatatype::Date;
+-    let (body, tz) = split_tz(dt, s, s)?;
+-    let (year, month, day) = parse_ymd(dt, s, &body)?;
+-    let year = year?;
+-    Ok(Date {
+-        year,
+-        month,
+-        day,
+-        tz,
+-    })
+-}
+-
+-/// `xsd:time` = `time tz?`.
+-pub fn parse_time(s: &str) -> Result<Time, XsdError> {
+-    let dt = XsdDatatype::Time;
+-    let (body, tz) = split_tz(dt, s, s)?;
+-    let (hour, minute, second) = parse_hms(dt, s, &body)?;
+-    let second = second?;
+-    Ok(Time {
+-        hour,
+-        minute,
+-        second,
+-        tz,
+-    })
+-}
+-
+-/// The numerals of one half of a duration lexical — the date part with
+-/// `designators` `Y`, `M`, `D` or the time part with `H`, `M`, `S` — indexed by
+-/// designator. Each designator follows a non-empty numeral and comes at most once,
+-/// in order; only the last (`S`) takes a fraction (`n.`, `.n` and `n.n` all read,
+-/// as `duSecondFrag` allows), which [`parse_seconds`] then validates. Anything else
+-/// is refused.
+-fn duration_fields<'a>(
+-    dt: XsdDatatype,
+-    lexical: &str,
+-    part: &'a str,
+-    designators: [u8; 3],
+-) -> Result<[Option<&'a str>; 3], XsdError> {
+-    let mut fields = [None; 3];
+-    let mut next = 0;
+-    let mut rest = part;
+-    while !rest.is_empty() {
+-        let fraction_allowed = designators.get(next..).is_some_and(|d| d.contains(&b'S'));
+-        let width = rest
+-            .bytes()
+-            .take_while(|byte| byte.is_ascii_digit() || (fraction_allowed && *byte == b'.'))
+-            .count();
+-        let (numeral, tail) = rest.split_at(width);
+-        let Some(&designator) = tail.as_bytes().first() else {
+-            return Err(XsdError::invalid(
+-                dt,
+-                lexical,
+-                "duration numeral without a designator",
+-            ));
+-        };
+-        let Some(index) = designators
+-            .iter()
+-            .skip(next)
+-            .position(|&d| d == designator)
+-            .map(|offset| next + offset)
+-        else {
+-            return Err(XsdError::invalid(
+-                dt,
+-                lexical,
+-                "duration designator out of order, repeated or unknown",
+-            ));
+-        };
+-        if numeral.is_empty() || (numeral.contains('.') && designators[index] != b'S') {
+-            return Err(XsdError::invalid(
+-                dt,
+-                lexical,
+-                "duration designator without a valid numeral",
+-            ));
+-        }
+-        fields[index] = Some(numeral);
+-        next = index + 1;
+-        // The designator is ASCII, so this is a char boundary.
+-        rest = &tail[1..];
+-    }
+-    Ok(fields)
+-}
+-
+-/// `xsd:duration` and subtypes: `[-]PnYnMnDTnHnMnS` (any component group optional,
+-/// at least one present; the `T` separates date from time components).
+-pub fn parse_duration(dt: XsdDatatype, s: &str) -> Result<Duration, XsdError> {
+-    let neg = s.starts_with('-');
+-    let body = s.strip_prefix('-').unwrap_or(s);
+-    let body = body
+-        .strip_prefix('P')
+-        .ok_or_else(|| XsdError::invalid(dt, s, "duration must start with 'P'"))?;
+-    let (date_part, time_part) = match body.split_once('T') {
+-        Some((d, t)) => (d, Some(t)),
+-        None => (body, None),
+-    };
+-
+-    // XSD 1.1 Part 2 pattern facets on the two named subtypes (§3.4.26–§3.4.27):
+-    // `yearMonthDuration` is `[^DT]*` — no day component and no time part at all;
+-    // `dayTimeDuration` is `[^YM]*(T.*)?` — no year/month component in the date
+-    // part (an `M` inside the *time* part denotes minutes and is unrestricted).
+-    // `xsd:duration` itself carries no pattern facet and accepts every component.
+-    match dt {
+-        XsdDatatype::YearMonthDuration if date_part.contains('D') || time_part.is_some() => {
+-            return Err(XsdError::invalid(
+-                dt,
+-                s,
+-                "yearMonthDuration must not have a day or time component",
+-            ));
+-        }
+-        XsdDatatype::DayTimeDuration if date_part.contains('Y') || date_part.contains('M') => {
+-            return Err(XsdError::invalid(
+-                dt,
+-                s,
+-                "dayTimeDuration must not have a year or month component",
+-            ));
+-        }
+-        _ => {}
+-    }
+-
+-    // The lexical grammar first (XSD 1.1 Part 2 §3.3.6.2, `durationLexicalRep`):
+-    // each designator at most once and in order, every designator after a
+-    // numeral, a fraction only on the seconds, at least one field, and a `T`
+-    // only before a time field. Only then are the numerals read as values, so a
+-    // numeral too wide for its field is out of range, never ill-formed.
+-    let [years, months_field, days] = duration_fields(dt, s, date_part, *b"YMD")?;
+-    let [hours, minutes, secs] = match time_part {
+-        Some(time_part) => {
+-            let fields = duration_fields(dt, s, time_part, *b"HMS")?;
+-            if fields.iter().all(Option::is_none) {
+-                return Err(XsdError::invalid(
+-                    dt,
+-                    s,
+-                    "'T' must be followed by a time component",
+-                ));
+-            }
+-            fields
+-        }
+-        None => [None; 3],
+-    };
+-    if years.is_none() && months_field.is_none() && days.is_none() && time_part.is_none() {
+-        return Err(XsdError::invalid(dt, s, "duration has no components"));
+-    }
+-    let sec_decimal = secs.map(|text| parse_seconds(dt, s, text)).transpose()?;
+-
+-    let numeral = |text: Option<&str>| -> Result<i64, XsdError> {
+-        text.map_or(Ok(0), |digits| {
+-            parse_numeral(dt, s, digits, "duration field beyond i64")
+-        })
+-    };
+-    let months_overflow = || XsdError::OutOfRange {
+-        datatype: dt,
+-        lexical: s.to_string(),
+-        reason: "duration months overflow",
+-    };
+-    let (years, months_field) = (numeral(years)?, numeral(months_field)?);
+-    let mut months = years
+-        .checked_mul(12)
+-        .and_then(|from_years| from_years.checked_add(months_field))
+-        .ok_or_else(months_overflow)?;
+-    // Every numeral fits `i64`, so the weighted sum fits `i128`.
+-    let seconds = i128::from(numeral(days)?) * SECS_PER_DAY
+-        + i128::from(numeral(hours)?) * 3600
+-        + i128::from(numeral(minutes)?) * 60;
+-    let (seconds, sec_frac) = match sec_decimal {
+-        Some(decimal) => {
+-            let decimal = decimal?;
+-            let whole =
+-                seconds
+-                    .checked_add(decimal.whole_part())
+-                    .ok_or_else(|| XsdError::OutOfRange {
+-                        datatype: dt,
+-                        lexical: s.to_string(),
+-                        reason: "duration seconds overflow",
+-                    })?;
+-            (whole, decimal.frac_part())
+-        }
+-        None => (seconds, Decimal::from_parts(0, 0)),
+-    };
+-
+-    // Combine whole + fractional seconds into one Decimal at the fraction's scale.
+-    let scale = sec_frac.scale();
+-    let combined = seconds
+-        .checked_mul(10i128.pow(u32::from(scale)))
+-        .and_then(|w| w.checked_add(sec_frac.mantissa()))
+-        .ok_or_else(|| XsdError::OutOfRange {
+-            datatype: dt,
+-            lexical: s.to_string(),
+-            reason: "duration seconds overflow",
+-        })?;
+-    let mut total_secs = Decimal::from_parts(combined, scale);
+-    if neg {
+-        months = months.checked_neg().ok_or_else(|| XsdError::OutOfRange {
+-            datatype: dt,
+-            lexical: s.to_string(),
+-            reason: "duration months overflow",
+-        })?;
+-        let negated_mantissa =
+-            total_secs
+-                .mantissa()
+-                .checked_neg()
+-                .ok_or_else(|| XsdError::OutOfRange {
+-                    datatype: dt,
+-                    lexical: s.to_string(),
+-                    reason: "duration seconds overflow",
+-                })?;
+-        total_secs = Decimal::from_parts(negated_mantissa, total_secs.scale());
+-    }
+-    Duration::new(months, total_secs, dt)
+-}
+-
+-// ── Gregorian family parsing ─────────────────────────────────────────────────────
+-
+-/// Parse a year part `[-]YYYY[Y...]` (no trailing components).
+-/// Returns `(signed_year, remaining_str_after_year_digits)`, the year deferred.
+-/// The year must be ≥4 digits; >4 digits must not have a leading zero.
+-fn parse_year_str<'a>(
+-    dt: XsdDatatype,
+-    lexical: &str,
+-    s: &'a str,
+-) -> Result<(Deferred<i64>, &'a str), XsdError> {
+-    let neg = s.starts_with('-');
+-    let digits_start = usize::from(neg);
+-    let rest = &s[digits_start..];
+-    // Find how many leading ASCII digits there are.
+-    let n_digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+-    if n_digits < 4 {
+-        return Err(XsdError::invalid(
+-            dt,
+-            lexical,
+-            "year must be at least 4 digits",
+-        ));
+-    }
+-    let year_digits = &rest[..n_digits];
+-    if n_digits > 4 && year_digits.starts_with('0') {
+-        return Err(XsdError::invalid(
+-            dt,
+-            lexical,
+-            "year wider than 4 digits must not have a leading zero",
+-        ));
+-    }
+-    let (year, _) = read_year(dt, lexical, neg, year_digits);
+-    let after = &rest[n_digits..];
+-    Ok((year, after))
+-}
+-
+-/// Max days per month with February = 29 (no year available; allow Feb 29).
+-/// Index 0 = January, index 11 = December.
+-const MONTH_MAX_DAYS_LEAP: [u8; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+-
+-/// A two-digit Gregorian field (`MM` or `DD`, XSD 1.1 Part 2 Appendix D): its largest
+-/// value and the refusals naming it.
+-struct TwoDigitField {
+-    /// The field's largest value; the smallest is `1`.
+-    max: u8,
+-    /// The refusal of a field that is not exactly two ASCII digits.
+-    width: &'static str,
+-    /// The refusal of a field outside `1..=max`.
+-    range: &'static str,
+-}
+-
+-/// `monthFrag ::= ('0' [1-9]) | ('1' [0-2])`.
+-const MONTH_FIELD: TwoDigitField = TwoDigitField {
+-    max: 12,
+-    width: "month must be exactly 2 digits",
+-    range: "month out of range (01-12)",
+-};
+-
+-/// `dayFrag ::= ('0' [1-9]) | ([12] digit) | ('3' [01])`.
+-const DAY_FIELD: TwoDigitField = TwoDigitField {
+-    max: 31,
+-    width: "day must be exactly 2 digits",
+-    range: "day out of range (01-31)",
+-};
+-
+-/// Parse a two-digit Gregorian field, returning its value in `1..=field.max`: the
+-/// one reading of `MM` and `DD`. Exactly two ASCII digits, so the value is read
+-/// off the two bytes and no signed or wider spelling can slip through.
+-fn parse_two_digit_field(
+-    dt: XsdDatatype,
+-    lexical: &str,
+-    s: &str,
+-    field: &TwoDigitField,
+-) -> Result<u8, XsdError> {
+-    let &[tens, units] = s.as_bytes() else {
+-        return Err(XsdError::invalid(dt, lexical, field.width));
+-    };
+-    if !tens.is_ascii_digit() || !units.is_ascii_digit() {
+-        return Err(XsdError::invalid(dt, lexical, field.width));
+-    }
+-    let value = (tens - b'0') * 10 + (units - b'0');
+-    if !(1..=field.max).contains(&value) {
+-        return Err(XsdError::invalid(dt, lexical, field.range));
+-    }
+-    Ok(value)
+-}
+-
+-/// Dispatch parser for all five Gregorian datatypes.
+-pub fn parse_gregorian(datatype: XsdDatatype, lexical: &str) -> Result<Gregorian, XsdError> {
+-    let dt = datatype;
+-    match dt {
+-        XsdDatatype::GYear => {
+-            // [-]YYYY[Y...][tz]
+-            let (body, tz) = split_tz(dt, lexical, lexical)?;
+-            let (year, after) = parse_year_str(dt, lexical, &body)?;
+-            if !after.is_empty() {
+-                return Err(XsdError::invalid(
+-                    dt,
+-                    lexical,
+-                    "unexpected content after gYear",
+-                ));
+-            }
+-            Ok(Gregorian {
+-                year: Some(year?),
+-                month: None,
+-                day: None,
+-                tz,
+-                datatype: dt,
+-            })
+-        }
+-        XsdDatatype::GMonth => {
+-            // --MM[tz]
+-            let (body, tz) = split_tz(dt, lexical, lexical)?;
+-            let s = body
+-                .strip_prefix("--")
+-                .ok_or_else(|| XsdError::invalid(dt, lexical, "gMonth must start with '--'"))?;
+-            // After stripping "--", s must be exactly "MM" (2 digits)
+-            if s.len() != 2 {
+-                return Err(XsdError::invalid(dt, lexical, "gMonth must be '--MM'"));
+-            }
+-            let month = parse_two_digit_field(dt, lexical, s, &MONTH_FIELD)?;
+-            Ok(Gregorian {
+-                year: None,
+-                month: Some(month),
+-                day: None,
+-                tz,
+-                datatype: dt,
+-            })
+-        }
+-        XsdDatatype::GDay => {
+-            // ---DD[tz]
+-            let (body, tz) = split_tz(dt, lexical, lexical)?;
+-            let s = body
+-                .strip_prefix("---")
+-                .ok_or_else(|| XsdError::invalid(dt, lexical, "gDay must start with '---'"))?;
+-            if s.len() != 2 {
+-                return Err(XsdError::invalid(dt, lexical, "gDay must be '---DD'"));
+-            }
+-            let day = parse_two_digit_field(dt, lexical, s, &DAY_FIELD)?;
+-            Ok(Gregorian {
+-                year: None,
+-                month: None,
+-                day: Some(day),
+-                tz,
+-                datatype: dt,
+-            })
+-        }
+-        XsdDatatype::GYearMonth => {
+-            // [-]YYYY[Y...]-MM[tz]
+-            let (body, tz) = split_tz(dt, lexical, lexical)?;
+-            let (year, after) = parse_year_str(dt, lexical, &body)?;
+-            // after must be "-MM"
+-            let mm_str = after.strip_prefix('-').ok_or_else(|| {
+-                XsdError::invalid(dt, lexical, "gYearMonth: expected '-MM' after year")
+-            })?;
+-            if mm_str.len() != 2 {
+-                return Err(XsdError::invalid(
+-                    dt,
+-                    lexical,
+-                    "gYearMonth: month part must be 2 digits",
+-                ));
+-            }
+-            let month = parse_two_digit_field(dt, lexical, mm_str, &MONTH_FIELD)?;
+-            Ok(Gregorian {
+-                year: Some(year?),
+-                month: Some(month),
+-                day: None,
+-                tz,
+-                datatype: dt,
+-            })
+-        }
+-        XsdDatatype::GMonthDay => {
+-            // --MM-DD[tz]
+-            let (body, tz) = split_tz(dt, lexical, lexical)?;
+-            let s = body
+-                .strip_prefix("--")
+-                .ok_or_else(|| XsdError::invalid(dt, lexical, "gMonthDay must start with '--'"))?;
+-            // s must be "MM-DD" — exactly 5 chars
+-            if s.len() != 5 || s.as_bytes()[2] != b'-' {
+-                return Err(XsdError::invalid(
+-                    dt,
+-                    lexical,
+-                    "gMonthDay must be '--MM-DD'",
+-                ));
+-            }
+-            let month = parse_two_digit_field(dt, lexical, &s[..2], &MONTH_FIELD)?;
+-            let day = parse_two_digit_field(dt, lexical, &s[3..5], &DAY_FIELD)?;
+-            // Validate day against month; use leap reference (Feb max = 29).
+-            let max_day = MONTH_MAX_DAYS_LEAP[(month - 1) as usize];
+-            if day > max_day {
+-                return Err(XsdError::invalid(dt, lexical, "day out of range for month"));
+-            }
+-            Ok(Gregorian {
+-                year: None,
+-                month: Some(month),
+-                day: Some(day),
+-                tz,
+-                datatype: dt,
+-            })
+-        }
+-        _ => Err(XsdError::invalid(dt, lexical, "not a Gregorian datatype")),
+-    }
+-}
+-
++/// Allocation-free temporal lexical/value-space classification.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum TemporalReadError {
++    /// The lexical form does not satisfy its datatype grammar.
++    Invalid { datatype: XsdDatatype, reason: &'static str },
++    /// A valid lexical exceeds the native value representation.
++    OutOfRange { datatype: XsdDatatype, reason: &'static str },
++    /// An inline value constructor refuses its component invariant.
++    ConstructorRange { datatype: XsdDatatype, reason: &'static str },
++}
++
++impl TemporalReadError {
++    fn invalid(datatype: XsdDatatype, _lexical: &str, reason: &'static str) -> Self {
++        Self::Invalid { datatype, reason }
++    }
++
++    fn from_constructor(error: XsdError) -> Self {
++        // Duration's constructor has only OutOfRange failures with empty text.
++        // Its String::new() owns no heap allocation, even on refusal.
++        match error {
++            XsdError::OutOfRange { datatype, lexical, reason } => {
++                assert!(lexical.is_empty(), "duration constructor has no lexical input");
++                Self::ConstructorRange { datatype, reason }
++            }
++            _ => unreachable!("duration constructor returns only a range error"),
++        }
++    }
++
++    /// Materialize the resident API's existing diagnostic only at its boundary.
++    #[must_use]
++    pub fn into_owned(self, lexical: &str) -> XsdError {
++        match self {
++            Self::Invalid { datatype, reason } => XsdError::invalid(datatype, lexical, reason),
++            Self::OutOfRange { datatype, reason } => XsdError::OutOfRange {
++                datatype, lexical: lexical.to_owned(), reason,
++            },
++            Self::ConstructorRange { datatype, reason } => XsdError::OutOfRange {
++                datatype, lexical: String::new(), reason,
++            },
++        }
++    }
++}
++
++/// Parse a supported temporal datatype without heap storage or owned error text.
++/// None means this datatype belongs to another native parser.
++///
++/// # Errors
++/// The inner result retains lexical versus native range refusal classification.
++pub fn read_temporal(
++    lexical: &str, datatype: XsdDatatype,
++) -> Option<Result<crate::XsdValue, TemporalReadError>> {
++    use XsdDatatype as D;
++    Some(match datatype {
++        D::DateTime => read_datetime(lexical).map(crate::XsdValue::DateTime),
++        D::Date => read_date(lexical).map(crate::XsdValue::Date),
++        D::Time => read_time(lexical).map(crate::XsdValue::Time),
++        D::Duration | D::DayTimeDuration | D::YearMonthDuration =>
++            read_duration(datatype, lexical).map(crate::XsdValue::Duration),
++        D::GYear | D::GMonth | D::GDay | D::GYearMonth | D::GMonthDay =>
++            read_gregorian(datatype, lexical).map(crate::XsdValue::Gregorian),
++        _ => return None,
++    })
++}
++
++/// Parse the existing resident dateTime surface.
++pub fn parse_datetime(lexical: &str) -> Result<DateTime, XsdError> {
++    read_datetime(lexical).map_err(|error| error.into_owned(lexical))
++}
++/// Parse the existing resident date surface.
++pub fn parse_date(lexical: &str) -> Result<Date, XsdError> {
++    read_date(lexical).map_err(|error| error.into_owned(lexical))
++}
++/// Parse the existing resident time surface.
++pub fn parse_time(lexical: &str) -> Result<Time, XsdError> {
++    read_time(lexical).map_err(|error| error.into_owned(lexical))
++}
++/// Parse the existing resident duration surface.
++pub fn parse_duration(datatype: XsdDatatype, lexical: &str) -> Result<Duration, XsdError> {
++    read_duration(datatype, lexical).map_err(|error| error.into_owned(lexical))
++}
++/// Parse the existing resident Gregorian surface.
++pub fn parse_gregorian(datatype: XsdDatatype, lexical: &str) -> Result<Gregorian, XsdError> {
++    read_gregorian(datatype, lexical).map_err(|error| error.into_owned(lexical))
++}
++
++/// Split a trailing timezone (`Z`, `+hh:mm`, `-hh:mm`) off the time portion. Returns
++/// `(body_without_tz, tz_minutes_option)`.
++fn split_tz<'a>(dt: XsdDatatype, lexical: &str, s: &'a str) -> Result<(&'a str, Option<i32>), TemporalReadError> {
++    if let Some(body) = s.strip_suffix('Z') {
++        return Ok((body, Some(0)));
++    }
++    // A tz sign is the last '+' or '-' AND must look like "±hh:mm" (len 6). The
++    // split is checked, so an offset inside a multi-byte character is no
++    // timezone and the body's own parse refuses the lexical. Past that split,
++    // the ASCII sign and ':' make every field slice below a char boundary.
++    if let Some((body, tail)) = s.len().checked_sub(6).and_then(|at| s.split_at_checked(at)) {
++        let sign = tail.as_bytes()[0];
++        if (sign == b'+' || sign == b'-') && tail.as_bytes()[3] == b':' {
++            // `i32::from_str` also takes a sign, so "+-1:00" would read an hour
++            // of -1: both fields are exactly two ASCII digits.
++            if !all_ascii_digits(&tail[1..3]) || !all_ascii_digits(&tail[4..6]) {
++                return Err(TemporalReadError::invalid(
++                    dt,
++                    lexical,
++                    "timezone fields must be two digits",
++                ));
++            }
++            let hh: i32 = tail[1..3]
++                .parse()
++                .map_err(|_| TemporalReadError::invalid(dt, lexical, "bad timezone hour"))?;
++            let mm: i32 = tail[4..6]
++                .parse()
++                .map_err(|_| TemporalReadError::invalid(dt, lexical, "bad timezone minute"))?;
++            if hh > 14 || mm > 59 {
++                return Err(TemporalReadError::invalid(dt, lexical, "timezone out of range"));
++            }
++            let mut off = hh * 60 + mm;
++            if sign == b'-' {
++                off = -off;
++            }
++            if off.abs() > MAX_TZ_MIN {
++                return Err(TemporalReadError::invalid(dt, lexical, "timezone exceeds ±14:00"));
++            }
++            return Ok((body, Some(off)));
++        }
++    }
++    Ok((s, None))
++}
++
++/// Whether `text` is non-empty and all ASCII digits.
++fn all_ascii_digits(text: &str) -> bool {
++    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
++}
++
++/// A lexically valid numeral (`digits`, every byte an ASCII digit) read into a
++/// native integer. A numeral too wide for `T` is still in the lexical space —
++/// XSD's years and duration fields are unbounded — so that failure is
++/// [`TemporalReadError::OutOfRange`], never [`TemporalReadError::Invalid`].
++fn parse_numeral<T: std::str::FromStr>(
++    dt: XsdDatatype,
++    _lexical: &str,
++    digits: &str,
++    reason: &'static str,
++) -> Result<T, TemporalReadError> {
++    debug_assert!(all_ascii_digits(digits), "{digits:?} is a numeral");
++    digits.parse().map_err(|_| TemporalReadError::OutOfRange {
++        datatype: dt,
++        reason,
++    })
++}
++
++/// A field that is in the lexical space but whose value may lie beyond this
++/// crate's representable range. Its [`TemporalReadError::OutOfRange`] is held until the
++/// rest of the lexical form has been checked, so a malformed lexical is never
++/// reported as merely out of range.
++type Deferred<T> = Result<T, TemporalReadError>;
++
++/// A seconds field read by [`parse_decimal`], reported against the temporal
++/// datatype `dt`. A malformed field is [`TemporalReadError::Invalid`] at once. XSD
++/// allows any number of fractional digits, so a well-formed field past the
++/// decimal's scale is first read again without its trailing zeros (the same
++/// value), and only a field whose significant digits still do not fit is a
++/// deferred [`TemporalReadError::OutOfRange`] — never a zero.
++fn parse_seconds(
++    dt: XsdDatatype, lexical: &str, text: &str,
++) -> Result<Deferred<Decimal>, TemporalReadError> {
++    let out_of_range = || TemporalReadError::OutOfRange {
++        datatype: dt, reason: "seconds beyond the representable decimal scale",
++    };
++    match crate::numeric::read_decimal(text) {
++        Ok(seconds) => Ok(Ok(seconds)),
++        Err(crate::numeric::NumericReadError::OutOfRange(_)) => {
++            let trimmed = if text.contains('.') {
++                let without_zeros = text.trim_end_matches('0');
++                without_zeros.strip_suffix('.').unwrap_or(without_zeros)
++            } else { text };
++            Ok(crate::numeric::read_decimal(trimmed).map_err(|_| out_of_range()))
++        }
++        Err(crate::numeric::NumericReadError::Invalid(_)) => {
++            Err(TemporalReadError::invalid(dt, lexical, "bad seconds"))
++        }
++    }
++}
++
++/// A year numeral (`digits`, four or more ASCII digits, negated when `neg`): its
++/// value, deferred when it does not fit `i64`, and a year with the same leap-ness
++/// for the calendar checks — 400 divides 10 000, so the last four digits decide it.
++fn read_year(dt: XsdDatatype, lexical: &str, neg: bool, digits: &str) -> (Deferred<i64>, i64) {
++    let sign = |magnitude: i64| if neg { -magnitude } else { magnitude };
++    let value = parse_numeral::<i64>(dt, lexical, digits, "year beyond i64").map(sign);
++    let calendar_year = value.as_ref().map_or_else(
++        |_| {
++            sign(
++                digits[digits.len().saturating_sub(4)..]
++                    .parse()
++                    .unwrap_or(0),
++            )
++        },
++        |year| *year,
++    );
++    (value, calendar_year)
++}
++
++/// Whether `year` is a leap year of the proleptic Gregorian calendar: divisible
++/// by 4, except centuries unless also divisible by 400 (XSD 1.1 Part 2
++/// Appendix D.3, whose calendar every date grammar in the workspace uses).
++/// Negative years follow the same rule; year 0 (1 BCE) is a leap year.
++#[must_use]
++pub const fn is_leap(year: i64) -> bool {
++    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
++}
++
++/// Number of days in a given month for a proleptic-Gregorian year.
++/// Uses the signed year directly; negative years follow the same leap-year rule as
++/// positive ones ([`is_leap`]). A `month` outside 1..=12 answers `0`, which no
++/// day number satisfies, so a caller range-checking a day against it refuses.
++#[must_use]
++pub const fn days_in_month(year: i64, month: u8) -> u8 {
++    match month {
++        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
++        4 | 6 | 9 | 11 => 30,
++        2 if is_leap(year) => 29,
++        2 => 28,
++        _ => 0, // invalid month — caught by caller before reaching here
++    }
++}
++
++/// Parse `[-]YYYY[Y...]-MM-DD` into `(year, month, day)`, the year deferred.
++fn parse_ymd(dt: XsdDatatype, lexical: &str, s: &str) -> Result<(Deferred<i64>, u8, u8), TemporalReadError> {
++    let neg = s.starts_with('-');
++    let body = if neg { &s[1..] } else { s };
++    let Some((year_text, month_day)) = body.split_once('-') else {
++        return Err(TemporalReadError::invalid(dt, lexical, "expected YYYY-MM-DD"));
++    };
++    let Some((month_text, day_text)) = month_day.split_once('-') else {
++        return Err(TemporalReadError::invalid(dt, lexical, "expected YYYY-MM-DD"));
++    };
++    if day_text.contains('-') {
++        return Err(TemporalReadError::invalid(dt, lexical, "expected YYYY-MM-DD"));
++    }
++    if year_text.len() < 4 || month_text.len() != 2 || day_text.len() != 2 {
++        return Err(TemporalReadError::invalid(dt, lexical, "bad date field widths"));
++    }
++    // `from_str` also takes a leading `+`, which no date field carries.
++    if !all_ascii_digits(year_text) || !all_ascii_digits(month_text) || !all_ascii_digits(day_text)
++    {
++        return Err(TemporalReadError::invalid(
++            dt,
++            lexical,
++            "date fields must be ASCII digits",
++        ));
++    }
++    // XSD 1.1 §3.3.7: a year wider than 4 digits must not have a leading zero.
++    // Exactly 4 digits with a leading zero (e.g. "0044", "0000") are valid.
++    if year_text.len() > 4 && year_text.starts_with('0') {
++        return Err(TemporalReadError::invalid(
++            dt,
++            lexical,
++            "year wider than 4 digits must not have a leading zero",
++        ));
++    }
++    let (year, calendar_year) = read_year(dt, lexical, neg, year_text);
++    let month: u8 = month_text
++        .parse()
++        .map_err(|_| TemporalReadError::invalid(dt, lexical, "bad month"))?;
++    let day: u8 = day_text
++        .parse()
++        .map_err(|_| TemporalReadError::invalid(dt, lexical, "bad day"))?;
++    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
++        return Err(TemporalReadError::invalid(dt, lexical, "month/day out of range"));
++    }
++    if day > days_in_month(calendar_year, month) {
++        return Err(TemporalReadError::invalid(dt, lexical, "day out of range for month"));
++    }
++    Ok((year, month, day))
++}
++
++/// Parse `hh:mm:ss(.fff)?` into `(hour, minute, second)`, the second deferred.
++fn parse_hms(
++    dt: XsdDatatype,
++    lexical: &str,
++    s: &str,
++) -> Result<(u8, u8, Deferred<Decimal>), TemporalReadError> {
++    let Some((hour_text, minute_second)) = s.split_once(':') else {
++        return Err(TemporalReadError::invalid(dt, lexical, "expected hh:mm:ss"));
++    };
++    let Some((minute_text, second_text)) = minute_second.split_once(':') else {
++        return Err(TemporalReadError::invalid(dt, lexical, "expected hh:mm:ss"));
++    };
++    if second_text.contains(':') {
++        return Err(TemporalReadError::invalid(dt, lexical, "expected hh:mm:ss"));
++    }
++    if hour_text.len() != 2 || minute_text.len() != 2 {
++        return Err(TemporalReadError::invalid(dt, lexical, "bad time field widths"));
++    }
++    // `from_str` also takes a leading `+`; the seconds field is two digits and
++    // an optional fraction (`ss(.s+)?`), never `5` or `005`.
++    let (whole_seconds, _) = second_text.split_once('.').unwrap_or((second_text, ""));
++    if !all_ascii_digits(hour_text)
++        || !all_ascii_digits(minute_text)
++        || whole_seconds.len() != 2
++        || !all_ascii_digits(whole_seconds)
++    {
++        return Err(TemporalReadError::invalid(
++            dt,
++            lexical,
++            "time fields must be two ASCII digits",
++        ));
++    }
++    let hour: u8 = hour_text
++        .parse()
++        .map_err(|_| TemporalReadError::invalid(dt, lexical, "bad hour"))?;
++    let minute: u8 = minute_text
++        .parse()
++        .map_err(|_| TemporalReadError::invalid(dt, lexical, "bad minute"))?;
++    // Reject a trailing-dot seconds lexical (e.g. "00.") — parse_decimal accepts it
++    // as a valid decimal ("1.0") but it is not a valid XSD time seconds field.
++    if second_text.ends_with('.') {
++        return Err(TemporalReadError::invalid(
++            dt,
++            lexical,
++            "seconds has trailing decimal point",
++        ));
++    }
++    // Reject a leading sign in the seconds field — seconds must be non-negative.
++    if second_text.starts_with('-') || second_text.starts_with('+') {
++        return Err(TemporalReadError::invalid(
++            dt,
++            lexical,
++            "seconds must not have a sign",
++        ));
++    }
++    let second = parse_seconds(dt, lexical, second_text)?;
++    // XSD has no leap seconds: seconds must be in [0, 60). Whole part >= 60 is
++    // invalid; it is read off the two digits, which a deferred second still has.
++    if whole_seconds >= "60" {
++        return Err(TemporalReadError::invalid(
++            dt,
++            lexical,
++            "seconds out of range (must be < 60)",
++        ));
++    }
++    if minute > 59 {
++        return Err(TemporalReadError::invalid(dt, lexical, "minute out of range"));
++    }
++    if hour > 24 {
++        return Err(TemporalReadError::invalid(dt, lexical, "hour out of range"));
++    }
++    // Hour 24 is only valid as exactly 24:00:00 (end-of-day sentinel). A deferred
++    // second has significant digits past the decimal's scale, so it is not zero.
++    if hour == 24 && (minute != 0 || !second.as_ref().is_ok_and(Decimal::is_zero)) {
++        return Err(TemporalReadError::invalid(
++            dt,
++            lexical,
++            "hour 24 is only valid as 24:00:00",
++        ));
++    }
++    Ok((hour, minute, second))
++}
++
++/// `xsd:dateTime` = `date 'T' time tz?`.
++fn read_datetime(s: &str) -> Result<DateTime, TemporalReadError> {
++    let dt = XsdDatatype::DateTime;
++    let (date_part, time_part) = s
++        .split_once('T')
++        .ok_or_else(|| TemporalReadError::invalid(dt, s, "missing 'T'"))?;
++    let (time_no_tz, tz) = split_tz(dt, s, time_part)?;
++    let (year, month, day) = parse_ymd(dt, s, date_part)?;
++    let (hour, minute, second) = parse_hms(dt, s, time_no_tz)?;
++    let (year, second) = (year?, second?);
++    Ok(DateTime {
++        year,
++        month,
++        day,
++        hour,
++        minute,
++        second,
++        tz,
++    })
++}
++
++/// `xsd:date` = `date tz?`.
++fn read_date(s: &str) -> Result<Date, TemporalReadError> {
++    let dt = XsdDatatype::Date;
++    let (body, tz) = split_tz(dt, s, s)?;
++    let (year, month, day) = parse_ymd(dt, s, body)?;
++    let year = year?;
++    Ok(Date {
++        year,
++        month,
++        day,
++        tz,
++    })
++}
++
++/// `xsd:time` = `time tz?`.
++fn read_time(s: &str) -> Result<Time, TemporalReadError> {
++    let dt = XsdDatatype::Time;
++    let (body, tz) = split_tz(dt, s, s)?;
++    let (hour, minute, second) = parse_hms(dt, s, body)?;
++    let second = second?;
++    Ok(Time {
++        hour,
++        minute,
++        second,
++        tz,
++    })
++}
++
++/// The numerals of one half of a duration lexical — the date part with
++/// `designators` `Y`, `M`, `D` or the time part with `H`, `M`, `S` — indexed by
++/// designator. Each designator follows a non-empty numeral and comes at most once,
++/// in order; only the last (`S`) takes a fraction (`n.`, `.n` and `n.n` all read,
++/// as `duSecondFrag` allows), which [`parse_seconds`] then validates. Anything else
++/// is refused.
++fn duration_fields<'a>(
++    dt: XsdDatatype,
++    lexical: &str,
++    part: &'a str,
++    designators: [u8; 3],
++) -> Result<[Option<&'a str>; 3], TemporalReadError> {
++    let mut fields = [None; 3];
++    let mut next = 0;
++    let mut rest = part;
++    while !rest.is_empty() {
++        let fraction_allowed = designators.get(next..).is_some_and(|d| d.contains(&b'S'));
++        let width = rest
++            .bytes()
++            .take_while(|byte| byte.is_ascii_digit() || (fraction_allowed && *byte == b'.'))
++            .count();
++        let (numeral, tail) = rest.split_at(width);
++        let Some(&designator) = tail.as_bytes().first() else {
++            return Err(TemporalReadError::invalid(
++                dt,
++                lexical,
++                "duration numeral without a designator",
++            ));
++        };
++        let Some(index) = designators
++            .iter()
++            .skip(next)
++            .position(|&d| d == designator)
++            .map(|offset| next + offset)
++        else {
++            return Err(TemporalReadError::invalid(
++                dt,
++                lexical,
++                "duration designator out of order, repeated or unknown",
++            ));
++        };
++        if numeral.is_empty() || (numeral.contains('.') && designators[index] != b'S') {
++            return Err(TemporalReadError::invalid(
++                dt,
++                lexical,
++                "duration designator without a valid numeral",
++            ));
++        }
++        fields[index] = Some(numeral);
++        next = index + 1;
++        // The designator is ASCII, so this is a char boundary.
++        rest = &tail[1..];
++    }
++    Ok(fields)
++}
++
++/// `xsd:duration` and subtypes: `[-]PnYnMnDTnHnMnS` (any component group optional,
++/// at least one present; the `T` separates date from time components).
++fn read_duration(dt: XsdDatatype, s: &str) -> Result<Duration, TemporalReadError> {
++    let neg = s.starts_with('-');
++    let body = s.strip_prefix('-').unwrap_or(s);
++    let body = body
++        .strip_prefix('P')
++        .ok_or_else(|| TemporalReadError::invalid(dt, s, "duration must start with 'P'"))?;
++    let (date_part, time_part) = match body.split_once('T') {
++        Some((d, t)) => (d, Some(t)),
++        None => (body, None),
++    };
++
++    // XSD 1.1 Part 2 pattern facets on the two named subtypes (§3.4.26–§3.4.27):
++    // `yearMonthDuration` is `[^DT]*` — no day component and no time part at all;
++    // `dayTimeDuration` is `[^YM]*(T.*)?` — no year/month component in the date
++    // part (an `M` inside the *time* part denotes minutes and is unrestricted).
++    // `xsd:duration` itself carries no pattern facet and accepts every component.
++    match dt {
++        XsdDatatype::YearMonthDuration if date_part.contains('D') || time_part.is_some() => {
++            return Err(TemporalReadError::invalid(
++                dt,
++                s,
++                "yearMonthDuration must not have a day or time component",
++            ));
++        }
++        XsdDatatype::DayTimeDuration if date_part.contains('Y') || date_part.contains('M') => {
++            return Err(TemporalReadError::invalid(
++                dt,
++                s,
++                "dayTimeDuration must not have a year or month component",
++            ));
++        }
++        _ => {}
++    }
++
++    // The lexical grammar first (XSD 1.1 Part 2 §3.3.6.2, `durationLexicalRep`):
++    // each designator at most once and in order, every designator after a
++    // numeral, a fraction only on the seconds, at least one field, and a `T`
++    // only before a time field. Only then are the numerals read as values, so a
++    // numeral too wide for its field is out of range, never ill-formed.
++    let [years, months_field, days] = duration_fields(dt, s, date_part, *b"YMD")?;
++    let [hours, minutes, secs] = match time_part {
++        Some(time_part) => {
++            let fields = duration_fields(dt, s, time_part, *b"HMS")?;
++            if fields.iter().all(Option::is_none) {
++                return Err(TemporalReadError::invalid(
++                    dt,
++                    s,
++                    "'T' must be followed by a time component",
++                ));
++            }
++            fields
++        }
++        None => [None; 3],
++    };
++    if years.is_none() && months_field.is_none() && days.is_none() && time_part.is_none() {
++        return Err(TemporalReadError::invalid(dt, s, "duration has no components"));
++    }
++    let sec_decimal = secs.map(|text| parse_seconds(dt, s, text)).transpose()?;
++
++    let numeral = |text: Option<&str>| -> Result<i64, TemporalReadError> {
++        text.map_or(Ok(0), |digits| {
++            parse_numeral(dt, s, digits, "duration field beyond i64")
++        })
++    };
++    let months_overflow = || TemporalReadError::OutOfRange {
++        datatype: dt,
++        reason: "duration months overflow",
++    };
++    let (years, months_field) = (numeral(years)?, numeral(months_field)?);
++    let mut months = years
++        .checked_mul(12)
++        .and_then(|from_years| from_years.checked_add(months_field))
++        .ok_or_else(months_overflow)?;
++    // Every numeral fits `i64`, so the weighted sum fits `i128`.
++    let seconds = i128::from(numeral(days)?) * SECS_PER_DAY
++        + i128::from(numeral(hours)?) * 3600
++        + i128::from(numeral(minutes)?) * 60;
++    let (seconds, sec_frac) = match sec_decimal {
++        Some(decimal) => {
++            let decimal = decimal?;
++            let whole =
++                seconds
++                    .checked_add(decimal.whole_part())
++                    .ok_or_else(|| TemporalReadError::OutOfRange {
++                        datatype: dt,
++                        reason: "duration seconds overflow",
++                    })?;
++            (whole, decimal.frac_part())
++        }
++        None => (seconds, Decimal::from_parts(0, 0)),
++    };
++
++    // Combine whole + fractional seconds into one Decimal at the fraction's scale.
++    let scale = sec_frac.scale();
++    let combined = seconds
++        .checked_mul(10i128.pow(u32::from(scale)))
++        .and_then(|w| w.checked_add(sec_frac.mantissa()))
++        .ok_or_else(|| TemporalReadError::OutOfRange {
++            datatype: dt,
++            reason: "duration seconds overflow",
++        })?;
++    let mut total_secs = Decimal::from_parts(combined, scale);
++    if neg {
++        months = months.checked_neg().ok_or_else(|| TemporalReadError::OutOfRange {
++            datatype: dt,
++            reason: "duration months overflow",
++        })?;
++        let negated_mantissa =
++            total_secs
++                .mantissa()
++                .checked_neg()
++                .ok_or_else(|| TemporalReadError::OutOfRange {
++                    datatype: dt,
++                    reason: "duration seconds overflow",
++                })?;
++        total_secs = Decimal::from_parts(negated_mantissa, total_secs.scale());
++    }
++    Duration::new(months, total_secs, dt).map_err(TemporalReadError::from_constructor)
++}
++
++// ── Gregorian family parsing ─────────────────────────────────────────────────────
++
++/// Parse a year part `[-]YYYY[Y...]` (no trailing components).
++/// Returns `(signed_year, remaining_str_after_year_digits)`, the year deferred.
++/// The year must be ≥4 digits; >4 digits must not have a leading zero.
++fn parse_year_str<'a>(
++    dt: XsdDatatype,
++    lexical: &str,
++    s: &'a str,
++) -> Result<(Deferred<i64>, &'a str), TemporalReadError> {
++    let neg = s.starts_with('-');
++    let digits_start = usize::from(neg);
++    let rest = &s[digits_start..];
++    // Find how many leading ASCII digits there are.
++    let n_digits = rest.bytes().take_while(u8::is_ascii_digit).count();
++    if n_digits < 4 {
++        return Err(TemporalReadError::invalid(
++            dt,
++            lexical,
++            "year must be at least 4 digits",
++        ));
++    }
++    let year_digits = &rest[..n_digits];
++    if n_digits > 4 && year_digits.starts_with('0') {
++        return Err(TemporalReadError::invalid(
++            dt,
++            lexical,
++            "year wider than 4 digits must not have a leading zero",
++        ));
++    }
++    let (year, _) = read_year(dt, lexical, neg, year_digits);
++    let after = &rest[n_digits..];
++    Ok((year, after))
++}
++
++/// Max days per month with February = 29 (no year available; allow Feb 29).
++/// Index 0 = January, index 11 = December.
++const MONTH_MAX_DAYS_LEAP: [u8; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
++
++/// A two-digit Gregorian field (`MM` or `DD`, XSD 1.1 Part 2 Appendix D): its largest
++/// value and the refusals naming it.
++struct TwoDigitField {
++    /// The field's largest value; the smallest is `1`.
++    max: u8,
++    /// The refusal of a field that is not exactly two ASCII digits.
++    width: &'static str,
++    /// The refusal of a field outside `1..=max`.
++    range: &'static str,
++}
++
++/// `monthFrag ::= ('0' [1-9]) | ('1' [0-2])`.
++const MONTH_FIELD: TwoDigitField = TwoDigitField {
++    max: 12,
++    width: "month must be exactly 2 digits",
++    range: "month out of range (01-12)",
++};
++
++/// `dayFrag ::= ('0' [1-9]) | ([12] digit) | ('3' [01])`.
++const DAY_FIELD: TwoDigitField = TwoDigitField {
++    max: 31,
++    width: "day must be exactly 2 digits",
++    range: "day out of range (01-31)",
++};
++
++/// Parse a two-digit Gregorian field, returning its value in `1..=field.max`: the
++/// one reading of `MM` and `DD`. Exactly two ASCII digits, so the value is read
++/// off the two bytes and no signed or wider spelling can slip through.
++fn parse_two_digit_field(
++    dt: XsdDatatype,
++    lexical: &str,
++    s: &str,
++    field: &TwoDigitField,
++) -> Result<u8, TemporalReadError> {
++    let &[tens, units] = s.as_bytes() else {
++        return Err(TemporalReadError::invalid(dt, lexical, field.width));
++    };
++    if !tens.is_ascii_digit() || !units.is_ascii_digit() {
++        return Err(TemporalReadError::invalid(dt, lexical, field.width));
++    }
++    let value = (tens - b'0') * 10 + (units - b'0');
++    if !(1..=field.max).contains(&value) {
++        return Err(TemporalReadError::invalid(dt, lexical, field.range));
++    }
++    Ok(value)
++}
++
++/// Dispatch parser for all five Gregorian datatypes.
++fn read_gregorian(datatype: XsdDatatype, lexical: &str) -> Result<Gregorian, TemporalReadError> {
++    let dt = datatype;
++    match dt {
++        XsdDatatype::GYear => {
++            // [-]YYYY[Y...][tz]
++            let (body, tz) = split_tz(dt, lexical, lexical)?;
++            let (year, after) = parse_year_str(dt, lexical, body)?;
++            if !after.is_empty() {
++                return Err(TemporalReadError::invalid(
++                    dt,
++                    lexical,
++                    "unexpected content after gYear",
++                ));
++            }
++            Ok(Gregorian {
++                year: Some(year?),
++                month: None,
++                day: None,
++                tz,
++                datatype: dt,
++            })
++        }
++        XsdDatatype::GMonth => {
++            // --MM[tz]
++            let (body, tz) = split_tz(dt, lexical, lexical)?;
++            let s = body
++                .strip_prefix("--")
++                .ok_or_else(|| TemporalReadError::invalid(dt, lexical, "gMonth must start with '--'"))?;
++            // After stripping "--", s must be exactly "MM" (2 digits)
++            if s.len() != 2 {
++                return Err(TemporalReadError::invalid(dt, lexical, "gMonth must be '--MM'"));
++            }
++            let month = parse_two_digit_field(dt, lexical, s, &MONTH_FIELD)?;
++            Ok(Gregorian {
++                year: None,
++                month: Some(month),
++                day: None,
++                tz,
++                datatype: dt,
++            })
++        }
++        XsdDatatype::GDay => {
++            // ---DD[tz]
++            let (body, tz) = split_tz(dt, lexical, lexical)?;
++            let s = body
++                .strip_prefix("---")
++                .ok_or_else(|| TemporalReadError::invalid(dt, lexical, "gDay must start with '---'"))?;
++            if s.len() != 2 {
++                return Err(TemporalReadError::invalid(dt, lexical, "gDay must be '---DD'"));
++            }
++            let day = parse_two_digit_field(dt, lexical, s, &DAY_FIELD)?;
++            Ok(Gregorian {
++                year: None,
++                month: None,
++                day: Some(day),
++                tz,
++                datatype: dt,
++            })
++        }
++        XsdDatatype::GYearMonth => {
++            // [-]YYYY[Y...]-MM[tz]
++            let (body, tz) = split_tz(dt, lexical, lexical)?;
++            let (year, after) = parse_year_str(dt, lexical, body)?;
++            // after must be "-MM"
++            let mm_str = after.strip_prefix('-').ok_or_else(|| {
++                TemporalReadError::invalid(dt, lexical, "gYearMonth: expected '-MM' after year")
++            })?;
++            if mm_str.len() != 2 {
++                return Err(TemporalReadError::invalid(
++                    dt,
++                    lexical,
++                    "gYearMonth: month part must be 2 digits",
++                ));
++            }
++            let month = parse_two_digit_field(dt, lexical, mm_str, &MONTH_FIELD)?;
++            Ok(Gregorian {
++                year: Some(year?),
++                month: Some(month),
++                day: None,
++                tz,
++                datatype: dt,
++            })
++        }
++        XsdDatatype::GMonthDay => {
++            // --MM-DD[tz]
++            let (body, tz) = split_tz(dt, lexical, lexical)?;
++            let s = body
++                .strip_prefix("--")
++                .ok_or_else(|| TemporalReadError::invalid(dt, lexical, "gMonthDay must start with '--'"))?;
++            // s must be "MM-DD" — exactly 5 chars
++            if s.len() != 5 || s.as_bytes()[2] != b'-' {
++                return Err(TemporalReadError::invalid(
++                    dt,
++                    lexical,
++                    "gMonthDay must be '--MM-DD'",
++                ));
++            }
++            let month = parse_two_digit_field(dt, lexical, &s[..2], &MONTH_FIELD)?;
++            let day = parse_two_digit_field(dt, lexical, &s[3..5], &DAY_FIELD)?;
++            // Validate day against month; use leap reference (Feb max = 29).
++            let max_day = MONTH_MAX_DAYS_LEAP[(month - 1) as usize];
++            if day > max_day {
++                return Err(TemporalReadError::invalid(dt, lexical, "day out of range for month"));
++            }
++            Ok(Gregorian {
++                year: None,
++                month: Some(month),
++                day: Some(day),
++                tz,
++                datatype: dt,
++            })
++        }
++        _ => Err(TemporalReadError::invalid(dt, lexical, "not a Gregorian datatype")),
++    }
++}
++
+ // ── Comparison (XSD partial order) ───────────────────────────────────────────────
+ 
+ /// The naive whole-seconds offset (timezone NOT applied) on the proleptic timeline.
+@@ -3979,7 +4049,8 @@
+     #[test]
+     fn two_digit_fields_refuse_outside_their_range_and_accept_its_edges() {
+         let read = |field: &TwoDigitField, text: &str| {
+-            parse_two_digit_field(XsdDatatype::GMonth, "--00", text, field)
++            parse_two_digit_field(XsdDatatype::GMonth, "--00", text, field)
++                .map_err(|error| error.into_owned("--00"))
+         };
+         for (field, low, high, above) in [
+             (&MONTH_FIELD, "01", "12", "13"),

@@ -1,0 +1,10 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 16.87s
+     Running tests/ir_zero_alloc.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-core/c5bb58b25fc5cd0d/out/ir_zero_alloc-c5bb58b25fc5cd0d)
+
+running 1 test
+test destructive_term_drop_allocates_no_traversal_storage has been running for over 60 seconds
+error: test failed, to rerun pass `-p purrdf-core --test ir_zero_alloc`
+
+Caused by:
+  process didn't exit successfully: `/opt/purrdf-508-qualification/build/debug/build/purrdf-core/c5bb58b25fc5cd0d/out/ir_zero_alloc-c5bb58b25fc5cd0d destructive_term_drop_allocates_no_traversal_storage` (signal: 15, SIGTERM: termination signal)

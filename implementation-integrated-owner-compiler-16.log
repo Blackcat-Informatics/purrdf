@@ -1,0 +1,1764 @@
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+error[E0428]: the name `for_each_expression_mut_with_memory` is defined multiple times
+   --> crates/sparql-algebra/src/walk.rs:668:1
+    |
+642 | / pub fn for_each_expression_mut_with_memory<'e, S, E>(
+643 | |     roots: impl IntoIterator<Item = &'e mut Expression>,
+644 | |     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+645 | |     mut visit: impl FnMut(&mut Expression, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+...   |
+660 | |     pending.release_admitted(memory).map_err(MutationError::Storage)
+661 | | }
+    | |_- previous definition of the value `for_each_expression_mut_with_memory` here
+...
+668 | / pub fn for_each_expression_mut_with_memory<'e, S, E>(
+669 | |     roots: impl IntoIterator<Item = &'e mut Expression>,
+670 | |     mut visit: impl FnMut(&mut Expression, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+671 | |     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+...   |
+694 | |     Ok(())
+695 | | }
+    | |_^ `for_each_expression_mut_with_memory` redefined here
+    |
+    = note: `for_each_expression_mut_with_memory` must be defined only once in the value namespace of this module
+
+error[E0425]: cannot find type `Function` in this scope
+   --> crates/sparql-algebra/src/owned.rs:636:6
+    |
+636 | impl Function {
+    |      ^^^^^^^^ not found in this scope
+    |
+help: consider importing this enum through its public re-export
+    |
+  6 + use crate::Function;
+    |
+
+error[E0425]: cannot find value `STRING` in module `purrdf_xsd::datatype`
+   --> crates/sparql-algebra/src/parser/machine.rs:683:78
+    |
+683 |                         let datatype = self.named_node(purrdf_xsd::datatype::STRING)?;
+    |                                                                              ^^^^^^ not found in `purrdf_xsd::datatype`
+
+error: unnecessary qualification
+  --> crates/sparql-algebra/src/algebra.rs:96:28
+   |
+96 |         let mut resident = purrdf_lex::allocation::Resident;
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-qualifications` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+   |
+96 -         let mut resident = purrdf_lex::allocation::Resident;
+96 +         let mut resident = Resident;
+   |
+
+error: unnecessary qualification
+  --> crates/sparql-algebra/src/algebra.rs:97:26
+   |
+97 |         let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+   |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+97 -         let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+97 +         let mut memory = Memory::new(&mut resident);
+   |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/algebra.rs:105:33
+    |
+105 |     pub fn parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(raw: &str, memory: &mut purrdf_lex::allocation::Memory<...
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+105 -     pub fn parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(raw: &str, memory: &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<Self, purrdf_lex::allocation::StorageError> {
+105 +     pub fn parse_with_memory<S: Admission + ?Sized>(raw: &str, memory: &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<Self, purrdf_lex::allocation::StorageError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/algebra.rs:105:101
+    |
+105 | ...:Admission + ?Sized>(raw: &str, memory: &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<Self, purrdf_lex::allocation::Stor...
+    |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+105 -     pub fn parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(raw: &str, memory: &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<Self, purrdf_lex::allocation::StorageError> {
+105 +     pub fn parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(raw: &str, memory: &mut Memory<'_, S>) -> Result<Self, purrdf_lex::allocation::StorageError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/algebra.rs:105:156
+    |
+105 | ...x::allocation::Memory<'_, S>) -> Result<Self, purrdf_lex::allocation::StorageError> {
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+105 -     pub fn parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(raw: &str, memory: &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<Self, purrdf_lex::allocation::StorageError> {
+105 +     pub fn parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(raw: &str, memory: &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<Self, StorageError> {
+    |
+
+error: unused import: `Literal`
+  --> crates/sparql-algebra/src/parser/machine.rs:33:18
+   |
+33 | use crate::ast::{Literal, NamedNode, NamedNodePattern, Variable};
+   |                  ^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unused import: `ParseError`
+  --> crates/sparql-algebra/src/parser/triples.rs:21:20
+   |
+21 | use crate::error::{ParseError, Result};
+   |                    ^^^^^^^^^^
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/parser.rs:615:28
+    |
+615 |                     .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+615 -                     .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+615 +                     .ok_or(StorageError::SizeOverflow)?;
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/parser.rs:620:28
+    |
+620 |                     .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+620 -                     .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+620 +                     .ok_or(StorageError::SizeOverflow)?;
+    |
+
+error: unnecessary qualification
+    --> crates/sparql-algebra/src/parser.rs:3208:20
+     |
+3208 |             .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3208 -             .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+3208 +             .ok_or(StorageError::SizeOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-algebra/src/parser.rs:3225:20
+     |
+3225 |             .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3225 -             .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+3225 +             .ok_or(StorageError::SizeOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-algebra/src/parser.rs:3286:20
+     |
+3286 |             .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3286 -             .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+3286 +             .ok_or(StorageError::SizeOverflow)?;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-algebra/src/parser.rs:3434:24
+     |
+3434 |                 .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?,
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3434 -                 .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?,
+3434 +                 .ok_or(StorageError::SizeOverflow)?,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-algebra/src/parser.rs:3440:24
+     |
+3440 |                 .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?,
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3440 -                 .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?,
+3440 +                 .ok_or(StorageError::SizeOverflow)?,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-algebra/src/parser.rs:3449:24
+     |
+3449 |                 .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?,
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3449 -                 .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?,
+3449 +                 .ok_or(StorageError::SizeOverflow)?,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-algebra/src/parser.rs:3580:24
+     |
+3580 |     let mut resident = purrdf_lex::allocation::Resident;
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3580 -     let mut resident = purrdf_lex::allocation::Resident;
+3580 +     let mut resident = Resident;
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-algebra/src/parser.rs:3601:40
+     |
+3601 | ) -> std::result::Result<GraphPattern, purrdf_lex::allocation::StorageError> {
+     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3601 - ) -> std::result::Result<GraphPattern, purrdf_lex::allocation::StorageError> {
+3601 + ) -> std::result::Result<GraphPattern, StorageError> {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-algebra/src/parser.rs:3621:28
+     |
+3621 |                     .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?,
+     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3621 -                     .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?,
+3621 +                     .ok_or(StorageError::SizeOverflow)?,
+     |
+
+error: unnecessary qualification
+  --> crates/sparql-algebra/src/validate.rs:48:25
+   |
+48 |     let mut admission = purrdf_lex::allocation::Resident;
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+48 -     let mut admission = purrdf_lex::allocation::Resident;
+48 +     let mut admission = Resident;
+   |
+
+error: unnecessary qualification
+  --> crates/sparql-algebra/src/validate.rs:49:22
+   |
+49 |     let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+49 -     let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
+49 +     let mut memory = Memory::new(&mut admission);
+   |
+
+error: unnecessary qualification
+  --> crates/sparql-algebra/src/validate.rs:53:58
+   |
+53 | fn triple_term_nesting_with_memory<T: TripleTermSlot, S: purrdf_lex::allocation::Admission + ?Sized>(
+   |                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+53 - fn triple_term_nesting_with_memory<T: TripleTermSlot, S: purrdf_lex::allocation::Admission + ?Sized>(
+53 + fn triple_term_nesting_with_memory<T: TripleTermSlot, S: Admission + ?Sized>(
+   |
+
+error: unnecessary qualification
+  --> crates/sparql-algebra/src/validate.rs:54:28
+   |
+54 |     root: &T, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+54 -     root: &T, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+54 +     root: &T, memory: &mut Memory<'_, S>,
+   |
+
+error: unnecessary qualification
+  --> crates/sparql-algebra/src/validate.rs:55:33
+   |
+55 | ) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+55 - ) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
+55 + ) -> std::result::Result<usize, StorageError> {
+   |
+
+error: unnecessary qualification
+  --> crates/sparql-algebra/src/validate.rs:61:52
+   |
+61 |             let depth = above.checked_add(1).ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+   |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+61 -             let depth = above.checked_add(1).ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+61 +             let depth = above.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+   |
+
+error: unnecessary qualification
+  --> crates/sparql-algebra/src/validate.rs:86:47
+   |
+86 |     pub fn triple_term_nesting_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+   |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+86 -     pub fn triple_term_nesting_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+86 +     pub fn triple_term_nesting_with_memory<S: Admission + ?Sized>(
+   |
+
+error: unnecessary qualification
+  --> crates/sparql-algebra/src/validate.rs:87:29
+   |
+87 |         &self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+87 -         &self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+87 +         &self, memory: &mut Memory<'_, S>,
+   |
+
+error: unnecessary qualification
+  --> crates/sparql-algebra/src/validate.rs:88:37
+   |
+88 |     ) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
+   |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+88 -     ) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
+88 +     ) -> std::result::Result<usize, StorageError> {
+   |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/validate.rs:100:29
+    |
+100 |         let mut admission = purrdf_lex::allocation::Resident;
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+100 -         let mut admission = purrdf_lex::allocation::Resident;
+100 +         let mut admission = Resident;
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/validate.rs:101:26
+    |
+101 |         let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+101 -         let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
+101 +         let mut memory = Memory::new(&mut admission);
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/validate.rs:118:14
+    |
+118 |     where S: purrdf_lex::allocation::Admission + ?Sized,
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+118 -     where S: purrdf_lex::allocation::Admission + ?Sized,
+118 +     where S: Admission + ?Sized,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/validate.rs:115:32
+    |
+115 |         &'a self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+115 -         &'a self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+115 +         &'a self, memory: &mut Memory<'_, S>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/validate.rs:116:50
+    |
+116 |         mut visit: impl FnMut(&'a Variable, &mut purrdf_lex::allocation::Memory<'_, S>) -> std::result::Result<(), E>,
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+116 -         mut visit: impl FnMut(&'a Variable, &mut purrdf_lex::allocation::Memory<'_, S>) -> std::result::Result<(), E>,
+116 +         mut visit: impl FnMut(&'a Variable, &mut Memory<'_, S>) -> std::result::Result<(), E>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/validate.rs:178:47
+    |
+178 |     pub fn triple_term_nesting_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+178 -     pub fn triple_term_nesting_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+178 +     pub fn triple_term_nesting_with_memory<S: Admission + ?Sized>(
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/validate.rs:179:29
+    |
+179 |         &self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+179 -         &self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+179 +         &self, memory: &mut Memory<'_, S>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/validate.rs:180:37
+    |
+180 |     ) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+180 -     ) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
+180 +     ) -> std::result::Result<usize, StorageError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/walk.rs:649:22
+    |
+649 |     let mut pending: purrdf_lex::walk::WorkList<&'e mut Expression, 16> =
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+649 -     let mut pending: purrdf_lex::walk::WorkList<&'e mut Expression, 16> =
+649 +     let mut pending: WorkList<&'e mut Expression, 16> =
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/walk.rs:650:9
+    |
+650 |         purrdf_lex::walk::WorkList::new();
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+650 -         purrdf_lex::walk::WorkList::new();
+650 +         WorkList::new();
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-algebra/src/walk.rs:700:19
+    |
+700 |     pending: &mut purrdf_lex::walk::WorkList<&'e mut Expression, 16>,
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+700 -     pending: &mut purrdf_lex::walk::WorkList<&'e mut Expression, 16>,
+700 +     pending: &mut WorkList<&'e mut Expression, 16>,
+    |
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+   --> crates/sparql-algebra/src/ast.rs:193:10
+    |
+193 |     ) -> Result<Self, E> {
+    |          ^^^^^^     --- help: remove the unnecessary generic argument
+    |          |
+    |          expected 1 generic argument
+    |
+note: type alias defined here, with 1 generic parameter: `T`
+   --> crates/sparql-algebra/src/error.rs:490:10
+    |
+490 | pub type Result<T> = core::result::Result<T, ParseError>;
+    |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+   --> crates/sparql-algebra/src/ast.rs:222:10
+    |
+222 |     ) -> Result<Self, E> {
+    |          ^^^^^^     --- help: remove the unnecessary generic argument
+    |          |
+    |          expected 1 generic argument
+    |
+note: type alias defined here, with 1 generic parameter: `T`
+   --> crates/sparql-algebra/src/error.rs:490:10
+    |
+490 | pub type Result<T> = core::result::Result<T, ParseError>;
+    |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+   --> crates/sparql-algebra/src/error.rs:136:10
+    |
+136 |     ) -> Result<DiagnosticPresentation, purrdf_lex::allocation::StorageError> {
+    |          ^^^^^^                       -------------------------------------- help: remove the unnecessary generic argument
+    |          |
+    |          expected 1 generic argument
+    |
+note: type alias defined here, with 1 generic parameter: `T`
+   --> crates/sparql-algebra/src/error.rs:490:10
+    |
+490 | pub type Result<T> = core::result::Result<T, ParseError>;
+    |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+   --> crates/sparql-algebra/src/error.rs:212:10
+    |
+212 |     ) -> Result<DiagnosticPresentation, purrdf_lex::allocation::StorageError> {
+    |          ^^^^^^                       -------------------------------------- help: remove the unnecessary generic argument
+    |          |
+    |          expected 1 generic argument
+    |
+note: type alias defined here, with 1 generic parameter: `T`
+   --> crates/sparql-algebra/src/error.rs:490:10
+    |
+490 | pub type Result<T> = core::result::Result<T, ParseError>;
+    |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+   --> crates/sparql-algebra/src/ast.rs:192:55
+    |
+192 |         mint: impl FnOnce(&dyn core::fmt::Display) -> Result<SharedText, E>,
+    |                                                       ^^^^^^           --- help: remove the unnecessary generic argument
+    |                                                       |
+    |                                                       expected 1 generic argument
+    |
+note: type alias defined here, with 1 generic parameter: `T`
+   --> crates/sparql-algebra/src/error.rs:490:10
+    |
+490 | pub type Result<T> = core::result::Result<T, ParseError>;
+    |          ^^^^^^ -
+
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+   --> crates/sparql-algebra/src/ast.rs:221:55
+    |
+221 |         mint: impl FnOnce(&dyn core::fmt::Display) -> Result<SharedText, E>,
+    |                                                       ^^^^^^           --- help: remove the unnecessary generic argument
+    |                                                       |
+    |                                                       expected 1 generic argument
+    |
+note: type alias defined here, with 1 generic parameter: `T`
+   --> crates/sparql-algebra/src/error.rs:490:10
+    |
+490 | pub type Result<T> = core::result::Result<T, ParseError>;
+    |          ^^^^^^ -
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:138:24
+    |
+138 |             return Err(*error);
+    |                    --- ^^^^^^ expected `ParseError`, found `StorageError`
+    |                    |
+    |                    arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `StorageError` due to the type of the argument passed
+   --> crates/sparql-algebra/src/error.rs:138:20
+    |
+138 |             return Err(*error);
+    |                    ^^^^------^
+    |                        |
+    |                        this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+help: try wrapping the expression in `error::ParseError::Storage`
+    |
+138 |             return Err(error::ParseError::Storage(*error));
+    |                        +++++++++++++++++++++++++++      +
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:152:81
+    |
+152 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             --- ^^^^^ expected `ParseError`, found `StorageError`
+    |                                                                             |
+    |                                                                             arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `StorageError` due to the type of the argument passed
+   --> crates/sparql-algebra/src/error.rs:152:77
+    |
+152 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             ^^^^-----^
+    |                                                                                 |
+    |                                                                                 this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+help: try wrapping the expression in `error::ParseError::Storage`
+    |
+152 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error::ParseError::Storage(error)),
+    |                                                                                 +++++++++++++++++++++++++++     +
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:160:81
+    |
+160 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             --- ^^^^^ expected `ParseError`, found `StorageError`
+    |                                                                             |
+    |                                                                             arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `StorageError` due to the type of the argument passed
+   --> crates/sparql-algebra/src/error.rs:160:77
+    |
+160 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             ^^^^-----^
+    |                                                                                 |
+    |                                                                                 this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+help: try wrapping the expression in `error::ParseError::Storage`
+    |
+160 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error::ParseError::Storage(error)),
+    |                                                                                 +++++++++++++++++++++++++++     +
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:168:81
+    |
+168 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             --- ^^^^^ expected `ParseError`, found `StorageError`
+    |                                                                             |
+    |                                                                             arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `StorageError` due to the type of the argument passed
+   --> crates/sparql-algebra/src/error.rs:168:77
+    |
+168 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             ^^^^-----^
+    |                                                                                 |
+    |                                                                                 this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+help: try wrapping the expression in `error::ParseError::Storage`
+    |
+168 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error::ParseError::Storage(error)),
+    |                                                                                 +++++++++++++++++++++++++++     +
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:188:28
+    |
+136 |       ) -> Result<DiagnosticPresentation, purrdf_lex::allocation::StorageError> {
+    |            -------------------------------------------------------------------- expected `std::result::Result<DiagnosticPresentation, error::ParseError>` because of return type
+...
+188 |                       return presentation
+    |  ____________________________^
+189 | |                         .try_with_detail_with_memory(detail, memory)
+190 | |                         .map_err(presentation_storage);
+    | |______________________________________________________^ expected `error::ParseError`, found `StorageError`
+    |
+    = note: expected enum `Result<_, error::ParseError>`
+               found enum `Result<_, StorageError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+    |
+188 ~                     return Ok(presentation
+189 |                         .try_with_detail_with_memory(detail, memory)
+190 ~                         .map_err(presentation_storage)?);
+    |
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:336:9
+    |
+212 |       ) -> Result<DiagnosticPresentation, purrdf_lex::allocation::StorageError> {
+    |            -------------------------------------------------------------------- expected `std::result::Result<DiagnosticPresentation, error::ParseError>` because of return type
+...
+336 | /         DiagnosticPresentation::try_new_with_memory(identity, template, parameters, memory)
+337 | |             .map_err(presentation_storage)
+    | |__________________________________________^ expected `error::ParseError`, found `StorageError`
+    |
+    = note: expected enum `Result<_, error::ParseError>`
+               found enum `Result<_, StorageError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+    |
+336 ~         Ok(DiagnosticPresentation::try_new_with_memory(identity, template, parameters, memory)
+337 ~             .map_err(presentation_storage)?)
+    |
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser/machine.rs:2822:79
+     |
+2822 |                 version: crate::SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                               ^^^ method not found in `Option<SparqlVersion>`
+     |
+note: the method `raw` exists on the type `SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+2822 |                 version: crate::SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                              +++++++++++++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-algebra/src/parser/machine.rs:2822:26
+     |
+2822 |                 version: crate::SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<SparqlVersion>`, found `SparqlVersion`
+     |
+     = note: `?` operator cannot convert from `SparqlVersion` to `Option<SparqlVersion>`
+     = note: expected enum `Option<SparqlVersion>`
+                found enum `SparqlVersion`
+help: try wrapping the expression in `Some`
+     |
+2822 |                 version: Some(crate::SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?),
+     |                          +++++                                                                         +
+
+error[E0277]: expected an `FnMut(&mut Expression, &mut Memory<'_, _>)` closure, found `Memory<'_, dyn ParserAdmission>`
+    --> crates/sparql-algebra/src/parser/machine.rs:2866:13
+     |
+2837 |         crate::walk::for_each_expression_mut_with_memory(
+     |         ------------------------------------------------ required by a bound introduced by this call
+...
+2866 |             self.memory,
+     |             ^^^^^^^^^^^ expected an `FnMut(&mut Expression, &mut Memory<'_, _>)` closure, found `Memory<'_, dyn ParserAdmission>`
+     |
+     = help: the trait `for<'a, 'b, 'c> FnMut(&'a mut Expression, &'b mut Memory<'c, _>)` is not implemented for `Memory<'_, dyn ParserAdmission>`
+     = note: required for `&mut Memory<'_, dyn ParserAdmission>` to implement `for<'a, 'b, 'c> FnMut(&'a mut Expression, &'b mut Memory<'c, _>)`
+note: required by a bound in `walk::for_each_expression_mut_with_memory`
+    --> crates/sparql-algebra/src/walk.rs:645:21
+     |
+ 642 | pub fn for_each_expression_mut_with_memory<'e, S, E>(
+     |        ----------------------------------- required by a bound in this function
+...
+ 645 |     mut visit: impl FnMut(&mut Expression, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `for_each_expression_mut_with_memory`
+
+error[E0271]: type mismatch resolving `<&mut Memory<'_, _> as FnOnce<_>>::Output == Result<(), _>`
+    --> crates/sparql-algebra/src/parser/machine.rs:2866:13
+     |
+2837 |         crate::walk::for_each_expression_mut_with_memory(
+     |         ------------------------------------------------ required by a bound introduced by this call
+...
+2866 |             self.memory,
+     |             ^^^^^^^^^^^ types differ
+     |
+note: required by a bound in `walk::for_each_expression_mut_with_memory`
+    --> crates/sparql-algebra/src/walk.rs:645:91
+     |
+ 642 | pub fn for_each_expression_mut_with_memory<'e, S, E>(
+     |        ----------------------------------- required by a bound in this function
+...
+ 645 |     mut visit: impl FnMut(&mut Expression, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+     |                                                                                           ^^^^^^^^^^^^^ required by this bound in `for_each_expression_mut_with_memory`
+     = note: the full name for the type has been written to '/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-algebra/8dc31ff965b9c7b5/out/purrdf_sparql_algebra-8dc31ff965b9c7b5.long-type-12333598612176168763.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0308]: mismatched types
+    --> crates/sparql-algebra/src/parser/machine.rs:2841:39
+     |
+2841 |                     && target != Some(name)
+     |                                  ---- ^^^^ expected `&Variable`, found `Variable`
+     |                                  |
+     |                                  arguments to this enum variant are incorrect
+     |
+help: the type constructed contains `Variable` due to the type of the argument passed
+    --> crates/sparql-algebra/src/parser/machine.rs:2841:34
+     |
+2841 |                     && target != Some(name)
+     |                                  ^^^^^----^
+     |                                       |
+     |                                       this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider borrowing here
+     |
+2841 |                     && target != Some(&name)
+     |                                       +
+
+error[E0308]: mismatched types
+    --> crates/sparql-algebra/src/parser/machine.rs:2842:41
+     |
+2842 |                     && !lifted.contains(name)
+     |                                -------- ^^^^ expected `&Variable`, found `Variable`
+     |                                |
+     |                                arguments to this method are incorrect
+     |
+note: method defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/slice/mod.rs:2602:12
+     |
+2602 |     pub fn contains(&self, x: &T) -> bool
+     |            ^^^^^^^^
+help: consider borrowing here
+     |
+2842 |                     && !lifted.contains(&name)
+     |                                         +
+
+error[E0614]: type `Variable` cannot be dereferenced
+    --> crates/sparql-algebra/src/parser/machine.rs:2862:21
+     |
+2862 |                     *name = sampled;
+     |                     ^^^^^ can't be dereferenced
+
+error[E0308]: mismatched types
+    --> crates/sparql-algebra/src/parser/machine.rs:2837:9
+     |
+2835 |       ) -> Result<()> {
+     |            ---------- expected `std::result::Result<(), error::ParseError>` because of return type
+2836 |           let counter = &mut self.agg_counter;
+2837 | /         crate::walk::for_each_expression_mut_with_memory(
+2838 | |             [expression],
+2839 | |             |expression, memory| {
+2840 | |                 if let Expression::Variable(name) = expression
+...    |
+2866 | |             self.memory,
+2867 | |         )
+     | |_________^ expected `Result<(), ParseError>`, found `Result<(), MutationError<_>>`
+     |
+     = note: expected enum `Result<_, error::ParseError>`
+                found enum `Result<_, MutationError<_>>`
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/parser/triples.rs:557:43
+    |
+557 | ...                   .push(self.translate_predicate_path(path, subject, object));
+    |                        ---- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `GraphPattern`, found `Result<GraphPattern, ParseError>`
+    |                        |
+    |                        arguments to this method are incorrect
+    |
+    = note: expected enum `GraphPattern`
+               found enum `std::result::Result<GraphPattern, error::ParseError>`
+note: method defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:999:12
+    |
+999 |     pub fn push(&mut self, value: T) {
+    |            ^^^^
+help: use the `?` operator to extract the `std::result::Result<GraphPattern, error::ParseError>` value, propagating a `Result::Err` value to the caller
+    |
+557 |                                     .push(self.translate_predicate_path(path, subject, object)?);
+    |                                                                                               +
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser.rs:1689:72
+     |
+1689 |                 version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                        ^^^ method not found in `Option<SparqlVersion>`
+     |
+note: the method `raw` exists on the type `SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+1689 |                 version: SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                       +++++++++++++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-algebra/src/parser.rs:1689:26
+     |
+1689 |                 version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<SparqlVersion>`, found `SparqlVersion`
+     |
+     = note: `?` operator cannot convert from `SparqlVersion` to `Option<SparqlVersion>`
+     = note: expected enum `Option<SparqlVersion>`
+                found enum `SparqlVersion`
+help: try wrapping the expression in `Some`
+     |
+1689 |                 version: Some(SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?),
+     |                          +++++                                                                  +
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser.rs:1732:68
+     |
+1732 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                    ^^^ method not found in `Option<SparqlVersion>`
+     |
+note: the method `raw` exists on the type `SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+1732 |             version: SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                   +++++++++++++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-algebra/src/parser.rs:1732:22
+     |
+1732 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<SparqlVersion>`, found `SparqlVersion`
+     |
+     = note: `?` operator cannot convert from `SparqlVersion` to `Option<SparqlVersion>`
+     = note: expected enum `Option<SparqlVersion>`
+                found enum `SparqlVersion`
+help: try wrapping the expression in `Some`
+     |
+1732 |             version: Some(SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?),
+     |                      +++++                                                                  +
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser.rs:1752:68
+     |
+1752 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                    ^^^ method not found in `Option<SparqlVersion>`
+     |
+note: the method `raw` exists on the type `SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+1752 |             version: SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                   +++++++++++++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-algebra/src/parser.rs:1752:22
+     |
+1752 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<SparqlVersion>`, found `SparqlVersion`
+     |
+     = note: `?` operator cannot convert from `SparqlVersion` to `Option<SparqlVersion>`
+     = note: expected enum `Option<SparqlVersion>`
+                found enum `SparqlVersion`
+help: try wrapping the expression in `Some`
+     |
+1752 |             version: Some(SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?),
+     |                      +++++                                                                  +
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser.rs:1795:68
+     |
+1795 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                    ^^^ method not found in `Option<SparqlVersion>`
+     |
+note: the method `raw` exists on the type `SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+1795 |             version: SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                   +++++++++++++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-algebra/src/parser.rs:1795:22
+     |
+1795 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<SparqlVersion>`, found `SparqlVersion`
+     |
+     = note: `?` operator cannot convert from `SparqlVersion` to `Option<SparqlVersion>`
+     = note: expected enum `Option<SparqlVersion>`
+                found enum `SparqlVersion`
+help: try wrapping the expression in `Some`
+     |
+1795 |             version: Some(SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?),
+     |                      +++++                                                                  +
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser.rs:2027:68
+     |
+2027 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                    ^^^ method not found in `Option<SparqlVersion>`
+     |
+note: the method `raw` exists on the type `SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+2027 |             version: SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                   +++++++++++++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-algebra/src/parser.rs:2027:22
+     |
+2027 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Option<SparqlVersion>`, found `SparqlVersion`
+     |
+     = note: `?` operator cannot convert from `SparqlVersion` to `Option<SparqlVersion>`
+     = note: expected enum `Option<SparqlVersion>`
+                found enum `SparqlVersion`
+help: try wrapping the expression in `Some`
+     |
+2027 |             version: Some(SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?),
+     |                      +++++                                                                  +
+
+error[E0308]: mismatched types
+    --> crates/sparql-algebra/src/parser.rs:3520:29
+     |
+3520 | ...                   memory.admission_mut().text(name)
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<SharedText, ParseError>`, found `Result<SharedText, StorageError>`
+     |
+     = note: expected enum `Result<_, error::ParseError>`
+                found enum `Result<_, StorageError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+3520 |                             Ok(memory.admission_mut().text(name)?)
+     |                             +++                                 ++
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:138:24
+    |
+138 |             return Err(*error);
+    |                    --- ^^^^^^ expected `ParseError`, found `StorageError`
+    |                    |
+    |                    arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `purrdf_lex::allocation::StorageError` due to the type of the argument passed
+   --> crates/sparql-algebra/src/error.rs:138:20
+    |
+138 |             return Err(*error);
+    |                    ^^^^------^
+    |                        |
+    |                        this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+help: try wrapping the expression in `error::ParseError::Storage`
+    |
+138 |             return Err(error::ParseError::Storage(*error));
+    |                        +++++++++++++++++++++++++++      +
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:152:81
+    |
+152 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             --- ^^^^^ expected `ParseError`, found `StorageError`
+    |                                                                             |
+    |                                                                             arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `purrdf_lex::allocation::StorageError` due to the type of the argument passed
+   --> crates/sparql-algebra/src/error.rs:152:77
+    |
+152 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             ^^^^-----^
+    |                                                                                 |
+    |                                                                                 this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+help: try wrapping the expression in `error::ParseError::Storage`
+    |
+152 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error::ParseError::Storage(error)),
+    |                                                                                 +++++++++++++++++++++++++++     +
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:160:81
+    |
+160 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             --- ^^^^^ expected `ParseError`, found `StorageError`
+    |                                                                             |
+    |                                                                             arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `purrdf_lex::allocation::StorageError` due to the type of the argument passed
+   --> crates/sparql-algebra/src/error.rs:160:77
+    |
+160 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             ^^^^-----^
+    |                                                                                 |
+    |                                                                                 this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+help: try wrapping the expression in `error::ParseError::Storage`
+    |
+160 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error::ParseError::Storage(error)),
+    |                                                                                 +++++++++++++++++++++++++++     +
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:168:81
+    |
+168 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             --- ^^^^^ expected `ParseError`, found `StorageError`
+    |                                                                             |
+    |                                                                             arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `purrdf_lex::allocation::StorageError` due to the type of the argument passed
+   --> crates/sparql-algebra/src/error.rs:168:77
+    |
+168 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+    |                                                                             ^^^^-----^
+    |                                                                                 |
+    |                                                                                 this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+help: try wrapping the expression in `error::ParseError::Storage`
+    |
+168 |                     Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error::ParseError::Storage(error)),
+    |                                                                                 +++++++++++++++++++++++++++     +
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:188:28
+    |
+136 |       ) -> Result<DiagnosticPresentation, purrdf_lex::allocation::StorageError> {
+    |            -------------------------------------------------------------------- expected `std::result::Result<DiagnosticPresentation, error::ParseError>` because of return type
+...
+188 |                       return presentation
+    |  ____________________________^
+189 | |                         .try_with_detail_with_memory(detail, memory)
+190 | |                         .map_err(presentation_storage);
+    | |______________________________________________________^ expected `error::ParseError`, found `purrdf_lex::allocation::StorageError`
+    |
+    = note: expected enum `Result<_, error::ParseError>`
+               found enum `Result<_, purrdf_lex::allocation::StorageError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+    |
+188 ~                     return Ok(presentation
+189 |                         .try_with_detail_with_memory(detail, memory)
+190 ~                         .map_err(presentation_storage)?);
+    |
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/error.rs:336:9
+    |
+212 |       ) -> Result<DiagnosticPresentation, purrdf_lex::allocation::StorageError> {
+    |            -------------------------------------------------------------------- expected `std::result::Result<DiagnosticPresentation, error::ParseError>` because of return type
+...
+336 | /         DiagnosticPresentation::try_new_with_memory(identity, template, parameters, memory)
+337 | |             .map_err(presentation_storage)
+    | |__________________________________________^ expected `error::ParseError`, found `purrdf_lex::allocation::StorageError`
+    |
+    = note: expected enum `Result<_, error::ParseError>`
+               found enum `Result<_, purrdf_lex::allocation::StorageError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+    |
+336 ~         Ok(DiagnosticPresentation::try_new_with_memory(identity, template, parameters, memory)
+337 ~             .map_err(presentation_storage)?)
+    |
+
+error[E0277]: `?` couldn't convert the error to `StorageError`
+   --> crates/sparql-algebra/src/scope.rs:453:39
+    |
+453 |             check(node, index, memory)?;
+    |             --------------------------^ the trait `From<E>` is not implemented for `StorageError`
+    |             |
+    |             this can't be annotated with `?` because it has type `Result<_, E>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: consider extending the `where` clause, but there might be an alternative better way to express this requirement
+    |
+449 | where S: Admission + ?Sized, E: From<StorageError>, StorageError: From<E> {
+    |                                                   +++++++++++++++++++++++
+
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+   --> crates/sparql-algebra/src/validate.rs:433:27
+    |
+433 |             let failure = invalid(&error, memory, memory);
+    |                           ^^^^^^^                 ------ unexpected argument #3 of type `&mut Memory<'_, S>`
+    |
+note: function defined here
+   --> crates/sparql-algebra/src/validate.rs:407:4
+    |
+407 | fn invalid<S: Admission + ?Sized>(
+    |    ^^^^^^^
+help: remove the extra argument
+    |
+433 -             let failure = invalid(&error, memory, memory);
+433 +             let failure = invalid(&error, memory);
+    |
+
+error[E0425]: cannot find function `push_operands_mut` in this scope
+   --> crates/sparql-algebra/src/walk.rs:682:9
+    |
+682 |         push_operands_mut(expr, |operand| {
+    |         ^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:711:17
+    |
+711 |                 push(operand);
+    |                 ^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:716:17
+    |
+716 |                 push(operand);
+    |                 ^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:718:13
+    |
+718 |             push(first);
+    |             ^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:726:13
+    |
+726 |             push(right);
+    |             ^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:727:13
+    |
+727 |             push(left);
+    |             ^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:730:13
+    |
+730 |             push(inner);
+    |             ^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:734:17
+    |
+734 |                 push(operand);
+    |                 ^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:736:13
+    |
+736 |             push(target);
+    |             ^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:739:13
+    |
+739 |             push(else_expr);
+    |             ^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:740:13
+    |
+740 |             push(then_expr);
+    |             ^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:741:13
+    |
+741 |             push(cond);
+    |             ^^^^ not found in this scope
+
+error[E0425]: cannot find function `push` in this scope
+   --> crates/sparql-algebra/src/walk.rs:745:17
+    |
+745 |                 push(operand);
+    |                 ^^^^ not found in this scope
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser/machine.rs:2822:79
+     |
+2822 |                 version: crate::SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                               ^^^ method not found in `Option<algebra::SparqlVersion>`
+     |
+note: the method `raw` exists on the type `algebra::SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `algebra::SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+2822 |                 version: crate::SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                              +++++++++++++++++
+
+error[E0277]: expected an `FnMut(&mut algebra::Expression, &mut purrdf_lex::allocation::Memory<'_, _>)` closure, found `purrdf_lex::allocation::Memory<'_, dyn parser::ParserAdmission>`
+    --> crates/sparql-algebra/src/parser/machine.rs:2866:13
+     |
+2837 |         crate::walk::for_each_expression_mut_with_memory(
+     |         ------------------------------------------------ required by a bound introduced by this call
+...
+2866 |             self.memory,
+     |             ^^^^^^^^^^^ expected an `FnMut(&mut algebra::Expression, &mut purrdf_lex::allocation::Memory<'_, _>)` closure, found `purrdf_lex::allocation::Memory<'_, dyn parser::ParserAdmission>`
+     |
+     = help: the trait `for<'a, 'b, 'c> FnMut(&'a mut algebra::Expression, &'b mut purrdf_lex::allocation::Memory<'c, _>)` is not implemented for `purrdf_lex::allocation::Memory<'_, dyn parser::ParserAdmission>`
+     = note: required for `&mut purrdf_lex::allocation::Memory<'_, dyn parser::ParserAdmission>` to implement `FnMut(&mut Expression, &mut Memory<'c, _>)`
+note: required by a bound in `walk::for_each_expression_mut_with_memory`
+    --> crates/sparql-algebra/src/walk.rs:645:21
+     |
+ 642 | pub fn for_each_expression_mut_with_memory<'e, S, E>(
+     |        ----------------------------------- required by a bound in this function
+...
+ 645 |     mut visit: impl FnMut(&mut Expression, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `for_each_expression_mut_with_memory`
+     = note: the full name for the type has been written to '/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-algebra/643763a1bc6ccec1/out/purrdf_sparql_algebra-643763a1bc6ccec1.long-type-15218168078782925807.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0271]: type mismatch resolving `<&mut Memory<'_, _> as FnOnce<_>>::Output == Result<(), _>`
+    --> crates/sparql-algebra/src/parser/machine.rs:2866:13
+     |
+2837 |         crate::walk::for_each_expression_mut_with_memory(
+     |         ------------------------------------------------ required by a bound introduced by this call
+...
+2866 |             self.memory,
+     |             ^^^^^^^^^^^ types differ
+     |
+note: required by a bound in `walk::for_each_expression_mut_with_memory`
+    --> crates/sparql-algebra/src/walk.rs:645:91
+     |
+ 642 | pub fn for_each_expression_mut_with_memory<'e, S, E>(
+     |        ----------------------------------- required by a bound in this function
+...
+ 645 |     mut visit: impl FnMut(&mut Expression, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+     |                                                                                           ^^^^^^^^^^^^^ required by this bound in `for_each_expression_mut_with_memory`
+     = note: the full name for the type has been written to '/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-algebra/643763a1bc6ccec1/out/purrdf_sparql_algebra-643763a1bc6ccec1.long-type-5761842474826246807.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0308]: mismatched types
+    --> crates/sparql-algebra/src/parser/machine.rs:2841:39
+     |
+2841 |                     && target != Some(name)
+     |                                  ---- ^^^^ expected `&Variable`, found `Variable`
+     |                                  |
+     |                                  arguments to this enum variant are incorrect
+     |
+help: the type constructed contains `ast::Variable` due to the type of the argument passed
+    --> crates/sparql-algebra/src/parser/machine.rs:2841:34
+     |
+2841 |                     && target != Some(name)
+     |                                  ^^^^^----^
+     |                                       |
+     |                                       this argument influences the type of `Some`
+note: tuple variant defined here
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:606:5
+     |
+ 606 |     Some(#[stable(feature = "rust1", since = "1.0.0")] T),
+     |     ^^^^
+help: consider borrowing here
+     |
+2841 |                     && target != Some(&name)
+     |                                       +
+
+error[E0614]: type `ast::Variable` cannot be dereferenced
+    --> crates/sparql-algebra/src/parser/machine.rs:2862:21
+     |
+2862 |                     *name = sampled;
+     |                     ^^^^^ can't be dereferenced
+
+error[E0308]: mismatched types
+   --> crates/sparql-algebra/src/parser/triples.rs:557:43
+    |
+557 | ...                   .push(self.translate_predicate_path(path, subject, object));
+    |                        ---- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `GraphPattern`, found `Result<GraphPattern, ParseError>`
+    |                        |
+    |                        arguments to this method are incorrect
+    |
+    = note: expected enum `GraphPattern`
+               found enum `std::result::Result<GraphPattern, error::ParseError>`
+note: method defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:999:12
+    |
+999 |     pub fn push(&mut self, value: T) {
+    |            ^^^^
+help: use the `?` operator to extract the `std::result::Result<algebra::GraphPattern, error::ParseError>` value, propagating a `Result::Err` value to the caller
+    |
+557 |                                     .push(self.translate_predicate_path(path, subject, object)?);
+    |                                                                                               +
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser.rs:1689:72
+     |
+1689 |                 version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                        ^^^ method not found in `Option<algebra::SparqlVersion>`
+     |
+note: the method `raw` exists on the type `algebra::SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `algebra::SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+1689 |                 version: SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                       +++++++++++++++++
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser.rs:1732:68
+     |
+1732 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                    ^^^ method not found in `Option<algebra::SparqlVersion>`
+     |
+note: the method `raw` exists on the type `algebra::SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `algebra::SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+1732 |             version: SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                   +++++++++++++++++
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser.rs:1752:68
+     |
+1752 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                    ^^^ method not found in `Option<algebra::SparqlVersion>`
+     |
+note: the method `raw` exists on the type `algebra::SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `algebra::SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+1752 |             version: SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                   +++++++++++++++++
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser.rs:1795:68
+     |
+1795 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                    ^^^ method not found in `Option<algebra::SparqlVersion>`
+     |
+note: the method `raw` exists on the type `algebra::SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `algebra::SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+1795 |             version: SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                   +++++++++++++++++
+
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+   --> crates/sparql-algebra/src/parser/machine.rs:861:26
+    |
+822 |           match self.peek() {
+    |                 ---- immutable borrow occurs here
+...
+861 |               other => Err(self.syntax(
+    |                            ^    ------ immutable borrow later used by call
+    |  __________________________|
+    | |
+862 | |                 &format_args!("expected an expression, found {other:?}"),
+863 | |                 self.span(),
+864 | |             )),
+    | |_____________^ mutable borrow occurs here
+
+error[E0599]: no method named `raw` found for enum `Option<T>` in the current scope
+    --> crates/sparql-algebra/src/parser.rs:2027:68
+     |
+2027 |             version: SparqlVersion::parse_with_memory(self.version.raw(), self.memory)?,
+     |                                                                    ^^^ method not found in `Option<algebra::SparqlVersion>`
+     |
+note: the method `raw` exists on the type `algebra::SparqlVersion`
+    --> crates/sparql-algebra/src/algebra.rs:117:5
+     |
+ 117 |     pub fn raw(&self) -> &str {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Option::expect` to unwrap the `algebra::SparqlVersion` value, panicking if the value is an `Option::None`
+     |
+2027 |             version: SparqlVersion::parse_with_memory(self.version.expect("REASON").raw(), self.memory)?,
+     |                                                                   +++++++++++++++++
+
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+    --> crates/sparql-algebra/src/parser/machine.rs:1634:17
+     |
+1634 |               Err(self.syntax(
+     |                   ^    ------ immutable borrow later used by call
+     |  _________________|
+     | |
+1635 | |                 &format_args!(
+1636 | |                     "FILTER expects a Constraint (a bracketed expression, a built-in call \
+1637 | |                      or a function call), found {:?}",
+1638 | |                     self.peek()
+     | |                     ---- immutable borrow occurs here
+1639 | |                 ),
+1640 | |                 self.span(),
+1641 | |             ))
+     | |_____________^ mutable borrow occurs here
+
+error[E0308]: mismatched types
+    --> crates/sparql-algebra/src/parser.rs:3520:29
+     |
+3520 | ...                   memory.admission_mut().text(name)
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<SharedText, ParseError>`, found `Result<SharedText, StorageError>`
+     |
+     = note: expected enum `Result<_, error::ParseError>`
+                found enum `Result<_, purrdf_lex::allocation::StorageError>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+3520 |                             Ok(memory.admission_mut().text(name)?)
+     |                             +++                                 ++
+
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+    --> crates/sparql-algebra/src/parser/machine.rs:2975:17
+     |
+2975 |               Err(self.syntax(
+     |                   ^    ------ immutable borrow later used by call
+     |  _________________|
+     | |
+2976 | |                 &format_args!(
+2977 | |                     "HAVING expects a Constraint (a bracketed expression, a built-in call \
+2978 | |                      or a function call), found {:?}",
+2979 | |                     self.peek()
+     | |                     ---- immutable borrow occurs here
+2980 | |                 ),
+2981 | |                 self.span(),
+2982 | |             ))
+     | |_____________^ mutable borrow occurs here
+
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+   --> crates/sparql-algebra/src/parser/triples.rs:857:40
+    |
+840 |                       match self.peek() {
+    |                             ---- immutable borrow occurs here
+...
+857 |                               return Err(self.syntax(
+    |                                          ^    ------ immutable borrow later used by call
+    |  ________________________________________|
+    | |
+858 | |                                 &format_args!("expected a property path, found {other:?}"),
+859 | |                                 self.span(),
+860 | |                             ));
+    | |_____________________________^ mutable borrow occurs here
+
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+    --> crates/sparql-algebra/src/parser/triples.rs:1115:26
+     |
+1087 |           match self.peek() {
+     |                 ---- immutable borrow occurs here
+...
+1115 |               other => Err(self.syntax(
+     |                            ^    ------ immutable borrow later used by call
+     |  __________________________|
+     | |
+1116 | |                 &format_args!("expected an RDF term, found {other:?}"),
+1117 | |                 self.span(),
+1118 | |             )),
+     | |_____________^ mutable borrow occurs here
+
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+    --> crates/sparql-algebra/src/parser.rs:1248:17
+     |
+1248 |               Err(self.syntax(
+     |                   ^    ------ immutable borrow later used by call
+     |  _________________|
+     | |
+1249 | |                 &format_args!("expected {t:?}, found {:?}", self.peek()),
+     | |                                                             ---- immutable borrow occurs here
+1250 | |                 self.span(),
+1251 | |             ))
+     | |_____________^ mutable borrow occurs here
+
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+    --> crates/sparql-algebra/src/parser.rs:1277:17
+     |
+1277 |               Err(self.syntax(
+     |                   ^    ------ immutable borrow later used by call
+     |  _________________|
+     | |
+1278 | |                 &format_args!("expected keyword {kw}, found {:?}", self.peek()),
+     | |                                                                    ---- immutable borrow occurs here
+1279 | |                 self.span(),
+1280 | |             ))
+     | |_____________^ mutable borrow occurs here
+
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+    --> crates/sparql-algebra/src/parser.rs:1288:17
+     |
+1288 |               Err(self.syntax(
+     |                   ^    ------ immutable borrow later used by call
+     |  _________________|
+     | |
+1289 | |                 &format_args!("unexpected trailing token {:?}", self.peek()),
+     | |                                                                 ---- immutable borrow occurs here
+1290 | |                 self.span(),
+1291 | |             ))
+     | |_____________^ mutable borrow occurs here
+
+error[E0499]: cannot borrow `*self.memory` as mutable more than once at a time
+    --> crates/sparql-algebra/src/parser.rs:1846:57
+     |
+1845 |             other => Err(self.syntax(
+     |                          ---- ------ first borrow later used by call
+     |                          |
+     |                          first mutable borrow occurs here
+1846 |                 &if block_has_property_function(&other, self.memory)? {
+     |                                                         ^^^^^^^^^^^ second mutable borrow occurs here
+     |
+help: try adding a local storing this argument...
+    --> crates/sparql-algebra/src/parser.rs:1846:21
+     |
+1846 |                 &if block_has_property_function(&other, self.memory)? {
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: ...and then using that local as the argument to this call
+    --> crates/sparql-algebra/src/parser.rs:1845:26
+     |
+1845 |               other => Err(self.syntax(
+     |  __________________________^
+1846 | |                 &if block_has_property_function(&other, self.memory)? {
+1847 | |                     "property functions are not allowed in a CONSTRUCT template"
+1848 | |                 } else {
+...    |
+1851 | |                 self.span(),
+1852 | |             )),
+     | |_____________^
+
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+    --> crates/sparql-algebra/src/parser.rs:2049:17
+     |
+2049 |               Err(self.syntax(
+     |                   ^    ------ immutable borrow later used by call
+     |  _________________|
+     | |
+2050 | |                 &format_args!(
+2051 | |                     "expected an update operation keyword, found {:?}",
+2052 | |                     self.peek()
+     | |                     ---- immutable borrow occurs here
+2053 | |                 ),
+2054 | |                 self.span(),
+2055 | |             ))
+     | |_____________^ mutable borrow occurs here
+
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+    --> crates/sparql-algebra/src/parser.rs:2352:32
+     |
+2352 |                       return Err(self.syntax(
+     |                                  ^    ------ immutable borrow later used by call
+     |  ________________________________|
+     | |
+2353 | |                         &format_args!("expected '.' between triples, found {:?}", self.peek()),
+     | |                                                                                   ---- immutable borrow occurs here
+2354 | |                         self.span(),
+2355 | |                     ));
+     | |_____________________^ mutable borrow occurs here
+
+error[E0596]: cannot borrow `quads` as mutable, as it is not declared as mutable
+    --> crates/sparql-algebra/src/parser.rs:2467:34
+     |
+2467 |                 self.memory.push(&mut quads, native_value)?;
+     |                                  ^^^^^^^^^^ cannot borrow as mutable
+     |
+note: the binding is already a mutable borrow
+    --> crates/sparql-algebra/src/parser.rs:2447:16
+     |
+2447 |         quads: &mut Vec<QuadPattern>,
+     |                ^^^^^^^^^^^^^^^^^^^^^
+help: consider making the binding mutable if you need to reborrow multiple times
+     |
+2447 |         mut quads: &mut Vec<QuadPattern>,
+     |         +++
+help: to reborrow the mutable reference, add `*`
+     |
+2467 |                 self.memory.push(&mut *quads, native_value)?;
+     |                                       +
+
+error[E0502]: cannot borrow `*self` as mutable because it is also borrowed as immutable
+    --> crates/sparql-algebra/src/parser.rs:2601:32
+     |
+2601 |                       return Err(self.syntax(
+     |                                  ^    ------ immutable borrow later used by call
+     |  ________________________________|
+     | |
+2602 | |                         &format_args!("expected '.' between triples, found {:?}", self.peek()),
+     | |                                                                                   ---- immutable borrow occurs here
+2603 | |                         self.span(),
+2604 | |                     ));
+     | |_____________________^ mutable borrow occurs here
+
+error[E0716]: temporary value dropped while borrowed
+    --> crates/sparql-algebra/src/parser.rs:2990:21
+     |
+2989 | /                 &if sign.is_some() {
+2990 | |                     format_args!("expected a numeral after the sign, found {other:?}")
+     | |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |                     |
+     | |                     creates a temporary value which is freed while still in use
+     | |                     temporary value is freed at the end of this statement
+2991 | |                 } else {
+2992 | |                     format_args!("expected a literal, found {other:?}")
+2993 | |                 },
+     | |_________________- borrow later used here
+     |
+     = note: consider using a `let` binding to create a longer lived value
+
+error[E0716]: temporary value dropped while borrowed
+    --> crates/sparql-algebra/src/parser.rs:2992:21
+     |
+2989 | /                 &if sign.is_some() {
+2990 | |                     format_args!("expected a numeral after the sign, found {other:?}")
+2991 | |                 } else {
+2992 | |                     format_args!("expected a literal, found {other:?}")
+     | |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     | |                     |
+     | |                     creates a temporary value which is freed while still in use
+     | |                     temporary value is freed at the end of this statement
+2993 | |                 },
+     | |_________________- borrow later used here
+     |
+     = note: consider using a `let` binding to create a longer lived value
+
+error[E0277]: `?` couldn't convert the error to `purrdf_lex::allocation::StorageError`
+   --> crates/sparql-algebra/src/scope.rs:453:39
+    |
+453 |             check(node, index, memory)?;
+    |             --------------------------^ the trait `From<E>` is not implemented for `purrdf_lex::allocation::StorageError`
+    |             |
+    |             this can't be annotated with `?` because it has type `Result<_, E>`
+    |
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: consider extending the `where` clause, but there might be an alternative better way to express this requirement
+    |
+449 | where S: Admission + ?Sized, E: From<StorageError>, purrdf_lex::allocation::StorageError: From<E> {
+    |                                                   +++++++++++++++++++++++++++++++++++++++++++++++
+
+Some errors have detailed explanations: E0061, E0107, E0271, E0277, E0308, E0425, E0428, E0499, E0502...
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-sparql-algebra` (lib) due to 103 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0061]: this function takes 2 arguments but 3 arguments were supplied
+   --> crates/sparql-algebra/src/validate.rs:433:27
+    |
+433 |             let failure = invalid(&error, memory, memory);
+    |                           ^^^^^^^                 ------ unexpected argument #3 of type `&mut purrdf_lex::allocation::Memory<'_, S>`
+    |
+note: function defined here
+   --> crates/sparql-algebra/src/validate.rs:407:4
+    |
+407 | fn invalid<S: Admission + ?Sized>(
+    |    ^^^^^^^
+help: remove the extra argument
+    |
+433 -             let failure = invalid(&error, memory, memory);
+433 +             let failure = invalid(&error, memory);
+    |
+
+error: could not compile `purrdf-sparql-algebra` (lib test) due to 103 previous errors

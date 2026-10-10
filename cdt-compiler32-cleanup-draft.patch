@@ -1,0 +1,103 @@
+--- a/crates/cdt/src/limits.rs
++++ b/crates/cdt/src/limits.rs
+@@ -69,8 +69,10 @@
+ use alloc::vec::Vec;
+ 
+ use crate::error::CdtError;
+-use crate::memory::{Memory, Resident, StorageError};
+-use crate::render::{key_lexical_len, term_lexical_len, try_term_lexical_len};
++use crate::memory::{Memory, StorageError};
++#[cfg(test)]
++use crate::memory::Resident;
++use crate::render::{key_lexical_len, try_term_lexical_len};
+ use crate::term::{CdtKey, CdtTerm};
+ 
+ /// Maximum number of elements (list items plus map entries, at every level) in one
+@@ -137,9 +139,7 @@
+ /// The elements one element contributes to its container: none for a leaf, the
+ /// value's whole element count for a nested composite, and the sum over its
+ /// components for a triple term. Iterative, with an explicit worklist.
+-pub(crate) fn term_elements(term: &CdtTerm) -> usize {
+-    try_term_elements(term, &mut Memory::new(&mut Resident)).expect("resident extent capacity")
+-}
++
+ 
+ pub(crate) fn try_term_elements(
+     term: &CdtTerm,
+@@ -166,6 +166,7 @@
+ }
+ 
+ /// The extent of the list these elements would form.
++#[cfg(test)]
+ pub(crate) fn list_extent<'a>(items: impl IntoIterator<Item = &'a CdtTerm>) -> Extent {
+     try_list_extent(items, &mut Memory::new(&mut Resident)).expect("resident extent capacity")
+ }
+@@ -193,6 +194,7 @@
+ 
+ /// The extent of the map these key/value pairs would form. The pairs must already be
+ /// deduplicated by key.
++#[cfg(test)]
+ pub(crate) fn map_extent<'a>(pairs: impl IntoIterator<Item = (&'a CdtKey, &'a CdtTerm)>) -> Extent {
+     try_map_extent(pairs, &mut Memory::new(&mut Resident)).expect("resident extent capacity")
+ }
+@@ -244,24 +246,7 @@
+     Ok(())
+ }
+ 
+-/// Check a prospective **element** against both bounds.
+-///
+-/// An element is not itself a composite value, so it carries no invariant of its own;
+-/// what this answers is whether the element could ever appear in one. The measure is
+-/// therefore the **smallest composite that could hold it** — the one-element list
+-/// `[term]`, which is one element larger and two bytes longer than the element. An
+-/// element that fails here can never be placed anywhere, so
+-/// [`CdtTerm::composite`](crate::CdtTerm::composite) and
+-/// [`CdtTerm::triple`](crate::CdtTerm::triple) refuse it where it is made rather than
+-/// leaving the caller to discover it when it is finally placed. A triple term is the
+-/// case that most needs this: it combines three separately admissible elements' element
+-/// counts and canonical lengths into one that need not be.
+-pub(crate) fn check_term(term: &CdtTerm) -> Result<(), CdtError> {
+-    check_extent(&Extent {
+-        elements: term_elements(term).saturating_add(1),
+-        bytes: term_lexical_len(term).saturating_add(2),
+-    })
+-}
++
+ 
+ #[cfg(test)]
+ mod tests {
+--- a/crates/cdt/src/render.rs
++++ b/crates/cdt/src/render.rs
+@@ -281,9 +281,7 @@
+ /// The byte length one element occupies in a canonical form, without allocating it.
+ /// A nested composite answers from its carried measure, so this costs the element's
+ /// own leaves and nothing below a composite.
+-pub(crate) fn term_lexical_len(term: &CdtTerm) -> usize {
+-    try_term_lexical_len(term, &mut Memory::new(&mut Resident)).expect("resident measure capacity")
+-}
++
+ 
+ pub(crate) fn try_term_lexical_len(
+     term: &CdtTerm,
+--- a/crates/cdt/src/tree.rs
++++ b/crates/cdt/src/tree.rs
+@@ -303,9 +303,16 @@
+         self,
+         memory: &mut crate::memory::Memory<'_>,
+     ) -> Result<(), crate::memory::StorageError> {
+-        let bytes = owned_bytes(OwnedRoot::Term(&self), memory)?;
+-        drop(self);
+-        memory.release_bytes(bytes)
++        match self {
++            Self::Iri(value) | Self::Blank(value) => memory.release_string(value),
++            Self::Literal(value) => value.release_with_memory(memory),
++            Self::Null => Ok(()),
++            node => {
++                let bytes = owned_bytes(OwnedRoot::Term(&node), memory)?;
++                drop(node);
++                memory.release_bytes(bytes)
++            }
++        }
+     }
+ }
+ impl Clone for CdtTerm {

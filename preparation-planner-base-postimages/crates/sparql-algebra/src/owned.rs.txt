@@ -1,0 +1,206 @@
+            leaf => shallow_ground(leaf),
+        }),
+        NodeRef::Order(key) => Owned::Order(match key {
+            OrderExpression::Asc(_) => OrderExpression::Asc(kids.expr()),
+            OrderExpression::Desc(_) => OrderExpression::Desc(kids.expr()),
+        }),
+        NodeRef::Aggregate(aggregate) => Owned::Aggregate(AggregateExpression {
+            function: aggregate.function.clone(),
+            args: kids.exprs(aggregate.args.len(), memory)?,
+            scalarvals: clone_vec_with_memory(
+                &aggregate.scalarvals,
+                memory,
+                |(key, value), memory| Ok((memory.string(key)?, value.clone())),
+            )?,
+            order_by: kids.orders(aggregate.order_by.len(), memory)?,
+            distinct: aggregate.distinct,
+        }),
+    })
+}
+
+fn clone_policy<S: Admission + ?Sized>(
+    policy: &crate::algebra::ApplicationPolicy,
+    memory: &mut Memory<'_, S>,
+) -> Result<Box<crate::algebra::ApplicationPolicy>, StorageError> {
+    let group_domain = policy
+        .group_domain
+        .as_deref()
+        .map(|domain| {
+            clone_shallow_vec_with_memory(domain, memory).map(Vec::into_boxed_slice)
+        })
+        .transpose()?;
+    let inputs = clone_shallow_vec_with_memory(&policy.inputs, memory)?;
+    let optional = policy
+        .optional
+        .as_ref()
+        .map(|optional| -> Result<_, StorageError> {
+            Ok(crate::algebra::OptionalApplication {
+                retry_inputs: clone_shallow_vec_with_memory(&optional.retry_inputs, memory)?,
+                forget_marker: optional.forget_marker.clone(),
+            })
+        })
+        .transpose()?;
+    let copy = crate::algebra::ApplicationPolicy {
+        dataset_required: policy.dataset_required,
+        row_pipeline: policy.row_pipeline,
+        reduced_adjacent: policy.reduced_adjacent,
+        group_domain,
+        inputs,
+        optional,
+    };
+    memory.add_bytes(core::alloc::Layout::new::<crate::algebra::ApplicationPolicy>().size())?;
+    purrdf_lex::allocation::try_boxed(copy).map_err(|_| StorageError::AllocationFailed)
+}
+
+fn assemble_pattern<S: Admission + ?Sized>(
+    pattern: &GraphPattern,
+    kids: &mut Kids<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<GraphPattern, StorageError> {
+    use GraphPattern as G;
+    Ok(match pattern {
+        G::Bgp { patterns } => G::Bgp {
+            patterns: kids.triples(patterns.len(), memory)?,
+        },
+        G::Path { .. } => G::Path {
+            subject: kids.term(),
+            path: kids.path(),
+            object: kids.term(),
+        },
+        G::Join { .. } => G::Join {
+            left: Child::try_new(kids.pattern(), memory)?,
+            right: Child::try_new(kids.pattern(), memory)?,
+        },
+        G::LeftJoin { expression, .. } => G::LeftJoin {
+            left: Child::try_new(kids.pattern(), memory)?,
+            right: Child::try_new(kids.pattern(), memory)?,
+            expression: expression.as_ref().map(|_| kids.expr()),
+        },
+        G::Lateral { .. } => G::Lateral {
+            left: Child::try_new(kids.pattern(), memory)?,
+            right: Child::try_new(kids.pattern(), memory)?,
+        },
+        G::Apply { policy, .. } => G::Apply {
+            left: Child::try_new(kids.pattern(), memory)?,
+            right: Child::try_new(kids.pattern(), memory)?,
+            policy: clone_policy(policy, memory)?,
+        },
+        G::Filter { .. } => G::Filter {
+            expr: kids.expr(),
+            inner: Child::try_new(kids.pattern(), memory)?,
+        },
+        G::Union { arms } => G::Union {
+            arms: Chain::from_vec_unchecked(kids.patterns(arms.len(), memory)?),
+        },
+        G::Graph { name, .. } => G::Graph {
+            name: name.clone(),
+            inner: Child::try_new(kids.pattern(), memory)?,
+        },
+        G::Extend { variable, .. } => G::Extend {
+            inner: Child::try_new(kids.pattern(), memory)?,
+            variable: variable.clone(),
+            expression: kids.expr(),
+        },
+        G::Minus { .. } => G::Minus {
+            left: Child::try_new(kids.pattern(), memory)?,
+            right: Child::try_new(kids.pattern(), memory)?,
+        },
+        G::Service { name, silent, .. } => G::Service {
+            name: name.clone(),
+            inner: Child::try_new(kids.pattern(), memory)?,
+            silent: *silent,
+        },
+        G::Values {
+            variables,
+            bindings,
+        } => G::Values {
+            variables: clone_shallow_vec_with_memory(variables, memory)?,
+            bindings: clone_vec_with_memory(bindings, memory, |row, memory| {
+                clone_vec_with_memory(row, memory, |cell, _| {
+                    Ok(cell.as_ref().map(|_| kids.ground()))
+                })
+            })?,
+        },
+        G::OrderBy { expression, .. } => G::OrderBy {
+            inner: Child::try_new(kids.pattern(), memory)?,
+            expression: kids.orders(expression.len(), memory)?,
+        },
+        G::Project { variables, .. } => G::Project {
+            inner: Child::try_new(kids.pattern(), memory)?,
+            variables: clone_shallow_vec_with_memory(variables, memory)?,
+        },
+        G::Distinct { .. } => G::Distinct {
+            inner: Child::try_new(kids.pattern(), memory)?,
+        },
+        G::Reduced { .. } => G::Reduced {
+            inner: Child::try_new(kids.pattern(), memory)?,
+        },
+        G::Slice { start, length, .. } => G::Slice {
+            inner: Child::try_new(kids.pattern(), memory)?,
+            start: *start,
+            length: *length,
+        },
+        G::Group {
+            variables,
+            aggregates,
+            ..
+        } => G::Group {
+            inner: Child::try_new(kids.pattern(), memory)?,
+            variables: clone_shallow_vec_with_memory(variables, memory)?,
+            aggregates: clone_vec_with_memory(aggregates, memory, |(output, _), _| {
+                Ok((output.clone(), kids.aggregate()))
+            })?,
+        },
+        G::PropertyFunction(call) => G::PropertyFunction(PropertyFunctionCall {
+            iri: memory.string(&call.iri)?,
+            subject_args: kids.terms(call.subject_args.len(), memory)?,
+            object_args: kids.terms(call.object_args.len(), memory)?,
+        }),
+        G::Unfold {
+            element, companion, ..
+        } => G::Unfold {
+            inner: Child::try_new(kids.pattern(), memory)?,
+            expression: kids.expr(),
+            element: element.clone(),
+            companion: companion.clone(),
+        },
+    })
+}
+
+fn clone_function<S: Admission + ?Sized>(
+    function: &crate::algebra::Function,
+    memory: &mut Memory<'_, S>,
+) -> Result<crate::algebra::Function, StorageError> {
+    use crate::algebra::Function as F;
+    Ok(match function {
+        F::Purrdf(call) => F::Purrdf(crate::algebra::PurrdfCall {
+            fn_kind: call.fn_kind,
+            iri: memory.string(&call.iri)?,
+        }),
+        F::Cdt(call) => F::Cdt(crate::algebra::CdtCall {
+            fn_kind: call.fn_kind,
+            iri: memory.string(&call.iri)?,
+        }),
+        F::Str | F::Lang | F::LangMatches | F::Datatype | F::Iri | F::Uri
+        | F::BNode | F::Rand | F::Abs | F::Ceil | F::Floor | F::Round
+        | F::Concat | F::SubStr | F::StrLen | F::Replace | F::UCase | F::LCase
+        | F::EncodeForUri | F::Contains | F::StrStarts | F::StrEnds
+        | F::StrBefore | F::StrAfter | F::Year | F::Month | F::Day | F::Hours
+        | F::Minutes | F::Seconds | F::Timezone | F::Tz | F::Adjust | F::Now
+        | F::Uuid | F::StrUuid | F::Md5 | F::Sha1 | F::Sha256 | F::Sha384
+        | F::Sha512 | F::Sha3_224 | F::Sha3_256 | F::Sha3_384 | F::Sha3_512
+        | F::StrLang | F::StrDt | F::IsIri | F::IsUri | F::IsBlank | F::IsLiteral
+        | F::IsNumeric | F::Regex | F::Triple | F::Subject | F::Predicate
+        | F::Object | F::IsTriple | F::LangDir | F::StrLangDir | F::HasLang
+        | F::HasLangDir | F::Custom(_) => function.clone(),
+    })
+}
+
+fn assemble_expr<S: Admission + ?Sized>(
+    expr: &Expression,
+    kids: &mut Kids<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Expression, StorageError> {
+    use Expression as E;
+    macro_rules! binary {
+        ($variant:ident) => {

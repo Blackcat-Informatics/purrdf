@@ -1,0 +1,133 @@
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+error[E0433]: cannot find type `NativeDiagnosticKind` in this scope
+    --> crates/text/src/relation.rs:2342:98
+     |
+2342 | ...stic) if diagnostic.kind() == NativeDiagnosticKind::Function), "got {error:?}");
+     |                                  ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `NativeDiagnosticKind`
+     |
+help: consider importing one of these enums
+     |
+1879 +     use crate::relation::NativeDiagnosticKind;
+     |
+1879 +     use purrdf_sparql_eval::NativeDiagnosticKind;
+     |
+
+error[E0433]: cannot find type `NativeDiagnosticKind` in this scope
+    --> crates/text/src/relation.rs:2368:102
+     |
+2368 | ...stic) if diagnostic.kind() == NativeDiagnosticKind::Function), "got {error:?}");
+     |                                  ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `NativeDiagnosticKind`
+     |
+help: consider importing one of these enums
+     |
+1879 +     use crate::relation::NativeDiagnosticKind;
+     |
+1879 +     use purrdf_sparql_eval::NativeDiagnosticKind;
+     |
+
+error[E0433]: cannot find type `NativeDiagnosticKind` in this scope
+    --> crates/text/src/relation.rs:2374:102
+     |
+2374 | ...stic) if diagnostic.kind() == NativeDiagnosticKind::Function), "got {error:?}");
+     |                                  ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `NativeDiagnosticKind`
+     |
+help: consider importing one of these enums
+     |
+1879 +     use crate::relation::NativeDiagnosticKind;
+     |
+1879 +     use purrdf_sparql_eval::NativeDiagnosticKind;
+     |
+
+error[E0433]: cannot find type `NativeDiagnosticKind` in this scope
+    --> crates/text/src/relation.rs:2449:102
+     |
+2449 | ...stic) if diagnostic.kind() == NativeDiagnosticKind::Function), "got {error:?}");
+     |                                  ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `NativeDiagnosticKind`
+     |
+help: consider importing one of these enums
+     |
+1879 +     use crate::relation::NativeDiagnosticKind;
+     |
+1879 +     use purrdf_sparql_eval::NativeDiagnosticKind;
+     |
+
+error[E0433]: cannot find type `NativeDiagnosticKind` in this scope
+    --> crates/text/src/relation.rs:2458:102
+     |
+2458 | ...stic) if diagnostic.kind() == NativeDiagnosticKind::Function), "got {error:?}");
+     |                                  ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `NativeDiagnosticKind`
+     |
+help: consider importing one of these enums
+     |
+1879 +     use crate::relation::NativeDiagnosticKind;
+     |
+1879 +     use purrdf_sparql_eval::NativeDiagnosticKind;
+     |
+
+error[E0433]: cannot find type `NativeDiagnosticKind` in this scope
+    --> crates/text/src/relation.rs:2469:102
+     |
+2469 | ...stic) if diagnostic.kind() == NativeDiagnosticKind::Function), "got {error:?}");
+     |                                  ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `NativeDiagnosticKind`
+     |
+help: consider importing one of these enums
+     |
+1879 +     use crate::relation::NativeDiagnosticKind;
+     |
+1879 +     use purrdf_sparql_eval::NativeDiagnosticKind;
+     |
+
+error[E0433]: cannot find type `NativeDiagnosticKind` in this scope
+    --> crates/text/src/relation.rs:2589:102
+     |
+2589 | ...stic) if diagnostic.kind() == NativeDiagnosticKind::Function), "got {error:?}");
+     |                                  ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `NativeDiagnosticKind`
+     |
+help: consider importing one of these enums
+     |
+1879 +     use crate::relation::NativeDiagnosticKind;
+     |
+1879 +     use purrdf_sparql_eval::NativeDiagnosticKind;
+     |
+
+error[E0433]: cannot find type `NativeDiagnosticKind` in this scope
+    --> crates/text/src/relation.rs:2595:102
+     |
+2595 | ...stic) if diagnostic.kind() == NativeDiagnosticKind::Function), "got {error:?}");
+     |                                  ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `NativeDiagnosticKind`
+     |
+help: consider importing one of these enums
+     |
+1879 +     use crate::relation::NativeDiagnosticKind;
+     |
+1879 +     use purrdf_sparql_eval::NativeDiagnosticKind;
+     |
+
+error[E0433]: cannot find type `NativeDiagnosticKind` in this scope
+    --> crates/text/src/relation.rs:3187:98
+     |
+3187 | ...stic) if diagnostic.kind() == NativeDiagnosticKind::Function), "got {error:?}");
+     |                                  ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `NativeDiagnosticKind`
+     |
+help: consider importing one of these enums
+     |
+1879 +     use crate::relation::NativeDiagnosticKind;
+     |
+1879 +     use purrdf_sparql_eval::NativeDiagnosticKind;
+     |
+
+error[E0433]: cannot find type `NativeDiagnosticKind` in this scope
+    --> crates/text/src/relation.rs:3207:102
+     |
+3207 | ...stic) if diagnostic.kind() == NativeDiagnosticKind::Function), "got {error:?}");
+     |                                  ^^^^^^^^^^^^^^^^^^^^ use of undeclared type `NativeDiagnosticKind`
+     |
+help: consider importing one of these enums
+     |
+1879 +     use crate::relation::NativeDiagnosticKind;
+     |
+1879 +     use purrdf_sparql_eval::NativeDiagnosticKind;
+     |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `purrdf-text` (lib test) due to 10 previous errors

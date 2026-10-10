@@ -1,0 +1,418 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The canonical lexical mapping: [`canonical_lexical`].
+//!
+//! SEP-0009 defines **no** canonical form for `cdt:List` / `cdt:Map`. This module
+//! therefore *chooses* one, for exactly the same reason and with exactly the same
+//! standing as `purrdf_xsd::XsdValue::canonical_lexical` choosing the XSD canonical
+//! mapping: whenever PurRDF **computes** a composite value it must write some
+//! lexical form, and a serializer that writes different bytes for the same value on
+//! two runs breaks the workspace's byte-determinism rule. Values PurRDF merely
+//! *carries* are never rewritten — the kernel keeps literals lexical-verbatim.
+//!
+//! # The form
+//!
+//! * A list is `[`, its elements separated by a single `,`, `]`. No whitespace
+//!   anywhere. An empty list is `[]`.
+//! * A map is `{`, its entries separated by a single `,`, `}`, each entry spelled
+//!   `key` `:` `value` with no whitespace. Entries are written in the crate's
+//!   syntactic key order ([`crate::total_key_cmp`]), which is what makes the output
+//!   independent of authoring order. An empty map is `{}`.
+//! * An IRI is [`purrdf_lex::term_syntax::write_iri`]'s `IRIREF`: `<`, the IRI
+//!   text through [`purrdf_lex::iri_escape`], `>`.
+//! * A blank node is `_:` followed by its label.
+//! * A literal is **always explicit**: `"lexical"^^<datatype>`, with no shorthand —
+//!   never a bare `1`, `1.5`, `1e0`, `true` or `"abc"`. A language-tagged literal is
+//!   `"lexical"@tag`, and a directional one `"lexical"@tag--ltr` / `--rtl`. The
+//!   lexical form is escaped by the [`Canonical`](Carrier::Canonical) carrier of
+//!   [`purrdf_lex::literal_escape`], the RDF 1.2 canonical string body.
+//! * A triple term is the RDF 1.2 term syntax's `<<( s p o )>>`: the three
+//!   components separated by a single space, with one space inside each delimiter.
+//! * The null element is `null`.
+//!
+//! # Total by construction, and iterative
+//!
+//! [`canonical_lexical`] takes `&CdtValue` and returns `String`: there is no failure
+//! mode, because every inhabitant of the type has a spelling. It walks the value
+//! with an explicit heap job stack and never recurses, so it is safe on a value of
+//! any depth.
+//!
+//! # Measuring without materialising
+//!
+//! [`canonical_lexical_len`] answers "how many bytes would that be?" without
+//! allocating them. It is not a second, parallel spelling of the form: every
+//! constructor measures the value it builds by driving the **same** walker through a
+//! measuring sink instead of a `String`, and the value carries that measure, so the
+//! two can never drift. The measuring sink stops at a nested composite and reads the
+//! measure it already carries, which is what makes building a value one level at a
+//! time linear in its depth. [`crate::functions`] needs the measure before the value
+//! exists: a minted composite must be refused *before* it is built when its canonical
+//! form would exceed [`crate::MAX_LEXICAL_BYTES`], and rendering the very thing you
+//! are trying not to allocate is not a bound check.
+
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt;
+
+use purrdf_lex::literal_escape::{self, Carrier};
+use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri};
+use purrdf_lex::text_out::TextOut;
+
+use crate::memory::{Memory, Resident, Storage, StorageError};
+
+use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm};
+use crate::value::{CdtContents, CdtValue};
+
+/// One step of the iterative renderer.
+enum Job<'a> {
+    /// Render a term (which may open a nested composite).
+    Term(&'a CdtTerm),
+    /// Render a map key (always a leaf).
+    Key(&'a CdtKey),
+    /// Emit a fixed piece of punctuation.
+    Punct(&'static str),
+}
+
+/// Where the canonical renderer puts its output.
+///
+/// There are exactly two implementations — [`FixedText`], which materialises the form,
+/// and [`Measure`], which keeps only its byte length — and **one** walker drives
+/// both. Measuring is therefore guaranteed to agree with rendering, byte for byte,
+/// with no second description of the form to fall out of step.
+///
+/// A sink is a [`TextOut`], so the lexical layer's term writers append into it
+/// directly and the measure counts exactly the bytes they would write.
+trait Sink: TextOut {
+    /// A nested composite: schedule its rendering, or account for its length.
+    fn composite<'a>(
+        &mut self,
+        jobs: &mut Vec<Job<'a>>,
+        value: &'a CdtValue,
+        memory: &mut Memory<'_>,
+    ) -> Result<(), StorageError>;
+}
+
+/// A [`Sink`] that materialises nothing and accumulates only the byte length.
+///
+/// Saturating rather than wrapping: a length that overflows `usize` is astronomically
+/// over every bound this crate enforces, and saturating keeps the comparison against
+/// [`crate::MAX_LEXICAL_BYTES`] correct instead of wrapping it to a small number.
+///
+/// A nested composite is not walked: it carries the length of its own canonical form
+/// from its construction, measured by this very sink, and that is what is added.
+struct Measure(usize);
+
+impl fmt::Write for Measure {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        TextOut::push_str(self, text);
+        Ok(())
+    }
+}
+
+impl TextOut for Measure {
+    fn push_str(&mut self, text: &str) {
+        self.0 = self.0.saturating_add(text.len());
+    }
+
+    fn push(&mut self, ch: char) {
+        self.0 = self.0.saturating_add(ch.len_utf8());
+    }
+}
+
+impl Sink for Measure {
+    fn composite<'a>(
+        &mut self,
+        _jobs: &mut Vec<Job<'a>>,
+        value: &'a CdtValue,
+        _memory: &mut Memory<'_>,
+    ) -> Result<(), StorageError> {
+        self.0 = self.0.saturating_add(value.extent().bytes);
+        Ok(())
+    }
+}
+
+/// The canonical lexical form of a composite value.
+///
+/// Byte-identical across runs, processes and hosts: the walk order is the value's
+/// own order, map entries are written in the crate's total key order, and no hash
+/// iteration, clock or RNG is consulted.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_cdt::{CdtDatatype, canonical_lexical, parse_cdt};
+///
+/// // Shorthands become explicit; whitespace disappears.
+/// let v = parse_cdt("[ 1 , null ]", CdtDatatype::List)?;
+/// assert_eq!(
+///     canonical_lexical(&v),
+///     "[\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>,null]"
+/// );
+///
+/// // Re-parsing the canonical form yields the same value (a fixpoint).
+/// let again = parse_cdt(&canonical_lexical(&v), CdtDatatype::List)?;
+/// assert_eq!(canonical_lexical(&again), canonical_lexical(&v));
+/// # Ok::<(), purrdf_cdt::CdtError>(())
+/// ```
+#[must_use]
+pub fn canonical_lexical(value: &CdtValue) -> String {
+    try_canonical_lexical(value, &mut Resident)
+        .expect("resident renderer capacity")
+        .0
+}
+
+/// Render the original canonical spelling under caller-owned admission.
+/// The returned byte count belongs to the caller's original storage grant.
+/// # Errors
+/// Returns original admission, allocator or checked-layout refusal.
+pub fn try_canonical_lexical(
+    value: &CdtValue,
+    storage: &mut impl Storage,
+) -> Result<(String, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    memory.scope(|memory| {
+        let expected = canonical_lexical_len(value);
+        let mut out = FixedText {
+            text: String::new(),
+            failed: false,
+        };
+        memory.reserve_string(&mut out.text, expected)?;
+        let mut jobs = Vec::new();
+        push_value(&mut jobs, value, memory)?;
+        run(&mut out, jobs, memory)?;
+        if out.failed || out.text.len() != expected {
+            return Err(StorageError::FormattingFailed);
+        }
+        Ok((out.text, memory.live_bytes()))
+    })
+}
+
+/// The immutable value's exact canonical extent is admitted before rendering.
+/// The same emitter writes into this checked destination; a broken extent can
+/// never trigger an unpriced String reallocation or publish partial output.
+struct FixedText {
+    text: String,
+    failed: bool,
+}
+impl fmt::Write for FixedText {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        if self.failed || self.text.capacity().saturating_sub(self.text.len()) < text.len() {
+            self.failed = true;
+            return Err(fmt::Error);
+        }
+        self.text.push_str(text);
+        Ok(())
+    }
+}
+impl TextOut for FixedText {
+    fn push_str(&mut self, text: &str) {
+        let _ = fmt::Write::write_str(self, text);
+    }
+    fn push(&mut self, ch: char) {
+        let mut bytes = [0; 4];
+        TextOut::push_str(self, ch.encode_utf8(&mut bytes));
+    }
+    fn failed(&self) -> bool {
+        self.failed
+    }
+}
+impl Sink for FixedText {
+    fn composite<'a>(
+        &mut self,
+        jobs: &mut Vec<Job<'a>>,
+        value: &'a CdtValue,
+        memory: &mut Memory<'_>,
+    ) -> Result<(), StorageError> {
+        push_value(jobs, value, memory)
+    }
+}
+
+/// The **byte length** of [`canonical_lexical`], without allocating it.
+///
+/// Exactly equal to `canonical_lexical(value).len()` for every value: the value
+/// carries the length from its construction, where it was measured by the same walker
+/// that renders (see the `Sink` trait) through a sink that keeps only the count. That
+/// is what lets [`crate::functions`] check a prospective composite against
+/// [`crate::MAX_LEXICAL_BYTES`] *before* deciding to build it, and what makes this
+/// answer cost the same for a value of any size.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_cdt::{canonical_lexical, canonical_lexical_len, parse_list};
+///
+/// let value = parse_list("[1, 'two'@en, [ true ]]")?;
+/// assert_eq!(canonical_lexical_len(&value), canonical_lexical(&value).len());
+/// # Ok::<(), purrdf_cdt::CdtError>(())
+/// ```
+#[must_use]
+pub fn canonical_lexical_len(value: &CdtValue) -> usize {
+    value.extent().bytes
+}
+
+/// The canonical lexical form of a single map key, used by the duplicate-key
+/// diagnostic.
+#[must_use]
+pub fn canonical_key_lexical(key: &CdtKey) -> String {
+    try_canonical_key_lexical(key, &mut Memory::new(&mut Resident))
+        .expect("resident canonical key storage")
+}
+
+pub(crate) fn try_canonical_key_lexical(
+    key: &CdtKey,
+    memory: &mut Memory<'_>,
+) -> Result<String, StorageError> {
+    memory.scope(|memory| {
+        let length = key_lexical_len(key);
+        let mut output = FixedText {
+            text: String::new(),
+            failed: false,
+        };
+        memory.reserve_string(&mut output.text, length)?;
+        write_key(&mut output, key);
+        if output.failed || output.text.len() != length {
+            return Err(StorageError::FormattingFailed);
+        }
+        Ok(output.text)
+    })
+}
+
+/// The byte length one element occupies in a canonical form, without allocating it.
+/// A nested composite answers from its carried measure, so this costs the element's
+/// own leaves and nothing below a composite.
+
+
+pub(crate) fn try_term_lexical_len(
+    term: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<usize, StorageError> {
+    let mut out = Measure(0);
+    let mut jobs = Vec::new();
+    memory.push(&mut jobs, Job::Term(term))?;
+    run(&mut out, jobs, memory)?;
+    Ok(out.0)
+}
+
+/// Measure the original triple renderer before its checked box is born.
+pub(crate) fn try_triple_lexical_len(
+    triple: &CdtTripleTerm,
+    memory: &mut Memory<'_>,
+) -> Result<usize, StorageError> {
+    let mut output = Measure(0);
+    let mut jobs = Vec::new();
+    push_triple(&mut jobs, triple, memory)?;
+    run(&mut output, jobs, memory)?;
+    Ok(output.0)
+}
+
+/// The byte length one map key occupies in a canonical form, without allocating it.
+pub(crate) fn key_lexical_len(key: &CdtKey) -> usize {
+    let mut out = Measure(0);
+    write_key(&mut out, key);
+    out.0
+}
+
+/// Drive the renderer's job stack into a sink. Iterative: nesting costs heap, never
+/// stack.
+fn run<S: Sink>(
+    out: &mut S,
+    mut jobs: Vec<Job<'_>>,
+    memory: &mut Memory<'_>,
+) -> Result<(), StorageError> {
+    while let Some(job) = jobs.pop() {
+        match job {
+            Job::Punct(text) => out.push_str(text),
+            Job::Key(key) => write_key(out, key),
+            Job::Term(term) => match term {
+                CdtTerm::Composite(inner) => out.composite(&mut jobs, inner.as_ref(), memory)?,
+                CdtTerm::TripleTerm(triple) => push_triple(&mut jobs, triple.as_ref(), memory)?,
+                CdtTerm::Iri(iri) => write_iri(iri, out),
+                CdtTerm::Blank(label) => write_blank(label, out),
+                CdtTerm::Literal(literal) => write_literal(out, literal),
+                CdtTerm::Null => out.push_str("null"),
+            },
+        }
+    }
+    memory.release_vec(jobs)
+}
+
+/// Push the jobs for a composite, in reverse emission order (the stack pops LIFO).
+fn push_value<'a>(
+    jobs: &mut Vec<Job<'a>>,
+    value: &'a CdtValue,
+    memory: &mut Memory<'_>,
+) -> Result<(), StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => {
+            memory.push(jobs, Job::Punct("]"))?;
+            for (index, item) in items.iter().enumerate().rev() {
+                memory.push(jobs, Job::Term(item))?;
+                if index > 0 {
+                    memory.push(jobs, Job::Punct(","))?;
+                }
+            }
+            memory.push(jobs, Job::Punct("["))?;
+        }
+        CdtContents::Map(entries) => {
+            memory.push(jobs, Job::Punct("}"))?;
+            for (index, CdtEntry { key, value: item }) in entries.iter().enumerate().rev() {
+                memory.push(jobs, Job::Term(item))?;
+                memory.push(jobs, Job::Punct(":"))?;
+                memory.push(jobs, Job::Key(key))?;
+                if index > 0 {
+                    memory.push(jobs, Job::Punct(","))?;
+                }
+            }
+            memory.push(jobs, Job::Punct("{"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Push the jobs for a triple term, in reverse emission order.
+fn push_triple<'a>(
+    jobs: &mut Vec<Job<'a>>,
+    triple: &'a CdtTripleTerm,
+    memory: &mut Memory<'_>,
+) -> Result<(), StorageError> {
+    memory.push(jobs, Job::Punct(TRIPLE_TERM_CLOSE))?;
+    memory.push(jobs, Job::Punct(" "))?;
+    memory.push(jobs, Job::Term(&triple.object))?;
+    memory.push(jobs, Job::Punct(" "))?;
+    memory.push(jobs, Job::Term(&triple.predicate))?;
+    memory.push(jobs, Job::Punct(" "))?;
+    memory.push(jobs, Job::Term(&triple.subject))?;
+    memory.push(jobs, Job::Punct(" "))?;
+    memory.push(jobs, Job::Punct(TRIPLE_TERM_OPEN))?;
+    Ok(())
+}
+
+fn write_key<S: Sink>(out: &mut S, key: &CdtKey) {
+    match key {
+        CdtKey::Iri(iri) => write_iri(iri, out),
+        CdtKey::Literal(literal) => write_literal(out, literal),
+    }
+}
+
+/// A literal with its datatype always written: the canonical string body, then
+/// `@tag`, `@tag--dir`, or `^^` and the datatype's `IRIREF`.
+fn write_literal<S: Sink>(out: &mut S, literal: &CdtLiteral) {
+    out.push('"');
+    literal_escape::write(&literal.lexical, Carrier::Canonical, out);
+    out.push('"');
+    match &literal.language {
+        Some(language) => {
+            out.push('@');
+            out.push_str(language);
+            if let Some(direction) = literal.direction {
+                out.push_str("--");
+                out.push_str(direction.as_str());
+            }
+        }
+        None => {
+            out.push_str("^^");
+            write_iri(&literal.datatype, out);
+        }
+    }
+}

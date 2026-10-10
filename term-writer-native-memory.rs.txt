@@ -1,0 +1,72 @@
+pub fn write_term_value<W: TextOut + ?Sized>(term: &TermValue, out: &mut W) {
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+    write_term_value_with_memory(term, out, &mut memory).expect("resident RDF term spelling");
+}
+
+/// Append the same canonical RDF 1.2 term under original native working admission.
+///
+/// The destination keeps its own physical owner. This memory covers the actual
+/// nested-term work list and temporary canonical blank label; each is destroyed
+/// before its grant is released. Destination failure stops the same emitter.
+///
+/// # Errors
+/// Returns the first working-layout, admission or allocator failure.
+pub fn write_term_value_with_memory<
+    W: TextOut + ?Sized,
+    S: purrdf_lex::allocation::Admission + ?Sized,
+>(
+    term: &TermValue,
+    out: &mut W,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    enum Step<'t> {
+        Term(&'t TermValue),
+        Text(&'static str),
+    }
+    memory.scope(|memory| {
+        let mut held = Vec::new();
+        let mut next = Some(Step::Term(term));
+        while !out.failed() {
+            let Some(step) = next.take().or_else(|| held.pop()) else { break };
+            let term = match step {
+                Step::Text(text) => {
+                    out.push_str(text);
+                    continue;
+                }
+                Step::Term(term) => term,
+            };
+            match term {
+                TermValue::Iri(iri) => write_iri(iri, out),
+                TermValue::Blank { label, scope } => {
+                    let encoded = crate::blank_label::encode_blank_label_with_memory(
+                        label, *scope, LabelAlphabet::BlankNodeLabel, memory,
+                    )?;
+                    write_blank(&encoded, out);
+                    if let std::borrow::Cow::Owned(encoded) = encoded {
+                        memory.release_string(encoded)?;
+                    }
+                }
+                TermValue::Literal { lexical_form, datatype, language, direction } => {
+                    write_literal(
+                        lexical_form, datatype, language.as_deref(),
+                        direction.map(crate::RdfTextDirection::as_str), out,
+                    );
+                }
+                TermValue::Triple { s, p, o } => {
+                    out.push_str(TRIPLE_TERM_OPEN);
+                    out.push(' ');
+                    if out.failed() { break; }
+                    for step in [
+                        Step::Text(TRIPLE_TERM_CLOSE), Step::Text(" "), Step::Term(o),
+                        Step::Text(" "), Step::Term(p), Step::Text(" "),
+                    ] {
+                        memory.push(&mut held, step)?;
+                    }
+                    next = Some(Step::Term(s));
+                }
+            }
+        }
+        memory.release_vec(held)
+    })
+}

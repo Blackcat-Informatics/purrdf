@@ -1,0 +1,287 @@
+diff --git a/crates/sparql-eval/src/bgp.rs b/crates/sparql-eval/src/bgp.rs
+--- a/crates/sparql-eval/src/bgp.rs
++++ b/crates/sparql-eval/src/bgp.rs
+@@ -39,6 +39,7 @@
+     GraphPattern, NamedNodePattern, PropertyFunctionCall, TermPattern, TriplePattern, Variable,
+ };
+ use purrdf_xsd::ieee::{Binary64, Binary64Scope};
++use purrdf_lex::text_out::TextOut;
+ 
+ use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
+ use crate::dataset_spec::{ActiveDataset, GraphScope};
+@@ -46,6 +47,7 @@
+ use crate::eval::EvalCtx;
+ use crate::governor::ledger::PlanEstimate;
+ use crate::plan::PlanShape;
++use crate::workspace::{AdmittedRecords, AdmittedVec, SharedWorkspace};
+ use crate::scratch::SolutionTerm;
+ use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
+ use crate::statement_layer::{self, StatementProbe};
+@@ -1868,66 +1870,130 @@
+ /// Format a triple pattern as a compact SPARQL-like string for plan-introspection
+ /// output. The format is human-readable and stable; it is not a round-trippable
+ /// serializer.
++#[cfg(test)]
+ fn triple_pattern_to_string(tp: &TriplePattern) -> String {
+-    format!(
+-        "{} {} {} .",
+-        term_pattern_to_string(&tp.subject),
+-        named_node_pattern_to_string(&tp.predicate),
+-        term_pattern_to_string(&tp.object)
+-    )
++
++    let mut out = String::new();
++    write_triple_pattern(tp, &mut out, &crate::WorkspaceCapability::resident()).expect("resident triple spelling");
++    out
+ }
+ 
++fn write_triple_pattern(
++    triple: &TriplePattern,
++    out: &mut impl TextOut,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<(), EvalError> {
++    write_term_pattern(&triple.subject, out, workspace)?;
++    out.push(' ');
++    write_named_node_pattern(&triple.predicate, out);
++    out.push(' ');
++    write_term_pattern(&triple.object, out, workspace)?;
++    out.push_str(" .");
++    if out.failed() { return Err(EvalError::WorkspaceBoundOverflow); }
++    Ok(())
++}
++
++/// The same RDF spelling is first measured and then written into its exact
++/// admitted destination. The sink cannot silently grow a bounded destination.
++fn triple_pattern_text_admitted(
++    triple: &TriplePattern,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<(String, crate::WorkspaceAllocation), EvalError> {
++    struct Text<'a> { output: Option<&'a mut String>, bytes: usize, failed: bool }
++    impl std::fmt::Write for Text<'_> {
++        fn write_str(&mut self, text: &str) -> std::fmt::Result {
++            if self.failed { return Err(std::fmt::Error); }
++            let Some(bytes) = self.bytes.checked_add(text.len()) else {
++                self.failed = true; return Err(std::fmt::Error);
++            };
++            if let Some(output) = self.output.as_mut() {
++                if bytes > output.capacity() { self.failed = true; return Err(std::fmt::Error); }
++                output.push_str(text);
++            }
++            self.bytes = bytes;
++            Ok(())
++        }
++    }
++    impl TextOut for Text<'_> {
++        fn push_str(&mut self, text: &str) { let _ = std::fmt::Write::write_str(self, text); }
++        fn push(&mut self, character: char) { let _ = std::fmt::Write::write_char(self, character); }
++        fn failed(&self) -> bool { self.failed }
++    }
++    let mut measured = Text { output: None, bytes: 0, failed: false };
++    write_triple_pattern(triple, &mut measured, workspace)?;
++    let bytes = measured.bytes;
++    let allocation = workspace.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++    let mut output = String::new();
++    output.try_reserve_exact(bytes).map_err(|_| EvalError::AllocationFailed { construct: "EXPLAIN triple text" })?;
++    {
++        let mut destination = Text { output: Some(&mut output), bytes: 0, failed: false };
++        write_triple_pattern(triple, &mut destination, workspace)?;
++        if destination.failed || destination.bytes != bytes { return Err(EvalError::WorkspaceBoundOverflow); }
++    }
++    Ok((output, allocation))
++
++}
++
+ /// Format a term pattern as a compact SPARQL-like string: every constant in the
+ /// RDF 1.2 term syntax ([`purrdf_lex::term_syntax`]), a quoted triple as
+ /// `<<( s p o )>>`, written left to right over a work list of the pieces still to
+ /// emit, so a term nested to any depth is formatted on constant machine stack.
++#[cfg(test)]
+ fn term_pattern_to_string(term: &TermPattern) -> String {
+-    /// One piece of the text still to emit.
++
++    let mut out = String::new();
++    write_term_pattern(term, &mut out, &crate::WorkspaceCapability::resident()).expect("resident term spelling");
++    out
++}
++
++fn write_term_pattern(
++    term: &TermPattern,
++    out: &mut impl TextOut,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<(), EvalError> {
+     enum Piece<'a> {
+         Term(&'a TermPattern),
+         Predicate(&'a NamedNodePattern),
+         Text(&'static str),
+     }
+-    let mut out = String::new();
+-    let mut pending = vec![Piece::Term(term)];
++    let mut storage = crate::workspace::LexicalFrame::new(workspace);
++    let mut pending = purrdf_lex::walk::WorkList::<Piece<'_>, 16>::new();
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++    pending.try_push_admitted(Piece::Term(term), &mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "EXPLAIN term walk"))?;
+     while let Some(piece) = pending.pop() {
+         match piece {
+             Piece::Text(text) => out.push_str(text),
+-            Piece::Predicate(nn) => write_named_node_pattern(nn, &mut out),
+-            Piece::Term(TermPattern::Variable(v)) => {
+-                out.push('?');
+-                out.push_str(v.as_str());
+-            }
+-            Piece::Term(TermPattern::BlankNode(b)) => write_blank(b.as_str(), &mut out),
+-            Piece::Term(TermPattern::NamedNode(n)) => write_iri(n.as_str(), &mut out),
+-            Piece::Term(TermPattern::Literal(l)) => write_literal(
+-                l.value(),
+-                l.datatype().as_str(),
+-                l.language(),
+-                l.direction()
+-                    .map(purrdf_sparql_algebra::BaseDirection::as_str),
+-                &mut out,
++            Piece::Predicate(named) => write_named_node_pattern(named, out),
++            Piece::Term(TermPattern::Variable(variable)) => { out.push('?'); out.push_str(variable.as_str()); }
++            Piece::Term(TermPattern::BlankNode(blank)) => write_blank(blank.as_str(), out),
++            Piece::Term(TermPattern::NamedNode(named)) => write_iri(named.as_str(), out),
++            Piece::Term(TermPattern::Literal(literal)) => write_literal(
++                literal.value(), literal.datatype().as_str(), literal.language(),
++                literal.direction().map(purrdf_sparql_algebra::BaseDirection::as_str), out,
+             ),
+-            Piece::Term(TermPattern::Triple(t)) => {
++            Piece::Term(TermPattern::Triple(triple)) => {
+                 out.push_str(TRIPLE_TERM_OPEN);
+                 out.push(' ');
+-                pending.extend([
+-                    Piece::Text(TRIPLE_TERM_CLOSE),
+-                    Piece::Text(" "),
+-                    Piece::Term(&t.object),
+-                    Piece::Text(" "),
+-                    Piece::Predicate(&t.predicate),
+-                    Piece::Text(" "),
+-                    Piece::Term(&t.subject),
+-                ]);
++                for child in [
++                    Piece::Text(TRIPLE_TERM_CLOSE), Piece::Text(" "), Piece::Term(&triple.object),
++                    Piece::Text(" "), Piece::Predicate(&triple.predicate), Piece::Text(" "), Piece::Term(&triple.subject),
++                ] {
++                    pending.try_push_admitted(child, &mut memory)
++                        .map_err(|error| memory.admission_mut().storage_error(error, "EXPLAIN term walk"))?;
++                }
+             }
+         }
++        if out.failed() { return Err(EvalError::WorkspaceBoundOverflow); }
+     }
+-    out
++    pending.release_admitted(&mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "EXPLAIN term walk"))?;
++    Ok(())
++
+ }
+ 
+ /// Append a named-node pattern (IRI or variable).
+-fn write_named_node_pattern(nn: &NamedNodePattern, out: &mut String) {
++fn write_named_node_pattern(nn: &NamedNodePattern, out: &mut impl TextOut) {
+     match nn {
+         NamedNodePattern::Variable(v) => {
+             out.push('?');
+@@ -1938,6 +2004,7 @@
+ }
+ 
+ /// Format a named-node pattern (IRI or variable) as a compact string.
++#[cfg(test)]
+ fn named_node_pattern_to_string(nn: &NamedNodePattern) -> String {
+     let mut out = String::new();
+     write_named_node_pattern(nn, &mut out);
+@@ -1954,28 +2021,36 @@
+ pub(crate) struct PlanSurvey {
+     /// Human-readable triple-pattern strings, in the order the planner chose, for every
+     /// BGP with at least two patterns. The historical `explain_query` output.
+-    pub(crate) orders: Vec<String>,
++    pub(crate) orders: AdmittedRecords<String>,
+     /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
+     /// walks; `None` where it predicts nothing.
+-    pub(crate) estimates: Vec<Option<PlanEstimate>>,
++    pub(crate) estimates: AdmittedVec<Option<PlanEstimate>>,
+     /// The shape of that tree, which is where a surveyed node finds its id.
+-    shape: Arc<PlanShape>,
++    shape: SharedWorkspace<PlanShape>,
++    workspace: crate::WorkspaceCapability,
+ }
+ 
+ purrdf_hash::debug_non_exhaustive!(PlanSurvey { orders, estimates });
+ 
+ impl PlanSurvey {
+     /// An empty survey of the tree `shape` numbers.
+-    pub(crate) fn for_shape(shape: &Arc<PlanShape>) -> Self {
+-        Self {
+-            orders: Vec::new(),
+-            estimates: vec![None; shape.len()],
+-            shape: Arc::clone(shape),
+-        }
++    pub(crate) fn for_shape(shape: &SharedWorkspace<PlanShape>) -> Self {
++
++        Self::for_shape_admitted(shape, &crate::WorkspaceCapability::resident()).expect("resident plan survey")
+     }
+ 
++    pub(crate) fn for_shape_admitted(
++        shape: &SharedWorkspace<PlanShape>,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Self, EvalError> {
++        let mut estimates = AdmittedVec::with_capacity(shape.len(), workspace)?;
++        for _ in 0..shape.len() { estimates.push_reserved(None); }
++        Ok(Self { orders: AdmittedRecords::new(workspace), estimates, shape: shape.clone(), workspace: workspace.clone() })
++
++}
++
+     /// The shape of the surveyed tree.
+-    pub(crate) const fn shape(&self) -> &Arc<PlanShape> {
++    pub(crate) const fn shape(&self) -> &SharedWorkspace<PlanShape> {
+         &self.shape
+     }
+ 
+@@ -1985,7 +2060,7 @@
+             .shape
+             .node_of(node)
+             .expect("the survey walks only nodes of the tree it was sized for");
+-        self.estimates[id.index()] = Some(estimate);
++        self.estimates.as_mut_slice()[id.index()] = Some(estimate);
+     }
+ 
+     /// The prediction for `node`, when it is a node of the surveyed tree and the survey
+@@ -2399,7 +2474,7 @@
+     survey: &mut PlanSurvey,
+ ) -> Result<(), EvalError> {
+     let (_, estimate, order) = forecast_bgp(dataset, active_dataset, active_graph, patterns, seed)?;
+-    record_bgp_forecast(node, patterns, estimate, &order, survey);
++    record_bgp_forecast(node, patterns, estimate, &order, survey)?;
+     Ok(())
+ }
+ 
+@@ -2411,13 +2486,17 @@
+     estimate: PlanEstimate,
+     order: &[usize],
+     survey: &mut PlanSurvey,
+-) {
++) -> Result<(), EvalError> {
++
+     if patterns.len() >= 2 {
+         for &i in order {
+-            survey.orders.push(triple_pattern_to_string(&patterns[i]));
++            let (text, allocation) = triple_pattern_text_admitted(&patterns[i], &survey.workspace)?;
++            survey.orders.push(text, allocation)?;
+         }
+     }
+     survey.record(node, estimate);
++    Ok(())
++
+ }
+ 
+ /// Record the survey's prediction for one property-function node, keyed by that node's
+@@ -5108,7 +5187,7 @@
+             .enumerate()
+             .filter_map(|(id, estimate)| estimate.clone().map(|estimate| (id, estimate)))
+             .collect();
+-        (survey.orders.clone(), estimates)
++        (survey.orders.to_vec(), estimates)
+     }
+ 
+     // ── The tests ──────────────────────────────────────────────────────────────────

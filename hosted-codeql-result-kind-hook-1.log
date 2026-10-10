@@ -1,0 +1,4 @@
+cargo wrapper: relocating /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/target -> /opt/.cargo/target/508-sparql-eval-complete-bounded-workspace-a0e79c11
+OK: non-Rust ratchet: 2 changed non-Rust path(s) in the staged index against 291513809a3b (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/508-sparql-eval-complete-bounded-workspace 1042c8224] Report unexpected governed result kinds without payload logging
+ 1 file changed, 2 insertions(+), 1 deletion(-)

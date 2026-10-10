@@ -1,0 +1,46 @@
+impl CdtValue {
+    /// Move an original admitted array into a checked list without copying it.
+    /// The caller retains the input array/payload account. The returned byte count
+    /// covers only additional surviving constructor storage.
+    ///
+    /// # Errors
+    /// Returns the original bound diagnostic or checked physical failure.
+    pub fn list_admitted(items: Vec<CdtTerm>, storage: &mut dyn crate::memory::Storage) -> Result<(Self, usize), crate::memory::ReadError> {
+        let mut memory = crate::memory::Memory::new(storage);
+        let value = memory.scope(|memory| Self::list_with_memory(items, memory))??;
+        Ok((value, memory.live_bytes()))
+    }
+    pub(crate) fn list_with_memory(items: Vec<CdtTerm>, memory: &mut crate::memory::Memory<'_>) -> Result<Result<Self, CdtError>, crate::memory::StorageError> {
+        let extent = crate::limits::try_list_extent(items.iter(), memory)?;
+        Ok(crate::limits::check_extent(&extent).map(|()| Self::from_checked_items(items, extent)))
+    }
+
+    /// Move an original admitted array into a checked, stably ordered map.
+    /// The original input account remains with the caller; duplicate-key text is
+    /// authored under the native callback before the diagnostic escapes.
+    ///
+    /// # Errors
+    /// Preserves duplicate-key offsets/wording and bounds separately from storage.
+    pub fn map_admitted(entries: Vec<CdtEntry>, storage: &mut dyn crate::memory::Storage) -> Result<(Self, usize), crate::memory::ReadError> {
+        let mut memory = crate::memory::Memory::new(storage);
+        let value = memory.scope(|memory| Self::map_with_memory(entries, memory))??;
+        Ok((value, memory.live_bytes()))
+    }
+    pub(crate) fn map_with_memory(mut entries: Vec<CdtEntry>, memory: &mut crate::memory::Memory<'_>) -> Result<Result<Self, CdtError>, crate::memory::StorageError> {
+        memory.sort_by(&mut entries, |x, y| crate::ops::total_key_cmp(&x.key, &y.key))?;
+        let mut offset = 1usize;
+        for window in entries.windows(2) {
+            offset = offset.saturating_add(crate::render::key_lexical_len(&window[0].key))
+                .saturating_add(crate::render::try_term_lexical_len(&window[0].value, memory)?)
+                .saturating_add(2);
+            if crate::ops::total_key_cmp(&window[0].key, &window[1].key) == Ordering::Equal {
+                return Ok(Err(CdtError::DuplicateMapKey {
+                    offset,
+                    key: crate::render::try_canonical_key_lexical(&window[0].key, memory)?,
+                }));
+            }
+        }
+        let extent = crate::limits::try_map_extent(entries.iter().map(|entry| (&entry.key, &entry.value)), memory)?;
+        Ok(crate::limits::check_extent(&extent).map(|()| Self::from_checked_entries(entries, extent)))
+    }
+}

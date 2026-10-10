@@ -1,0 +1,511 @@
+--- a/crates/cdt/src/tree.rs
++++ b/crates/cdt/src/tree.rs
+@@ -275,19 +275,32 @@
+     Ok(result)
+ }
+ 
++// The public clone entry and resident Clone use one protocol. Each payload
++// retains its own native clone body, including the original iterative tree law.
++macro_rules! clone_entry {
++    ($(#[$meta:meta])* $type:ty, $resident:literal) => {
++        impl $type {
++            $(#[$meta])*
++            pub fn clone_admitted(
++                &self,
++                storage: &mut dyn $crate::memory::Storage,
++            ) -> Result<(Self, usize), $crate::memory::StorageError> {
++                let mut memory = $crate::memory::Memory::new(storage);
++                let value = memory.scope(|memory| self.clone_with_memory(memory))?;
++                Ok((value, memory.admitted_bytes()))
++            }
++        }
++        impl Clone for $type {
++            fn clone(&self) -> Self {
++                self.clone_admitted(&mut $crate::memory::Resident)
++                    .expect($resident).0
++            }
++        }
++    };
++}
++pub(crate) use clone_entry;
++
+ impl CdtTerm {
+-    /// Copy under original native storage; surviving bytes exclude dead scratch.
+-    ///
+-    /// # Errors
+-    /// Returns checked layout, physical allocator or original admission refusal.
+-    pub fn clone_admitted(
+-        &self,
+-        storage: &mut dyn crate::memory::Storage,
+-    ) -> Result<(Self, usize), crate::memory::StorageError> {
+-        let mut memory = crate::memory::Memory::new(storage);
+-        let value = memory.scope(|memory| self.clone_with_memory(memory))?;
+-        Ok((value, memory.admitted_bytes()))
+-    }
+     pub(crate) fn clone_with_memory(
+         &self,
+         memory: &mut crate::memory::Memory<'_>,
+@@ -315,27 +328,15 @@
+         }
+     }
+ }
+-impl Clone for CdtTerm {
+-    fn clone(&self) -> Self {
+-        self.clone_admitted(&mut crate::memory::Resident)
+-            .expect("resident CDT clone capacity")
+-            .0
+-    }
+-}
+-
+-impl CdtValue {
+-    /// Copy the immutable composite under its original native caller.
++crate::tree::clone_entry! {
++    /// Copy under original native storage; surviving bytes exclude dead scratch.
+     ///
+     /// # Errors
+-    /// Returns checked layout, allocator or original admission refusal.
+-    pub fn clone_admitted(
+-        &self,
+-        storage: &mut dyn crate::memory::Storage,
+-    ) -> Result<(Self, usize), crate::memory::StorageError> {
+-        let mut memory = crate::memory::Memory::new(storage);
+-        let value = memory.scope(|memory| self.clone_with_memory(memory))?;
+-        Ok((value, memory.admitted_bytes()))
+-    }
++    /// Returns checked layout, physical allocator or original admission refusal.
++    CdtTerm, "resident CDT clone capacity"
++}
++
++impl CdtValue {
+     pub(crate) fn clone_with_memory(
+         &self,
+         memory: &mut crate::memory::Memory<'_>,
+@@ -369,12 +370,12 @@
+         memory.release_bytes(bytes)
+     }
+ }
+-impl Clone for CdtValue {
+-    fn clone(&self) -> Self {
+-        self.clone_admitted(&mut crate::memory::Resident)
+-            .expect("resident CDT clone capacity")
+-            .0
+-    }
++crate::tree::clone_entry! {
++    /// Copy the immutable composite under its original native caller.
++    ///
++    /// # Errors
++    /// Returns checked layout, allocator or original admission refusal.
++    CdtValue, "resident CDT clone capacity"
+ }
+ 
+ /// Both destruction-only roots share one checked physical-layout observation.
+--- a/crates/cdt/src/term.rs
++++ b/crates/cdt/src/term.rs
+@@ -339,15 +339,6 @@
+         })
+     }
+ 
+-    /// Copy verbatim fields under original native storage.
+-    ///
+-    /// # Errors
+-    /// Returns checked physical layout, allocator or original admission refusal.
+-    pub fn clone_admitted(&self, storage: &mut dyn Storage) -> Result<(Self, usize), StorageError> {
+-        let mut memory = Memory::new(storage);
+-        let value = memory.scope(|memory| self.clone_with_memory(memory))?;
+-        Ok((value, memory.admitted_bytes()))
+-    }
+     pub(crate) fn clone_with_memory(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+         Self::fields_with_memory(
+             &self.lexical,
+@@ -425,30 +416,17 @@
+             .and_then(|bytes| bytes.checked_add(self.language.as_ref().map_or(0, String::capacity)))
+             .ok_or(StorageError::SizeOverflow)
+     }
+-    pub(crate) fn release_with_memory(self, memory: &mut Memory<'_>) -> Result<(), StorageError> {
+-        let bytes = self.owned_bytes()?;
+-        drop(self);
+-        memory.release_bytes(bytes)
+-    }
+-}
+-impl Clone for CdtLiteral {
+-    fn clone(&self) -> Self {
+-        self.clone_admitted(&mut Resident)
+-            .expect("resident CDT literal capacity")
+-            .0
+-    }
++    crate::memory::release_entry!();
++}
++crate::tree::clone_entry! {
++    /// Copy verbatim fields under original native storage.
++    ///
++    /// # Errors
++    /// Returns checked physical layout, allocator or original admission refusal.
++    CdtLiteral, "resident CDT literal capacity"
+ }
+ 
+ impl CdtKey {
+-    /// Copy this lexical key without changing its identity.
+-    ///
+-    /// # Errors
+-    /// Returns checked physical layout, allocator or original admission refusal.
+-    pub fn clone_admitted(&self, storage: &mut dyn Storage) -> Result<(Self, usize), StorageError> {
+-        let mut memory = Memory::new(storage);
+-        let value = memory.scope(|memory| self.clone_with_memory(memory))?;
+-        Ok((value, memory.admitted_bytes()))
+-    }
+     pub(crate) fn clone_with_memory(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+         Ok(match self {
+             Self::Iri(iri) => Self::Iri(memory.string(iri)?),
+@@ -506,18 +484,14 @@
+             Self::Literal(value) => value.owned_bytes(),
+         }
+     }
+-    pub(crate) fn release_with_memory(self, memory: &mut Memory<'_>) -> Result<(), StorageError> {
+-        let bytes = self.owned_bytes()?;
+-        drop(self);
+-        memory.release_bytes(bytes)
+-    }
+-}
+-impl Clone for CdtKey {
+-    fn clone(&self) -> Self {
+-        self.clone_admitted(&mut Resident)
+-            .expect("resident CDT key capacity")
+-            .0
+-    }
++    crate::memory::release_entry!();
++}
++crate::tree::clone_entry! {
++    /// Copy this lexical key without changing its identity.
++    ///
++    /// # Errors
++    /// Returns checked physical layout, allocator or original admission refusal.
++    CdtKey, "resident CDT key capacity"
+ }
+ 
+ impl CdtEntry {
+--- a/crates/cdt/src/memory.rs
++++ b/crates/cdt/src/memory.rs
+@@ -34,6 +34,34 @@
+     }
+ }
+ 
++// A lexical leaf dies before its original capacity is refunded. The capacity
++// getter remains payload-specific, while this destruction protocol has one body.
++macro_rules! release_entry {
++    () => {
++        pub(crate) fn release_with_memory(
++            self,
++            memory: &mut $crate::memory::Memory<'_>,
++        ) -> Result<(), $crate::memory::StorageError> {
++            let bytes = self.owned_bytes()?;
++            drop(self);
++            memory.release_bytes(bytes)
++        }
++    };
++}
++pub(crate) use release_entry;
++
++// Storage stays object-safe: these two typed doors share the actual native
++// factory and differ only in the payload selected by their return types.
++macro_rules! native_box_factories {
++    ($( $(#[$meta:meta])* $name:ident : $payload:ty ),+ $(,)?) => { $(
++        $(#[$meta])*
++        fn $name(&mut self, value: $payload) -> Result<Box<$payload>, StorageError> {
++            purrdf_lex::allocation::try_boxed(value)
++                .map_err(|_| StorageError::AllocationFailed)
++        }
++    )+ };
++}
++
+ /// A caller's concrete storage owner and fallible native box factory.
+ /// `resize` covers live requested layouts, including both buffers during replacement.
+ /// Parse success transfers the surviving payload to a caller retaining its original
+@@ -41,20 +69,15 @@
+ /// Factories run only after `Layout::new::<Payload>()` admission and must allocate
+ /// exactly that payload fallibly, with no unpriced alternate destination.
+ pub trait Storage: Admission {
+-    /// Fallibly allocate the already admitted nested composite payload.
+-    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError>;
+-    /// Fallibly allocate the already admitted nested triple payload.
+-    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError>;
++    native_box_factories! {
++        /// Fallibly allocate the already admitted nested composite payload.
++        boxed_value: CdtValue,
++        /// Fallibly allocate the already admitted nested triple payload.
++        boxed_triple: CdtTripleTerm,
++    }
+ }
+ 
+-impl Storage for Resident {
+-    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
+-        purrdf_lex::allocation::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
+-    }
+-    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
+-        purrdf_lex::allocation::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
+-    }
+-}
++impl Storage for Resident {}
+ 
+ pub(crate) trait CdtMemory {
+     fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError>;
+--- a/crates/cdt/tests/value_relations.rs
++++ b/crates/cdt/tests/value_relations.rs
+@@ -607,6 +607,12 @@
+             refuse_box: false,
+         }
+     }
++    fn boxed<T>(&self, value: T) -> Result<Box<T>, StorageError> {
++        if self.refuse_box {
++            return Err(StorageError::AllocationFailed);
++        }
++        purrdf_lex::allocation::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
++    }
+ }
+ impl Admission for NativeGrant {
+     fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+@@ -623,16 +629,10 @@
+ }
+ impl Storage for NativeGrant {
+     fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
+-        if self.refuse_box {
+-            return Err(StorageError::AllocationFailed);
+-        }
+-        purrdf_lex::allocation::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
++        self.boxed(value)
+     }
+     fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
+-        if self.refuse_box {
+-            return Err(StorageError::AllocationFailed);
+-        }
+-        purrdf_lex::allocation::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
++        self.boxed(value)
+     }
+ }
+ 
+--- a/crates/sparql-eval/src/cdt_fn.rs
++++ b/crates/sparql-eval/src/cdt_fn.rs
+@@ -682,6 +682,17 @@
+         let base = frame.admitted_bytes();
+         Self { frame, base }
+     }
++    fn boxed<T>(
++        &mut self,
++        value: T,
++        construct: &'static str,
++    ) -> Result<Box<T>, purrdf_cdt::memory::StorageError> {
++        purrdf_lex::allocation::try_boxed(value).map_err(|_| {
++            self.frame
++                .latch_failure(EvalError::AllocationFailed { construct });
++            purrdf_cdt::memory::StorageError::AllocationFailed
++        })
++    }
+ }
+ impl purrdf_cdt::memory::Admission for CdtStorage<'_> {
+     fn resize(&mut self, bytes: usize) -> Result<(), purrdf_cdt::memory::StorageError> {
+@@ -697,23 +708,13 @@
+         &mut self,
+         value: CdtValue,
+     ) -> Result<Box<CdtValue>, purrdf_cdt::memory::StorageError> {
+-        purrdf_lex::allocation::try_boxed(value).map_err(|_| {
+-            self.frame.latch_failure(EvalError::AllocationFailed {
+-                construct: "native composite value box",
+-            });
+-            purrdf_cdt::memory::StorageError::AllocationFailed
+-        })
++        self.boxed(value, "native composite value box")
+     }
+     fn boxed_triple(
+         &mut self,
+         value: CdtTripleTerm,
+     ) -> Result<Box<CdtTripleTerm>, purrdf_cdt::memory::StorageError> {
+-        purrdf_lex::allocation::try_boxed(value).map_err(|_| {
+-            self.frame.latch_failure(EvalError::AllocationFailed {
+-                construct: "native composite triple box",
+-            });
+-            purrdf_cdt::memory::StorageError::AllocationFailed
+-        })
++        self.boxed(value, "native composite triple box")
+     }
+ }
+ 
+--- a/crates/xsd/src/exact/error.rs
++++ b/crates/xsd/src/exact/error.rs
+@@ -263,3 +263,30 @@
+         }
+     }
+ }
++
++// Each exact datatype keeps its own lexical reader. Both public entry protocols
++// select the same original destination policy and preserve their error channels.
++macro_rules! lexical_entry {
++    (
++        $type:ty;
++        try_from_lexical { $(#[$native:meta])* }
++        from_str { $(#[$resident:meta])* }
++    ) => {
++        impl $type {
++            $(#[$native])*
++            pub fn try_from_lexical(lexical: &str) -> Result<Self, $crate::exact::ExactParseError> {
++                Self::parse_with_storage(lexical, &$crate::bigint::scratch::Fallible)
++            }
++        }
++        impl ::std::str::FromStr for $type {
++            type Err = $crate::exact::ExactError;
++            $(#[$resident])*
++            fn from_str(lexical: &str) -> Result<Self, $crate::exact::ExactError> {
++                Self::parse_with_storage(lexical, &$crate::bigint::scratch::Unbounded)
++                    .map_err(|error| error.into_value_error(lexical)
++                        .expect("unbounded integer storage"))
++            }
++        }
++    };
++}
++pub(crate) use lexical_entry;
+--- a/crates/xsd/src/exact/integer.rs
++++ b/crates/xsd/src/exact/integer.rs
+@@ -6,7 +6,6 @@
+ use std::cmp::Ordering;
+ use std::fmt;
+ use std::ops::{Add, Mul, Neg, Sub};
+-use std::str::FromStr;
+ 
+ use super::binary::decompose_f64;
+ use super::cost::{self, Cost};
+@@ -722,14 +721,6 @@
+ }
+ 
+ impl Integer {
+-    /// Read an exact integer with fallible native limb destinations.
+-    ///
+-    /// # Errors
+-    /// Distinguishes borrowed lexical classification from physical refusal.
+-    pub fn try_from_lexical(lexical: &str) -> Result<Self, super::ExactParseError> {
+-        Self::parse_with_storage(lexical, &crate::bigint::scratch::Fallible)
+-    }
+-
+     fn parse_with_storage(
+         lexical: &str,
+         storage: &impl crate::bigint::scratch::Allocate,
+@@ -757,8 +748,15 @@
+     }
+ }
+ 
+-impl FromStr for Integer {
+-    type Err = ExactError;
++super::error::lexical_entry! {
++    Integer;
++    try_from_lexical {
++    /// Read an exact integer with fallible native limb destinations.
++    ///
++    /// # Errors
++    /// Distinguishes borrowed lexical classification from physical refusal.
++    }
++    from_str {
+     /// Parse the `xsd:integer` lexical space (XSD 1.1 Part 2 §3.4.13.1): an
+     /// optional `+` or `-`, then one or more ASCII digits, of any length. No
+     /// whitespace is trimmed (a caller applying the `collapse` facet trims first),
+@@ -769,12 +767,6 @@
+     /// # Errors
+     ///
+     /// [`ExactError::InvalidLexical`] for text outside the lexical space.
+-    fn from_str(lexical: &str) -> Result<Self, ExactError> {
+-        Self::parse_with_storage(lexical, &crate::bigint::scratch::Unbounded).map_err(|error| {
+-            error
+-                .into_value_error(lexical)
+-                .expect("unbounded integer storage")
+-        })
+     }
+ }
+ 
+--- a/crates/xsd/src/exact/decimal.rs
++++ b/crates/xsd/src/exact/decimal.rs
+@@ -7,7 +7,6 @@
+ use std::cmp::Ordering;
+ use std::fmt;
+ use std::ops::{Add, Neg, Sub};
+-use std::str::FromStr;
+ 
+ use super::binary::{BINARY32, BINARY64, decompose_f32, decompose_f64};
+ use super::cost::{self, Cost};
+@@ -2070,14 +2069,6 @@
+ }
+ 
+ impl Decimal {
+-    /// Read an exact decimal with fallible native limb destinations.
+-    ///
+-    /// # Errors
+-    /// Distinguishes borrowed lexical/scale refusal from physical allocation.
+-    pub fn try_from_lexical(lexical: &str) -> Result<Self, super::ExactParseError> {
+-        Self::parse_with_storage(lexical, &crate::bigint::scratch::Fallible)
+-    }
+-
+     fn parse_with_storage(
+         lexical: &str,
+         storage: &impl crate::bigint::scratch::Allocate,
+@@ -2128,8 +2119,15 @@
+     }
+ }
+ 
+-impl FromStr for Decimal {
+-    type Err = ExactError;
++super::error::lexical_entry! {
++    Decimal;
++    try_from_lexical {
++    /// Read an exact decimal with fallible native limb destinations.
++    ///
++    /// # Errors
++    /// Distinguishes borrowed lexical/scale refusal from physical allocation.
++    }
++    from_str {
+     /// Parse the `xsd:decimal` lexical space (XSD 1.1 Part 2 §3.3.3.1) of any
+     /// length: an optional sign, then digits with at most one `.` and at least one
+     /// digit (`.5`, `1.`, `-0012.3400`). No whitespace is trimmed, matching
+@@ -2140,12 +2138,6 @@
+     ///
+     /// [`ExactError::InvalidLexical`] for text outside the lexical space;
+     /// [`ExactError::ScaleOverflow`] for more than `u32::MAX` fractional digits.
+-    fn from_str(lexical: &str) -> Result<Self, ExactError> {
+-        Self::parse_with_storage(lexical, &crate::bigint::scratch::Unbounded).map_err(|error| {
+-            error
+-                .into_value_error(lexical)
+-                .expect("unbounded integer storage")
+-        })
+     }
+ }
+ 
+--- a/crates/lex/src/allocation/text.rs
++++ b/crates/lex/src/allocation/text.rs
+@@ -37,21 +37,19 @@
+         self
+     }
+ }
+-impl From<String> for OwnedText {
+-    fn from(value: String) -> Self {
+-        Self(TextStorage::Caller(value.into()))
+-    }
++// Caller spelling conversion has one body; the typed From doors consume an
++// owned String/Arc or copy a borrowed slice through its standard Arc conversion.
++macro_rules! caller_text_from {
++    ($($source:ty),+ $(,)?) => { $(
++        impl From<$source> for OwnedText {
++            fn from(value: $source) -> Self {
++                Self(TextStorage::Caller(value.into()))
++            }
++        }
++    )+ };
+ }
+-impl From<&str> for OwnedText {
+-    fn from(value: &str) -> Self {
+-        Self(TextStorage::Caller(value.into()))
+-    }
+-}
+-impl From<Arc<str>> for OwnedText {
+-    fn from(value: Arc<str>) -> Self {
+-        Self(TextStorage::Caller(value))
+-    }
+-}
++caller_text_from!(String, &str, Arc<str>);
++
+ impl From<SharedText> for OwnedText {
+     fn from(value: SharedText) -> Self {
+         Self(TextStorage::Native(value))

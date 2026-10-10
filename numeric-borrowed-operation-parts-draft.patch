@@ -1,0 +1,469 @@
+diff --git a/crates/xsd/src/exact/decimal.rs b/crates/xsd/src/exact/decimal.rs
+--- a/crates/xsd/src/exact/decimal.rs
++++ b/crates/xsd/src/exact/decimal.rs
+@@ -219,40 +219,21 @@
+     }
+ 
+     fn add_admitted_using(
+-        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++        &self, rhs: &Self,
++        storage: &impl crate::bigint::scratch::Allocate,
+         admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+     ) -> Result<Self, crate::bigint::LimbScratchError> {
+-        if let Some((a, b, scale)) = self.aligned_small(rhs)
+-            && let Some(sum) = a.checked_add(b) { return Ok(Self::from_small(sum, scale)); }
+-        admit(self.aligned_layout(rhs)?)?;
+-        let (a, b, scale) = self.aligned_using(rhs, storage)?;
+-        let live = cost::live_integer_bytes(&[&a, &b])?;
+-        admit(a.operation_layout(&b, cost::IntegerOperation::Add)?.with_live(live)?)?;
+-        let sum = a.add_using(&b, storage)?;
+-        drop(a); drop(b);
+-        admit(cost::normalize_layout(&sum, scale)?)?;
+-        Self::new_using(sum, scale, storage)
++        add_parts_admitted_using(&self.unscaled, self.scale, &rhs.unscaled, rhs.scale, storage, admit)
+     }
+ 
+     fn sub_admitted_using(
+-        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++        &self, rhs: &Self,
++        storage: &impl crate::bigint::scratch::Allocate,
+         admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+     ) -> Result<Self, crate::bigint::LimbScratchError> {
+-        if let Some((a, b, scale)) = self.aligned_small(rhs)
+-            && let Some(value) = a.checked_sub(b) { return Ok(Self::from_small(value, scale)); }
+-        admit(self.aligned_layout(rhs)?)?;
+-        let (a, b, scale) = self.aligned_using(rhs, storage)?;
+-        let live = cost::live_integer_bytes(&[&a, &b])?;
+-        admit(a.operation_layout(&b, cost::IntegerOperation::Subtract)?.with_live(live)?)?;
+-        let value = a.sub_using(&b, storage)?;
+-        drop(a); drop(b);
+-        admit(cost::normalize_layout(&value, scale)?)?;
+-        Self::new_using(value, scale, storage)
++        sub_parts_admitted_using(&self.unscaled, self.scale, &rhs.unscaled, rhs.scale, storage, admit)
+     }
+ 
+-    fn aligned_layout(&self, rhs: &Self) -> Result<cost::NumericOperationLayout, crate::bigint::LimbScratchError> {
+-        aligned_parts_layout(&self.unscaled, self.scale, &rhs.unscaled, rhs.scale)
+-    }
+ 
+     pub(crate) fn copy_using(
+         &self, storage: &impl crate::bigint::scratch::Allocate,
+@@ -706,18 +687,11 @@
+     }
+ 
+     fn mul_admitted_using(
+-        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++        &self, rhs: &Self,
++        storage: &impl crate::bigint::scratch::Allocate,
+         admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+     ) -> Result<Self, super::ExactOperationError> {
+-        let scale = self.scale.checked_add(rhs.scale).ok_or(ExactError::ScaleOverflow)?;
+-        if let (Some(a), Some(b)) = (self.unscaled.as_i128(), rhs.unscaled.as_i128())
+-            && let Some(product) = a.checked_mul(b) {
+-                return Ok(Self::from_small(product, scale));
+-            }
+-        admit(self.unscaled.operation_layout(&rhs.unscaled, cost::IntegerOperation::Multiply)?)?;
+-        let product = self.unscaled.mul_using(&rhs.unscaled, storage)?;
+-        admit(cost::normalize_layout(&product, scale)?)?;
+-        Ok(Self::new_using(product, scale, storage)?)
++        mul_parts_admitted_using(&self.unscaled, self.scale, &rhs.unscaled, rhs.scale, storage, admit)
+     }
+ 
+     /// The canonical decimal `value × 10^-scale` for an inline coefficient: no
+@@ -758,20 +732,6 @@
+         (value, scale - stripped)
+     }
+ 
+-    /// Both coefficients at the larger scale, when both are inline and the
+-    /// shifted one still fits `i128`.
+-    fn aligned_small(&self, rhs: &Self) -> Option<(i128, i128, u32)> {
+-        let (a, b) = (self.unscaled.as_i128()?, rhs.unscaled.as_i128()?);
+-        let shift = |value: i128, digits: u32| {
+-            let power = i128::try_from(*POW10.get(usize::try_from(digits).ok()?)?).ok()?;
+-            value.checked_mul(power)
+-        };
+-        match self.scale.cmp(&rhs.scale) {
+-            Ordering::Equal => Some((a, b, self.scale)),
+-            Ordering::Less => Some((shift(a, rhs.scale - self.scale)?, b, rhs.scale)),
+-            Ordering::Greater => Some((a, shift(b, self.scale - rhs.scale)?, self.scale)),
+-        }
+-    }
+ 
+     /// `op:numeric-divide`: `self ÷ rhs` under `policy` — see [`DivisionPolicy`].
+     ///
+@@ -853,69 +813,9 @@
+         storage: &impl crate::bigint::scratch::Allocate,
+         admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+     ) -> Result<Self, super::ExactOperationError> {
+-        let negative = self.is_negative() != rhs.is_negative();
+-        let shift = i64::from(scale) + i64::from(rhs.scale) - i64::from(self.scale);
+-        let digits = u32::try_from(shift.unsigned_abs()).map_err(|_| ExactError::ScaleOverflow)?;
+-        if let Some(quotient) = self.div_rounded_small(rhs, shift, rounding, negative) {
+-            return Ok(Self::from_small(quotient, scale));
+-        }
+-        let copied = cost::live_integer_bytes(&[&self.unscaled, &rhs.unscaled])?;
+-        admit(cost::NumericOperationLayout::bytes(copied, copied)?)?;
+-        let (a, b) = (self.unscaled.abs_using(storage)?, rhs.unscaled.abs_using(storage)?);
+-        let copied = cost::live_integer_bytes(&[&a, &b])?;
+-        let selected = if shift >= 0 { &a } else { &b };
+-        admit(cost::scale_up_layout(selected, digits)?.with_live(copied)?)?;
+-        let (numerator, denominator) = if shift >= 0 {
+-            let numerator = scale_up_using(&a, digits, storage)?;
+-            drop(a);
+-            (numerator, b)
+-        } else {
+-            let denominator = scale_up_using(&b, digits, storage)?;
+-            drop(b);
+-            (a, denominator)
+-        };
+-        let live = cost::live_integer_bytes(&[&numerator, &denominator])?;
+-        let quotient = round_quotient_admitted_using(
+-            &numerator, &denominator, rounding, negative, storage,
+-            &mut |layout| admit(layout.with_live(live)?),
+-        )?;
+-        drop(numerator); drop(denominator);
+-        let signed = if negative { quotient.negated_owned() } else { quotient };
+-        admit(cost::normalize_layout(&signed, scale)?)?;
+-        Ok(Self::new_using(signed, scale, storage)?)
++        div_rounded_parts_admitted_using(&self.unscaled, self.scale, &rhs.unscaled, rhs.scale, scale, rounding, storage, admit)
+     }
+ 
+-    /// [`Self::div_rounded`] in machine arithmetic, when both coefficients and
+-    /// the scaled operand fit `u128`: the signed rounded quotient, or `None` to
+-    /// take the general path.
+-    fn div_rounded_small(
+-        &self,
+-        rhs: &Self,
+-        shift: i64,
+-        rounding: Rounding,
+-        negative: bool,
+-    ) -> Option<i128> {
+-        let (a, b) = (
+-            self.unscaled.as_i128()?.unsigned_abs(),
+-            rhs.unscaled.as_i128()?.unsigned_abs(),
+-        );
+-        let power = POW10.get(usize::try_from(shift.unsigned_abs()).ok()?)?;
+-        let (numerator, denominator) = if shift >= 0 {
+-            (a.checked_mul(*power)?, b)
+-        } else {
+-            (a, b.checked_mul(*power)?)
+-        };
+-        let quotient = numerator / denominator;
+-        let remainder = numerator - quotient * denominator;
+-        // Twice the remainder against the denominator, as the remainder against
+-        // what is left of the denominator: a scaled divisor can pass `2^127`, where
+-        // doubling the remainder would overflow `u128`.
+-        let half = remainder.cmp(&(denominator - remainder));
+-        let magnitude = quotient
+-            + u128::from(rounding.increments(negative, quotient & 1 == 1, half, remainder != 0));
+-        let magnitude = i128::try_from(magnitude).ok()?;
+-        Some(if negative { -magnitude } else { magnitude })
+-    }
+ 
+     /// The exact quotient, or [`ExactError::NonTerminating`]. With
+     /// `g = gcd(a, b)` and `b / g = 2^x · 5^y · r`, the quotient terminates exactly
+@@ -928,57 +828,13 @@
+     }
+ 
+     fn div_exact_admitted_using(
+-        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++        &self, rhs: &Self,
++        storage: &impl crate::bigint::scratch::Allocate,
+         admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+     ) -> Result<Self, super::ExactOperationError> {
+-        use crate::bigint::LimbScratchError::SizeOverflow;
+-        let negative = self.is_negative() != rhs.is_negative();
+-        let (a, b) = (
+-            self.unscaled.with_bigint(|value| value.abs_using(storage))?,
+-            rhs.unscaled.with_bigint(|value| value.abs_using(storage))?,
+-        );
+-        let g = a.gcd_using(&b, storage)?;
+-        let reduced_a = a.div_rem_using(&g, storage)?.expect("gcd is nonzero").0;
+-        let reduced_b = b.div_rem_using(&g, storage)?.expect("gcd is nonzero").0;
+-        drop(a); drop(b); drop(g);
+-        let (rest, twos) = strip_factor_using(reduced_b, 2, storage)?;
+-        let (rest, fives) = strip_factor_using(rest, 5, storage)?;
+-        if rest != BigInt::one() { return Err(ExactError::NonTerminating.into()); }
+-        drop(rest);
+-        let k = twos.max(fives);
+-        // Every previous reduction/factor temporary is gone. The actual
+-        // reduced numerator stays covered while its fresh shift is allocated.
+-        admit(cost::binary_shift_layout(
+-            reduced_a.bit_len(), k - twos, reduced_a.allocated_bytes(),
+-        )?)?;
+-        let shifted = reduced_a.shl_using(k - twos, storage)?;
+-        drop(reduced_a);
+-        admit(cost::pow5_layout(shifted.bit_len(), k - fives, shifted.allocated_bytes())?)?;
+-        let coefficient = shifted.mul_pow5_using(k - fives, storage)?;
+-        drop(shifted);
+-        let exponent = i64::from(rhs.scale) - i64::from(self.scale) - i64::from(k);
+-        let signed = Integer::from_bigint(coefficient.with_sign(negative));
+-        if exponent >= 0 {
+-            let up = u32::try_from(exponent).map_err(|_| ExactError::ScaleOverflow)?;
+-            let native = cost::scale_up_layout(&signed, up)?;
+-            let live = usize::try_from(signed.heap_bytes()).map_err(|_| SizeOverflow)?;
+-            admit(cost::NumericOperationLayout::bytes(
+-                live.checked_add(native.peak_bytes()).ok_or(SizeOverflow)?, native.retained_bytes(),
+-            )?)?;
+-            Ok(Self::new_using(scale_up_using(&signed, up, storage)?, 0, storage)?)
+-        } else {
+-            let scale = u32::try_from(-exponent).map_err(|_| ExactError::ScaleOverflow)?;
+-            admit(cost::normalize_layout(&signed, scale)?)?;
+-            Ok(Self::new_using(signed, scale, storage)?)
+-        }
++        div_exact_parts_admitted_using(&self.unscaled, self.scale, &rhs.unscaled, rhs.scale, storage, admit)
+     }
+ 
+-    /// Both coefficients at the larger scale.
+-    fn aligned_using(
+-        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
+-    ) -> Result<(Integer, Integer, u32), crate::bigint::LimbScratchError> {
+-        aligned_parts_using(&self.unscaled, self.scale, &rhs.unscaled, rhs.scale, storage)
+-    }
+ 
+     // ----- resource governance ---------------------------------------------
+ 
+@@ -1116,6 +972,56 @@
+         cmp_scaled_f64_admitted_using(&self.unscaled, self.scale, value, &crate::bigint::scratch::Fallible, admit)
+     }
+ 
++    /// Add two borrowed decimal coefficients without an owned promotion copy.
++    /// # Errors
++    /// Returns checked admission or native destination refusal.
++    pub fn try_add_parts_admitted(
++        left: &Integer, ls: u32, right: &Integer, rs: u32,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        add_parts_admitted_using(left, ls, right, rs, &crate::bigint::scratch::Fallible, admit)
++    }
++
++    /// Subtract two borrowed decimal coefficients without an owned promotion copy.
++    /// # Errors
++    /// Returns checked admission or native destination refusal.
++    pub fn try_sub_parts_admitted(
++        left: &Integer, ls: u32, right: &Integer, rs: u32,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        sub_parts_admitted_using(left, ls, right, rs, &crate::bigint::scratch::Fallible, admit)
++    }
++
++    /// Multiply two borrowed decimal coefficients without an owned promotion copy.
++    /// # Errors
++    /// Preserves scale overflow separately from admission/storage refusal.
++    pub fn try_mul_parts_admitted(
++        left: &Integer, ls: u32, right: &Integer, rs: u32,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
++        mul_parts_admitted_using(left, ls, right, rs, &crate::bigint::scratch::Fallible, admit)
++    }
++
++    /// Divide borrowed decimal parts under the complete existing precision law.
++    /// # Errors
++    /// Preserves zero/nonterminating/scale errors separately from physical refusal.
++    pub fn try_div_parts_admitted(
++        left: &Integer, ls: u32, right: &Integer, rs: u32, policy: DivisionPolicy,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
++        if right.is_zero() { return Err(ExactError::DivisionByZero.into()); }
++        if left.is_zero() { return Ok(Self::ZERO); }
++        match policy {
++            DivisionPolicy::Scale { scale, rounding } => {
++                div_rounded_parts_admitted_using(left, ls, right, rs, scale, rounding, &crate::bigint::scratch::Fallible, admit)
++            }
++            DivisionPolicy::Exact => {
++                admit(cost::decimal_exact_initial_layout(left.limb_len(), right.limb_len())?)?;
++                div_exact_parts_admitted_using(left, ls, right, rs, &crate::bigint::scratch::Fallible, admit)
++            }
++        }
++    }
++
+     /// The exact order of the value against `value`; `None` only for `NaN`, and an
+     /// infinity is past every decimal. The signs or the two magnitudes' leading
+     /// positions decide most pairs outright; reading those positions includes
+@@ -1128,6 +1034,185 @@
+     }
+ }
+ 
++fn add_parts_admitted_using(
++    left: &Integer, ls: u32, right: &Integer, rs: u32,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Decimal, crate::bigint::LimbScratchError> {
++        if let Some((a, b, scale)) = aligned_small_parts(left, ls, right, rs)
++            && let Some(sum) = a.checked_add(b) { return Ok(Decimal::from_small(sum, scale)); }
++        admit(aligned_parts_layout(left, ls, right, rs)?)?;
++        let (a, b, scale) = aligned_parts_using(left, ls, right, rs, storage)?;
++        let live = cost::live_integer_bytes(&[&a, &b])?;
++        admit(a.operation_layout(&b, cost::IntegerOperation::Add)?.with_live(live)?)?;
++        let sum = a.add_using(&b, storage)?;
++        drop(a); drop(b);
++        admit(cost::normalize_layout(&sum, scale)?)?;
++        Decimal::new_using(sum, scale, storage)
++    
++}
++
++fn sub_parts_admitted_using(
++    left: &Integer, ls: u32, right: &Integer, rs: u32,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Decimal, crate::bigint::LimbScratchError> {
++        if let Some((a, b, scale)) = aligned_small_parts(left, ls, right, rs)
++            && let Some(value) = a.checked_sub(b) { return Ok(Decimal::from_small(value, scale)); }
++        admit(aligned_parts_layout(left, ls, right, rs)?)?;
++        let (a, b, scale) = aligned_parts_using(left, ls, right, rs, storage)?;
++        let live = cost::live_integer_bytes(&[&a, &b])?;
++        admit(a.operation_layout(&b, cost::IntegerOperation::Subtract)?.with_live(live)?)?;
++        let value = a.sub_using(&b, storage)?;
++        drop(a); drop(b);
++        admit(cost::normalize_layout(&value, scale)?)?;
++        Decimal::new_using(value, scale, storage)
++    
++}
++
++fn mul_parts_admitted_using(
++    left: &Integer, ls: u32, right: &Integer, rs: u32,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Decimal, super::ExactOperationError> {
++        let scale = ls.checked_add(rs).ok_or(ExactError::ScaleOverflow)?;
++        if let (Some(a), Some(b)) = (left.as_i128(), right.as_i128())
++            && let Some(product) = a.checked_mul(b) {
++                return Ok(Decimal::from_small(product, scale));
++            }
++        admit(left.operation_layout(right, cost::IntegerOperation::Multiply)?)?;
++        let product = left.mul_using(right, storage)?;
++        admit(cost::normalize_layout(&product, scale)?)?;
++        Ok(Decimal::new_using(product, scale, storage)?)
++    
++}
++
++fn div_rounded_parts_admitted_using(
++    left: &Integer, ls: u32, right: &Integer, rs: u32, scale: u32, rounding: Rounding,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Decimal, super::ExactOperationError> {
++        let negative = left.is_negative() != right.is_negative();
++        let shift = i64::from(scale) + i64::from(rs) - i64::from(ls);
++        let digits = u32::try_from(shift.unsigned_abs()).map_err(|_| ExactError::ScaleOverflow)?;
++        if let Some(quotient) = div_rounded_small_parts(left, right, shift, rounding, negative) {
++            return Ok(Decimal::from_small(quotient, scale));
++        }
++        let copied = cost::live_integer_bytes(&[left, right])?;
++        admit(cost::NumericOperationLayout::bytes(copied, copied)?)?;
++        let (a, b) = (left.abs_using(storage)?, right.abs_using(storage)?);
++        let copied = cost::live_integer_bytes(&[&a, &b])?;
++        let selected = if shift >= 0 { &a } else { &b };
++        admit(cost::scale_up_layout(selected, digits)?.with_live(copied)?)?;
++        let (numerator, denominator) = if shift >= 0 {
++            let numerator = scale_up_using(&a, digits, storage)?;
++            drop(a);
++            (numerator, b)
++        } else {
++            let denominator = scale_up_using(&b, digits, storage)?;
++            drop(b);
++            (a, denominator)
++        };
++        let live = cost::live_integer_bytes(&[&numerator, &denominator])?;
++        let quotient = round_quotient_admitted_using(
++            &numerator, &denominator, rounding, negative, storage,
++            &mut |layout| admit(layout.with_live(live)?),
++        )?;
++        drop(numerator); drop(denominator);
++        let signed = if negative { quotient.negated_owned() } else { quotient };
++        admit(cost::normalize_layout(&signed, scale)?)?;
++        Ok(Decimal::new_using(signed, scale, storage)?)
++    
++}
++
++fn div_exact_parts_admitted_using(
++    left: &Integer, ls: u32, right: &Integer, rs: u32,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Decimal, super::ExactOperationError> {
++        use crate::bigint::LimbScratchError::SizeOverflow;
++        let negative = left.is_negative() != right.is_negative();
++        let (a, b) = (
++            left.with_bigint(|value| value.abs_using(storage))?,
++            right.with_bigint(|value| value.abs_using(storage))?,
++        );
++        let g = a.gcd_using(&b, storage)?;
++        let reduced_a = a.div_rem_using(&g, storage)?.expect("gcd is nonzero").0;
++        let reduced_b = b.div_rem_using(&g, storage)?.expect("gcd is nonzero").0;
++        drop(a); drop(b); drop(g);
++        let (rest, twos) = strip_factor_using(reduced_b, 2, storage)?;
++        let (rest, fives) = strip_factor_using(rest, 5, storage)?;
++        if rest != BigInt::one() { return Err(ExactError::NonTerminating.into()); }
++        drop(rest);
++        let k = twos.max(fives);
++        // Every previous reduction/factor temporary is gone. The actual
++        // reduced numerator stays covered while its fresh shift is allocated.
++        admit(cost::binary_shift_layout(
++            reduced_a.bit_len(), k - twos, reduced_a.allocated_bytes(),
++        )?)?;
++        let shifted = reduced_a.shl_using(k - twos, storage)?;
++        drop(reduced_a);
++        admit(cost::pow5_layout(shifted.bit_len(), k - fives, shifted.allocated_bytes())?)?;
++        let coefficient = shifted.mul_pow5_using(k - fives, storage)?;
++        drop(shifted);
++        let exponent = i64::from(rs) - i64::from(ls) - i64::from(k);
++        let signed = Integer::from_bigint(coefficient.with_sign(negative));
++        if exponent >= 0 {
++            let up = u32::try_from(exponent).map_err(|_| ExactError::ScaleOverflow)?;
++            let native = cost::scale_up_layout(&signed, up)?;
++            let live = usize::try_from(signed.heap_bytes()).map_err(|_| SizeOverflow)?;
++            admit(cost::NumericOperationLayout::bytes(
++                live.checked_add(native.peak_bytes()).ok_or(SizeOverflow)?, native.retained_bytes(),
++            )?)?;
++            Ok(Decimal::new_using(scale_up_using(&signed, up, storage)?, 0, storage)?)
++        } else {
++            let scale = u32::try_from(-exponent).map_err(|_| ExactError::ScaleOverflow)?;
++            admit(cost::normalize_layout(&signed, scale)?)?;
++            Ok(Decimal::new_using(signed, scale, storage)?)
++        }
++    
++}
++
++fn aligned_small_parts(left: &Integer, ls: u32, right: &Integer, rs: u32) -> Option<(i128, i128, u32)> {
++        let (a, b) = (left.as_i128()?, right.as_i128()?);
++        let shift = |value: i128, digits: u32| {
++            let power = i128::try_from(*POW10.get(usize::try_from(digits).ok()?)?).ok()?;
++            value.checked_mul(power)
++        };
++        match ls.cmp(&rs) {
++            Ordering::Equal => Some((a, b, ls)),
++            Ordering::Less => Some((shift(a, rs - ls)?, b, rs)),
++            Ordering::Greater => Some((a, shift(b, ls - rs)?, ls)),
++        }
++    
++}
++
++fn div_rounded_small_parts(
++    left: &Integer, right: &Integer, shift: i64, rounding: Rounding, negative: bool,
++) -> Option<i128> {
++        let (a, b) = (
++            left.as_i128()?.unsigned_abs(),
++            right.as_i128()?.unsigned_abs(),
++        );
++        let power = POW10.get(usize::try_from(shift.unsigned_abs()).ok()?)?;
++        let (numerator, denominator) = if shift >= 0 {
++            (a.checked_mul(*power)?, b)
++        } else {
++            (a, b.checked_mul(*power)?)
++        };
++        let quotient = numerator / denominator;
++        let remainder = numerator - quotient * denominator;
++        // Twice the remainder against the denominator, as the remainder against
++        // what is left of the denominator: a scaled divisor can pass `2^127`, where
++        // doubling the remainder would overflow `u128`.
++        let half = remainder.cmp(&(denominator - remainder));
++        let magnitude = quotient
++            + u128::from(rounding.increments(negative, quotient & 1 == 1, half, remainder != 0));
++        let magnitude = i128::try_from(magnitude).ok()?;
++        Some(if negative { -magnitude } else { magnitude })
++    
++}
++
+ /// `unscaled × 10^-scale` against `value`, exactly; see [`Decimal::cmp_f64`].
+ pub(crate) fn cmp_scaled_f64(unscaled: &Integer, scale: u32, value: f64) -> Option<Ordering> {
+     cmp_scaled_f64_admitted_using(unscaled, scale, value, &crate::bigint::scratch::Unbounded, &mut |_| Ok(()))
+

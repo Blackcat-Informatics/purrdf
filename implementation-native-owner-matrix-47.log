@@ -1,0 +1,18 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+error[E0117]: only traits defined in the current crate can be implemented for arbitrary types
+   --> crates/sparql-eval/tests/query_completion.rs:204:1
+    |
+204 | impl WorkspaceReservation for [OwnedReservation; 1] {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^---------------------
+    |                               |
+    |                               this is not defined in the current crate because arrays are always foreign
+    |
+    = note: impl doesn't have any local type before any uncovered type parameters
+    = note: for more information see https://doc.rust-lang.org/reference/items/implementations.html#orphan-rules
+    = note: define and implement a trait or new type instead
+
+For more information about this error, try `rustc --explain E0117`.
+error: could not compile `purrdf-sparql-eval` (test "query_completion") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

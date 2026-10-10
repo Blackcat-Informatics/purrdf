@@ -1,0 +1,203 @@
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -30,8 +30,9 @@
+ //! `heldIn` called without a caller-supplied standpoint-predicate configuration
+ //! (`UnsupportedKind::HeldInUnconfigured`).
+ 
+-use purrdf_sparql_algebra::{Chain, Child};
++use purrdf_sparql_algebra::{Chain, Child, NonEmpty};
+ use std::cmp::Ordering;
++#[cfg(test)]
+ use std::sync::Arc;
+ #[cfg(test)]
+ use purrdf_core::TermBox;
+@@ -1306,7 +1307,7 @@
+ /// test build, whether or not it contributes anything.
+ fn collect_vars_admitted<'a>(
+     roots: impl IntoIterator<Item = VarNode<'a>>, workspace: &crate::WorkspaceCapability,
+-) -> Result<crate::solution::VarSchema, EvalError> {
++) -> Result<VarSchema, EvalError> {
+     let mut pending = crate::AdmittedVec::new(workspace);
+     pending.try_extend(roots)?;
+     let mut out = crate::solution::SchemaBuilder::new(workspace);
+@@ -1549,19 +1550,19 @@
+ /// native work-list, schema-column, hash-array and immutable-control admission.
+ pub(crate) fn pattern_all_vars_admitted(
+     pattern: &GraphPattern, workspace: &crate::WorkspaceCapability,
+-) -> Result<crate::solution::VarSchema, EvalError> {
++) -> Result<VarSchema, EvalError> {
+     pattern_vars_outside_admitted(pattern, None, workspace)
+ }
+ 
+ pub(crate) fn pattern_vars_outside_admitted(
+     pattern: &GraphPattern, endpoint: Option<&Variable>, workspace: &crate::WorkspaceCapability,
+-) -> Result<crate::solution::VarSchema, EvalError> {
++) -> Result<VarSchema, EvalError> {
+     collect_vars_admitted([VarNode::Pattern(pattern, endpoint)], workspace)
+ }
+ 
+ pub(crate) fn expr_vars_admitted(
+     expression: &Expression, workspace: &crate::WorkspaceCapability,
+-) -> Result<crate::solution::VarSchema, EvalError> {
++) -> Result<VarSchema, EvalError> {
+     collect_vars_admitted([VarNode::Expression(expression)], workspace)
+ }
+ 
+@@ -3953,7 +3954,7 @@
+             for (operator, operand) in steps {
+                 copied.push((*operator, substitute_expr::<PRESERVE>(operand, row, map, defer, memory)?));
+             }
+-            Expression::Arithmetic(first.into(), Chain::try_from(copied).expect("one arithmetic step per source step"))
++            Expression::Arithmetic(first.into(), NonEmpty::try_from(copied).expect("one arithmetic step per source step"))
+         }
+         Expression::Equal(a, b) | Expression::SameTerm(a, b) | Expression::Greater(a, b)
+         | Expression::GreaterOrEqual(a, b) | Expression::Less(a, b) | Expression::LessOrEqual(a, b) => {
+@@ -3993,13 +3994,13 @@
+             let needle = substitute_expr::<PRESERVE>(needle,row,map,defer,memory)?;
+             let needle = Child::from(correlated_box(needle,memory)?);
+             let items = substitute_expression_list::<PRESERVE>(haystack,row,map,defer,memory)?;
+-            Expression::In(needle,items)
++            Expression::In(needle,items.into())
+         }
+         Expression::Coalesce(items) => {
+-            Expression::Coalesce(substitute_expression_list::<PRESERVE>(items,row,map,defer,memory)?)
++            Expression::Coalesce(substitute_expression_list::<PRESERVE>(items,row,map,defer,memory)?.into())
+         }
+         Expression::FunctionCall(function,args) => {
+-            Expression::FunctionCall(function.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory,e))?,substitute_expression_list::<PRESERVE>(args,row,map,defer,memory)?)
++            Expression::FunctionCall(function.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory,e))?,substitute_expression_list::<PRESERVE>(args,row,map,defer,memory)?.into())
+         }
+         Expression::Exists(body) => {
+             let body = match defer.defer(body,row,memory)? {
+@@ -12888,7 +12889,7 @@
+                 // Preserve stored-data spelling; this is not SHACL lexical validation.
+                 let lexical=workspace.authored_text(&lexical_form.as_str())?;
+                 let (datatype,language,direction)=match language {
+-                    Some(language)=>(purrdf_iri::vocab::rdf::language_datatype_iri(direction.is_some()),Some(workspace.authored_text(&language.as_str())?),*direction),
++                    Some(language)=>(purrdf_iri::vocab::language_datatype_iri(direction.is_some()),Some(workspace.authored_text(&language.as_str())?),*direction),
+                     None=>(datatype.as_str(),None,None),
+                 };
+                 let datatype=NamedNode::from_admitted(workspace.authored_text(&datatype)?);
+--- a/crates/sparql-eval/src/substitute.rs
++++ b/crates/sparql-eval/src/substitute.rs
+@@ -1858,7 +1858,7 @@
+     Ok(out)
+ }
+ 
+-fn rewrite_child<T: purrdf_sparql_algebra::Subtree>(
++fn rewrite_child<T: purrdf_sparql_algebra::Subtree + purrdf_lex::walk::Dismantle>(
+     value: T,
+     memory: &mut RewriteMemory<'_>,
+ ) -> RewriteResult<Child<T>> {
+@@ -2923,7 +2923,7 @@
+     memory: &mut RewriteMemory<'_>,
+ ) -> RewriteResult<SeedColumns> {
+     let mut restored = carried.0;
+-    let mut indices = crate::AdmittedVec::new(&rewrite_workspace(memory));
++    let mut indices: crate::AdmittedVec<usize> = crate::AdmittedVec::new(&rewrite_workspace(memory));
+     for (index, (variable, _)) in expr_subs.entries().iter().enumerate() {
+         if keys.contains(variable)
+             || indices
+@@ -4132,7 +4132,7 @@
+ fn descend_into_inner_with_memory(
+     mut frame: SubstituteFrame,
+     open: &mut crate::AdmittedVec<SubstituteFrame>,
+-    memory: &mut RewriteMemory<'_>,
++    _memory: &mut RewriteMemory<'_>,
+ ) -> RewriteResult<Step<SubstituteDescent, (GraphPattern, SeedColumns)>> {
+     let child = match &mut frame.node {
+         GraphPattern::Filter { inner, .. }
+@@ -4380,7 +4380,7 @@
+         NodeRef::Pattern(query.pattern()),
+         |visit, node| {
+             if visit == Visit::Exit {
+-                return Ok(Flow::Descend);
++                return Flow::Descend;
+             }
+             match node {
+                 NodeRef::Expr(Expression::Exists(_)) => Flow::Stop,
+--- a/crates/sparql-eval/src/enf.rs
++++ b/crates/sparql-eval/src/enf.rs
+@@ -251,7 +251,7 @@
+ //! distinct site per evaluation, before any row of that site is tested, never
+ //! recomputed per row.
+ 
+-use purrdf_sparql_algebra::{Chain, Child};
++use purrdf_sparql_algebra::Chain;
+ use purrdf_sparql_algebra::{GraphPattern, OrderExpression, Variable};
+ 
+ use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
+@@ -1024,7 +1024,7 @@
+         Variable,
+     };
+ 
+-    use super::{Enf, copied, ledger_source_map, left_join_erasable, normalize, order_by_erasable};
++    use super::{Enf, ledger_source_map, left_join_erasable, normalize, order_by_erasable};
+     use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
+     use crate::governor::soundness;
+ 
+@@ -1037,6 +1037,12 @@
+     const DEPTH: usize = 100_000;
+ 
+     // ── The recursive references ────────────────────────────────────────────────────
++
++    /// The independent recursive oracle copies its caller-owned fixture tree.
++    fn copied(pattern: &GraphPattern) -> GraphPattern {
++        crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(pattern));
++        pattern.clone()
++    }
+ 
+     /// [`normalize_with_memory`], written as the recursion over the spine it replaces.
+     fn normalize_ref(pattern: &GraphPattern) -> Enf {
+--- a/crates/sparql-eval/src/service_endpoints.rs
++++ b/crates/sparql-eval/src/service_endpoints.rs
+@@ -1546,7 +1546,7 @@
+             // the clause's endpoint and is injected into its body wherever the body names
+             // it.
+             let row = crate::expr::outer_bindings_for_substitution(&[Some(endpoint)], &key, ctx)?;
+-            let substituted = crate::expr::substitute_pattern(node, &row)?;
++            let substituted = crate::expr::substitute_pattern_admitted(node, &row, &ctx.growth)?;
+             let GraphPattern::Service {
+                 name: NamedNodePattern::NamedNode(iri),
+                 inner,
+--- a/crates/sparql-eval/src/parallel.rs
++++ b/crates/sparql-eval/src/parallel.rs
+@@ -3027,7 +3027,7 @@
+     }
+ }
+ 
+-fn reaches_unsafe_builtin_admitted(root:Reach<'_>,registries:SafetyRegistries<'_>,verdict:ExistsVerdict<'_>,workspace:&crate::WorkspaceCapability)->Result<bool,crate::EvalError> {
++fn reaches_unsafe_builtin_admitted(root:Reach<'_>,registries:SafetyRegistries<'_>,verdict:ExistsVerdict<'_>,workspace:&crate::WorkspaceCapability)->Result<bool,EvalError> {
+     let mut frame=crate::workspace::LexicalFrame::new(workspace);
+     let mut memory=purrdf_lex::allocation::Memory::new(&mut frame);
+     let mut pending=purrdf_lex::walk::WorkList::<Reach<'_>,16>::new();
+@@ -3098,7 +3098,7 @@
+     Ok(false)
+ }
+ 
+-pub(crate) fn is_parallel_safe_pattern_with_admitted(pattern:&GraphPattern,registries:SafetyRegistries<'_>,verdict:ExistsVerdict<'_>,workspace:&crate::WorkspaceCapability)->Result<bool,crate::EvalError> {
++pub(crate) fn is_parallel_safe_pattern_with_admitted(pattern:&GraphPattern,registries:SafetyRegistries<'_>,verdict:ExistsVerdict<'_>,workspace:&crate::WorkspaceCapability)->Result<bool,EvalError> {
+     reaches_unsafe_builtin_admitted(Reach::Pattern(pattern),registries,verdict,workspace).map(|unsafe_|!unsafe_)
+ }
+ 
+--- a/crates/sparql-eval/src/binop.rs
++++ b/crates/sparql-eval/src/binop.rs
+@@ -16,6 +16,7 @@
+ //! a compatibility scan over all build rows. The common case — two fully-bound BGPs
+ //! — stays an O(n+m) hash join.
+ 
++#[cfg(test)]
+ use std::sync::Arc;
+ 
+ use purrdf_core::{DatasetView, TermId, ViewTermId};
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -2527,7 +2527,7 @@
+                 "this".to_owned(),
+                 purrdf_core::TermValue::Blank {
+                     label: "focus".to_owned(),
+-                    scope: None,
++                    scope: purrdf_core::BlankScope::DEFAULT,
+                 },
+             )];
+             let (workspace, ledger, base) = account(u64::MAX);

@@ -1,0 +1,19 @@
+/// Grow a fixed-key map at the same physical table home as native hash tables.
+///
+/// # Errors
+/// Returns layout overflow, original admission or allocator refusal.
+pub fn reserve_map_with_memory<K: Eq + core::hash::Hash, V, S: purrdf_lex::allocation::Admission + ?Sized>(
+    map: &mut FastMap<K, V>, required: usize,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    use purrdf_lex::allocation::StorageError;
+    if required <= map.capacity() { return Ok(()); }
+    let old = hash_table_allocation_bound::<(K, V)>(map.capacity()).ok_or(StorageError::SizeOverflow)?;
+    let next = hash_table_allocation_bound::<(K, V)>(required).ok_or(StorageError::SizeOverflow)?;
+    memory.add_bytes(next)?;
+    let mut replacement = FastMap::default();
+    replacement.try_reserve(required).map_err(|_| StorageError::AllocationFailed)?;
+    replacement.extend(map.drain());
+    drop(core::mem::replace(map, replacement));
+    memory.release_bytes(old)
+}

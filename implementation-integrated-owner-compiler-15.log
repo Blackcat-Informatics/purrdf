@@ -1,0 +1,644 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/testkit)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/deflate)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/ed25519)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+error[E0107]: type alias takes 1 generic argument but 2 generic arguments were supplied
+   --> crates/iri/src/error.rs:292:10
+    |
+292 |     ) -> Result<DiagnosticPresentation, purrdf_lex::allocation::StorageError> {
+    |          ^^^^^^                       -------------------------------------- help: remove the unnecessary generic argument
+    |          |
+    |          expected 1 generic argument
+    |
+note: type alias defined here, with 1 generic parameter: `T`
+   --> crates/iri/src/error.rs:482:10
+    |
+482 | pub type Result<T> = core::result::Result<T, IriError>;
+    |          ^^^^^^ -
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:300:14
+    |
+297 |               Self::Empty => ("iri-empty", "empty IRI/URI string", {
+    |  __________________________________________________________________-
+298 | |                 let native_values = [];
+299 | |                 memory.collect(native_values)
+300 | |             }?),
+    | |             -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_____________|
+    |               this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:304:14
+    |
+301 |               Self::MissingScheme => ("iri-missing-scheme", "missing scheme", {
+    |  _____________________________________________________________________________-
+302 | |                 let native_values = [];
+303 | |                 memory.collect(native_values)
+304 | |             }?),
+    | |             -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_____________|
+    |               this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:308:46
+    |
+308 |                     Text(memory.string(value)?),
+    |                                 -------------^ the trait `From<StorageError>` is not implemented for `IriError`
+    |                                 |
+    |                                 this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:310:18
+    |
+306 |                   let native_values = [DiagnosticParameter::try_new_with_memory(
+    |  ______________________________________-
+307 | |                     "scheme",
+308 | |                     Text(memory.string(value)?),
+309 | |                     memory,
+310 | |                 )?];
+    | |                 -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_________________|
+    |                   this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:312:14
+    |
+305 |               Self::BadScheme(value) => ("iri-bad-scheme", "malformed scheme: {scheme:?}", {
+    |  __________________________________________________________________________________________-
+306 | |                 let native_values = [DiagnosticParameter::try_new_with_memory(
+307 | |                     "scheme",
+308 | |                     Text(memory.string(value)?),
+...   |
+311 | |                 memory.collect(native_values)
+312 | |             }?),
+    | |             -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_____________|
+    |               this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:321:22
+    |
+317 |                       let native_values = [DiagnosticParameter::try_new_with_memory(
+    |  __________________________________________-
+318 | |                         "offset",
+319 | |                         Unsigned(*offset as u64),
+320 | |                         memory,
+321 | |                     )?];
+    | |                     -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_____________________|
+    |                       this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:323:18
+    |
+316 | /                 {
+317 | |                     let native_values = [DiagnosticParameter::try_new_with_memory(
+318 | |                         "offset",
+319 | |                         Unsigned(*offset as u64),
+...   |
+322 | |                     memory.collect(native_values)
+323 | |                 }?,
+    | |                 -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_________________|
+    |                   this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:334:26
+    |
+330 | /                         DiagnosticParameter::try_new_with_memory(
+331 | |                             "character",
+332 | |                             Character(*character),
+333 | |                             memory,
+334 | |                         )?,
+    | |                         -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_________________________|
+    |                           this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:339:26
+    |
+335 | /                         DiagnosticParameter::try_new_with_memory(
+336 | |                             "offset",
+337 | |                             Unsigned(*offset as u64),
+338 | |                             memory,
+339 | |                         )?,
+    | |                         -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_________________________|
+    |                           this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:342:18
+    |
+328 | /                 {
+329 | |                     let native_values = [
+330 | |                         DiagnosticParameter::try_new_with_memory(
+331 | |                             "character",
+...   |
+341 | |                     memory.collect(native_values)
+342 | |                 }?,
+    | |                 -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_________________|
+    |                   this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:347:47
+    |
+347 |                     Text(memory.string(reason)?),
+    |                                 --------------^ the trait `From<StorageError>` is not implemented for `IriError`
+    |                                 |
+    |                                 this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:349:18
+    |
+345 |                   let native_values = [DiagnosticParameter::try_new_with_memory(
+    |  ______________________________________-
+346 | |                     "reason",
+347 | |                     Text(memory.string(reason)?),
+348 | |                     memory,
+349 | |                 )?];
+    | |                 -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_________________|
+    |                   this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:351:14
+    |
+344 |               Self::BadAuthority(reason) => ("iri-bad-authority", "malformed authority: {reason}", {
+    |  __________________________________________________________________________________________________-
+345 | |                 let native_values = [DiagnosticParameter::try_new_with_memory(
+346 | |                     "reason",
+347 | |                     Text(memory.string(reason)?),
+...   |
+350 | |                 memory.collect(native_values)
+351 | |             }?),
+    | |             -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_____________|
+    |               this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:358:49
+    |
+358 |                         Text(memory.string(base)?),
+    |                                     ------------^ the trait `From<StorageError>` is not implemented for `IriError`
+    |                                     |
+    |                                     this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:360:22
+    |
+356 |                       let native_values = [DiagnosticParameter::try_new_with_memory(
+    |  __________________________________________-
+357 | |                         "base",
+358 | |                         Text(memory.string(base)?),
+359 | |                         memory,
+360 | |                     )?];
+    | |                     -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_____________________|
+    |                       this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:362:18
+    |
+355 | /                 {
+356 | |                     let native_values = [DiagnosticParameter::try_new_with_memory(
+357 | |                         "base",
+358 | |                         Text(memory.string(base)?),
+...   |
+361 | |                     memory.collect(native_values)
+362 | |                 }?,
+    | |                 -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_________________|
+    |                   this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:370:54
+    |
+370 |                         Text(memory.string(reference)?),
+    |                                     -----------------^ the trait `From<StorageError>` is not implemented for `IriError`
+    |                                     |
+    |                                     this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:372:22
+    |
+368 |                       let native_values = [DiagnosticParameter::try_new_with_memory(
+    |  __________________________________________-
+369 | |                         "reference",
+370 | |                         Text(memory.string(reference)?),
+371 | |                         memory,
+372 | |                     )?];
+    | |                     -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_____________________|
+    |                       this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:374:18
+    |
+367 | /                 {
+368 | |                     let native_values = [DiagnosticParameter::try_new_with_memory(
+369 | |                         "reference",
+370 | |                         Text(memory.string(reference)?),
+...   |
+373 | |                     memory.collect(native_values)
+374 | |                 }?,
+    | |                 -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_________________|
+    |                   this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:380:54
+    |
+380 |                         Text(memory.string(reference)?),
+    |                                     -----------------^ the trait `From<StorageError>` is not implemented for `IriError`
+    |                                     |
+    |                                     this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:382:22
+    |
+378 |                       let native_values = [DiagnosticParameter::try_new_with_memory(
+    |  __________________________________________-
+379 | |                         "reference",
+380 | |                         Text(memory.string(reference)?),
+381 | |                         memory,
+382 | |                     )?];
+    | |                     -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_____________________|
+    |                       this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:384:18
+    |
+377 |                   let mut parameters = {
+    |  ______________________________________-
+378 | |                     let native_values = [DiagnosticParameter::try_new_with_memory(
+379 | |                         "reference",
+380 | |                         Text(memory.string(reference)?),
+...   |
+383 | |                     memory.collect(native_values)
+384 | |                 }?;
+    | |                 -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_________________|
+    |                   this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:394:56
+    |
+394 | ...                   Text(memory.string(iri)?),
+    |                                   -----------^ the trait `From<StorageError>` is not implemented for `IriError`
+    |                                   |
+    |                                   this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:396:30
+    |
+392 |   ...                   let native_parameter = DiagnosticParameter::try_new_with_memory(
+    |  ______________________________________________-
+393 | | ...                       "base",
+394 | | ...                       Text(memory.string(iri)?),
+395 | | ...                       memory,
+396 | | ...                   )?;
+    | |                       -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_______________________|
+    |                         this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:398:26
+    |
+391 | /                         {
+392 | |                             let native_parameter = DiagnosticParameter::try_new_with_memory(
+393 | |                                 "base",
+394 | |                                 Text(memory.string(iri)?),
+...   |
+397 | |                             memory.push(&mut parameters, native_parameter)
+398 | |                         }?;
+    | |                         -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_________________________|
+    |                           this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:411:42
+    |
+407 | / ...                   DiagnosticParameter::try_new_with_memory(
+408 | | ...                       "line",
+409 | | ...                       Unsigned(*line),
+410 | | ...                       memory,
+411 | | ...                   )?;
+    | |                       -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_______________________|
+    |                         this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:413:34
+    |
+405 | / ...                   {
+406 | | ...                       let native_parameter =
+407 | | ...                           DiagnosticParameter::try_new_with_memory(
+408 | | ...                               "line",
+...   |
+412 | | ...                       memory.push(&mut parameters, native_parameter)
+413 | | ...                   }?;
+    | |                       -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_______________________|
+    |                         this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:420:42
+    |
+416 | / ...                   DiagnosticParameter::try_new_with_memory(
+417 | | ...                       "column",
+418 | | ...                       Unsigned(u64::from(*column)),
+419 | | ...                       memory,
+420 | | ...                   )?;
+    | |                       -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_______________________|
+    |                         this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:422:34
+    |
+414 | / ...                   {
+415 | | ...                       let native_parameter =
+416 | | ...                           DiagnosticParameter::try_new_with_memory(
+417 | | ...                               "column",
+...   |
+421 | | ...                       memory.push(&mut parameters, native_parameter)
+422 | | ...                   }?;
+    | |                       -^ the trait `From<StorageError>` is not implemented for `IriError`
+    | |_______________________|
+    |                         this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:439:65
+    |
+439 |             memory.format(&format_args!("{template}; {remedy}"))?
+    |                    ---------------------------------------------^ the trait `From<StorageError>` is not implemented for `IriError`
+    |                    |
+    |                    this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:441:36
+    |
+441 |             memory.string(template)?
+    |                    ----------------^ the trait `From<StorageError>` is not implemented for `IriError`
+    |                    |
+    |                    this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:450:47
+    |
+449 |             DiagnosticPresentation::try_new_with_memory(identity, &template, parameters, memory)
+    |             ------------------------------------------------------------------------------------ this has type `Result<_, DiagnosticPresentationError>`
+450 |                 .map_err(presentation_storage)?;
+    |                  -----------------------------^ the trait `From<StorageError>` is not implemented for `IriError`
+    |                  |
+    |                  this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+error[E0277]: `?` couldn't convert the error to `IriError`
+   --> crates/iri/src/error.rs:451:40
+    |
+451 |         memory.release_string(template)?;
+    |                ------------------------^ the trait `From<StorageError>` is not implemented for `IriError`
+    |                |
+    |                this can't be annotated with `?` because it has type `Result<_, StorageError>`
+    |
+note: `IriError` needs to implement `From<StorageError>`
+   --> crates/iri/src/error.rs:40:1
+    |
+ 40 | pub enum IriError {
+    | ^^^^^^^^^^^^^^^^^
+    = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+
+Some errors have detailed explanations: E0107, E0277.
+For more information about an error, try `rustc --explain E0107`.
+error: could not compile `purrdf-iri` (lib) due to 34 previous errors
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,18 @@
+{
+  "crates/rdf-wasm/src/dataset.rs": {
+    "source_sha256": "b12cb6273325874bc63f748fc724c9fac77262c9bd06049a541deac273ec49a0",
+    "postimage_sha256": "dd6d30a989b043d922e6c34a3302c91b384dd0b3101c6656fc4e1c5efa1c6870"
+  },
+  "crates/rdf-wasm/src/query.rs": {
+    "source_sha256": "e38aea3e43092241cd4b60173cd77b5ba4faeaedc327774631f7aaf72b87bcb5",
+    "postimage_sha256": "64f8006ee986fdb56fe963f5bfcbfb2b51ea3d734d48bbc095dc24191bb7c132"
+  },
+  "crates/rdf-wasm/src/stream.rs": {
+    "source_sha256": "d9c9bd22284e7184bf140db2edf6ebab81a1acfeca677cf09358ae7ba5aab78e",
+    "postimage_sha256": "6d1ffcfa3c1c9b3b1ae83804d6416462d5d9d91495659e63606d514667f60409"
+  },
+  "crates/rdf-wasm/src/projection.rs": {
+    "source_sha256": "d5ac50b3a68a3df80ea9723b51b5ea9eac447d37eb41e768d57fe75dc6f3ad7d",
+    "postimage_sha256": "916da9d2f3dff0bfed9f7b8c030a1646bf1d39684fc594d5fd5f85a0cd36a9f6"
+  }
+}

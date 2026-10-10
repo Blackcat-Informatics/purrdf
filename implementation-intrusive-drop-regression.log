@@ -1,0 +1,64 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+error: methods `copy_using` and `abs_using` are never used
+  --> crates/xsd/src/exact/integer.rs:66:19
+   |
+38 | impl Integer {
+   | ------------ methods in this implementation
+...
+66 |     pub(crate) fn copy_using(
+   |                   ^^^^^^^^^^
+...
+75 |     pub(crate) fn abs_using(
+   |                   ^^^^^^^^^
+   |
+   = note: `-D dead-code` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: type does not implement `Debug`; consider adding `#[derive(Debug)]` or a manual implementation
+   --> crates/xsd/src/bigint.rs:587:1
+    |
+587 | / pub struct PreparedDecimalDigits {
+588 | |     negative: bool,
+589 | |     groups: Mag,
+590 | |     digits: usize,
+591 | | }
+    | |_^
+    |
+    = note: `-D missing-debug-implementations` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(missing_debug_implementations)]`
+
+error: missing documentation for a variant
+   --> crates/xsd/src/exact/cost.rs:101:29
+    |
+101 | pub enum IntegerOperation { Add, Subtract, Multiply }
+    |                             ^^^
+    |
+    = note: `-D missing-docs` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(missing_docs)]`
+
+error: missing documentation for a variant
+   --> crates/xsd/src/exact/cost.rs:101:34
+    |
+101 | pub enum IntegerOperation { Add, Subtract, Multiply }
+    |                                  ^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/xsd/src/exact/cost.rs:101:44
+    |
+101 | pub enum IntegerOperation { Add, Subtract, Multiply }
+    |                                            ^^^^^^^^
+
+error: type does not implement `Debug`; consider adding `#[derive(Debug)]` or a manual implementation
+  --> crates/xsd/src/exact/decimal.rs:27:1
+   |
+27 | / pub struct PreparedDecimalText {
+28 | |     digits: crate::bigint::PreparedDecimalDigits,
+29 | |     scale: usize,
+30 | |     length: usize,
+31 | | }
+   | |_^
+
+error: could not compile `purrdf-xsd` (lib) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...

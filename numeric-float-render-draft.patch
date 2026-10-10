@@ -1,0 +1,189 @@
+diff --git a/crates/xsd/src/numeric.rs b/crates/xsd/src/numeric.rs
+--- a/crates/xsd/src/numeric.rs
++++ b/crates/xsd/src/numeric.rs
+@@ -631,59 +631,132 @@
+     Ok(())
+ }
+ 
+-/// XSD canonical `double`: `m.dddEsexp`, mantissa in shortest round-trippable form,
+-/// `INF`/`-INF`/`NaN` for the specials.
+-#[must_use]
+-pub fn canonical_double(d: f64) -> String {
+-    canonical_ieee(d, d.is_nan(), d.is_infinite(), d.is_sign_negative(), || {
+-        format!("{d:e}")
+-    })
+-}
+-
+-/// XSD canonical `float`.
+-#[must_use]
+-pub fn canonical_float(f: f32) -> String {
+-    canonical_ieee(
+-        f64::from(f),
+-        f.is_nan(),
+-        f.is_infinite(),
+-        f.is_sign_negative(),
+-        || format!("{f:e}"),
+-    )
+-}
+-
+-fn canonical_ieee(
+-    value: f64,
+-    is_nan: bool,
+-    is_inf: bool,
+-    is_neg: bool,
+-    sci: impl Fn() -> String,
+-) -> String {
+-    if is_nan {
+-        return "NaN".to_string();
+-    }
+-    if is_inf {
+-        return if is_neg { "-INF" } else { "INF" }.to_string();
+-    }
+-    if value == 0.0 {
+-        return if is_neg { "-0.0E0" } else { "0.0E0" }.to_string();
+-    }
+-    // Rust's `{:e}` is the shortest round-trippable scientific form (e.g. `1e2`,
+-    // `1.5e0`, `5e-3`). Normalize to the XSD canonical `mantissa.frac E exp`.
+-    let raw = sci();
+-    let (mantissa, exp) = raw.split_once('e').unwrap_or((raw.as_str(), "0"));
+-    // One exact-fit buffer instead of two `format!` intermediates; the mantissa
+-    // and exponent digits come from `sci()` untouched.
+-    let mut out = String::with_capacity(mantissa.len() + exp.len() + 3);
+-    out.push_str(mantissa);
+-    if !mantissa.contains('.') {
+-        out.push_str(".0");
+-    }
+-    out.push('E');
+-    out.push_str(exp);
+-    out
+-}
+-
++/// Refusal while writing into a caller-owned numeric lexical destination.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum NumericRenderError {
++    /// The caller has not admitted enough available destination capacity.
++    DestinationTooSmall {
++        /// Complete bytes the writer will append.
++        required_bytes: usize,
++        /// Bytes available without growing the caller's destination.
++        available_bytes: usize,
++    },
++}
++
++/// Inline shortest IEEE text, already normalized to its XSD canonical spelling.
++///
++/// The longest binary64 scientific spelling has 17 significant digits, a sign,
++/// point, exponent marker/sign and three exponent digits (24 bytes). The
++/// `.0` normalization affects only a one-digit mantissa. This array also
++/// covers XPath's plain spelling in its stated [10^-6, 10^6) interval.
++#[derive(Clone, Copy)]
++pub struct CanonicalFloatText {
++    bytes: [u8; 32],
++    length: usize,
++}
++
++impl CanonicalFloatText {
++    const fn empty() -> Self { Self { bytes: [0; 32], length: 0 } }
++
++    /// Actual final lexical length, known without allocating.
++    #[must_use]
++    pub const fn len(&self) -> usize { self.length }
++
++    /// Numeric text is never empty.
++    #[must_use]
++    pub const fn is_empty(&self) -> bool { self.length == 0 }
++
++    /// Borrow the inline ASCII lexical bytes.
++    #[must_use]
++    pub fn as_str(&self) -> &str {
++        std::str::from_utf8(&self.bytes[..self.length])
++            .expect("the native IEEE formatter writes ASCII only")
++    }
++
++    /// Append without allocating or growing the caller's String.
++    /// The full destination check happens before the first write.
++    ///
++    /// # Errors
++    /// Refuses insufficient admitted capacity without modifying the destination.
++    pub fn write_to(&self, output: &mut String) -> Result<(), NumericRenderError> {
++        let available = output.capacity() - output.len();
++        if self.length > available {
++            return Err(NumericRenderError::DestinationTooSmall {
++                required_bytes: self.length, available_bytes: available,
++            });
++        }
++        output.push_str(self.as_str());
++        Ok(())
++    }
++}
++
++impl std::fmt::Write for CanonicalFloatText {
++    fn write_str(&mut self, text: &str) -> std::fmt::Result {
++        let end = self.length.checked_add(text.len()).ok_or(std::fmt::Error)?;
++        let destination = self.bytes.get_mut(self.length..end).ok_or(std::fmt::Error)?;
++        destination.copy_from_slice(text.as_bytes());
++        self.length = end;
++        Ok(())
++    }
++}
++
++/// XSD canonical double in inline caller-borrowable storage. No allocation.
++#[must_use]
++pub fn canonical_double_text(value: f64) -> CanonicalFloatText {
++    canonical_ieee(value, value.is_nan(), value.is_infinite(), value.is_sign_negative(),
++        |output| std::fmt::write(output, format_args!("{value:e}")))
++}
++
++/// XSD canonical float at its original single precision. No allocation.
++#[must_use]
++pub fn canonical_float_text(value: f32) -> CanonicalFloatText {
++    canonical_ieee(f64::from(value), value.is_nan(), value.is_infinite(), value.is_sign_negative(),
++        |output| std::fmt::write(output, format_args!("{value:e}")))
++}
++
++/// XSD canonical double as a resident owned String.
++#[must_use]
++pub fn canonical_double(value: f64) -> String {
++    canonical_double_text(value).as_str().to_owned()
++}
++
++/// XSD canonical float as a resident owned String.
++#[must_use]
++pub fn canonical_float(value: f32) -> String {
++    canonical_float_text(value).as_str().to_owned()
++}
++
++fn canonical_ieee(
++    value: f64,
++    is_nan: bool,
++    is_inf: bool,
++    is_neg: bool,
++    scientific: impl FnOnce(&mut CanonicalFloatText) -> std::fmt::Result,
++) -> CanonicalFloatText {
++    use std::fmt::Write;
++    let mut output = CanonicalFloatText::empty();
++    let special = if is_nan { Some("NaN") } else if is_inf {
++        Some(if is_neg { "-INF" } else { "INF" })
++    } else if value == 0.0 {
++        Some(if is_neg { "-0.0E0" } else { "0.0E0" })
++    } else { None };
++    if let Some(special) = special {
++        output.write_str(special).expect("special IEEE lexical fits inline");
++        return output;
++    }
++    // One semantic formatter; the Rust scientific temporary is now inline.
++    let mut raw = CanonicalFloatText::empty();
++    scientific(&mut raw).expect("shortest IEEE scientific lexical fits inline");
++    let (mantissa, exponent) = raw.as_str().split_once('e').unwrap_or((raw.as_str(), "0"));
++    output.write_str(mantissa).expect("IEEE mantissa fits inline");
++    if !mantissa.contains('.') {
++        output.write_str(".0").expect("normalized IEEE mantissa fits inline");
++    }
++    output.write_str("E").expect("IEEE exponent marker fits inline");
++    output.write_str(exponent).expect("IEEE exponent fits inline");
++    output
++}
++
+ /// SPARQL numeric promotion comparison. Promotes both operands to the least type
+ /// that contains them (`integer ⊂ decimal ⊂ float ⊂ double`) and compares. Returns
+ /// `None` when an operand is `NaN` (genuinely unordered) or non-numeric (the caller

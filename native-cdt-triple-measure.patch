@@ -1,0 +1,21 @@
+--- a/crates/cdt/src/render.rs
++++ b/crates/cdt/src/render.rs
+@@ -281,6 +281,18 @@
+     Ok(out.0)
+ }
+ 
++/// Measure the original triple renderer before its checked box is born.
++pub(crate) fn try_triple_lexical_len(
++    triple: &CdtTripleTerm,
++    memory: &mut Memory<'_>,
++) -> Result<usize, StorageError> {
++    let mut output = Measure(0);
++    let mut jobs = Vec::new();
++    push_triple(&mut jobs, triple, memory)?;
++    run(&mut output, jobs, memory)?;
++    Ok(output.0)
++}
++
+ /// The byte length one map key occupies in a canonical form, without allocating it.
+ pub(crate) fn key_lexical_len(key: &CdtKey) -> usize {
+     let mut out = Measure(0);

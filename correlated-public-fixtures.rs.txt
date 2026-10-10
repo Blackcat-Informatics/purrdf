@@ -1,0 +1,124 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Public correlated entries, real allocator peaks, exact bags and retained clones.
+
+mod support;
+
+use purrdf_core::{SparqlRequest, SparqlResult};
+use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions};
+use support::segmented::{CEILING,fixture,open_with_evidence};
+
+#[global_allocator]
+static GLOBAL:purrdf_alloc_probe::CountingAllocator=purrdf_alloc_probe::CountingAllocator;
+
+fn compare(found:&purrdf_sparql_eval::RetainedSparqlResult,expected:&SparqlResult) {
+    match expected {
+        SparqlResult::Solutions { .. }=>assert_eq!(
+            support::sorted_rows(found,support::render_cell),
+            support::sorted_rows(expected,support::render_cell)),
+        SparqlResult::Boolean(answer)=>assert_eq!(found.boolean(),Some(*answer)),
+        SparqlResult::Graph(expected)=> {
+            let actual=found.graph().expect("complete retained graph");
+            // Native interner identity differs across the source doors; compare
+            // the original RDF terms and exact quad multiplicity.
+            let mut actual:Vec<_>=actual.owned_quads().map(|quad|purrdf_core::turtle::emit_quad(&quad)).collect();
+            let mut expected:Vec<_>=expected.owned_quads().map(|quad|purrdf_core::turtle::emit_quad(&quad)).collect();
+            actual.sort();
+            expected.sort();
+            assert_eq!(actual,expected);
+        }
+    }
+}
+
+#[test]
+fn all_public_forms_and_routes_share_native_correlated_scopes_and_owned_outputs() {
+    let (image,resident)=fixture();
+    let queries=[
+        r#"SELECT ?s ?label WHERE {
+            ?s <https://example.org/p> ?label
+            FILTER EXISTS {
+                ?s <https://example.org/q> ?label
+                FILTER NOT EXISTS { ?s <https://example.org/absent> ?missing }
+            }
+        }"#,
+        r#"SELECT ?s ?label WHERE {
+            ?s <https://example.org/p> ?label
+            FILTER EXISTS {
+                { SELECT ?s ?label WHERE {
+                    ?s <https://example.org/q> ?label
+                    OPTIONAL { ?s <https://example.org/absent> ?missing }
+                    MINUS { ?s <https://example.org/also-absent> ?minus }
+                } ORDER BY ?label LIMIT 1 }
+            }
+        }"#,
+        r#"SELECT ?label WHERE {
+            VALUES ?s { <https://example.org/target> <https://example.org/target> }
+            LATERAL {
+                ?s <https://example.org/p> ?label
+                FILTER EXISTS { ?s <https://example.org/q> ?label }
+            }
+        }"#,
+        r#"SELECT ?s WHERE {
+            ?s <https://example.org/p> ?label
+            FILTER EXISTS {
+                { ?s <https://example.org/q> ?label }
+                UNION { ?s <https://example.org/absent> ?other }
+                BIND(CONCAT(STR(?label)," computed") AS ?derived)
+                FILTER (STRLEN(?derived)>0)
+            }
+        }"#,
+        r#"ASK WHERE {
+            <https://example.org/target> <https://example.org/p> ?label
+            FILTER EXISTS { <https://example.org/target> <https://example.org/q> ?label }
+        }"#,
+        r#"CONSTRUCT {
+            <https://example.org/target> <https://example.org/copied> ?label
+        } WHERE {
+            <https://example.org/target> <https://example.org/p> ?label
+            FILTER EXISTS { <https://example.org/target> <https://example.org/q> ?label }
+        }"#,
+        r#"DESCRIBE ?s WHERE {
+            VALUES ?s { <https://example.org/target> }
+            FILTER EXISTS { ?s <https://example.org/q> ?label }
+        }"#,
+    ];
+    for query in queries {
+        let engine=NativeSparqlEngine::new();
+        let prepared=engine.prepare_query(query,None).expect("original admitted syntax");
+        let expected=engine.query_prepared(&resident,&prepared,&[],QueryOptions::EMPTY)
+            .expect("independent resident production result");
+        for route in 0..4 {
+            let source=open_with_evidence(&image,CEILING,2,16_384);
+            let window=purrdf_alloc_probe::CurrentThreadWindow::open();
+            let request=||SparqlRequest { query,base_iri:None,substitutions:&[] };
+            let found=match route {
+                0=>engine.query_fallible_view(&source,request(),QueryOptions::EMPTY)
+                    .expect("complete direct correlated entry").result,
+                1=>engine.query_prepared_fallible_view(&source,&prepared,&[],QueryOptions::EMPTY)
+                    .expect("complete prepared correlated entry").result,
+                2=>engine.query_governed_fallible_view(&source,request(),QueryOptions::EMPTY,
+                    &QueryGovernors::METERED).expect("complete governed correlated entry").result,
+                _=>engine.query_prepared_governed_fallible_view(&source,&prepared,&[],
+                    QueryOptions::EMPTY,&QueryGovernors::METERED)
+                    .expect("complete prepared governed correlated entry").result,
+            };
+            let measurement=window.close();
+            assert!(u64::try_from(measurement.peak_working_bytes).unwrap()<=source.evidence().peak_bytes(),
+                "route {route} must price original working owners before actual allocation");
+            assert!(source.evidence().peak_bytes()<=CEILING);
+            assert!(source.read_error().is_none());
+            compare(&found,&expected);
+            let original_live=source.evidence().live_bytes();
+            let window=purrdf_alloc_probe::CurrentThreadWindow::open();
+            let retained=found.clone();
+            drop(found);
+            assert_eq!(window.close().allocations,0,"ordinary native clones share original payload owners");
+            assert_eq!(source.evidence().live_bytes(),original_live);
+            compare(&retained,&expected);
+            drop(retained);
+            assert!(source.evidence().live_bytes()<original_live,
+                "the final retained output releases its original allocation grant");
+        }
+    }
+}

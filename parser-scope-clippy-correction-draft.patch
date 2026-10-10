@@ -1,0 +1,31 @@
+--- a/crates/sparql-algebra/src/parser/table.rs
++++ b/crates/sparql-algebra/src/parser/table.rs
+@@ -353,8 +353,7 @@
+     pub(crate) fn remove(&mut self, key: &K) -> Option<V> {
+         let mut index = self.find(|candidate| key.cmp(candidate))?;
+         let entry = self.entry(index);
+-        if entry.left.is_some() && entry.right.is_some() {
+-            let mut successor = entry.right.expect("checked nonempty right subtree");
++        if let (Some(_), Some(mut successor)) = (entry.left, entry.right) {
+             while let Some(left) = self.entry(successor).left {
+                 successor = left;
+             }
+--- a/crates/sparql-algebra/src/scope.rs
++++ b/crates/sparql-algebra/src/scope.rs
+@@ -698,11 +698,11 @@
+                 }
+             }
+             TermPattern::Variable(variable) if source != LabelSource::Raw => {
+-                if let Some(label) = variable.source_blank_label() {
+-                    if visit(label, memory)? {
+-                        found = true;
+-                        break;
+-                    }
++                if let Some(label) = variable.source_blank_label()
++                    && visit(label, memory)?
++                {
++                    found = true;
++                    break;
+                 }
+             }
+             TermPattern::Triple(triple) => {

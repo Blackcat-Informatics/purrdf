@@ -1,0 +1,31 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+error: unnecessary qualification
+   --> crates/iri/src/base.rs:482:28
+    |
+482 |         let mut resident = purrdf_lex::allocation::Resident;
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+482 -         let mut resident = purrdf_lex::allocation::Resident;
+482 +         let mut resident = Resident;
+    |
+
+error: unnecessary qualification
+   --> crates/iri/src/base.rs:483:37
+    |
+483 |         self.clone_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+483 -         self.clone_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
+483 +         self.clone_with_memory(&mut Memory::new(&mut resident))
+    |
+
+error: could not compile `purrdf-iri` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

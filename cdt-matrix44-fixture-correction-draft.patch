@@ -1,0 +1,14 @@
+--- a/crates/cdt/tests/value_relations.rs
++++ b/crates/cdt/tests/value_relations.rs
+@@ -1031,7 +1031,10 @@
+ #[test]
+ fn native_literal_parser_keeps_original_box_failure_through_child_refund() {
+     let left = literal_composite("[[1],{'a':[2]}]");
+-    let right = literal_composite("[[1],{'a':[2]}]");
++    let right = literal_composite("[[1], {'a': [2]}]");
++    // Distinct lexical terms denote the same nested value. Identical terms can
++    // answer by term identity without entering the native denotation producer.
++    assert_eq!(term_equal(&left, &right), Ok(true));
+     let mut grant = RefuseBoxAndShrink(NativeGrant::new(), false);
+     let window = CurrentThreadWindow::open();
+     let answer = purrdf_cdt::ops::try_term_equal(&left, &right, &mut grant);

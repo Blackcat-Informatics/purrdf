@@ -1,0 +1,8 @@
+issue      /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/issue.md
+prior art  /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/prior-art.md
+machine    /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/brief.json
+
+  - issue #508 + 2 comment(s) via github
+  - link crawl: 6 issue(s) within 2 hop(s) of `#N` references
+  - forge search on ['sparql-eval:', 'complete', 'bounded']: 14 other item(s)
+  - GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits

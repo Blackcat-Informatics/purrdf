@@ -1,0 +1,20 @@
+heaptrack output will be written to "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/prepared-baseline-memo.zst.zst"
+starting application, this might take some time...
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 17 filtered out; finished in 0.00s
+
+NOTE: heaptrack detected DEBUGINFOD_URLS but will disable it to prevent 
+unintended network delays during recording
+If you really want to use DEBUGINFOD, export HEAPTRACK_ENABLE_DEBUGINFOD=1
+heaptrack stats:
+	allocations:          	227
+	leaked allocations:   	2
+	temporary allocations:	48
+Heaptrack finished! Now run the following to investigate the data:
+
+  heaptrack --analyze "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/prepared-baseline-memo.zst.zst"
+
+heaptrack_gui detected, automatically opening the file...
+/usr/bin/heaptrack: line 288: 1953577 Aborted                    (core dumped) exit $EXIT_CODE

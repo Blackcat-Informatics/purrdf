@@ -1,0 +1,60 @@
+--- a/crates/sparql-eval/tests/numeric_aggregate_ownership.rs
++++ b/crates/sparql-eval/tests/numeric_aggregate_ownership.rs
+@@ -395,3 +395,57 @@
+     assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
+     assert!(source.evidence().peak_bytes() <= ceiling);
+ }
++
++#[test]
++fn statistical_big_integer_states_and_outputs_are_physically_admitted() {
++    let (image, _) = fixture();
++    let engine = NativeSparqlEngine::new();
++    let env = statistical_env();
++    let options = QueryOptions::EMPTY
++        .with_env(&env)
++        .with_division(DivisionPolicy::Exact);
++    let zeros = "0".repeat(4096);
++    let first = format!("1{zeros}");
++    let last = format!("3{zeros}");
++    let expected = vec![vec![
++        Some(TermValue::typed_literal(format!("2{zeros}"), XSD_DECIMAL)),
++        Some(TermValue::typed_literal(
++            format!("1{}", "0".repeat(8192)),
++            XSD_DECIMAL,
++        )),
++        Some(TermValue::typed_literal(first.clone(), XSD_INTEGER)),
++        Some(TermValue::simple_literal(format!("{last} {first}"))),
++    ]];
++    let query = format!(
++        "SELECT (AGG(<http://example.org/stat#MEDIAN>, ?x) AS ?median) (AGG(<http://example.org/stat#VAR_POP>, ?x) AS ?variance) (AGG(<http://example.org/stat#MODE>, ?x) AS ?mode) (AGG(<http://example.org/stat#TOPK>, ?x; K=2) AS ?topk) WHERE {{ VALUES ?x {{ {first} {last} }} }}"
++    );
++    let prepared = engine
++        .prepare_query_with_options(&query, None, options)
++        .unwrap();
++    let source = open(&image, CEILING);
++    let window = CurrentThreadWindow::open();
++    let complete = engine
++        .query_prepared_governed_fallible_view(
++            &source,
++            &prepared,
++            &[],
++            options,
++            &QueryGovernors::METERED,
++        )
++        .unwrap();
++    let measured = window.close();
++    assert_eq!(complete.result.solutions().unwrap().1, expected);
++    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
++    assert!(source.evidence().peak_bytes() <= CEILING);
++    let (result, evidence) = complete.into_parts();
++    drop(evidence);
++    let live = source.evidence().live_bytes();
++    let window = CurrentThreadWindow::open();
++    let clone = result.clone();
++    assert_eq!(window.close().allocations, 0);
++    drop(result);
++    assert_eq!(source.evidence().live_bytes(), live);
++    assert_eq!(clone.solutions().unwrap().1, expected);
++    drop(clone);
++    assert!(source.evidence().live_bytes() < live);
++}

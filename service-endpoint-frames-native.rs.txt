@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+/// The mutable endpoint-frame array retains its ORIGINAL capacity grant outside
+/// the vector. Payload frames and the actual array die before that grant.
+#[derive(Debug)]
+pub(crate) struct EndpointFrames<I> {
+    frames: Vec<EndpointFrame<I>>,
+    allocation: Option<crate::WorkspaceAllocation>,
+}
+
+impl<I> Default for EndpointFrames<I> {
+    fn default() -> Self {
+        Self {
+            frames: Vec::new(),
+            allocation: None,
+        }
+    }
+}
+
+impl<I> std::ops::Deref for EndpointFrames<I> {
+    type Target = [EndpointFrame<I>];
+    fn deref(&self) -> &[EndpointFrame<I>] {
+        &self.frames
+    }
+}
+
+impl<I: purrdf_core::ViewTermId> EndpointFrames<I> {
+    fn push(
+        &mut self,
+        frame: EndpointFrame<I>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        let required = self
+            .frames
+            .len()
+            .checked_add(1)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        workspace.reserve_vec(&mut self.frames, &mut self.allocation, required)?;
+        self.frames.push(frame);
+        Ok(())
+    }
+
+    fn truncate(&mut self, depth: usize) {
+        self.frames.truncate(depth);
+    }
+
+    pub(crate) fn clone_admitted(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let mut copy = Self::default();
+        workspace.reserve_vec(&mut copy.frames, &mut copy.allocation, self.len())?;
+        // Variables and immutable endpoint arrays share their original controls.
+        // Only this concrete metadata array is new; no scratch value is copied.
+        copy.frames.extend(self.frames.iter().cloned());
+        Ok(copy)
+    }
+}

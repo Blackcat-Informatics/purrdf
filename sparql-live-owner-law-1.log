@@ -1,0 +1,16 @@
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 3m 44s
+     Running tests/sparql_path_alloc.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/155cf37ddfa95d1b/out/sparql_path_alloc-155cf37ddfa95d1b)
+
+running 8 tests
+test every_sparql_surface_costs_a_constant_per_conforming_focus_node ... ok
+test every_sparql_surface_still_reports_its_violations_when_governed ... ok
+test ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node ... ok
+test every_registered_prose_site_quotes_the_measured_figures ... ok
+test every_sparql_surface_costs_a_constant_per_governed_change_focus_node ... ok
+test every_sparql_surface_still_reports_its_violations ... ok
+test the_fixture_gives_every_focus_node_two_value_nodes ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.03s
+

@@ -1,0 +1,183 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0603]: function `hash_of` is private
+   --> crates/sparql-eval/src/solution.rs:180:96
+    |
+180 |                 index.try_reserve(map_capacity, |entry: &(Variable, usize)| purrdf_core::hash::hash_of(&entry.0))
+    |                                                                                                ^^^^^^^ private function
+    |
+note: the function `hash_of` is defined here
+   --> crates/rdf-core/src/hash.rs:62:16
+    |
+ 62 | pub(crate) use purrdf_hash::fixed::hash_one as hash_of;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: import `hash_of` directly
+    |
+180 -                 index.try_reserve(map_capacity, |entry: &(Variable, usize)| purrdf_core::hash::hash_of(&entry.0))
+180 +                 index.try_reserve(map_capacity, |entry: &(Variable, usize)| purrdf_hash::fixed::hash_one(&entry.0))
+    |
+
+error[E0603]: function `hash_of` is private
+   --> crates/sparql-eval/src/solution.rs:183:60
+    |
+183 | ...   index.insert_unique(purrdf_core::hash::hash_of(col), (col.clone(), ordinal), |entry| purrdf_core::hash::hash_of(&entry.0));
+    |                                              ^^^^^^^ private function
+    |
+note: the function `hash_of` is defined here
+   --> crates/rdf-core/src/hash.rs:62:16
+    |
+ 62 | pub(crate) use purrdf_hash::fixed::hash_one as hash_of;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: import `hash_of` directly
+    |
+183 -                     index.insert_unique(purrdf_core::hash::hash_of(col), (col.clone(), ordinal), |entry| purrdf_core::hash::hash_of(&entry.0));
+183 +                     index.insert_unique(purrdf_hash::fixed::hash_one(col), (col.clone(), ordinal), |entry| purrdf_core::hash::hash_of(&entry.0));
+    |
+
+error[E0603]: function `hash_of` is private
+   --> crates/sparql-eval/src/solution.rs:183:125
+    |
+183 | ... (col.clone(), ordinal), |entry| purrdf_core::hash::hash_of(&entry.0));
+    |                                                        ^^^^^^^ private function
+    |
+note: the function `hash_of` is defined here
+   --> crates/rdf-core/src/hash.rs:62:16
+    |
+ 62 | pub(crate) use purrdf_hash::fixed::hash_one as hash_of;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: import `hash_of` directly
+    |
+183 -                     index.insert_unique(purrdf_core::hash::hash_of(col), (col.clone(), ordinal), |entry| purrdf_core::hash::hash_of(&entry.0));
+183 +                     index.insert_unique(purrdf_core::hash::hash_of(col), (col.clone(), ordinal), |entry| purrdf_hash::fixed::hash_one(&entry.0));
+    |
+
+error[E0603]: function `hash_of` is private
+   --> crates/sparql-eval/src/solution.rs:191:57
+    |
+191 | ...   data.index.insert_unique(purrdf_core::hash::hash_of(&variable), (variable, ordinal), |entry| purrdf_core::hash::hash_of(&entr...
+    |                                                   ^^^^^^^ private function
+    |
+note: the function `hash_of` is defined here
+   --> crates/rdf-core/src/hash.rs:62:16
+    |
+ 62 | pub(crate) use purrdf_hash::fixed::hash_one as hash_of;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: import `hash_of` directly
+    |
+191 -             data.index.insert_unique(purrdf_core::hash::hash_of(&variable), (variable, ordinal), |entry| purrdf_core::hash::hash_of(&entry.0));
+191 +             data.index.insert_unique(purrdf_hash::fixed::hash_one(&variable), (variable, ordinal), |entry| purrdf_core::hash::hash_of(&entry.0));
+    |
+
+error[E0603]: function `hash_of` is private
+   --> crates/sparql-eval/src/solution.rs:191:125
+    |
+191 | ...e), (variable, ordinal), |entry| purrdf_core::hash::hash_of(&entry.0));
+    |                                                        ^^^^^^^ private function
+    |
+note: the function `hash_of` is defined here
+   --> crates/rdf-core/src/hash.rs:62:16
+    |
+ 62 | pub(crate) use purrdf_hash::fixed::hash_one as hash_of;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: import `hash_of` directly
+    |
+191 -             data.index.insert_unique(purrdf_core::hash::hash_of(&variable), (variable, ordinal), |entry| purrdf_core::hash::hash_of(&entry.0));
+191 +             data.index.insert_unique(purrdf_core::hash::hash_of(&variable), (variable, ordinal), |entry| purrdf_hash::fixed::hash_one(&entry.0));
+    |
+
+error[E0603]: function `hash_of` is private
+   --> crates/sparql-eval/src/solution.rs:205:48
+    |
+205 |             data.index.find(purrdf_core::hash::hash_of(var), |entry| &entry.0 == var).map(|entry| entry.1)
+    |                                                ^^^^^^^ private function
+    |
+note: the function `hash_of` is defined here
+   --> crates/rdf-core/src/hash.rs:62:16
+    |
+ 62 | pub(crate) use purrdf_hash::fixed::hash_one as hash_of;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: import `hash_of` directly
+    |
+205 -             data.index.find(purrdf_core::hash::hash_of(var), |entry| &entry.0 == var).map(|entry| entry.1)
+205 +             data.index.find(purrdf_hash::fixed::hash_one(var), |entry| &entry.0 == var).map(|entry| entry.1)
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/solution.rs:356:24
+    |
+356 | type InternedLayouts = hashbrown::HashTable<(Box<[Variable]>, Arc<VarSchema>)>;
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+356 - type InternedLayouts = hashbrown::HashTable<(Box<[Variable]>, Arc<VarSchema>)>;
+356 + type InternedLayouts = HashTable<(Box<[Variable]>, Arc<VarSchema>)>;
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/solution.rs:373:38
+    |
+373 |             std::cell::RefCell::new((hashbrown::HashTable::new(), crate::plan_memory::InternerCharge::new()))
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+373 -             std::cell::RefCell::new((hashbrown::HashTable::new(), crate::plan_memory::InternerCharge::new()))
+373 +             std::cell::RefCell::new((HashTable::new(), crate::plan_memory::InternerCharge::new()))
+    |
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/engine.rs:3538:24
+     |
+3538 |                   return refused
+     |  ________________________^
+3539 | |                     .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)))
+3540 | |                     .map_err(EvaluationFailure::Diagnostic);
+     | |___________________________________________________________^ expected `Result<_, RdfDiagnostic>`, found `Result<InternedGoverned<_>, _>`
+     |
+     = note: expected enum `Result<_, RdfDiagnostic>`
+                found enum `Result<InternedGoverned<_>, EvaluationFailure>`
+note: return type inferred to be `Result<_, RdfDiagnostic>` here
+    --> crates/sparql-eval/src/engine.rs:3514:27
+     |
+3514 |             let options = publication.options(dataset, options)?;
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/engine.rs:3578:13
+     |
+3578 |             answer
+     |             ^^^^^^ expected `Result<_, RdfDiagnostic>`, found `Result<InternedGoverned<R>, _>`
+     |
+     = note: expected enum `Result<_, RdfDiagnostic>`
+                found enum `Result<InternedGoverned<R>, EvaluationFailure>`
+note: return type inferred to be `Result<_, RdfDiagnostic>` here
+    --> crates/sparql-eval/src/engine.rs:3514:27
+     |
+3514 |             let options = publication.options(dataset, options)?;
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0502]: cannot borrow `*ctx` as mutable because it is also borrowed as immutable
+   --> crates/sparql-eval/src/modifier.rs:238:21
+    |
+230 |     let layout = || {
+    |                  -- immutable borrow occurs here
+231 |         if ctx.dataset.storage_live_budget().is_some() {
+232 |             VarSchema::from_vars_admitted(variables.iter().cloned(), &ctx.growth)?.shared_admitted(&ctx.growth)
+    |                                                                       ---------- first borrow occurs due to use of `ctx.growth` in closure
+...
+238 |     let evaluated = crate::service_endpoints::eval_projected(inner, variables, ctx)?;
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+239 |     let Some(seq) = lift.absorb(0, evaluated) else {
+240 |         let schema = layout()?;
+    |                      ------ immutable borrow later used here
+
+Some errors have detailed explanations: E0308, E0502, E0603.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 11 previous errors

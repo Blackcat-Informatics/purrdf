@@ -1,0 +1,72 @@
+impl SubstitutionEnv {
+    pub(crate) fn then(&self,row:&SubstitutionRow,vars:&VarSchema,workspace:&WorkspaceCapability)->Result<Self,EvalError> {
+        let pruned=restrict(row,vars,workspace)?;
+        if pruned.term.is_empty()&&pruned.expr.is_empty() { return Ok(self.clone()); }
+        let merged=match (&self.layers,&self.merged) {
+            (None,_)=>Some(pruned.clone()),
+            (Some(_),Some(base))=>merge(base,&pruned,workspace)?,
+            (Some(_),None)=>None,
+        };
+        Ok(Self { layers:Some(SharedWorkspace::new_admitted(EnvLayer { row:pruned,parent:self.layers.clone() },workspace)?),merged })
+    }
+    pub(crate) fn layers(&self,workspace:&WorkspaceCapability)->Result<AdmittedVec<&SubstitutionRow>,EvalError> {
+        let mut output=AdmittedVec::new(workspace);
+        let mut next=self.layers.as_deref();
+        while let Some(layer)=next { output.push(&layer.row)?; next=layer.parent.as_deref(); }
+        output.as_mut_slice().reverse();
+        Ok(output)
+    }
+}
+fn restrict(row:&SubstitutionRow,vars:&VarSchema,workspace:&WorkspaceCapability)->Result<SubstitutionRow,EvalError> {
+    row.filtered(workspace,|v|vars.contains(v))
+}
+fn merge(base:&SubstitutionRow,next:&SubstitutionRow,workspace:&WorkspaceCapability)->Result<Option<SubstitutionRow>,EvalError> {
+    let mut conflict=false;
+    let row=SubstitutionRow::build(workspace,|expr,term,memory| {
+        for (variable,value) in &base.expr {
+            let copy=value.clone_with_memory(memory).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+            memory.push(expr,(variable.clone(),copy)).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+        }
+        for (variable,value) in &base.term {
+            let copy=value.clone_with_memory(memory).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+            memory.push(term,(variable.clone(),copy)).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+        }
+        for (variable,value) in &next.term {
+            match base.term.iter().find(|(name,_)|name==variable) {
+                Some((_,existing))=>{
+                    if !existing.eq_with_memory(value,memory).map_err(|e|crate::expr::correlated_storage_error(memory,e))? {
+                        conflict=true;return Ok(());
+                    }
+                }
+                None=>{
+                    let copy=value.clone_with_memory(memory).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+                    memory.push(term,(variable.clone(),copy)).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+                }
+            }
+        }
+        for (variable,value) in &next.expr {
+            if !base.expr.iter().any(|(name,_)|name==variable) {
+                let copy=value.clone_with_memory(memory).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+                memory.push(expr,(variable.clone(),copy)).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+            }
+        }
+        Ok(())
+    })?;
+    Ok((!conflict).then_some(row))
+}
+pub(crate) fn with_row(env:&SubstitutionRow,row:&SubstitutionRow,vars:&VarSchema,workspace:&WorkspaceCapability)
+    ->Result<Option<SubstitutionRow>,EvalError> {
+    merge(env,&restrict(row,vars,workspace)?,workspace)
+}
+
+pub(crate) fn placeholder_with_memory(memory:&mut crate::expr::CorrelatedMemory<'_>)->Result<Box<GraphPattern>,EvalError> {
+    let workspace=memory.admission_mut().workspace().clone();
+    let variable=Variable::from_admitted(workspace.authored_text(&PLACEHOLDER_VARIABLE)?);
+    let variables=memory.collect([variable]).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+    crate::expr::correlated_box(GraphPattern::Values { variables,bindings:Vec::new() },memory)
+}
+pub(crate) fn lateral_placeholder_with_memory(schema:&[Variable],memory:&mut crate::expr::CorrelatedMemory<'_>)->Result<Box<GraphPattern>,EvalError> {
+    let inner=placeholder_with_memory(memory)?;
+    let variables=memory.collect(schema.iter().cloned()).map_err(|e|crate::expr::correlated_storage_error(memory,e))?;
+    crate::expr::correlated_box(GraphPattern::Project { inner:inner.into(),variables },memory)
+}

@@ -1,0 +1,24 @@
+--- a/crates/sparql-eval/src/property_fn.rs
++++ b/crates/sparql-eval/src/property_fn.rs
+@@ -2106,6 +2106,21 @@
+         ceiling,
+         &crate::WorkspaceCapability::default(),
+     )
++    .map_err(|error| match error {
++        // This public resident boundary retains its documented legacy variants.
++        // Bounded execution calls the admitted checker directly and keeps its lease.
++        EvalError::NativeDiagnostic(message)
++            if message.kind() == crate::NativeDiagnosticKind::Function =>
++        {
++            EvalError::function(message.message())
++        }
++        EvalError::NativeDiagnostic(message)
++            if message.kind() == crate::NativeDiagnosticKind::FunctionOperational =>
++        {
++            EvalError::function_operational(message.message())
++        }
++        other => other,
++    })
+ }
+ 
+ pub(crate) fn open_with_workspace_contained(

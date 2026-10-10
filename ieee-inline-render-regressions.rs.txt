@@ -1,0 +1,82 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Append to the existing XSD exact_governance integration test: it owns the
+// counting allocator and measured() helper. Proposed; not compiled or run.
+
+#[test]
+fn inline_ieee_text_preserves_extreme_values_without_heap_traffic() {
+    use purrdf_xsd::numeric::{canonical_double_text, canonical_float_text};
+    let doubles = [
+        (0.0, "0.0E0"),
+        (-0.0, "-0.0E0"),
+        (1.0, "1.0E0"),
+        (-1.5, "-1.5E0"),
+        (f64::MAX, "1.7976931348623157E308"),
+        (f64::MIN_POSITIVE, "2.2250738585072014E-308"),
+        (f64::from_bits(1), "5.0E-324"),
+        (-f64::from_bits(1), "-5.0E-324"),
+        (f64::INFINITY, "INF"),
+        (f64::NEG_INFINITY, "-INF"),
+        (f64::NAN, "NaN"),
+    ];
+    for (value, expected) in doubles {
+        let (text, allocation) = measured(|| canonical_double_text(value));
+        assert_eq!(text.as_str(), expected);
+        assert_eq!(text.len(), expected.len());
+        assert_eq!(allocation.requested_bytes, 0);
+        assert_eq!(allocation.peak_working_bytes, 0);
+    }
+    let singles = [
+        (0.0_f32, "0.0E0"),
+        (-0.0_f32, "-0.0E0"),
+        (1.234_567_8_f32, "1.2345678E0"),
+        (f32::MAX, "3.4028235E38"),
+        (f32::MIN_POSITIVE, "1.1754944E-38"),
+        (f32::from_bits(1), "1.0E-45"),
+        (f32::INFINITY, "INF"),
+        (f32::NEG_INFINITY, "-INF"),
+        (f32::NAN, "NaN"),
+    ];
+    for (value, expected) in singles {
+        let (text, allocation) = measured(|| canonical_float_text(value));
+        assert_eq!(text.as_str(), expected);
+        assert_eq!(text.len(), expected.len());
+        assert_eq!(allocation.requested_bytes, 0);
+        assert_eq!(allocation.peak_working_bytes, 0);
+    }
+}
+
+#[test]
+fn inline_ieee_append_refuses_before_mutation_and_never_grows() {
+    use purrdf_xsd::numeric::{NumericRenderError, canonical_double_text};
+    let text = canonical_double_text(f64::MAX);
+    let mut output = String::with_capacity(text.len() + 3);
+    output.push_str("rdf");
+    let capacity = output.capacity();
+    let (result, allocation) = measured(|| text.write_to(&mut output));
+    result.expect("the admitted destination fits the full lexical");
+    assert_eq!(output, "rdf1.7976931348623157E308");
+    assert_eq!(output.capacity(), capacity);
+    assert_eq!(allocation.requested_bytes, 0);
+
+    // Make free capacity smaller than the lexical regardless of any allocator
+    // over-allocation. Setup occurs outside the measured native operation.
+    output.clear();
+    while output.len() < output.capacity() {
+        output.push('x');
+    }
+    let before = output.clone();
+    let (result, allocation) = measured(|| text.write_to(&mut output));
+    assert_eq!(
+        result,
+        Err(NumericRenderError::DestinationTooSmall {
+            required_bytes: text.len(),
+            available_bytes: 0,
+        })
+    );
+    assert_eq!(output, before);
+    assert_eq!(output.capacity(), capacity);
+    assert_eq!(allocation.requested_bytes, 0);
+    assert_eq!(allocation.peak_working_bytes, 0);
+}

@@ -1,0 +1,1722 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! **Nearest-neighbour search over a PURREMB embedding space**, reachable from SPARQL
+//! through the [property-function seam](crate::property_fn).
+//!
+//! `purrdf_core`'s PURREMB layer already carries RDF-1.2-addressable vectors, a declared
+//! [`purrdf_core::DistanceMetric`], and tamper-evident guards binding a third-party index
+//! payload to the exact matrix it was built over. What it does not carry is a way to *ask
+//! a question*: it stores vectors and refuses to rank them, because ranking is a query
+//! operation and PURREMB is an artifact format. This module is the query operation.
+//!
+//! ```text
+//! PREFIX knn: <https://example.org/space/abstracts>
+//!
+//! SELECT ?neighbour ?distance WHERE {
+//!   ?neighbour knn: ( <https://example.org/doc/7> 5 ?distance )
+//! }
+//! ```
+//!
+//! # PurRDF mints no IRI for this
+//!
+//! The predicate above is the **caller's**, and it is how a query names a space: a host
+//! builds one [`EmbeddingSpace`] per `(artifact, target set, vector space)` triple it
+//! wants queryable and registers an [`EmbeddingKnnRelation`] over it under whatever IRI
+//! its own vocabulary uses. There is no default IRI, no namespace this crate reserves,
+//! and no fallback space — a registry with nothing in it resolves nothing, which is a
+//! host misconfiguration the evaluator reports rather than an empty search result.
+//!
+//! Registering one relation per space, rather than one relation taking a space IRI as an
+//! argument, is what lets [`PropertyFunction::rows_per_invocation`] be *measured* from
+//! the space it will actually search instead of maximized over every space a host might
+//! ever register. The planner reads that number to admit the call against a cell ceiling,
+//! so a bound inflated by an unrelated space is a query refused for no reason.
+//!
+//! # The call shape
+//!
+//! Four flattened positions — one on the subject side, three on the object side:
+//!
+//! | position | name | role |
+//! |---|---|---|
+//! | 0 | `?neighbour` | **out**: the RDF term whose vector was retrieved |
+//! | 1 | `?query` | **in**: the term whose vector seeds the search |
+//! | 2 | `k` | **in**: how many neighbours to retrieve |
+//! | 3 | `?distance` | **out**: the distance, as `xsd:double` |
+//!
+//! The general declared mode is therefore `fbbf`: positions 1 and 2 are inputs this
+//! relation cannot enumerate. By the seam's subsumption rule that admits every invocation
+//! binding at least those two, so `?neighbour` and `?distance` may each be bound or free
+//! and the engine's equality filter (which this relation's cursor mirrors) resolves them.
+//!
+//! A second mode, `bbff`, is declared beside it: the neighbour and the seed bound, the
+//! count **free**. It is a genuinely new capability rather than a narrowing — `fbbf` binds
+//! the count it leaves free, so `fbbf` does not subsume it — and it asks a different
+//! question: *do you hold this term at all*, answered by [`EmbeddingSpace::row_of`]
+//! without entering the scan. A count-BOUND call keeps its `k` cut exactly as before: the
+//! two are two points of the lattice, and the invocation's own pattern decides which was
+//! asked. See [`PropertyFunction::open`].
+//!
+//! # Ordering, and the exactness of it
+//!
+//! Rows are emitted in **rank order, nearest first**, under the metric the space's family
+//! contract declares — the ordering PURREMB v1 defines, with `smaller ranks first` for
+//! all three built-ins. The search is **exact**: every candidate row is scored, and the
+//! `k` returned are the true `k` nearest, not an approximation. It is not an approximate
+//! search that happens to be exact on small inputs; there is no candidate pruning
+//! anywhere, and the guard below is an admission bound on work rather than a licence to
+//! return an approximate answer.
+//!
+//! That matters for two claims elsewhere. It is why the ceiling the engine offers is
+//! sound here (emission order *is* rank order, so the first `n` rows are the `n` nearest
+//! for every `n`), and it is why "results ordered correctly" is a property this module
+//! can be tested for rather than a property of a tuning parameter.
+//!
+//! # The guard, and what it does and does not bound
+//!
+//! PURREMB v1 stores derived-index payloads but does not interpret them: an
+//! `IndexGuardView` binds an opaque third-party ANN payload to the exact
+//! `(source, family, space, matrix, projection, prefix)` tuple it was built over, and
+//! declares its own approximation contract — it is not an ANN algorithm PurRDF can run.
+//! So this surface does not pretend to run one. Instead:
+//!
+//! * [`KnnGuard`] is **caller-supplied configuration with no default**: the largest space
+//!   a host will let one invocation scan, and the largest `k` it will let one invocation
+//!   request. Both are refusals, both are stated in the error when they fire, and both
+//!   are what make [`PropertyFunction::rows_per_invocation`] an honest, tight bound
+//!   rather than `u64::MAX`.
+//! * Every derived-index guard in the artifact that names *this* target set and vector
+//!   space is checked against the matrix actually being scanned, so a stale or
+//!   substituted guard is a construction-time failure rather than silent agreement.
+//! * The evaluation cost the governor charges is proportional to the candidates the
+//!   search actually examines — the guard-bounded work — through
+//!   [`PfCursor::take_work`]. Before that channel existed, a scan of a million vectors
+//!   returning five rows was priced at six units of fuel.
+//!
+//! # Determinism
+//!
+//! Every distance is computed by a [`Kernel`] under [`purrdf_core::distance::Exact`]:
+//! binary64, one correctly-rounded IEEE operation at a time, in the pinned sixteen-lane
+//! tree order, with no fused multiply-add and no transcendental. The exact scan scores
+//! every row through the batch kernel, whose dispatch path is resolved once per search and
+//! whose every path returns the same bits; resolving it also refuses a thread whose
+//! floating-point environment flushes subnormals or rounds other than to nearest, with
+//! [`EvalError::FloatEnvironment`]. Ranking breaks equal distances by ascending row
+//! number, and a PURREMB target set numbers its rows by sorted `TargetId` — a digest of
+//! canonical content — so the tie-break is a function of the data rather than of the
+//! order anything was built in. Two independently produced artifacts over the same
+//! targets rank identically, on every target this workspace builds for.
+//!
+//! That is the relation [`EmbeddingKnnRelation::new`] builds. A host that prefers the
+//! reassociated arithmetic's freedom to the exact one's cross-target bits builds
+//! [`EmbeddingKnnRelation::new_reassociated`] instead: the same exhaustive scan under
+//! `Reassociated`, whose last bits depend on the target, the build and the dispatch path
+//! it selected at construction. It is a different type, and its ranked declaration says
+//! so — it names the law and declares a perturbed order carrying the arithmetic's own
+//! evidence — so the difference reaches every plan and every fused answer that uses it.
+
+mod invocation;
+mod metric;
+
+use purrdf_hash::Domain;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use purrdf_core::binding_pattern::BindingPattern;
+use purrdf_core::distance::RowsRef;
+use purrdf_core::{
+    ContentDigest, DistanceMetric, EmbeddingView, FamilyContractDigest, Iri,
+    ProjectionContentDigest, TargetId, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
+    verify_embedding,
+};
+
+use crate::error::EvalError;
+use crate::property_fn::{
+    AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, OrderFidelity, PfArgs,
+    PfArity, PfCursor, PropertyFunction, RankArithmetic, RankFidelity, RankedDeclaration,
+    RequestFacet, TermKind, TermPattern, TermPlacement, composed_order_fidelity,
+};
+use crate::user_fn::Volatility;
+
+use crate::property_fn::ExclusionBasis;
+pub use invocation::{
+    KNN_ARITY, KNN_COUNT, KNN_DISTANCE, KNN_MEMBERSHIP_MODE, KNN_MODE, KNN_NEIGHBOUR, KNN_QUERY,
+    AdmittedKnnInvocation, KnnAnswer, KnnInvocation, RankSource, RankedCursor, TermRows, neighbour_count, universe_size,
+};
+pub use metric::{
+    Arithmetic, Bound, Bounded, Exact, Kernel, Ranked, Reassociated, Resolved, Scalar, Selected,
+    best,
+};
+
+/// The domain separator every [`EmbeddingSpace`] generation opens with, so this
+/// digest can never equal a digest of another kind that happens to fold a
+/// structurally identical field sequence — the same discipline
+/// `crate::property_fn_plan`'s registry fingerprint follows.
+const SPACE_GENERATION_DOMAIN: Domain =
+    Domain::new(b"purrdf-sparql-eval/embedding-space-generation/v1");
+
+// ---------------------------------------------------------------------------
+// The guard
+// ---------------------------------------------------------------------------
+
+/// The **work bounds** a host puts on one nearest-neighbour invocation.
+///
+/// Caller-supplied, with no default and no `Default` impl, because both numbers are
+/// statements about what a host is willing to spend and neither has a value this crate
+/// could invent on its behalf. They exist for two independent reasons:
+///
+/// * `max_candidates` bounds the **search**: a space with more rows than this is refused
+///   at construction, not truncated at query time. Truncating would be the worse failure
+///   by far — a top-`k` computed over an arbitrary prefix of the space is a wrong answer
+///   that looks exactly like a right one.
+/// * `max_neighbours` bounds the **request**: an invocation asking for more than this is
+///   refused, naming both numbers. This is what lets
+///   [`PropertyFunction::rows_per_invocation`] declare a real bound. `k` is a per-call
+///   argument the declaration cannot see, so without a configured ceiling on it the only
+///   honest declaration would be the whole space — and the planner would refuse the call
+///   against any modest cell ceiling on the strength of a number no invocation would ever
+///   reach.
+///
+/// Both are hard refusals rather than clamps, and both are exercised in both directions:
+/// a value *at* the bound is admitted, a value one past it is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KnnGuard {
+    max_candidates: u64,
+    max_neighbours: u64,
+}
+
+impl KnnGuard {
+    /// A guard admitting a space of at most `max_candidates` rows and an invocation
+    /// requesting at most `max_neighbours` neighbours.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Config`] if either bound is zero. A zero `max_candidates` admits no
+    /// space at all and a zero `max_neighbours` admits no request, so either one
+    /// configures a relation that can never answer anything — which is a mistake worth
+    /// reporting where it is made rather than a valid, permanently-empty surface.
+    pub fn new(max_candidates: u64, max_neighbours: u64) -> Result<Self, EvalError> {
+        if max_candidates == 0 || max_neighbours == 0 {
+            return Err(EvalError::config(format!(
+                "a kNN guard admitting at most {max_candidates} candidate(s) and at most \
+                 {max_neighbours} neighbour(s) can never answer any invocation; both bounds \
+                 must be positive"
+            )));
+        }
+        Ok(Self {
+            max_candidates,
+            max_neighbours,
+        })
+    }
+
+    /// The largest space this guard admits, in rows.
+    #[must_use]
+    pub const fn max_candidates(self) -> u64 {
+        self.max_candidates
+    }
+
+    /// The largest `k` this guard admits in one invocation.
+    #[must_use]
+    pub const fn max_neighbours(self) -> u64 {
+        self.max_neighbours
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The space
+// ---------------------------------------------------------------------------
+
+/// One queryable PURREMB vector space: its vectors, the RDF terms they belong to, the
+/// metric they are compared under, and the guard bounding a search over them.
+///
+/// # Why the vectors are copied out of the artifact
+///
+/// An [`EmbeddingView`] borrows the caller's bytes, and a [`PropertyFunction`] is stored
+/// behind an `Arc<dyn …>` with no lifetime to lend it — so a relation cannot hold a view.
+/// Re-opening the artifact per invocation would mean re-running structural validation on
+/// every driving row, which is a per-row cost for an answer that cannot change.
+///
+/// Materializing once has a second benefit that matters more than the first. PURREMB
+/// exposes each row two ways: a true zero-copy `&[f32]` when the buffer happens to be
+/// aligned and fully verified, and a portable decoder otherwise — and *which one a caller
+/// gets depends on the alignment of a heap allocation*. Reading every row once, through
+/// the portable path, means there is exactly one arithmetic path in this crate and
+/// therefore nothing for the two to disagree about. Values are widened to `f64`, which is
+/// exact for an `f32` and identity for an `f64`.
+///
+/// # What construction proves
+///
+/// Everything that could otherwise fail mid-query, so that an invocation's only remaining
+/// failure modes are about the invocation:
+///
+/// * the artifact verifies in full (`verify_embedding`), not merely structurally;
+/// * the named target set and vector space exist, and an effective matrix joins them;
+/// * the declared metric is one this engine can evaluate;
+/// * every row of the target set has exactly one caller-supplied term, and no term is
+///   claimed by two rows;
+/// * the space fits the guard's candidate bound;
+/// * under a norm-dividing metric, no stored vector has a zero norm;
+/// * every derived-index guard naming this space binds the matrix actually being scanned.
+#[derive(Debug, Clone)]
+pub struct EmbeddingSpace {
+    /// The kernel the family contract declared.
+    kernel: Kernel,
+    /// The declared metric, retained verbatim for [`Self::metric`].
+    metric: DistanceMetric,
+    /// The effective (post-prefix, post-postprocessing) dimension of every row.
+    dimension: usize,
+    /// Every row's components, row-major: row `r` occupies `r * dimension ..`.
+    vectors: Vec<f64>,
+    /// Every row's L2 norm, in row order. Empty unless [`Kernel::needs_norms`].
+    norms: Vec<f64>,
+    /// Row `r`'s RDF term, and the term-to-row lookup a query seed needs.
+    rows: TermRows,
+    /// The bounds one invocation is held to.
+    guard: KnnGuard,
+    /// The generation every cursor over this space attests, folded once at
+    /// construction — see [`space_generation`].
+    ///
+    /// Shared rather than owned: the space is immutable, so this hex is a constant
+    /// of it, and
+    /// [`IndexGeneration::Declared`](crate::property_fn::IndexGeneration::Declared)
+    /// holds the same `Arc<str>`. Attesting it — which the engine asks for once per
+    /// invocation, and an invocation is once per driving row — is a refcount bump
+    /// instead of a fresh copy of the digest.
+    generation: Arc<str>,
+}
+
+impl EmbeddingSpace {
+    /// Build a queryable space from `artifact`'s `(target_set, vector_space)` matrix.
+    ///
+    /// `bindings` names the RDF term each of the space's targets stands for. PURREMB
+    /// deliberately allows an artifact to disclose a target by digest alone, so the
+    /// term↔target correspondence is host knowledge and is supplied rather than decoded:
+    /// a space whose rows could not be named would emit neighbours nobody can join back
+    /// to a graph.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Config`] for a caller mistake — a space or target set the artifact
+    /// does not hold, a binding for a target outside the set, a duplicate target or term,
+    /// a row no binding covers, a space larger than the guard admits, or an extension
+    /// metric this engine cannot evaluate.
+    ///
+    /// [`EvalError::Data`] for a defect in the artifact itself — verification failure, an
+    /// unreadable row, a zero-norm vector under a norm-dividing metric, or a derived-index
+    /// guard naming this space but binding a different matrix.
+    ///
+    /// [`EvalError::FloatEnvironment`] when the calling thread's floating-point
+    /// environment is not the IEEE one the exact arithmetic defines its results under;
+    /// the norms computed here would already differ.
+    ///
+    /// # A row without a term is a refusal, not a skipped row
+    ///
+    /// Dropping an uncovered row would make the search quietly range over fewer
+    /// candidates than the space holds, so a top-`k` would be the top `k` of a subset and
+    /// nothing would say so. The coverage check runs here, once, where a host can fix it —
+    /// which also means no invocation can fail this way.
+    pub fn from_artifact(
+        artifact: &[u8],
+        target_set: TargetSetId,
+        vector_space: VectorSpaceId,
+        bindings: Vec<(TargetId, TermValue)>,
+        guard: KnnGuard,
+    ) -> Result<Self, EvalError> {
+        // The float environment first: every number this constructor computes (the norms
+        // a cosine space divides by) is already arithmetic under it.
+        let exact = Exact::resolve().map_err(EvalError::FloatEnvironment)?;
+        let mut view = EmbeddingView::from_bytes(artifact)
+            .map_err(|e| EvalError::data(format!("the PURREMB artifact is unreadable: {e}")))?;
+        verify_embedding(&mut view)
+            .map_err(|e| EvalError::data(format!("the PURREMB artifact does not verify: {e}")))?;
+
+        let space = view.vector_space(vector_space).ok_or_else(|| {
+            EvalError::config(format!(
+                "the artifact declares no vector space {vector_space}"
+            ))
+        })?;
+        let family = view.family(space.family_id()).ok_or_else(|| {
+            EvalError::data(format!(
+                "vector space {vector_space} names family {} , which the artifact does not hold",
+                space.family_id()
+            ))
+        })?;
+        let metric = family.metric().map_err(|e| {
+            EvalError::data(format!("the family's declared metric is unusable: {e}"))
+        })?;
+        let kernel = Kernel::of(&metric).ok_or_else(|| {
+            EvalError::config(format!(
+                "vector space {vector_space} declares the caller-defined distance metric \
+                 {metric:?}, whose parameters are opaque bytes this engine cannot evaluate; \
+                 only the three built-in PURREMB metrics can be ranked here"
+            ))
+        })?;
+
+        let set = view.target_set(target_set).ok_or_else(|| {
+            EvalError::config(format!("the artifact declares no target set {target_set}"))
+        })?;
+        let effective = view
+            .effective_matrix(target_set, vector_space)
+            .map_err(|e| EvalError::data(format!("the effective matrix is unreadable: {e}")))?
+            .ok_or_else(|| {
+                EvalError::config(format!(
+                    "the artifact holds no matrix joining target set {target_set} to vector \
+                     space {vector_space}"
+                ))
+            })?;
+
+        let row_count = set.row_count();
+        if row_count as u64 > guard.max_candidates() {
+            return Err(EvalError::config(format!(
+                "this space holds {row_count} row(s), which is more than the {} candidate(s) \
+                 the configured guard admits; a search here would either exceed the work the \
+                 host licensed or rank a prefix of the space and report it as the whole",
+                guard.max_candidates()
+            )));
+        }
+
+        let dimension = space.dimension() as usize;
+        let rows = TermRows::bind(&set, bindings)?;
+        let vectors = read_vectors(&effective, row_count, dimension, exact)?;
+        let norms = read_norms(exact, kernel, &vectors, dimension, row_count)?;
+        check_index_guards(&view, target_set, vector_space, &effective)?;
+
+        // Folded here, where the snapshot is pinned: the artifact has verified,
+        // the projection's own digest has been recomputed against its bytes by
+        // that verification, and the host's bindings have been proved to cover
+        // every row exactly once. Nothing after this point can move it.
+        let generation = space_generation(
+            effective.projection().content_digest(),
+            family.contract_digest(),
+            rows.terms(),
+        );
+
+        Ok(Self {
+            kernel,
+            metric,
+            dimension,
+            vectors,
+            norms,
+            rows,
+            guard,
+            generation,
+        })
+    }
+
+    /// Build a queryable space directly from a host's own vectors, each already
+    /// named by the RDF term it stands for.
+    ///
+    /// The sibling of [`Self::from_artifact`] for a host that holds vectors rather than
+    /// a sealed PURREMB artifact — the same shape as `purrdf_hnsw::HnswSpace::from_index`
+    /// on the approximate side, which takes a matrix built from plain rows. Row `r` of the
+    /// space is `rows[r]`, in the host's own order: that order is what ranks two
+    /// neighbours at exactly equal distance, so it is the host's to state and is never
+    /// re-sorted here.
+    ///
+    /// Everything [`Self::from_artifact`] proves at construction is proved here too, so
+    /// an invocation's only remaining failure modes are about the invocation: the metric
+    /// is one this engine can evaluate, every row carries exactly `dimension` finite
+    /// components, no term is claimed by two rows, the space fits the guard's candidate
+    /// bound, and under a norm-dividing metric no vector has a zero norm. A non-finite
+    /// component is refused here rather than at the first query that reaches it, which
+    /// is where it would otherwise surface as a distance that left the finite range.
+    ///
+    /// # Generation
+    ///
+    /// A content identity over exactly what decides this space's answers — the metric,
+    /// the dimension, every component in row order and every term in row order — under
+    /// a domain separator of its own, so a space built this way can never attest the
+    /// generation of an artifact-built one. The guard is excluded for the reason
+    /// [`Self::generation`] gives.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Config`] for every refusal above: a zero `dimension`, a row whose
+    /// component count is not `dimension`, a non-finite component, a duplicate term, a
+    /// space larger than the guard admits, or an extension metric.
+    ///
+    /// [`EvalError::Data`] for a zero-norm vector under a norm-dividing metric, the
+    /// classification [`Self::from_artifact`] gives the same defect.
+    ///
+    /// [`EvalError::FloatEnvironment`] when the calling thread's floating-point
+    /// environment is not the IEEE one the norms are computed under, as
+    /// [`Self::from_artifact`] refuses it.
+    pub fn from_vectors(
+        metric: &DistanceMetric,
+        dimension: usize,
+        rows: Vec<(TermValue, Vec<f64>)>,
+        guard: KnnGuard,
+    ) -> Result<Self, EvalError> {
+        // The float environment first, as `from_artifact` checks it: the norms a cosine
+        // space divides by are already arithmetic under it.
+        let exact = Exact::resolve().map_err(EvalError::FloatEnvironment)?;
+        let kernel = Kernel::of(metric).ok_or_else(|| {
+            EvalError::config(format!(
+                "the caller-defined distance metric {metric:?} carries parameters as opaque \
+                 bytes this engine cannot evaluate; only the three built-in PURREMB metrics \
+                 can be ranked here"
+            ))
+        })?;
+        if dimension == 0 {
+            return Err(EvalError::config(
+                "a space of dimension zero holds vectors with no components, so no distance \
+                 between two of them separates anything"
+                    .to_owned(),
+            ));
+        }
+        let row_count = rows.len();
+        if row_count as u64 > guard.max_candidates() {
+            return Err(EvalError::config(format!(
+                "this space holds {row_count} row(s), which is more than the {} candidate(s) \
+                 the configured guard admits; a search here would either exceed the work the \
+                 host licensed or rank a prefix of the space and report it as the whole",
+                guard.max_candidates()
+            )));
+        }
+
+        let mut terms: Vec<TermValue> = Vec::with_capacity(row_count);
+        let mut vectors: Vec<f64> = Vec::with_capacity(row_count.saturating_mul(dimension));
+        for (row, (term, values)) in rows.into_iter().enumerate() {
+            if values.len() != dimension {
+                return Err(EvalError::config(format!(
+                    "row {row} ({term:?}) carries {} component(s); the space's dimension is \
+                     {dimension}",
+                    values.len()
+                )));
+            }
+            if let Some(at) = values.iter().position(|value| !value.is_finite()) {
+                return Err(EvalError::config(format!(
+                    "row {row} ({term:?}) carries the non-finite component {} at position \
+                     {at}; a distance computed from it could not be ranked",
+                    values[at]
+                )));
+            }
+            vectors.extend_from_slice(&values);
+            terms.push(term);
+        }
+
+        let rows = TermRows::new(terms)?;
+
+        let norms = read_norms(exact, kernel, &vectors, dimension, row_count)?;
+        let generation = vectors_generation(metric, dimension, &vectors, rows.terms());
+        Ok(Self {
+            kernel,
+            metric: metric.clone(),
+            dimension,
+            vectors,
+            norms,
+            rows,
+            guard,
+            generation,
+        })
+    }
+
+    /// The generation this space attests for every row it returns.
+    ///
+    /// A content identity, comparable across processes and machines. It folds the
+    /// projection digest, the family contract that names the metric, and every
+    /// bound term in row order — and it moves exactly when the rows this space can
+    /// return move, which is what makes it worth comparing. A space built by
+    /// [`Self::from_vectors`] folds its metric, dimension and components in their
+    /// place, because it has no artifact to take a digest of.
+    ///
+    /// The projection digest rather than the matrix digest, because a prefix policy
+    /// lets two spaces share one stored matrix and differ in the prefix taken. The
+    /// bindings are folded because the map from a row to the RDF term it stands for
+    /// is a host argument: two spaces over byte-identical artifacts with different
+    /// bindings return a different term at every position, and a matrix-only
+    /// identity would call them one generation. The bound on work is excluded — it
+    /// decides how hard a search tries, never which rows exist or how they rank.
+    #[must_use]
+    pub fn generation(&self) -> &str {
+        &self.generation
+    }
+
+    /// How many candidate rows this space holds.
+    #[must_use]
+    pub fn row_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// The effective dimension of every vector in this space.
+    #[must_use]
+    pub const fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    /// The distance metric the space's family contract declares.
+    #[must_use]
+    pub const fn metric(&self) -> &DistanceMetric {
+        &self.metric
+    }
+
+    /// The work bounds one invocation over this space is held to.
+    #[must_use]
+    pub const fn guard(&self) -> KnnGuard {
+        self.guard
+    }
+
+    /// The RDF term row `row` stands for.
+    #[must_use]
+    pub fn term(&self, row: usize) -> Option<&TermValue> {
+        self.rows.term(row)
+    }
+
+    /// The row `term` occupies, if this space holds it.
+    ///
+    /// Terms are distinct by construction, so this is single-valued.
+    #[must_use]
+    pub fn row_of(&self, term: &TermValue) -> Option<usize> {
+        self.rows.row_of(term)
+    }
+
+    /// Row `row`'s components.
+    fn vector(&self, row: usize) -> &[f64] {
+        let start = row * self.dimension;
+        &self.vectors[start..start + self.dimension]
+    }
+
+    /// Row `row`'s L2 norm, or `0.0` for a kernel that does not divide by one.
+    fn norm_of(&self, row: usize) -> f64 {
+        self.norms.get(row).copied().unwrap_or(0.0)
+    }
+
+    /// The distance between two rows of this space under arithmetic `A`, computed
+    /// without ranking anything.
+    ///
+    /// The one arithmetic path: the same batch kernel of `A`, on the same dispatch path
+    /// (`declared` when the relation selected one, else this thread's), over the same
+    /// stored components and the same precomputed norms [`Self::search_admitted`] uses, so the
+    /// value is bit-identical to the one a scan would have produced for this pair.
+    /// There is no second distance formula in this crate and this does not add one.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Data`], as [`Self::search_admitted`] raises it, when the distance leaves
+    /// the finite binary64 range. Reporting an infinity as a distance would put a
+    /// number that overflowed into an answer. [`EvalError::FloatEnvironment`], as
+    /// [`Self::search_admitted`] raises it, when the calling thread's floating-point environment
+    /// is not the IEEE one the arithmetic defines.
+    fn row_distance<A: Arithmetic>(
+        &self,
+        declared: Option<Selected<A>>,
+        query_row: usize,
+        row: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<f64, EvalError> {
+        let arithmetic = resolve_here(declared)?;
+        let rows = self.rows(workspace)?;
+        let mut distance = [None];
+        arithmetic.distances_indexed(
+            self.kernel.measure(),
+            self.vector(query_row),
+            self.norm_of(query_row),
+            rows,
+            &[row],
+            &mut distance,
+        );
+        distance[0].ok_or_else(|| {
+            crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Data, format_args!(
+                "the distance from row {query_row} to row {row} left the finite range \
+                 under {:?}; the artifact's magnitudes cannot be ranked under this metric",
+                self.metric
+            ), workspace,
+            )
+        })
+    }
+
+    /// Every row of this space as the batch kernels read it.
+    fn rows(&self, workspace: &crate::WorkspaceCapability) -> Result<RowsRef<'_, f64>, EvalError> {
+        RowsRef::new(&self.vectors, self.row_count(), self.dimension, &self.norms).ok_or_else(
+            || {
+                crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Internal, format_args!(
+                    "the space's {} value(s) and {} norm(s) do not describe {} row(s) of {} \
+                     component(s)",
+                    self.vectors.len(),
+                    self.norms.len(),
+                    self.row_count(),
+                    self.dimension
+                ), workspace,
+            )
+            },
+        )
+    }
+
+    /// The `k` rows nearest `query_row`, in rank order.
+    ///
+    /// Returns the ranked rows together with **the number of candidates examined**, which
+    /// is the work unit this surface reports to the governor: one distance computation per
+    /// candidate, every candidate scored exactly once.
+    ///
+    /// Every row is scored by one call to arithmetic `A`'s batch kernel over the flat
+    /// matrix, on one dispatch path for the whole scan. The float environment is checked
+    /// here, on every search, rather than once at construction, because it is a property
+    /// of the calling thread and an invocation may run on a different thread from the one
+    /// that built the space.
+    ///
+    /// `declared` is the path a relation selected at construction and named in its
+    /// declaration, when it did; the scan runs that path, which is the processor's and so
+    /// the same on every thread, resolved here, on the calling thread, which is what
+    /// checks that thread's environment. Without one the path this thread resolves is
+    /// used, which for [`Exact`] is any of its paths, since they all return the same bits.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::Data`] if a distance leaves the finite binary64 range. Ranking by an
+    /// infinity would sort — last, confidently — from a number that overflowed.
+    /// [`EvalError::FloatEnvironment`] if the calling thread's floating-point environment
+    /// is not the IEEE one the arithmetic defines.
+    #[cfg(test)]
+    fn search<A: Arithmetic>(
+        &self,
+        declared: Option<Selected<A>>,
+        query_row: usize,
+        k: usize,
+    ) -> Result<(Vec<Ranked>, u64), EvalError> {
+        let (ranked, examined) = self.search_admitted::<A>(
+            declared, query_row, k, &crate::WorkspaceCapability::default(),
+        )?;
+        Ok((ranked.into_parts().0, examined))
+    }
+
+    /// The same exhaustive batch kernel, with its actual buffers admitted before
+    /// allocation and the selected rows retaining their heap allocation.
+    fn search_admitted<A: Arithmetic>(
+        &self,
+        declared: Option<Selected<A>>,
+        query_row: usize,
+        k: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(crate::AdmittedVec<Ranked>, u64), EvalError> {
+        if k == 0 {
+            // No neighbours were asked for, so no candidate is examined and no work is
+            // reported. A zero request is a well-formed question with an empty answer.
+            return Ok((crate::AdmittedVec::new(workspace), 0));
+        }
+        let arithmetic = resolve_here(declared)?;
+        let rows = self.rows(workspace)?;
+        let mut distances = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
+        for _ in 0..self.row_count() {
+            distances.push(None)?;
+        }
+        arithmetic.distances(
+            self.kernel.measure(),
+            self.vector(query_row),
+            self.norm_of(query_row),
+            rows,
+            distances.as_mut_slice(),
+        );
+        let mut scored = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
+        for (row, distance) in distances.into_iter().enumerate() {
+            let distance = distance.ok_or_else(|| {
+                crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Data, format_args!(
+                    "the distance from row {query_row} to row {row} left the finite range \
+                     under {:?}; the artifact's magnitudes cannot be ranked under this \
+                     metric",
+                    self.metric
+                ), workspace,
+            )
+            })?;
+            scored.push(Ranked { distance, row })?;
+        }
+        let examined = u64::try_from(scored.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        Ok((metric::best_admitted(k, scored, workspace)?, examined))
+    }
+}
+
+/// Arithmetic `A` resolved on the calling thread: on `declared`'s path when the relation
+/// selected one, else on the path this thread's resolve selects.
+///
+/// The one place a kNN computation obtains its handle, and it runs on the thread that
+/// computes: a relation stores only the thread-free [`Selected`] path, because the float
+/// environment the handle proves is the calling thread's, and a relation is invoked on
+/// whatever thread the engine runs it.
+///
+/// # Errors
+///
+/// [`EvalError::FloatEnvironment`] when the calling thread's float environment is not the
+/// IEEE one the arithmetic defines.
+fn resolve_here<A: Arithmetic>(declared: Option<Selected<A>>) -> Result<Resolved<A>, EvalError> {
+    declared
+        .map_or_else(A::resolve, Selected::resolve)
+        .map_err(EvalError::FloatEnvironment)
+}
+
+/// The generation one [`EmbeddingSpace`] attests: a domain-separated digest over
+/// the exact vectors it will rank and the exact terms it will name them by.
+///
+/// # Why the matrix digest alone is not the answer
+///
+/// The obvious candidate is the artifact's own `MatrixContentDigest` — a
+/// verified digest of the stored scalar bytes, already computed, free to read.
+/// It is not sufficient, and the reason is visible in [`EmbeddingSpace::from_artifact`]'s
+/// signature: `bindings` is a **host argument**, not artifact content. PURREMB
+/// deliberately allows a target to be disclosed by digest alone, so the map
+/// from a row to the RDF term it stands for is knowledge the host supplies, and
+/// two spaces built from byte-identical artifact bytes with different bindings
+/// return *different terms* at position 0 of every row. A generation that moved
+/// only with the matrix would attest "same generation" across two spaces whose
+/// answers disagree on every row — exactly the silent-same-generation failure
+/// the attestation exists to make impossible. So the bindings are folded in,
+/// in row order, through `TermValue::canonical_bytes` (which is injective, so
+/// no two distinct term sequences can share an encoding).
+///
+/// # The three facts folded, and why each is load-bearing
+///
+/// * The **projection content digest**, not the matrix content digest. A
+///   projection is the `(matrix, vector space)` pair this space actually reads,
+///   and its digest covers the scalar dtype, the row count, the *effective*
+///   dimension and the prefix-postprocessing policy along with the logical row
+///   bytes. Under a Matryoshka policy two vector spaces share one stored matrix
+///   and differ only in the prefix they take, so the matrix digest is equal
+///   across two spaces that rank differently and the projection digest is not.
+///   `verify_embedding` has already recomputed it against the bytes, so reading
+///   it here is a read and not a second scan of the vectors.
+/// * The **family contract digest**, because the projection digest carries the
+///   vectors but not the law they are compared under. The family contract is
+///   what declares the [`DistanceMetric`], and the same vectors ranked under
+///   cosine and under squared Euclidean are two different orderings of the same
+///   candidates.
+/// * The **bound terms**, in row order, per the argument above. The row count is
+///   folded ahead of them so a shorter sequence can never be the prefix of a
+///   longer one under a framing that already length-prefixes each field.
+///
+/// # What is deliberately not folded
+///
+/// The [`KnnGuard`]. It bounds the work one invocation may spend and the `k` one
+/// invocation may ask for; it decides no row's presence and no row's rank. A
+/// generation that moved when a host retuned a budget would report a rebuilt
+/// index where none was rebuilt.
+///
+/// # No clock, no counter, no RNG
+///
+/// Every input is content. Two processes that open the same artifact bytes with
+/// the same bindings attest the same generation, which is the whole point of
+/// declaring one: a host comparing two answers' evidence is comparing the
+/// indexes, not the runs.
+fn space_generation(
+    projection: ProjectionContentDigest,
+    family: FamilyContractDigest,
+    terms: &[TermValue],
+) -> Arc<str> {
+    let mut bytes = Vec::new();
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "domain",
+        SPACE_GENERATION_DOMAIN.as_bytes(),
+    );
+    crate::registry_id::append_framed_part(&mut bytes, "projection", projection.as_bytes());
+    crate::registry_id::append_framed_part(&mut bytes, "family-contract", family.as_bytes());
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "row-count",
+        &(terms.len() as u64).to_be_bytes(),
+    );
+    let mut term_bytes = Vec::new();
+    for term in terms {
+        term_bytes.clear();
+        term.canonical_bytes(&mut term_bytes);
+        crate::registry_id::append_framed_part(&mut bytes, "term", &term_bytes);
+    }
+    Arc::from(ContentDigest::of(&bytes).to_hex())
+}
+
+/// The domain separator a [`EmbeddingSpace::from_vectors`] generation opens with. It
+/// differs from [`SPACE_GENERATION_DOMAIN`] so the two constructions can never attest
+/// one generation, however their folded fields happen to line up.
+const VECTORS_GENERATION_DOMAIN: Domain =
+    Domain::new(b"purrdf-sparql-eval/embedding-space-vectors-generation/v1");
+
+/// The generation one [`EmbeddingSpace::from_vectors`] space attests.
+///
+/// The same discipline as [`space_generation`], over the facts this construction
+/// actually has: the metric's stable code (the law the vectors are compared under),
+/// the dimension, every component's exact binary64 bit pattern in row order, and every
+/// term in row order through the injective `TermValue::canonical_bytes`. Bit patterns
+/// rather than a decimal rendering, so two vectors that differ in their last bit are
+/// two generations. No clock, no counter, no RNG: two processes handed the same rows
+/// attest the same generation.
+fn vectors_generation(
+    metric: &DistanceMetric,
+    dimension: usize,
+    vectors: &[f64],
+    terms: &[TermValue],
+) -> Arc<str> {
+    let mut bytes = Vec::new();
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "domain",
+        VECTORS_GENERATION_DOMAIN.as_bytes(),
+    );
+    crate::registry_id::append_framed_part(&mut bytes, "metric", &metric.code().to_be_bytes());
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "dimension",
+        &(dimension as u64).to_be_bytes(),
+    );
+    crate::registry_id::append_framed_part(
+        &mut bytes,
+        "row-count",
+        &(terms.len() as u64).to_be_bytes(),
+    );
+    let mut component_bytes = Vec::with_capacity(dimension * 8);
+    let mut term_bytes = Vec::new();
+    for (row, term) in terms.iter().enumerate() {
+        component_bytes.clear();
+        for value in &vectors[row * dimension..(row + 1) * dimension] {
+            component_bytes.extend_from_slice(&value.to_bits().to_be_bytes());
+        }
+        crate::registry_id::append_framed_part(&mut bytes, "vector", &component_bytes);
+        term_bytes.clear();
+        term.canonical_bytes(&mut term_bytes);
+        crate::registry_id::append_framed_part(&mut bytes, "term", &term_bytes);
+    }
+    Arc::from(ContentDigest::of(&bytes).to_hex())
+}
+
+/// Read every row of `effective` into one row-major `f64` buffer.
+///
+/// `exact` is the handle a normalized projection's rows are computed under.
+fn read_vectors(
+    effective: &purrdf_core::EffectiveMatrixView<'_>,
+    row_count: usize,
+    dimension: usize,
+    exact: Resolved<Exact>,
+) -> Result<Vec<f64>, EvalError> {
+    let dtype = effective
+        .matrix()
+        .dtype()
+        .map_err(|e| EvalError::data(format!("the matrix's scalar type is unreadable: {e}")))?;
+    let mut out: Vec<f64> = Vec::with_capacity(row_count.saturating_mul(dimension));
+    for row in 0..row_count {
+        let index = row as u64;
+        let before = out.len();
+        match dtype {
+            VectorDtype::F32 => {
+                let values = effective.f32_row(index, exact).map_err(|e| {
+                    EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
+                })?;
+                for value in values {
+                    let value = value.map_err(|e| {
+                        EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
+                    })?;
+                    // Exact: every binary32 is a binary64.
+                    out.push(f64::from(value));
+                }
+            }
+            VectorDtype::F64 => {
+                let values = effective.f64_row(index, exact).map_err(|e| {
+                    EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
+                })?;
+                for value in values {
+                    out.push(value.map_err(|e| {
+                        EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
+                    })?);
+                }
+            }
+        }
+        if out.len() - before != dimension {
+            return Err(EvalError::data(format!(
+                "row {row} decoded {} component(s); the vector space declares {dimension}",
+                out.len() - before
+            )));
+        }
+    }
+    Ok(out)
+}
+
+/// Every row's L2 norm, for a kernel that divides by one; empty otherwise.
+fn read_norms(
+    exact: Resolved<Exact>,
+    kernel: Kernel,
+    vectors: &[f64],
+    dimension: usize,
+    row_count: usize,
+) -> Result<Vec<f64>, EvalError> {
+    if !kernel.needs_norms() {
+        return Ok(Vec::new());
+    }
+    let mut norms = Vec::with_capacity(row_count);
+    for row in 0..row_count {
+        let start = row * dimension;
+        let value = exact.norm(&vectors[start..start + dimension]);
+        // PURREMB v1: "Cosine distance is undefined for a zero-norm operand and hard-fails
+        // rather than inventing a score." Caught here rather than per invocation, so a
+        // space that verifies can never fail a query this way.
+        if value <= 0.0 {
+            return Err(EvalError::data(format!(
+                "row {row} has a zero L2 norm, and the declared metric divides by it; a \
+                 zero-norm vector has no direction, so its cosine distance is undefined \
+                 rather than large"
+            )));
+        }
+        norms.push(value);
+    }
+    Ok(norms)
+}
+
+/// Check every derived-index guard that names this space against the matrix being scanned.
+///
+/// A guard is PURREMB's tamper-evident binding from an opaque third-party ANN payload to
+/// the exact coordinates it was built over. PurRDF cannot run the payload, but it can
+/// check the binding — and a guard that names this target set and vector space while
+/// pointing at a *different* matrix or projection is either stale or substituted. Either
+/// way it is a statement about this space that is no longer true, and admitting it would
+/// let a host believe an index covers a matrix it does not.
+///
+/// Guards naming other spaces in the same artifact are none of this space's business and
+/// are passed over.
+///
+/// # What this adds, stated honestly
+///
+/// `purrdf_core`'s own writer cannot *produce* a mismatch: it refuses at build time a
+/// derived index whose coordinates do not describe a matrix the artifact holds, and the
+/// guard digest covers those coordinates, so a tampered one fails `verify_embedding`
+/// before this runs. Through this workspace's encoder the refusal below is therefore
+/// unreachable, and the tested behaviour is the *other* half — that a guard which agrees
+/// is admitted and changes no answer.
+///
+/// It is kept anyway, and the reason is the format rather than the encoder. PURREMB is a
+/// wire format with third-party producers; a reader that assumed its own writer made the
+/// bytes would be assuming exactly what a fail-closed borrowed-view design exists to stop
+/// assuming. The check is one integer comparison per guard, at construction, once.
+fn check_index_guards(
+    view: &EmbeddingView<'_>,
+    target_set: TargetSetId,
+    vector_space: VectorSpaceId,
+    effective: &purrdf_core::EffectiveMatrixView<'_>,
+) -> Result<(), EvalError> {
+    let matrix = effective.matrix().id();
+    let projection = effective.projection().id();
+    for guard in view.index_guards() {
+        if guard.target_set_id() != target_set || guard.vector_space_id() != vector_space {
+            continue;
+        }
+        if guard.matrix_id() != matrix || guard.projection_id() != projection {
+            return Err(EvalError::data(format!(
+                "derived index {} names target set {target_set} and vector space \
+                 {vector_space} but binds matrix {} / projection {}, where this space scans \
+                 matrix {matrix} / projection {projection}; the guard is stale or substituted",
+                guard.id(),
+                guard.matrix_id(),
+                guard.projection_id()
+            )));
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The relation
+// ---------------------------------------------------------------------------
+
+/// The [`PropertyFunction`] a host registers to make [`EmbeddingSpace`] queryable.
+///
+/// One relation per space; see the [module docs](self) for the call shape, and why the
+/// space is the registration rather than an argument.
+///
+/// # The arithmetic is a type parameter, and the default is the exact one
+///
+/// `A` is the [`Arithmetic`] every distance of every search is computed under.
+/// [`EmbeddingKnnRelation::new`] builds the [`Exact`] relation, whose distances are the
+/// same bits on every target; [`EmbeddingKnnRelation::new_reassociated`] builds the
+/// [`Reassociated`] one, which may reassociate its sums and contract them to fused
+/// multiply-add along the dispatch path this process resolved, so near-ties may order
+/// differently from the exact relation and between targets. They are two types, not one
+/// relation with a mode: neither ever computes a distance under the other's law.
+///
+/// The law is not a private detail of the kernel.
+/// [`EmbeddingKnnRelation::ranked_declaration`] names it in
+/// [`RankedDeclaration::arithmetic`], so it reaches the registry's content fingerprint
+/// and two registries differing only in it plan differently, and a reassociated
+/// relation declares its order [`OrderFidelity::Perturbed`] with the arithmetic's own
+/// evidence, which a fused answer carries to its reader.
+///
+/// [`Volatility::Stable`]: the space is frozen and every distance is a pure function of
+/// two of its rows under the relation's arithmetic. Under [`Exact`] an invocation's rows
+/// are the same on the main thread, on a fork-join worker, and on
+/// `wasm32-unknown-unknown`; under [`Reassociated`] they are the same wherever this
+/// process runs the dispatch path the relation selected, which is every thread of it
+/// whose float environment its per-search resolve accepts.
+#[derive(Debug, Clone)]
+pub struct EmbeddingKnnRelation<A: Arithmetic = Exact> {
+    /// The space every invocation searches.
+    space: Arc<EmbeddingSpace>,
+    /// The declared modes, materialized once so [`PropertyFunction::modes`] can
+    /// hand out a slice.
+    modes: [BindingPattern; 2],
+    /// The dispatch path selected at construction, whose evidence the declaration
+    /// names and whose compilation every search runs; `None` for a relation built by
+    /// [`EmbeddingKnnRelation::new`], which selects per search. [`Exact`] names no
+    /// evidence and returns the same bits on every path, so it has nothing to fix at
+    /// construction, and `new` stays infallible.
+    ///
+    /// A [`Selected`] path, never a [`Resolved`] handle: the relation is shared across
+    /// the engine's threads, and the float environment a handle proves is one thread's.
+    /// Every search resolves it again on the thread that runs it.
+    declared: Option<Selected<A>>,
+    /// The search every invocation runs, fixed by the constructor that named the law.
+    scan: Scan<A>,
+    /// The membership lookup's one pairwise distance, fixed alongside [`Self::scan`]
+    /// for the same reason; see [`Lookup`].
+    lookup: Lookup<A>,
+    /// What this relation's invocations actually did, counted rather than inferred.
+    /// Shared with every clone, so a host that cloned the relation into a registry
+    /// still reads the counts of the invocations that registry served.
+    observations: Arc<KnnObservations>,
+}
+
+/// What [`EmbeddingKnnRelation`]'s invocations actually did, counted at the two
+/// places the difference between a point lookup and a scan is decided.
+///
+/// This exists because "a candidate-bound call does not scan the space" is a claim
+/// about *work*, and the only honest evidence for a claim about work is a count of
+/// the work. Timing is not evidence: a fixture small enough to run in a test is
+/// small enough that scanning it and not scanning it take the same measurable time,
+/// so a timing assertion would pass over an implementation that scans every row and
+/// one that does not.
+///
+/// Every counter is monotone for the life of the relation and is never reset here.
+/// A caller that wants a delta reads the value before and after, which is the
+/// reading that composes: a reset would race with any other invocation of a relation
+/// the registry may run across workers.
+///
+/// # Not part of any identity
+///
+/// Nothing here reaches a row, a distance, an ordering or a fingerprint. Two
+/// relations over the same space answer identically whatever these say, so the
+/// counts are an observation about one process's execution rather than a fact about
+/// the space — which is why they live on the relation and not on [`EmbeddingSpace`],
+/// whose every field is part of what it attests.
+#[derive(Debug, Default)]
+pub struct KnnObservations {
+    /// Candidate-bound invocations answered by a row lookup.
+    membership_lookups: AtomicU64,
+    /// Invocations that entered the exhaustive scan.
+    scans: AtomicU64,
+    /// Rows the scans examined — one distance evaluation each.
+    scanned_candidates: AtomicU64,
+    /// Distance evaluations the membership path performed.
+    membership_distances: AtomicU64,
+}
+
+impl KnnObservations {
+    /// How many **membership lookups** this relation has performed.
+    ///
+    /// One lookup is one candidate-bound invocation, answered by
+    /// [`EmbeddingSpace::row_of`] — a binary search over the space's canonical term
+    /// order, with no float in it anywhere. Exactly one is performed per
+    /// candidate-bound invocation, and nothing else performs any.
+    #[must_use]
+    pub fn membership_lookups(&self) -> u64 {
+        self.membership_lookups.load(Ordering::Relaxed)
+    }
+
+    /// How many invocations have **entered the exhaustive scan** — that is, have
+    /// asked `EmbeddingSpace::search` for a ranking at all.
+    ///
+    /// Zero is the load-bearing value: an invocation that never entered the scan
+    /// never compared a distance against another row and never claimed a rank,
+    /// whatever the space holds. This relation has exactly one call site into the
+    /// scan and it increments this counter, so a zero here is not an inference about
+    /// how much scanning happened; it is the statement that none did.
+    #[must_use]
+    pub fn scans(&self) -> u64 {
+        self.scans.load(Ordering::Relaxed)
+    }
+
+    /// How many rows the scans examined, which is how many distances they computed.
+    #[must_use]
+    pub fn scanned_candidates(&self) -> u64 {
+        self.scanned_candidates.load(Ordering::Relaxed)
+    }
+
+    /// How many distances the **membership path** computed.
+    ///
+    /// Zero for a candidate the space does not hold — that answer is settled by the
+    /// term order alone and no vector is ever read — and one for a candidate it
+    /// does, which is the single pairwise evaluation the emitted row's `?distance`
+    /// position needs. Never more, whatever `k` the call carried, because a call
+    /// that names its own candidate ranks nothing.
+    #[must_use]
+    pub fn membership_distances(&self) -> u64 {
+        self.membership_distances.load(Ordering::Relaxed)
+    }
+}
+
+/// One search of a space under arithmetic `A`: [`EmbeddingSpace::search`] at a concrete
+/// law.
+///
+/// A relation carries it rather than calling `search::<A>` from its generic cursor so the
+/// scan is instantiated where its law is concrete — in [`EmbeddingKnnRelation::new`] and
+/// [`EmbeddingKnnRelation::new_reassociated`], in this crate — rather than wherever a
+/// caller first turns the relation into a trait object. The scan, and the batch kernel
+/// and every dispatch path it calls, is then compiled once, here, and the asm evidence
+/// gate measures the copy every registered relation runs.
+type Scan<A> = fn(
+    &EmbeddingSpace,
+    Option<Selected<A>>,
+    usize,
+    usize,
+    &crate::WorkspaceCapability,
+) -> Result<(crate::AdmittedVec<Ranked>, u64), EvalError>;
+
+/// One membership distance under arithmetic `A`: [`EmbeddingSpace::row_distance`] at a
+/// concrete law, instantiated in the constructors for the reason [`Scan`] is, so the
+/// pairwise evaluation a candidate-bound call runs is the copy this crate compiled.
+type Lookup<A> = fn(
+    &EmbeddingSpace, Option<Selected<A>>, usize, usize, &crate::WorkspaceCapability,
+) -> Result<f64, EvalError>;
+
+impl EmbeddingKnnRelation {
+    /// A nearest-neighbour relation over `space`, ranking under the [`Exact`] arithmetic.
+    #[must_use]
+    pub fn new(space: Arc<EmbeddingSpace>) -> Self {
+        Self::over(space, None)
+    }
+
+    /// The flattened argument position of `?neighbour`, the retrieved term.
+    ///
+    /// The positions belong to the call shape, which is the same under every
+    /// arithmetic; they are named on the default type so a caller spells them without
+    /// naming a law.
+    pub const NEIGHBOUR: usize = KNN_NEIGHBOUR;
+    /// The flattened argument position of `?query`, the seed term. Always an input.
+    pub const QUERY: usize = KNN_QUERY;
+    /// The flattened argument position of `k`, the neighbour count. Always an input.
+    pub const COUNT: usize = KNN_COUNT;
+    /// The flattened argument position of `?distance`.
+    pub const DISTANCE: usize = KNN_DISTANCE;
+}
+
+impl EmbeddingKnnRelation<Reassociated> {
+    /// A nearest-neighbour relation over `space`, ranking under the [`Reassociated`]
+    /// arithmetic.
+    ///
+    /// The dispatch path is selected here, once, and every search runs it; the
+    /// declaration names its evidence. The float environment is checked here and again
+    /// on every search, on the thread that runs it, since it belongs to the calling
+    /// thread: the relation keeps the [`Selected`] path, never the handle.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::FloatEnvironment`] when the calling thread's floating-point
+    /// environment flushes subnormals or rounds other than to nearest, ties to even. The
+    /// reassociated arithmetic has a compilation for every target, so nothing else
+    /// refuses it.
+    pub fn new_reassociated(space: Arc<EmbeddingSpace>) -> Result<Self, EvalError> {
+        let resolved = Reassociated::resolve().map_err(EvalError::FloatEnvironment)?;
+        Ok(Self::over(space, Some(resolved.selected())))
+    }
+}
+
+impl<A: Arithmetic> EmbeddingKnnRelation<A> {
+    /// The relation over `space` under `A`, with `declared` the dispatch path it
+    /// selected at construction (`None` for an arithmetic that selects per search).
+    ///
+    /// The one assembly both public constructors share. It stays private and is called
+    /// only from them, at a concrete `A`, so the [`Scan`] and [`Lookup`] it takes are
+    /// instantiated in this crate.
+    fn over(space: Arc<EmbeddingSpace>, declared: Option<Selected<A>>) -> Self {
+        Self {
+            space,
+            modes: [
+                BindingPattern::from_code(KNN_MODE),
+                BindingPattern::from_code(KNN_MEMBERSHIP_MODE),
+            ],
+            declared,
+            scan: EmbeddingSpace::search_admitted::<A>,
+            lookup: EmbeddingSpace::row_distance::<A>,
+            observations: Arc::new(KnnObservations::default()),
+        }
+    }
+
+    /// The space this relation searches.
+    #[must_use]
+    pub fn space(&self) -> &EmbeddingSpace {
+        &self.space
+    }
+
+    /// What this relation's invocations have actually done.
+    ///
+    /// Handed back as a shared handle rather than a snapshot so a host can keep
+    /// reading after the relation itself has been moved into a registry, which is
+    /// the only arrangement in which the interesting question — did the exclusion
+    /// lookups this producer served scan anything — can be asked at all. See
+    /// [`KnnObservations`].
+    #[must_use]
+    pub fn observations(&self) -> Arc<KnnObservations> {
+        Arc::clone(&self.observations)
+    }
+
+    /// The dispatch path this relation selected at construction, or `None` for an
+    /// [`Exact`] relation, which selects per search and whose every path returns the
+    /// same bits.
+    ///
+    /// A thread-free [`Selected`] path: a caller that computes with it calls
+    /// [`Selected::resolve`] on the thread that computes, as every search does.
+    #[must_use]
+    pub const fn selected(&self) -> Option<Selected<A>> {
+        self.declared
+    }
+
+    /// The order fidelity this relation's own arithmetic can promise: faithful under an
+    /// arithmetic whose bits are the same on every path, and perturbed, carrying that
+    /// arithmetic's evidence along the resolved path, under one whose bits are not.
+    fn arithmetic_order(&self) -> OrderFidelity {
+        match self.declared.and_then(Selected::evidence) {
+            Some(evidence) => OrderFidelity::Perturbed {
+                evidence: Arc::from(evidence),
+            },
+            None => OrderFidelity::Faithful,
+        }
+    }
+
+    /// The ranked-retrieval declaration this relation can make, for a
+    /// **caller-supplied** stratum.
+    ///
+    /// A [`RankedDeclaration`] is configuration a host supplies at
+    /// [`register_ranked`](crate::PropertyFunctionRegistry::register_ranked), not
+    /// a property of this type. What this method adds is two things. A host
+    /// does not have to hand-write the argument indices: they come from
+    /// [`EmbeddingKnnRelation::NEIGHBOUR`], [`EmbeddingKnnRelation::QUERY`] and
+    /// [`EmbeddingKnnRelation::COUNT`], which are this relation's own. And the
+    /// relation states the one fact about its rows that is its own rather than
+    /// the host's, its arithmetic (see below). Every field of the result is public, so a host that wants
+    /// a `mandatory` producer or a second accepted alternative edits it before
+    /// registering.
+    ///
+    /// Nothing is minted. `stratum` is the caller's IRI; `seed` is the caller's
+    /// statement of which RDF term kind its queries seed with; `depth_datatype`
+    /// is the caller's datatype IRI for the neighbour count.
+    ///
+    /// # The accepted term is a **seed**, not an embedding
+    ///
+    /// This relation searches *from a term it already holds a vector for*:
+    /// `?query` is looked up with [`EmbeddingSpace::row_of`]. So the request
+    /// shape it accepts is an entity seed — a term the caller already knows —
+    /// and `seed` says which kind of term that is, because a space's rows may be
+    /// IRIs, literals or triple terms and only the host knows which its queries
+    /// will name. A raw query embedding is a different question — "what is near
+    /// this point" rather than "what is near this thing" — and no producer here
+    /// accepts one.
+    ///
+    /// [`TermKind::Any`] and [`TermKind::Literal`] are available and are real
+    /// choices, with one consequence worth stating: either accepts a request
+    /// term carrying a raw query embedding, whose value placement demands a
+    /// datatype naming the embedding encoding the producer reads. The
+    /// declaration written here supplies none (a seed is rendered from the
+    /// caller's own term, which carries its own), so a request containing an
+    /// embedding makes this producer unplaceable and it is dropped from the plan
+    /// entirely, rather than serving the seed terms beside it. A host that wants
+    /// both questions answered declares two producers.
+    ///
+    /// # `k` is the per-stratum depth, and it is required
+    ///
+    /// `k` is an input at [`EmbeddingKnnRelation::COUNT`] in the relation's only
+    /// access pattern (`fbbf`): a call that leaves it free is refused, because an unbounded
+    /// generator cannot be admitted against a row ceiling. So the declaration
+    /// carries a [`DepthPlacement`] there, which is how the consumer's
+    /// per-stratum depth becomes this relation's `k`. `depth_datatype` is the
+    /// datatype that rendered integer carries; this crate reads `k` as an XSD
+    /// integer, so an `xsd:integer`-shaped datatype is what makes the invocation
+    /// answerable — and it comes from the caller rather than being invented
+    /// here.
+    ///
+    /// # Ranks and duplicates
+    ///
+    /// Rows are emitted nearest-first under the space's declared metric, ranked
+    /// exactly, with equal distances broken by ascending row number — a total
+    /// order, so the ranks this relation numbers its rows with are 1-based,
+    /// contiguous and ascending, which is the one rank law
+    /// [`RankedDeclaration`] holds every ranked producer to. Terms are distinct
+    /// within a space and a search returns distinct rows, so no item repeats.
+    ///
+    /// # `fidelity` comes from the host, for the same reason `domains` does
+    ///
+    /// This relation is the **exact oracle**: it scans every row of its space,
+    /// compares exact distances, prunes nothing and exits early nowhere, so
+    /// over the vectors it holds it names every neighbour that was due and
+    /// orders them truly. Under the [`Exact`] arithmetic
+    /// [`RankFidelity::EXACT`] is therefore a true statement about its *search*.
+    ///
+    /// What it is not is a statement about the *corpus*. Whether the vectors
+    /// this space holds are the whole of what the host means is not a fact this
+    /// relation holds — a host that embedded a sample, or one shard of a larger
+    /// collection, or a snapshot it knows has fallen behind, has a genuinely
+    /// lossy producer, and this is the only place it can say so. Asserting
+    /// exactness on its behalf would put the strongest claim in the lattice into
+    /// the mouth of the one party that never spoke, and that claim is invisible
+    /// downstream: a stream that ran out of rows and a stream whose space never
+    /// held them both simply stop yielding, so a consumer reads the silence as
+    /// completeness and certifies an answer missing half a corpus.
+    ///
+    /// This is the identical parameter `purrdf-text`'s
+    /// `TextSearchRelation::ranked_declaration` takes, for the identical
+    /// reason, and it is deliberately not defaulted: see
+    /// [`RankFidelity::EXACT`] for why the top of the lattice is the one
+    /// direction a default must never go.
+    ///
+    /// # What the relation adds: its arithmetic
+    ///
+    /// The one fact about the rows that is the relation's own rather than the
+    /// host's is the arithmetic its distances are computed under, and it is added
+    /// here rather than asked for.
+    ///
+    /// * [`RankedDeclaration::arithmetic`] names the law,
+    ///   [`Arithmetic::ID`] of `A`, so it reaches
+    ///   [`RankedDeclaration::canonical_description`] and the registry's content
+    ///   fingerprint: an exact and a reassociated producer over one space are two
+    ///   different plans.
+    /// * Under an arithmetic whose bits depend on the dispatch path —
+    ///   [`Reassociated`] — the order axis is composed with
+    ///   [`OrderFidelity::Perturbed`] carrying that arithmetic's evidence along the
+    ///   path selected at construction, verbatim, by [`composed_order_fidelity`].
+    ///   The composition only degrades: a host passing
+    ///   [`OrderFidelity::Faithful`] says it did nothing to the vectors, and cannot
+    ///   talk a reassociated sum back into a faithful order. Two near-tied rows may
+    ///   swap under it, so a row can be emitted at a better rank than the exact
+    ///   ranking gives it, which is precisely the case in which a consumer must be
+    ///   told that no finite score bound exists. A host that declared its own
+    ///   perturbation keeps its words on the axis; the law is still named in the
+    ///   declaration.
+    ///
+    /// The completeness axis is the host's, unchanged: a reassociated scan still
+    /// scores every row of the space, so it omits nothing the exact one would name.
+    ///
+    /// # `domains` comes from the host, and cannot come from anywhere else
+    ///
+    /// Which blocks of the candidate universe this space's neighbours lie in is
+    /// a fact about the *corpus the space was built over*, and this relation
+    /// cannot see it: it holds vectors and row numbers, and the terms those
+    /// rows carry are whatever the host embedded. Only the host knows whether
+    /// the entities in this space are the same entities its text index ranks,
+    /// or a disjoint population. So the tags are a parameter.
+    ///
+    /// Deriving one from the stratum would be the dangerous convenience:
+    /// two producers over one entity space would receive two tags a consumer
+    /// reads as disjoint, and that is not a conservative mistake in either
+    /// direction — it makes a fusion refuse a valid query when both producers
+    /// name one entity, and certify a score missing the other producer's
+    /// contribution when they do not. [`CandidateDomains::Unrestricted`] is the
+    /// honest value where the host does not know, and it is today's behaviour
+    /// exactly.
+    #[must_use]
+    pub fn ranked_declaration(
+        &self,
+        stratum: Iri,
+        seed: TermKind,
+        depth_datatype: String,
+        fidelity: RankFidelity,
+        domains: CandidateDomains,
+    ) -> RankedDeclaration {
+        RankedDeclaration {
+            stratum,
+            accepted_terms: vec![AcceptedTerm {
+                pattern: TermPattern::of_kind(seed),
+                placements: vec![TermPlacement {
+                    facet: RequestFacet::Value,
+                    position: KNN_QUERY,
+                    datatype: None,
+                }],
+            }],
+            depth_placement: Some(DepthPlacement {
+                position: KNN_COUNT,
+                datatype: depth_datatype,
+            }),
+            candidate_position: KNN_NEIGHBOUR,
+            duplicates: DuplicatePolicy::Unique,
+            // Passed through, never asserted here, for the reason `domains` is.
+            // This relation scans every row of its space and compares exact
+            // distances, so it names every neighbour that was due and orders
+            // them truly: it is the exact oracle an approximate index is
+            // measured against, and [`RankFidelity::EXACT`] is the true
+            // declaration of its SEARCH.
+            //
+            // Whether the vectors it searched are the whole of the host's
+            // corpus is a different question and not one this relation can
+            // answer, so the host answers it. See the doc comment above.
+            //
+            // The order axis is where the relation's own arithmetic enters: a
+            // law whose bits depend on the dispatch path perturbs the order, and
+            // the composition only ever degrades the host's word.
+            fidelity: RankFidelity {
+                completeness: fidelity.completeness,
+                order: composed_order_fidelity(self.arithmetic_order(), fidelity.order),
+            },
+            arithmetic: RankArithmetic::float_distance::<A>(),
+            domains,
+            // This relation projects a neighbour and a distance; it knows
+            // nothing of a host's partition, so it has no position to read a
+            // per-row block out of and says so. A host whose vector index spans
+            // several blocks declares one producer per block, or declares
+            // `CandidateDomains::Unrestricted`; see
+            // `RankedDeclaration::block_position`.
+            block_position: None,
+            // An exclusion from this producer is a fact about its own TERM
+            // UNIVERSE — the space holds a row for this term, or it holds none —
+            // which is what `Membership` means and the only thing a point lookup
+            // can honestly say.
+            //
+            // It is emphatically not the ranked question. `is this candidate among
+            // your best n` has absences that are not exclusions: a candidate
+            // outside the best n is one this producer may still name at rank n,
+            // and a consumer that read that absence as an exclusion would refuse
+            // the fused read as a contradiction the first time the stream named
+            // it. Those two questions are two points of this relation's mode
+            // lattice, and which one an invocation asks is decided by the count —
+            // see `KNN_MEMBERSHIP_MODE` and [`Self::open`].
+            //
+            // What makes the basis deliverable is that a lookup arrives in the
+            // membership mode. The consumer renders the lookup with the count left
+            // FREE and declares the candidate a prepare parameter, so the
+            // admission pass sees `KNN_MEMBERSHIP_MODE` rather than the general
+            // one, and the invocation reaches this relation as the point lookup it
+            // was admitted as. The promise that the candidate really will be
+            // supplied is enforced where the execution begins; a plan that
+            // declared it and did not supply it is refused rather than run with
+            // the position free.
+            //
+            // The lookup is exact however the search behaves — a term the space
+            // holds no row for is a term no ranking can name — and it costs one
+            // binary search over canonical term order, with no vector read and no
+            // distance compared against any other row. `KnnObservations` counts
+            // both halves, so that is measured rather than argued.
+            exclusion: ExclusionBasis::Membership,
+            mandatory: false,
+        }
+    }
+}
+
+impl<A: Arithmetic> PropertyFunction for EmbeddingKnnRelation<A> {
+    fn volatility(&self) -> Volatility {
+        Volatility::Stable
+    }
+
+    fn arity(&self) -> PfArity {
+        KNN_ARITY
+    }
+
+    /// Two modes, answering two different questions.
+    ///
+    /// `fbbf` is the ranked capability: the seed and the count are the two positions
+    /// this relation cannot enumerate, and it projects the other two. It subsumes
+    /// every access pattern of this arity that binds both inputs, so a bound
+    /// `?neighbour` beside a bound count — *is this term among the `k` nearest* — is
+    /// feasible under it and means what it has always meant.
+    ///
+    /// `bbff` is the **membership** capability, and it is a genuinely new one rather
+    /// than a narrowing: subsumption is `bound(declared) ⊆ bound(invocation)`, and
+    /// `fbbf` binds the count that this pattern leaves free, so `fbbf` does not
+    /// subsume it and an invocation of this shape was infeasible before it was
+    /// declared. What it adds is the point lookup [`Self::open`] documents — *do you
+    /// hold this term at all* — with the row bound [`Self::rows_per_invocation`]
+    /// reports for it. That is the question an
+    /// [`ExclusionBasis::Membership`] lookup asks, this relation answers it, and the
+    /// ranked declaration offers the basis on that footing: a lookup is rendered with
+    /// the count free and the candidate declared to the prepare, so it is admitted
+    /// against THIS pattern rather than against the one beside it.
+    ///
+    /// Adding it takes nothing away from the pattern beside it. A count-bound call
+    /// keeps its `k` cut, because the two shapes are two points of the lattice and
+    /// the invocation's own pattern decides which question was asked.
+    fn modes(&self) -> &[BindingPattern] {
+        &self.modes
+    }
+
+    /// The declared row bound, as a real function of the mode.
+    ///
+    /// Only one of the four positions restricts how many rows an invocation can produce.
+    ///
+    /// | bound positions | declared bound | why |
+    /// |---|---|---|
+    /// | `?neighbour` (0) | `min(1, rows)` | terms are distinct within a space, so at most one row carries the bound term — emitted if it is among the `k` nearest where `k` was given, and if the space holds it at all where `k` was not |
+    /// | otherwise | `min(max_neighbours, rows)` | an invocation emits at most `k` rows, `k` is capped by the guard, and a space cannot yield more rows than it holds |
+    ///
+    /// `?query` (1) and `k` (2) are bound in every admitted invocation, so neither
+    /// distinguishes a mode. `?distance` (3) restricts nothing: arbitrarily many rows can
+    /// sit at the same distance from a query, so binding it cannot bound the count.
+    ///
+    /// Both bounds are measured from the frozen space rather than assumed — an empty space
+    /// declares `0`, not `1` — and both are attained, which is the property an `<=`
+    /// assertion cannot check and `u64::MAX` would trivially satisfy.
+    fn rows_per_invocation(&self, mode: BindingPattern) -> u64 {
+        let rows = self.space.row_count() as u64;
+        if mode.is_bound(KNN_NEIGHBOUR) {
+            rows.min(1)
+        } else {
+            rows.min(self.space.guard().max_neighbours())
+        }
+    }
+
+    /// Begin one nearest-neighbour invocation.
+    ///
+    /// # A free `k` asks a different question, and is answered by membership
+    ///
+    /// The **count** decides which of two questions an invocation is, and nothing else
+    /// does.
+    ///
+    /// With `k` **bound** — every invocation `KNN_MODE` subsumes, which is every
+    /// invocation that was feasible before `KNN_MEMBERSHIP_MODE` existed — the call
+    /// means what it has always meant: rank the seed's neighbourhood and emit the `k`
+    /// nearest, filtering `?neighbour` and `?distance` afterwards. A bound
+    /// `?neighbour` is therefore still *is this term among the `k` nearest*, and a
+    /// term the offer of `k` leaves out is still an empty answer. Nothing on this
+    /// path changed when the membership mode was declared, and nothing may: it is a
+    /// public query surface, and a producer that quietly answered a wider question
+    /// here would change the rows of a query nobody edited.
+    ///
+    /// With `k` **free** and `?neighbour` bound — `KNN_MEMBERSHIP_MODE`, a pattern
+    /// `KNN_MODE` does not subsume and which was infeasible until it was declared —
+    /// the call asks *do you hold this term at all*. That is the question
+    /// [`ExclusionBasis::Membership`] declares, and `k` is no part of it: there is one
+    /// candidate and no offer to size. It is answered by [`EmbeddingSpace::row_of`] —
+    /// a binary search over canonical term order, with no vector read, no distance
+    /// compared against any other row and no rank claimed — and the answer is one row
+    /// where the space holds the term and none where it does not.
+    /// [`KnnObservations`] counts both halves, so "nothing was scanned" is an
+    /// observation a test reads rather than an inference from a timing.
+    ///
+    /// Splitting them is what makes the exclusion lookup sound. A lookup is rendered
+    /// as this call with the candidate bound, so a producer that answered it by
+    /// ranking would report an absence for a term it is about to name at rank five,
+    /// and a consumer that believed it would refuse the fused read as a
+    /// contradiction. A membership answer cannot contradict a row, because every row a
+    /// search can name is a row this lookup finds.
+    ///
+    /// The emitted `?distance` is the true one: a single pairwise evaluation through
+    /// `EmbeddingSpace::row_distance`, which is the same [`Kernel`] over the same
+    /// components and norms the scan uses, so it is bit-identical to the value a scan
+    /// would have produced for that pair. What a point lookup cannot produce is a
+    /// *rank* — one plus the number of rows nearer the seed is a fact about every other
+    /// row, so no lookup can know it — and this relation does not claim one.
+    ///
+    /// # Refusals
+    ///
+    /// Each aborts the query rather than contributing zero rows, which would be
+    /// indistinguishable from an honest empty answer:
+    ///
+    /// * `?query` (1) or `k` (2) is free — this relation retrieves neighbours *for* a seed
+    ///   and cannot enumerate seeds, nor invent how many to return;
+    /// * `k` is not an integer literal, or is negative — there is no such request;
+    /// * `k` exceeds the guard's `max_neighbours`, which is named in the error.
+    ///
+    /// # What is an empty answer rather than a refusal
+    ///
+    /// A `?query` term the space does not hold is a **well-formed question the data does
+    /// not answer**, exactly as an unmatched triple pattern is, and it yields no rows.
+    /// Refusing it would abort any query that ranged a seed over terms only some of which
+    /// are embedded — which is the ordinary way this relation is used.
+    ///
+    /// `k = 0` is likewise a request for zero neighbours of a *free* `?neighbour`,
+    /// honoured with zero rows and zero work. It is a boundary a clamp-or-refuse rule
+    /// gets wrong in both directions. On the candidate-bound call it bounds nothing, as
+    /// above.
+    ///
+    /// # The ceiling
+    ///
+    /// The engine offers a row ceiling whenever the call is admission-transparent, which
+    /// includes calls that bind `?distance` to a constant. That position is filtered
+    /// *after* the ranking, so shrinking the ranking to the ceiling would let the cursor
+    /// filter a prefix and then report exhaustion with fewer rows than the engine asked
+    /// for — a short bag read as a complete one. So the ceiling is pushed into the
+    /// selection only when it is free; otherwise the full `k` are ranked and the cursor
+    /// does the cutting, spending the licence only on rows it emits. The membership
+    /// answer is at most one row and needs no such care.
+    fn open(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        self.open_admitted(args, ceiling, crate::WorkspaceCapability::resident())
+    }
+
+    fn open_admitted(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        workspace: crate::WorkspaceCapability,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        KnnInvocation::open_owned(
+            "the embedding kNN relation", args, ceiling, &self.space.rows,
+            self.space.guard(), &self.observations.membership_lookups, workspace,
+        )?.cursor(KnnSource {
+            space: Arc::clone(&self.space), declared: self.declared,
+            scan: self.scan, lookup: self.lookup,
+            observations: Arc::clone(&self.observations),
+        })
+    }
+
+}
+
+/// How an [`EmbeddingKnnRelation`] ranks: the exhaustive scan and the membership
+/// distance its constructor fixed, counted on the relation's observations.
+#[derive(Debug)]
+struct KnnSource<A: Arithmetic> {
+    /// The space being searched.
+    space: Arc<EmbeddingSpace>,
+    /// The relation's dispatch path, when it selected one at construction; see
+    /// [`EmbeddingSpace::search`].
+    declared: Option<Selected<A>>,
+    /// The relation's search; see [`Scan`].
+    scan: Scan<A>,
+    /// The relation's membership distance; see [`Lookup`].
+    lookup: Lookup<A>,
+    /// The relation's counters, so the work a cursor does is observable from the
+    /// relation a host still holds after moving it into a registry.
+    observations: Arc<KnnObservations>,
+}
+
+impl<A: Arithmetic> RankSource for KnnSource<A> {
+    fn search(&self, query_row: usize, select_k: usize) -> Result<(Vec<Ranked>, u64), EvalError> {
+        let (ranked, examined) = self.search_admitted(
+            query_row, select_k, &crate::WorkspaceCapability::default(),
+        )?;
+        Ok((ranked.into_parts().0, examined))
+    }
+
+    fn search_admitted(
+        &self,
+        query_row: usize,
+        select_k: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(crate::AdmittedVec<Ranked>, u64), EvalError> {
+        self.observations.scans.fetch_add(1, Ordering::Relaxed);
+        let (ranked, examined) = (self.scan)(
+            &self.space, self.declared, query_row, select_k, workspace,
+        )?;
+        self.observations
+            .scanned_candidates
+            .fetch_add(examined, Ordering::Relaxed);
+        Ok((ranked, examined))
+    }
+
+    /// One pairwise evaluation: no other row of the space is read and the graph of
+    /// ranks is never built.
+    fn distance(&self, query_row: usize, row: usize) -> Result<f64, EvalError> {
+        self.distance_admitted(query_row, row, &crate::WorkspaceCapability::default())
+    }
+
+    fn distance_admitted(
+        &self, query_row: usize, row: usize, workspace: &crate::WorkspaceCapability,
+    ) -> Result<f64, EvalError> {
+        self.observations
+            .membership_distances
+            .fetch_add(1, Ordering::Relaxed);
+        (self.lookup)(&self.space, self.declared, query_row, row, workspace)
+    }
+
+    fn term(&self, row: usize) -> Option<&TermValue> {
+        self.space.term(row)
+    }
+
+    fn generation(&self) -> Arc<str> {
+        Arc::clone(&self.space.generation)
+    }
+}
+
+#[cfg(test)]
+mod tests;

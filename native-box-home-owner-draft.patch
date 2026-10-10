@@ -1,0 +1,19 @@
+--- a/crates/lex/src/walk.rs
++++ b/crates/lex/src/walk.rs
+@@ -421,15 +421,7 @@
+         value: T,
+         memory: &mut crate::allocation::Memory<'_, S>,
+     ) -> Result<Self, crate::allocation::StorageError> {
+-        let bytes = core::alloc::Layout::new::<T>().size();
+-        memory.add_bytes(bytes)?;
+-        match crate::allocation::try_boxed(value) {
+-            Ok(value) => Ok(Self::from(value)),
+-            Err(_) => {
+-                memory.release_bytes(bytes)?;
+-                Err(crate::allocation::StorageError::AllocationFailed)
+-            }
+-        }
++        memory.boxed(value).map(Self::from)
+     }
+ 
+     fn take_box(&mut self) -> Box<T> {

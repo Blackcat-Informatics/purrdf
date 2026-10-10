@@ -1,0 +1,822 @@
+diff --git a/crates/rdf-core/src/xsd_regex/xpath/mod.rs b/crates/rdf-core/src/xsd_regex/xpath/mod.rs
+--- a/crates/rdf-core/src/xsd_regex/xpath/mod.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/mod.rs
+@@ -12,6 +12,8 @@
+ 
+ mod cache;
+ mod compile;
++mod compatibility;
++mod compatibility_tables;
+ mod dated_blocks;
+ mod dated_names;
+ mod r#match;
+@@ -22,6 +24,7 @@
+ 
+ pub use cache::PatternCache;
+ pub use compile::{CompiledPattern, OwnedCompiledPattern, compile, compile_with_storage};
++pub use compatibility::{CompatibilityPattern, OwnedCompatibilityPattern, compile_compatibility_with_storage};
+ pub use r#match::OwnedCaptures;
+ pub use replace::OwnedReplacement;
+ pub use r#match::Captures;
+@@ -140,6 +143,19 @@
+     #[must_use]
+     pub fn from_name(name: &str) -> Option<Self> {
+         Self::ALL.into_iter().find(|profile| profile.name() == name)
++    }
++}
++
++/// The internal law carried by the one native program representation.
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub(super) enum Law {
++    Dated(Profile),
++    Compatibility,
++}
++
++impl Law {
++    pub(super) const fn is_compatibility(self) -> bool {
++        matches!(self, Self::Compatibility)
+     }
+ }
+ 
+@@ -297,6 +313,16 @@
+         }
+     }
+ 
++    /// Remove application presets while keeping checked native counter ranges.
++    ///
++    /// The caller's physical admission still bounds every actual allocation.
++    /// Counter/layout overflow remains a typed operational error. This does not
++    /// silently install the dated production limits in an unselected evaluator.
++    #[must_use]
++    pub const fn without_presets() -> Self {
++        Self { bounds: [u64::MAX; Resource::COUNT] }
++    }
++
+     /// These bounds with one named resource replaced.
+     #[must_use]
+     pub const fn with(mut self, resource: Resource, limit: u64) -> Self {
+@@ -573,6 +599,20 @@
+         flag: char,
+         /// The law against which the flags were admitted.
+         profile: Profile,
++    },
++    /// A flag outside the existing unselected compatibility alphabet.
++    CompatibilityFlags {
++        /// UTF-8 byte offset within the flag text.
++        offset: usize,
++        /// The rejected character.
++        flag: char,
++    },
++    /// The existing compatibility surface's authored source-byte contract.
++    CompatibilitySource {
++        /// Actual source UTF-8 bytes.
++        bytes: usize,
++        /// The compatibility source limit.
++        limit: usize,
+     },
+     /// Invalid grammar under the explicitly selected dated profile.
+     Syntax {
+@@ -621,6 +661,10 @@
+                 "invalid XPath flag {flag:?} at byte {offset} for {} (err:FORX0001)",
+                 profile.name()
+             ),
++            Self::CompatibilityFlags { offset, flag } => write!(f,
++                "invalid compatibility pattern flag {flag:?} at byte {offset}"),
++            Self::CompatibilitySource { bytes, limit } => write!(f,
++                "compatibility pattern has {bytes} source bytes, limit {limit}"),
+             Self::Syntax { offset, message } => {
+                 write!(f, "invalid XPath pattern at byte {offset}: {message}")
+             }
+@@ -645,6 +689,8 @@
+             Self::Resource(refusal) => Some(refusal),
+             Self::Replacement(error) => Some(error),
+             Self::Flags { .. }
++            | Self::CompatibilityFlags { .. }
++            | Self::CompatibilitySource { .. }
+             | Self::Syntax { .. }
+             | Self::Allocation { .. }
+             | Self::Storage(_)
+diff --git a/crates/rdf-core/src/xsd_regex/xpath/compile.rs b/crates/rdf-core/src/xsd_regex/xpath/compile.rs
+--- a/crates/rdf-core/src/xsd_regex/xpath/compile.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/compile.rs
+@@ -12,7 +12,7 @@
+ use std::cmp::Ordering;
+ use std::ops::Range;
+ 
+-use super::{Budget, Error, Limits, Profile, Resource, dated_blocks, dated_names, unicode_tables};
++use super::{Budget, Error, Law, Limits, Profile, Resource, compatibility_tables, dated_blocks, dated_names, unicode_tables};
+ use crate::xsd_regex::scan::{Scanner, Token};
+ 
+ #[derive(Debug, Clone, Copy)]
+@@ -27,7 +27,7 @@
+ }
+ 
+ impl Modes {
+-    fn parse(profile: Profile, flags: &str, budget: &mut Budget<'_>) -> Result<Self, Error> {
++    fn parse(law: Law, flags: &str, budget: &mut Budget<'_>) -> Result<Self, Error> {
+         let mut result = Self {
+             insensitive: false,
+             dot_all: false,
+@@ -42,12 +42,11 @@
+                 's' => result.dot_all = true,
+                 'm' => result.multiline = true,
+                 'x' => result.whitespace = true,
+-                'q' if profile == Profile::Xpath31 => result.quoted = true,
++                'q' if law != Law::Dated(Profile::Xpath20) => result.quoted = true,
+                 _ => {
+-                    return Err(Error::Flags {
+-                        offset,
+-                        flag,
+-                        profile,
++                    return Err(match law {
++                        Law::Dated(profile) => Error::Flags { offset, flag, profile },
++                        Law::Compatibility => Error::CompatibilityFlags { offset, flag },
+                     });
+                 }
+             }
+@@ -146,7 +145,8 @@
+ #[derive(Debug, Clone, Copy)]
+ pub(super) enum Set {
+     Range { lo: char, hi: char, folded: bool },
+-    Table(&'static [(u32, u32)]),
++    Table { ranges: &'static [(u32, u32)], folded: bool },
++    Block { lo: u32, hi: u32, folded: bool },
+     Space,
+     Word,
+     Dot,
+@@ -226,6 +226,16 @@
+         .map_or(&[], |index| unicode_tables::CASE_VARIANTS[index].1)
+ }
+ 
++pub(super) fn case_variants_for(law: Law, ch: char) -> &'static [u32] {
++    if law.is_compatibility() {
++        compatibility_tables::CASE_VARIANTS
++            .binary_search_by_key(&(ch as u32), |&(point, _)| point)
++            .map_or(&[], |index| compatibility_tables::CASE_VARIANTS[index].1)
++    } else {
++        case_variants(ch)
++    }
++}
++
+ #[derive(Debug, Clone, Copy)]
+ enum LeadStep {
+     Visit(usize),
+@@ -245,7 +255,7 @@
+ /// successful compilation under earlier, larger bounds is not current admission.
+ #[derive(Debug)]
+ pub struct CompiledPattern {
+-    pub(super) profile: Profile,
++    pub(super) law: Law,
+     pub(super) source: String,
+     pub(super) flags: String,
+     pub(super) modes: Modes,
+@@ -269,13 +279,16 @@
+     /// Whether this program belongs to the exact requested grammar and text.
+     #[must_use]
+     pub fn matches_source(&self, profile: Profile, pattern: &str, flags: &str) -> bool {
+-        self.profile == profile && self.source == pattern && self.flags == flags
++        self.law == Law::Dated(profile) && self.source == pattern && self.flags == flags
+     }
+ 
+     /// The dated Recommendation used for recognition and execution.
+     #[must_use]
+     pub const fn profile(&self) -> Profile {
+-        self.profile
++        match self.law {
++            Law::Dated(profile) => profile,
++            Law::Compatibility => unreachable!("compatibility payload has no public dated view"),
++        }
+     }
+ 
+     /// The original UTF-8 source, before any x-flag removal.
+@@ -377,15 +390,18 @@
+ /// Preserves the original caller account alongside every grammar, work,
+ /// layout, allocator or physical-admission failure.
+ pub fn compile_with_storage<S: purrdf_lex::allocation::Admission>(
+-    profile: Profile,
+-    pattern: &str,
+-    flags: &str,
+-    limits: Limits,
+-    mut storage: S,
++    profile: Profile, pattern: &str, flags: &str, limits: Limits, storage: S,
+ ) -> Result<OwnedCompiledPattern<S>, super::OwnedPatternError<S>> {
+-    let verdict = compile_budget(profile, pattern, flags, Budget::with_storage(limits, &mut storage));
++    compile_owned_law(Law::Dated(profile), pattern, flags, limits, storage, |pattern| pattern)
++}
++
++pub(super) fn compile_owned_law<T, S: purrdf_lex::allocation::Admission>(
++    law: Law, pattern: &str, flags: &str, limits: Limits, mut storage: S,
++    wrap: impl FnOnce(CompiledPattern) -> T,
++) -> Result<super::OwnedPatternValue<T, S>, super::OwnedPatternError<S>> {
++    let verdict = compile_budget(law, pattern, flags, Budget::with_storage(limits, &mut storage));
+     match verdict {
+-        Ok(pattern) => Ok(super::OwnedPatternValue::new(pattern, storage)),
++        Ok(pattern) => Ok(super::OwnedPatternValue::new(wrap(pattern), storage)),
+         Err(error @ Error::Storage(_)) =>
+             Err(super::OwnedPatternValue::new(error, storage)),
+         Err(error) => {
+@@ -419,17 +435,22 @@
+     flags: &str,
+     limits: Limits,
+ ) -> Result<CompiledPattern, Error> {
+-    compile_budget(profile, pattern, flags, Budget::new(limits))
++    compile_budget(Law::Dated(profile), pattern, flags, Budget::new(limits))
+ }
+ 
+ fn compile_budget(
+-    profile: Profile,
++    law: Law,
+     pattern: &str,
+     flags: &str,
+     mut budget: Budget<'_>,
+ ) -> Result<CompiledPattern, Error> {
+     budget.limits().admit_pattern(pattern)?;
+-    let modes = Modes::parse(profile, flags, &mut budget)?;
++    if law.is_compatibility() && pattern.len() > crate::xsd_regex::MAX_SOURCE_BYTES {
++        return Err(Error::CompatibilitySource {
++            bytes: pattern.len(), limit: crate::xsd_regex::MAX_SOURCE_BYTES,
++        });
++    }
++    let modes = Modes::parse(law, flags, &mut budget)?;
+     let source = owned(pattern, &mut budget)?;
+     let flag_source = owned(flags, &mut budget)?;
+     let normalized = if modes.whitespace && !modes.quoted {
+@@ -450,7 +471,7 @@
+     let mut parser = Parser {
+         scanner,
+         budget,
+-        profile,
++        law,
+         modes,
+         text,
+         offsets,
+@@ -492,7 +513,7 @@
+         slots: budget.peak_compile_slots,
+     };
+     Ok(CompiledPattern {
+-        profile,
++        law,
+         source,
+         flags: flag_source,
+         modes,
+@@ -612,7 +633,7 @@
+ struct Parser<'a, 'storage> {
+     scanner: Scanner<'a>,
+     budget: Budget<'storage>,
+-    profile: Profile,
++    law: Law,
+     modes: Modes,
+     text: &'a str,
+     offsets: Option<&'a [usize]>,
+@@ -911,7 +932,7 @@
+                         }
+                         for point in lo as u32..=hi as u32 {
+                             let ch = char::from_u32(point).expect("a range holds scalar values");
+-                            let variants = case_variants(ch);
++                            let variants = case_variants_for(self.law, ch);
+                             self.budget
+                                 .charge_wide(Resource::CompileSteps, variants.len() as u128 + 1)?;
+                             for &variant in variants {
+@@ -975,7 +996,7 @@
+             let offset = self.offset(spanned.span.start);
+             match spanned.token {
+                 Token::GroupOpen { capturing } => {
+-                    if !capturing && self.profile == Profile::Xpath20 {
++                    if !capturing && self.law == Law::Dated(Profile::Xpath20) {
+                         return Err(self.syntax(offset, "non-capturing groups require XPath 3.1"));
+                     }
+                     let capture = if capturing {
+@@ -1018,6 +1039,9 @@
+                     self.append(node)?;
+                 }
+                 Token::Backreference(number) => {
++                    if self.law.is_compatibility() {
++                        return Err(self.syntax(offset, "backreferences are not supported by the compatibility law"));
++                    }
+                     let node = self.node(Node::Backreference(number))?;
+                     self.append(node)?;
+                 }
+@@ -1072,6 +1096,13 @@
+         } else {
+             true
+         };
++        let (body, min, max) = if self.law.is_compatibility()
++            && min == Count::Finite(0) && max.is_none() {
++            let plus = self.node(Node::Repeat {
++                body, min: Count::Finite(1), max: None, greedy, follow: None,
++            })?;
++            (plus, Count::Finite(0), Some(Count::Finite(1)))
++        } else { (body, min, max) };
+         let node = self.node(Node::Repeat {
+             body,
+             min,
+@@ -1162,23 +1193,40 @@
+     }
+ 
+     fn property(&mut self, name: &str, offset: usize) -> Result<usize, Error> {
+-        self.budget
+-            .charge_wide(Resource::CompileSteps, (name.len() as u128) * 10)?;
++        self.budget.charge_wide(Resource::CompileSteps, (name.len() as u128) * 10)?;
++        let folded = self.law.is_compatibility() && self.modes.insensitive;
++        if self.law.is_compatibility() && name.starts_with("Is") {
++            let Some((lo, hi)) = crate::xsd_regex::blocks::lookup(name) else {
++                return Err(self.syntax(offset, "unknown Unicode category or Is-prefixed block"));
++            };
++            return self.set(Set::Block { lo, hi, folded });
++        }
+         let found = if name.starts_with("Is") {
+-            block(self.profile, name)
++            let Law::Dated(profile) = self.law else { unreachable!("compatibility blocks returned above"); };
++            block(profile, name)
+         } else {
+-            unicode_tables::CATEGORIES
+-                .binary_search_by_key(&name, |&(name, _)| name)
+-                .ok()
+-                .map(|index| unicode_tables::CATEGORIES[index].1)
++            let categories = if self.law.is_compatibility() {
++                compatibility_tables::CATEGORIES
++            } else { unicode_tables::CATEGORIES };
++            table(categories, name)
+         };
+         let Some(ranges) = found else {
+-            return Err(self.syntax(
+-                offset,
+-                "unknown Unicode category or Is-prefixed block",
+-            ));
++            return Err(self.syntax(offset, "unknown Unicode category or Is-prefixed block"));
+         };
+-        self.set(Set::Table(ranges))
++        self.set(Set::Table { ranges, folded })
++    }
++
++    fn word(&mut self, offset: usize) -> Result<usize, Error> {
++        if !self.law.is_compatibility() { return self.set(Set::Word); }
++        // Folding applies to P/Z/C before negation, exactly as in the original
++        // translated [^\p{P}\p{Z}\p{C}] class. Difference/negation are never
++        // folded after construction.
++        let punctuation = self.property("P", offset)?;
++        let separators = self.property("Z", offset)?;
++        let controls = self.property("C", offset)?;
++        let first = self.set(Set::Union(punctuation, separators))?;
++        let excluded = self.set(Set::Union(first, controls))?;
++        self.set(Set::Complement(excluded))
+     }
+ 
+     fn member(&mut self, token: Token<'_>, offset: usize) -> Result<usize, Error> {
+@@ -1188,20 +1236,22 @@
+             Token::Escape('r') => return self.range('\r', '\r'),
+             Token::Escape('t') => return self.range('\t', '\t'),
+             Token::Escape('d' | 'D') => (self.property("Nd", offset)?, token == Token::Escape('D')),
+-            Token::Escape('&' | '~') => {
++            Token::Escape('&' | '~') if !self.law.is_compatibility() => {
+                 return Err(self.syntax(offset, "escape is outside XPath SingleCharEsc"));
+             }
+             Token::Escape(ch) => return self.range(ch, ch),
+             Token::NameEscape { negated, chars } => {
+-                let ranges = if chars {
+-                    dated_names::NAME
+-                } else {
+-                    dated_names::NAME_START
++                let ranges = match (self.law.is_compatibility(), chars) {
++                    (true, true) => purrdf_iri::terminals::xml_name_char_ranges(),
++                    (true, false) => purrdf_iri::terminals::xml_name_start_char_ranges(),
++                    (false, true) => dated_names::NAME,
++                    (false, false) => dated_names::NAME_START,
+                 };
+-                (self.set(Set::Table(ranges))?, negated)
++                (self.set(Set::Table { ranges,
++                    folded: self.law.is_compatibility() && self.modes.insensitive })?, negated)
+             }
+             Token::SpaceEscape { negated } => (self.set(Set::Space)?, negated),
+-            Token::WordEscape { negated } => (self.set(Set::Word)?, negated),
++            Token::WordEscape { negated } => (self.word(offset)?, negated),
+             Token::UnicodeProperty { negated, name } => (self.property(name, offset)?, negated),
+             Token::Dot => return self.set(Set::Dot),
+             _ => return Err(self.syntax(offset, "construct is not a character-class member")),
+@@ -1213,13 +1263,14 @@
+         }
+     }
+ 
+-    fn scalar(token: &Token<'_>) -> Option<char> {
++    fn scalar(&self, token: &Token<'_>) -> Option<char> {
+         match token {
+             Token::Literal(ch) | Token::ClassMember(ch) => Some(*ch),
+             Token::Escape('n') => Some('\n'),
+             Token::Escape('r') => Some('\r'),
+             Token::Escape('t') => Some('\t'),
+-            Token::Escape('d' | 'D' | '&' | '~') => None,
++            Token::Escape('d' | 'D') => None,
++            Token::Escape('&' | '~') if !self.law.is_compatibility() => None,
+             Token::Escape(ch) => Some(*ch),
+             _ => None,
+         }
+@@ -1321,7 +1372,7 @@
+     }
+ 
+     fn class_member(&mut self, token: Token<'_>, offset: usize) -> Result<usize, Error> {
+-        if let Some(lo) = Self::scalar(&token)
++        if let Some(lo) = self.scalar(&token)
+             && token != Token::Literal('-')
+             && self
+                 .peek()?
+@@ -1336,7 +1387,7 @@
+                 let dash = self.range('-', '-')?;
+                 return self.set(Set::Union(lo, dash));
+             }
+-            let hi = Self::scalar(&next.token)
++            let hi = self.scalar(&next.token)
+                 .filter(|_| next.token != Token::Literal('-'))
+                 .ok_or_else(|| {
+                     self.syntax(
+@@ -1512,7 +1563,7 @@
+         let program = accepted(Profile::Xpath31, r"[^A-Z-[IO]]", "i");
+         assert!(matches!(program.sets.last(), Some(Set::Difference(..))));
+         let program = accepted(Profile::Xpath31, r"\p{Lu}", "i");
+-        assert!(matches!(program.sets.as_slice(), [Set::Table(_)]));
++        assert!(matches!(program.sets.as_slice(), [Set::Table { .. }]));
+     }
+ 
+     #[test]
+diff --git a/crates/rdf-core/src/xsd_regex/xpath/match.rs b/crates/rdf-core/src/xsd_regex/xpath/match.rs
+--- a/crates/rdf-core/src/xsd_regex/xpath/match.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/match.rs
+@@ -25,9 +25,9 @@
+ 
+ use purrdf_lex::walk::WorkList;
+ 
+-use super::compile::{CompiledPattern, Count, Lead, Node, Set, case_variants};
++use super::compile::{CompiledPattern, Count, Lead, Node, Set, case_variants, case_variants_for};
+ use super::pike::Pike;
+-use super::{Budget, Error, Limits, Profile, Refusal, Resource, unicode_tables};
++use super::{Budget, Error, Limits, Law, Profile, Refusal, Resource, unicode_tables};
+ 
+ /// UTF-8 byte spans captured by one ordered successful match.
+ #[derive(Debug, PartialEq, Eq)]
+@@ -241,7 +241,6 @@
+         fallback: bool,
+     },
+     /// The thread machine alone, from every start.
+-    #[cfg(all(test, not(target_arch = "wasm32")))]
+     Pike(Pike<'a>),
+     /// The set machine finds where a match starts; the thread machine walks
+     /// that one start for the priority match and its captures.
+@@ -274,7 +273,6 @@
+     pub(super) fn into_budget(self) -> Result<Budget<'a>, Error> {
+         match self.machine {
+             Machine::Backtrack { machine, .. } => Ok(machine.abandon()?.budget),
+-            #[cfg(all(test, not(target_arch = "wasm32")))]
+             Machine::Pike(machine) => machine.into_budget(),
+             Machine::Linear(machine) => machine.into_budget(),
+             Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+@@ -282,6 +280,9 @@
+     }
+ 
+     fn with_context(ctx: Ctx<'a>) -> Self {
++        if ctx.program.law.is_compatibility() {
++            return Self { machine: Machine::Pike(Pike::new(ctx)) };
++        }
+         let fallback = !ctx.program.links.backreferences;
+         Self { machine: Machine::Backtrack { machine: Backtrack::with_context(ctx), fallback } }
+     }
+@@ -347,7 +348,6 @@
+     pub(super) fn budget(&mut self) -> &mut Budget<'a> {
+         match &mut self.machine {
+             Machine::Backtrack { machine, .. } => &mut machine.ctx.budget,
+-            #[cfg(all(test, not(target_arch = "wasm32")))]
+             Machine::Pike(machine) => &mut machine.ctx.budget,
+             Machine::Linear(pike) => &mut pike.ctx.budget,
+             Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+@@ -371,7 +371,6 @@
+                 }
+                 decided => Ok(decided?.is_some()),
+             },
+-            #[cfg(all(test, not(target_arch = "wasm32")))]
+             Machine::Pike(machine) => Ok(machine.find_from(start)?.is_some()),
+             Machine::Linear(pike) => Self::linear_is_match(pike, start),
+             Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+@@ -445,7 +444,6 @@
+                 }
+                 decided => decided,
+             },
+-            #[cfg(all(test, not(target_arch = "wasm32")))]
+             Machine::Pike(machine) => machine.find_from(start),
+             Machine::Linear(pike) => Self::linear_find(pike, start),
+             Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+@@ -497,7 +495,7 @@
+     pub(super) fn at_start(&self, position: usize) -> bool {
+         position == 0
+             || (self.program.modes.multiline
+-                && position < self.input.len()
++                && (position < self.input.len() || self.program.law.is_compatibility())
+                 && self.input[..position].ends_with('\n'))
+     }
+ 
+@@ -505,7 +503,7 @@
+     pub(super) fn at_end(&self, position: usize) -> bool {
+         if self.program.modes.multiline {
+             self.input[position..].starts_with('\n')
+-                || (position == self.input.len() && !self.input.ends_with('\n'))
++                || (position == self.input.len() && (self.program.law.is_compatibility() || !self.input.ends_with('\n')))
+         } else {
+             position == self.input.len()
+         }
+@@ -527,7 +525,6 @@
+ 
+     /// Whether a match can begin at `start`, spending the comparison that
+     /// decides it.
+-    #[cfg(all(test, not(target_arch = "wasm32")))]
+     pub(super) fn may_start(&mut self, start: usize) -> Result<bool, Error> {
+         match self.program.lead.first {
+             Lead::Any => Ok(true),
+@@ -568,12 +565,13 @@
+                 // The multiline start: after a newline that is not final.
+                 loop {
+                     self.budget.charge(Resource::MatchSteps, 1)?;
+-                    if start >= self.input.len() {
++                    if start > self.input.len() {
+                         return Ok(None);
+                     }
+-                    if self.input[..start].ends_with('\n') {
++                    if self.at_start(start) {
+                         return Ok(Some(start));
+                     }
++                    if start == self.input.len() { return Ok(None); }
+                     start += self.input[start..]
+                         .chars()
+                         .next()
+@@ -666,7 +664,7 @@
+                 if (lo..=hi).contains(&ch) {
+                     true
+                 } else if folded {
+-                    let variants = case_variants(ch);
++                    let variants = case_variants_for(self.program.law, ch);
+                     self.budget
+                         .charge_wide(Resource::MatchSteps, variants.len() as u128)?;
+                     variants
+@@ -676,7 +674,22 @@
+                     false
+                 }
+             }
+-            Set::Table(ranges) => purrdf_iri::terminals::in_ranges(ch as u32, ranges),
++            Set::Table { ranges, folded } => {
++                if purrdf_iri::terminals::in_ranges(ch as u32, ranges) { true }
++                else if folded {
++                    let variants = case_variants_for(self.program.law, ch);
++                    self.budget.charge_wide(Resource::MatchSteps, variants.len() as u128)?;
++                    variants.iter().any(|&point| purrdf_iri::terminals::in_ranges(point, ranges))
++                } else { false }
++            }
++            Set::Block { lo, hi, folded } => {
++                if (lo..=hi).contains(&(ch as u32)) { true }
++                else if folded {
++                    let variants = case_variants_for(self.program.law, ch);
++                    self.budget.charge_wide(Resource::MatchSteps, variants.len() as u128)?;
++                    variants.iter().any(|point| (lo..=hi).contains(point))
++                } else { false }
++            },
+             Set::Space => purrdf_iri::terminals::is_ws_char(ch),
+             Set::Word => {
+                 self.budget.charge(Resource::MatchSteps, 3)?;
+@@ -689,7 +702,7 @@
+             }
+             Set::Dot => {
+                 self.program.modes.dot_all
+-                    || (ch != '\n' && (self.program.profile == Profile::Xpath20 || ch != '\r'))
++                    || (ch != '\n' && (self.program.law == Law::Dated(Profile::Xpath20) || ch != '\r'))
+             }
+             Set::Complement(_) | Set::Union(..) | Set::Difference(..) => {
+                 unreachable!("compound character sets are evaluated on the explicit work list");
+diff --git a/crates/rdf-core/src/xsd_regex/xpath/pike.rs b/crates/rdf-core/src/xsd_regex/xpath/pike.rs
+--- a/crates/rdf-core/src/xsd_regex/xpath/pike.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/pike.rs
+@@ -702,6 +702,9 @@
+     ///
+     /// Each new state is admitted against the per-position state bound first.
+     fn visit(&mut self, point: Pc, level: u32) -> Result<bool, Error> {
++        // Compatibility merges an epsilon control point at the same input
++        // position independent of nullable progress, retaining its first tags.
++        let level = if self.ctx.program.law.is_compatibility() { 0 } else { level };
+         let generation = self.visited.generation;
+         if self.visited.dense {
+             // One indexed probe, within the transition that reached `point`.
+@@ -990,8 +993,8 @@
+                             // increment, even an empty one.
+                             let link = links[parent];
+                             let count = next_count(min, self.count(parent));
+-                            let stalled =
+-                                links[node].stall > link.stall && self.level <= link.stall;
++                            let stalled = !program.law.is_compatibility()
++                                && links[node].stall > link.stall && self.level <= link.stall;
+                             match stalled.then(|| self.chain(parent, count)).transpose()? {
+                                 // Every further required iteration would be
+                                 // empty too: leave once the minimum is met.
+@@ -1033,7 +1036,8 @@
+             unreachable!("only a repetition iterates");
+         };
+         let links = &program.links.nodes;
+-        links[body].empty && links[body].counters > links[repeat].counters
++        !program.law.is_compatibility()
++            && links[body].empty && links[body].counters > links[repeat].counters
+     }
+ 
+     /// How an empty iteration of `repeat`, completing `count` iterations
+@@ -1297,6 +1301,12 @@
+             // Leaving instead clears the count again.
+             self.set(link.counters as usize, store_count(min, max, count))?;
+         }
++        if program.law.is_compatibility() && can_stop
++            && !self.visit(Pc::Enter(node), 0)? {
++            // Merge BEFORE enqueuing the lower-priority exit. An empty loop
++            // must not replace that exit's original captures with later tags.
++            return Ok(None);
++        }
+         if !can_stop {
+             return Ok(Some(Pc::Iterate(node)));
+         }
+@@ -1355,7 +1365,6 @@
+     }
+ 
+     /// The first match from any start at or after `start`.
+-    #[cfg(all(test, not(target_arch = "wasm32")))]
+     pub(super) fn find_from(&mut self, start: usize) -> Result<Option<Captures>, Error> {
+         self.run(start, Self::search)
+     }
+@@ -1390,7 +1399,6 @@
+ 
+     /// Run every admissible start from `position` on, as one pass over the
+     /// input, until the best match is final or no thread is left.
+-    #[cfg(all(test, not(target_arch = "wasm32")))]
+     fn search(
+         &mut self,
+         mut position: usize,
+diff --git a/crates/rdf-core/src/xsd_regex/xpath/replace.rs b/crates/rdf-core/src/xsd_regex/xpath/replace.rs
+--- a/crates/rdf-core/src/xsd_regex/xpath/replace.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/replace.rs
+@@ -118,17 +118,20 @@
+             let mut template = Cursor::new(replacement, self.captures);
+             while next(&mut template, &mut budget)?.is_some() {}
+         }
+-        let mut empty = Vm::with_budget(self, "", budget);
+-        if empty.find_from(0)?.is_some() {
+-            return Err(Error::EmptyMatch);
+-        }
+-        let budget = empty.into_budget()?;
++        let budget = if self.law.is_compatibility() { budget } else {
++            let mut empty = Vm::with_budget(self, "", budget);
++            if empty.find_from(0)?.is_some() { return Err(Error::EmptyMatch); }
++            empty.into_budget()?
++        };
+         let mut vm = Vm::with_budget(self, input, budget);
+         let mut out = String::new();
+         let mut position = 0;
++        let mut search = Some(0);
++        let mut previous_nonempty_end = None;
+         let mut changed = false;
+         loop {
+-            let Some(captures) = vm.find_from(position)? else {
++            let found = search.map(|start| vm.find_from(start)).transpose()?.flatten();
++            let Some(captures) = found else {
+                 if !changed {
+                     // The unchanged input is returned borrowed: no output
+                     // byte is produced, so none is admitted.
+@@ -138,7 +141,16 @@
+                 return Ok(Cow::Owned(out));
+             };
+             let matched = captures.get(0).expect("successful match has capture zero");
+-            debug_assert!(matched.end > matched.start, "empty-match guard was passed");
++            let empty = matched.start == matched.end;
++            debug_assert!(!empty || self.law.is_compatibility(), "dated empty-match guard was passed");
++            if empty && previous_nonempty_end == Some(matched.end) {
++                // The original find iterator suppresses an empty match directly
++                // after a nonempty one. The output cursor stays at that end.
++                search = input[matched.end..].chars().next()
++                    .map(|ch| matched.end + ch.len_utf8());
++                vm.release_captures(captures)?;
++                continue;
++            }
+             append(&mut out, &input[position..matched.start], vm.budget(), &mut output)?;
+             if self.modes.quoted {
+                 append(&mut out, replacement, vm.budget(), &mut output)?;
+@@ -156,6 +168,10 @@
+                 }
+             }
+             position = matched.end;
++            search = if empty {
++                input[matched.end..].chars().next().map(|ch| matched.end + ch.len_utf8())
++            } else { Some(matched.end) };
++            previous_nonempty_end = (!empty).then_some(matched.end);
+             changed = true;
+             // No previous match's capture vector survives the next search.
+             vm.release_captures(captures)?;
+diff --git a/crates/rdf-core/src/xsd_regex/xpath/compatibility.rs b/crates/rdf-core/src/xsd_regex/xpath/compatibility.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/rdf-core/src/xsd_regex/xpath/compatibility.rs
+@@ -0,0 +1,107 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! The existing unselected evaluator law over the one admitted native program.
++//!
++//! Its Unicode 16 simple folding, shared modern XML name terminals, exact
++//! Unicode 16 block names, final-newline anchors and empty replacement matches
++//! remain separate from explicitly selected dated XPath laws. No regular-engine
++//! compiler or matcher participates in this owned production path.
++
++use purrdf_lex::allocation::Admission;
++
++use super::{CompiledPattern, Law, Limits, OwnedCaptures, OwnedPatternError, OwnedPatternValue, OwnedReplacement};
++
++/// The immutable unselected law, without an exposed dated-program view.
++#[derive(Debug)]
++pub struct CompatibilityPattern {
++    pattern: CompiledPattern,
++}
++
++impl CompatibilityPattern {
++    /// The exact original source and flags belonging to this retained program.
++    #[must_use]
++    pub fn matches_source(&self, pattern: &str, flags: &str) -> bool {
++        self.pattern.law == Law::Compatibility
++            && self.pattern.source() == pattern && self.pattern.flags() == flags
++    }
++
++    /// Original source text, before x-flag normalization.
++    #[must_use]
++    pub fn source(&self) -> &str { self.pattern.source() }
++
++    /// Original flags, including legal repeated flags.
++    #[must_use]
++    pub fn flags(&self) -> &str { self.pattern.flags() }
++
++    /// Capturing groups, excluding the complete match at capture zero.
++    #[must_use]
++    pub const fn capture_count(&self) -> usize { self.pattern.capture_count() }
++
++    /// Native retained program capacity; a cache fee, never a physical proof.
++    #[must_use]
++    pub fn storage_bytes(&self) -> usize { self.pattern.storage_bytes() }
++
++    /// Recheck the caller's current explicit logical resource bounds.
++    ///
++    /// # Errors
++    /// Returns the original typed native resource refusal.
++    pub fn admit(&self, limits: Limits) -> Result<(), super::Error> {
++        self.pattern.admit(limits)
++    }
++
++    /// Match with the native control-state machine and original physical owner.
++    ///
++    /// # Errors
++    /// Preserves allocator, layout, explicit resource and capacity refusals.
++    pub fn is_match_with_storage<S: Admission>(
++        &self, input: &str, limits: Limits, storage: S,
++    ) -> Result<OwnedPatternValue<bool, S>, OwnedPatternError<S>> {
++        self.pattern.is_match_with_storage(input, limits, storage)
++    }
++
++    /// Find the original ordered captures with an ownership-carrying result.
++    ///
++    /// # Errors
++    /// Preserves the original physical owner and every operational refusal.
++    pub fn find_with_storage<S: Admission>(
++        &self, input: &str, limits: Limits, storage: S,
++    ) -> Result<OwnedCaptures<S>, OwnedPatternError<S>> {
++        self.pattern.find_with_storage(input, limits, storage)
++    }
++
++    /// Replace ordered nonoverlapping matches, including legal empty matches.
++    ///
++    /// The shared XPath replacement cursor still parses the complete template
++    /// before searching. Empty matches advance at UTF-8 boundaries; an empty
++    /// match immediately following a nonempty match is suppressed, as before.
++    ///
++    /// # Errors
++    /// Preserves both original matcher and output physical owners. Malformed
++    /// replacement text remains lexical; no partial replacement is published.
++    pub fn replace_all_with_storage<'h, M: Admission, O: Admission>(
++        &self, input: &'h str, replacement: &str, limits: Limits, matcher: M, output: O,
++    ) -> Result<OwnedReplacement<'h, M, O>, OwnedPatternError<(M, O)>> {
++        self.pattern.replace_all_with_storage(input, replacement, limits, matcher, output)
++    }
++}
++
++/// An unselected native program retaining its original concrete account.
++pub type OwnedCompatibilityPattern<S> = OwnedPatternValue<CompatibilityPattern, S>;
++
++/// Compile the existing unselected law through the same native parser/arenas.
++///
++/// `limits` are explicit caller bounds. Use [`Limits::without_presets`] when
++/// no dated application preset was selected; actual physical admission still
++/// precedes every compiler allocation. The public legacy `super::super::compile`
++/// remains unchanged for consumers of its `as_regex` representation.
++///
++/// # Errors
++/// Returns the original account alongside grammar, work, layout, allocator and
++/// admission failures. Failed requests are never immutable cached programs.
++pub fn compile_compatibility_with_storage<S: Admission>(
++    pattern: &str, flags: &str, limits: Limits, storage: S,
++) -> Result<OwnedCompatibilityPattern<S>, OwnedPatternError<S>> {
++    super::compile::compile_owned_law(Law::Compatibility, pattern, flags, limits, storage,
++        |pattern| CompatibilityPattern { pattern })
++}

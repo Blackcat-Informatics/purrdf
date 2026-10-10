@@ -1,0 +1,80 @@
+    #[test]
+    fn nested_native_service_denial_keeps_inner_type_and_original_error_owner() {
+        use crate::remote::{
+            AdmittedResolvedBindings, RemoteError, ResolvedBindings, ServiceBuildError,
+            ServiceRequest, ServiceResolutionError, ServiceResolver,
+        };
+        const INNER: &str = "http://example.org/inner";
+        const OUTER: &str = "http://example.org/outer";
+        struct Forward<'a>(&'a purrdf_core::RdfDataset);
+        impl ServiceResolver for Forward<'_> {
+            fn resolve(
+                &self,
+                request: ServiceRequest<'_>,
+            ) -> Result<ResolvedBindings, RemoteError> {
+                crate::remote::resident_resolution(self.resolve_admitted(
+                    request,
+                    crate::WorkspaceCapability::resident(),
+                ))
+            }
+            fn resolve_admitted(
+                &self,
+                request: ServiceRequest<'_>,
+                workspace: crate::WorkspaceCapability,
+            ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
+                if let Some(trip) = request.stop_trip() {
+                    return Err(crate::remote::invocation_error(trip, &workspace)?);
+                }
+                if request.endpoint == INNER {
+                    let mut frame = super::LexicalFrame::new(&workspace);
+                    let error = {
+                        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+                        let endpoint = memory.string(request.endpoint).map_err(|error| {
+                            memory.admission_mut().storage_error(error, "denial endpoint")
+                        })?;
+                        let message = memory.string("tenant blocked").map_err(|error| {
+                            memory.admission_mut().storage_error(error, "denial message")
+                        })?;
+                        RemoteError::HostDenied { endpoint, message }
+                    };
+                    return Err(crate::remote::build_error(
+                        ServiceBuildError::Remote(error),
+                        frame,
+                    ));
+                }
+                crate::remote::evaluate_in_memory_admitted(self.0, request, self, &workspace)
+            }
+        }
+        let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+        let resolver = Forward(dataset.as_ref());
+        let query = "SELECT ?x WHERE { SERVICE <http://example.org/inner> { ?x ?p ?o } }";
+        let resident = resolver.resolve(ServiceRequest::new(OUTER, query)).unwrap_err();
+        assert!(matches!(
+            resident,
+            RemoteError::HostDenied { endpoint, message }
+                if endpoint == INNER && message == "tenant blocked"
+        ));
+
+        let (workspace, ledger, base) = account(2_000_000);
+        let capability = workspace.capability();
+        let error = resolver
+            .resolve_admitted(ServiceRequest::new(OUTER, query), capability.clone())
+            .unwrap_err();
+        let ServiceResolutionError::Invocation(error) = error else {
+            panic!("native nested denial remains the original invocation class")
+        };
+        assert!(matches!(
+            error.error(),
+            RemoteError::HostDenied { endpoint, message }
+                if endpoint == INNER && message == "tenant blocked"
+        ));
+        assert!(ledger.live.load(Ordering::Relaxed) > base);
+        assert!(!workspace.has_failed());
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        assert!(matches!(error.error(), RemoteError::HostDenied { .. }));
+        drop(error);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }

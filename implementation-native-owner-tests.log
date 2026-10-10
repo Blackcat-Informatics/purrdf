@@ -1,0 +1,71 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash)
+   Compiling regex-syntax v0.8.11
+   Compiling const-oid v0.10.2
+   Compiling cfg-if v1.0.4
+   Compiling cpufeatures v0.3.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling libc v0.2.186
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/alloc-probe)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-events)
+   Compiling hashbrown v0.17.1
+   Compiling regex-automata v0.4.14
+   Compiling hybrid-array v0.4.15
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/stack)
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling digest v0.11.3
+   Compiling regex v1.12.4
+   Compiling sha2 v0.11.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/testkit)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/deflate)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+error[E0425]: cannot find function `parse_decimal` in this scope
+    --> crates/xsd/src/temporal.rs:5838:20
+     |
+5838 |         let half = parse_decimal("0.5").unwrap();
+     |                    ^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4069 +     use crate::numeric::parse_decimal;
+     |
+
+error[E0425]: cannot find function `parse_decimal` in this scope
+    --> crates/xsd/src/temporal.rs:5846:24
+     |
+5846 |         let one_half = parse_decimal("1.5").unwrap();
+     |                        ^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4069 +     use crate::numeric::parse_decimal;
+     |
+
+error[E0425]: cannot find function `parse_decimal` in this scope
+    --> crates/xsd/src/temporal.rs:5935:20
+     |
+5935 |         let half = parse_decimal("0.5").unwrap();
+     |                    ^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4069 +     use crate::numeric::parse_decimal;
+     |
+
+error[E0425]: cannot find function `parse_decimal` in this scope
+    --> crates/xsd/src/temporal.rs:5950:20
+     |
+5950 |         let half = parse_decimal("0.5").unwrap();
+     |                    ^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4069 +     use crate::numeric::parse_decimal;
+     |
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-xsd` (lib test) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...

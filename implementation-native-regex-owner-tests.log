@@ -1,0 +1,41 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+error[E0621]: explicit lifetime required in the type of `budget`
+   --> crates/rdf-core/src/xsd_regex/xpath/replace.rs:119:9
+    |
+119 |         *empty.budget() = budget;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^ lifetime `'h` required
+    |
+help: add explicit lifetime `'h` to the type of `budget`
+    |
+109 -         &self, input: &'h str, replacement: &str, mut budget: Budget<'_>,
+109 +         &self, input: &'h str, replacement: &str, mut budget: xsd_regex::xpath::Budget<'h>,
+    |
+
+error: lifetime may not live long enough
+   --> crates/rdf-core/src/xsd_regex/xpath/replace.rs:119:9
+    |
+109 |         &self, input: &'h str, replacement: &str, mut budget: Budget<'_>,
+    |         -                                         ---------- has type `xsd_regex::xpath::Budget<'2>`
+    |         |
+    |         let's call the lifetime of this reference `'1`
+...
+119 |         *empty.budget() = budget;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^ assignment requires that `'1` must outlive `'2`
+    |
+    = note: requirement occurs because of the type `xsd_regex::xpath::Budget<'_>`, which makes the generic argument `'_` invariant
+    = note: the struct `xsd_regex::xpath::Budget<'storage>` is invariant over the parameter `'storage`
+    = help: see <https://doc.rust-lang.org/nomicon/subtyping.html> for more information about variance
+help: consider reusing a named lifetime parameter and update trait if needed
+    |
+109 -         &self, input: &'h str, replacement: &str, mut budget: Budget<'_>,
+109 +         &'h self, input: &'h str, replacement: &str, mut budget: Budget<'h>,
+    |
+
+For more information about this error, try `rustc --explain E0621`.
+error: could not compile `purrdf-core` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-core` (lib test) due to 2 previous errors

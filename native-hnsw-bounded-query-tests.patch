@@ -1,0 +1,263 @@
+--- a/crates/hnsw/Cargo.toml
++++ b/crates/hnsw/Cargo.toml
+@@ -35,6 +35,7 @@
+ [dev-dependencies]
++purrdf-alloc-probe = { workspace = true }
+ # The shared `harness = false` runner for the native corpus and focused WASM
+ # path-admission cases. Path-only and unpublished, so it is stripped from the
+ # packaged manifest; wasm32-clean, so it needs no target gate.
+ purrdf-testkit = { workspace = true }
+ 
+--- a/crates/hnsw/tests/sparql_e2e.rs
++++ b/crates/hnsw/tests/sparql_e2e.rs
+@@ -204,3 +204,250 @@
+         "registering the relation is what produces the rows"
+     );
+ }
++
++
++/// Real host routes over a persisted empty dataset; the caller-owned index is
++/// deliberately outside the measurement, while all per-query native scratch is inside.
++mod bounded_native_workspace {
++    use super::*;
++    use purrdf_alloc_probe::CurrentThreadWindow;
++    use purrdf_core::{
++        SegmentedBuildLimits, SegmentedBuilder, SegmentedError, SegmentedImage,
++        SegmentedReadLimits, SegmentedSession,
++    };
++    use purrdf_hnsw::relation::HnswObservations;
++    use purrdf_sparql_eval::{
++        FallibleSparqlError, PreparedQuery, QueryGovernors, RetainedSparqlResult,
++    };
++
++    #[global_allocator]
++    static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
++
++    const CEILING: u64 = 8_000_000;
++
++    #[derive(Clone, Copy)]
++    enum Route {
++        Text,
++        Prepared,
++        GovernedPrepared,
++    }
++
++    const ROUTES: [Route; 3] = [Route::Text, Route::Prepared, Route::GovernedPrepared];
++
++    fn image() -> SegmentedImage {
++        SegmentedBuilder::new(SegmentedBuildLimits::new(8, 512, 8, 512, 4).unwrap())
++            .seal()
++            .unwrap()
++    }
++
++    fn open(image: &SegmentedImage, ceiling: u64) -> SegmentedSession {
++        // A small real request ledger prevents source-opening capacity from hiding
++        // an unpriced native traversal behind a much larger unused request array.
++        SegmentedSession::open(
++            Arc::new(image.provider()),
++            image.receipt(),
++            SegmentedReadLimits::new(ceiling, 2, 32, 1_000_000, 8),
++        )
++        .unwrap()
++    }
++
++    fn run(
++        engine: &NativeSparqlEngine,
++        source: &SegmentedSession,
++        query: &str,
++        prepared: &PreparedQuery,
++        options: QueryOptions<'_>,
++        route: Route,
++    ) -> RetainedSparqlResult {
++        match route {
++            Route::Text => engine
++                .query_fallible_view(
++                    source,
++                    SparqlRequest { query, base_iri: None, substitutions: &[] },
++                    options,
++                )
++                .unwrap_or_else(|error| panic!("healthy bounded HNSW text query: {error:?}"))
++                .result,
++            Route::Prepared => engine
++                .query_prepared_fallible_view(source, prepared, &[], options)
++                .unwrap_or_else(|error| panic!("healthy bounded HNSW prepared query: {error:?}"))
++                .result,
++            Route::GovernedPrepared => engine
++                .query_prepared_governed_fallible_view(
++                    source, prepared, &[], options, &QueryGovernors::METERED,
++                )
++                .unwrap_or_else(|error| panic!("healthy bounded HNSW governed query: {error:?}"))
++                .result,
++        }
++    }
++
++    #[test]
++    fn native_rank_membership_absence_and_post_rank_limit_are_bounded_on_host_routes() {
++        let (space, terms) = space(1024);
++        let TermValue::Iri(seed) = &terms[7] else { panic!("IRI fixture"); };
++        let registry = registry(&space);
++        let full_query = format!(
++            "SELECT ?neighbour ?distance WHERE {{ ?neighbour <{NEAREST}> (<{seed}> 8 ?distance) }}"
++        );
++        let full = answer(&registry, &full_query);
++        assert_eq!(full.len(), 8);
++        let Some(TermValue::Iri(candidate)) = &full[4][0] else { panic!("IRI candidate"); };
++        let queries = [
++            full_query.clone(),
++            format!(
++                "SELECT ?distance WHERE {{ <{candidate}> <{NEAREST}> (<{seed}> ?k ?distance) }}"
++            ),
++            format!(
++                "SELECT ?neighbour WHERE {{ ?neighbour <{NEAREST}> \
++                 (<https://example.org/missing-seed> 8 ?distance) }}"
++            ),
++            format!(
++                "SELECT ?distance WHERE {{ <{candidate}> <{NEAREST}> (<{seed}> 8 ?distance) }} LIMIT 1"
++            ),
++        ];
++        let image = image();
++        for (case, query) in queries.iter().enumerate() {
++            let expected = answer(&registry, query);
++            if case == 2 { assert!(expected.is_empty()); }
++            if case == 3 {
++                assert_eq!(expected, vec![vec![full[4][1].clone()]]);
++            }
++            let engine = NativeSparqlEngine::new();
++            let env = ExtensionEnv::over_relations(registry.clone()).unwrap();
++            let options = QueryOptions::new().with_env(&env);
++            let prepared = engine.prepare_query_with_options(query, None, options).unwrap();
++            for route in ROUTES {
++                let window = CurrentThreadWindow::open();
++                let source = open(&image, CEILING);
++                let result = run(&engine, &source, query, &prepared, options, route);
++                let measured = window.close();
++                let peak = source.evidence().peak_bytes();
++                assert!(
++                    u64::try_from(measured.peak_working_bytes).unwrap() <= peak,
++                    "case {case}: native allocations exceeded admitted peak"
++                );
++                assert!(peak <= CEILING);
++                assert_eq!(result.solutions().unwrap().1, expected.as_slice());
++            }
++        }
++    }
++
++    #[test]
++    fn cloned_and_extracted_native_answers_retain_without_copying_payloads() {
++        let (space, terms) = space(64);
++        let TermValue::Iri(seed) = &terms[3] else { panic!("IRI fixture"); };
++        let registry = registry(&space);
++        let query = format!(
++            "SELECT ?neighbour ?distance WHERE {{ ?neighbour <{NEAREST}> (<{seed}> 6 ?distance) }}"
++        );
++        let expected = answer(&registry, &query);
++        let image = image();
++        let source = open(&image, CEILING);
++        let engine = NativeSparqlEngine::new();
++        let env = ExtensionEnv::over_relations(registry.clone()).unwrap();
++        let options = QueryOptions::new().with_env(&env);
++        let prepared = engine.prepare_query_with_options(&query, None, options).unwrap();
++        let result = run(&engine, &source, &query, &prepared, options, Route::Prepared);
++        let window = CurrentThreadWindow::open();
++        let clone = result.clone();
++        let retained = clone.into_solutions().unwrap();
++        let measured = window.close();
++        assert_eq!(measured.allocations, 0);
++        assert_eq!(measured.requested_bytes, 0);
++        assert_eq!(measured.retained_bytes, 0);
++        drop(result);
++        drop(prepared);
++        drop(engine);
++        drop(env);
++        drop(registry);
++        drop(space);
++        drop(source);
++        drop(image);
++        assert_eq!(retained.as_parts().1, expected.as_slice());
++    }
++
++    fn observed_registry(
++        space: &Arc<HnswSpace>,
++    ) -> (PropertyFunctionRegistry, Arc<HnswObservations>) {
++        let relation = space.relation();
++        let observations = relation.observations();
++        let mut registry = PropertyFunctionRegistry::new();
++        registry.register(NEAREST.to_owned(), Arc::new(relation));
++        (registry, observations)
++    }
++
++    #[test]
++    fn first_native_traversal_admission_refusal_is_typed_and_releases_scratch() {
++        let (space, terms) = space(4096);
++        let TermValue::Iri(seed) = &terms[7] else { panic!("IRI fixture"); };
++        let (registry, observations) = observed_registry(&space);
++        let query = format!(
++            "SELECT ?neighbour ?distance WHERE {{ ?neighbour <{NEAREST}> (<{seed}> 8 ?distance) }}"
++        );
++        let image = image();
++        let engine = NativeSparqlEngine::new();
++        let env = ExtensionEnv::over_relations(registry).unwrap();
++        let options = QueryOptions::new().with_env(&env);
++        let prepared = engine.prepare_query_with_options(&query, None, options).unwrap();
++        let healthy = open(&image, CEILING);
++        let opening = healthy.evidence().live_bytes();
++        let before = observations.searches();
++        let result = run(&engine, &healthy, &query, &prepared, options, Route::Prepared);
++        assert_eq!(observations.searches(), before + 1);
++        assert_eq!(result.solutions().unwrap().1.len(), 8);
++        let successful_peak = healthy.evidence().peak_bytes();
++        drop(result);
++        drop(healthy);
++        assert!(successful_peak > opening);
++
++        // Find the lowest physical capacity that actually enters the beam.
++        // Every probe is a cold source with the identical immutable prepared plan.
++        let mut low = opening;
++        let mut high = successful_peak;
++        while low < high {
++            let ceiling = low + (high - low) / 2;
++            let source = open(&image, ceiling);
++            let before = observations.searches();
++            let outcome = engine.query_prepared_fallible_view(&source, &prepared, &[], options);
++            let entered = observations.searches() != before;
++            match &outcome {
++                Ok(_) => {}
++                Err(FallibleSparqlError::Operational {
++                    error: SegmentedError::Residency { requested, limit }, ..
++                }) => {
++                    assert!(*requested > *limit);
++                    assert_eq!(*limit, ceiling);
++                }
++                other => panic!("capacity refusal lost its physical cause: {other:?}"),
++            }
++            drop(outcome);
++            if entered { high = ceiling; } else { low = ceiling + 1; }
++        }
++
++        let window = CurrentThreadWindow::open();
++        let source = open(&image, low);
++        let opening_live = source.evidence().live_bytes();
++        let before_searches = observations.searches();
++        let before_candidates = observations.graph_candidates();
++        let error = engine.query_prepared_fallible_view(&source, &prepared, &[], options).unwrap_err();
++        let measured = window.close();
++        assert_eq!(observations.searches(), before_searches + 1);
++        assert_eq!(
++            observations.graph_candidates(), before_candidates,
++            "the traversal refused before publishing successful candidate work"
++        );
++        assert!(matches!(
++            &error,
++            FallibleSparqlError::Operational {
++                error: SegmentedError::Residency { requested, limit }, ..
++            } if requested > limit && *limit == low
++        ));
++        assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
++        assert!(source.evidence().peak_bytes() <= low);
++        drop(error);
++        assert_eq!(
++            source.evidence().live_bytes(), opening_live,
++            "a failed native beam must release every query-owned grant"
++        );
++    }
++}

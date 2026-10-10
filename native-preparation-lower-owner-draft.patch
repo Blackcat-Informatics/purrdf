@@ -1,0 +1,1813 @@
+diff --git a/crates/lex/src/walk.rs b/crates/lex/src/walk.rs
+--- a/crates/lex/src/walk.rs
++++ b/crates/lex/src/walk.rs
+@@ -180,6 +180,18 @@
+         Ok(())
+     }
+ 
++    /// Reserve the spill through the original exact physical account.
++    ///
++    /// # Errors
++    /// Returns checked layout, admission or native allocator refusal.
++    pub fn try_reserve_heap_admitted<S: crate::allocation::Admission + ?Sized>(
++        &mut self,
++        capacity: usize,
++        memory: &mut crate::allocation::Memory<'_, S>,
++    ) -> Result<(), crate::allocation::StorageError> {
++        memory.reserve(&mut self.spill, capacity)
++    }
++
+     /// Read entries from the bottom, without copying or allocating.
+     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
+         self.inline[..self.held]
+diff --git a/crates/sparql-algebra/src/walk.rs b/crates/sparql-algebra/src/walk.rs
+--- a/crates/sparql-algebra/src/walk.rs
++++ b/crates/sparql-algebra/src/walk.rs
+@@ -436,102 +436,159 @@
+ /// # Errors
+ /// Reports admission, visitor, layout and actual allocation failures before a
+ /// refused work-list growth occurs.
+-pub fn try_walk_pre_post<'a, E: std::fmt::Debug, A>(
++enum WalkStep<'a> {
++    Enter(NodeRef<'a>),
++    Exit(NodeRef<'a>),
++}
++
++/// One traversal law; the caller supplies only physical storage and visitor effects.
++fn pre_post<'a, C, E>(
+     root: NodeRef<'a>,
+-    mut visit: impl FnMut(Visit, NodeRef<'a>) -> Result<Flow, E>,
+-    mut admit: impl FnMut(usize) -> Result<A, E>,
+-) -> Result<bool, WalkError<E>> {
+-    enum Step<'a> {
+-        Enter(NodeRef<'a>),
+-        Exit(NodeRef<'a>),
+-    }
+-    let mut admission = None;
+-    let mut stack: WorkList<Step<'a>, 32> = WorkList::with(Step::Enter(root));
+-    while let Some(step) = stack.pop() {
+-        match step {
+-            Step::Enter(node) => {
+-                let flow = visit(Visit::Enter, node).map_err(WalkError::Visitor)?;
+-                if flow == Flow::Stop {
+-                    return Ok(false);
+-                }
+-                let mut children = Some(0usize);
+-                if flow == Flow::Descend {
+-                    node.for_each_child(|_| children = children.and_then(|n| n.checked_add(1)));
+-                }
+-                let children = children.ok_or(WalkError::LayoutOverflow)?;
+-                let total = stack
+-                    .len()
+-                    .checked_add(children)
+-                    .and_then(|n| n.checked_add(1))
+-                    .ok_or(WalkError::LayoutOverflow)?;
+-                let needed = if total > 32 { total - 32 } else { 0 };
+-                if needed > stack.heap_capacity() {
+-                    let capacity = stack
+-                        .heap_capacity()
+-                        .checked_mul(2)
+-                        .ok_or(WalkError::LayoutOverflow)?
+-                        .max(needed);
+-                    let bytes = capacity
+-                        .checked_mul(size_of::<Step<'a>>())
+-                        .ok_or(WalkError::LayoutOverflow)?;
+-                    let next = admit(bytes).map_err(WalkError::Visitor)?;
+-                    stack
+-                        .try_reserve_heap_exact(capacity)
+-                        .map_err(WalkError::Allocation)?;
+-                    admission = Some(next);
+-                }
+-                match flow {
+-                    Flow::Stop => unreachable!("stop was handled before admitting growth"),
+-                    Flow::Skip => stack.push(Step::Exit(node)),
+-                    Flow::Descend => {
+-                        stack.push(Step::Exit(node));
++    context: &mut C,
++    mut visit: impl FnMut(Visit, NodeRef<'a>, &mut C) -> Result<Flow, E>,
++    mut grow: impl FnMut(&mut WorkList<WalkStep<'a>, 32>, usize, &mut C) -> Result<(), E>,
++    mut release: impl FnMut(WorkList<WalkStep<'a>, 32>, &mut C) -> Result<(), E>,
++    overflow: impl Fn() -> E,
++) -> Result<bool, E> {
++    let mut stack = WorkList::with(WalkStep::Enter(root));
++    let result = (|| {
++        while let Some(step) = stack.pop() {
++            match step {
++                WalkStep::Enter(node) => {
++                    let flow = visit(Visit::Enter, node, context)?;
++                    if flow == Flow::Stop {
++                        return Ok(false);
++                    }
++                    let mut children = Some(0usize);
++                    if flow == Flow::Descend {
++                        node.for_each_child(|_| children = children.and_then(|n| n.checked_add(1)));
++                    }
++                    let total = stack.len().checked_add(children.ok_or_else(&overflow)?)
++                        .and_then(|n| n.checked_add(1)).ok_or_else(&overflow)?;
++                    let needed = total.saturating_sub(32);
++                    if needed > stack.heap_capacity() {
++                        let capacity = stack.heap_capacity().checked_mul(2)
++                            .ok_or_else(&overflow)?.max(needed);
++                        grow(&mut stack, capacity, context)?;
++                    }
++                    stack.push(WalkStep::Exit(node));
++                    if flow == Flow::Descend {
+                         let first = stack.len();
+-                        node.for_each_child(|child| stack.push(Step::Enter(child)));
++                        node.for_each_child(|child| stack.push(WalkStep::Enter(child)));
+                         stack.reverse_top(stack.len() - first);
+                     }
+                 }
+-            }
+-            Step::Exit(node) => {
+-                if visit(Visit::Exit, node).map_err(WalkError::Visitor)? == Flow::Stop {
+-                    return Ok(false);
++                WalkStep::Exit(node) => {
++                    if visit(Visit::Exit, node, context)? == Flow::Stop {
++                        return Ok(false);
++                    }
+                 }
+             }
+         }
++        Ok(true)
++    })();
++    let released = release(stack, context);
++    match result {
++        Ok(complete) => { released?; Ok(complete) }
++        Err(error) => Err(error),
+     }
+-    drop(stack);
+-    drop(admission);
+-    Ok(true)
+ }
+ 
+-/// Compute one value per node under `root`, each from the node and its children's
+-/// values, and return the root's.
++pub fn try_walk_pre_post<'a, E: std::fmt::Debug, A>(
++    root: NodeRef<'a>,
++    mut visit: impl FnMut(Visit, NodeRef<'a>) -> Result<Flow, E>,
++    mut admit: impl FnMut(usize) -> Result<A, E>,
++) -> Result<bool, WalkError<E>> {
++    let mut admission = None;
++    pre_post(
++        root, &mut admission,
++        |phase, node, _| visit(phase, node).map_err(WalkError::Visitor),
++        |stack, capacity, admission| {
++            let bytes = capacity.checked_mul(size_of::<WalkStep<'a>>())
++                .ok_or(WalkError::LayoutOverflow)?;
++            let next = admit(bytes).map_err(WalkError::Visitor)?;
++            stack.try_reserve_heap_exact(capacity).map_err(WalkError::Allocation)?;
++            *admission = Some(next);
++            Ok(())
++        },
++        |stack, admission| { drop(stack); *admission = None; Ok(()) },
++        || WalkError::LayoutOverflow,
++    )
++}
++
++/// Traverse the same pre/post law with original native storage admission.
+ ///
+-/// `combine` is called once per node, after every child's value exists, with those
+-/// values in declaration order. The walk keeps its own work list and its own stack
+-/// of computed values, so it needs no more machine stack for a taller tree.
++/// The visitor may construct native payloads in the same memory. Walk spill
++/// is destroyed and released before any successful return, including a stop.
++///
++/// # Errors
++/// Returns the visitor's original failure or checked physical storage refusal.
++pub fn walk_pre_post_with_memory<'a, S, E>(
++    root: NodeRef<'a>,
++    mut visit: impl FnMut(Visit, NodeRef<'a>, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<Flow, E>,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<bool, E>
++where
++    S: purrdf_lex::allocation::Admission + ?Sized,
++    E: From<purrdf_lex::allocation::StorageError>,
++{
++    pre_post(
++        root, memory,
++        |phase, node, memory| visit(phase, node, memory),
++        |stack, capacity, memory| stack.try_reserve_heap_admitted(capacity, memory).map_err(E::from),
++        |stack, memory| stack.release_admitted(memory).map_err(E::from),
++        || purrdf_lex::allocation::StorageError::SizeOverflow.into(),
++    )
++}
++
++/// Compute one value per node, children in declaration order.
+ pub fn fold_post_order<'a, R>(
+     root: NodeRef<'a>,
+     mut combine: impl FnMut(NodeRef<'a>, &mut dyn Iterator<Item = R>) -> R,
+ ) -> R {
+-    enum Step<'a> {
+-        Enter(NodeRef<'a>),
+-        Exit(NodeRef<'a>, usize),
+-    }
++    let mut resident = purrdf_lex::allocation::Resident;
++    fold_post_order_with_memory(
++        root,
++        |node, children, _| Ok::<_, purrdf_lex::allocation::StorageError>(combine(node, children)),
++        &mut purrdf_lex::allocation::Memory::new(&mut resident),
++    ).expect("resident postorder storage")
++}
++
++/// The original bottom-up fold with physical admission for both work lists.
++///
++/// # Errors
++/// Returns original visitor errors or checked native storage refusal.
++pub fn fold_post_order_with_memory<'a, R, S, E>(
++    root: NodeRef<'a>,
++    mut combine: impl FnMut(NodeRef<'a>, &mut dyn Iterator<Item = R>, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<R, E>,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<R, E>
++where
++    S: purrdf_lex::allocation::Admission + ?Sized,
++    E: From<purrdf_lex::allocation::StorageError>,
++{
++    enum Step<'a> { Enter(NodeRef<'a>), Exit(NodeRef<'a>, usize) }
+     let mut stack: WorkList<Step<'a>, 32> = WorkList::with(Step::Enter(root));
+     let mut values: WorkList<R, 16> = WorkList::new();
+     while let Some(step) = stack.pop() {
+         match step {
+             Step::Enter(node) => {
+                 let exit = stack.len();
+-                stack.push(Step::Exit(node, 0));
+-                node.for_each_child(|child| stack.push(Step::Enter(child)));
++                stack.try_push_admitted(Step::Exit(node, 0), memory)?;
++                let mut failure = None;
++                node.for_each_child(|child| {
++                    if failure.is_none() {
++                        if let Err(error) = stack.try_push_admitted(Step::Enter(child), memory) {
++                            failure = Some(error);
++                        }
++                    }
++                });
++                if let Some(error) = failure { return Err(error.into()); }
+                 let count = stack.len() - exit - 1;
+                 stack.set(exit, Step::Exit(node, count));
+                 stack.reverse_top(count);
+             }
+             Step::Exit(node, count) => {
+-                // The children's values are the top `count` entries, the last
+-                // child's on top; reversed, they pop in declaration order.
+                 values.reverse_top(count);
+                 let mut left = count;
+                 let mut kids = core::iter::from_fn(|| {
+@@ -540,16 +597,16 @@
+                         values.pop().expect("a child's value is computed")
+                     })
+                 });
+-                let value = combine(node, &mut kids);
+-                // Values `combine` left unread are dropped here, before the next.
++                let value = combine(node, &mut kids, memory)?;
+                 kids.for_each(drop);
+-                values.push(value);
++                values.try_push_admitted(value, memory)?;
+             }
+         }
+     }
+-    values
+-        .pop()
+-        .expect("the root's value is the last one computed")
++    let value = values.pop().expect("the root's value is computed last");
++    stack.release_admitted(memory)?;
++    values.release_admitted(memory)?;
++    Ok(value)
+ }
+ 
+ /// Visit each expression for rewriting, without entering `EXISTS` bodies. `visit`
+diff --git a/crates/sparql-algebra/src/traits.rs b/crates/sparql-algebra/src/traits.rs
+--- a/crates/sparql-algebra/src/traits.rs
++++ b/crates/sparql-algebra/src/traits.rs
+@@ -176,12 +176,12 @@
+ 
+ /// Builds a node's script, in order, onto a buffer.
+ struct Script<'s, 'a> {
+-    out: &'s mut Tokens<'a>,
++    out: &'s mut dyn FnMut(Tok<'a>),
+ }
+ 
+ impl<'a> Script<'_, 'a> {
+     fn push(&mut self, tok: Tok<'a>) -> &mut Self {
+-        self.out.push(tok);
++        (self.out)(tok);
+         self
+     }
+ 
+@@ -578,23 +578,63 @@
+ /// the script's first token is popped next.
+ fn expand<'a>(node: NodeRef<'a>, stack: &mut Tokens<'a>) {
+     let before = stack.len();
+-    Script { out: stack }.of(node);
++    Script { out: &mut |token| stack.push(token) }.of(node);
+     stack.reverse_top(stack.len() - before);
+ }
+ 
+ /// `a == b`, as `#[derive(PartialEq)]` answers it, over two work lists.
+ pub(crate) fn nodes_eq(a: NodeRef<'_>, b: NodeRef<'_>) -> bool {
++    let mut resident = purrdf_lex::allocation::Resident;
++    nodes_eq_with_memory(a, b, &mut purrdf_lex::allocation::Memory::new(&mut resident))
++        .expect("resident structural comparison storage")
++}
++
++/// The same script comparison, with actual before-growth spill admission.
++pub(crate) fn nodes_eq_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++    a: NodeRef<'_>, b: NodeRef<'_>,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<bool, purrdf_lex::allocation::StorageError> {
++    fn expand_admitted<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
++        node: NodeRef<'a>, stack: &mut Tokens<'a>,
++        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> Result<(), purrdf_lex::allocation::StorageError> {
++        let before = stack.len();
++        let mut failure = None;
++        Script { out: &mut |token| {
++            if failure.is_none() {
++                if let Err(error) = stack.try_push_admitted(token, memory) { failure = Some(error); }
++            }
++        }}.of(node);
++        if let Some(error) = failure { return Err(error); }
++        stack.reverse_top(stack.len() - before);
++        Ok(())
++    }
+     let (mut left, mut right) = (Tokens::with(Tok::Node(a)), Tokens::with(Tok::Node(b)));
+-    loop {
++    let equal = loop {
+         match (left.pop(), right.pop()) {
+-            (None, None) => return true,
++            (None, None) => break true,
+             (Some(Tok::Node(a)), Some(Tok::Node(b))) => {
+-                expand(a, &mut left);
+-                expand(b, &mut right);
++                expand_admitted(a, &mut left, memory)?;
++                expand_admitted(b, &mut right, memory)?;
+             }
+             (Some(a), Some(b)) if same_tok(a, b) => {}
+-            _ => return false,
++            _ => break false,
+         }
++    };
++    left.release_admitted(memory)?;
++    right.release_admitted(memory)?;
++    Ok(equal)
++}
++
++impl GraphPattern {
++    /// Compare structural scripts under the original native memory account.
++    ///
++    /// # Errors
++    /// Returns checked layout, physical allocation or admission refusal.
++    pub fn eq_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++        &self, other: &Self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> Result<bool, purrdf_lex::allocation::StorageError> {
++        nodes_eq_with_memory(NodeRef::Pattern(self), NodeRef::Pattern(other), memory)
+     }
+ }
+ 
+@@ -617,7 +657,7 @@
+ /// `{:?}` / `{:#?}` exactly as `#[derive(Debug)]` writes them, over a work list.
+ pub(crate) fn node_debug(node: NodeRef<'_>, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+     purrdf_lex::walk::write_debug(f, node, |node, out: &mut Tokens<'_>| {
+-        Script { out }.of(node);
++        Script { out: &mut |token| out.push(token) }.of(node);
+     })
+ }
+ 
+diff --git a/crates/sparql-algebra/src/scope.rs b/crates/sparql-algebra/src/scope.rs
+--- a/crates/sparql-algebra/src/scope.rs
++++ b/crates/sparql-algebra/src/scope.rs
+@@ -19,6 +19,8 @@
+ //! consumes no additional machine stack.
+ 
+ use core::fmt;
++use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
++use crate::walk::walk_pre_post_with_memory;
+ 
+ use crate::walk::{Flow, NodeRef, Visit, walk_pre_post};
+ use crate::{
+@@ -189,6 +191,27 @@
+ 
+ impl std::error::Error for ScopeError {}
+ 
++/// Typed observer or physical working-storage refusal.
++#[derive(Debug)]
++pub enum ScopeValidationError {
++    /// Original observer violation.
++    Scope(ScopeError),
++    /// Original native storage refusal.
++    Storage(StorageError),
++}
++impl From<ScopeError> for ScopeValidationError {
++    fn from(error: ScopeError) -> Self { Self::Scope(error) }
++}
++impl From<StorageError> for ScopeValidationError {
++    fn from(error: StorageError) -> Self { Self::Storage(error) }
++}
++impl fmt::Display for ScopeValidationError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self { Self::Scope(error) => error.fmt(f), Self::Storage(error) => error.fmt(f) }
++    }
++}
++impl std::error::Error for ScopeValidationError {}
++
+ impl From<ScopeError> for crate::ParseError {
+     fn from(error: ScopeError) -> Self {
+         Self::syntax(error.to_string(), 0)
+@@ -204,18 +227,36 @@
+ /// # Errors
+ /// Returns the first hidden observation in deterministic preorder.
+ pub fn validate_pattern(pattern: &GraphPattern) -> Result<(), ScopeError> {
+-    walk_nodes(NodeRef::Pattern(pattern), |node, index| {
+-        check_node(node, ScopeSite::pattern(index))
+-    })
++    resident_scope(|memory| validate_pattern_with_memory(pattern, memory))
+ }
+ 
++/// Check observer roles with before-growth native walk admission.
++/// # Errors
++/// Returns original observer violations or native storage refusal.
++pub fn validate_pattern_with_memory<S: Admission + ?Sized>(
++    pattern: &GraphPattern, memory: &mut Memory<'_, S>,
++) -> Result<(), ScopeValidationError> {
++    walk_nodes_with_memory(NodeRef::Pattern(pattern), |node, index, _| {
++        check_node(node, ScopeSite::pattern(index)).map_err(ScopeValidationError::from)
++    }, memory)
++}
++
++fn resident_scope(
++    check: impl FnOnce(&mut Memory<'_, Resident>) -> Result<(), ScopeValidationError>,
++) -> Result<(), ScopeError> {
++    match check(&mut Memory::new(&mut Resident)) {
++        Ok(()) => Ok(()),
++        Err(ScopeValidationError::Scope(error)) => Err(error),
++        Err(ScopeValidationError::Storage(error)) => panic!("resident observer storage: {error}"),
++    }
++}
++
+ /// Check a query's template or description targets, then its graph pattern.
+ ///
+ /// # Errors
+ /// Returns a typed hidden observation with its query region and owning node.
+ pub fn validate_query(query: &Query) -> Result<(), ScopeError> {
+-    validate_query_head(query)?;
+-    validate_pattern(query.pattern())
++    resident_scope(|memory| validate_query_with_memory(query, memory))
+ }
+ 
+ /// Check every output slot of one template quad, including quoted triple terms.
+@@ -226,30 +267,35 @@
+ /// # Errors
+ /// Refuses a hidden identity in a template subject, predicate, object or graph.
+ pub fn validate_quad(quad: &QuadPattern) -> Result<(), ScopeError> {
+-    validate_quad_at(quad, 0)
++    resident_scope(|memory| validate_quad_at_with_memory(quad, 0, memory))
+ }
+ 
+ /// The head checks shared by full structural admission and identity-only queries.
+-pub(crate) fn validate_query_head(query: &Query) -> Result<(), ScopeError> {
++/// Check a query's observer contract through native working storage.
++/// # Errors
++/// Returns the original observer violation or physical refusal.
++pub fn validate_query_with_memory<S: Admission + ?Sized>(
++    query: &Query, memory: &mut Memory<'_, S>,
++) -> Result<(), ScopeValidationError> {
++    validate_query_head_with_memory(query, memory)?;
++    validate_pattern_with_memory(query.pattern(), memory)
++}
++
++pub(crate) fn validate_query_head_with_memory<S: Admission + ?Sized>(
++    query: &Query, memory: &mut Memory<'_, S>,
++) -> Result<(), ScopeValidationError> {
+     match query {
+         Query::Construct { template, .. } => {
+             for (index, quad) in template.iter().enumerate() {
+-                validate_quad_at(quad, index)?;
++                validate_quad_at_with_memory(quad, index, memory)?;
+             }
+         }
+         Query::Describe { targets, .. } => {
+             for (index, target) in targets.iter().enumerate() {
+                 if let NamedNodePattern::Variable(variable) = target {
+-                    check_identity(
+-                        variable,
+-                        ObserverRole::DescribeTarget,
+-                        ScopeSite {
+-                            region: ScopeRegion::Description,
+-                            item: index,
+-                            node: 0,
+-                            slot: 0,
+-                        },
+-                    )?;
++                    check_identity(variable, ObserverRole::DescribeTarget, ScopeSite {
++                        region: ScopeRegion::Description, item: index, node: 0, slot: 0,
++                    })?;
+                 }
+             }
+         }
+@@ -258,9 +304,9 @@
+     Ok(())
+ }
+ 
+-fn validate_quad_at(quad: &QuadPattern, item: usize) -> Result<(), ScopeError> {
++fn validate_quad_at_with_memory<S: Admission + ?Sized>(quad: &QuadPattern, item: usize, memory: &mut Memory<'_, S>) -> Result<(), ScopeValidationError> {
+     let mut next_node = 0;
+-    walk_nodes(NodeRef::Triple(&quad.triple), |node, index| {
++    walk_nodes_with_memory(NodeRef::Triple(&quad.triple), |node, index, _| {
+         next_node = index + 1;
+         let site = ScopeSite {
+             region: ScopeRegion::Template,
+@@ -279,8 +325,8 @@
+                 check_identity(variable, ObserverRole::TemplateObject, site.at_slot(2))?;
+             }
+         }
+-        Ok(())
+-    })?;
++        Ok::<_, ScopeValidationError>(())
++    }, memory)?;
+     if let Some(NamedNodePattern::Variable(variable)) = &quad.graph {
+         check_identity(
+             variable,
+@@ -394,6 +440,24 @@
+     result
+ }
+ 
++/// Numbered preorder over the same native traversal law.
++pub(crate) fn walk_nodes_with_memory<'a, S, E>(
++    root: NodeRef<'a>,
++    mut check: impl FnMut(NodeRef<'a>, usize, &mut Memory<'_, S>) -> Result<(), E>,
++    memory: &mut Memory<'_, S>,
++) -> Result<(), E>
++where S: Admission + ?Sized, E: From<StorageError> {
++    let mut index = 0usize;
++    walk_pre_post_with_memory(root, |phase, node, memory| {
++        if phase == Visit::Enter {
++            check(node, index, memory)?;
++            index = index.checked_add(1).ok_or(StorageError::SizeOverflow)?;
++        }
++        Ok(Flow::Descend)
++    }, memory)?;
++    Ok(())
++}
++
+ // Source basic-graph-pattern ownership and exposure are shared with evaluation.
+ 
+ /// Whether `pattern` is a node joining two pieces of one basic graph pattern.
+@@ -414,39 +478,56 @@
+ /// first, so the left pops first and the leaves come out left to right, however tall
+ /// the spine.
+ pub fn spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
+-    visit_spine_leaves(pattern, &mut |leaf| {
+-        out.push(leaf);
+-        false
+-    });
++    let mut resident = Resident;
++    let mut memory = Memory::new(&mut resident);
++    spine_leaves_with_memory(pattern, out, &mut memory).expect("resident spine storage");
+ }
+ 
+-/// Whether any leaf under the spine rooted at `pattern` satisfies `test`.
+-///
+-/// Leaves are visited left to right, stopping at the first match. The work list
+-/// holds up to eight pending nodes inline; a deeper spine can spill to heap scratch
+-/// even when no labels need renaming. This walk runs on every admission, including
+-/// prepared re-runs.
++/// Collect written-order spine leaves with native storage admission.
++/// # Errors
++/// Returns checked native working/output buffer refusal.
++pub fn spine_leaves_with_memory<'a, S: Admission + ?Sized>(
++    pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>, memory: &mut Memory<'_, S>,
++) -> Result<(), StorageError> {
++    visit_spine_leaves_with_memory(pattern, &mut |leaf, memory| {
++        memory.push(out, leaf)?;
++        Ok(false)
++    }, memory)?;
++    Ok(())
++}
++
++/// Visit leaves in their original written order.
+ pub fn visit_spine_leaves<'a>(
+-    pattern: &'a GraphPattern,
+-    test: &mut impl FnMut(&'a GraphPattern) -> bool,
++    pattern: &'a GraphPattern, test: &mut impl FnMut(&'a GraphPattern) -> bool,
+ ) -> bool {
++    visit_spine_leaves_with_memory(
++        pattern, &mut |leaf, _| Ok::<_, StorageError>(test(leaf)), &mut Memory::new(&mut Resident),
++    ).expect("resident spine traversal")
++}
++
++/// The same written-order spine walk under original storage admission.
++/// # Errors
++/// Returns original visitor or physical working-storage refusal.
++pub fn visit_spine_leaves_with_memory<'a, S, E>(
++    pattern: &'a GraphPattern,
++    test: &mut impl FnMut(&'a GraphPattern, &mut Memory<'_, S>) -> Result<bool, E>,
++    memory: &mut Memory<'_, S>,
++) -> Result<bool, E>
++where S: Admission + ?Sized, E: From<StorageError> {
+     let mut pending = crate::worklist::WorkList::<_, 8>::with(pattern);
++    let mut found = false;
+     while let Some(node) = pending.pop() {
+         match node {
+             GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
+-                if joins_blank_scope(node) =>
+-            {
+-                pending.push(right);
+-                pending.push(left);
+-            }
+-            _ => {
+-                if test(node) {
+-                    return true;
++                if joins_blank_scope(node) => {
++                    pending.try_push_admitted(&**right, memory)?;
++                    pending.try_push_admitted(&**left, memory)?;
+                 }
+-            }
++            _ => if test(node, memory)? { found = true; break; },
+         }
+     }
+-    false
++    pending.release_admitted(memory)?;
++    Ok(found)
+ }
+ 
+ /// Which identities a source-blank exposure walk includes.
+@@ -460,78 +541,103 @@
+     All,
+ }
+ 
+-/// Visit a leaf's labels, stopping when the visitor returns true. A UNION exposes
+-/// only carried parser-block identities, never its arms' local algebra blanks.
++/// Visit exposed leaf labels under the original identity rule.
+ pub fn visit_leaf_labels<'a>(
+-    leaf: &'a GraphPattern,
+-    source: LabelSource,
+-    visit: &mut impl FnMut(&'a str) -> bool,
++    leaf: &'a GraphPattern, source: LabelSource, visit: &mut impl FnMut(&'a str) -> bool,
+ ) -> bool {
++    visit_leaf_labels_with_memory(
++        leaf, source, &mut |label, _| Ok::<_, StorageError>(visit(label)), &mut Memory::new(&mut Resident),
++    ).expect("resident leaf-label traversal")
++}
++
++/// The same raw/carried exposure rule with admitted spill storage.
++/// # Errors
++/// Returns original visitor or physical storage refusal.
++pub fn visit_leaf_labels_with_memory<'a, S, E>(
++    leaf: &'a GraphPattern, source: LabelSource,
++    visit: &mut impl FnMut(&'a str, &mut Memory<'_, S>) -> Result<bool, E>,
++    memory: &mut Memory<'_, S>,
++) -> Result<bool, E>
++where S: Admission + ?Sized, E: From<StorageError> {
+     let mut pending = crate::worklist::WorkList::<_, 8>::with((leaf, source));
+-    while let Some((node, source)) = pending.pop() {
+-        let found = match node {
+-            GraphPattern::Bgp { patterns } => patterns.iter().any(|triple| {
+-                visit_term_labels(&triple.subject, source, visit)
+-                    || visit_term_labels(&triple.object, source, visit)
+-            }),
+-            GraphPattern::Path {
+-                subject, object, ..
+-            } => {
+-                visit_term_labels(subject, source, visit)
+-                    || visit_term_labels(object, source, visit)
++    let mut found = false;
++    'nodes: while let Some((node, source)) = pending.pop() {
++        match node {
++            GraphPattern::Bgp { patterns } => {
++                for triple in patterns {
++                    if visit_term_labels_with_memory(&triple.subject, source, visit, memory)?
++                        || visit_term_labels_with_memory(&triple.object, source, visit, memory)? {
++                        found = true; break 'nodes;
++                    }
++                }
+             }
+-            GraphPattern::PropertyFunction(call) => call
+-                .subject_args
+-                .iter()
+-                .chain(&call.object_args)
+-                .any(|term| visit_term_labels(term, source, visit)),
++            GraphPattern::Path { subject, object, .. } => {
++                if visit_term_labels_with_memory(subject, source, visit, memory)?
++                    || visit_term_labels_with_memory(object, source, visit, memory)? {
++                    found = true; break;
++                }
++            }
++            GraphPattern::PropertyFunction(call) => {
++                for term in call.subject_args.iter().chain(&call.object_args) {
++                    if visit_term_labels_with_memory(term, source, visit, memory)? {
++                        found = true; break 'nodes;
++                    }
++                }
++            }
+             GraphPattern::Join { left, right } => {
+-                pending.push((right, source));
+-                pending.push((left, source));
+-                false
++                pending.try_push_admitted((&**right, source), memory)?;
++                pending.try_push_admitted((&**left, source), memory)?;
+             }
+             GraphPattern::Union { arms } if source != LabelSource::Raw => {
+-                pending.extend(arms.iter().rev().map(|arm| (arm, LabelSource::Carried)));
+-                false
++                for arm in arms.iter().rev() {
++                    pending.try_push_admitted((arm, LabelSource::Carried), memory)?;
++                }
+             }
+-            _ => false,
+-        };
+-        if found {
+-            return true;
++            _ => {}
+         }
+     }
+-    false
++    pending.release_admitted(memory)?;
++    Ok(found)
+ }
+ 
+-/// The blank labels in a term, subject before object at every quoted level, over
+-/// an inline work list and with the same early-exit visitor as the leaf walk.
++/// Visit term labels, subject before object at each quoted level.
+ pub fn visit_term_labels<'a>(
+-    term: &'a TermPattern,
+-    source: LabelSource,
+-    visit: &mut impl FnMut(&'a str) -> bool,
++    term: &'a TermPattern, source: LabelSource, visit: &mut impl FnMut(&'a str) -> bool,
+ ) -> bool {
++    visit_term_labels_with_memory(
++        term, source, &mut |label, _| Ok::<_, StorageError>(visit(label)), &mut Memory::new(&mut Resident),
++    ).expect("resident term-label traversal")
++}
++
++/// The same native term exposure walk with before-growth storage admission.
++/// # Errors
++/// Returns original visitor or physical storage refusal.
++pub fn visit_term_labels_with_memory<'a, S, E>(
++    term: &'a TermPattern, source: LabelSource,
++    visit: &mut impl FnMut(&'a str, &mut Memory<'_, S>) -> Result<bool, E>,
++    memory: &mut Memory<'_, S>,
++) -> Result<bool, E>
++where S: Admission + ?Sized, E: From<StorageError> {
+     let mut pending = crate::worklist::WorkList::<_, 8>::with(term);
++    let mut found = false;
+     while let Some(term) = pending.pop() {
+         match term {
+             TermPattern::BlankNode(blank) if source != LabelSource::Carried => {
+-                if visit(blank.as_str()) {
+-                    return true;
+-                }
++                if visit(blank.as_str(), memory)? { found = true; break; }
+             }
+             TermPattern::Variable(variable) if source != LabelSource::Raw => {
+-                if variable.source_blank_label().is_some_and(&mut *visit) {
+-                    return true;
++                if let Some(label) = variable.source_blank_label() {
++                    if visit(label, memory)? { found = true; break; }
+                 }
+             }
+             TermPattern::Triple(triple) => {
+-                pending.push(&triple.object);
+-                pending.push(&triple.subject);
++                pending.try_push_admitted(&triple.object, memory)?;
++                pending.try_push_admitted(&triple.subject, memory)?;
+             }
+-            TermPattern::NamedNode(_)
+-            | TermPattern::BlankNode(_)
+-            | TermPattern::Literal(_)
+-            | TermPattern::Variable(_) => {}
++            TermPattern::NamedNode(_) | TermPattern::BlankNode(_)
++            | TermPattern::Literal(_) | TermPattern::Variable(_) => {}
+         }
+     }
+-    false
++    pending.release_admitted(memory)?;
++    Ok(found)
+ }
+diff --git a/crates/sparql-algebra/src/retained_size.rs b/crates/sparql-algebra/src/retained_size.rs
+--- a/crates/sparql-algebra/src/retained_size.rs
++++ b/crates/sparql-algebra/src/retained_size.rs
+@@ -11,7 +11,8 @@
+     BlankNode, GroundTerm, Literal, NamedNode, NamedNodePattern, QuadPattern, TermPattern,
+     TriplePattern, Variable,
+ };
+-use crate::walk::{Flow, NodeRef, walk_pre_post};
++use crate::walk::{Flow, NodeRef, walk_pre_post_with_memory};
++use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+ 
+ impl Query {
+     /// Conservative bytes retained by this algebra, including vector capacities.
+@@ -23,6 +24,18 @@
+     /// height is charged in full.
+     #[must_use]
+     pub fn retained_size_bytes(&self) -> usize {
++        self.retained_size_bytes_with_memory(&mut Memory::new(&mut Resident))
++            .expect("resident retained-size traversal")
++    }
++
++    /// Observe the same conservative per-occurrence statistic with admitted spill.
++    /// This statistic never certifies native payload ownership.
++    ///
++    /// # Errors
++    /// Returns checked native working-storage refusal.
++    pub fn retained_size_bytes_with_memory<S: Admission + ?Sized>(
++        &self, memory: &mut Memory<'_, S>,
++    ) -> Result<usize, StorageError> {
+         let (pattern, head) = match self {
+             Self::Select {
+                 pattern,
+@@ -53,10 +66,7 @@
+                 pattern,
+                 sum([
+                     vec_bytes(template),
+-                    template
+-                        .iter()
+-                        .map(templated)
+-                        .fold(0, usize::saturating_add),
++                    templated_all(template, memory)?,
+                     dataset.heap_bytes(),
+                     base_iri.heap_bytes(),
+                     version.heap_bytes(),
+@@ -78,33 +88,40 @@
+                 ]),
+             ),
+         };
+-        sum([
++        Ok(sum([
+             size_of::<Self>(),
+             head,
+-            tree_bytes(NodeRef::Pattern(pattern)),
+-        ])
++            tree_bytes_with_memory(NodeRef::Pattern(pattern), memory)?,
++        ]))
+     }
+ }
+ 
+-/// The heap a `CONSTRUCT` template quad retains, its triple's terms included.
+-fn templated(quad: &QuadPattern) -> usize {
+-    sum([
+-        quad.graph.heap_bytes(),
+-        tree_bytes(NodeRef::Triple(&quad.triple)),
+-    ])
++/// The original template statistic, including quoted terms.
++fn templated_all<S: Admission + ?Sized>(
++    template: &[QuadPattern], memory: &mut Memory<'_, S>,
++) -> Result<usize, StorageError> {
++    let mut total = 0usize;
++    for quad in template {
++        total = total.saturating_add(sum([
++            quad.graph.heap_bytes(),
++            tree_bytes_with_memory(NodeRef::Triple(&quad.triple), memory)?,
++        ]));
++    }
++    Ok(total)
+ }
+ 
+-/// The heap the tree under `root` retains: every node's own share, summed over a
+-/// work list.
+-fn tree_bytes(root: NodeRef<'_>) -> usize {
++/// Every node's original conservative share; native walk storage is not counted.
++fn tree_bytes_with_memory<S: Admission + ?Sized>(
++    root: NodeRef<'_>, memory: &mut Memory<'_, S>,
++) -> Result<usize, StorageError> {
+     let mut total = 0usize;
+-    walk_pre_post(root, |visit, node| {
++    walk_pre_post_with_memory(root, |visit, node, _| {
+         if visit == crate::walk::Visit::Enter {
+             total = total.saturating_add(own_bytes(node));
+         }
+-        Flow::Descend
+-    });
+-    total
++        Ok::<_, StorageError>(Flow::Descend)
++    }, memory)?;
++    Ok(total)
+ }
+ 
+ fn sum(parts: impl IntoIterator<Item = usize>) -> usize {
+diff --git a/crates/sparql-algebra/src/validate.rs b/crates/sparql-algebra/src/validate.rs
+--- a/crates/sparql-algebra/src/validate.rs
++++ b/crates/sparql-algebra/src/validate.rs
+@@ -4,6 +4,8 @@
+ //! Borrowed structural admission for compiler-built query algebra.
+ 
+ use std::collections::BTreeSet;
++use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
++use crate::parser::table::ScopeTable;
+ 
+ use crate::walk::NodeRef;
+ use crate::{
+@@ -172,63 +174,127 @@
+     }
+ }
+ 
++/// Structural validation refusal, preserving the original semantic cause.
++#[derive(Debug)]
++pub enum ValidationError {
++    /// The original syntax message, constructed through original native storage.
++    Invalid(String),
++    /// The original observer violation.
++    Scope(crate::scope::ScopeError),
++    /// Checked native storage refusal.
++    Storage(StorageError),
++}
++impl From<StorageError> for ValidationError {
++    fn from(error: StorageError) -> Self { Self::Storage(error) }
++}
++impl From<crate::scope::ScopeValidationError> for ValidationError {
++    fn from(error: crate::scope::ScopeValidationError) -> Self {
++        match error {
++            crate::scope::ScopeValidationError::Scope(error) => Self::Scope(error),
++            crate::scope::ScopeValidationError::Storage(error) => Self::Storage(error),
++        }
++    }
++}
++impl From<crate::scope::ScopeError> for ValidationError {
++    fn from(error: crate::scope::ScopeError) -> Self { Self::Scope(error) }
++}
++impl core::fmt::Display for ValidationError {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self {
++            Self::Invalid(message) => f.write_str(message),
++            Self::Scope(error) => error.fmt(f), Self::Storage(error) => error.fmt(f),
++        }
++    }
++}
++impl std::error::Error for ValidationError {}
++
++fn resident_validation<T>(
++    body: impl FnOnce(&mut Memory<'_, Resident>) -> std::result::Result<T, ValidationError>,
++) -> Result<T> {
++    match body(&mut Memory::new(&mut Resident)) {
++        Ok(value) => Ok(value),
++        Err(ValidationError::Invalid(message)) => Err(ParseError::syntax(message, 0)),
++        Err(ValidationError::Scope(error)) => Err(ParseError::from(error)),
++        Err(ValidationError::Storage(error)) => panic!("resident structural validation: {error}"),
++    }
++}
++
+ impl Query {
+-    /// Check reserved non-distinguished identities at a raw query entry, including
+-    /// graph templates and description targets, without re-admitting ordinary terms.
+-    ///
++    /// Check hidden observer identities without re-admitting ordinary terms.
+     /// # Errors
+-    /// Refuses an explicit observation of a hidden match witness.
++    /// Refuses explicit observation of a hidden match witness.
+     pub fn validate_hidden_variables(&self) -> Result<()> {
+         crate::scope::validate_query(self).map_err(ParseError::from)
+     }
+ 
+-    /// Check the structural invariants needed to evaluate compiler-built algebra.
+-    ///
+-    /// Walks borrowed nodes without rendering or parsing SPARQL. Runtime expression
+-    /// errors (including ill-typed datatype lexical forms) remain runtime errors.
+-    /// Blank labels remain opaque identifiers, including scope-qualified labels.
+-    /// Registry admission belongs to the evaluator, which owns those registries.
+-    ///
+-    /// Walks the tree over a work list, so a tree of any height is checked without
+-    /// recursion; how tall a tree may be to be *evaluated* is the evaluator's to decide.
+-    ///
++    /// Check the original structural query invariants.
+     /// # Errors
+-    /// Refuses invalid absolute IRIs, language tags, binding widths and output-name
+-    /// collisions, and malformed typed calls or ranges.
++    /// Returns the original syntax/observer refusal.
+     pub fn validate(&self) -> Result<()> {
+-        self.walk::<true>(&mut BTreeSet::new())
++        resident_validation(|memory| self.validate_with_memory(memory))
+     }
+ 
+-    /// Admit algebra for ordinary parameter and SHACL transformations.
+-    /// Contextual application has private input/output identities and is admitted
+-    /// only through the typed contextual preparation boundary.
+-    ///
++    /// Check ordinary preparation's original structural invariants.
+     /// # Errors
+-    /// The structural diagnostics of [`Self::validate`], or a contextual application.
++    /// Returns structural or contextual-application refusal.
+     pub fn validate_ordinary(&self) -> Result<()> {
+-        self.walk::<false>(&mut BTreeSet::new())
++        resident_validation(|memory| self.validate_ordinary_with_memory(memory))
+     }
+ 
+-    /// The IRIs of every extension function the query calls: each
+-    /// [`Function::Custom`] in an expression anywhere in the algebra — a `FILTER`, a
+-    /// `BIND`, a projection, an `ORDER BY`, a `HAVING`, an aggregate's argument, and
+-    /// inside `EXISTS` / `NOT EXISTS` and sub-queries — sorted and de-duplicated.
+-    ///
+-    /// A host that can say which IRIs it cannot evaluate learns, before running the
+-    /// query, whether the query would reach one. Custom aggregates
+-    /// ([`crate::AggregateFunction::Custom`]) are a separate seam and are not listed.
+-    ///
++    /// Validate through the original native account, including temporary tables.
+     /// # Errors
+-    /// Whatever [`Self::validate`] refuses: the walk is the same one.
++    /// Returns original structural/observer errors or physical storage refusal.
++    pub fn validate_with_memory<S: Admission + ?Sized>(
++        &self, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<(), ValidationError> {
++        let mut calls = ScopeTable::default();
++        self.walk_with_memory::<true, S>(&mut calls, memory)?;
++        calls.release(memory)?;
++        Ok(())
++    }
++
++    /// The ordinary-entry variant of the same native validation body.
++    /// # Errors
++    /// Returns original semantic refusal or native working-storage failure.
++    pub fn validate_ordinary_with_memory<S: Admission + ?Sized>(
++        &self, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<(), ValidationError> {
++        let mut calls = ScopeTable::default();
++        self.walk_with_memory::<false, S>(&mut calls, memory)?;
++        calls.release(memory)?;
++        Ok(())
++    }
++
++    /// Sorted, de-duplicated extension-function IRIs; custom aggregates are separate.
++    /// # Errors
++    /// Returns the same structural diagnostics as validation.
+     pub fn custom_function_calls(&self) -> Result<BTreeSet<String>> {
+-        let mut calls = BTreeSet::new();
+-        self.walk::<true>(&mut calls)?;
+-        Ok(calls.into_iter().map(ToOwned::to_owned).collect())
++        resident_validation(|memory| self.custom_function_calls_with_memory(memory))
++            .map(|calls| calls.into_iter().collect())
+     }
+ 
+-    /// [`Self::validate`]'s walk, recording every [`Function::Custom`] IRI it passes
+-    /// in `calls`.
+-    fn walk<'a, const APPLICATION: bool>(&'a self, calls: &mut BTreeSet<&'a str>) -> Result<()> {
++    /// The same extension census with native output and working-storage admission.
++    /// Returned strings remain in the caller's original account.
++    /// # Errors
++    /// Returns original validation or physical storage refusal.
++    pub fn custom_function_calls_with_memory<S: Admission + ?Sized>(
++        &self, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<Vec<String>, ValidationError> {
++        let mut calls = ScopeTable::default();
++        self.walk_with_memory::<true, S>(&mut calls, memory)?;
++        let mut output = Vec::new();
++        for (name, ()) in calls.iter() {
++            let text = memory.string(name)?;
++            memory.push(&mut output, text)?;
++        }
++        calls.release(memory)?;
++        output.sort_unstable();
++        Ok(output)
++    }
++
++    fn walk_with_memory<'a, const APPLICATION: bool, S: Admission + ?Sized>(
++        &'a self, calls: &mut ScopeTable<&'a str, ()>, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<(), ValidationError> {
+         let (pattern, dataset, base) = match self {
+             Self::Select {
+                 pattern,
+@@ -256,45 +322,59 @@
+             } => (pattern, dataset, base_iri),
+         };
+         for name in dataset.default.iter().chain(&dataset.named) {
+-            iri(name.as_str())?;
++            iri(name.as_str(), memory)?;
+         }
+         if let Some(base) = base {
+-            purrdf_iri::BaseIri::parse(base.as_str()).map_err(|e| invalid(e.to_string()))?;
++            let before = memory.live_bytes();
++            match purrdf_iri::BaseIri::parse_with_memory(base.as_str(), memory) {
++                Ok(parsed) => { drop(parsed); memory.release_bytes(memory.live_bytes() - before)?; }
++                Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
++                Err(purrdf_iri::IriReadError::Lexical(error)) => {
++                    let temporary_bytes = memory.live_bytes() - before;
++                    let failure = invalid(&error, memory);
++                    drop(error);
++                    memory.release_bytes(temporary_bytes)?;
++                    return Err(failure);
++                }
++            }
+         }
+-        crate::scope::validate_query_head(self).map_err(ParseError::from)?;
+-        let mut stack = vec![NodeRef::Pattern(pattern)];
++        crate::scope::validate_query_head_with_memory(self, memory).map_err(ValidationError::from)?;
++        let mut stack = Vec::new();
++        memory.push(&mut stack, NodeRef::Pattern(pattern))?;
+         match self {
+             Self::Construct { template, .. } => {
+                 for quad in template {
+                     if let Some(graph) = &quad.graph {
+-                        named(graph)?;
++                        named(graph, memory)?;
+                     }
+-                    stack.push(NodeRef::Triple(&quad.triple));
++                    memory.push(&mut stack, NodeRef::Triple(&quad.triple))?;
+                 }
+             }
+             Self::Describe { targets, .. } => {
+                 for target in targets {
+-                    named(target)?;
++                    named(target, memory)?;
+                 }
+             }
+             Self::Select { .. } | Self::Ask { .. } => {}
+         }
+-        visit_nodes(stack, |node| check::<APPLICATION>(node, calls))
++        visit_nodes_with_memory(stack, |node, memory| check::<APPLICATION, S>(node, calls, memory), memory)
+     }
+ }
+ 
+-/// The shared borrowed admission walk, with one check per node and no recursion.
+-fn visit_nodes<'a>(
++
++/// The original root order and numbered observer traversal.
++fn visit_nodes_with_memory<'a, S: Admission + ?Sized>(
+     stack: Vec<NodeRef<'a>>,
+-    mut check: impl FnMut(NodeRef<'a>) -> Result<()>,
+-) -> Result<()> {
+-    for root in stack.into_iter().rev() {
+-        crate::scope::walk_nodes(root, |node, index| {
+-            crate::scope::check_node(node, crate::scope::ScopeSite::pattern(index))
+-                .map_err(ParseError::from)?;
+-            check(node)
+-        })?;
++    mut check: impl FnMut(NodeRef<'a>, &mut Memory<'_, S>) -> std::result::Result<(), ValidationError>,
++    memory: &mut Memory<'_, S>,
++) -> std::result::Result<(), ValidationError> {
++    for root in stack.iter().rev().copied() {
++        crate::scope::walk_nodes_with_memory(root, |node, index, memory| {
++            crate::scope::check_node(node, crate::scope::ScopeSite::pattern(index))?;
++            check(node, memory)
++        }, memory)?;
+     }
++    memory.release_vec(stack)?;
+     Ok(())
+ }
+ 
+@@ -305,8 +385,13 @@
+     crate::scope::validate_quad(quad).map_err(ParseError::from)
+ }
+ 
+-fn invalid(message: impl Into<String>) -> ParseError {
+-    ParseError::syntax(message, 0)
++fn invalid<S: Admission + ?Sized>(
++    message: impl core::fmt::Display, memory: &mut Memory<'_, S>,
++) -> ValidationError {
++    match memory.format(&message) {
++        Ok(message) => ValidationError::Invalid(message),
++        Err(error) => ValidationError::Storage(error),
++    }
+ }
+ 
+ /// Accept `value` iff it is a well-formed **absolute** IRI.
+@@ -320,51 +405,63 @@
+ /// accepted and what is rejected here is unchanged, which
+ /// `tests::absolute_iris_are_still_accepted_and_relative_ones_still_refused` pins
+ /// from both sides.
+-fn iri(value: &str) -> Result<()> {
+-    if purrdf_iri::is_absolute(value).map_err(|e| invalid(e.to_string()))? {
++fn iri<S: Admission + ?Sized>(value: &str, memory: &mut Memory<'_, S>) -> std::result::Result<(), ValidationError> {
++    let absolute = match purrdf_iri::is_absolute_with_memory(value, memory) {
++        Ok(value) => value,
++        Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
++        Err(purrdf_iri::IriReadError::Lexical(error)) => {
++            let bytes = error.owned_text_bytes();
++            let failure = invalid(&error, memory, memory);
++            drop(error);
++            memory.release_bytes(bytes)?;
++            return Err(failure);
++        }
++    };
++    if absolute {
+         Ok(())
+     } else {
+-        Err(invalid("relative IRI in query algebra"))
++        Err(invalid("relative IRI in query algebra", memory))
+     }
+ }
+ 
+-fn variable(value: &Variable) -> Result<()> {
++fn variable<S: Admission + ?Sized>(value: &Variable, memory: &mut Memory<'_, S>) -> std::result::Result<(), ValidationError> {
+     // `VARNAME` is position-dependent, so this is a whole-string test and not a
+     // per-character one: a name may CONTINUE with a combining mark but may not
+     // BEGIN with one, and no position admits `'-'`.
+     if !value.is_hidden() && !crate::lexer::is_varname(value.as_str()) {
+-        return Err(invalid("invalid query variable name"));
++        return Err(invalid("invalid query variable name", memory));
+     }
+     Ok(())
+ }
+ 
+-fn distinct_variables<'a>(values: impl IntoIterator<Item = &'a Variable>) -> Result<()> {
+-    let mut seen = BTreeSet::new();
++fn distinct_variables<'a, S: Admission + ?Sized>(values: impl IntoIterator<Item = &'a Variable>, memory: &mut Memory<'_, S>) -> std::result::Result<(), ValidationError> {
++    let mut seen = ScopeTable::default();
+     for value in values {
+-        variable(value)?;
+-        if !seen.insert(value) {
+-            return Err(invalid("duplicate output variable in query algebra"));
++        variable(value, memory)?;
++        if seen.insert(value, (), memory)?.is_some() {
++            return Err(invalid("duplicate output variable in query algebra", memory));
+         }
+     }
++    seen.release(memory)?;
+     Ok(())
+ }
+ 
+-fn named(value: &NamedNodePattern) -> Result<()> {
++fn named<S: Admission + ?Sized>(value: &NamedNodePattern, memory: &mut Memory<'_, S>) -> std::result::Result<(), ValidationError> {
+     match value {
+-        NamedNodePattern::NamedNode(n) => iri(n.as_str()),
+-        NamedNodePattern::Variable(v) => variable(v),
++        NamedNodePattern::NamedNode(n) => iri(n.as_str(), memory),
++        NamedNodePattern::Variable(v) => variable(v, memory),
+     }
+ }
+ 
+-fn literal(value: &Literal) -> Result<()> {
+-    iri(value.datatype().as_str())?;
++fn literal<S: Admission + ?Sized>(value: &Literal, memory: &mut Memory<'_, S>) -> std::result::Result<(), ValidationError> {
++    iri(value.datatype().as_str(), memory)?;
+     match value.language() {
+         Some(_) => {
+             let expected = purrdf_iri::vocab::language_datatype_iri(value.direction().is_some());
+             if value.datatype().as_str() != expected {
+                 return Err(invalid(
+                     "literal datatype disagrees with its language and direction",
+-                ));
++                 memory));
+             }
+         }
+         None if value.direction().is_some()
+@@ -375,7 +472,7 @@
+         {
+             return Err(invalid(
+                 "a language-string datatype or direction requires a language tag",
+-            ));
++             memory));
+         }
+         None => {}
+     }
+@@ -383,57 +480,56 @@
+         .language()
+         .is_some_and(|tag| !crate::parser::is_langtag(tag))
+     {
+-        return Err(invalid("invalid language tag in query algebra"));
++        return Err(invalid("invalid language tag in query algebra", memory));
+     }
+     Ok(())
+ }
+ 
+ /// The checks of `node` itself; its children are checked when they are reached.
+ /// Every [`Function::Custom`] IRI `node` calls is recorded in `calls`.
+-fn check<'a, const APPLICATION: bool>(
+-    node: NodeRef<'a>,
+-    calls: &mut BTreeSet<&'a str>,
+-) -> Result<()> {
++fn check<'a, const APPLICATION: bool, S: Admission + ?Sized>(
++    node: NodeRef<'a>, calls: &mut ScopeTable<&'a str, ()>, memory: &mut Memory<'_, S>,
++) -> std::result::Result<(), ValidationError> {
+     match node {
+-        NodeRef::Pattern(pattern) => check_pattern::<APPLICATION>(pattern),
+-        NodeRef::Expr(expr) => check_expression(expr, calls),
+-        NodeRef::Path(path) => check_path(path),
+-        NodeRef::Triple(triple) => named(&triple.predicate),
++        NodeRef::Pattern(pattern) => check_pattern::<APPLICATION, S>(pattern, memory),
++        NodeRef::Expr(expr) => check_expression(expr, calls, memory),
++        NodeRef::Path(path) => check_path(path, memory),
++        NodeRef::Triple(triple) => named(&triple.predicate, memory),
+         NodeRef::Term(term) => match term {
+-            TermPattern::NamedNode(n) => iri(n.as_str()),
+-            TermPattern::Variable(v) => variable(v),
+-            TermPattern::Literal(l) => literal(l),
++            TermPattern::NamedNode(n) => iri(n.as_str(), memory),
++            TermPattern::Variable(v) => variable(v, memory),
++            TermPattern::Literal(l) => literal(l, memory),
+             TermPattern::Triple(_) | TermPattern::BlankNode(_) => Ok(()),
+         },
+         NodeRef::Ground(term) => match term {
+-            GroundTerm::NamedNode(n) => iri(n.as_str()),
+-            GroundTerm::Literal(l) => literal(l),
++            GroundTerm::NamedNode(n) => iri(n.as_str(), memory),
++            GroundTerm::Literal(l) => literal(l, memory),
+             GroundTerm::BlankNode(_) => Ok(()),
+             GroundTerm::Triple(t) => {
+                 if matches!(t.subject, GroundTerm::Literal(_) | GroundTerm::Triple(_)) {
+                     return Err(invalid(
+                         "a ground triple term requires an IRI or blank subject",
+-                    ));
++                     memory));
+                 }
+-                iri(t.predicate.as_str())
++                iri(t.predicate.as_str(), memory)
+             }
+         },
+         NodeRef::Order(_) => Ok(()),
+-        NodeRef::Aggregate(aggregate) => check_aggregate(aggregate),
++        NodeRef::Aggregate(aggregate) => check_aggregate(aggregate, memory),
+     }
+ }
+ 
+-fn check_aggregate(value: &AggregateExpression) -> Result<()> {
++fn check_aggregate<S: Admission + ?Sized>(value: &AggregateExpression, memory: &mut Memory<'_, S>) -> std::result::Result<(), ValidationError> {
+     if let crate::AggregateFunction::Custom(name) = value.function() {
+-        iri(name.as_str())?;
++        iri(name.as_str(), memory)?;
+     }
+     for (_, value) in value.scalarvals() {
+-        literal(value)?;
++        literal(value, memory)?;
+     }
+     Ok(())
+ }
+ 
+-fn check_pattern<const APPLICATION: bool>(pattern: &GraphPattern) -> Result<()> {
++fn check_pattern<const APPLICATION: bool, S: Admission + ?Sized>(pattern: &GraphPattern, memory: &mut Memory<'_, S>) -> std::result::Result<(), ValidationError> {
+     use GraphPattern as G;
+     match pattern {
+         G::Apply {
+@@ -444,7 +540,7 @@
+             if !APPLICATION {
+                 return Err(invalid(
+                     "contextual application requires typed contextual preparation",
+-                ));
++                 memory));
+             }
+             if policy.dataset_required
+                 && (policy.row_pipeline
+@@ -457,7 +553,7 @@
+             {
+                 return Err(invalid(
+                     "dataset-required application requires an uncorrelated Graph operand and empty driver",
+-                ));
++                 memory));
+             }
+             if policy.reduced_adjacent
+                 && (policy.group_domain.is_some()
+@@ -469,7 +565,7 @@
+             {
+                 return Err(invalid(
+                     "adjacent reduction requires an uncorrelated Reduced operand and empty driver",
+-                ));
++                 memory));
+             }
+             if policy.row_pipeline {
+                 if policy.group_domain.is_some()
+@@ -478,7 +574,7 @@
+                 {
+                     return Err(invalid(
+                         "scalar continuation cannot carry group, reduction or retry policies",
+-                    ));
++                     memory));
+                 }
+                 let mut row = &**right;
+                 loop {
+@@ -490,7 +586,7 @@
+                         _ => {
+                             return Err(invalid(
+                                 "scalar continuation requires a zero-or-one-row scalar operand",
+-                            ));
++                             memory));
+                         }
+                     }
+                 }
+@@ -505,43 +601,46 @@
+                 {
+                     return Err(invalid(
+                         "group mapping domain requires an uncorrelated Group operand and empty driver",
+-                    ));
++                     memory));
+                 }
+-                let mut seen = BTreeSet::new();
++                let mut seen = ScopeTable::default();
+                 for name in domain {
+-                    variable(name)?;
+-                    if !seen.insert(name) {
+-                        return Err(invalid("group mapping domain repeats a column"));
++                    variable(name, memory)?;
++                    if seen.insert(name, (), memory)?.is_some() {
++                        return Err(invalid("group mapping domain repeats a column", memory));
+                     }
+                 }
++                seen.release(memory)?;
+             }
+-            let mut inputs = BTreeSet::new();
++            let mut inputs = ScopeTable::default();
+             for (input, driver) in &policy.inputs {
+-                variable(input)?;
+-                variable(driver)?;
+-                if !inputs.insert(input) {
+-                    return Err(invalid("application input is declared twice"));
++                variable(input, memory)?;
++                variable(driver, memory)?;
++                if inputs.insert(input, (), memory)?.is_some() {
++                    return Err(invalid("application input is declared twice", memory));
+                 }
+             }
+             if let Some(optional) = &policy.optional {
+-                variable(&optional.forget_marker)?;
+-                if inputs.contains(&optional.forget_marker) {
++                variable(&optional.forget_marker, memory)?;
++                if inputs.get(&&optional.forget_marker).is_some() {
+                     return Err(invalid(
+                         "optional visibility marker collides with an application input",
+-                    ));
++                     memory));
+                 }
+-                let mut retry = BTreeSet::new();
++                let mut retry = ScopeTable::default();
+                 for (input, driver) in &optional.retry_inputs {
+-                    variable(input)?;
+-                    variable(driver)?;
+-                    if !inputs.contains(input) {
+-                        return Err(invalid("retry refers to an undeclared application input"));
++                    variable(input, memory)?;
++                    variable(driver, memory)?;
++                    if inputs.get(&input).is_none() {
++                        return Err(invalid("retry refers to an undeclared application input", memory));
+                     }
+-                    if !retry.insert(input) {
+-                        return Err(invalid("retry application input is declared twice"));
++                    if retry.insert(input, (), memory)?.is_some() {
++                        return Err(invalid("retry application input is declared twice", memory));
+                     }
+                 }
++                retry.release(memory)?;
+             }
++            inputs.release(memory)?;
+         }
+         G::Bgp { .. }
+         | G::Path { .. }
+@@ -555,23 +654,23 @@
+         | G::Distinct { .. }
+         | G::Reduced { .. }
+         | G::Slice { .. } => {}
+-        G::Graph { name, .. } | G::Service { name, .. } => named(name)?,
++        G::Graph { name, .. } | G::Service { name, .. } => named(name, memory)?,
+         G::Extend {
+             variable: target, ..
+-        } => variable(target)?,
++        } => variable(target, memory)?,
+         G::Values {
+             variables,
+             bindings,
+         } => {
+-            distinct_variables(variables)?;
++            distinct_variables(variables, memory)?;
+             if bindings.iter().any(|row| row.len() != variables.len()) {
+-                return Err(invalid("VALUES row width differs from its variables"));
++                return Err(invalid("VALUES row width differs from its variables", memory));
+             }
+         }
+         G::Project { variables, .. } => {
+             // Repeated projection variables are normalized by the result schema.
+             for value in variables {
+-                variable(value)?;
++                variable(value, memory)?;
+             }
+         }
+         G::Group {
+@@ -579,38 +678,39 @@
+             aggregates,
+             ..
+         } => {
+-            let mut outputs = BTreeSet::new();
++            let mut outputs = ScopeTable::default();
+             for value in variables {
+-                variable(value)?;
+-                outputs.insert(value);
++                variable(value, memory)?;
++                outputs.insert(value, (), memory)?;
+             }
+             for (target, _) in aggregates {
+-                variable(target)?;
+-                if !outputs.insert(target) {
++                variable(target, memory)?;
++                if outputs.insert(target, (), memory)?.is_some() {
+                     return Err(invalid(
+                         "aggregate output collides with another group output",
+-                    ));
++                     memory));
+                 }
+             }
++            outputs.release(memory)?;
+         }
+-        G::PropertyFunction(call) => iri(&call.iri)?,
++        G::PropertyFunction(call) => iri(&call.iri, memory)?,
+         G::Unfold {
+             element, companion, ..
+-        } => distinct_variables(std::iter::once(element).chain(companion))?,
++        } => distinct_variables(std::iter::once(element).chain(companion), memory)?,
+     }
+     Ok(())
+ }
+ 
+-fn check_expression<'a>(expr: &'a Expression, calls: &mut BTreeSet<&'a str>) -> Result<()> {
++fn check_expression<'a, S: Admission + ?Sized>(expr: &'a Expression, calls: &mut ScopeTable<&'a str, ()>, memory: &mut Memory<'_, S>) -> std::result::Result<(), ValidationError> {
+     use Expression as E;
+     match expr {
+-        E::NamedNode(n) => iri(n.as_str())?,
+-        E::Literal(l) => literal(l)?,
+-        E::Variable(v) | E::Bound(v) => variable(v)?,
++        E::NamedNode(n) => iri(n.as_str(), memory)?,
++        E::Literal(l) => literal(l, memory)?,
++        E::Variable(v) | E::Bound(v) => variable(v, memory)?,
+         E::FunctionCall(function, args) => match function {
+             Function::Custom(n) => {
+-                iri(n.as_str())?;
+-                calls.insert(n.as_str());
++                iri(n.as_str(), memory)?;
++                calls.insert(n.as_str(), (), memory)?;
+             }
+             Function::Cdt(call) => {
+                 if crate::CdtFn::from_iri(&call.iri) != Some(call.fn_kind)
+@@ -618,17 +718,17 @@
+                 {
+                     return Err(invalid(
+                         "invalid composite datatype function identity or arity",
+-                    ));
++                     memory));
+                 }
+             }
+             Function::Purrdf(call) => {
+-                iri(&call.iri)?;
++                iri(&call.iri, memory)?;
+                 if !call.iri.ends_with(call.local_name()) {
+-                    return Err(invalid("extension function IRI disagrees with its kind"));
++                    return Err(invalid("extension function IRI disagrees with its kind", memory));
+                 }
+             }
+             Function::Adjust if args.len() != 2 => {
+-                return Err(invalid("ADJUST requires two arguments"));
++                return Err(invalid("ADJUST requires two arguments", memory));
+             }
+             _ => {}
+         },
+@@ -652,10 +752,10 @@
+     Ok(())
+ }
+ 
+-fn check_path(path: &PropertyPathExpression) -> Result<()> {
++fn check_path<S: Admission + ?Sized>(path: &PropertyPathExpression, memory: &mut Memory<'_, S>) -> std::result::Result<(), ValidationError> {
+     use PropertyPathExpression as P;
+     match path {
+-        P::NamedNode(n) => iri(n.as_str())?,
++        P::NamedNode(n) => iri(n.as_str(), memory)?,
+         P::Reverse(_)
+         | P::ZeroOrMore(_)
+         | P::OneOrMore(_)
+@@ -664,17 +764,17 @@
+         | P::Alternative(_) => {}
+         P::Range { min, max, .. } => {
+             if max.is_some_and(|max| *min > max) {
+-                return Err(invalid("path range lower bound exceeds upper bound"));
++                return Err(invalid("path range lower bound exceeds upper bound", memory));
+             }
+         }
+         P::NegatedPropertySet(values) => {
+             for v in values {
+-                iri(v.predicate.as_str())?;
++                iri(v.predicate.as_str(), memory)?;
+             }
+         }
+         P::Wildcard { namespace } => {
+             if let Some(n) = namespace {
+-                iri(n.as_str())?;
++                iri(n.as_str(), memory)?;
+             }
+         }
+     }
+diff --git a/crates/sparql-algebra/src/parser/table.rs b/crates/sparql-algebra/src/parser/table.rs
+--- a/crates/sparql-algebra/src/parser/table.rs
++++ b/crates/sparql-algebra/src/parser/table.rs
+@@ -30,7 +30,7 @@
+ ///
+ /// Both empty construction and every lookup are allocation-free. The memory
+ /// supplied to growth/release must be the original memory of this arena.
+-pub(super) struct ScopeTable<K, V> {
++pub(crate) struct ScopeTable<K, V> {
+     slots: Vec<Slot<K, V>>,
+     root: Option<usize>,
+     free: Option<usize>,
+@@ -49,7 +49,7 @@
+ }
+ 
+ impl<K, V> ScopeTable<K, V> {
+-    pub(super) fn is_empty(&self) -> bool {
++    pub(crate) fn is_empty(&self) -> bool {
+         self.len == 0
+     }
+ 
+@@ -82,13 +82,13 @@
+ 
+     /// Lookup a borrowed spelling without manufacturing an owned key.
+     /// The comparator returns query-versus-stored-key ordering.
+-    pub(super) fn get_by(&self, compare: impl FnMut(&K) -> Ordering) -> Option<&V> {
++    pub(crate) fn get_by(&self, compare: impl FnMut(&K) -> Ordering) -> Option<&V> {
+         self.find(compare).map(|index| &self.entry(index).value)
+     }
+ 
+     /// Iterate live slots without a traversal allocation. This is arena order,
+     /// not key order; output/declaration order remains the consumer's own law.
+-    pub(super) fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
++    pub(crate) fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+         self.slots.iter().filter_map(|slot| match slot {
+             Slot::Live(entry) => Some((&entry.key, &entry.value)),
+             Slot::Free(_) => None,
+@@ -96,7 +96,7 @@
+     }
+ 
+     /// Drop all keys/values, retaining the already-admitted backing capacity.
+-    pub(super) fn clear(&mut self) {
++    pub(crate) fn clear(&mut self) {
+         self.slots.clear();
+         self.root = None;
+         self.free = None;
+@@ -104,7 +104,7 @@
+     }
+ 
+     /// Destroy this arena before releasing its original physical array layout.
+-    pub(super) fn release<S: Admission + ?Sized>(
++    pub(crate) fn release<S: Admission + ?Sized>(
+         self,
+         memory: &mut Memory<'_, S>,
+     ) -> Result<(), StorageError> {
+@@ -113,7 +113,7 @@
+ 
+     /// Copy only slot metadata and shallow immutable native key/value owners.
+     /// K/V clones used by the parser must themselves allocate no payload.
+-    pub(super) fn try_clone<S: Admission + ?Sized>(
++    pub(crate) fn try_clone<S: Admission + ?Sized>(
+         &self,
+         memory: &mut Memory<'_, S>,
+     ) -> Result<Self, StorageError>
+@@ -244,18 +244,18 @@
+ }
+ 
+ impl<K: Ord, V> ScopeTable<K, V> {
+-    pub(super) fn get(&self, key: &K) -> Option<&V> {
++    pub(crate) fn get(&self, key: &K) -> Option<&V> {
+         self.get_by(|candidate| key.cmp(candidate))
+     }
+ 
+-    pub(super) fn get_mut(&mut self, key: &K) -> Option<&mut V> {
++    pub(crate) fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+         let index = self.find(|candidate| key.cmp(candidate))?;
+         Some(&mut self.entry_mut(index).value)
+     }
+ 
+     /// Reserve the actual next array layout without modifying any key/value.
+     /// Consumers may reserve their parallel output destination before insertion.
+-    pub(super) fn reserve_insert<S: Admission + ?Sized>(
++    pub(crate) fn reserve_insert<S: Admission + ?Sized>(
+         &mut self,
+         memory: &mut Memory<'_, S>,
+     ) -> Result<(), StorageError> {
+@@ -280,7 +280,7 @@
+ 
+     /// Replace the value in place, or admit storage before adding a new key.
+     /// Refusal leaves every existing association unchanged.
+-    pub(super) fn insert<S: Admission + ?Sized>(
++    pub(crate) fn insert<S: Admission + ?Sized>(
+         &mut self,
+         key: K,
+         value: V,
+@@ -343,7 +343,7 @@
+     }
+ 
+     /// Remove an association without allocation; reuse its original slot later.
+-    pub(super) fn remove(&mut self, key: &K) -> Option<V> {
++    pub(crate) fn remove(&mut self, key: &K) -> Option<V> {
+         let mut index = self.find(|candidate| key.cmp(candidate))?;
+         let entry = self.entry(index);
+         if entry.left.is_some() && entry.right.is_some() {
+diff --git a/crates/sparql-algebra/src/lib.rs b/crates/sparql-algebra/src/lib.rs
+--- a/crates/sparql-algebra/src/lib.rs
++++ b/crates/sparql-algebra/src/lib.rs
+@@ -105,10 +105,11 @@
+     ParserOptions, QueryDatasetSlot, QuerySplit, SparqlParser, UpdateDatasetSlot, UpdateSplit,
+     builtin_function_keyword,
+ };
+-pub use scope::{ObserverRole, ScopeError, ScopeHazard, ScopeRegion, ScopeSite};
++pub use scope::{ObserverRole, ScopeError, ScopeHazard, ScopeRegion, ScopeSite, ScopeValidationError};
++pub use validate::ValidationError;
+ pub use serialize::{
+     pattern_to_select_query, pattern_to_select_query_with_options, try_pattern_to_select_query,
+     try_pattern_to_select_query_with_options,
+ };
+ pub use tree::{Args, Chain, Child, NonEmpty, Subtree};
+-pub use walk::{Flow, NodeRef, Visit, WalkError, fold_post_order, try_walk_pre_post, walk_pre_post};
++pub use walk::{Flow, NodeRef, Visit, WalkError, fold_post_order, fold_post_order_with_memory, try_walk_pre_post, walk_pre_post, walk_pre_post_with_memory};
+diff --git a/crates/sparql-eval/src/stack/height.rs b/crates/sparql-eval/src/stack/height.rs
+--- a/crates/sparql-eval/src/stack/height.rs
++++ b/crates/sparql-eval/src/stack/height.rs
+@@ -147,35 +147,81 @@
+ /// calling thread; on `wasm32`, [`EvalError::HostStackExhausted`] when it is also past
+ /// the host-stack bounds.
+ fn admit<'a>(roots: impl IntoIterator<Item = NodeRef<'a>>) -> Result<(), EvalError> {
+-    // The pending nodes of a shallow plan stay inline: admitting it allocates nothing.
+-    let mut stack: purrdf_core::SmallVec<[(NodeRef<'a>, Depth); 32]> =
+-        roots.into_iter().map(|root| (root, Depth::ROOT)).collect();
+-    let mut fits = 0;
+-    while let Some((node, depth)) = stack.pop() {
+-        depth.admit(&mut fits)?;
+-        let below = depth.below(node);
+-        node.for_each_child(|child| stack.push((child, below)));
++    let capability = crate::WorkspaceCapability::default();
++    let mut frame = crate::workspace::LexicalFrame::new(&capability);
++    admit_with_memory(roots, &mut purrdf_lex::allocation::Memory::new(&mut frame))
++}
++
++fn admit_with_memory<'a>(
++    roots: impl IntoIterator<Item = NodeRef<'a>>,
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++) -> Result<(), EvalError> {
++    let result = (|| {
++        let mut stack = purrdf_lex::walk::WorkList::<(NodeRef<'a>, Depth), 32>::new();
++        for root in roots {
++            stack.try_push_admitted((root, Depth::ROOT), memory)?;
++        }
++        let mut fits = 0;
++        while let Some((node, depth)) = stack.pop() {
++            depth.admit(&mut fits).map_err(HeightFailure::Evaluation)?;
++            let below = depth.below(node);
++            let mut failure = None;
++            node.for_each_child(|child| {
++                if failure.is_none() {
++                    if let Err(error) = stack.try_push_admitted((child, below), memory) { failure = Some(error); }
++                }
++            });
++            if let Some(error) = failure { return Err(HeightFailure::Storage(error)); }
++        }
++        stack.release_admitted(memory)?;
++        Ok(())
++    })();
++    match result {
++        Ok(()) => Ok(()),
++        Err(HeightFailure::Evaluation(error)) => Err(error),
++        Err(HeightFailure::Storage(error)) => Err(memory.admission_mut().storage_error(error, "query algebra height")),
+     }
+-    Ok(())
+ }
+ 
+-/// Admit `pattern` for evaluation: see [`admit`].
++enum HeightFailure {
++    Evaluation(EvalError),
++    Storage(purrdf_lex::allocation::StorageError),
++}
++impl From<purrdf_lex::allocation::StorageError> for HeightFailure {
++    fn from(error: purrdf_lex::allocation::StorageError) -> Self { Self::Storage(error) }
++}
++
++/// Admit the original pattern depth law.
+ pub(crate) fn admit_pattern(pattern: &GraphPattern) -> Result<(), EvalError> {
+     admit([NodeRef::Pattern(pattern)])
+ }
+ 
+-/// Admit `query` for the recursive passes preparation runs over it: its pattern and, for
+-/// a `CONSTRUCT`, its template's triples; see [`admit`].
++/// Admit pattern height under the original physical traversal account.
++pub(crate) fn admit_pattern_with_memory(
++    pattern: &GraphPattern,
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++) -> Result<(), EvalError> {
++    admit_with_memory([NodeRef::Pattern(pattern)], memory)
++}
++
++/// Admit query pattern and template trees, preserving the original root order.
+ pub(crate) fn admit_query(query: &Query) -> Result<(), EvalError> {
++    let capability = crate::WorkspaceCapability::default();
++    let mut frame = crate::workspace::LexicalFrame::new(&capability);
++    admit_query_with_memory(query, &mut purrdf_lex::allocation::Memory::new(&mut frame))
++}
++
++/// The same query depth law with native before-growth physical admission.
++pub(crate) fn admit_query_with_memory(
++    query: &Query,
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++) -> Result<(), EvalError> {
+     match query {
+-        Query::Construct {
+-            pattern, template, ..
+-        } => admit(
++        Query::Construct { pattern, template, .. } => admit_with_memory(
+             std::iter::once(NodeRef::Pattern(pattern))
+-                .chain(template.iter().map(|quad| NodeRef::Triple(&quad.triple))),
++                .chain(template.iter().map(|quad| NodeRef::Triple(&quad.triple))), memory,
+         ),
+-        Query::Select { pattern, .. }
+-        | Query::Ask { pattern, .. }
+-        | Query::Describe { pattern, .. } => admit([NodeRef::Pattern(pattern)]),
++        Query::Select { pattern, .. } | Query::Ask { pattern, .. }
++        | Query::Describe { pattern, .. } => admit_with_memory([NodeRef::Pattern(pattern)], memory),
+     }
+ }
+diff --git a/crates/sparql-algebra/src/parser.rs b/crates/sparql-algebra/src/parser.rs
+--- a/crates/sparql-algebra/src/parser.rs
++++ b/crates/sparql-algebra/src/parser.rs
+@@ -28,7 +28,7 @@
+ 
+ mod machine;
+-mod table;
++pub(crate) mod table;
+ mod triples;
+ 
+ use machine::Machine;
+ use table::ScopeTable;

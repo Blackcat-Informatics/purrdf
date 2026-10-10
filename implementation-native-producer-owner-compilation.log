@@ -1,0 +1,49 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+error: missing documentation for a struct field
+   --> crates/lex/src/html.rs:223:5
+    |
+223 |     pub text_bytes: usize,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D missing-docs` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(missing_docs)]`
+
+error: missing documentation for a struct field
+   --> crates/lex/src/html.rs:224:5
+    |
+224 |     pub sources: usize,
+    |     ^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/lex/src/html.rs:225:5
+    |
+225 |     pub diagnostics: usize,
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a struct field
+   --> crates/lex/src/html.rs:226:5
+    |
+226 |     pub replaced: bool,
+    |     ^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/lex/src/html.rs:231:29
+    |
+231 | pub enum ResolveIntoError { Capacity, LayoutOverflow }
+    |                             ^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/lex/src/html.rs:231:39
+    |
+231 | pub enum ResolveIntoError { Capacity, LayoutOverflow }
+    |                                       ^^^^^^^^^^^^^^
+
+error: missing documentation for a function
+  --> crates/lex/src/unicode/aligned.rs:30:1
+   |
+30 | / pub fn decompose_tagged<const COMPAT: bool, M: Clone>(
+31 | |     scalars: &mut Vec<TaggedScalar<M>>, scratch: &mut Vec<TaggedScalar<M>>,
+32 | | ) {
+   | |_^
+
+error: could not compile `purrdf-lex` (lib) due to 7 previous errors

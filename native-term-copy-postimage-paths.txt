@@ -1,0 +1,5 @@
+term_walk.rs crates/rdf-core/src/ir/term_walk.rs
+dataset_view.rs crates/rdf-core/src/dataset_view.rs
+ir-mod.rs crates/rdf-core/src/ir/mod.rs
+scratch.rs crates/sparql-eval/src/scratch.rs
+workspace.rs crates/sparql-eval/src/workspace.rs

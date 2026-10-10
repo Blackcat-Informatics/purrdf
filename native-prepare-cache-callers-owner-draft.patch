@@ -1,0 +1,1182 @@
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -58,6 +58,80 @@
+ use crate::{CacheLimits, CacheStats};
+ 
+ mod prepared_fallible;
++
++/// A reusable key buffer retains its original array's admission. Replacement
++/// uses the current invocation's capability while the old array remains alive.
++#[derive(Debug, Default)]
++struct PlanKeyScratch {
++    bytes: Vec<u8>,
++    allocation: Option<crate::WorkspaceAllocation>,
++}
++
++impl PlanKeyScratch {
++    fn reserve(&mut self, capacity: usize, workspace: &crate::WorkspaceCapability) -> Result<(), crate::EvalError> {
++        workspace.reserve_vec(&mut self.bytes, &mut self.allocation, capacity)
++    }
++}
++
++/// Immutable cache identities use the existing native shared owner and original
++/// admitted byte array. Recency clones only this shared identity.
++#[derive(Debug, Clone)]
++struct PreparedCacheKey(crate::workspace::SharedWorkspace<crate::workspace::AdmittedVec<u8>>);
++
++impl PreparedCacheKey {
++    fn copy_from(bytes: &[u8], workspace: &crate::WorkspaceCapability) -> Result<Self, crate::EvalError> {
++        let mut owned = crate::workspace::AdmittedVec::with_capacity(bytes.len(), workspace)?;
++        for byte in bytes { owned.push(*byte)?; }
++        Ok(Self(crate::workspace::SharedWorkspace::new_admitted(owned, workspace)?))
++    }
++
++    fn len(&self) -> usize { self.0.len() }
++
++    fn retained_size_bytes(&self) -> usize {
++        self.len().saturating_add(crate::workspace::SharedWorkspace::<crate::workspace::AdmittedVec<u8>>::control_bytes())
++    }
++}
++
++impl std::borrow::Borrow<[u8]> for PreparedCacheKey {
++    fn borrow(&self) -> &[u8] { &self.0 }
++}
++
++impl PartialEq for PreparedCacheKey {
++    fn eq(&self, other: &Self) -> bool { self.0[..] == other.0[..] }
++}
++impl Eq for PreparedCacheKey {}
++impl std::hash::Hash for PreparedCacheKey {
++    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
++        std::hash::Hash::hash(&self.0[..], state);
++    }
++}
++
++/// A native parse publishes its original containers and grant as one consuming
++/// carrier. Lexical SharedText leaves retain their independent original owners.
++#[derive(Debug)]
++pub(crate) struct AdmittedQuery {
++    query: Query,
++    allocation: crate::WorkspaceAllocation,
++    live_bytes: usize,
++}
++
++impl AdmittedQuery {
++    pub(crate) fn into_parts(self) -> (Query, crate::WorkspaceAllocation, usize) {
++        (self.query, self.allocation, self.live_bytes)
++    }
++}
++
++type PreparedHandle = crate::workspace::SharedWorkspace<PreparedQuery>;
++
++/// Every failure destroys partial payloads before their original native frame.
++struct PreparingQuery {
++    query: Query,
++    source: Option<Box<Query>>,
++    source_schema: Option<purrdf_core::small::Shared<crate::solution::VarSchema>>,
++    relations: String,
++    aggregates: String,
++    frame: crate::workspace::LexicalFrame,
++}
+ 
+ /// A parsed, ready-to-evaluate query (the cached unit of the [`PlanCache`]).
+ #[derive(Debug)]
+@@ -98,6 +172,9 @@
+     /// The numbered tree of [`Self::query`], built on the first evaluation of this plan
+     /// and shared by every later one. See [`crate::plan::PlanCache`].
+     pub(crate) plan: crate::plan::PlanCache,
++    certified_bytes: Option<usize>,
++    // Parsed/rewrite containers die before their original allocation grant.
++    _allocation: Option<crate::WorkspaceAllocation>,
+ }
+ 
+ /// A contextual plan whose initial bindings have already been compiled.
+@@ -266,6 +343,8 @@
+             aggregates,
+             memory: PlanCharge::new(memory, bytes),
+             plan: crate::plan::PlanCache::default(),
++            certified_bytes: None,
++            _allocation: None,
+         }
+     }
+ 
+@@ -340,6 +419,7 @@
+     /// evaluation builds and later evaluations share.
+     #[must_use]
+     pub fn retained_size_bytes(&self) -> usize {
++        if let Some(bytes) = self.certified_bytes { return bytes; }
+         plan_payload_bytes(
+             &self.query,
+             self.source.as_deref(),
+@@ -354,6 +434,71 @@
+     pub fn memory_observer(&self) -> PlanMemoryObserver {
+         self.memory.observer()
+     }
++}
++
++fn parse_admitted_query(
++    text: &str, options: &ParserOptions, base: Option<&str>, names: &[&str],
++    workspace: &crate::WorkspaceCapability,
++) -> Result<AdmittedQuery, EvaluationFailure> {
++    use purrdf_lex::allocation::Memory;
++    use purrdf_sparql_algebra::ParseError;
++    use crate::workspace::LexicalFrame;
++    let mut frame = LexicalFrame::new(workspace);
++    let result = {
++        let admission: &mut dyn purrdf_sparql_algebra::parser::ParserAdmission = &mut frame;
++        let mut memory = Memory::new(admission);
++        SparqlParser::parse_query_admitted(text, options, base, names, &mut memory)
++    };
++    match result {
++        Ok(query) => {
++            let live_bytes = frame.live_bytes();
++            let allocation = match frame.into_allocation() {
++                Some(allocation) => allocation,
++                None => workspace.charge(0)?,
++            };
++            Ok(AdmittedQuery { query, allocation, live_bytes })
++        }
++        Err(ParseError::Storage(error)) => Err(frame.storage_error(error, "native query parser").into()),
++        Err(error) => {
++            let error_bytes = frame.live_bytes();
++            let mut memory = Memory::resume(&mut frame, error_bytes);
++            let presentation = error.try_presentation_with_memory(&mut memory)
++                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "query parse presentation")))?;
++            let mut diagnostic = purrdf_core::RdfDiagnostic::try_error_with_memory(
++                "native-sparql-query-parse", &"", &mut memory,
++            ).map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "query parse diagnostic")))?
++                .with_presentation(presentation);
++            diagnostic.detail = None;
++            drop(error);
++            memory.release_bytes(error_bytes)
++                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "query parse error payload")))?;
++            memory.add_bytes(crate::RetainedDiagnostic::control_bytes())
++                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "query parse diagnostic control")))?;
++            drop(memory);
++            let allocation = frame.into_allocation().expect("retained diagnostic control has an original grant");
++            Err(crate::RetainedDiagnostic::from_admitted(diagnostic, allocation)?.into())
++        }
++    }
++}
++
++fn prepared_payload_bytes_with_memory(
++    query: &Query, source: Option<&Query>, schema: Option<&crate::solution::VarSchema>,
++    relations: usize, aggregates: usize,
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++) -> Result<usize, EvaluationFailure> {
++    let query = query.retained_size_bytes_with_memory(memory)
++        .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared query retention observation")))?;
++    let source = match source {
++        Some(source) => source.retained_size_bytes_with_memory(memory)
++            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared source retention observation")))?,
++        None => 0,
++    };
++    size_of::<PreparedQuery>().checked_add(query.saturating_sub(size_of::<Query>()))
++        .and_then(|n| n.checked_add(source))
++        .and_then(|n| n.checked_add(relations))
++        .and_then(|n| n.checked_add(aggregates))
++        .and_then(|n| n.checked_add(schema.map_or(0, |schema| schema.retained_size_bytes().saturating_add(2 * size_of::<usize>()))))
++        .ok_or_else(|| crate::EvalError::WorkspaceBoundOverflow.into())
+ }
+ 
+ fn plan_payload_bytes(
+@@ -380,34 +525,22 @@
+ }
+ 
+ /// Retain an observable source header only when the admitted layout differs.
+-fn changed_source_schema(
+-    source: &Query,
+-    planned: Option<&Query>,
+-) -> Option<purrdf_core::small::Shared<crate::solution::VarSchema>> {
+-    let Query::Select { pattern, .. } = source else {
+-        return None;
++fn changed_source_schema_admitted(
++    source: &Query, planned: Option<&Query>, workspace: &crate::WorkspaceCapability,
++) -> Result<Option<purrdf_core::small::Shared<crate::solution::VarSchema>>, crate::EvalError> {
++    let Query::Select { pattern, .. } = source else { return Ok(None); };
++    let Some(planned) = planned else { return Ok(None); };
++    let visible = |pattern: &purrdf_sparql_algebra::GraphPattern| {
++        let schema = crate::eval::syntactic_schema_admitted(pattern, workspace)?;
++        if schema.vars().iter().any(crate::blank_scope::is_joined_blank) {
++            crate::solution::VarSchema::from_vars_admitted(
++                schema.vars().iter().filter(|variable| !crate::blank_scope::is_joined_blank(variable)).cloned(),
++                workspace,
++            )?.shared_admitted(workspace)
++        } else { Ok(schema) }
+     };
+-    let planned = planned?;
+-    let visible = |pattern: &purrdf_sparql_algebra::GraphPattern| {
+-        let schema = crate::eval::syntactic_schema(pattern);
+-        if schema
+-            .vars()
+-            .iter()
+-            .any(crate::blank_scope::is_joined_blank)
+-        {
+-            crate::solution::VarSchema::shared_resident(crate::solution::VarSchema::from_vars(
+-                schema
+-                    .vars()
+-                    .iter()
+-                    .filter(|variable| !crate::blank_scope::is_joined_blank(variable))
+-                    .cloned(),
+-            ))
+-        } else {
+-            schema
+-        }
+-    };
+-    let source = visible(pattern);
+-    (*source != *visible(query_pattern(planned))).then_some(source)
++    let source = visible(pattern)?;
++    Ok((*source != *visible(query_pattern(planned))?).then_some(source))
+ }
+ 
+ /// Admit `query`: structurally valid, and feasibility ordered against the supplied
+@@ -483,7 +616,7 @@
+ /// everything else but differ there must not share a plan.
+ #[derive(Debug)]
+ pub struct PlanCache {
+-    entries: BoundedCache<Arc<[u8]>, Arc<PreparedQuery>>,
++    entries: BoundedCache<PreparedCacheKey, PreparedHandle>,
+     memory: PlanMemoryObserver,
+     /// The buffer [`Self::prepare_with_relations`] builds its lookup key in, reused
+     /// across calls.
+@@ -496,7 +629,7 @@
+     /// only the MISS path, which is already parsing and planning, allocates the
+     /// owned `Arc<[u8]>` the map retains. Its contents carry no meaning between
+     /// calls: each call clears it before writing.
+-    key_scratch: Vec<u8>,
++    key_scratch: PlanKeyScratch,
+ }
+ 
+ impl Drop for PlanCache {
+@@ -538,7 +671,7 @@
+         Self {
+             entries: BoundedCache::new(limits),
+             memory: PlanMemoryObserver::default(),
+-            key_scratch: Vec::new(),
++            key_scratch: PlanKeyScratch::default(),
+         }
+     }
+ 
+@@ -729,78 +862,139 @@
+         parameters: &[&str],
+         exempt: &[&str],
+     ) -> Result<Arc<PreparedQuery>, RdfDiagnostic> {
+-        // The key is built into the cache's own reusable buffer and probed as a
+-        // borrowed slice, so a hit costs no allocation at all. The buffer is moved
+-        // out for the duration of the build (the probe needs `&mut self.entries`)
+-        // and put back before this method can return or fail, so a later call still
+-        // finds its capacity.
+-        let mut scratch = std::mem::take(&mut self.key_scratch);
+-        scratch.clear();
+-        PlanCacheKey {
+-            query,
+-            base_iri,
+-            options,
+-            relations: fingerprint,
+-            aggregates: agg_fingerprint,
+-            parameters,
+-            exempt,
+-        }
+-        .write_into(&mut scratch);
+-        if let Some(prepared) = self.entries.get(scratch.as_slice()) {
+-            self.key_scratch = scratch;
++        let workspace = crate::WorkspaceCapability::resident();
++        let prepared = self.prepare_keyed_admitted(query, base_iri, options,
++            relations, aggregates, fingerprint, agg_fingerprint, parameters, exempt, &workspace)
++            .map_err(EvaluationFailure::into_diagnostic)?;
++        prepared.caller_arc().ok_or_else(|| RdfDiagnostic::error(
++            "native-sparql-algebra", "a resident cache key returned a native allocation owner",
++        ))
++    }
++
++    pub(crate) fn prepare_execution_plan_admitted(
++        &mut self, query: &str, base_iri: Option<&str>,
++        env: &crate::extension_env::ExtensionEnv, parameters: &[&str], exempt: &[&str],
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<PreparedHandle, EvaluationFailure> {
++        self.prepare_keyed_admitted(query, base_iri, env.parser_options(), env.relations(),
++            env.aggregates(), env.relations_fingerprint(), env.aggregates_fingerprint(),
++            parameters, exempt, workspace)
++    }
++
++    #[allow(clippy::too_many_arguments, reason = "the existing cache identity and registry inputs remain separate borrowed components")]
++    fn prepare_keyed_admitted(
++        &mut self, text: &str, base_iri: Option<&str>, options: &ParserOptions,
++        relations: &crate::property_fn::PropertyFunctionRegistry,
++        aggregates: &crate::agg_fn::AggregateRegistry,
++        fingerprint: &str, agg_fingerprint: &str,
++        parameters: &[&str], exempt: &[&str], workspace: &crate::WorkspaceCapability,
++    ) -> Result<PreparedHandle, EvaluationFailure> {
++        let result = self.build_keyed_admitted(text, base_iri, options, relations,
++            aggregates, fingerprint, agg_fingerprint, parameters, exempt, workspace);
++        if result.is_err() && workspace.is_bounded() {
++            // A failed invocation leaves no new reusable array charged to its
++            // source. Existing successful cache entries retain their own grants.
++            drop(core::mem::take(&mut self.key_scratch));
++        }
++        result
++    }
++
++    #[allow(clippy::too_many_arguments, reason = "the existing cache identity and registry inputs remain separate borrowed components")]
++    fn build_keyed_admitted(
++        &mut self, text: &str, base_iri: Option<&str>, options: &ParserOptions,
++        relations: &crate::property_fn::PropertyFunctionRegistry,
++        aggregates: &crate::agg_fn::AggregateRegistry,
++        fingerprint: &str, agg_fingerprint: &str,
++        parameters: &[&str], exempt: &[&str], workspace: &crate::WorkspaceCapability,
++    ) -> Result<PreparedHandle, EvaluationFailure> {
++        use purrdf_lex::allocation::Memory;
++        use crate::workspace::{AdmittedVec, LexicalFrame, SharedWorkspace};
++
++        PlanCacheKey { query: text, base_iri, options, relations: fingerprint,
++            aggregates: agg_fingerprint, parameters, exempt }
++            .write_into(&mut self.key_scratch, workspace)?;
++        if let Some(prepared) = self.entries.get(self.key_scratch.bytes.as_slice()) {
+             return Ok(prepared);
+         }
+-        // A miss retains the key, so here — and only here — it is copied into the
+-        // owned form the map stores.
+-        let key: Arc<[u8]> = Arc::from(scratch.as_slice());
+-        self.key_scratch = scratch;
+-        // The declared parameters are bound before every run, so the grouping
+-        // constraint treats them as constants of the evaluation.
+-        let mut parser =
+-            SparqlParser::new().with_prebound_variables(parameters.iter().chain(exempt));
+-        if let Some(base) = base_iri {
+-            parser = parser.with_base_iri(base);
+-        }
+-        let mut parsed = parser
+-            .parse_query_with(query, options)
+-            .map_err(|e| parse_diagnostic(&e, "native-sparql-query-parse"))?;
+-        // An assignment of a pre-bound name where SPARQL scoping makes it the outer
+-        // variable is already refused by the parser (§18.2.1: a `BIND` target may not
+-        // be in scope). Every other assignment of one, a sub-`SELECT`'s included,
+-        // joins with the bound value where it is made.
+-        let names: Vec<&str> = parameters.iter().chain(exempt).copied().collect();
+-        let source = (!names.is_empty()).then(|| parsed.clone());
+-        crate::substitute::join_assignments_with_prebinding(&mut parsed, &names);
+-        let source = source.filter(|source| *source != parsed).map(Box::new);
+-        let planned = admit_algebra(
+-            &parsed,
+-            relations,
+-            aggregates,
+-            &crate::property_fn_plan::parameter_set(parameters),
++        let key = PreparedCacheKey::copy_from(&self.key_scratch.bytes, workspace)?;
++        let count = parameters.len().checked_add(exempt.len())
++            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
++        let mut names = AdmittedVec::with_capacity(count, workspace)?;
++        for name in parameters.iter().chain(exempt) { names.push(*name)?; }
++
++        let admitted = parse_admitted_query(text, options, base_iri, &names, workspace)?;
++        let (query, allocation, original_live) = admitted.into_parts();
++        let mut preparing = PreparingQuery {
++            query, source: None, source_schema: None, relations: String::new(), aggregates: String::new(),
++            frame: LexicalFrame::from_allocation(workspace, allocation, original_live),
++        };
++        let mut memory = Memory::resume(&mut preparing.frame, original_live);
++        let keep_source = crate::substitute::needs_assignment_join_with_memory(&preparing.query, &names, &mut memory)
++            .map_err(EvaluationFailure::from)?;
++        let source_begin = memory.live_bytes();
++        preparing.source = if keep_source {
++            let source = preparing.query.clone_with_memory(&mut memory)
++                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared source AST")))?;
++            let bytes = core::alloc::Layout::new::<Query>().size();
++            memory.add_bytes(bytes)
++                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared source box")))?;
++            let source = purrdf_lex::allocation::try_boxed(source)
++                .map_err(|_| crate::EvalError::AllocationFailed { construct: "prepared source box" })?;
++            Some(source)
++        } else { None };
++        let source_live = memory.live_bytes().checked_sub(source_begin)
++            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
++        crate::substitute::join_assignments_with_prebinding_with_memory(&mut preparing.query, &names, &mut memory)
++            .map_err(EvaluationFailure::from)?;
++        drop(names);
++
++        admit_structure_with_memory::<true>(&preparing.query, &mut memory)?;
++        let before_plan = memory.live_bytes();
++        let planned = crate::property_fn_plan::plan_query_with_memory(
++            &preparing.query, relations, aggregates, parameters, &mut memory,
+         )?;
+-        let source_schema = changed_source_schema(&parsed, planned.as_ref());
+-        let prepared = Arc::new(PreparedQuery::admitted(
+-            planned.unwrap_or(parsed),
+-            source,
+-            source_schema,
+-            fingerprint.to_owned(),
+-            agg_fingerprint.to_owned(),
+-            &self.memory,
+-        ));
+-        let bytes = key
+-            .len()
+-            .saturating_add(4 * size_of::<usize>()) // Key and plan Arc counters.
+-            .saturating_add(prepared.retained_size_bytes());
+-        if self
+-            .entries
+-            .insert_with_eviction(key, prepared.clone(), bytes, |plan| {
+-                plan.memory.detach();
+-            })
+-        {
++        preparing.source_schema = changed_source_schema_admitted(&preparing.query, planned.as_ref(), workspace)?;
++        if let Some(planned) = planned {
++            let original_bytes = before_plan.checked_sub(source_live)
++                .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
++            drop(core::mem::replace(&mut preparing.query, planned));
++            memory.release_bytes(original_bytes)
++                .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared replaced AST")))?;
++        }
++        preparing.relations = memory.string(fingerprint)
++            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared relation identity")))?;
++        preparing.aggregates = memory.string(agg_fingerprint)
++            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared aggregate identity")))?;
++        // Retention statistics walk under the original memory, but confer no
++        // admission on the tree: every buffer above already holds its birth grant.
++        let bytes = prepared_payload_bytes_with_memory(
++            &preparing.query, preparing.source.as_deref(), preparing.source_schema.as_deref(),
++            preparing.relations.capacity(), preparing.aggregates.capacity(), &mut memory,
++        )?;
++        drop(memory);
++        let charge = PlanCharge::new(&self.memory, bytes);
++        let plan = crate::plan::PlanCache::default();
++        let value = PreparedQuery {
++            query: preparing.query, source: preparing.source, source_schema: preparing.source_schema,
++            relations: preparing.relations, aggregates: preparing.aggregates,
++            memory: charge, plan, certified_bytes: Some(bytes),
++            _allocation: preparing.frame.into_allocation(),
++        };
++        let prepared = if workspace.is_bounded() {
++            SharedWorkspace::new_admitted(value, workspace)?
++        } else {
++            Arc::new(value).into()
++        };
++        let retained = key.retained_size_bytes()
++            .checked_add(bytes)
++            .and_then(|n| n.checked_add(SharedWorkspace::<PreparedQuery>::control_bytes().saturating_sub(size_of::<PreparedQuery>())))
++            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
++        if self.entries.insert_with_eviction_admitted(key, prepared.clone(), retained, workspace, |plan| plan.memory.detach())? {
+             prepared.memory.retain();
+         }
+         Ok(prepared)
+     }
++
+ }
+ 
+ /// Every component a plan-cache key is built from, borrowed for the duration of
+@@ -832,67 +1026,49 @@
+     /// relations, aggregates and query fields.
+     const FIXED_LENGTH_PREFIXES: usize = 9;
+ 
+-    /// Append this key's bytes to `out`, which the caller supplies already empty:
+-    /// the key is only needed for the lookup, so [`PlanCache`] hands its reusable
+-    /// buffer here rather than paying for a fresh one per prepare.
+-    fn write_into(&self, out: &mut Vec<u8>) {
+-        fn length(out: &mut Vec<u8>, value: usize) {
+-            out.extend_from_slice(&(value as u64).to_le_bytes());
+-        }
+-        fn field(out: &mut Vec<u8>, value: &str) {
+-            purrdf_hash::frame::frame_le(out, value.as_bytes());
+-        }
+-        let Self {
+-            query,
+-            base_iri,
+-            options,
+-            relations,
+-            aggregates,
+-            parameters,
+-            exempt,
+-        } = *self;
+-        let lists = [
+-            &options.extension_fn_namespaces,
+-            &options.property_fn_namespaces,
+-            &options.property_fn_iris,
+-        ];
+-        let mut capacity = 1 + Self::FIXED_LENGTH_PREFIXES * size_of::<u64>();
++    /// Frame the same request identity into its original reusable array. Storage
++    /// mode distinguishes allocation certificates, never SPARQL behavior.
++    fn write_into(
++        &self, out: &mut PlanKeyScratch, workspace: &crate::WorkspaceCapability,
++    ) -> Result<(), crate::EvalError> {
++        fn length(out: &mut Vec<u8>, value: usize) { out.extend_from_slice(&(value as u64).to_le_bytes()); }
++        fn field(out: &mut Vec<u8>, value: &str) { purrdf_hash::frame::frame_le(out, value.as_bytes()); }
++        let Self { query, base_iri, options, relations, aggregates, parameters, exempt } = *self;
++        let lists = [&options.extension_fn_namespaces, &options.property_fn_namespaces, &options.property_fn_iris];
++        let mut capacity = 2usize.checked_add(Self::FIXED_LENGTH_PREFIXES * size_of::<u64>())
++            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+         for value in [base_iri.unwrap_or(""), relations, aggregates, query] {
+-            capacity += value.len();
++            capacity = capacity.checked_add(value.len()).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+         }
+         for list in lists {
+             for value in list {
+-                capacity += size_of::<u64>() + value.len();
++                capacity = capacity.checked_add(size_of::<u64>()).and_then(|n| n.checked_add(value.len()))
++                    .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+             }
+         }
+         for value in parameters.iter().chain(exempt) {
+-            capacity += size_of::<u64>() + value.len();
+-        }
+-        // A no-op once the buffer has seen a key this size, which is the steady state.
+-        out.reserve(capacity);
++            capacity = capacity.checked_add(size_of::<u64>()).and_then(|n| n.checked_add(value.len()))
++                .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
++        }
++        out.reserve(capacity, workspace)?;
++        let out = &mut out.bytes;
++        out.clear();
++        out.push(u8::from(workspace.is_bounded()));
+         out.push(u8::from(base_iri.is_some()));
+         field(out, base_iri.unwrap_or(""));
+         for list in lists {
+             length(out, list.len());
+-            for value in list {
+-                field(out, value);
+-            }
+-        }
+-        // The declared execution parameters, for the reason the registry fingerprints are
+-        // here: the same text under a different declaration is admitted differently.
++            for value in list { field(out, value); }
++        }
+         length(out, parameters.len());
+-        for value in parameters {
+-            field(out, value);
+-        }
+-        // The names declared pre-bound without a value change what the parse admits.
++        for value in parameters { field(out, value); }
+         length(out, exempt.len());
+-        for value in exempt {
+-            field(out, value);
+-        }
+-        for value in [relations, aggregates, query] {
+-            field(out, value);
+-        }
+-    }
++        for value in exempt { field(out, value); }
++        for value in [relations, aggregates, query] { field(out, value); }
++        debug_assert_eq!(out.len(), capacity, "the framed key fills its exact admitted layout");
++        Ok(())
++    }
++
+ }
+ 
+ /// The native, RDF-1.2-first multiset SPARQL engine.
+@@ -1300,7 +1476,7 @@
+                 !substitutions.is_empty(),
+                 options,
+             )?;
+-            check_plan_matches_relations(prepared, options, &crate::DetHashSet::default())?;
++            RequestParameters::none().check_admitted(prepared, options, &workspace.capability())?;
+             self.query_prepared_admitted(
+                 dataset,
+                 prepared,
+@@ -1381,7 +1557,7 @@
+                 )
+             })?;
+         let evaluation = (|| {
+-            substitutions.parameters.check(prepared, options)?;
++            substitutions.parameters.check_admitted(prepared, options, &workspace.capability())?;
+             self.query_prepared_admitted(
+                 dataset,
+                 prepared,
+@@ -1446,14 +1622,15 @@
+             );
+             fallible_admission_failure(dataset, failure)
+         })?;
+-        let prepared = match self.prepare_request(
++        let prepared = match self.prepare_request_admitted(
+             request.query,
+             request.base_iri,
+             options.env,
+             &substitutions.parameters,
++            &reporting.capability(),
+         ) {
+             Ok(prepared) => prepared,
+-            Err(diagnostic) => return finish_fallible_query(dataset, Err(diagnostic.into()), None),
++            Err(error) => return finish_fallible_query(dataset, Err(error), Some(&reporting.execution())),
+         };
+         self.query_prepared_fallible_view_admitted(dataset, &prepared, &substitutions, options)
+     }
+@@ -1516,24 +1693,29 @@
+         let publication = crate::user_fn::RefusalPublication::default();
+         checked_query_read(dataset, &publication, || {
+             let options = publication.options(dataset, options)?;
++            let reporting = bounded_workspace::reserve_reporting(dataset)
++                .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
++            let workspace = reporting.execution();
+             let admitted =
+-                AdmittedSubstitutions::requested(request.substitutions, options.declared_prebound);
+-            let prepared = self.prepare_request(
++                AdmittedSubstitutions::requested_admitted(request.substitutions, options.declared_prebound, &workspace.capability())?;
++            let prepared = self.prepare_request_admitted(
+                 request.query,
+                 request.base_iri,
+                 options.env,
+                 &admitted.parameters,
++                &workspace.capability(),
+             )?;
+-            let _reporting =
+-                bounded_workspace::reserve_reporting(dataset).map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
+-            let state = Arc::new(GovernorState::new(governors));
+-            self.query_governed_prepared_in_state(
++            let state = crate::workspace::SharedWorkspace::new_admitted(
++                GovernorState::with_workspace(governors, workspace.capability()), &workspace.capability(),
++            )?;
++            self.query_governed_prepared_admitted(
+                 dataset,
+                 &prepared,
+                 &admitted,
+                 options,
+                 &state,
+                 Sequencing::Free,
++                &workspace,
+             )
+         })
+     }
+@@ -1568,16 +1750,20 @@
+         let publication = crate::user_fn::RefusalPublication::default();
+         checked_query_read(dataset, &publication, || {
+             let options = publication.options(dataset, options)?;
+-            let _reporting =
+-                bounded_workspace::reserve_reporting(dataset).map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
+-            let state = Arc::new(GovernorState::new(governors));
+-            self.query_governed_prepared_in_state(
++            let reporting = bounded_workspace::reserve_reporting(dataset)
++                .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
++            let workspace = reporting.execution();
++            let state = crate::workspace::SharedWorkspace::new_admitted(
++                GovernorState::with_workspace(governors, workspace.capability()), &workspace.capability(),
++            )?;
++            self.query_governed_prepared_admitted(
+                 dataset,
+                 prepared,
+                 &AdmittedSubstitutions::prepared(substitutions),
+                 options,
+                 &state,
+                 Sequencing::Free,
++                &workspace,
+             )
+         })
+     }
+@@ -1751,7 +1937,7 @@
+         sequencing: Sequencing,
+         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+     ) -> Result<GovernedOutcome, EvaluationFailure> {
+-        substitutions.parameters.check(prepared, options)?;
++        substitutions.parameters.check_admitted(prepared, options, &workspace.capability())?;
+         // `prepared.relations` is the registry fingerprint computed once at prepare and
+         // just validated against `options.property_functions()` above — reused rather than
+         // re-derived, so this receipt's identity and the plan cache's key never disagree.
+@@ -1888,21 +2074,26 @@
+         let publication = crate::user_fn::RefusalPublication::default();
+         checked_query_read(dataset, &publication, || {
+             let options = publication.options(dataset, options)?;
++            let reporting = bounded_workspace::reserve_reporting(dataset)
++                .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
++            let workspace = reporting.execution();
+             let admitted =
+-                AdmittedSubstitutions::requested(request.substitutions, options.declared_prebound);
+-            let prepared = self.prepare_request(
++                AdmittedSubstitutions::requested_admitted(request.substitutions, options.declared_prebound, &workspace.capability())?;
++            let prepared = self.prepare_request_admitted(
+                 request.query,
+                 request.base_iri,
+                 options.env,
+                 &admitted.parameters,
++                &workspace.capability(),
+             )?;
+-            self.query_governed_prepared_in_state(
++            self.query_governed_prepared_admitted(
+                 dataset,
+                 &prepared,
+                 &admitted,
+                 options,
+-                state,
++                &crate::workspace::SharedWorkspace::from(state.clone()),
+                 Sequencing::Free,
++                &workspace,
+             )
+         })
+     }
+@@ -2003,15 +2194,16 @@
+             fallible_admission_failure(dataset, failure)
+                 .map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+         })?;
+-        let prepared = match self.prepare_request(
++        let prepared = match self.prepare_request_admitted(
+             request.query,
+             request.base_iri,
+             options.env,
+             &admitted.parameters,
++            &reporting.capability(),
+         ) {
+             Ok(prepared) => prepared,
+-            Err(diagnostic) => {
+-                return finish_governed_fallible_query(dataset, &state, Err(diagnostic.into()), None);
++            Err(error) => {
++                return finish_governed_fallible_query(dataset, &state, Err(error), Some(&reporting.execution()));
+             }
+         };
+         self.query_prepared_governed_fallible_admitted(
+@@ -2423,6 +2615,23 @@
+         )
+     }
+ 
++    fn prepare_for_admitted(
++        &self, query: &str, base_iri: Option<&str>,
++        env: &crate::extension_env::ExtensionEnv, workspace: &crate::WorkspaceCapability,
++    ) -> Result<PreparedHandle, EvaluationFailure> {
++        self.cache.borrow_mut().prepare_execution_plan_admitted(query, base_iri, env, &[], &[], workspace)
++    }
++
++    fn prepare_request_admitted(
++        &self, query: &str, base_iri: Option<&str>,
++        env: &crate::extension_env::ExtensionEnv, admitted: &RequestParameters<'_>,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<PreparedHandle, EvaluationFailure> {
++        self.cache.borrow_mut().prepare_execution_plan_admitted(
++            query, base_iri, env, &admitted.names, &admitted.exempt, workspace,
++        )
++    }
++
+     /// Bind every SPARQL-bodied function in `functions` against `env`: parse each
+     /// body under the environment's effective [`ParserOptions`] and
+     /// feasibility-order it against the environment's relation registry.
+@@ -2759,9 +2968,9 @@
+     {
+         preflight_fallible_view(dataset)?;
+         let _reporting = reserve_fallible_reporting(dataset)?;
+-        let prepared = match self.prepare_for(query_text, base_iri, options.env) {
++        let prepared = match self.prepare_for_admitted(query_text, base_iri, options.env, &_reporting.capability()) {
+             Ok(prepared) => prepared,
+-            Err(diagnostic) => return finish_fallible_read(dataset, Err(diagnostic.into()), Some(&_reporting.execution())),
++            Err(error) => return finish_fallible_read(dataset, Err(error), Some(&_reporting.execution())),
+         };
+         let workspace = reserve_fallible_workspace(dataset, &prepared.query, false, options)?;
+         let publication = crate::user_fn::RefusalPublication::default();
+@@ -2807,15 +3016,10 @@
+         let publication = crate::user_fn::RefusalPublication::default();
+         checked_query_read(dataset, &publication, || {
+             let options = publication.options(dataset, options)?;
+-            let prepared = self.prepare_for(query_text, base_iri, options.env)?;
+-            let workspace = bounded_workspace::reserve(
+-                dataset,
+-                &prepared.query,
+-                false,
+-                QueryOptions::EMPTY
+-                    .with_env(options.env)
+-                    .with_functions(options.functions),
+-            )?;
++            let reporting = bounded_workspace::reserve_reporting(dataset)
++                .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
++            let workspace = reporting.execution();
++            let prepared = self.prepare_for_admitted(query_text, base_iri, options.env, &workspace.capability())?;
+             self.explain_prepared(
+                 dataset,
+                 &prepared,
+@@ -3037,19 +3241,17 @@
+         let publication = crate::user_fn::RefusalPublication::default();
+         checked_query_read(dataset, &publication, || {
+             let options = publication.options(dataset, options)?;
++            let reporting = bounded_workspace::reserve_reporting(dataset)
++                .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
++            let workspace = reporting.execution();
+             let admitted =
+-                AdmittedSubstitutions::requested(request.substitutions, options.declared_prebound);
+-            let prepared = self.prepare_request(
++                AdmittedSubstitutions::requested_admitted(request.substitutions, options.declared_prebound, &workspace.capability())?;
++            let prepared = self.prepare_request_admitted(
+                 request.query,
+                 request.base_iri,
+                 options.env,
+                 &admitted.parameters,
+-            )?;
+-            let workspace = bounded_workspace::reserve(
+-                dataset,
+-                &prepared.query,
+-                !request.substitutions.is_empty(),
+-                options,
++                &workspace.capability(),
+             )?;
+             self.query_prepared_admitted(
+                 dataset,
+@@ -3619,18 +3821,16 @@
+         let publication = crate::user_fn::RefusalPublication::default();
+         checked_query_read(dataset, &publication, || {
+             let options = publication.options(dataset, options)?;
+-            let admitted = RequestParameters::of(
++            let reporting = bounded_workspace::reserve_reporting(dataset)
++                .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
++            let workspace = reporting.execution();
++            let admitted = RequestParameters::of_admitted(
+                 Prebindings::Borrowed(request.substitutions),
+                 options.declared_prebound,
+-            );
++                &workspace.capability(),
++            )?;
+             let prepared =
+-                self.prepare_request(request.query, request.base_iri, options.env, &admitted)?;
+-            let workspace = bounded_workspace::reserve(
+-                dataset,
+-                &prepared.query,
+-                !request.substitutions.is_empty(),
+-                options,
+-            )?;
++                self.prepare_request_admitted(request.query, request.base_iri, options.env, &admitted, &workspace.capability())?;
+             let ctx = self.eval_ctx(dataset, &workspace)?;
+             let mut ctx = apply_query_options(ctx, options)?;
+             let outcome = evaluate_with_substitutions(
+@@ -3672,19 +3872,17 @@
+         let publication = crate::user_fn::RefusalPublication::default();
+         checked_query_read(dataset, &publication, || {
+             let options = publication.options(dataset, options)?;
+-            let admitted = RequestParameters::of(
++            let reporting = bounded_workspace::reserve_reporting(dataset)
++                .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
++            let workspace = reporting.execution();
++            let admitted = RequestParameters::of_admitted(
+                 Prebindings::Borrowed(request.substitutions),
+                 options.declared_prebound,
+-            );
++                &workspace.capability(),
++            )?;
+             let prepared =
+-                self.prepare_request(request.query, request.base_iri, options.env, &admitted)?;
+-            admitted.check(&prepared, options)?;
+-            let workspace = bounded_workspace::reserve(
+-                dataset,
+-                &prepared.query,
+-                !request.substitutions.is_empty(),
+-                options,
+-            )?;
++                self.prepare_request_admitted(request.query, request.base_iri, options.env, &admitted, &workspace.capability())?;
++            admitted.check_admitted(&prepared, options, &workspace.capability())?;
+             let identity = relation_identity(&prepared, options.property_functions())?;
+             if let Some(refused) = self.admit_refusal(
+                 dataset,
+@@ -3800,7 +3998,7 @@
+ /// Keep evaluator failures allocation-free until the operational checkpoint has
+ /// had the first opportunity to publish its original typed cause.
+ #[derive(Debug)]
+-enum EvaluationFailure {
++pub(crate) enum EvaluationFailure {
+     Diagnostic(RdfDiagnostic),
+     RetainedDiagnostic(crate::RetainedDiagnostic),
+     Evaluation(crate::EvalError),
+@@ -3812,8 +4010,17 @@
+     Evaluation(crate::EvalError),
+ });
+ 
++impl From<crate::substitute::GroundFailure> for EvaluationFailure {
++    fn from(error: crate::substitute::GroundFailure) -> Self {
++        match error {
++            crate::substitute::GroundFailure::Diagnostic(error) => Self::RetainedDiagnostic(error),
++            crate::substitute::GroundFailure::Operational(error) => Self::Evaluation(error),
++        }
++    }
++}
++
+ impl EvaluationFailure {
+-    fn native_diagnostic(
++    pub(crate) fn native_diagnostic(
+         code: &str,
+         message: &(impl std::fmt::Display + ?Sized),
+         workspace: &crate::WorkspaceCapability,
+@@ -4709,6 +4916,7 @@
+     /// ([`QueryOptions::declared_prebound`]), sorted, without repeats and without any of
+     /// [`Self::names`]: read by the grouping check alone.
+     exempt: purrdf_core::SmallVec<[&'a str; 8]>,
++    _allocations: [Option<crate::WorkspaceAllocation>; 2],
+ }
+ 
+ impl<'a> RequestParameters<'a> {
+@@ -4722,10 +4930,11 @@
+     fn of_admitted(substitutions: Prebindings<'a>, declared: &'a [&'a str], workspace: &crate::WorkspaceCapability) -> Result<Self, crate::EvalError> {
+         let mut names = purrdf_core::SmallVec::<[&'a str; 8]>::new();
+         let mut exempt = purrdf_core::SmallVec::<[&'a str; 8]>::new();
+-        for count in [substitutions.len(), declared.len()] {
++        let mut allocations = [None, None];
++        for (index, count) in [substitutions.len(), declared.len()].into_iter().enumerate() {
+             if count > 8 {
+                 let bytes = count.checked_mul(size_of::<&str>()).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+-                workspace.retain(u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?)?;
++                allocations[index] = Some(workspace.charge(u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?)?);
+             }
+         }
+         names.try_reserve_exact(substitutions.len()).map_err(|_| crate::EvalError::AllocationFailed { construct: "request parameter names" })?;
+@@ -4740,7 +4949,7 @@
+             );
+         exempt.sort_unstable();
+         exempt.dedup();
+-        Ok(Self { names, exempt })
++        Ok(Self { names, exempt, _allocations: allocations })
+     }
+ 
+     /// No parameters: what a plan prepared by [`NativeSparqlEngine::prepare_query`] or
+@@ -4749,7 +4958,15 @@
+         Self {
+             names: purrdf_core::SmallVec::new(),
+             exempt: purrdf_core::SmallVec::new(),
+-        }
++            _allocations: [None, None],
++        }
++    }
++
++    fn check_admitted(&self, prepared: &PreparedQuery, options: QueryOptions<'_>, workspace: &crate::WorkspaceCapability) -> Result<(), EvaluationFailure> {
++        let mut frame = crate::workspace::LexicalFrame::new(workspace);
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
++        admit_structure_with_memory::<true>(&prepared.query, &mut memory)?;
++        check_plan_matches_registries_with_memory(prepared, options, &self.names, &mut memory)
+     }
+ 
+     /// Re-check `prepared` against `options` under these parameters — see
+@@ -4916,47 +5133,11 @@
+ /// differs from the one this plan was admitted against. A host failure while
+ /// reading declarations retains its own execution diagnostic.
+ fn check_prepared_registries_unchanged(
+-    prepared: &PreparedQuery,
+-    options: QueryOptions<'_>,
+-    workspace: &crate::WorkspaceCapability,
++    prepared: &PreparedQuery, options: QueryOptions<'_>, workspace: &crate::WorkspaceCapability,
+ ) -> Result<(), EvaluationFailure> {
+-    let diagnostic = |code: &str, message: &dyn std::fmt::Display| {
+-        EvaluationFailure::native_diagnostic(code, message, workspace)
+-    };
+-    let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions())
+-        .map_err(|e| {
+-            diagnostic(
+-                eval_diagnostic_code(&e, "native-sparql-property-function"),
+-                &e,
+-            )
+-        })?;
+-    if supplied != prepared.relations {
+-        return Err(diagnostic(
+-            "native-sparql-property-function",
+-            &"this prepared execution was prepared against a different property-function \
+-             registry than the one supplied for its evaluation; prepare it with \
+-             `NativeSparqlEngine::prepare_execution` under the SAME `QueryOptions` the \
+-             evaluation uses, because the registry is what decides which predicates are calls",
+-        ));
+-    }
+-    let supplied_aggregates =
+-        crate::agg_fn::registry_fingerprint(options.aggregates()).map_err(|e| {
+-            diagnostic(
+-                eval_diagnostic_code(&e, "native-sparql-aggregate-function"),
+-                &e,
+-            )
+-        })?;
+-    if supplied_aggregates != prepared.aggregates {
+-        return Err(diagnostic(
+-            "native-sparql-aggregate-function",
+-            &"this prepared execution was prepared against a different custom-aggregate \
+-             registry than the one supplied for its evaluation; prepare it with \
+-             `NativeSparqlEngine::prepare_execution` under the SAME `QueryOptions` the \
+-             evaluation uses, because the registry is what a `Custom` aggregate IRI resolves \
+-             against",
+-        ));
+-    }
+-    Ok(())
++    let mut frame = crate::workspace::LexicalFrame::new(workspace);
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
++    check_prepared_registries_with_memory(prepared, options, &mut memory)
+ }
+ 
+ /// The **plan-only** half of [`check_plan_matches_relations`]: the structural
+@@ -5018,6 +5199,80 @@
+ /// it), one past the `wasm32` host-stack bounds is
+ /// [`crate::EvalError::HOST_STACK_EXHAUSTED_CODE`], and every refusal of
+ /// [`purrdf_sparql_algebra::Query::validate`] is `native-sparql-algebra`.
++fn admit_structure_with_memory<const CONTEXTUAL: bool>(
++    query: &Query,
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++) -> Result<(), EvaluationFailure> {
++    crate::stack::height::admit_query_with_memory(query, memory)?;
++    let validation = if CONTEXTUAL {
++        query.validate_with_memory(memory)
++    } else {
++        query.validate_ordinary_with_memory(memory)
++    };
++    validation.map_err(|error| match error {
++        purrdf_sparql_algebra::ValidationError::Storage(error) => {
++            memory.admission_mut().storage_error(error, "prepared algebra validation").into()
++        }
++        error => EvaluationFailure::native_diagnostic(
++            "native-sparql-algebra", &error, memory.admission_mut().workspace(),
++        ),
++    })
++}
++
++fn check_plan_matches_registries_with_memory(
++    prepared: &PreparedQuery,
++    options: QueryOptions<'_>,
++    parameters: &[&str],
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++) -> Result<(), EvaluationFailure> {
++    let before = memory.live_bytes();
++    let planned = crate::property_fn_plan::recheck_query_with_memory(
++        &prepared.query, options.property_functions(), options.aggregates(), parameters, memory,
++    )?;
++    let equal = match &planned {
++        Some(query) => query.eq_with_memory(&prepared.query, memory)
++            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared algebra comparison")))?,
++        None => true,
++    };
++    if !equal {
++        return Err(EvaluationFailure::native_diagnostic(
++            "native-sparql-algebra",
++            &"prepared algebra requires feasibility replanning; prepare the changed algebra before execution",
++            memory.admission_mut().workspace(),
++        ));
++    }
++    let temporary = memory.live_bytes().checked_sub(before)
++        .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
++    drop(planned);
++    memory.release_bytes(temporary)
++        .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "prepared recheck temporaries")))?;
++    // These are live declaration reads, not a cached environment identity.
++    check_prepared_registries_with_memory(prepared, options, memory)
++}
++
++fn check_prepared_registries_with_memory(
++    prepared: &PreparedQuery, options: QueryOptions<'_>,
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++) -> Result<(), EvaluationFailure> {
++    let supplied = crate::property_fn_plan::registry_fingerprint_with_memory(options.property_functions(), memory)?;
++    if supplied != prepared.relations {
++        return Err(EvaluationFailure::native_diagnostic(
++            "native-sparql-property-function",
++            &"this plan was prepared against a different property-function registry than the one supplied for its evaluation; prepare it under the SAME QueryOptions, because the registry is what decides which predicates are calls",
++            memory.admission_mut().workspace(),
++        ));
++    }
++    let supplied_aggregates = crate::agg_fn::registry_fingerprint_with_memory(options.aggregates(), memory)?;
++    if supplied_aggregates != prepared.aggregates {
++        return Err(EvaluationFailure::native_diagnostic(
++            "native-sparql-aggregate-function",
++            &"this plan was prepared against a different custom-aggregate registry than the one supplied for its evaluation; prepare it under the SAME QueryOptions, because the registry is what a Custom aggregate IRI resolves against",
++            memory.admission_mut().workspace(),
++        ));
++    }
++    Ok(())
++}
++
+ fn admit_structure(query: &Query) -> Result<(), RdfDiagnostic> {
+     admit_structure_with::<true>(query)
+ }
+@@ -5050,60 +5305,14 @@
+ ///
+ /// As [`check_plan_matches_relations`], for the registry half.
+ fn check_plan_matches_registries(
+-    prepared: &PreparedQuery,
+-    options: QueryOptions<'_>,
+-    parameters: &crate::DetHashSet<Variable>,
++    prepared: &PreparedQuery, options: QueryOptions<'_>, parameters: &crate::DetHashSet<Variable>,
+ ) -> Result<(), RdfDiagnostic> {
+-    let planned = crate::property_fn_plan::recheck_query(
+-        &prepared.query,
+-        options.property_functions(),
+-        options.aggregates(),
+-        parameters,
+-    )
+-    .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
+-    if planned
+-        .as_ref()
+-        .is_some_and(|query| query != &prepared.query)
+-    {
+-        return Err(RdfDiagnostic::error(
+-            "native-sparql-algebra",
+-            "prepared algebra requires feasibility replanning; prepare the changed algebra before execution",
+-        ));
+-    }
+-    let supplied = crate::property_fn_plan::registry_fingerprint(options.property_functions())
+-        .map_err(|e| {
+-            RdfDiagnostic::error(
+-                eval_diagnostic_code(&e, "native-sparql-property-function"),
+-                e.to_string(),
+-            )
+-        })?;
+-    if supplied != prepared.relations {
+-        return Err(RdfDiagnostic::error(
+-            "native-sparql-property-function",
+-            "this plan was prepared against a different property-function registry than the \
+-             one supplied for its evaluation; prepare it with \
+-             `NativeSparqlEngine::prepare_query_with_options` under the SAME `QueryOptions` the \
+-             evaluation uses, because the registry is what decides which predicates are calls",
+-        ));
+-    }
+-    let supplied_aggregates =
+-        crate::agg_fn::registry_fingerprint(options.aggregates()).map_err(|e| {
+-            RdfDiagnostic::error(
+-                eval_diagnostic_code(&e, "native-sparql-aggregate-function"),
+-                e.to_string(),
+-            )
+-        })?;
+-    if supplied_aggregates != prepared.aggregates {
+-        return Err(RdfDiagnostic::error(
+-            "native-sparql-aggregate-function",
+-            "this plan was prepared against a different custom-aggregate registry than the \
+-             one supplied for its evaluation; prepare it with \
+-             `NativeSparqlEngine::prepare_query_with_options` under the SAME `QueryOptions` the \
+-             evaluation uses, because the registry is what a `Custom` aggregate IRI resolves \
+-             against",
+-        ));
+-    }
+-    Ok(())
++    let names: Vec<&str> = parameters.iter().map(Variable::as_str).collect();
++    let workspace = crate::WorkspaceCapability::resident();
++    let mut frame = crate::workspace::LexicalFrame::new(&workspace);
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
++    check_plan_matches_registries_with_memory(prepared, options, &names, &mut memory)
++        .map_err(EvaluationFailure::into_diagnostic)
+ }
+ 
+ /// The [`RelationIdentity`] a governed outcome carries: `prepared`'s already-computed
+--- a/crates/sparql-eval/src/plan_cache.rs
++++ b/crates/sparql-eval/src/plan_cache.rs
+@@ -218,7 +218,7 @@
+         self.insert_with_eviction_admitted(key, value, bytes, workspace, |_| {})
+     }
+ 
+-    fn insert_with_eviction_admitted(
++    pub(crate) fn insert_with_eviction_admitted(
+         &mut self,
+         key: K,
+         value: V,
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -61,6 +61,19 @@
+             SharedWorkspaceStorage::Caller(value) => std::sync::Arc::get_mut(value),
+             SharedWorkspaceStorage::Native(_) => None,
+         }
++    }
++
++    /// Borrow the resident public handle without copying its payload. Native
++    /// controls deliberately expose no Arc conversion or unadmitted copy.
++    pub(crate) fn caller_arc(&self) -> Option<std::sync::Arc<T>> {
++        match &self.0 {
++            SharedWorkspaceStorage::Caller(value) => Some(value.clone()),
++            SharedWorkspaceStorage::Native(_) => None,
++        }
++    }
++
++    pub(crate) fn control_bytes() -> usize {
++        Shared::<SharedWorkspacePayload<T>>::allocation_layout().size()
+     }
+ 
+     pub(crate) fn new_admitted(
+@@ -219,6 +232,16 @@
+     fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
+         self.resize_live(live)
+             .map_err(|_| purrdf_lex::allocation::StorageError::AdmissionFailed)
++    }
++}
++
++impl purrdf_sparql_algebra::parser::ParserAdmission for LexicalFrame {
++    fn text(&mut self, text: &dyn core::fmt::Display) -> Result<purrdf_lex::allocation::SharedText, purrdf_lex::allocation::StorageError> {
++        if self.failure.is_some() { return Err(purrdf_lex::allocation::StorageError::AdmissionFailed); }
++        self.workspace.authored_text(text).map_err(|error| {
++            self.failure = Some(error);
++            purrdf_lex::allocation::StorageError::AdmissionFailed
++        })
+     }
+ }
+ 

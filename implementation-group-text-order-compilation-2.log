@@ -1,0 +1,90 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error: function `merge` is never used
+    --> crates/sparql-eval/src/binop.rs:1838:4
+     |
+1838 | fn merge<I: ViewTermId>(
+     |    ^^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: function `padded_left_row` is never used
+    --> crates/sparql-eval/src/binop.rs:1868:4
+     |
+1868 | fn padded_left_row<I: ViewTermId>(left: &Solution<I>, width: usize) -> Solution<I> {
+     |    ^^^^^^^^^^^^^^^
+
+error: function `shallow_order` is never used
+    --> crates/sparql-eval/src/modifier.rs:1609:4
+     |
+1609 | fn shallow_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
+     |    ^^^^^^^^^^^^^
+
+error: field `0` is never read
+  --> crates/sparql-eval/src/parsed_value.rs:19:13
+   |
+19 |     Invalid(Option<purrdf_xsd::ErrorCode>),
+   |     ------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |     |
+   |     field in this variant
+   |
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+   |
+19 -     Invalid(Option<purrdf_xsd::ErrorCode>),
+19 +     Invalid(()),
+   |
+
+error: field `allocation` is never read
+  --> crates/sparql-eval/src/solution.rs:44:5
+   |
+41 | struct SchemaData {
+   |        ---------- field in this struct
+...
+44 |     allocation: Option<crate::WorkspaceAllocation>,
+   |     ^^^^^^^^^^
+   |
+   = note: `SchemaData` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+error: associated functions `link` and `link_without_exists` are never used
+   --> crates/sparql-eval/src/vm/mod.rs:207:19
+    |
+205 | impl<'e, I: Copy + PartialEq> Linked<'e, I> {
+    | ------------------------------------------- associated functions in this implementation
+206 |     /// Link `program`, compiled from `expr`, to a call over `schema`.
+207 |     pub(crate) fn link<D: DatasetView<Id = I> + Sync>(
+    |                   ^^^^
+...
+254 |     pub(crate) fn link_without_exists<D: DatasetView<Id = I> + Sync>(
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+error: method `has_failed` is never used
+   --> crates/sparql-eval/src/workspace.rs:564:19
+    |
+559 | impl<E: Clone> QueryWorkspace<E> {
+    | -------------------------------- method in this implementation
+...
+564 |     pub(crate) fn has_failed(&self) -> bool {
+    |                   ^^^^^^^^^^
+
+error: missing documentation for a variant
+   --> crates/sparql-eval/src/fallible.rs:112:5
+    |
+112 |     BudgetExhausted {
+    |     ^^^^^^^^^^^^^^^
+    |
+    = note: `-D missing-docs` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(missing_docs)]`
+
+error: type does not implement `Debug`; consider adding `#[derive(Debug)]` or a manual implementation
+   --> crates/sparql-eval/src/workspace.rs:229:1
+    |
+229 | / pub struct AdmittedVecIntoIter<T> {
+230 | |     values: std::vec::IntoIter<T>,
+231 | |     _allocation: Option<WorkspaceAllocation>,
+232 | | }
+    | |_^
+    |
+    = note: `-D missing-debug-implementations` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(missing_debug_implementations)]`
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 9 previous errors

@@ -1,0 +1,219 @@
+diff --git a/crates/xsd/src/exact/cost.rs b/crates/xsd/src/exact/cost.rs
+--- a/crates/xsd/src/exact/cost.rs
++++ b/crates/xsd/src/exact/cost.rs
+@@ -270,11 +270,11 @@
+ 
+ /// Checked old/new destination overlap of the native word-chunk 10^digits body.
+ pub(crate) fn power_of_ten_layout(
+-    digits: u32,
++    digits: u64,
+ ) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
+     use crate::bigint::LimbScratchError::SizeOverflow;
+     if digits == 0 { return Ok(NumericOperationLayout::INLINE); }
+-    let limbs = limbs_for_digits(u64::from(digits));
++    let limbs = limbs_for_digits(digits);
+     let capacity = limbs.checked_add(1).ok_or(SizeOverflow)?;
+     let heap = if limbs <= 3 { 0 } else { capacity };
+     NumericOperationLayout::words(heap.checked_mul(2).ok_or(SizeOverflow)?, heap)
+diff --git a/crates/xsd/src/exact/decimal.rs b/crates/xsd/src/exact/decimal.rs
+--- a/crates/xsd/src/exact/decimal.rs
++++ b/crates/xsd/src/exact/decimal.rs
+@@ -549,7 +549,7 @@
+         storage: &impl crate::bigint::scratch::Allocate,
+         admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+     ) -> Result<u64, crate::bigint::LimbScratchError> {
+-        admit(cost::power_of_ten_layout(self.scale)?)?;
++        admit(cost::power_of_ten_layout(u64::from(self.scale))?)?;
+         let denominator = BigInt::pow10_using(self.scale, storage)?;
+         let live = denominator.allocated_bytes();
+         self.unscaled.with_bigint(|numerator| {
+@@ -616,28 +616,62 @@
+     /// rounds to a multiple of `10^-precision`, as XPath F&O 3.1 defines.
+     #[must_use]
+     pub fn round(&self, precision: i32, rounding: Rounding) -> Self {
++        self.round_admitted_using(precision, rounding, &crate::bigint::scratch::Unbounded, &mut |_| Ok(()))
++            .expect("unbounded integer storage")
++    }
++
++    /// Round through the existing coefficient/division law with native admission.
++    /// # Errors
++    /// Returns admission/allocation refusal before conversion, power or output.
++    pub fn try_round_admitted(
++        &self, precision: i32, rounding: Rounding,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.round_admitted_using(precision, rounding, &crate::bigint::scratch::Fallible, admit)
++    }
++
++    /// Truncate toward zero for the integer cast, with native destinations admitted.
++    /// # Errors
++    /// Returns admission/allocation refusal before any owned coefficient copy.
++    pub fn try_to_integer_truncated_admitted(
++        &self,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Integer, crate::bigint::LimbScratchError> {
++        self.try_round_admitted(0, Rounding::TowardZero, admit).map(|value| value.unscaled)
++    }
++
++    fn round_admitted_using(
++        &self, precision: i32, rounding: Rounding, storage: &impl crate::bigint::scratch::Allocate,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
+         let precision_wide = i64::from(precision);
+         let scale = i64::from(self.scale);
+         if precision_wide >= scale {
+-            return self.clone();
++            let bytes = cost::live_integer_bytes(&[&self.unscaled])?;
++            admit(cost::NumericOperationLayout::bytes(bytes, bytes)?)?;
++            return self.copy_using(storage);
+         }
+         let negative = self.is_negative();
+-        // Digits to discard from the coefficient: positive, below 2^33.
+         let drop = (scale - precision_wide).unsigned_abs();
+-        let (kept, increment) = discard_digits(&self.unscaled, drop, rounding, negative);
++        let (kept, increment) = discard_digits_admitted_using(
++            &self.unscaled, drop, rounding, negative, storage, admit,
++        )?;
+         let kept = if increment {
+-            if negative {
+-                &kept - &Integer::ONE
+-            } else {
+-                &kept + &Integer::ONE
+-            }
+-        } else {
+-            kept
+-        };
++            let op = if negative { cost::IntegerOperation::Subtract } else { cost::IntegerOperation::Add };
++            let live = cost::live_integer_bytes(&[&kept])?;
++            admit(kept.operation_layout(&Integer::ONE, op)?.with_live(live)?)?;
++            if negative { kept.sub_using(&Integer::ONE, storage)? }
++            else { kept.add_using(&Integer::ONE, storage)? }
++        } else { kept };
+         if precision >= 0 {
+-            Self::new(kept, precision.unsigned_abs())
++            admit(cost::normalize_layout(&kept, precision.unsigned_abs())?)?;
++            Self::new_using(kept, precision.unsigned_abs(), storage)
+         } else {
+-            Self::new(scale_up(&kept, precision.unsigned_abs()), 0)
++            let live = cost::live_integer_bytes(&[&kept])?;
++            admit(cost::scale_up_layout(&kept, precision.unsigned_abs())?.with_live(live)?)?;
++            let result = scale_up_using(&kept, precision.unsigned_abs(), storage)?;
++            drop(kept);
++            Self::new_using(result, 0, storage)
+         }
+     }
+ 
+@@ -1278,50 +1312,42 @@
+ 
+ /// Split `coefficient`'s magnitude at `drop` digits: the kept (truncated) signed
+ /// coefficient, and whether `rounding` increments its magnitude.
+-fn discard_digits(
+-    coefficient: &Integer,
+-    drop: u64,
+-    rounding: Rounding,
+-    negative: bool,
+-) -> (Integer, bool) {
+-    if coefficient.is_zero() {
+-        return (Integer::ZERO, false);
+-    }
+-    if drop > coefficient.decimal_digits() {
+-        // Everything is discarded and the excess is below half a unit
+-        // (`|c| < 10^digits ≤ 10^(drop − 1)`), but nonzero.
+-        let increment = rounding.increments(negative, false, Ordering::Less, true);
+-        return (Integer::ZERO, increment);
++fn discard_digits_admitted_using(
++    coefficient: &Integer, drop: u64, rounding: Rounding, negative: bool,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<(Integer, bool), crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    if coefficient.is_zero() { return Ok((Integer::ZERO, false)); }
++    // A certified upper bound is enough for this strict early decision.
++    // Close cases still execute the exact native quotient and comparison.
++    if drop > cost::digits_for_bits(coefficient.binary_bits()) {
++        return Ok((Integer::ZERO, rounding.increments(negative, false, Ordering::Less, true)));
+     }
+-    if let Some(value) = coefficient.as_i128()
+-        && drop <= u64::from(MAX_I128_POW10)
+-    {
++    if let Some(value) = coefficient.as_i128() && drop <= u64::from(MAX_I128_POW10) {
+         let unit = POW10[usize::try_from(drop).expect("at most 38")];
+         let magnitude = value.unsigned_abs();
+         let (kept, rest) = (magnitude / unit, magnitude % unit);
+-        // `rest < 10^38`, so doubling it stays inside u128.
+         let half = (rest * 2).cmp(&unit);
+         let increment = rounding.increments(negative, kept & 1 == 1, half, rest != 0);
+         let kept = Integer::from(kept);
+-        return (if negative { -kept } else { kept }, increment);
++        return Ok((if negative { kept.negated_owned() } else { kept }, increment));
+     }
+-    let (kept, rest) = coefficient.to_bigint().div_rem_pow10(drop);
+-    let increment = if rest.is_zero() {
+-        false
+-    } else {
+-        // 0 < 2·rest < 2·10^drop, so it reaches 10^drop exactly when it has
+-        // drop + 1 digits, and equals it when those are a one and drop zeros.
+-        let twice = rest.abs().mul_small(2);
+-        let half = if twice.decimal_digits() <= drop {
+-            Ordering::Less
+-        } else if twice.trailing_decimal_zeros() == drop {
+-            Ordering::Equal
+-        } else {
+-            Ordering::Greater
+-        };
+-        rounding.increments(negative, kept.is_odd(), half, true)
+-    };
+-    (Integer::from_bigint(kept), increment)
++    admit(cost::power_of_ten_layout(drop)?)?;
++    let power = BigInt::pow10_wide_using(drop, storage)?;
++    let power_live = power.allocated_bytes();
++    admit(cost::integer_division_layout(coefficient.limb_len(), power.limb_len() as u64)?.with_live(power_live)?)?;
++    let (kept, rest) = coefficient.with_bigint(|big| big.div_rem_using(&power, storage))?
++        .expect("power of ten is nonzero");
++    let kept = Integer::from_bigint(kept);
++    let rest = Integer::from_bigint(rest.with_sign(false));
++    if rest.is_zero() { return Ok((kept, false)); }
++    let live = cost::live_integer_bytes(&[&kept, &rest])?.checked_add(power_live).ok_or(SizeOverflow)?;
++    admit(rest.operation_layout(&rest, cost::IntegerOperation::Add)?.with_live(live)?)?;
++    let twice = rest.add_using(&rest, storage)?;
++    let half = twice.with_bigint(|big| big.cmp(&power));
++    let increment = rounding.increments(negative, kept.is_odd(), half, true);
++    Ok((kept, increment))
+ }
+ 
+ /// `value` with every factor `prime` (2 or 5) divided out, and how many there
+diff --git a/crates/xsd/src/bigint.rs b/crates/xsd/src/bigint.rs
+--- a/crates/xsd/src/bigint.rs
++++ b/crates/xsd/src/bigint.rs
+@@ -953,18 +953,24 @@
+     }
+ 
+     fn mul_power_using(
+-        &self,
+-        base: u64,
+-        exp: u32,
+-        chunk: u32,
+-        storage: &impl Allocate,
++        &self, base: u64, exp: u32, chunk: u32, storage: &impl Allocate,
+     ) -> Result<Self, LimbScratchError> {
++        self.mul_power_wide_using(base, u64::from(exp), chunk, storage)
++    }
++
++    pub(crate) fn pow10_wide_using(exp: u64, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
++        Self::one().mul_power_wide_using(10, exp, DECIMAL_CHUNK as u32, storage)
++    }
++
++    fn mul_power_wide_using(
++        &self, base: u64, exp: u64, chunk: u32, storage: &impl Allocate,
++    ) -> Result<Self, LimbScratchError> {
+         let mut magnitude = storage.copy(&self.magnitude)?;
+         let mut remaining = exp;
+         while remaining != 0 {
+-            let step = remaining.min(chunk);
++            let step = u32::try_from(remaining.min(u64::from(chunk))).expect("bounded by a machine chunk");
+             magnitude = mag_mul_small_add(&magnitude, base.pow(step), 0, storage)?;
+-            remaining -= step;
++            remaining -= u64::from(step);
+         }
+         Ok(Self::from_parts(self.negative, magnitude))
+     }

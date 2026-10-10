@@ -1,0 +1,19 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+error: unnecessary qualification
+    --> crates/iri/src/langtag.rs:1843:6
+     |
+1843 | ) -> core::result::Result<String, purrdf_lex::allocation::StorageError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1843 - ) -> core::result::Result<String, purrdf_lex::allocation::StorageError> {
+1843 + ) -> Result<String, purrdf_lex::allocation::StorageError> {
+     |
+
+error: could not compile `purrdf-iri` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

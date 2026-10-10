@@ -1,0 +1,139 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+error[E0599]: no method named `clone_with_memory` found for reference `&IriError` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1563:67
+     |
+1563 |                 Ok::<_, StorageError>((memory.string(iri)?, error.clone_with_memory(memory)?))
+     |                                                                   ^^^^^^^^^^^^^^^^^ method not found in `&IriError`
+
+error[E0599]: no method named `clone_with_memory` found for reference `&RdfLocation` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1589:37
+     |
+1589 |             let location = location.clone_with_memory(memory)?;
+     |                                     ^^^^^^^^^^^^^^^^^ method not found in `&RdfLocation`
+
+error[E0599]: no method named `clone_with_memory` found for reference `&RdfLocation` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1650:41
+     |
+1650 |                 let location = location.clone_with_memory(memory)?;
+     |                                         ^^^^^^^^^^^^^^^^^ method not found in `&RdfLocation`
+
+error[E0382]: use of moved value: `node`
+   --> crates/rdf-core/src/xsd_regex/xpath/compile.rs:706:25
+    |
+699 |     fn node(&mut self, node: Node) -> Result<usize, Error> {
+    |                        ---- move occurs because `node` has type `compile::Node`, which does not implement the `Copy` trait
+...
+703 |         let properties = super::pike::node_properties(node, |child| self.properties[child]);
+    |                                                       ---- value moved here
+...
+706 |         self.nodes.push(node);
+    |                         ^^^^ value used here after move
+    |
+note: consider changing this parameter type in function `node_properties` to borrow instead if owning the value isn't necessary
+   --> crates/rdf-core/src/xsd_regex/xpath/pike.rs:243:37
+    |
+243 | pub(super) fn node_properties(node: Node, child: impl Fn(usize) -> (bool, bool)) -> (bool, bool) {
+    |               ---------------       ^^^^ this parameter takes ownership of the value
+    |               |
+    |               in this function
+note: if `compile::Node` implemented `Clone`, you could clone the value
+   --> crates/rdf-core/src/xsd_regex/xpath/compile.rs:121:1
+    |
+121 | pub(super) enum Node {
+    | ^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+...
+703 |         let properties = super::pike::node_properties(node, |child| self.properties[child]);
+    |                                                       ---- you could clone this value
+
+error[E0508]: cannot move out of type `[compile::Node]`, a non-copy slice
+   --> crates/rdf-core/src/xsd_regex/xpath/pike.rs:304:49
+    |
+304 |         let (empty, nullable) = node_properties(nodes[node], |child| (links[child].empty, links[child].nullable));
+    |                                                 ^^^^^^^^^^^
+    |                                                 |
+    |                                                 cannot move out of here
+    |                                                 move occurs because `nodes[_]` has type `compile::Node`, which does not implement the `Copy` trait
+    |
+note: if `compile::Node` implemented `Clone`, you could clone the value
+   --> crates/rdf-core/src/xsd_regex/xpath/compile.rs:121:1
+    |
+121 | pub(super) enum Node {
+    | ^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+    |
+   ::: crates/rdf-core/src/xsd_regex/xpath/pike.rs:304:49
+    |
+304 |         let (empty, nullable) = node_properties(nodes[node], |child| (links[child].empty, links[child].nullable));
+    |                                                 ----------- you could clone this value
+
+Some errors have detailed explanations: E0382, E0508, E0599.
+For more information about an error, try `rustc --explain E0382`.
+error: could not compile `purrdf-core` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0599]: no method named `clone_with_memory` found for reference `&purrdf_iri::IriError` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1563:67
+     |
+1563 |                 Ok::<_, StorageError>((memory.string(iri)?, error.clone_with_memory(memory)?))
+     |                                                                   ^^^^^^^^^^^^^^^^^ method not found in `&purrdf_iri::IriError`
+
+error[E0599]: no method named `clone_with_memory` found for reference `&diagnostic::RdfLocation` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1589:37
+     |
+1589 |             let location = location.clone_with_memory(memory)?;
+     |                                     ^^^^^^^^^^^^^^^^^ method not found in `&diagnostic::RdfLocation`
+
+error[E0599]: no method named `clone_with_memory` found for reference `&diagnostic::RdfLocation` in the current scope
+    --> crates/rdf-core/src/ir/builder.rs:1650:41
+     |
+1650 |                 let location = location.clone_with_memory(memory)?;
+     |                                         ^^^^^^^^^^^^^^^^^ method not found in `&diagnostic::RdfLocation`
+
+error[E0382]: use of moved value: `node`
+   --> crates/rdf-core/src/xsd_regex/xpath/compile.rs:706:25
+    |
+699 |     fn node(&mut self, node: Node) -> Result<usize, Error> {
+    |                        ---- move occurs because `node` has type `xsd_regex::xpath::compile::Node`, which does not implement the `Copy` trait
+...
+703 |         let properties = super::pike::node_properties(node, |child| self.properties[child]);
+    |                                                       ---- value moved here
+...
+706 |         self.nodes.push(node);
+    |                         ^^^^ value used here after move
+    |
+note: consider changing this parameter type in function `node_properties` to borrow instead if owning the value isn't necessary
+   --> crates/rdf-core/src/xsd_regex/xpath/pike.rs:243:37
+    |
+243 | pub(super) fn node_properties(node: Node, child: impl Fn(usize) -> (bool, bool)) -> (bool, bool) {
+    |               ---------------       ^^^^ this parameter takes ownership of the value
+    |               |
+    |               in this function
+note: if `xsd_regex::xpath::compile::Node` implemented `Clone`, you could clone the value
+   --> crates/rdf-core/src/xsd_regex/xpath/compile.rs:121:1
+    |
+121 | pub(super) enum Node {
+    | ^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+...
+703 |         let properties = super::pike::node_properties(node, |child| self.properties[child]);
+    |                                                       ---- you could clone this value
+
+error[E0508]: cannot move out of type `[xsd_regex::xpath::compile::Node]`, a non-copy slice
+   --> crates/rdf-core/src/xsd_regex/xpath/pike.rs:304:49
+    |
+304 |         let (empty, nullable) = node_properties(nodes[node], |child| (links[child].empty, links[child].nullable));
+    |                                                 ^^^^^^^^^^^
+    |                                                 |
+    |                                                 cannot move out of here
+    |                                                 move occurs because `nodes[_]` has type `xsd_regex::xpath::compile::Node`, which does not implement the `Copy` trait
+    |
+note: if `xsd_regex::xpath::compile::Node` implemented `Clone`, you could clone the value
+   --> crates/rdf-core/src/xsd_regex/xpath/compile.rs:121:1
+    |
+121 | pub(super) enum Node {
+    | ^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+    |
+   ::: crates/rdf-core/src/xsd_regex/xpath/pike.rs:304:49
+    |
+304 |         let (empty, nullable) = node_properties(nodes[node], |child| (links[child].empty, links[child].nullable));
+    |                                                 ----------- you could clone this value
+
+error: could not compile `purrdf-core` (lib test) due to 5 previous errors

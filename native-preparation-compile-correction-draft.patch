@@ -1,0 +1,260 @@
+--- a/crates/sparql-algebra/src/owned.rs
++++ b/crates/sparql-algebra/src/owned.rs
+@@ -4,7 +4,7 @@
+ //! Original owners for allocation-free drop and bottom-up iterative cloning.
+ 
+ use crate::algebra::{
+-    AggregateExpression, Expression, GraphPattern, OrderExpression, PropertyFunctionCall,
++    AggregateExpression, Expression, Function, GraphPattern, OrderExpression, PropertyFunctionCall,
+     PropertyPathExpression,
+ };
+ use crate::ast::{GroundTerm, GroundTriple, TermPattern, TriplePattern};
+--- a/crates/sparql-algebra/src/algebra.rs
++++ b/crates/sparql-algebra/src/algebra.rs
+@@ -93,8 +93,8 @@
+     /// `"1.2-basic"`; anything else becomes [`Self::Other`] verbatim.
+     #[must_use]
+     pub fn parse(raw: &str) -> Self {
+-        let mut resident = purrdf_lex::allocation::Resident;
+-        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
++        let mut resident = Resident;
++        let mut memory = Memory::new(&mut resident);
+         Self::parse_with_memory(raw, &mut memory).expect("resident version storage")
+     }
+ 
+@@ -102,7 +102,7 @@
+     ///
+     /// # Errors
+     /// Returns physical storage refusal for an owned unknown spelling.
+-    pub fn parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(raw: &str, memory: &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<Self, purrdf_lex::allocation::StorageError> {
++    pub fn parse_with_memory<S: Admission + ?Sized>(raw: &str, memory: &mut Memory<'_, S>) -> Result<Self, StorageError> {
+         match raw {
+             "1.2" => Ok(Self::V12),
+             "1.2-basic" => Ok(Self::V12Basic),
+--- a/crates/sparql-algebra/src/validate.rs
++++ b/crates/sparql-algebra/src/validate.rs
+@@ -45,20 +45,20 @@
+ /// triple term, so it needs no more stack however deep the term nests and does
+ /// not allocate unless a subject nests.
+ fn triple_term_nesting<T: TripleTermSlot>(root: &T) -> usize {
+-    let mut admission = purrdf_lex::allocation::Resident;
+-    let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
++    let mut admission = Resident;
++    let mut memory = Memory::new(&mut admission);
+     triple_term_nesting_with_memory(root, &mut memory).expect("resident triple nesting census")
+ }
+ 
+-fn triple_term_nesting_with_memory<T: TripleTermSlot, S: purrdf_lex::allocation::Admission + ?Sized>(
+-    root: &T, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+-) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
++fn triple_term_nesting_with_memory<T: TripleTermSlot, S: Admission + ?Sized>(
++    root: &T, memory: &mut Memory<'_, S>,
++) -> std::result::Result<usize, StorageError> {
+     let mut deepest = 0_usize;
+     let mut pending = purrdf_lex::walk::WorkList::<(&T, usize), 8>::new();
+     let mut next = Some((root, 0_usize));
+     while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
+         if let Some((subject, object)) = term.subject_and_object() {
+-            let depth = above.checked_add(1).ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
++            let depth = above.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+             deepest = deepest.max(depth);
+             if subject.subject_and_object().is_some() { pending.try_push_admitted((subject, depth), memory)?; }
+             next = Some((object, depth));
+@@ -83,9 +83,9 @@
+     /// Count nesting through the same native body under concrete work-list admission.
+     /// # Errors
+     /// Returns checked depth overflow, admission refusal or native allocator failure.
+-    pub fn triple_term_nesting_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+-        &self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+-    ) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
++    pub fn triple_term_nesting_with_memory<S: Admission + ?Sized>(
++        &self, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<usize, StorageError> {
+         triple_term_nesting_with_memory(self, memory)
+     }
+ 
+@@ -97,8 +97,8 @@
+     /// own work list, so a term nested to any depth needs no more machine stack, and
+     /// a term that is not a triple term is answered without allocating.
+     pub fn for_each_variable<'a>(&'a self, mut visit: impl FnMut(&'a Variable)) {
+-        let mut admission = purrdf_lex::allocation::Resident;
+-        let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
++        let mut admission = Resident;
++        let mut memory = Memory::new(&mut admission);
+         self.for_each_variable_with_memory(&mut memory, |variable, _| {
+             visit(variable);
+             Ok::<(), core::convert::Infallible>(())
+@@ -112,10 +112,10 @@
+     /// # Errors
+     /// Returns the original visitor error or physical work-list failure.
+     pub fn for_each_variable_with_memory<'a, S, E>(
+-        &'a self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+-        mut visit: impl FnMut(&'a Variable, &mut purrdf_lex::allocation::Memory<'_, S>) -> std::result::Result<(), E>,
++        &'a self, memory: &mut Memory<'_, S>,
++        mut visit: impl FnMut(&'a Variable, &mut Memory<'_, S>) -> std::result::Result<(), E>,
+     ) -> std::result::Result<(), crate::walk::MutationError<E>>
+-    where S: purrdf_lex::allocation::Admission + ?Sized,
++    where S: Admission + ?Sized,
+     {
+         use crate::walk::MutationError;
+         let mut pending: purrdf_lex::walk::WorkList<&'a Self, 8> = purrdf_lex::walk::WorkList::new();
+@@ -175,9 +175,9 @@
+     /// Count nesting through the same native body under concrete work-list admission.
+     /// # Errors
+     /// Returns checked depth overflow, admission refusal or native allocator failure.
+-    pub fn triple_term_nesting_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+-        &self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+-    ) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
++    pub fn triple_term_nesting_with_memory<S: Admission + ?Sized>(
++        &self, memory: &mut Memory<'_, S>,
++    ) -> std::result::Result<usize, StorageError> {
+         triple_term_nesting_with_memory(self, memory)
+     }
+ }
+@@ -430,7 +430,7 @@
+         Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
+         Err(purrdf_iri::IriReadError::Lexical(error)) => {
+             let bytes = error.owned_text_bytes();
+-            let failure = invalid(&error, memory, memory);
++            let failure = invalid(&error, memory);
+             drop(error);
+             memory.release_bytes(bytes)?;
+             return Err(failure);
+--- a/crates/sparql-algebra/src/walk.rs
++++ b/crates/sparql-algebra/src/walk.rs
+@@ -646,8 +646,8 @@
+ ) -> Result<(), MutationError<E>>
+ where S: purrdf_lex::allocation::Admission + ?Sized,
+ {
+-    let mut pending: purrdf_lex::walk::WorkList<&'e mut Expression, 16> =
+-        purrdf_lex::walk::WorkList::new();
++    let mut pending: WorkList<&'e mut Expression, 16> =
++        WorkList::new();
+     for root in roots {
+         pending.try_push_admitted(root, memory).map_err(MutationError::Storage)?;
+     }
+@@ -661,43 +661,12 @@
+ }
+ 
+ 
+-/// Rewrite expressions with the same traversal and admitted working storage.
+-///
+-/// # Errors
+-/// Returns visitor errors or physical working-storage refusal.
+-pub fn for_each_expression_mut_with_memory<'e, S, E>(
+-    roots: impl IntoIterator<Item = &'e mut Expression>,
+-    mut visit: impl FnMut(&mut Expression, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+-    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+-) -> Result<(), E>
+-where
+-    S: purrdf_lex::allocation::Admission + ?Sized,
+-    E: From<purrdf_lex::allocation::StorageError>,
+-{
+-    let mut pending = memory.collect(roots)?;
+-    pending.reverse();
+-    while let Some(expr) = pending.pop() {
+-        visit(expr, memory)?;
+-        let mut failure = None;
+-        push_operands_mut(expr, |operand| {
+-            if failure.is_none() {
+-                if let Err(error) = memory.push(&mut pending, operand) {
+-                    failure = Some(error);
+-                }
+-            }
+-        });
+-        if let Some(error) = failure {
+-            return Err(error.into());
+-        }
+-    }
+-    memory.release_vec(pending)?;
+-    Ok(())
+-}
++
+ 
+ /// Push the rewritten expression operands in reverse source order.
+ fn push_operands_mut_with_memory<'e, S: purrdf_lex::allocation::Admission + ?Sized>(
+     expr: &'e mut Expression,
+-    pending: &mut purrdf_lex::walk::WorkList<&'e mut Expression, 16>,
++    pending: &mut WorkList<&'e mut Expression, 16>,
+     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+ ) -> Result<(), purrdf_lex::allocation::StorageError> {
+     match expr {
+@@ -708,14 +677,14 @@
+         | Expression::Exists(_) => {}
+         Expression::Or(operands) | Expression::And(operands) => {
+             for operand in operands.iter_mut().rev() {
+-                push(operand);
++                pending.try_push_admitted(operand, memory)?;
+             }
+         }
+         Expression::Arithmetic(first, steps) => {
+             for (_, operand) in steps.iter_mut().rev() {
+-                push(operand);
++                pending.try_push_admitted(operand, memory)?;
+             }
+-            push(first);
++            pending.try_push_admitted(first, memory)?;
+         }
+         Expression::Equal(left, right)
+         | Expression::SameTerm(left, right)
+@@ -723,26 +692,26 @@
+         | Expression::GreaterOrEqual(left, right)
+         | Expression::Less(left, right)
+         | Expression::LessOrEqual(left, right) => {
+-            push(right);
+-            push(left);
++            pending.try_push_admitted(right, memory)?;
++            pending.try_push_admitted(left, memory)?;
+         }
+         Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
+-            push(inner);
++            pending.try_push_admitted(inner, memory)?;
+         }
+         Expression::In(target, list) => {
+             for operand in list.iter_mut().rev() {
+-                push(operand);
++                pending.try_push_admitted(operand, memory)?;
+             }
+-            push(target);
++            pending.try_push_admitted(target, memory)?;
+         }
+         Expression::If(cond, then_expr, else_expr) => {
+-            push(else_expr);
+-            push(then_expr);
+-            push(cond);
++            pending.try_push_admitted(else_expr, memory)?;
++            pending.try_push_admitted(then_expr, memory)?;
++            pending.try_push_admitted(cond, memory)?;
+         }
+         Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+             for operand in list.iter_mut().rev() {
+-                push(operand);
++                pending.try_push_admitted(operand, memory)?;
+             }
+         }
+     }
+--- a/crates/sparql-algebra/src/ast.rs
++++ b/crates/sparql-algebra/src/ast.rs
+@@ -189,8 +189,8 @@
+     /// Returns the caller's original text-publication refusal.
+     pub fn try_hidden<E>(
+         name: &dyn core::fmt::Display,
+-        mint: impl FnOnce(&dyn core::fmt::Display) -> Result<SharedText, E>,
+-    ) -> Result<Self, E> {
++        mint: impl FnOnce(&dyn core::fmt::Display) -> core::result::Result<SharedText, E>,
++    ) -> core::result::Result<Self, E> {
+         struct HiddenName<'a>(&'a dyn core::fmt::Display);
+         impl core::fmt::Display for HiddenName<'_> {
+             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+@@ -218,8 +218,8 @@
+     /// Returns the caller's text-publication failure.
+     pub fn try_hidden_blank<E>(
+         label: &str,
+-        mint: impl FnOnce(&dyn core::fmt::Display) -> Result<SharedText, E>,
+-    ) -> Result<Self, E> {
++        mint: impl FnOnce(&dyn core::fmt::Display) -> core::result::Result<SharedText, E>,
++    ) -> core::result::Result<Self, E> {
+         Ok(Self::from_admitted(mint(&HiddenBlankName(label))?))
+     }
+ 
+

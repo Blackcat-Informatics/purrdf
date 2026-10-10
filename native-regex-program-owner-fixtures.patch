@@ -1,0 +1,118 @@
+--- a/crates/sparql-eval/src/xpath_regex.rs
++++ b/crates/sparql-eval/src/xpath_regex.rs
+@@ -540,3 +540,115 @@
+         }
+     }
+ }
++
++#[cfg(test)]
++mod native_program_owner_fixtures {
++    use super::*;
++    use purrdf_core::{
++        SegmentedBuildLimits, SegmentedBuilder, SegmentedError,
++        SegmentedReadLimits, SegmentedSession,
++    };
++    use crate::workspace::QueryWorkspace;
++
++    fn account() -> (SegmentedSession, QueryWorkspace<SegmentedError>, u64) {
++        let limits = SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap();
++        let image = SegmentedBuilder::new(limits).seal().unwrap();
++        let source = SegmentedSession::open(
++            Arc::new(image.provider()), image.receipt(),
++            SegmentedReadLimits::new(1_000_000, 2, 2048, 20_000_000, 8),
++        ).unwrap();
++        let baseline = source.evidence().live_bytes();
++        let control = QueryWorkspace::<SegmentedError>::control_bytes().unwrap();
++        let reservation = source.reserve_owned_workspace(control).unwrap().unwrap();
++        let workspace = QueryWorkspace::owned(reservation, 0).unwrap();
++        (source, workspace, baseline)
++    }
++
++    #[test]
++    fn native_program_clone_retains_the_original_compiler_and_control_owner() {
++        let (source, workspace, baseline) = account();
++        let capability = workspace.capability();
++        let first = compile_owned(xpath::Profile::Xpath31, "(a|b){1,20}[c-z-[d-f]]", "i",
++            xpath::Limits::new(), &capability).unwrap().unwrap();
++        let loaded = source.evidence().live_bytes();
++        let cloned = first.clone();
++        assert!(std::ptr::eq(&*first, &*cloned));
++        assert_eq!(source.evidence().live_bytes(), loaded);
++        drop(first);
++        drop(capability);
++        drop(workspace);
++        assert_eq!(source.evidence().live_bytes(), loaded);
++        assert!(cloned.pattern.matches_source(xpath::Profile::Xpath31, "(a|b){1,20}[c-z-[d-f]]", "i"));
++        drop(cloned);
++        assert_eq!(source.evidence().live_bytes(), baseline);
++    }
++
++    #[test]
++    fn replacement_transfers_the_original_owned_utf8_and_output_grant() {
++        let (source, workspace, baseline) = account();
++        let capability = workspace.capability();
++        let program = compile_owned(xpath::Profile::Xpath31, "(a)", "",
++            xpath::Limits::new(), &capability).unwrap().unwrap();
++        let native = program.pattern.replace_all_with_storage("aba", "$1é", xpath::Limits::new(),
++            NativeAdmission::new(&capability), NativeAdmission::new(&capability)).unwrap();
++        let Cow::Owned(lexical) = native.value() else { panic!("replacement fixture owns output"); };
++        let original_pointer = lexical.as_ptr();
++        let value = native.publish_with(StringLiteralPublication {
++            language: Some("fr"), direction: Some(RdfTextDirection::Rtl),
++        }).unwrap();
++        let TermValue::Literal { lexical_form, datatype, language, direction } = &*value else { unreachable!(); };
++        assert_eq!(lexical_form, "aébaé");
++        assert_eq!(lexical_form.as_ptr(), original_pointer, "publication moves original text");
++        assert_eq!(datatype, DIR_LANG_STRING);
++        assert_eq!(language.as_deref(), Some("fr"));
++        assert_eq!(*direction, Some(RdfTextDirection::Rtl));
++        drop(program);
++        drop(capability);
++        drop(workspace);
++        assert!(source.evidence().live_bytes() > baseline);
++        assert_eq!(lexical_form, "aébaé");
++        drop(value);
++        assert_eq!(source.evidence().live_bytes(), baseline);
++    }
++
++    #[test]
++    fn borrowed_native_output_is_copied_before_the_original_account_is_removed() {
++        let (source, workspace, _) = account();
++        let capability = workspace.capability();
++        let program = compile_owned(xpath::Profile::Xpath31, "z", "",
++            xpath::Limits::new(), &capability).unwrap().unwrap();
++        let text = String::from("aé");
++        let native = program.pattern.replace_all_with_storage(&text, "unused", xpath::Limits::new(),
++            NativeAdmission::new(&capability), NativeAdmission::new(&capability)).unwrap();
++        assert!(matches!(native.value(), Cow::Borrowed(_)));
++        let value = native.publish_with(StringLiteralPublication { language: None, direction: Some(RdfTextDirection::Rtl) }).unwrap();
++        let TermValue::Literal { lexical_form, datatype, language, direction } = &*value else { unreachable!(); };
++        assert_eq!(lexical_form, "aé");
++        assert_ne!(lexical_form.as_ptr(), text.as_ptr());
++        assert_eq!(datatype, XSD_STRING);
++        assert!(language.is_none());
++        assert!(direction.is_none());
++        drop(text);
++        assert_eq!(lexical_form, "aé");
++    }
++
++    #[test]
++    fn matcher_and_lexical_error_work_is_released_with_original_inputs_alive() {
++        let (source, workspace, _) = account();
++        let capability = workspace.capability();
++        let compiled = compile_owned(xpath::Profile::Xpath31, "(a)", "",
++            xpath::Limits::new(), &capability).unwrap().unwrap();
++        let baseline = source.evidence().live_bytes();
++        let program = Program::Native(compiled, xpath::Limits::new());
++        assert_eq!(program.is_match("aba", &capability).unwrap(), Some(true));
++        assert_eq!(source.evidence().live_bytes(), baseline);
++        for pattern in ["[", "(?<bad>", "\\7"] {
++            assert!(compile_owned(xpath::Profile::Xpath31, pattern, "",
++                xpath::Limits::new(), &capability).unwrap().is_none());
++            assert_eq!(source.evidence().live_bytes(), baseline);
++        }
++        assert!(program.replace_literal("aba", "$", None, None, &capability).unwrap().is_none());
++        assert_eq!(source.evidence().live_bytes(), baseline);
++        assert!(workspace.take_failure().is_none());
++    }
++}

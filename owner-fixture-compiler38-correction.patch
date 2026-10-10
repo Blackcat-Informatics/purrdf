@@ -1,0 +1,21 @@
+--- a/crates/sparql-eval/tests/custom_aggregate_ownership.rs
++++ b/crates/sparql-eval/tests/custom_aggregate_ownership.rs
+@@ -6,7 +6,7 @@
+ mod support;
+ 
+ use purrdf_alloc_probe::CurrentThreadWindow;
+-use purrdf_core::{DatasetView, SegmentedError, TermValue};
++use purrdf_core::{SegmentedError, TermValue};
+ use purrdf_sparql_eval::agg_fn::{
+     AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate, ScalarvalKind,
+     ScalarvalSpec, WorkspaceAccumulator,
+--- a/crates/sparql-eval/tests/correlated_owned_admission.rs
++++ b/crates/sparql-eval/tests/correlated_owned_admission.rs
+@@ -5,6 +5,7 @@
+ 
+ mod support;
+ 
++use purrdf_core::FallibleDatasetView as _;
+ use purrdf_core::{SparqlRequest, SparqlResult};
+ use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions};
+ use support::segmented::{CEILING, fixture, open_with_evidence};

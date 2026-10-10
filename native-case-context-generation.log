@@ -1,0 +1,137 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/testkit)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+error[E0282]: type annotations needed for `Result<(), _>`
+   --> crates/lex/src/json_escape.rs:448:9
+    |
+448 |     let result = (|| {
+    |         ^^^^^^
+...
+474 |             memory.release_string(out).map_err(|storage| JsonEscapeError::at(JsonEscapeErrorKind::Storage(storage), error.offset))?;
+    |                                                                                                                     ----- type must be known at this point
+    |
+help: consider giving `result` an explicit type, where the placeholders `_` are specified
+    |
+448 |     let result: Result<_, _> = (|| {
+    |               ++++++++++++++
+
+error[E0277]: expected an `FnMut(N, &mut WorkList<Tok<N, _>, _>, &mut Memory<'_, _>)` closure, found `impl FnMut(N, &mut WorkList<Tok<N, DebugScalar<'a>>, K>)`
+   --> crates/lex/src/walk/scalar.rs:67:35
+    |
+ 67 |         write_debug_with(f, root, script, |leaf, out| {
+    |         ----------------          ^^^^^^ expected an `FnMut(N, &mut WorkList<Tok<N, _>, _>, &mut Memory<'_, _>)` closure, found `impl FnMut(N, &mut WorkList<Tok<N, DebugScalar<'a>>, K>)`
+    |         |
+    |         required by a bound introduced by this call
+    |
+    = note: expected a closure taking 2 arguments, but one taking 3 arguments was given
+note: required by a bound in `write_debug_with`
+   --> crates/lex/src/walk.rs:667:22
+    |
+664 | fn write_debug_with<N, L, const K: usize, S: crate::allocation::Admission + ?Sized>(
+    |    ---------------- required by a bound in this function
+...
+667 |     mut script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>, &mut crate::allocation::Memory<'_, S>) -> Result<(), crate::allocation::StorageError>,
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `write_debug_with`
+
+error[E0061]: this function takes 6 arguments but 4 arguments were supplied
+   --> crates/lex/src/walk/scalar.rs:67:9
+    |
+ 67 |           write_debug_with(f, root, script, |leaf, out| {
+    |  _________^^^^^^^^^^^^^^^^-
+ 68 | |             options.emit(&mut NewlineFill(out), leaf)
+ 69 | |         })
+    | |__________- two arguments of type `&mut Memory<'_, _>` and `bool` are missing
+    |
+note: function defined here
+   --> crates/lex/src/walk.rs:664:4
+    |
+664 | fn write_debug_with<N, L, const K: usize, S: crate::allocation::Admission + ?Sized>(
+    |    ^^^^^^^^^^^^^^^^
+...
+669 |     memory: &mut crate::allocation::Memory<'_, S>,
+    |     ---------------------------------------------
+670 |     admitted_stack: bool,
+    |     --------------------
+help: provide the arguments
+    |
+ 67 |         write_debug_with(f, root, script, |leaf, out| {
+ 68 |             options.emit(&mut NewlineFill(out), leaf)
+ 69 ~         }, /* memory */, /* bool */)
+    |
+
+error[E0308]: mismatched types
+  --> crates/lex/src/walk/scalar.rs:67:9
+   |
+64 |   ) -> fmt::Result {
+   |        ----------- expected `Result<(), std::fmt::Error>` because of return type
+...
+67 | /         write_debug_with(f, root, script, |leaf, out| {
+68 | |             options.emit(&mut NewlineFill(out), leaf)
+69 | |         })
+   | |__________^ expected `Result<(), Error>`, found `Result<(), DebugWriteError>`
+   |
+   = note: expected enum `Result<_, std::fmt::Error>`
+              found enum `Result<_, DebugWriteError>`
+
+error[E0277]: expected an `FnMut(N, &mut WorkList<Tok<N, _>, _>, &mut Memory<'_, _>)` closure, found `impl FnMut(N, &mut WorkList<Tok<N, DebugScalar<'a>>, K>)`
+   --> crates/lex/src/walk/scalar.rs:71:35
+    |
+ 71 |         write_debug_with(f, root, script, |leaf, out| {
+    |         ----------------          ^^^^^^ expected an `FnMut(N, &mut WorkList<Tok<N, _>, _>, &mut Memory<'_, _>)` closure, found `impl FnMut(N, &mut WorkList<Tok<N, DebugScalar<'a>>, K>)`
+    |         |
+    |         required by a bound introduced by this call
+    |
+    = note: expected a closure taking 2 arguments, but one taking 3 arguments was given
+note: required by a bound in `write_debug_with`
+   --> crates/lex/src/walk.rs:667:22
+    |
+664 | fn write_debug_with<N, L, const K: usize, S: crate::allocation::Admission + ?Sized>(
+    |    ---------------- required by a bound in this function
+...
+667 |     mut script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>, &mut crate::allocation::Memory<'_, S>) -> Result<(), crate::allocation::StorageError>,
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `write_debug_with`
+
+error[E0061]: this function takes 6 arguments but 4 arguments were supplied
+   --> crates/lex/src/walk/scalar.rs:71:9
+    |
+ 71 |           write_debug_with(f, root, script, |leaf, out| {
+    |  _________^^^^^^^^^^^^^^^^-
+ 72 | |             fmt::Debug::fmt(&leaf, out.formatter()?)
+ 73 | |         })
+    | |__________- two arguments of type `&mut Memory<'_, _>` and `bool` are missing
+    |
+note: function defined here
+   --> crates/lex/src/walk.rs:664:4
+    |
+664 | fn write_debug_with<N, L, const K: usize, S: crate::allocation::Admission + ?Sized>(
+    |    ^^^^^^^^^^^^^^^^
+...
+669 |     memory: &mut crate::allocation::Memory<'_, S>,
+    |     ---------------------------------------------
+670 |     admitted_stack: bool,
+    |     --------------------
+help: provide the arguments
+    |
+ 71 |         write_debug_with(f, root, script, |leaf, out| {
+ 72 |             fmt::Debug::fmt(&leaf, out.formatter()?)
+ 73 ~         }, /* memory */, /* bool */)
+    |
+
+error[E0308]: mismatched types
+  --> crates/lex/src/walk/scalar.rs:71:9
+   |
+64 |   ) -> fmt::Result {
+   |        ----------- expected `Result<(), std::fmt::Error>` because of return type
+...
+71 | /         write_debug_with(f, root, script, |leaf, out| {
+72 | |             fmt::Debug::fmt(&leaf, out.formatter()?)
+73 | |         })
+   | |__________^ expected `Result<(), Error>`, found `Result<(), DebugWriteError>`
+   |
+   = note: expected enum `Result<_, std::fmt::Error>`
+              found enum `Result<_, DebugWriteError>`
+
+Some errors have detailed explanations: E0061, E0277, E0282, E0308.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-lex` (lib) due to 7 previous errors
+warning: build failed, waiting for other jobs to finish...

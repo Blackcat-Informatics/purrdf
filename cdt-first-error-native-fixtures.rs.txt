@@ -1,0 +1,44 @@
+
+// A concrete native box refusal remains the first error when refund refuses too.
+struct RefuseBoxAndShrink(NativeGrant, bool);
+impl Admission for RefuseBoxAndShrink {
+    fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+        if self.1 && next < self.0.live { return Err(StorageError::AdmissionFailed); }
+        self.0.resize(next)
+    }
+}
+impl Storage for RefuseBoxAndShrink {
+    fn boxed_value(&mut self, _value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
+        self.1 = true;
+        Err(StorageError::AllocationFailed)
+    }
+    fn boxed_triple(&mut self, _value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
+        self.1 = true;
+        Err(StorageError::AllocationFailed)
+    }
+}
+#[test]
+fn native_box_failure_stays_primary_when_original_refund_also_refuses() {
+    let source = parse_list("[[1],{'a':[2]}]").unwrap();
+    let mut grant = RefuseBoxAndShrink(NativeGrant::new(), false);
+    let window = CurrentThreadWindow::open();
+    let answer = source.clone_admitted(&mut grant);
+    let measured = window.close();
+    assert!(matches!(answer, Err(StorageError::AllocationFailed)), "actual native factory refusal remains primary");
+    assert_eq!(measured.retained_bytes, 0, "all failed clone payloads die even when logical refund refuses");
+    assert!(grant.0.live > 0, "the failed shrink kept the original grant until owner destruction");
+}
+
+#[test]
+fn native_literal_parser_keeps_original_box_failure_through_child_refund() {
+    let left = literal_composite("[[1],{'a':[2]}]");
+    let right = literal_composite("[[1],{'a':[2]}]");
+    let mut grant = RefuseBoxAndShrink(NativeGrant::new(), false);
+    let window = CurrentThreadWindow::open();
+    let answer = purrdf_cdt::ops::try_term_equal(&left, &right, &mut grant);
+    let measured = window.close();
+    assert!(grant.1, "exercise the actual nested native parser box factory");
+    assert!(matches!(answer, Err(StorageError::AllocationFailed)), "child refund cannot turn physical parser failure into another cause");
+    assert_eq!(measured.retained_bytes, 0);
+    assert!(grant.0.live > 0, "original admission remains held after failed shrink");
+}

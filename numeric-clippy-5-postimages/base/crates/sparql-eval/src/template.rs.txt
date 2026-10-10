@@ -1,0 +1,1108 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Template instantiation shared by `CONSTRUCT` and SPARQL `UPDATE`.
+//!
+//! Both the `CONSTRUCT` output template ([`construct`](crate::construct)) and the
+//! `DELETE`/`INSERT` quad templates of an UPDATE operation ([`update`](crate::update))
+//! turn a triple/quad *pattern* into concrete [`TermValue`]s, once per solution row,
+//! under the same three SPARQL §16.2 rules:
+//!
+//! 1. A template position holding an **unbound variable** makes the whole quad be
+//!    skipped (`None`).
+//! 2. A template **blank node is minted fresh per solution row** — the same label
+//!    co-refers within one row (the `blanks` map), distinct across rows (the
+//!    cross-row monotonic [`EvalCtx::bnode_counter`]).
+//! 3. **Positional validity** (an asserted subject that is not an IRI or a blank
+//!    node, a non-IRI predicate, or an object triple term whose own components break
+//!    the RDF 1.2 term model) is decided by the *caller* after instantiation, because
+//!    the two callers intern into different sinks (a builder vs. a
+//!    [`MutableDataset`](purrdf_core::MutableDataset)).
+//!
+//! The invariant rule 3 enforces is the **RDF 1.2 term model — what a PurRDF reader
+//! accepts**, not merely what the interner tolerates. Every statement these helpers
+//! let through must re-parse from the bytes PurRDF writes for it: the N-Triples /
+//! N-Quads / Turtle / TriG readers
+//! (`purrdf_rdf::native_codecs`) and the IR's pre-freeze validator
+//! (`purrdf_core::ir::validate`) enforce the same term model, position by position,
+//! so a template instantiation that is skipped here is exactly one that a reader
+//! would refuse. Loosening this predicate below the term model does not "emit more";
+//! it emits documents PurRDF cannot read back.
+//!
+//! These helpers stop at the dataset-independent [`TermValue`]: a bound variable is
+//! resolved through the scratch interner, so the value is valid across a
+//! snapshot→mutable boundary (the UPDATE round-trip). Source read failures
+//! propagate separately from unbound positions.
+
+use purrdf_core::{BlankScope, DatasetView, TermValue};
+use purrdf_sparql_algebra::{NamedNodePattern, QuadPattern, TermPattern, TriplePattern};
+
+use crate::convert::{literal_to_workspace_value, named_node_to_workspace_value};
+use crate::error::EvalError;
+use crate::eval::EvalCtx;
+use crate::solution::{Solution, VarSchema};
+use crate::{AdmittedMap, AdmittedVec, WorkspaceAllocation, WorkspaceCapability, WorkspaceTerm};
+use purrdf_lex::allocation::SharedText;
+
+/// A template term's column ordinal, precomputed ONCE per template against a fixed
+/// [`VarSchema`] and then walked lock-step with the [`TermPattern`] it mirrors —
+/// same device as `crate::modifier::eval_project`'s `src: Vec<Option<usize>>`, one
+/// layer down, for the RECURSIVE shape an RDF 1.2 quoted-triple template position
+/// needs.
+///
+/// [`VarSchema::index_of`] is `O(columns)` below `INDEXED_ABOVE` (see that
+/// constant's doc comment) — sound for the *node-at-a-time* callers it was
+/// designed for, but `instantiate_term`/`instantiate_predicate` are the innermost
+/// step of `CONSTRUCT`'s and UPDATE's `for row in &seq.rows` loops
+/// ([`crate::construct::build_construct_graph`],
+/// [`crate::update::delete_insert`]): calling `index_of` from inside that loop
+/// would pay `rows × positions × columns` string comparisons for what the schema
+/// is a plan constant across. Resolving into a `TermOrdinal` tree before the row
+/// loop starts pays the scan once per template position, not once per row.
+pub(crate) enum TermOrdinal {
+    /// A position with no variable of its own: `NamedNode`, `Literal`, or
+    /// `BlankNode`. Nothing to resolve.
+    Ground,
+    /// A `Variable` position's column, resolved once: `Some(ordinal)` if `schema`
+    /// carries the column, `None` if it does not — a row can never bind it, exactly
+    /// as an `index_of` miss would report.
+    Variable(Option<usize>),
+    /// A nested quoted-triple-term position: the ordinals of its three positions,
+    /// nesting as the pattern nests.
+    Triple(OrdinalBox),
+}
+
+/// [`TermOrdinal`]'s per-triple grouping — the ordinals of one
+/// [`TriplePattern`]'s three positions, mirroring its shape.
+pub(crate) struct TripleOrdinal {
+    pub(crate) subject: TermOrdinal,
+    pub(crate) predicate: PredicateOrdinal,
+    pub(crate) object: TermOrdinal,
+    drop_cursor: u8,
+}
+
+/// An ordinal box owns its original storage grant until the box is destroyed.
+pub(crate) struct OrdinalBox {
+    value: Option<Box<TripleOrdinal>>,
+    allocation: Option<WorkspaceAllocation>,
+}
+impl std::ops::Deref for OrdinalBox {
+    type Target = TripleOrdinal;
+    fn deref(&self) -> &Self::Target {
+        self.value
+            .as_deref()
+            .expect("an ordinal borrowed outside destruction is live")
+    }
+}
+impl OrdinalBox {
+    fn new(value: TripleOrdinal, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+        let bytes = u64::try_from(std::alloc::Layout::new::<TripleOrdinal>().size())
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        let allocation = workspace.charge(bytes)?;
+        let value =
+            purrdf_core::small::try_boxed(value).map_err(|_| EvalError::AllocationFailed {
+                construct: "template ordinal",
+            })?;
+        Ok(Self {
+            value: Some(value),
+            allocation: Some(allocation),
+        })
+    }
+    fn take(&mut self) -> Option<DroppingOrdinal> {
+        let value = self.value.take()?;
+        Some(DroppingOrdinal {
+            value,
+            allocation: self.allocation.take(),
+        })
+    }
+}
+impl Drop for OrdinalBox {
+    fn drop(&mut self) {
+        if let Some(node) = self.take() {
+            purrdf_lex::walk::dismantle_owned(node);
+        }
+    }
+}
+struct DroppingOrdinal {
+    value: Box<TripleOrdinal>,
+    allocation: Option<WorkspaceAllocation>,
+}
+impl DroppingOrdinal {
+    fn continuation(&mut self) -> &mut OrdinalBox {
+        let position = match self.value.drop_cursor {
+            1 => &mut self.value.subject,
+            2 => &mut self.value.object,
+            _ => unreachable!("the child cursor identifies an evacuated position"),
+        };
+        let TermOrdinal::Triple(slot) = position else {
+            unreachable!("the evacuated child leaves its box slot in place");
+        };
+        slot
+    }
+}
+impl purrdf_lex::walk::DismantleOwned for DroppingOrdinal {
+    fn take_child(&mut self) -> Option<Self> {
+        while self.value.drop_cursor < 2 {
+            let cursor = self.value.drop_cursor;
+            self.value.drop_cursor += 1;
+            let position = if cursor == 0 {
+                &mut self.value.subject
+            } else {
+                &mut self.value.object
+            };
+            if let TermOrdinal::Triple(child) = position
+                && let Some(node) = child.take()
+            {
+                return Some(node);
+            }
+        }
+        None
+    }
+    fn store_parent(&mut self, parent: Option<Self>) {
+        if let Some(parent) = parent {
+            let slot = self.continuation();
+            slot.value = Some(parent.value);
+            slot.allocation = parent.allocation;
+        }
+    }
+    fn take_parent(&mut self) -> Option<Self> {
+        self.continuation().take()
+    }
+}
+
+/// Authored keys are intrinsic immutable leaves; minted spellings retain their
+/// original producer admission rather than independent copies of a String.
+pub(crate) type TemplateBlanks = AdmittedMap<purrdf_sparql_algebra::BlankNode, SharedText>;
+
+/// The predicate-position twin of [`TermOrdinal`]: a predicate can never be a
+/// blank node or a quoted-triple term, so it has only the two [`TermOrdinal`]
+/// cases that apply to it.
+pub(crate) enum PredicateOrdinal {
+    /// A ground `NamedNode` predicate.
+    Ground,
+    /// A `Variable` predicate's column, resolved once.
+    Variable(Option<usize>),
+}
+
+/// Resolve one [`TriplePattern`]'s three positions against `schema`, nested
+/// quoted-triple terms included. Called ONCE per template quad, before the
+/// row loop — see [`TermOrdinal`]'s doc comment for why.
+pub(crate) fn resolve_triple(tp: &TriplePattern, schema: &VarSchema) -> TripleOrdinal {
+    resolve_triple_admitted(tp, schema, &WorkspaceCapability::resident())
+        .expect("resident template ordinal storage")
+}
+pub(crate) fn resolve_triple_admitted(
+    tp: &TriplePattern,
+    schema: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<TripleOrdinal, EvalError> {
+    Ok(TripleOrdinal {
+        subject: resolve_term_admitted(&tp.subject, schema, workspace)?,
+        predicate: resolve_predicate(&tp.predicate, schema),
+        object: resolve_term_admitted(&tp.object, schema, workspace)?,
+        drop_cursor: 0,
+    })
+}
+
+/// Resolve one [`TermPattern`] position against `schema`, a nested quoted-triple
+/// term included. See [`TermOrdinal`]'s doc comment.
+///
+/// The ordinal tree is assembled bottom-up over a work list: a quoted triple's
+/// positions are resolved subject, predicate, object — each fully before the next —
+/// and its ordinal is built once all three exist, so a term nested to any depth costs
+/// no more machine stack.
+#[cfg(test)]
+pub(crate) fn resolve_term(term: &TermPattern, schema: &VarSchema) -> TermOrdinal {
+    resolve_term_admitted(term, schema, &WorkspaceCapability::resident())
+        .expect("resident template ordinal storage")
+}
+pub(crate) fn resolve_term_admitted(
+    term: &TermPattern,
+    schema: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<TermOrdinal, EvalError> {
+    enum Step<'t> {
+        Term(&'t TermPattern),
+        Predicate(&'t NamedNodePattern),
+        Assemble,
+    }
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(Step::Term(term))?;
+    let mut terms = AdmittedVec::new(workspace);
+    let mut predicates = AdmittedVec::new(workspace);
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Term(term) => match term {
+                TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {
+                    terms.push(TermOrdinal::Ground)?;
+                }
+                TermPattern::Variable(v) => {
+                    terms.push(TermOrdinal::Variable(schema.index_of(v)))?
+                }
+                TermPattern::Triple(t) => steps.try_extend([
+                    Step::Assemble,
+                    Step::Term(&t.object),
+                    Step::Predicate(&t.predicate),
+                    Step::Term(&t.subject),
+                ])?,
+            },
+            Step::Predicate(predicate) => predicates.push(resolve_predicate(predicate, schema))?,
+            Step::Assemble => {
+                let object = terms.pop().expect("a quoted triple's object is resolved");
+                let predicate = predicates
+                    .pop()
+                    .expect("a quoted triple's predicate is resolved");
+                let subject = terms.pop().expect("a quoted triple's subject is resolved");
+                terms.push(TermOrdinal::Triple(OrdinalBox::new(
+                    TripleOrdinal {
+                        subject,
+                        predicate,
+                        object,
+                        drop_cursor: 0,
+                    },
+                    workspace,
+                )?))?;
+            }
+        }
+    }
+    Ok(terms
+        .pop()
+        .expect("the position's ordinal is the last one assembled"))
+}
+
+/// Resolve one [`NamedNodePattern`] predicate position against `schema`. See
+/// [`TermOrdinal`]'s doc comment.
+pub(crate) fn resolve_predicate(
+    pattern: &NamedNodePattern,
+    schema: &VarSchema,
+) -> PredicateOrdinal {
+    match pattern {
+        NamedNodePattern::NamedNode(_) => PredicateOrdinal::Ground,
+        NamedNodePattern::Variable(v) => PredicateOrdinal::Variable(schema.index_of(v)),
+    }
+}
+
+/// SPARQL §16.2 positional validity: an instantiated triple is **ill-formed** — and
+/// the caller SKIPS it rather than erroring — when it is not a legal RDF 1.2
+/// statement. Shared by `CONSTRUCT`, the UPDATE `DELETE`/`INSERT` templates, and the
+/// variable-free `DATA` path so the rule lives in exactly one place.
+///
+/// The rule is the RDF 1.2 term model, position by position — the model a PurRDF
+/// reader accepts, so that everything this predicate lets through both interns
+/// (no skippable instantiation may instead hard-fail the whole query at `freeze`
+/// time) and re-parses from the bytes PurRDF writes for it:
+///
+/// * **subject** — an ASSERTED subject is an IRI or a blank node. A literal is
+///   illegal, and so is a triple term: a quoted triple is a *value*, and an asserted
+///   statement cannot be made about one without a reifier standing in for it. Both
+///   are reachable purely from data — `CONSTRUCT { ?o ?p ?s }` over RDF 1.2 annotated
+///   input binds `?o` to a triple term exactly as easily as to a literal.
+/// * **predicate** — an IRI, and nothing else (a literal, a blank node and a triple
+///   term are all illegal).
+/// * **object** — every term kind is legal, but when the object *is* a triple term
+///   its own components carry the triple-term rules, recursively; see
+///   [`triple_term_well_formed`].
+///
+/// A graph term is NOT decided here: the two callers reach it by different routes
+/// (a plan-time slot versus a `WITH`-defaulted pattern) and each rejects a non-IRI
+/// graph name at its own site.
+pub(crate) fn positionally_ill_formed(
+    subject: &TermValue,
+    predicate: &TermValue,
+    object: &TermValue,
+) -> bool {
+    !matches!(subject, TermValue::Iri(_) | TermValue::Blank { .. })
+        || !matches!(predicate, TermValue::Iri(_))
+        || !triple_term_well_formed(object)
+}
+
+/// Whether `term` is legal WHERE IT STANDS as a triple-term component (an object
+/// position, or a position nested inside a quoted triple).
+///
+/// A non-triple term is always legal there — an IRI, a blank node and a literal are
+/// all admissible objects. A triple term is legal when its own components satisfy the
+/// RDF 1.2 term model for a triple term, recursively:
+///
+/// * its **subject** is an IRI or a blank node — the SAME rule as an asserted
+///   subject. A literal is illegal there, and so is a nested triple term: RDF 1.2
+///   admits a triple term only in the OBJECT of another triple term, and every
+///   PurRDF reader enforces exactly that (`purrdf_rdf::native_codecs`'s
+///   N-Triples/N-Quads statement validator, and `purrdf_core::ir::validate`'s
+///   pre-freeze pass). A weaker rule here would emit a document PurRDF then refuses
+///   to read — silently, with a zero exit status, and on the UPDATE path persisted.
+/// * its **predicate** is an IRI, and nothing else.
+/// * its **object** is any term, recursing when it is itself a triple term.
+///
+/// The subject needs no descent: an IRI or a blank node has no components, and every
+/// other term kind is already refused, so descending into the subject could only
+/// re-derive `true`. The walk therefore follows the object chain alone, one loop
+/// iteration per level.
+fn triple_term_well_formed(term: &TermValue) -> bool {
+    let mut term = term;
+    while let TermValue::Triple { s, p, o } = term {
+        if !matches!(**s, TermValue::Iri(_) | TermValue::Blank { .. })
+            || !matches!(**p, TermValue::Iri(_))
+        {
+            return false;
+        }
+        term = o;
+    }
+    true
+}
+
+/// Instantiate a **variable-free** template term (the `INSERT DATA` / `DELETE DATA`
+/// path). DATA is variable-free by a hard parser invariant, so no solution/dataset is
+/// consulted — a `Variable` here is a malformed-input guard that skips the quad
+/// (`None`). Blank labels mint fresh from `counter`, co-referring within the shared
+/// `blanks` scope (one DATA block), exactly like the solution-driven path.
+///
+/// A quoted triple is instantiated subject, predicate, object — each fully before the
+/// next, so blank labels are minted in written order — and assembled once all three
+/// exist; the first position that yields no term ends the walk there, and nothing
+/// after it is minted. The walk keeps its own work list, so a term nested to any
+/// depth costs no more machine stack.
+pub(crate) fn instantiate_ground_term(
+    term: &TermPattern,
+    blanks: &mut TemplateBlanks,
+    counter: &mut u64,
+    prefix: Option<&str>,
+) -> Option<TermValue> {
+    instantiate_ground_term_admitted(
+        term,
+        blanks,
+        counter,
+        prefix,
+        &WorkspaceCapability::resident(),
+    )
+    .expect("resident ground template storage")
+    .map(|value| {
+        value
+            .into_resident()
+            .unwrap_or_else(|_| unreachable!("resident producer"))
+    })
+}
+pub(crate) fn instantiate_ground_term_admitted(
+    term: &TermPattern,
+    blanks: &mut TemplateBlanks,
+    counter: &mut u64,
+    prefix: Option<&str>,
+    workspace: &WorkspaceCapability,
+) -> Result<Option<WorkspaceTerm>, EvalError> {
+    enum Step<'t> {
+        Term(&'t TermPattern),
+        Predicate(&'t NamedNodePattern),
+        Assemble,
+    }
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(Step::Term(term))?;
+    let mut values = AdmittedVec::new(workspace);
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Term(term) => match term {
+                TermPattern::NamedNode(n) => {
+                    values.push(named_node_to_workspace_value(n, workspace)?)?
+                }
+                TermPattern::Literal(l) => {
+                    values.push(literal_to_workspace_value(l, workspace)?)?
+                }
+                // The destination selects a disjoint namespace before DATA instantiation.
+                TermPattern::BlankNode(b) => {
+                    values.push(mint_blank_admitted(b, blanks, counter, prefix, workspace)?)?;
+                }
+                TermPattern::Triple(t) => steps.try_extend([
+                    Step::Assemble,
+                    Step::Term(&t.object),
+                    Step::Predicate(&t.predicate),
+                    Step::Term(&t.subject),
+                ])?,
+                TermPattern::Variable(_) => return Ok(None),
+            },
+            Step::Predicate(predicate) => match predicate {
+                NamedNodePattern::NamedNode(n) => {
+                    values.push(named_node_to_workspace_value(n, workspace)?)?
+                }
+                NamedNodePattern::Variable(_) => return Ok(None),
+            },
+            Step::Assemble => {
+                let o = values
+                    .pop()
+                    .expect("a quoted triple's object is instantiated");
+                let p = values
+                    .pop()
+                    .expect("a quoted triple's predicate is instantiated");
+                let s = values
+                    .pop()
+                    .expect("a quoted triple's subject is instantiated");
+                values.push(WorkspaceTerm::triple(s, p, o, workspace)?)?;
+            }
+        }
+    }
+    Ok(values.pop())
+}
+
+/// Instantiate a subject/object template term. `None` = an unbound variable.
+///
+/// `ordinal` is `term`'s [`TermOrdinal`], resolved once per template against the
+/// row's schema — see that type's doc comment. The two trees are walked in lock
+/// step; `debug_assert!`s guard the invariant that `ordinal` was actually resolved
+/// from `term` (a mismatch cannot arise from any caller in this crate, since every
+/// `TermOrdinal` a caller holds was built by [`resolve_term_admitted`]/[`resolve_triple`]
+/// from the exact pattern it is later paired with).
+///
+/// A quoted triple is instantiated subject, predicate, object — each fully before the
+/// next, so blank labels are minted in written order — and assembled once all three
+/// exist; the first position that yields no term ends the walk there, and nothing
+/// after it is minted. The walk keeps its own work list, so a term nested to any
+/// depth costs no more machine stack.
+pub(crate) fn instantiate_term<D: DatasetView + Sync>(
+    term: &TermPattern,
+    ordinal: &TermOrdinal,
+    row: &Solution<D::Id>,
+    blanks: &mut TemplateBlanks,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<TermValue>, EvalError> {
+    instantiate_term_admitted(term, ordinal, row, blanks, ctx)?
+        .map(|value| {
+            value
+                .into_resident()
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)
+        })
+        .transpose()
+}
+pub(crate) fn instantiate_term_admitted<D: DatasetView + Sync>(
+    term: &TermPattern,
+    ordinal: &TermOrdinal,
+    row: &Solution<D::Id>,
+    blanks: &mut TemplateBlanks,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<WorkspaceTerm>, EvalError> {
+    if ctx.expression_barrier.observed().is_some() {
+        return Ok(None);
+    }
+    enum Step<'t> {
+        Term(&'t TermPattern, &'t TermOrdinal),
+        Predicate(&'t NamedNodePattern, &'t PredicateOrdinal),
+        Assemble,
+    }
+    let workspace = ctx.growth.clone();
+    let mut steps = AdmittedVec::new(&workspace);
+    steps.push(Step::Term(term, ordinal))?;
+    let mut values = AdmittedVec::new(&workspace);
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Term(term, ordinal) => match term {
+                TermPattern::NamedNode(n) => {
+                    values.push(named_node_to_workspace_value(n, &workspace)?)?
+                }
+                TermPattern::Literal(l) => {
+                    values.push(literal_to_workspace_value(l, &workspace)?)?
+                }
+                TermPattern::Variable(_) => {
+                    let TermOrdinal::Variable(ord) = ordinal else {
+                        debug_assert!(
+                            false,
+                            "TermOrdinal must mirror the TermPattern it was resolved from"
+                        );
+                        return Ok(None);
+                    };
+                    let Some(term) = ord.and_then(|c| row[c]) else {
+                        return Ok(None);
+                    };
+                    values.push(ctx.scratch.try_owned_value_of(
+                        ctx.dataset,
+                        term,
+                        &workspace,
+                        |error| ctx.workspace.source_error(error),
+                    )?)?;
+                }
+                TermPattern::BlankNode(b) => {
+                    let Some(value) = fresh_blank_admitted(b, blanks, ctx)? else {
+                        return Ok(None);
+                    };
+                    values.push(value)?;
+                }
+                TermPattern::Triple(t) => {
+                    // RDF 1.2 quoted-triple term in the template: its three positions
+                    // are instantiated in turn, in lock step with their ordinals.
+                    let TermOrdinal::Triple(to) = ordinal else {
+                        debug_assert!(
+                            false,
+                            "TermOrdinal must mirror the TermPattern it was resolved from"
+                        );
+                        return Ok(None);
+                    };
+                    steps.try_extend([
+                        Step::Assemble,
+                        Step::Term(&t.object, &to.object),
+                        Step::Predicate(&t.predicate, &to.predicate),
+                        Step::Term(&t.subject, &to.subject),
+                    ])?;
+                }
+            },
+            Step::Predicate(predicate, ordinal) => {
+                let Some(value) = instantiate_predicate_admitted(predicate, ordinal, row, ctx)?
+                else {
+                    return Ok(None);
+                };
+                values.push(value)?;
+            }
+            Step::Assemble => {
+                let o = values
+                    .pop()
+                    .expect("a quoted triple's object is instantiated");
+                let p = values
+                    .pop()
+                    .expect("a quoted triple's predicate is instantiated");
+                let s = values
+                    .pop()
+                    .expect("a quoted triple's subject is instantiated");
+                values.push(WorkspaceTerm::triple(s, p, o, &workspace)?)?;
+            }
+        }
+    }
+    Ok(values.pop())
+}
+
+/// Instantiate a predicate template position. `None` = an unbound variable.
+///
+/// `ordinal` is `predicate`'s [`PredicateOrdinal`], resolved once per template —
+/// see [`instantiate_term`] and [`TermOrdinal`]'s doc comments.
+pub(crate) fn instantiate_predicate<D: DatasetView + Sync>(
+    predicate: &NamedNodePattern,
+    ordinal: &PredicateOrdinal,
+    row: &Solution<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Option<TermValue>, EvalError> {
+    instantiate_predicate_admitted(predicate, ordinal, row, ctx)?
+        .map(|value| {
+            value
+                .into_resident()
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)
+        })
+        .transpose()
+}
+pub(crate) fn instantiate_predicate_admitted<D: DatasetView + Sync>(
+    predicate: &NamedNodePattern,
+    ordinal: &PredicateOrdinal,
+    row: &Solution<D::Id>,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Option<WorkspaceTerm>, EvalError> {
+    match predicate {
+        NamedNodePattern::NamedNode(n) => Ok(Some(named_node_to_workspace_value(n, &ctx.growth)?)),
+        NamedNodePattern::Variable(_) => {
+            let PredicateOrdinal::Variable(ord) = ordinal else {
+                debug_assert!(
+                    false,
+                    "PredicateOrdinal must mirror the NamedNodePattern it was resolved from"
+                );
+                return Ok(None);
+            };
+            let Some(term) = ord.and_then(|c| row[c]) else {
+                return Ok(None);
+            };
+            ctx.scratch
+                .try_owned_value_of(ctx.dataset, term, &ctx.growth, |error| {
+                    ctx.workspace.source_error(error)
+                })
+                .map(Some)
+        }
+    }
+}
+
+/// The fresh blank value for a template label within the current solution row: the
+/// first occurrence mints a globally-unique label from the **cross-row** monotonic
+/// `bnode_counter`, later occurrences in the same row reuse it (the `blanks` map
+/// resets per row, so the counter — not the map — is what makes two rows' blanks
+/// distinct). Minted labels carry the context's deterministic
+/// [`EvalCtx::bnode_mint_prefix`], when one is set.
+fn fresh_blank_admitted<D: DatasetView + Sync>(
+    template: &purrdf_sparql_algebra::BlankNode,
+    blanks: &mut TemplateBlanks,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<WorkspaceTerm>, EvalError> {
+    let label = if let Some(existing) = blanks.get(template) {
+        existing.clone()
+    } else {
+        let Some(label) = ctx.try_mint_blank_text("c")? else {
+            return Ok(None);
+        };
+        blanks.insert_admitted(template.clone(), label.clone(), &ctx.growth)?;
+        label
+    };
+    blank_value(label.as_str(), &ctx.growth).map(Some)
+}
+fn blank_value(label: &str, workspace: &WorkspaceCapability) -> Result<WorkspaceTerm, EvalError> {
+    workspace.blank(label, BlankScope::DEFAULT)
+}
+
+/// The blank-minting core (independent of [`EvalCtx`]): first occurrence of
+/// `template_label` mints a unique label from the monotonic `counter`, later
+/// occurrences in the same `blanks` scope reuse it. Used by the variable-free
+/// DATA path after destination namespace selection; evaluation-context mints
+/// also check source and scratch identities through [`fresh_blank`].
+///
+/// With `prefix: None` the minted label is exactly `c{n}` — byte-identical to
+/// every pre-prefix caller; with `Some(prefix)` it is `{prefix}c{n}`.
+fn mint_blank_admitted(
+    template: &purrdf_sparql_algebra::BlankNode,
+    blanks: &mut TemplateBlanks,
+    counter: &mut u64,
+    prefix: Option<&str>,
+    workspace: &WorkspaceCapability,
+) -> Result<WorkspaceTerm, EvalError> {
+    let label = if let Some(existing) = blanks.get(template) {
+        existing.clone()
+    } else {
+        *counter = counter
+            .checked_add(1)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let fresh = crate::eval::minted_text(prefix, "c", *counter, workspace)?;
+        blanks.insert_admitted(template.clone(), fresh.clone(), workspace)?;
+        fresh
+    };
+    blank_value(label.as_str(), workspace)
+}
+
+/// Choose a deterministic mint namespace disjoint from the destination's blanks.
+/// `occupied(prefix)` reports whether a default-scope identity starts with that
+/// prefix; the empty prefix asks whether any such identity exists. A destination
+/// without default-scope blanks retains the caller's ordinary mint spelling.
+pub(crate) fn destination_mint_prefix(
+    requested: Option<&str>,
+    occupied: impl FnMut(&str) -> bool,
+) -> Option<String> {
+    destination_mint_prefix_admitted(requested, occupied, &WorkspaceCapability::resident())
+        .expect("resident destination namespace storage")
+        .map(|text| text.as_str().to_owned())
+}
+pub(crate) fn destination_mint_prefix_admitted(
+    requested: Option<&str>,
+    mut occupied: impl FnMut(&str) -> bool,
+    workspace: &WorkspaceCapability,
+) -> Result<Option<SharedText>, EvalError> {
+    if !occupied("") {
+        return Ok(None);
+    }
+    let requested = requested.unwrap_or("");
+    let mut ordinal = 0_u64;
+    loop {
+        let candidate = workspace.authored_text(&format_args!("{requested}append{ordinal}_"))?;
+        if !occupied(candidate.as_str()) {
+            return Ok(Some(candidate));
+        }
+        ordinal = ordinal
+            .checked_add(1)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    }
+}
+
+/// Whether a template has a blank mint position, including quoted triples.
+pub(crate) fn template_has_blank_node(template: &[QuadPattern]) -> bool {
+    template_has_blank_node_admitted(template, &WorkspaceCapability::resident())
+        .expect("resident template blank classification")
+}
+pub(crate) fn template_has_blank_node_admitted(
+    template: &[QuadPattern],
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    for quad in template {
+        if term_pattern_has_blank_node_admitted(&quad.triple.subject, workspace)?
+            || term_pattern_has_blank_node_admitted(&quad.triple.object, workspace)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The [`TriplePattern`] half of [`template_has_blank_node`]'s scan.
+
+/// The [`TermPattern`] half of [`template_has_blank_node`]'s scan, through nested
+/// quoted-triple positions — subject before object, over a work list rather than the
+/// call stack, ending at the first blank node found.
+pub(crate) fn term_pattern_has_blank_node_admitted(
+    term: &TermPattern,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push(term)?;
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::BlankNode(_) => return Ok(true),
+            TermPattern::Triple(inner) => pending.try_extend([&inner.object, &inner.subject])?,
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => {}
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The template-term walks — ordinal resolution and both instantiations — checked
+    //! against recursive references over generated shapes: the same term, the same
+    //! blank-label map and the same counter after each; and a template term a hundred
+    //! thousand levels deep, resolved, instantiated and released on a thread with a
+    //! 128 KiB stack.
+
+    use super::{
+        OrdinalBox, PredicateOrdinal, TemplateBlanks, TermOrdinal, TripleOrdinal,
+        instantiate_ground_term, instantiate_predicate, instantiate_term, resolve_predicate,
+        resolve_term,
+    };
+    use crate::DetHashMap;
+    use crate::convert::{literal_to_value, named_node_to_value};
+    use crate::eval::EvalCtx;
+    use crate::scratch::SolutionTerm;
+    use crate::solution::{Solution, VarSchema};
+    use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermBox, TermId, TermValue};
+    use purrdf_sparql_algebra::{
+        BlankNode, Child, Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
+        Variable,
+    };
+    use std::sync::Arc;
+
+    const EX: &str = "http://example.org/";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    fn same_blanks(actual: &TemplateBlanks, expected: &DetHashMap<String, String>, seed: u64) {
+        assert_eq!(actual.len(), expected.len(), "seed {seed}");
+        for (key, value) in actual.iter() {
+            assert_eq!(
+                expected.get(key.as_str()).map(String::as_str),
+                Some(value.as_str()),
+                "seed {seed}"
+            );
+        }
+    }
+    fn mint_blank(
+        template: &str,
+        blanks: &mut DetHashMap<String, String>,
+        counter: &mut u64,
+        prefix: Option<&str>,
+    ) -> TermValue {
+        if let Some(existing) = blanks.get(template) {
+            return TermValue::Blank {
+                label: existing.clone(),
+                scope: purrdf_core::BlankScope::DEFAULT,
+            };
+        }
+        *counter += 1;
+        let label = crate::eval::minted_label(prefix, "c", *counter);
+        blanks.insert(template.to_owned(), label.clone());
+        TermValue::Blank {
+            label,
+            scope: purrdf_core::BlankScope::DEFAULT,
+        }
+    }
+    fn fresh_blank<D: DatasetView + Sync>(
+        template: &str,
+        blanks: &mut DetHashMap<String, String>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Option<TermValue>, crate::EvalError> {
+        let label = if let Some(existing) = blanks.get(template) {
+            existing.clone()
+        } else {
+            let Some(label) = ctx.try_mint_blank_label("c")? else {
+                return Ok(None);
+            };
+            blanks.insert(template.to_owned(), label.clone());
+            label
+        };
+        Ok(Some(TermValue::Blank {
+            label,
+            scope: purrdf_core::BlankScope::DEFAULT,
+        }))
+    }
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: purrdf_testkit::rng::SplitMix64,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
+            }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            self.state.below_usize(n)
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    /// A generated template term: every leaf kind, and quoted triples while `budget`
+    /// lasts. Variables are drawn from `?a` (bound in the fixture row), `?b` (in the
+    /// schema, unbound) and `?c` (not in the schema).
+    fn pattern(choices: &mut Choices, budget: &mut usize) -> TermPattern {
+        match choices.choose(if *budget > 0 { 5 } else { 4 }) {
+            0 => TermPattern::NamedNode(iri(&format!("n{}", choices.choose(3)))),
+            1 => TermPattern::Literal(Literal::new_simple("x")),
+            2 => TermPattern::BlankNode(BlankNode::new(["b0", "b1", "b2"][choices.choose(3)])),
+            3 => TermPattern::Variable(Variable::new(["a", "b", "c"][choices.choose(3)])),
+            _ => {
+                *budget -= 1;
+                let subject = pattern(choices, budget);
+                let predicate = match choices.choose(4) {
+                    0 => NamedNodePattern::Variable(Variable::new("a")),
+                    1 => NamedNodePattern::Variable(Variable::new("b")),
+                    _ => NamedNodePattern::NamedNode(iri("p")),
+                };
+                let object = pattern(choices, budget);
+                TermPattern::Triple(Child::new(TriplePattern {
+                    subject,
+                    predicate,
+                    object,
+                }))
+            }
+        }
+    }
+
+    /// The recursive reference for [`instantiate_ground_term`].
+    fn ground_reference(
+        term: &TermPattern,
+        blanks: &mut DetHashMap<String, String>,
+        counter: &mut u64,
+    ) -> Option<TermValue> {
+        match term {
+            TermPattern::NamedNode(n) => Some(named_node_to_value(n)),
+            TermPattern::Literal(l) => Some(literal_to_value(l)),
+            TermPattern::BlankNode(b) => Some(mint_blank(b.as_str(), blanks, counter, None)),
+            TermPattern::Triple(t) => {
+                let s = ground_reference(&t.subject, blanks, counter)?;
+                let p = match &t.predicate {
+                    NamedNodePattern::NamedNode(n) => named_node_to_value(n),
+                    NamedNodePattern::Variable(_) => return None,
+                };
+                let o = ground_reference(&t.object, blanks, counter)?;
+                Some(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
+            }
+            TermPattern::Variable(_) => None,
+        }
+    }
+
+    /// The recursive reference for [`resolve_term_admitted`].
+    fn resolve_term_by_recursion(term: &TermPattern, schema: &VarSchema) -> TermOrdinal {
+        match term {
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {
+                TermOrdinal::Ground
+            }
+            TermPattern::Variable(v) => TermOrdinal::Variable(schema.index_of(v)),
+            TermPattern::Triple(t) => TermOrdinal::Triple(
+                OrdinalBox::new(
+                    TripleOrdinal {
+                        subject: resolve_term_by_recursion(&t.subject, schema),
+                        predicate: resolve_predicate(&t.predicate, schema),
+                        object: resolve_term_by_recursion(&t.object, schema),
+                        drop_cursor: 0,
+                    },
+                    &crate::WorkspaceCapability::resident(),
+                )
+                .expect("resident reference ordinal"),
+            ),
+        }
+    }
+
+    /// The recursive reference for [`instantiate_term`].
+    fn instantiate_reference<D: DatasetView + Sync>(
+        term: &TermPattern,
+        ordinal: &TermOrdinal,
+        row: &Solution<D::Id>,
+        blanks: &mut DetHashMap<String, String>,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Option<TermValue> {
+        match term {
+            TermPattern::NamedNode(n) => Some(named_node_to_value(n)),
+            TermPattern::Literal(l) => Some(literal_to_value(l)),
+            TermPattern::Variable(_) => {
+                let TermOrdinal::Variable(ord) = ordinal else {
+                    panic!("the ordinal mirrors the pattern");
+                };
+                let term = ord.and_then(|c| row[c])?;
+                Some(ctx.scratch.try_value_of(ctx.dataset, term).ok()?)
+            }
+            TermPattern::BlankNode(b) => {
+                fresh_blank(b.as_str(), blanks, ctx).expect("the fixture source is readable")
+            }
+            TermPattern::Triple(t) => {
+                let TermOrdinal::Triple(to) = ordinal else {
+                    panic!("the ordinal mirrors the pattern");
+                };
+                let s = instantiate_reference(&t.subject, &to.subject, row, blanks, ctx)?;
+                let p = instantiate_predicate(&t.predicate, &to.predicate, row, ctx)
+                    .expect("the fixture source is readable")?;
+                let o = instantiate_reference(&t.object, &to.object, row, blanks, ctx)?;
+                Some(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
+            }
+        }
+    }
+
+    /// The ordinal tree spelled out, for comparison.
+    fn spell(ordinal: &TermOrdinal) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        let mut pending: Vec<&TermOrdinal> = vec![ordinal];
+        while let Some(ordinal) = pending.pop() {
+            match ordinal {
+                TermOrdinal::Ground => out.push('g'),
+                TermOrdinal::Variable(column) => {
+                    write!(out, "v{column:?}").expect("writing to a String cannot fail");
+                }
+                TermOrdinal::Triple(triple) => {
+                    match triple.predicate {
+                        PredicateOrdinal::Ground => out.push_str("(pg"),
+                        PredicateOrdinal::Variable(column) => {
+                            write!(out, "(pv{column:?}").expect("writing to a String cannot fail");
+                        }
+                    }
+                    pending.extend([&triple.object, &triple.subject]);
+                }
+            }
+            out.push(' ');
+        }
+        out
+    }
+
+    /// One quad `:s :p :o`, whose subject the fixture row binds to `?a`.
+    fn fixture() -> (Arc<RdfDataset>, TermId) {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let o = builder.intern_iri(&format!("{EX}o"));
+        builder.push_quad(s, p, o, None);
+        (builder.freeze().expect("the fixture freezes"), s)
+    }
+
+    /// The schema `?a ?b` and the row binding `?a` to `bound`, leaving `?b` unbound.
+    fn row_for(bound: TermId) -> (VarSchema, Solution<TermId>) {
+        let mut schema = VarSchema::default();
+        schema.push(Variable::new("a"));
+        schema.push(Variable::new("b"));
+        let row: Solution<TermId> =
+            purrdf_core::smallvec![Some(SolutionTerm::Existing(bound)), None];
+        (schema, row)
+    }
+
+    /// A quoted-triple chain `depth` levels deep, its innermost object the blank
+    /// `_:deep`.
+    fn deep_pattern(depth: usize) -> TermPattern {
+        let mut term = TermPattern::BlankNode(BlankNode::new("deep"));
+        for _ in 0..depth {
+            term = TermPattern::Triple(Child::new(TriplePattern {
+                subject: TermPattern::NamedNode(iri("s")),
+                predicate: NamedNodePattern::NamedNode(iri("p")),
+                object: term,
+            }));
+        }
+        term
+    }
+
+    /// How many triple terms `value`'s object chain nests, and its innermost object.
+    fn unwind(value: &TermValue) -> (usize, &TermValue) {
+        let mut levels = 0;
+        let mut term = value;
+        while let TermValue::Triple { o, .. } = term {
+            levels += 1;
+            term = o;
+        }
+        (levels, term)
+    }
+
+    #[test]
+    fn the_ground_instantiation_agrees_with_the_recursive_reference() {
+        for seed in 0..200_u64 {
+            let mut choices = Choices::new(seed);
+            let mut budget = 5;
+            let pattern = pattern(&mut choices, &mut budget);
+            let (mut blanks_walk, mut counter_walk) = (TemplateBlanks::default(), 0_u64);
+            let walked =
+                instantiate_ground_term(&pattern, &mut blanks_walk, &mut counter_walk, None);
+            let (mut blanks_ref, mut counter_ref) = (DetHashMap::default(), 0_u64);
+            let referenced = ground_reference(&pattern, &mut blanks_ref, &mut counter_ref);
+            assert_eq!(walked, referenced, "seed {seed}");
+            same_blanks(&blanks_walk, &blanks_ref, seed);
+            assert_eq!(counter_walk, counter_ref, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn the_solution_driven_instantiation_agrees_with_the_recursive_reference() {
+        let (dataset, bound) = fixture();
+        let (schema, row) = row_for(bound);
+        for seed in 0..200_u64 {
+            let mut choices = Choices::new(seed);
+            let mut budget = 5;
+            let pattern = pattern(&mut choices, &mut budget);
+            let ordinal_walk = resolve_term(&pattern, &schema);
+            let ordinal_ref = resolve_term_by_recursion(&pattern, &schema);
+            assert_eq!(spell(&ordinal_walk), spell(&ordinal_ref), "seed {seed}");
+
+            let mut ctx_walk = EvalCtx::new(&*dataset);
+            let mut blanks_walk = TemplateBlanks::default();
+            let walked = instantiate_term(
+                &pattern,
+                &ordinal_walk,
+                &row,
+                &mut blanks_walk,
+                &mut ctx_walk,
+            )
+            .expect("the fixture source is readable");
+            let mut ctx_ref = EvalCtx::new(&*dataset);
+            let mut blanks_ref = DetHashMap::default();
+            let referenced =
+                instantiate_reference(&pattern, &ordinal_ref, &row, &mut blanks_ref, &mut ctx_ref);
+            assert_eq!(walked, referenced, "seed {seed}");
+            same_blanks(&blanks_walk, &blanks_ref, seed);
+            assert_eq!(ctx_walk.bnode_counter, ctx_ref.bnode_counter, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn a_hundred_thousand_level_template_term_is_instantiated_on_a_128_kib_stack() {
+        purrdf_stack::on_stack(SMALL_STACK, || {
+            let pattern = deep_pattern(DEPTH);
+
+            let mut blanks = TemplateBlanks::default();
+            let mut counter = 0_u64;
+            let ground = instantiate_ground_term(&pattern, &mut blanks, &mut counter, None)
+                .expect("a variable-free template term instantiates");
+            let (levels, innermost) = unwind(&ground);
+            assert_eq!(levels, DEPTH);
+            assert!(matches!(innermost, TermValue::Blank { label, .. } if label == "c1"));
+            assert_eq!(counter, 1);
+            drop(ground);
+
+            let (dataset, _) = fixture();
+            let schema = VarSchema::default();
+            let row: Solution<TermId> = purrdf_core::smallvec![];
+            let mut ctx = EvalCtx::new(&*dataset);
+            let ordinal = resolve_term(&pattern, &schema);
+            let mut blanks = TemplateBlanks::default();
+            let driven = instantiate_term(&pattern, &ordinal, &row, &mut blanks, &mut ctx)
+                .expect("the fixture source is readable")
+                .expect("a variable-free template term instantiates");
+            let (levels, innermost) = unwind(&driven);
+            assert_eq!(levels, DEPTH);
+            assert!(matches!(innermost, TermValue::Blank { label, .. } if label == "c1"));
+            assert_eq!(ctx.bnode_counter, 1);
+            drop(driven);
+            drop(ordinal);
+            drop(pattern);
+        })
+        .expect("spawn");
+    }
+}

@@ -1,0 +1,644 @@
+--- a/crates/rdf-core/src/xsd_regex/xpath/mod.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/mod.rs
+@@ -21,7 +21,7 @@
+ mod unicode_tables;
+ 
+ pub use cache::PatternCache;
++pub use compile::{CompiledPattern, OwnedCompileError, OwnedCompiledPattern, compile, compile_with_storage};
+-pub use compile::{CompiledPattern, compile};
+ pub use r#match::Captures;
+ 
+ /// The Recommendation that defines a pattern's grammar and matching law.
+@@ -271,23 +271,81 @@
+ /// [`Limits::admit`] on the prospective whole live count instead of accumulating
+ /// allocations that have already been released.
+ #[derive(Debug)]
++pub struct Budget<'storage> {
++    memory: Option<purrdf_lex::allocation::Memory<'storage, dyn purrdf_lex::allocation::Admission + 'storage>>,
+-pub struct Budget {
+     limits: Limits,
+     used: [u64; Resource::COUNT],
+     peak_compile_slots: u64,
+ }
+ 
++impl<'storage> Budget<'storage> {
+-impl Budget {
+     /// A fresh execution under explicit finite bounds.
+     #[must_use]
+     pub const fn new(limits: Limits) -> Self {
+         Self {
++            memory: None,
+             limits,
+             used: [0; Resource::COUNT],
+             peak_compile_slots: 0,
+         }
+     }
+ 
++
++    /// The same instruction/slot law with actual physical storage admission.
++    pub(super) fn with_storage(
++        limits: Limits,
++        storage: &'storage mut dyn purrdf_lex::allocation::Admission,
++    ) -> Self {
++        Self { memory: Some(purrdf_lex::allocation::Memory::new(storage)), ..Self::new(limits) }
++    }
++
++    pub(super) fn reserve<T>(&mut self, values: &mut Vec<T>, required: usize) -> Result<(), Error> {
++        if let Some(memory) = &mut self.memory {
++            return memory.reserve(values, required).map_err(Error::Storage);
++        }
++        if required > values.capacity() {
++            values.try_reserve_exact(required - values.len()).map_err(|_| Error::Allocation {
++                resource: Resource::CompileSlots, units: required as u64,
++            })?;
++        }
++        Ok(())
++    }
++
++    pub(super) fn reserve_string(&mut self, value: &mut String, required: usize) -> Result<(), Error> {
++        if let Some(memory) = &mut self.memory {
++            return memory.reserve_string(value, required).map_err(Error::Storage);
++        }
++        if required > value.capacity() {
++            value.try_reserve_exact(required - value.len()).map_err(|_| Error::Allocation {
++                resource: Resource::CompileSlots, units: required as u64,
++            })?;
++        }
++        Ok(())
++    }
++
++    pub(super) fn release_vec<T>(&mut self, values: Vec<T>) -> Result<(), Error> {
++        if let Some(memory) = &mut self.memory {
++            return memory.release_vec(values).map_err(Error::Storage);
++        }
++        drop(values);
++        Ok(())
++    }
++
++    pub(super) fn release_string(&mut self, value: String) -> Result<(), Error> {
++        if let Some(memory) = &mut self.memory {
++            return memory.release_string(value).map_err(Error::Storage);
++        }
++        drop(value);
++        Ok(())
++    }
++
++    pub(super) fn release_physical(&mut self, bytes: usize) -> Result<(), Error> {
++        if let Some(memory) = &mut self.memory {
++            memory.release_bytes(bytes).map_err(Error::Storage)?;
++        }
++        Ok(())
++    }
++
+     /// The unchanged bounds of this execution.
+     #[must_use]
+     pub const fn limits(&self) -> Limits {
+@@ -394,6 +452,8 @@
+         /// The requested storage units.
+         units: u64,
+     },
++    /// Concrete native buffer layout, allocator or caller-admission failure.
++    Storage(purrdf_lex::allocation::StorageError),
+     /// The replacement pattern matches the empty string (FORX0003).
+     EmptyMatch,
+     /// The replacement text violates the shared XPath grammar (FORX0004).
+@@ -407,7 +467,7 @@
+     /// flag or replacement-language error.
+     #[must_use]
+     pub const fn is_operational(&self) -> bool {
++        matches!(self, Self::Resource(_) | Self::Allocation { .. } | Self::Storage(_))
+-        matches!(self, Self::Resource(_) | Self::Allocation { .. })
+     }
+ }
+ 
+@@ -427,6 +487,7 @@
+                 write!(f, "invalid XPath pattern at byte {offset}: {message}")
+             }
+             Self::Resource(refusal) => refusal.fmt(f),
++            Self::Storage(error) => error.fmt(f),
+             Self::Allocation { resource, units } => write!(
+                 f,
+                 "{}: host refused allocation of {units} units",
+@@ -448,6 +509,7 @@
+             Self::Flags { .. }
+             | Self::Syntax { .. }
+             | Self::Allocation { .. }
++            | Self::Storage(_)
+             | Self::EmptyMatch => None,
+         }
+     }
+--- a/crates/rdf-core/src/xsd_regex/xpath/compile.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/compile.rs
+@@ -362,6 +362,81 @@
+     }
+ }
+ 
++
++/// A compiled program and the exact physical grant that admitted its buffers.
++///
++/// Neither the program nor the grant can be detached. The callback owner is
++/// destroyed after the native program, including every source and arena buffer.
++#[derive(Debug)]
++pub struct OwnedCompiledPattern<S> {
++    pattern: CompiledPattern,
++    storage: S,
++}
++
++impl<S> OwnedCompiledPattern<S> {
++    /// Borrow the program while its original physical admission remains alive.
++    #[must_use]
++    pub const fn pattern(&self) -> &CompiledPattern { &self.pattern }
++
++    /// Inspect the original caller's account without detaching its grant.
++    #[must_use]
++    pub const fn storage(&self) -> &S { &self.storage }
++}
++
++/// A failed native compilation retaining its original typed admission owner.
++pub struct OwnedCompileError<S> {
++    error: Error,
++    storage: S,
++}
++
++impl<S> OwnedCompileError<S> {
++    /// The grammar, work or physical-storage verdict.
++    #[must_use]
++    pub const fn error(&self) -> &Error { &self.error }
++
++    /// Original caller account, including its first typed operational cause.
++    #[must_use]
++    pub const fn storage(&self) -> &S { &self.storage }
++}
++
++impl<S> std::fmt::Debug for OwnedCompileError<S> {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("OwnedCompileError").field("error", &self.error).finish_non_exhaustive()
++    }
++}
++
++impl<S> std::fmt::Display for OwnedCompileError<S> {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.error.fmt(f) }
++}
++
++impl<S> std::error::Error for OwnedCompileError<S> {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.error) }
++}
++
++/// Compile the unchanged dated grammar with an owned physical admission.
++///
++/// The same parser, program arenas, leading sets and parent-table analysis run
++/// for resident and admitted construction. Matcher and replacement storage are
++/// separately admitted by their execution entry points.
++///
++/// # Errors
++///
++/// Preserves the original caller account alongside every grammar, work,
++/// layout, allocator or physical-admission failure.
++pub fn compile_with_storage<S: purrdf_lex::allocation::Admission>(
++    profile: Profile,
++    pattern: &str,
++    flags: &str,
++    limits: Limits,
++    mut storage: S,
++) -> Result<OwnedCompiledPattern<S>, OwnedCompileError<S>> {
++    let verdict = compile_budget(profile, pattern, flags, Budget::with_storage(limits, &mut storage));
++    match verdict {
++        Ok(pattern) => Ok(OwnedCompiledPattern { pattern, storage }),
++        Err(error) => Err(OwnedCompileError { error, storage }),
++    }
++}
++
+ /// Recognize the complete grammar of the selected dated Recommendation.
+ ///
+ /// XPath 2.0 already defines backreferences and reluctant quantifiers. XPath
+@@ -378,8 +453,16 @@
+     flags: &str,
+     limits: Limits,
+ ) -> Result<CompiledPattern, Error> {
++    compile_budget(profile, pattern, flags, Budget::new(limits))
++}
++
++fn compile_budget(
++    profile: Profile,
++    pattern: &str,
++    flags: &str,
++    mut budget: Budget<'_>,
++) -> Result<CompiledPattern, Error> {
++    budget.limits().admit_pattern(pattern)?;
+-    limits.admit_pattern(pattern)?;
+-    let mut budget = Budget::new(limits);
+     let modes = Modes::parse(profile, flags, &mut budget)?;
+     let source = owned(pattern, &mut budget)?;
+     let flag_source = owned(flags, &mut budget)?;
+@@ -427,10 +510,16 @@
+         sets,
+         captures,
+         windows,
++        frames,
+         ..
+     } = parser;
++    budget.release_vec(frames)?;
++    scanner.release(&mut budget)?;
+-    drop(scanner);
+     budget.release_compile_slots(scanner_slots);
++    if let Some((text, offsets)) = normalized {
++        budget.release_string(text)?;
++        budget.release_vec(offsets)?;
++    }
+     let links = super::pike::analyze(&nodes, root, &mut budget)?;
+     let admission = Admission {
+         nodes: budget.used(Resource::ProgramNodes),
+@@ -493,11 +582,7 @@
+     budget.charge_wide(Resource::CompileSlots, text.len() as u128)?;
+     budget.charge_wide(Resource::CompileSteps, text.len() as u128)?;
+     let mut out = String::new();
++    budget.reserve_string(&mut out, text.len())?;
+-    out.try_reserve_exact(text.len())
+-        .map_err(|_| Error::Allocation {
+-            resource: Resource::CompileSlots,
+-            units: text.len() as u64,
+-        })?;
+     out.push_str(text);
+     Ok(out)
+ }
+@@ -526,9 +611,7 @@
+     if bytes > isize::MAX as usize {
+         return Err(allocation());
+     }
++    budget.reserve(arena, capacity)
+-    arena
+-        .try_reserve_exact(capacity - arena.len())
+-        .map_err(|_| allocation())
+ }
+ 
+ #[derive(Clone)]
+@@ -566,9 +649,9 @@
+     difference: Option<usize>,
+ }
+ 
++struct Parser<'a, 'storage> {
+-struct Parser<'a> {
+     scanner: Scanner<'a>,
++    budget: Budget<'storage>,
+-    budget: Budget,
+     profile: Profile,
+     modes: Modes,
+     text: &'a str,
+@@ -583,7 +666,7 @@
+     windows: Vec<(usize, u64)>,
+ }
+ 
++impl<'a> Parser<'a, '_> {
+-impl<'a> Parser<'a> {
+     fn offset(&self, offset: usize) -> usize {
+         self.offsets.map_or(offset, |map| map[offset])
+     }
+@@ -749,7 +832,8 @@
+         }
+         let first = values.pop().expect("the root lead completed");
+         let released = (work.capacity() + values.capacity()) as u64;
++        self.budget.release_vec(work)?;
++        self.budget.release_vec(values)?;
+-        drop((work, values));
+         self.budget.release_compile_slots(released);
+         let mut node = root;
+         let run = loop {
+@@ -803,12 +887,7 @@
+                         .charge_wide(Resource::CompileSlots, missing as u128 * 2)?;
+                     self.budget
+                         .charge_wide(Resource::CompileSteps, missing as u128)?;
++                    self.budget.reserve(&mut flat.spans, missing)?;
+-                    flat.spans
+-                        .try_reserve_exact(missing)
+-                        .map_err(|_| Error::Allocation {
+-                            resource: Resource::CompileSlots,
+-                            units: missing as u64 * 2,
+-                        })?;
+                     flat.spans.resize(missing, None);
+                 }
+                 let start = flat.ranges.len();
+@@ -819,7 +898,7 @@
+                 let span = |at: usize| u32::try_from(at).expect("admitted ranges fit u32");
+                 flat.spans[set] = Some((span(start), span(flat.ranges.len())));
+             }
++            self.budget.release_vec(ranges)?;
+-            drop(ranges);
+             self.budget.release_compile_slots(held);
+         }
+         Ok(flat)
+@@ -869,11 +948,11 @@
+             }
+         }
+         let released = work.capacity() as u64;
++        self.budget.release_vec(work)?;
+-        drop(work);
+         self.budget.release_compile_slots(released);
+         if !flat {
+             let released = ranges.capacity() as u64 * 2;
++            self.budget.release_vec(ranges)?;
+-            drop(ranges);
+             self.budget.release_compile_slots(released);
+             return Ok(Vec::new());
+         }
+@@ -1198,7 +1277,7 @@
+                         parent.negated = false;
+                     } else {
+                         let slots = frames.capacity() as u64 * 3;
++                        self.budget.release_vec(frames)?;
+-                        drop(frames);
+                         self.budget.release_compile_slots(slots);
+                         return Ok(set);
+                     }
+--- a/crates/rdf-core/src/xsd_regex/xflag.rs
++++ b/crates/rdf-core/src/xsd_regex/xflag.rs
+@@ -94,21 +94,12 @@
+     pattern: &str,
+     budget: &mut super::xpath::Budget,
+ ) -> Result<(String, Vec<usize>), super::xpath::Error> {
++    use super::xpath::Resource;
+-    use super::xpath::{Error, Resource};
+     budget.charge_wide(Resource::CompileSlots, (pattern.len() as u128) * 2 + 1)?;
+     let mut out = String::new();
+     let mut offsets = Vec::new();
++    budget.reserve_string(&mut out, pattern.len())?;
++    budget.reserve(&mut offsets, pattern.len() + 1)?;
+-    out.try_reserve_exact(pattern.len())
+-        .map_err(|_| Error::Allocation {
+-            resource: Resource::CompileSlots,
+-            units: pattern.len() as u64,
+-        })?;
+-    offsets
+-        .try_reserve_exact(pattern.len() + 1)
+-        .map_err(|_| Error::Allocation {
+-            resource: Resource::CompileSlots,
+-            units: pattern.len() as u64 + 1,
+-        })?;
+     let before = budget.used(Resource::CompileSlots);
+     let mut scanner = Scanner::bounded(pattern, budget, true)?;
+     let scanner_slots = budget.used(Resource::CompileSlots) - before;
+@@ -126,7 +117,7 @@
+         }
+     }
+     offsets.push(pattern.len());
++    scanner.release(budget)?;
+-    drop(scanner);
+     budget.release_compile_slots(scanner_slots);
+     Ok((out, offsets))
+ }
+--- a/crates/rdf-core/src/xsd_regex/scan.rs
++++ b/crates/rdf-core/src/xsd_regex/scan.rs
+@@ -279,7 +279,7 @@
+         budget: &mut super::xpath::Budget,
+         x_state: bool,
+     ) -> Result<Self, super::xpath::Error> {
++        use super::xpath::Resource;
+-        use super::xpath::{Error, Resource};
+ 
+         budget.limits().admit_pattern(pattern)?;
+         budget.charge(Resource::CompileSteps, pattern.len() as u64)?;
+@@ -293,18 +293,8 @@
+         let mut groups = Groups::default();
+         let slots = 2 * (count as u128) + 1 + u128::from(x_state) * (count as u128);
+         budget.charge_wide(Resource::CompileSlots, slots)?;
++        budget.reserve(&mut chars, count)?;
++        budget.reserve(&mut offsets, count + 1)?;
+-        chars
+-            .try_reserve_exact(count)
+-            .map_err(|_| Error::Allocation {
+-                resource: Resource::CompileSlots,
+-                units: count as u64,
+-            })?;
+-        offsets
+-            .try_reserve_exact(count + 1)
+-            .map_err(|_| Error::Allocation {
+-                resource: Resource::CompileSlots,
+-                units: count as u64 + 1,
+-            })?;
+         for (offset, ch) in pattern.char_indices() {
+             offsets.push(offset);
+             chars.push(ch);
+@@ -317,27 +307,11 @@
+             Resource::CompileSlots,
+             class_count as u128 + group_count as u128,
+         )?;
++        budget.reserve(&mut classes, class_count)?;
++        budget.reserve(&mut groups.open_stack, group_count)?;
+-        classes
+-            .try_reserve_exact(class_count)
+-            .map_err(|_| Error::Allocation {
+-                resource: Resource::CompileSlots,
+-                units: class_count as u64,
+-            })?;
+-        groups
+-            .open_stack
+-            .try_reserve_exact(group_count)
+-            .map_err(|_| Error::Allocation {
+-                resource: Resource::CompileSlots,
+-                units: group_count as u64,
+-            })?;
+         let x_inside = if x_state {
+             let mut inside = Vec::new();
++            budget.reserve(&mut inside, count)?;
+-            inside
+-                .try_reserve_exact(count)
+-                .map_err(|_| Error::Allocation {
+-                    resource: Resource::CompileSlots,
+-                    units: count as u64,
+-                })?;
+             Some(inside)
+         } else {
+             None
+@@ -359,4 +333,27 @@
+         })
+     }
+ 
++
++    /// Destroy every token-cursor buffer before releasing its physical grant.
++    pub(super) fn release(self, budget: &mut super::xpath::Budget<'_>) -> Result<(), super::xpath::Error> {
++        fn bytes<T>(values: &Vec<T>) -> Result<usize, super::xpath::Error> {
++            std::alloc::Layout::array::<T>(values.capacity())
++                .map(|layout| layout.size())
++                .map_err(|_| super::xpath::Error::Storage(purrdf_lex::allocation::StorageError::SizeOverflow))
++        }
++        let mut total = bytes(&self.chars)?;
++        for size in [
++            bytes(&self.offsets)?,
++            bytes(&self.classes)?,
++            bytes(&self.groups.open_stack)?,
++            self.x_inside.as_ref().map_or(Ok(0), bytes)?,
++        ] {
++            total = total.checked_add(size).ok_or(super::xpath::Error::Storage(
++                purrdf_lex::allocation::StorageError::SizeOverflow,
++            ))?;
++        }
++        drop(self);
++        budget.release_physical(total)
++    }
++
+     /// The non-linear part of lexical work is admitted before a token can
+--- a/crates/rdf-core/src/xsd_regex/xpath/pike.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/pike.rs
+@@ -233,13 +233,6 @@
+     }
+ }
+ 
+-fn reserve_compile<T>(vec: &mut Vec<T>, count: usize) -> Result<(), Error> {
+-    vec.try_reserve_exact(count).map_err(|_| Error::Allocation {
+-        resource: Resource::CompileSlots,
+-        units: count as u64,
+-    })
+-}
+-
+ /// Build the parent table and the nesting facts of a parsed program.
+ ///
+ /// Three linear passes over a breadth-first order of the tree, which lists
+@@ -254,7 +247,7 @@
+     budget.charge_wide(Resource::CompileSlots, count as u128)?;
+     budget.charge_wide(Resource::CompileSteps, count as u128 * 3)?;
+     let mut links = Vec::new();
++    budget.reserve(&mut links, count)?;
+-    reserve_compile(&mut links, count)?;
+     links.resize(
+         count,
+         Link {
+@@ -268,7 +261,7 @@
+         },
+     );
+     let mut order = Vec::new();
++    budget.reserve(&mut order, count)?;
+-    reserve_compile(&mut order, count)?;
+     order.push(root);
+     let mut index = 0;
+     let (mut backreferences, mut anchors) = (false, false);
+@@ -339,7 +332,7 @@
+             links[operand].outer = outer;
+         }
+     }
++    budget.release_vec(order)?;
+-    drop(order);
+     budget.release_compile_slots(count as u64);
+     Ok(Links {
+         nodes: links,
+--- a/crates/rdf-core/src/xsd_regex/xpath/match.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/match.rs
+@@ -254,7 +254,7 @@
+     }
+ 
+     /// This execution's work and storage accounting.
+-    pub(super) fn budget(&mut self) -> &mut Budget {
++    pub(super) fn budget(&mut self) -> &mut Budget<'a> {
+         match &mut self.machine {
+             Machine::Backtrack { machine, .. } => &mut machine.ctx.budget,
+             #[cfg(all(test, not(target_arch = "wasm32")))]
+@@ -375,7 +375,7 @@
+ pub(super) struct Ctx<'a> {
+     pub(super) program: &'a CompiledPattern,
+     pub(super) input: &'a str,
++    pub(super) budget: Budget<'a>,
+-    pub(super) budget: Budget,
+     pub(super) live_slots: u128,
+ }
+ 
+--- /dev/null
++++ b/crates/rdf-core/tests/native_regex_storage.rs
+@@ -0,0 +1,100 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Independent compiler allocation measurements over the real native program.
++
++use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
++use purrdf_core::xsd_regex::xpath::{self, Limits, Profile};
++use purrdf_lex::allocation::{Admission, StorageError};
++
++#[global_allocator]
++static GLOBAL: CountingAllocator = CountingAllocator;
++
++#[derive(Debug)]
++struct Account {
++    limit: usize,
++    live: usize,
++    peak: usize,
++    refused: Option<usize>,
++}
++
++impl Account {
++    const fn new(limit: usize) -> Self {
++        Self { limit, live: 0, peak: 0, refused: None }
++    }
++}
++
++impl Admission for Account {
++    fn resize(&mut self, live_bytes: usize) -> Result<(), StorageError> {
++        if live_bytes > self.limit {
++            if self.refused.is_none() { self.refused = Some(live_bytes); }
++            return Err(StorageError::AdmissionFailed);
++        }
++        self.live = live_bytes;
++        self.peak = self.peak.max(live_bytes);
++        Ok(())
++    }
++}
++
++#[test]
++fn compiler_peak_and_retained_layout_cover_actual_native_buffers() {
++    let source = "(a|b){1,20}[c-z-[d-f]]\\p{Lu}".repeat(48);
++    for flags in ["", "ix", "qsimx"] {
++        let window = CurrentThreadWindow::open();
++        let program = xpath::compile_with_storage(
++            Profile::Xpath31, &source, flags, Limits::new(), Account::new(2_000_000),
++        ).unwrap();
++        let measured = window.close();
++        assert!(
++            usize::try_from(measured.peak_working_bytes).unwrap() <= program.storage().peak,
++            "flags {flags:?}: compiler heap exceeded its physical admission"
++        );
++        assert_eq!(
++            usize::try_from(measured.retained_bytes).unwrap(), program.storage().live,
++            "construction scratch must be destroyed and released before publication"
++        );
++        assert_eq!(
++            program.storage().live,
++            program.pattern().storage_bytes() - size_of::<xpath::CompiledPattern>(),
++            "the program's source, flags, nodes, sets, links and flat tables are retained"
++        );
++        let resident = xpath::compile(Profile::Xpath31, &source, flags, Limits::new()).unwrap();
++        for input in ["", "abc", "ABCD", &source] {
++            assert_eq!(
++                program.pattern().is_match(input, Limits::new()),
++                resident.is_match(input, Limits::new()),
++                "physical admission must preserve the selected native law"
++            );
++        }
++    }
++}
++
++#[test]
++fn compiler_refusal_precedes_unadmitted_allocation_and_preserves_its_owner() {
++    let source = "(a|b){1,20}[c-z-[d-f]]\\p{Lu}".repeat(48);
++    for limit in [0, 32, 1024, 4096] {
++        let window = CurrentThreadWindow::open();
++        let failure = xpath::compile_with_storage(
++            Profile::Xpath31, &source, "ix", Limits::new(), Account::new(limit),
++        ).unwrap_err();
++        let measured = window.close();
++        assert!(matches!(failure.error(), xpath::Error::Storage(StorageError::AdmissionFailed)));
++        assert!(failure.storage().refused.unwrap() > limit);
++        assert!(failure.storage().peak <= limit);
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= failure.storage().peak);
++        assert_eq!(measured.retained_bytes, 0, "failed compiler buffers are already destroyed");
++    }
++}
++
++#[test]
++fn owned_program_drop_destroys_all_compiler_storage() {
++    let source = "((ab|cd){2,8}[a-z-[e]]?)+".repeat(32);
++    let window = CurrentThreadWindow::open();
++    let program = xpath::compile_with_storage(
++        Profile::Xpath31, &source, "x", Limits::new(), Account::new(2_000_000),
++    ).unwrap();
++    assert!(program.storage().live > 0);
++    drop(program);
++    let measured = window.close();
++    assert_eq!(measured.retained_bytes, 0);
++}

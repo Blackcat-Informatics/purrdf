@@ -1,0 +1,15 @@
+--- a/crates/sparql-eval/tests/custom_aggregate_ownership.rs
++++ b/crates/sparql-eval/tests/custom_aggregate_ownership.rs
+@@ -100,6 +100,12 @@
+     }
+     fn algebraic_class(&self) -> AlgebraicClass {
+         AlgebraicClass::OrderDependent
++    }
++    fn state_bound(&self) -> u64 {
++        // The fixture accepts arbitrary caller lexical lengths. Physical growth
++        // is admitted natively; the legacy governor declaration has no smaller
++        // universal state bound for this input-dependent string producer.
++        u64::MAX
+     }
+     fn scalarvals(&self) -> &[ScalarvalSpec] {
+         const SPEC: [ScalarvalSpec; 1] = [ScalarvalSpec::new("PREFIX", ScalarvalKind::String)];

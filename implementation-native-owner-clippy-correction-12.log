@@ -1,0 +1,130 @@
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/slice)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/bench)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shex)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shapes)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/json)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/conformance-kit)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/markdown)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0282]: type annotations needed
+  --> crates/sparql-eval/tests/fallible_query.rs:71:5
+   |
+71 |     assert_eq!(empty.result.solutions().expect("SELECT shape").1, []);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer type
+
+For more information about this error, try `rustc --explain E0282`.
+error: could not compile `purrdf-sparql-eval` (test "fallible_query") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/validate)
+    Checking purrdf-envelope-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/envelope-probe)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/geo)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cli)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-conformance)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-capi)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-wasm)
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/bindings/python)
+error[E0308]: mismatched types
+    --> crates/rdf-capi/src/query.rs:1395:17
+     |
+1394 |             .update_governed(
+     |              --------------- arguments to this method are incorrect
+1395 |                 &mut (*dataset).0,
+     |                 ^^^^^^^^^^^^^^^^^ expected `&mut Arc<RdfDataset>`, found `&mut DatasetHandle`
+     |
+     = note: expected mutable reference `&mut std::sync::Arc<purrdf_core::RdfDataset>`
+                found mutable reference `&mut purrdf_core::DatasetHandle`
+note: method defined here
+    --> crates/sparql-eval/src/engine.rs:2655:12
+     |
+2655 |     pub fn update_governed(
+     |            ^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-capi` (lib) due to 1 previous error
+error[E0433]: cannot find `SharedText` in `small`
+   --> bindings/python/src/attestation.rs:128:45
+    |
+128 |                 reason: purrdf_core::small::SharedText::try_from_admitted(reason, ())
+    |                                             ^^^^^^^^^^ could not find `SharedText` in `small`
+    |
+help: consider importing this struct
+    |
+ 35 + use purrdf_core::small::shared::SharedText;
+    |
+help: if you import `SharedText`, refer to it directly
+    |
+128 -                 reason: purrdf_core::small::SharedText::try_from_admitted(reason, ())
+128 +                 reason: SharedText::try_from_admitted(reason, ())
+    |
+
+error[E0433]: cannot find `SharedText` in `small`
+    --> bindings/python/src/py_store/query.rs:2054:38
+     |
+2054 |             .map(purrdf_core::small::SharedText::as_str)
+     |                                      ^^^^^^^^^^ could not find `SharedText` in `small`
+     |
+help: consider importing this struct
+     |
+  57 + use purrdf_core::small::shared::SharedText;
+     |
+help: if you import `SharedText`, refer to it directly
+     |
+2054 -             .map(purrdf_core::small::SharedText::as_str)
+2054 +             .map(SharedText::as_str)
+     |
+
+error: unused import: `RdfDataset`
+  --> bindings/python/src/py_gts_dataset.rs:27:16
+   |
+27 |     CanonHash, RdfDataset, RdfLookaside, ViewCanonError, gts_write, try_canonicalize_flat_view,
+   |                ^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error[E0308]: mismatched types
+    --> crates/rdf-capi/src/query.rs:2282:26
+     |
+2282 |                 unsafe { &(*dataset).0 },
+     |                          ^^^^^^^^^^^^^ expected `&Arc<RdfDataset>`, found `&DatasetHandle`
+     |
+     = note: expected reference `&std::sync::Arc<purrdf_core::RdfDataset>`
+                found reference `&purrdf_core::DatasetHandle`
+
+error: could not compile `purrdf-capi` (lib test) due to 2 previous errors
+error: large size difference between variants
+   --> crates/rdf-wasm/src/operation.rs:318:1
+    |
+318 | /  pub(crate) enum JobOutcome {
+319 | |      Query(SparqlResult),
+320 | |      Raw(String),
+321 | |      Governed(Box<GovernedOutcome>),
+...   |
+324 | |/     UpdateGoverned {
+325 | ||         outcome: GovernedUpdateOutcome,
+326 | ||         frozen: Option<Arc<RdfDataset>>,
+327 | ||     },
+    | ||_____- the largest variant contains at least 328 bytes
+...   |
+341 | |      Failed(JobError),
+    | |      ---------------- the second-largest variant contains at least 112 bytes
+342 | |  }
+    | |__^ the entire enum is at least 328 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+    = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+325 -         outcome: GovernedUpdateOutcome,
+325 +         outcome: Box<GovernedUpdateOutcome>,
+    |
+
+error: could not compile `purrdf-wasm` (lib) due to 1 previous error
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `purrdf-python` (lib) due to 3 previous errors
+error: could not compile `purrdf-wasm` (lib test) due to 1 previous error

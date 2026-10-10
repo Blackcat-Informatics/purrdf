@@ -1,0 +1,32 @@
+heaptrack output will be written to "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/admit-allocation-trace.zst"
+starting application, this might take some time...
+
+running 1 test
+test admit_allocation_is_independent_of_dataset_size ... NOTE: heaptrack detected DEBUGINFOD_URLS but will disable it to prevent 
+unintended network delays during recording
+If you really want to use DEBUGINFOD, export HEAPTRACK_ENABLE_DEBUGINFOD=1
+
+thread 'admit_allocation_is_independent_of_dataset_size' (2727924) panicked at crates/shapes/tests/change_path_alloc.rs:2517:5:
+assertion `left == right` failed: admit's constant term moved from 277 to 282; this is a determinism pin, so the question is what changed in admission, not what the number should be now
+  left: 282
+ right: 277
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    admit_allocation_is_independent_of_dataset_size
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.12s
+
+heaptrack stats:
+	allocations:          	103930
+	leaked allocations:   	571
+	temporary allocations:	75094
+Heaptrack finished! Now run the following to investigate the data:
+
+  heaptrack --analyze "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/admit-allocation-trace.zst"
+
+heaptrack_gui detected, automatically opening the file...
+/usr/bin/heaptrack: line 288: 2727964 Aborted                    (core dumped) exit $EXIT_CODE

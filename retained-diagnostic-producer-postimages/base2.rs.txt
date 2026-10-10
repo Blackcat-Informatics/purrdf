@@ -1,0 +1,100 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Real public diagnostic publication, allocator traffic and retained lifetimes.
+
+mod support;
+
+use purrdf_alloc_probe::CurrentThreadWindow;
+use purrdf_core::{DatasetView, SparqlRequest};
+use purrdf_sparql_eval::{
+    FallibleSparqlError, NativeDiagnostic, NativeDiagnosticKind, NativeSparqlEngine,
+    QueryControlFailure, QueryGovernors, QueryOptions, RetainedDiagnostic,
+};
+use purrdf_sparql_eval::user_fn::{Arity, UserFunctionRegistry, Volatility};
+use support::segmented::{CEILING, fixture, open_with_evidence};
+use std::sync::Arc;
+
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+#[test]
+fn initial_control_outcome_clone_and_render_require_no_allocator() {
+    struct Sink;
+    impl std::fmt::Write for Sink {
+        fn write_str(&mut self, _: &str) -> std::fmt::Result { Ok(()) }
+    }
+    for failure in [
+        QueryControlFailure::Unpriced("missing owned factory"),
+        QueryControlFailure::LayoutOverflow,
+        QueryControlFailure::DiagnosticFormatting,
+        QueryControlFailure::WorkspaceStopped,
+    ] {
+        let window = CurrentThreadWindow::open();
+        let error: FallibleSparqlError<std::convert::Infallible, ()> =
+            FallibleSparqlError::ControlFailure { failure, evidence: () };
+        let cloned = error.clone();
+        std::fmt::write(&mut Sink, format_args!("{cloned}")).unwrap();
+        assert!(!failure.diagnostic_code().is_empty());
+        drop(error);
+        drop(cloned);
+        assert_eq!(window.close().allocations, 0,
+            "refused initial admission cannot allocate even for reporting or cloning");
+    }
+}
+
+fn extract<E, V>(error: FallibleSparqlError<E, V>) -> RetainedDiagnostic {
+    let FallibleSparqlError::Query { diagnostic, evidence } = error else {
+        panic!("the healthy source must publish the retained original native diagnostic");
+    };
+    drop(evidence);
+    diagnostic
+}
+
+#[test]
+fn native_error_retains_original_payload_across_all_public_entries_and_extraction() {
+    let (image, _) = fixture();
+    let text: Arc<str> = Arc::from("original admitted native failure é ".repeat(512));
+    let engine = NativeSparqlEngine::new();
+    let mut registry = UserFunctionRegistry::default();
+    let original = text.clone();
+    registry.register_native_admitted(
+        "http://example.org/fail", Arity::Exact(0), Volatility::Stable,
+        Arc::new(move |_, workspace| Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Internal, &original, workspace,
+        ))),
+    );
+    let bound = engine.bind_functions(registry, QueryOptions::EMPTY.env).unwrap();
+    let options = QueryOptions::EMPTY.with_functions(&bound);
+    let query = "SELECT (<http://example.org/fail>() AS ?value) WHERE {}";
+    let prepared = engine.prepare_query_with_options(query, None, options).unwrap();
+    let request = || SparqlRequest { query, base_iri: None, substitutions: &[] };
+    for entry in 0..4 {
+        let source = open_with_evidence(&image, CEILING, 2, 16_384);
+        let window = CurrentThreadWindow::open();
+        let diagnostic = match entry {
+            0 => extract(engine.query_fallible_view(&source, request(), options).unwrap_err()),
+            1 => extract(engine.query_prepared_fallible_view(&source, &prepared, &[], options).unwrap_err()),
+            2 => extract(engine.query_governed_fallible_view(&source, request(), options, &QueryGovernors::METERED)
+                .unwrap_err()),
+            _ => extract(engine.query_prepared_governed_fallible_view(
+                &source, &prepared, &[], options, &QueryGovernors::METERED,
+            ).unwrap_err()),
+        };
+        let measured = window.close();
+        assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
+        assert!(source.evidence().peak_bytes() <= CEILING);
+        assert_eq!(diagnostic.code, purrdf_sparql_eval::EvalError::INTERNAL_CODE);
+        assert!(diagnostic.message.ends_with(text.as_ref()));
+        let live = source.evidence().live_bytes();
+        let window = CurrentThreadWindow::open();
+        let clone = diagnostic.clone();
+        assert_eq!(window.close().allocations, 0);
+        drop(diagnostic);
+        assert_eq!(source.evidence().live_bytes(), live);
+        assert!(clone.message.ends_with(text.as_ref()));
+        drop(clone);
+        assert!(source.evidence().live_bytes() < live,
+            "the final error payload owner releases its original grant");
+    }
+}

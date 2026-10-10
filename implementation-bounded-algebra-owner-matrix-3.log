@@ -1,0 +1,21 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/property_fn_eval.rs:1128:33
+     |
+1128 |         ctx.base_iri.clone_from(&self.base_iri);
+     |                      ---------- ^^^^^^^^^^^^^^ expected `&Option<Shared<EffectiveBase>>`, found `&Option<String>`
+     |                      |
+     |                      arguments to this method are incorrect
+     |
+     = note: expected reference `&Option<purrdf_core::small::Shared<EffectiveBase>>`
+                found reference `&Option<std::string::String>`
+note: method defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/clone.rs:245:8
+     |
+ 245 |     fn clone_from(&mut self, source: &Self)
+     |        ^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 1 previous error

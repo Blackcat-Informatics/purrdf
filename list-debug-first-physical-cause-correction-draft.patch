@@ -1,0 +1,70 @@
+--- a/crates/sparql-eval/src/error.rs
++++ b/crates/sparql-eval/src/error.rs
+@@ -126,7 +126,14 @@
+         message: impl core::fmt::Display,
+         workspace: &crate::WorkspaceCapability,
+     ) -> Result<Self, EvalError> {
+-        let length = crate::workspace::display_len(&message)?;
++        let preserve_failure = |error| {
++            if workspace.has_failed() {
++                EvalError::WorkspaceStopped
++            } else {
++                error
++            }
++        };
++        let length = crate::workspace::display_len(&message).map_err(preserve_failure)?;
+         let control =
+             purrdf_core::small::Shared::<NativeDiagnosticPayload>::allocation_layout().size();
+         let bytes = length
+@@ -135,6 +142,7 @@
+         let allocation = workspace
+             .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+-        let text = crate::workspace::format_exact(&message, length, "native diagnostic text")?;
++        let text = crate::workspace::format_exact(&message, length, "native diagnostic text")
++            .map_err(preserve_failure)?;
+         let payload = purrdf_core::small::Shared::try_new(NativeDiagnosticPayload {
+             text,
+             _allocation: allocation,
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -3437,13 +3437,26 @@
+     fn constructed_metadata_refusal_publishes_no_cell_and_preserves_original_cause() {
+         let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
+-        let (workspace, ledger, _) = account(base + 15);
++        // Admit the three real lexical payloads and their concrete grant boxes,
++        // then refuse the first actual constructed-cell metadata array.
++        let inputs = ["urn:s", "urn:p", "urn:o"];
++        let control = u64::try_from(size_of::<super::WorkspaceCharge<Refusal>>()).unwrap();
++        let input_bytes = inputs.iter().try_fold(0u64, |bytes, text| {
++            bytes
++                .checked_add(u64::try_from(text.len()).unwrap())
++                .and_then(|bytes| bytes.checked_add(control))
++        }).unwrap();
++        let limit = base.checked_add(input_bytes).unwrap();
++        let (workspace, ledger, _) = account(limit);
+         let capability = workspace.capability();
+         let terms = (
+-            capability.iri("urn:s").unwrap(),
+-            capability.iri("urn:p").unwrap(),
+-            capability.iri("urn:o").unwrap(),
++            capability.iri(inputs[0]).unwrap(),
++            capability.iri(inputs[1]).unwrap(),
++            capability.iri(inputs[2]).unwrap(),
+         );
++        assert_eq!(ledger.live.load(Ordering::Relaxed), limit);
++        assert!(workspace.take_failure().is_none());
+         let mut cells = super::ConstructedCells::default();
+-        assert!(cells.push_admitted(terms, &capability).is_err());
++        let refusal = cells.push_admitted(terms, &capability).unwrap_err();
++        assert!(matches!(refusal, EvalError::WorkspaceStopped));
+         assert!(cells.is_empty());
+         assert_eq!(
+@@ -3504,7 +3517,7 @@
+             .take_failure()
+             .expect("original native worklist refusal");
+         assert!(matches!(refusal, EvalError::WorkspaceStopped));
+-        assert!(matches!(diagnostic, EvalError::UnstableNativeDiagnostic));
++        assert!(matches!(diagnostic, EvalError::WorkspaceStopped));
+         assert_eq!(workspace.take_failure().unwrap().identity, 7);
+         assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+         assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);

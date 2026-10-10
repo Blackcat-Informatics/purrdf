@@ -1,0 +1,154 @@
+    /// A relation whose generation or service-level declaration panics.
+    pub fn settle(&self) -> Result<RelationWitness, EvalError> {
+        let generation = generation_contained(&*self.cursor, &self.iri)?;
+        let service = service_level_contained(&*self.cursor, &self.iri)?;
+        let mut witness = RelationWitness::default();
+        witness.record(&self.iri, self.opened.generation.clone(), service.clone());
+        if generation != self.opened.generation {
+            witness.record(&self.iri, generation, service);
+        }
+        Ok(witness)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The forwarding refusal
+// ---------------------------------------------------------------------------
+
+/// Whether `pattern` reaches a property-function call anywhere — including inside an
+/// expression-embedded `EXISTS`, which the algebra crate's own serialization-facing
+/// walk deliberately does not descend into.
+///
+/// Used at the `SERVICE` forwarding boundary: a call serializes as an ordinary triple,
+/// so a remote endpoint would silently match it against ITS data and return rows that
+/// are not the relation's. That is a wrong answer with no symptom, so the forwarding
+/// refuses instead.
+pub(crate) fn pattern_reaches_property_function(pattern: &GraphPattern) -> bool {
+    reaches(ReachNode::Pattern(pattern), ReachKind::PropertyFunction)
+}
+
+/// [`pattern_reaches_property_function`] through an expression's embedded patterns.
+pub(crate) fn expression_reaches_property_function(expr: &Expression) -> bool {
+    reaches(ReachNode::Expression(expr), ReachKind::PropertyFunction)
+}
+
+/// Whether `pattern` reaches a `GROUP BY` with an [`AggregateFunction::Custom`]
+/// aggregate anywhere — including inside an expression-embedded `EXISTS`.
+///
+/// Shares the soundness-visitor idiom [`pattern_reaches_property_function`]
+/// establishes, but for a different reason at each of its two call sites:
+///
+/// * `crate::property_fn_plan::plan_query`'s prepare-time walk uses it to decide
+///   whether a query needs planning AT ALL when it carries no property-function
+///   call either — without this check, a query with a `Custom` aggregate and NO
+///   property function would skip `plan_query`'s whole walk via its
+///   `pattern_reaches_property_function`-only short-circuit, and the unregistered-
+///   IRI/arity admission [`crate::property_fn_plan::plan_aggregate`] performs
+///   would never run.
+/// * `crate::remote::eval_service` uses it for the SAME reason
+///   [`pattern_reaches_property_function`] exists: a `Custom` aggregate inside a
+///   `SERVICE` body would serialize as an ordinary `AGG`-shaped call the endpoint
+///   cannot know, or worse, an `AGG(<iri>, …)` textual form it silently mishandles
+///   — either way a wrong answer with no local symptom.
+pub(crate) fn pattern_reaches_custom_aggregate(pattern: &GraphPattern) -> bool {
+    reaches(ReachNode::Pattern(pattern), ReachKind::Aggregate)
+}
+
+/// [`pattern_reaches_custom_aggregate`] through an expression's embedded patterns
+/// (an `EXISTS`'s inner `GROUP BY`, e.g. `FILTER EXISTS { SELECT (AGG(<iri>,?x)
+/// AS ?v) WHERE {...} GROUP BY ?g }`).
+///
+/// `pub(crate)`: also read directly by `crate::property_fn_plan`'s expression planning
+/// short-circuit, for the identical reason `plan_where_pattern` reads
+/// [`pattern_reaches_custom_aggregate`] — an expression containing an `EXISTS`
+/// whose inner pattern has a `Custom` aggregate but no property-function call
+/// must not skip the walk that reaches that aggregate's prepare-time admission.
+pub(crate) fn expression_reaches_custom_aggregate(expr: &Expression) -> bool {
+    reaches(ReachNode::Expression(expr), ReachKind::Aggregate)
+}
+
+/// Whether the admission pass has any registered call to check.
+pub(crate) fn pattern_needs_admission(pattern: &GraphPattern) -> bool {
+    reaches(ReachNode::Pattern(pattern), ReachKind::Admission)
+}
+
+enum ReachNode<'a> {
+    Pattern(&'a GraphPattern),
+    Expression(&'a Expression),
+}
+
+#[derive(Clone, Copy)]
+enum ReachKind {
+    PropertyFunction,
+    Aggregate,
+    Admission,
+}
+
+// Use the exhaustive shallow visitors with a borrowed work stack. Flat parser
+// combinator spines can be much deeper than brace nesting; recursive visitor
+// callbacks consumed the native stack before the preparation pass could return.
+fn reaches(root: ReachNode<'_>, kind: ReachKind) -> bool {
+    use crate::governor::soundness::{
+        ExpressionPart, PatternPart, visit_expression_parts, visit_pattern_parts,
+    };
+    let mut pending: purrdf_core::SmallVec<[ReachNode<'_>; 16]> = purrdf_core::smallvec![root];
+    while let Some(node) = pending.pop() {
+        match node {
+            ReachNode::Pattern(pattern) => {
+                if matches!(kind, ReachKind::PropertyFunction | ReachKind::Admission)
+                    && matches!(pattern, GraphPattern::PropertyFunction(_))
+                {
+                    return true;
+                }
+                if matches!(kind, ReachKind::Aggregate | ReachKind::Admission)
+                    && let GraphPattern::Group { aggregates, .. } = pattern
+                    && aggregates.iter().any(|(_, aggregate)| {
+                        matches!(aggregate.function(), AggregateFunction::Custom(_))
+                    })
+                {
+                    return true;
+                }
+                visit_pattern_parts(pattern, &mut |part| {
+                    pending.push(match part {
+                        PatternPart::Child(child, _) => ReachNode::Pattern(child),
+                        PatternPart::Expression(expr) => ReachNode::Expression(expr),
+                    });
+                    false
+                });
+            }
+            ReachNode::Expression(expr) => {
+                visit_expression_parts(expr, &mut |part| {
+                    match part {
+                        ExpressionPart::Exists(pattern) => {
+                            pending.push(ReachNode::Pattern(pattern));
+                        }
+                        ExpressionPart::Sub(inner) => pending.push(ReachNode::Expression(inner)),
+                        ExpressionPart::Call(_) => {}
+                    }
+                    false
+                });
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use purrdf_core::{
+        RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult,
+        TermValue,
+    };
+
+    use super::*;
+    use crate::engine::NativeSparqlEngine;
+    use crate::error::EvalError;
+    use crate::property_fn::{MemoryRelation, PfCursor, PfRow, PropertyFunctionRegistry};
+    use crate::user_fn::Volatility;
+    use purrdf_sparql_algebra::Child;
+
+    const EX: &str = "http://example.org/";
+    const PF_SPLIT: &str = "http://example.org/pf/split";
+    const PF_CONTAINS: &str = "http://example.org/pf/contains";

@@ -1,0 +1,33 @@
+heaptrack output will be written to "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/prepared-current-memo.zst.zst"
+starting application, this might take some time...
+
+running 1 test
+test re_running_a_prepared_execution_costs_a_pinned_constant ... NOTE: heaptrack detected DEBUGINFOD_URLS but will disable it to prevent 
+unintended network delays during recording
+If you really want to use DEBUGINFOD, export HEAPTRACK_ENABLE_DEBUGINFOD=1
+prepared execution: [21, 21, 21, 21, 21] allocations per run
+
+thread 're_running_a_prepared_execution_costs_a_pinned_constant' (1953799) panicked at crates/sparql-eval/tests/prepared_execution.rs:273:5:
+assertion `left == right` failed: a prepared execution's per-run cost is pinned EXACTLY: a figure that CLIMBS run over run is per-run state accumulating, and one that sits flat at a different magnitude is a changed marginal cost. Each figure is the calling thread's own ledger over one steady-state run, so it is a fact about the evaluator and not about what else the process was doing
+  left: [21, 21, 21, 21, 21]
+ right: [26, 26, 26, 26, 26]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    re_running_a_prepared_execution_costs_a_pinned_constant
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+heaptrack stats:
+	allocations:          	626
+	leaked allocations:   	13
+	temporary allocations:	110
+Heaptrack finished! Now run the following to investigate the data:
+
+  heaptrack --analyze "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/prepared-current-memo.zst.zst"
+
+heaptrack_gui detected, automatically opening the file...
+/usr/bin/heaptrack: line 288: 1953807 Aborted                    (core dumped) exit $EXIT_CODE

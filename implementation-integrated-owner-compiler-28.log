@@ -1,0 +1,40 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+error: unnecessary qualification
+   --> crates/lex/src/allocation/shared.rs:539:6
+    |
+539 | impl core::fmt::Display for SharedText {
+    |      ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+539 - impl core::fmt::Display for SharedText {
+539 + impl fmt::Display for SharedText {
+    |
+
+error: unnecessary qualification
+   --> crates/lex/src/allocation/shared.rs:540:35
+    |
+540 |     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    |                                   ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+540 -     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+540 +     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> core::fmt::Result {
+    |
+
+error: unnecessary qualification
+   --> crates/lex/src/allocation/shared.rs:540:64
+    |
+540 |     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    |                                                                ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+540 -     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+540 +     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> fmt::Result {
+    |
+
+error: could not compile `purrdf-lex` (lib) due to 3 previous errors

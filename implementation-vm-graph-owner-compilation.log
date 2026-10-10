@@ -1,0 +1,450 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error: unnecessary qualification
+   --> crates/sparql-eval/src/modifier.rs:976:22
+    |
+976 |     let mut graphs = crate::AdmittedVec::new(&ctx.growth);
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+976 -     let mut graphs = crate::AdmittedVec::new(&ctx.growth);
+976 +     let mut graphs = AdmittedVec::new(&ctx.growth);
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/modifier.rs:993:20
+    |
+993 |     let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+993 -     let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
+993 +     let mut rows = RowsBuilder::new(&ctx.growth);
+    |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/modifier.rs:1014:32
+     |
+1014 |                 let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
+     |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1014 -                 let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
+1014 +                 let mut rows = RowsBuilder::new(&ctx.growth);
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/modifier.rs:1100:16
+     |
+1100 |     rows: &mut crate::solution::RowsBuilder<I>,
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1100 -     rows: &mut crate::solution::RowsBuilder<I>,
+1100 +     rows: &mut RowsBuilder<I>,
+     |
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/binop.rs:1333:74
+     |
+1333 |             .map(|row| crate::parallel::minted_row(&child.scratch, base, row))
+     |                        ---------------------------                       ^^^ expected `SmallVec<[Option<SolutionTerm<_>>; 4]>`, found `RetainedRow<<D as DatasetView>::Id>`
+     |                        |
+     |                        arguments to this function are incorrect
+     |
+     = note: expected struct `SmallVec<[Option<SolutionTerm<_>>; 4]>`
+                found struct `RetainedRow<<D as DatasetView>::Id>`
+note: function defined here
+    --> crates/sparql-eval/src/parallel.rs:1630:15
+     |
+1630 | pub(crate) fn minted_row<I: ViewTermId>(
+     |               ^^^^^^^^^^
+...
+1633 |     row: Solution<I>,
+     |     ----------------
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/binop.rs:1406:9
+     |
+1406 |         rows,
+     |         ^^^^ expected `RowBag<_>`, found `Vec<SmallVec<[Option<_>; 4]>>`
+     |
+     = note: expected struct `RowBag<_>`
+                found struct `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>`
+help: call `Into::into` on this expression to convert `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>` into `RowBag<_>`
+     |
+1406 |         rows: rows.into(),
+     |         +++++     +++++++
+
+error[E0599]: no method named `truncate` found for struct `RowBag<<D as DatasetView>::Id>` in the current scope
+    --> crates/sparql-eval/src/eval.rs:3383:23
+     |
+3383 |             rows.rows.truncate(admitted);
+     |                       ^^^^^^^^ method not found in `RowBag<<D as DatasetView>::Id>`
+     |
+    ::: crates/sparql-eval/src/solution.rs:377:1
+     |
+ 377 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ----------------------------------------- method `truncate` not found for this struct
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/eval.rs:3746:23
+     |
+3746 |                 rows: vec![row.clone()],
+     |                       ^^^^^^^^^^^^^^^^^ expected `RowBag<<D as DatasetView>::Id>`, found `Vec<RetainedRow<<D as DatasetView>::Id>>`
+     |
+     = note: expected struct `RowBag<<D as DatasetView>::Id>`
+                found struct `Vec<RetainedRow<<D as DatasetView>::Id>>`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/expr.rs:239:31
+    |
+239 |                     rows.push(row.clone());
+    |                          ---- ^^^^^^^^^^^ expected `SmallVec<[Option<SolutionTerm<_>>; 4]>`, found `RetainedRow<<D as DatasetView>::Id>`
+    |                          |
+    |                          arguments to this method are incorrect
+    |
+    = note: expected struct `SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>`
+               found struct `RetainedRow<<D as DatasetView>::Id>`
+note: method defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:999:12
+    |
+999 |     pub fn push(&mut self, value: T) {
+    |            ^^^^
+
+error[E0308]: `if` and `else` have incompatible types
+   --> crates/sparql-eval/src/expr.rs:254:9
+    |
+185 |       let rows = if forked {
+    |  ________________-
+186 | |         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
+...   |
+243 | |         rows
+    | |         ---- expected because of this
+...   |
+254 | |         rows
+    | |         ^^^^ expected `Vec<SmallVec<[Option<_>; 4]>>`, found `Vec<RetainedRow<<D as DatasetView>::Id>>`
+255 | |     };
+    | |_____- `if` and `else` have incompatible types
+    |
+    = note: expected struct `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>`
+               found struct `Vec<RetainedRow<<D as DatasetView>::Id>>`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/expr.rs:408:33
+    |
+408 |                 core::mem::take(&mut seq.rows),
+    |                 --------------- ^^^^^^^^^^^^^ expected `&mut Vec<_>`, found `&mut RowBag<<D as DatasetView>::Id>`
+    |                 |
+    |                 arguments to this function are incorrect
+    |
+    = note: expected mutable reference `&mut Vec<_>`
+               found mutable reference `&mut RowBag<<D as DatasetView>::Id>`
+note: function defined here
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/mem/mod.rs:894:14
+    |
+894 | pub const fn take<T: [const] Default>(dest: &mut T) -> T {
+    |              ^^^^
+
+error[E0308]: `if` and `else` have incompatible types
+   --> crates/sparql-eval/src/expr.rs:450:9
+    |
+349 |       let rows = if forked {
+    |  ________________-
+350 | |         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
+...   |
+433 | |         rows
+    | |         ---- expected because of this
+...   |
+450 | |         rows
+    | |         ^^^^ expected `Vec<SmallVec<[Option<_>; 4]>>`, found `Vec<RetainedRow<<D as DatasetView>::Id>>`
+451 | |     };
+    | |_____- `if` and `else` have incompatible types
+    |
+    = note: expected struct `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>`
+               found struct `Vec<RetainedRow<<D as DatasetView>::Id>>`
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/expr.rs:2200:15
+     |
+2200 |         rows: vec![seed_row],
+     |               ^^^^^^^^^^^^^^ expected `RowBag<_>`, found `Vec<SmallVec<[Option<_>; 4]>>`
+     |
+     = note: expected struct `RowBag<_>`
+                found struct `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>`
+help: call `Into::into` on this expression to convert `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>` into `RowBag<_>`
+     |
+2200 |         rows: vec![seed_row].into(),
+     |                             +++++++
+
+error[E0277]: the trait bound `usize: TryFrom<PfArity>` is not satisfied
+   --> crates/sparql-eval/src/knn/invocation.rs:371:59
+    |
+371 | ...   let mut bound = crate::AdmittedVec::with_capacity(usize::try_from(supplied).map_err(|_| EvalError::WorkspaceBoundOverflow)?, ...
+    |                                                         ^^^^^ the trait `From<PfArity>` is not implemented for `usize`
+    |
+help: `usize` implements trait `From<T>`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/convert/num.rs:119:9
+    |
+119 |         const impl From<bool> for $int {
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<bool>`
+...
+140 | impl_from_bool!(u8 u16 u32 u64 u128 usize);
+    | ------------------------------------------ in this macro invocation
+...
+148 |         const impl From<$small> for $large {
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         `From<u16>`
+    |         `From<u8>`
+...
+165 | impl_from!(u8 => usize, #[stable(feature = "lossless_int_conv", since = "1.5.0")]);
+    | ---------------------------------------------------------------------------------- in this macro invocation
+...
+201 | impl_from!(u16 => usize, #[stable(feature = "lossless_iusize_conv", since = "1.26.0")]);
+    | --------------------------------------------------------------------------------------- in this macro invocation
+    |
+   ::: /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/mem/alignment.rs:333:1
+    |
+333 | const impl From<Alignment> for usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<std::mem::Alignment>`
+    = note: required for `PfArity` to implement `Into<usize>`
+    = note: required for `usize` to implement `TryFrom<PfArity>`
+    = note: this error originates in the macro `impl_from_bool` which comes from the expansion of the macro `impl_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `usize: From<PfArity>` is not satisfied
+   --> crates/sparql-eval/src/knn/invocation.rs:371:59
+    |
+371 | ...ttedVec::with_capacity(usize::try_from(supplied).map_err(|_| EvalError::WorkspaceBoundOverflow)?, workspace)?;
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `From<PfArity>` is not implemented for `usize`
+    |
+help: `usize` implements trait `From<T>`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/convert/num.rs:119:9
+    |
+119 |         const impl From<bool> for $int {
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<bool>`
+...
+140 | impl_from_bool!(u8 u16 u32 u64 u128 usize);
+    | ------------------------------------------ in this macro invocation
+...
+148 |         const impl From<$small> for $large {
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         `From<u16>`
+    |         `From<u8>`
+...
+165 | impl_from!(u8 => usize, #[stable(feature = "lossless_int_conv", since = "1.5.0")]);
+    | ---------------------------------------------------------------------------------- in this macro invocation
+...
+201 | impl_from!(u16 => usize, #[stable(feature = "lossless_iusize_conv", since = "1.26.0")]);
+    | --------------------------------------------------------------------------------------- in this macro invocation
+    |
+   ::: /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/mem/alignment.rs:333:1
+    |
+333 | const impl From<Alignment> for usize {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `From<std::mem::Alignment>`
+    = note: required for `PfArity` to implement `Into<usize>`
+    = note: required for `usize` to implement `TryFrom<PfArity>`
+    = note: this error originates in the macro `impl_from_bool` which comes from the expansion of the macro `impl_from` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0425]: cannot find function `project_admitted` in this scope
+   --> crates/sparql-eval/src/modifier.rs:516:44
+    |
+516 |     for value in values.iter() { keys.push(project_admitted(value.as_ref(), &ctx.growth)?)?; }
+    |                                            ^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `total_order_admitted` in this scope
+    --> crates/sparql-eval/src/modifier.rs:1139:25
+     |
+1139 |         let mut order = total_order_admitted(&left.key, &right.key, workspace)?;
+     |                         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/modifier.rs:1862:58
+     |
+1862 |                         eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, domain, child)?;
+     |                         --------------                   ^^^^^^^^^ expected `&[SmallVec<[Option<_>; 4]>]`, found `&RowBag<<D as DatasetView>::Id>`
+     |                         |
+     |                         arguments to this function are incorrect
+     |
+     = note: expected reference `&[SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>]`
+                found reference `&RowBag<<D as DatasetView>::Id>`
+note: function defined here
+    --> crates/sparql-eval/src/modifier.rs:2469:4
+     |
+2469 | fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
+     |    ^^^^^^^^^^^^^^
+...
+2473 |     rows: &[Solution<D::Id>],
+     |     ------------------------
+
+error[E0599]: no method named `capacity` found for struct `RowBag<<D as DatasetView>::Id>` in the current scope
+    --> crates/sparql-eval/src/modifier.rs:1887:32
+     |
+1887 |             let out = if input.capacity() <= minted.len() {
+     |                                ^^^^^^^^ method not found in `RowBag<<D as DatasetView>::Id>`
+     |
+    ::: crates/sparql-eval/src/solution.rs:377:1
+     |
+ 377 | pub struct RowBag<I: ViewTermId = TermId> {
+     | ----------------------------------------- method `capacity` not found for this struct
+
+error[E0308]: `if` and `else` have incompatible types
+    --> crates/sparql-eval/src/modifier.rs:1891:17
+     |
+1887 |               let out = if input.capacity() <= minted.len() {
+     |  _______________________-
+1888 | |                 input
+     | |                 ----- expected because of this
+1889 | |             } else {
+1890 | |                 drop(input);
+1891 | |                 Vec::new()
+     | |                 ^^^^^^^^^^ expected `RowBag<<D as DatasetView>::Id>`, found `Vec<_>`
+1892 | |             };
+     | |_____________- `if` and `else` have incompatible types
+     |
+     = note: expected struct `RowBag<<D as DatasetView>::Id>`
+                found struct `Vec<_>`
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/modifier.rs:1906:58
+     |
+1906 |                         eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, domain, ctx)?;
+     |                         --------------                   ^^^^^^^^^ expected `&[SmallVec<[Option<_>; 4]>]`, found `&RowBag<<D as DatasetView>::Id>`
+     |                         |
+     |                         arguments to this function are incorrect
+     |
+     = note: expected reference `&[SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>]`
+                found reference `&RowBag<<D as DatasetView>::Id>`
+note: function defined here
+    --> crates/sparql-eval/src/modifier.rs:2469:4
+     |
+2469 | fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
+     |    ^^^^^^^^^^^^^^
+...
+2473 |     rows: &[Solution<D::Id>],
+     |     ------------------------
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/modifier.rs:1920:54
+     |
+1920 |                     eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, domain, ctx)?;
+     |                     --------------                   ^^^^^^^^^ expected `&[SmallVec<[Option<_>; 4]>]`, found `&RowBag<<D as DatasetView>::Id>`
+     |                     |
+     |                     arguments to this function are incorrect
+     |
+     = note: expected reference `&[SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>]`
+                found reference `&RowBag<<D as DatasetView>::Id>`
+note: function defined here
+    --> crates/sparql-eval/src/modifier.rs:2469:4
+     |
+2469 | fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
+     |    ^^^^^^^^^^^^^^
+...
+2473 |     rows: &[Solution<D::Id>],
+     |     ------------------------
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/modifier.rs:1935:9
+     |
+1935 |         rows,
+     |         ^^^^ expected `RowBag<<D as DatasetView>::Id>`, found `Vec<SmallVec<[Option<_>; 4]>>`
+     |
+     = note: expected struct `RowBag<<D as DatasetView>::Id>`
+                found struct `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>`
+help: call `Into::into` on this expression to convert `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>` into `RowBag<<D as DatasetView>::Id>`
+     |
+1935 |         rows: rows.into(),
+     |         +++++     +++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/modifier.rs:2392:9
+     |
+2392 |         rows,
+     |         ^^^^ expected `RowBag<<D as DatasetView>::Id>`, found `Vec<SmallVec<_>>`
+     |
+     = note: expected struct `RowBag<<D as DatasetView>::Id>`
+                found struct `Vec<SmallVec<_>>`
+help: call `Into::into` on this expression to convert `Vec<SmallVec<_>>` into `RowBag<<D as DatasetView>::Id>`
+     |
+2392 |         rows: rows.into(),
+     |         +++++     +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/path.rs:651:9
+    |
+651 |         rows,
+    |         ^^^^ expected `RowBag<<D as DatasetView>::Id>`, found `Vec<SmallVec<[Option<_>; 4]>>`
+    |
+    = note: expected struct `RowBag<<D as DatasetView>::Id>`
+               found struct `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>`
+help: call `Into::into` on this expression to convert `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>` into `RowBag<<D as DatasetView>::Id>`
+    |
+651 |         rows: rows.into(),
+    |         +++++     +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/property_fn_eval.rs:781:13
+    |
+781 |             rows,
+    |             ^^^^ expected `RowBag<<D as DatasetView>::Id>`, found `Vec<SmallVec<[Option<_>; 4]>>`
+    |
+    = note: expected struct `RowBag<<D as DatasetView>::Id>`
+               found struct `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>`
+help: call `Into::into` on this expression to convert `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>` into `RowBag<<D as DatasetView>::Id>`
+    |
+781 |             rows: rows.into(),
+    |             +++++     +++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/remote.rs:1205:15
+     |
+1205 |         rows: vec![purrdf_core::smallvec![]],
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `RowBag<I>`, found `Vec<SmallVec<_>>`
+     |
+     = note: expected struct `RowBag<I>`
+                found struct `Vec<SmallVec<_>>`
+help: call `Into::into` on this expression to convert `Vec<SmallVec<_>>` into `RowBag<I>`
+     |
+1205 |         rows: vec![purrdf_core::smallvec![]].into(),
+     |                                             +++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/remote.rs:1276:31
+     |
+1276 |     Ok((SolutionSeq { schema, rows }, tripped))
+     |                               ^^^^ expected `RowBag<<D as DatasetView>::Id>`, found `Vec<SmallVec<[Option<_>; 4]>>`
+     |
+     = note: expected struct `RowBag<<D as DatasetView>::Id>`
+                found struct `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>`
+help: call `Into::into` on this expression to convert `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>` into `RowBag<<D as DatasetView>::Id>`
+     |
+1276 |     Ok((SolutionSeq { schema, rows: rows.into() }, tripped))
+     |                               +++++     +++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/service_endpoints.rs:1515:37
+     |
+1515 |     let seq = SolutionSeq { schema, rows };
+     |                                     ^^^^ expected `RowBag<_>`, found `Vec<SmallVec<[Option<_>; 4]>>`
+     |
+     = note: expected struct `RowBag<_>`
+                found struct `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>`
+help: call `Into::into` on this expression to convert `Vec<SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>` into `RowBag<_>`
+     |
+1515 |     let seq = SolutionSeq { schema, rows: rows.into() };
+     |                                     +++++     +++++++
+
+Some errors have detailed explanations: E0277, E0308, E0425, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 29 previous errors

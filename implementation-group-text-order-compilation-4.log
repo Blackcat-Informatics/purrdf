@@ -1,0 +1,45 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+error: function `partition_keys` is never used
+   --> crates/text/src/relation.rs:352:4
+    |
+352 | fn partition_keys(index: &TextIndex) -> Vec<PartitionKey> {
+    |    ^^^^^^^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: missing documentation for a variant
+  --> crates/text/src/query_workspace.rs:13:5
+   |
+13 |     Stopped,
+   |     ^^^^^^^
+   |
+   = note: `-D missing-docs` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(missing_docs)]`
+
+error: missing documentation for a variant
+  --> crates/text/src/query_workspace.rs:14:5
+   |
+14 |     LayoutOverflow,
+   |     ^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+  --> crates/text/src/query_workspace.rs:15:5
+   |
+15 |     Allocator { construct: &'static str },
+   |     ^^^^^^^^^
+
+error: missing documentation for a struct field
+  --> crates/text/src/query_workspace.rs:15:17
+   |
+15 |     Allocator { construct: &'static str },
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: missing documentation for a variant
+  --> crates/text/src/query_workspace.rs:16:5
+   |
+16 |     UnstableDiagnostic,
+   |     ^^^^^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-text` (lib) due to 6 previous errors

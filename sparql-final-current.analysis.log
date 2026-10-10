@@ -1,0 +1,10 @@
+reading file ".stage/sparql-eval-complete-bounded-workspace/sparql-final-current.zst" - please wait, this might take some time...
+Debuggee command was: /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/155cf37ddfa95d1b/out/sparql_path_alloc-155cf37ddfa95d1b --exact every_sparql_surface_costs_a_constant_per_conforming_focus_node --nocapture --test-threads=1
+finished reading file, now analyzing data:
+
+total runtime: 5.576000s.
+calls to allocation functions: 4154622 (745090/s)
+temporary memory allocations: 160760 (28830/s)
+peak heap memory consumption: 2.99M
+peak RSS (including heaptrack overhead): 45.50M
+total memory leaked: 1.78M

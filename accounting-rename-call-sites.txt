@@ -1,0 +1,99 @@
+crates/rdf-core/src/collections.rs:1534:        assert!(memory.live_bytes() > 0);
+crates/rdf-core/src/collections.rs:1536:        assert_eq!(memory.live_bytes(), 0);
+crates/sparql-eval/src/xpath_regex.rs:207:            .live_bytes()
+crates/sparql-eval/src/xpath_regex.rs:475:        .live_bytes()
+crates/sparql-eval/src/xpath_regex.rs:680:                different.storage.live_bytes(),
+crates/sparql-eval/src/xpath_regex.rs:749:        let baseline = source.evidence().live_bytes();
+crates/sparql-eval/src/xpath_regex.rs:769:        let loaded = source.evidence().live_bytes();
+crates/sparql-eval/src/xpath_regex.rs:772:        assert_eq!(source.evidence().live_bytes(), loaded);
+crates/sparql-eval/src/xpath_regex.rs:776:        assert_eq!(source.evidence().live_bytes(), loaded);
+crates/sparql-eval/src/xpath_regex.rs:783:        assert_eq!(source.evidence().live_bytes(), baseline);
+crates/sparql-eval/src/xpath_regex.rs:840:        assert!(source.evidence().live_bytes() > baseline);
+crates/sparql-eval/src/xpath_regex.rs:843:        assert_eq!(source.evidence().live_bytes(), baseline);
+crates/sparql-eval/src/xpath_regex.rs:908:        let baseline = source.evidence().live_bytes();
+crates/sparql-eval/src/xpath_regex.rs:911:        assert_eq!(source.evidence().live_bytes(), baseline);
+crates/sparql-eval/src/xpath_regex.rs:924:            assert_eq!(source.evidence().live_bytes(), baseline);
+crates/sparql-eval/src/xpath_regex.rs:932:        assert_eq!(source.evidence().live_bytes(), baseline);
+crates/sparql-eval/src/xpath_regex.rs:949:        let loaded = source.evidence().live_bytes();
+crates/sparql-eval/src/xpath_regex.rs:952:        assert_eq!(source.evidence().live_bytes(), loaded);
+crates/sparql-eval/src/xpath_regex.rs:956:        assert_eq!(source.evidence().live_bytes(), loaded);
+crates/sparql-eval/src/xpath_regex.rs:964:        assert_eq!(source.evidence().live_bytes(), baseline);
+crates/sparql-eval/src/xpath_regex.rs:1003:        assert!(source.evidence().live_bytes() > baseline);
+crates/sparql-eval/src/xpath_regex.rs:1006:        assert_eq!(source.evidence().live_bytes(), baseline);
+crates/sparql-eval/src/xpath_regex.rs:1013:        let before = source.evidence().live_bytes();
+crates/sparql-eval/src/xpath_regex.rs:1020:        let refused_live = source.evidence().live_bytes();
+crates/sparql-eval/src/xpath_regex.rs:1033:        assert_eq!(source.evidence().live_bytes(), refused_live);
+crates/rdf-core/src/diagnostic.rs:546:                memory.live_bytes(),
+crates/rdf-core/src/diagnostic.rs:562:                memory.live_bytes(),
+crates/rdf-core/src/diagnostic.rs:568:            assert_eq!(memory.live_bytes(), 0);
+crates/sparql-eval/src/remote_http.rs:281:            let live = frame.live_bytes();
+crates/sparql-eval/src/remote_http.rs:342:                let live = frame.live_bytes();
+crates/sparql-eval/src/remote_http.rs:369:        let live = frame.live_bytes();
+crates/sparql-eval/src/remote.rs:1670:            (sanitized, memory.live_bytes())
+crates/sparql-eval/src/remote.rs:1928:            u64::try_from(frame.live_bytes()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+crates/sparql-eval/src/substitute.rs:574:                let before = memory.live_bytes();
+crates/sparql-eval/src/substitute.rs:580:                    .live_bytes()
+crates/sparql-eval/src/substitute.rs:3523:    let before = memory.live_bytes();
+crates/sparql-eval/src/substitute.rs:3526:        .live_bytes()
+crates/sparql-eval/src/substitute.rs:4664:    let baseline = memory.live_bytes();
+crates/sparql-eval/src/substitute.rs:4766:                .live_bytes()
+crates/sparql-eval/src/substitute.rs:6660:            let retained = memory.live_bytes();
+crates/sparql-eval/src/substitute.rs:6669:            assert_eq!(memory.live_bytes(), 0);
+crates/sparql-eval/src/substitute.rs:6696:        assert_eq!(memory.live_bytes(), 0);
+crates/sparql-eval/src/substitute.rs:6717:        let retained = memory.live_bytes();
+crates/sparql-eval/src/substitute.rs:6737:            let remaining = memory.live_bytes();
+crates/sparql-eval/src/substitute.rs:6741:            assert_eq!(memory.live_bytes(), 0);
+crates/sparql-eval/src/substitute.rs:6754:        assert_eq!(memory.live_bytes(), 0);
+crates/sparql-eval/src/deferred_exists.rs:792:        let live = frame.live_bytes();
+crates/sparql-eval/src/deferred_exists.rs:840:            let live = frame.live_bytes();
+crates/rdf-core/src/xsd_regex/xpath/mod.rs:489:                .release_bytes(memory.live_bytes())
+crates/sparql-eval/src/expr.rs:2867:            let live = frame.live_bytes();
+crates/sparql-eval/src/expr.rs:7025:            let bytes = memory.live_bytes();
+crates/sparql-eval/src/expr.rs:13953:    let baseline = memory.live_bytes();
+crates/sparql-eval/src/expr.rs:13991:                        .live_bytes()
+crates/sparql-eval/src/join_plan.rs:48:    let before = memory.live_bytes();
+crates/sparql-eval/src/join_plan.rs:137:        let bytes = memory.live_bytes() - before;
+crates/sparql-eval/src/retained.rs:482:            .live_bytes()
+crates/sparql-eval/src/parsed_value.rs:140:            (parsed, memory.live_bytes())
+crates/sparql-eval/src/native_numeric.rs:52:        let Ok(bytes) = u64::try_from(layout.peak_bytes()) else {
+crates/sparql-eval/src/native_numeric.rs:68:        self.admitted_bytes = layout.peak_bytes();
+crates/sparql-eval/src/execution.rs:870:                .live_bytes()
+crates/sparql-eval/src/property_fn_plan.rs:419:    let start = memory.live_bytes();
+crates/sparql-eval/src/property_fn_plan.rs:422:        .live_bytes()
+crates/sparql-eval/src/property_fn_plan.rs:426:    let normalized_start = memory.live_bytes();
+crates/sparql-eval/src/property_fn_plan.rs:433:        .live_bytes()
+crates/sparql-eval/src/construct.rs:304:    let live = frame.live_bytes();
+crates/sparql-eval/src/construct.rs:318:    let live = frame.live_bytes();
+crates/sparql-eval/src/construct.rs:338:    let live = frame.live_bytes();
+crates/sparql-eval/src/workspace.rs:2505:            let initial = memory.live_bytes();
+crates/sparql-eval/src/workspace.rs:2508:            assert_eq!(memory.live_bytes(), initial + 8 * size_of::<GroundTriple>());
+crates/sparql-eval/src/workspace.rs:2511:                memory.live_bytes(),
+crates/sparql-eval/src/workspace.rs:2781:                (query, memory.live_bytes())
+crates/sparql-eval/src/workspace.rs:2801:                assert!(memory.live_bytes() >= original);
+crates/sparql-eval/src/cdt_fn.rs:122:            let live = input_frame.live_bytes();
+crates/sparql-eval/src/cdt_fn.rs:137:            let live = input_frame.live_bytes();
+crates/sparql-eval/src/cdt_fn.rs:162:            let live = input_frame.live_bytes();
+crates/sparql-eval/src/cdt_fn.rs:562:                    let live = frame.live_bytes();
+crates/sparql-eval/src/cdt_fn.rs:583:                let live = frame.live_bytes();
+crates/sparql-eval/src/cdt_fn.rs:593:                    let live = frame.live_bytes();
+crates/sparql-eval/src/cdt_fn.rs:645:                    let live = frame.live_bytes();
+crates/sparql-eval/src/cdt_fn.rs:682:        let base = frame.live_bytes();
+crates/sparql-eval/src/cdt_agg.rs:197:        let live = self.frame.live_bytes();
+crates/sparql-eval/src/cdt_agg.rs:204:                let live = self.frame.live_bytes();
+crates/sparql-eval/src/cdt_agg.rs:310:            let live = self.frame.live_bytes();
+crates/sparql-eval/src/engine.rs:488:            let live_bytes = frame.live_bytes();
+crates/sparql-eval/src/engine.rs:503:            let error_bytes = frame.live_bytes();
+crates/sparql-eval/src/engine.rs:1107:        let source_begin = memory.live_bytes();
+crates/sparql-eval/src/engine.rs:1137:            .live_bytes()
+crates/sparql-eval/src/engine.rs:1149:        let before_plan = memory.live_bytes();
+crates/sparql-eval/src/engine.rs:5929:    let before = memory.live_bytes();
+crates/sparql-eval/src/engine.rs:5957:        .live_bytes()
+crates/rdf-core/src/ir/builder.rs:3151:        assert_eq!(memory.live_bytes(), 0);
+crates/rdf-core/src/ir/builder.rs:3216:        let live = memory.live_bytes();
+crates/rdf-core/src/ir/builder.rs:3221:        assert_eq!(memory.live_bytes(), live);
+crates/rdf-core/src/ir/builder.rs:3226:        assert_eq!(memory.live_bytes(), 0);
+crates/rdf-core/src/ir/builder.rs:3255:            memory.live_bytes(),
+crates/rdf-core/src/ir/builder.rs:3258:        let bytes = memory.live_bytes();
+crates/rdf-core/src/ir/builder.rs:3263:        assert_eq!(memory.live_bytes(), 0);
+crates/rdf-core/src/ir/term_walk.rs:760:    let baseline = memory.live_bytes();
+crates/rdf-core/src/ir/term_walk.rs:772:        && let Some(released) = memory.live_bytes().checked_sub(baseline)

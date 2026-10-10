@@ -1,0 +1,64 @@
+--- /dev/null
++++ b/crates/rdf-core/tests/shared_owned_control.rs
+@@ -0,0 +1,61 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Independent physical allocation and destruction measurements for Shared.
++
++use std::cell::Cell;
++
++use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
++use purrdf_core::small::Shared;
++
++#[global_allocator]
++static GLOBAL: CountingAllocator = CountingAllocator;
++
++// A payload-held admission destructor reads the REAL global allocation ledger
++// on this thread. It does not mirror Shared's deallocation with a fake counter.
++struct ObserveRelease<'a> {
++    window: &'a CurrentThreadWindow,
++    observed: &'a Cell<Option<i64>>,
++}
++impl Drop for ObserveRelease<'_> {
++    fn drop(&mut self) {
++        self.observed.set(Some(self.window.sample().retained_bytes));
++    }
++}
++
++#[test]
++fn control_is_deallocated_before_payload_held_admission_releases() {
++    let observed = Cell::new(None);
++    let window = CurrentThreadWindow::open();
++    let owner = Shared::try_new(ObserveRelease { window: &window, observed: &observed }).unwrap();
++    let retained = window.sample();
++    assert_eq!(retained.allocations, 1);
++    assert_eq!(usize::try_from(retained.retained_bytes).unwrap(),
++        Shared::<ObserveRelease<'_>>::allocation_layout().size());
++    let clone = owner.clone();
++    drop(owner);
++    assert_eq!(observed.get(), None);
++    assert_eq!(window.sample().retained_bytes, retained.retained_bytes);
++    drop(clone);
++    assert_eq!(observed.get(), Some(0),
++        "original control allocation must be freed before admission destructor runs");
++    assert_eq!(window.close().retained_bytes, 0);
++}
++
++#[cfg(all(not(target_arch = "wasm32"), panic = "unwind"))]
++#[test]
++fn panicking_factory_deallocates_the_original_uninitialized_control() {
++    // Warm native exception runtime outside the measured region. resume_unwind
++    // skips the panic hook and the zero-sized payload needs no heap allocation.
++    drop(std::panic::catch_unwind(|| std::panic::resume_unwind(Box::new(()))));
++    let window = CurrentThreadWindow::open();
++    let result = std::panic::catch_unwind(|| {
++        let _ = Shared::<()>::try_new_with(|| std::panic::resume_unwind(Box::new(())));
++    });
++    assert!(result.is_err());
++    drop(result);
++    let measured = window.close();
++    assert!(measured.requested_bytes >= u64::try_from(Shared::<()>::allocation_layout().size()).unwrap());
++    assert_eq!(measured.retained_bytes, 0,
++        "failed factory must not leave an initialized or uninitialized owner allocation");
++}

@@ -1,0 +1,70 @@
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -2974,15 +2974,16 @@
+         relations: &crate::property_fn::PropertyFunctionRegistry,
+         state: &GovernorState,
+         identity: &RelationIdentity,
+-    ) -> Option<Result<BudgetExhausted, RdfDiagnostic>> {
++        workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
++    ) -> Option<Result<BudgetExhausted, EvaluationFailure>> {
+         let dimension = purrdf_core::ResourceDimension::IntermediateCells;
+         if !state.is_engaged_in(dimension) {
+             return None;
+         }
+         let limit = state.limits().get(dimension);
+-        let estimate = match self.survey_plan(dataset, query, relations) {
+-            Ok::<_, RdfDiagnostic>(survey) => survey.peak_cells(),
+-            Err(diagnostic) => return Some(Err(diagnostic)),
++        let estimate = match self.survey_plan_admitted(dataset, query, relations, workspace) {
++            Ok(survey) => survey.peak_cells(),
++            Err(error) => return Some(Err(EvaluationFailure::Evaluation(error))),
+         };
+         if estimate <= limit {
+             return None;
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -1762,8 +1762,9 @@
+             options.property_functions(),
+             state,
+             &identity,
++            workspace,
+         ) {
+-            return refused.map(GovernedOutcome::BudgetExhausted).map_err(EvaluationFailure::Diagnostic);
++            return refused.map(GovernedOutcome::BudgetExhausted);
+         }
+         let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
+         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -3531,10 +3531,11 @@
+                 options.property_functions(),
+                 state,
+                 &identity,
++                &workspace,
+             ) {
+                 return refused
+                     .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)))
+-                    .map_err(EvaluationFailure::Diagnostic);
++                    ;
+             }
+             let mut ctx = self.governed_ctx(dataset, state.clone(), options, &workspace)?;
+             // The retained workspace, exactly as on the ungoverned twin — and taken
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -3689,10 +3689,11 @@
+                 options.property_functions(),
+                 state,
+                 &identity,
++                &workspace,
+             ) {
+                 return refused
+                     .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)))
+-                    .map_err(EvaluationFailure::Diagnostic);
++                    ;
+             }
+             let mut ctx = self.governed_ctx(dataset, state.clone(), options, &workspace)?;
+             let evaluated = evaluate_governed_with_substitutions(

@@ -1,0 +1,29 @@
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+error[E0308]: mismatched types
+   --> crates/sparql-results/tests/refusals_precede_emission.rs:153:9
+    |
+152 |       let graph = SparqlResult::Graph(
+    |                   ------------------- arguments to this enum variant are incorrect
+153 | /         RdfDatasetBuilder::new()
+154 | |             .freeze()
+155 | |             .expect("an empty dataset freezes"),
+    | |_______________________________________________^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+note: tuple variant defined here
+   --> crates/rdf-core/src/backend.rs:225:5
+    |
+225 |     Graph(DatasetHandle),
+    |     ^^^^^
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+155 |             .expect("an empty dataset freezes").into(),
+    |                                                +++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-results` (test "refusals_precede_emission") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

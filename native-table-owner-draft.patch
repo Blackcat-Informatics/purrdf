@@ -1,0 +1,148 @@
+diff --git a/crates/sparql-eval/src/workspace.rs b/crates/sparql-eval/src/workspace.rs
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -101,3 +101,59 @@
+ 
++/// A fixed-key native table retaining its actual hashbrown array admission.
++/// Returned references borrow the table; replacement moves each entry once.
++#[derive(Debug)]
++pub struct AdmittedMap<K, V> {
++    entries: hashbrown::HashTable<(K, V)>,
++    allocation: Option<WorkspaceAllocation>,
++}
++
++impl<K, V> Default for AdmittedMap<K, V> {
++    fn default() -> Self { Self { entries: hashbrown::HashTable::new(), allocation: None } }
++}
++
++impl<K: Eq + std::hash::Hash, V> AdmittedMap<K, V> {
++    /// Borrow a value without constructing or copying an owned key.
++    #[must_use]
++    pub fn get(&self, key: &K) -> Option<&V> {
++        self.entries.find(purrdf_hash::fixed::hash_one(key), |entry| entry.0 == *key)
++            .map(|entry| &entry.1)
++    }
++
++    /// Insert or replace after admitting any concrete replacement table.
++    /// # Errors
++    /// Returns layout overflow, admission refusal or allocator failure.
++    pub fn insert_admitted(
++        &mut self, key: K, value: V, workspace: &WorkspaceCapability,
++    ) -> Result<Option<V>, EvalError> {
++        let hash = purrdf_hash::fixed::hash_one(&key);
++        if let Some(entry) = self.entries.find_mut(hash, |entry| entry.0 == key) {
++            return Ok(Some(std::mem::replace(&mut entry.1, value)));
++        }
++        let needed = self.entries.len().checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        if needed > self.entries.capacity() {
++            let capacity = self.entries.capacity().checked_mul(2)
++                .ok_or(EvalError::WorkspaceBoundOverflow)?.max(needed);
++            let bytes = purrdf_core::hash::hash_table_allocation_bound::<(K, V)>(capacity)
++                .ok_or(EvalError::WorkspaceBoundOverflow)?;
++            let allocation = workspace.charge(u64::try_from(bytes)
++                .map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++            let mut entries = hashbrown::HashTable::new();
++            entries.try_reserve(capacity, |entry: &(K, V)| purrdf_hash::fixed::hash_one(&entry.0))
++                .map_err(|_| EvalError::AllocationFailed { construct: "admitted native table" })?;
++            // Draining moves payloads and does not allocate a temporary buffer.
++            // The old table stays admitted until assignment destroys its array.
++            for entry in self.entries.drain() {
++                entries.insert_unique(purrdf_hash::fixed::hash_one(&entry.0), entry,
++                    |entry| purrdf_hash::fixed::hash_one(&entry.0));
++            }
++            self.entries = entries;
++            self.allocation = Some(allocation);
++        }
++        self.entries.insert_unique(hash, (key, value),
++            |entry| purrdf_hash::fixed::hash_one(&entry.0));
++        Ok(None)
++    }
++}
++
+ /// A consuming iterator retaining its original metadata buffer admission.
+ pub struct AdmittedVecIntoIter<T> {
+diff --git a/crates/sparql-eval/src/lib.rs b/crates/sparql-eval/src/lib.rs
+--- a/crates/sparql-eval/src/lib.rs
++++ b/crates/sparql-eval/src/lib.rs
+@@ -172,3 +172,3 @@
+ mod workspace;
+-pub use workspace::{AdmittedVec, AdmittedVecIntoIter, WorkspaceAllocation, WorkspaceCapability, WorkspaceTerm};
++pub use workspace::{AdmittedMap, AdmittedVec, AdmittedVecIntoIter, WorkspaceAllocation, WorkspaceCapability, WorkspaceTerm};
+ // The per-query record of what the relations a query invoked attested about the
+diff --git a/crates/sparql-eval/src/parsed_value.rs b/crates/sparql-eval/src/parsed_value.rs
+--- a/crates/sparql-eval/src/parsed_value.rs
++++ b/crates/sparql-eval/src/parsed_value.rs
+@@ -7,7 +7,6 @@
+ use std::ops::Deref;
+ use purrdf_core::small::Shared;
+ 
+-use hashbrown::HashTable;
+ use purrdf_xsd::{XsdDatatype, XsdValue};
+ 
+ use crate::{EvalError, WorkspaceAllocation, WorkspaceCapability};
+@@ -200,22 +199,20 @@
+ /// parsed payload. Old and replacement tables stay admitted during growth.
+ #[derive(Debug)]
+ pub(crate) struct ParsedCache<K> {
++    entries: crate::workspace::AdmittedMap<K, Option<ParsedValue>>,
+-    entries: HashTable<(K, Option<ParsedValue>)>,
+-    _allocation: Option<WorkspaceAllocation>,
+ }
+ 
+ // Deriving Default would impose K: Default, though an empty table needs no key.
+ impl<K> Default for ParsedCache<K> {
+     fn default() -> Self {
++        Self { entries: crate::workspace::AdmittedMap::default() }
+-        Self { entries: HashTable::new(), _allocation: None }
+     }
+ }
+ 
+ impl<K: Copy + Eq + Hash> ParsedCache<K> {
+     /// The outer option distinguishes a miss from cached malformed/opaque None.
+     pub(crate) fn get(&self, key: K) -> Option<Option<ParsedValue>> {
++        self.entries.get(&key).cloned()
+-        self.entries.find(purrdf_hash::fixed::hash_one(&key), |entry| entry.0 == key)
+-            .map(|entry| entry.1.clone())
+     }
+ 
+     pub(crate) fn insert_admitted(
+@@ -224,36 +221,8 @@
+         value: Option<ParsedValue>,
+         workspace: &WorkspaceCapability,
+     ) -> Result<(), EvalError> {
++        if self.entries.get(&key).is_some() { return Ok(()); }
++        self.entries.insert_admitted(key, value, workspace)?;
+-        let hash = purrdf_hash::fixed::hash_one(&key);
+-        if self.entries.find(hash, |entry| entry.0 == key).is_some() {
+-            return Ok(());
+-        }
+-        let needed = self.entries.len().checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
+-        if needed > self.entries.capacity() {
+-            let capacity = self.entries.capacity().checked_mul(2)
+-                .ok_or(EvalError::WorkspaceBoundOverflow)?.max(needed);
+-            let bytes = purrdf_core::hash::hash_table_allocation_bound::<(K, Option<ParsedValue>)>(capacity)
+-                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+-            let allocation = workspace.charge(
+-                u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+-            )?;
+-            let mut entries = HashTable::new();
+-            entries.try_reserve(capacity, |entry: &(K, Option<ParsedValue>)| {
+-                purrdf_hash::fixed::hash_one(&entry.0)
+-            }).map_err(|_| EvalError::AllocationFailed { construct: "parsed-value cache table" })?;
+-            for (old_key, old_value) in self.entries.iter() {
+-                entries.insert_unique(
+-                    purrdf_hash::fixed::hash_one(old_key), (*old_key, old_value.clone()),
+-                    |entry| purrdf_hash::fixed::hash_one(&entry.0),
+-                );
+-            }
+-            // Assignment drops the old table before releasing its admission.
+-            self.entries = entries;
+-            self._allocation = Some(allocation);
+-        }
+-        self.entries.insert_unique(hash, (key, value), |entry| {
+-            purrdf_hash::fixed::hash_one(&entry.0)
+-        });
+         Ok(())
+     }
+ }
+

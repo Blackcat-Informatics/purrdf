@@ -1,0 +1,13 @@
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -14210,6 +14210,10 @@
+         let normalized = PreparedPattern::new(CorrelatedPattern { body, frame }, workspace)?;
+         let mut ledger_source =
+             crate::enf::ledger_source_map_admitted(pattern, &normalized, workspace)?;
++        #[cfg(test)]
++        crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(
++            normalized.as_ref(),
++        ));
+         let witness_inner = CorrelatedPattern::copy(&normalized, workspace)?;
+         let witness_map =
+             crate::enf::ledger_source_map_admitted(pattern, &witness_inner, workspace)?;

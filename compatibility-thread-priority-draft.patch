@@ -1,0 +1,21 @@
+--- a/crates/rdf-core/src/xsd_regex/xpath/pike.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/pike.rs
+@@ -1369,10 +1369,15 @@
+         self.run(start, Self::search)
+     }
+ 
+-    /// The match that starts exactly at `start`, which the set machine found
+-    /// a match start: one thread follows the first control state, in priority
+-    /// order, that can still complete a match.
++    /// Complete the leftmost start certified by the capture-free set machine.
++    /// Dated matching follows one viable control state. Compatibility retains
++    /// every earlier thread's epsilon closure: its first capture tags must merge
++    /// later nullable-loop paths even when those earlier paths are not the one
++    /// the capture-free future would select to consume the next character.
+     pub(super) fn walk(&mut self, start: usize) -> Result<Option<Captures>, Error> {
++        if self.ctx.program.law.is_compatibility() {
++            return self.find_from(start);
++        }
+         self.mode = Mode::Walk;
+         self.run(start, Self::anchored)
+     }

@@ -1,0 +1,76 @@
+// Append to expr_vm_owned_strings.rs, reusing its literal and four-entry
+// bounded_matrix helpers. Stage proposal; not compiled or run.
+
+#[test]
+fn complete_unselected_regex_entries_preserve_bags_unicode_and_final_newline_law() {
+    let query = r#"SELECT ?id (REGEX(?text, "^$", "m") AS ?final)
+        (REGEX(?text, "\\p{Lu}", "i") AS ?fold)
+        (REGEX(?text, "\\i") AS ?name)
+        (REGEX(?text, "\\&\\~") AS ?liberal)
+        (REGEX(?text, "(a)\\1") AS ?bad)
+        (REPLACE(?text, "", "|") AS ?expanded)
+        WHERE { VALUES (?id ?text) {
+            (0 "a\n") (1 "é") (1 "é") (2 "ı") (3 "&~") (4 "") (5 "꟎")
+        } } ORDER BY ?id"#;
+    bounded_matrix(query, |result| {
+        let (_, rows) = result.solutions().unwrap();
+        assert_eq!(rows.len(), 7);
+        let expected = [
+            ("0", true, true, true, false, "|a|\n|"),
+            ("1", false, true, true, false, "|é|"),
+            ("1", false, true, true, false, "|é|"),
+            ("2", false, false, true, false, "|ı|"),
+            ("3", false, false, false, true, "|&|~|"),
+            ("4", true, false, false, false, "|"),
+            // U+A7CE is Cn in compatibility's Unicode 16, while the shared
+            // XML NameStartChar production admits its scalar range.
+            ("5", false, false, true, false, "|꟎|"),
+        ];
+        for (row, (id, final_line, fold, name, liberal, expanded)) in rows.iter().zip(expected) {
+            literal(&row[0], id, None, None);
+            for (column, value) in [final_line, fold, name, liberal].into_iter().enumerate() {
+                literal(&row[1 + column], if value { "true" } else { "false" }, None, None);
+            }
+            assert!(row[5].is_none(), "unsupported backreference remains an expression error");
+            literal(&row[6], expanded, None, None);
+        }
+    });
+}
+
+#[test]
+fn complete_unselected_replace_entries_keep_empty_utf8_q_and_lexical_errors() {
+    let query = r#"SELECT (REPLACE("aé", "", "$1", "q") AS ?verbatim)
+        (REPLACE("aba", "a*", "X") AS ?suppressed)
+        (REPLACE("aé", "", "\\$") AS ?escaped)
+        (REPLACE("no", "z", "$") AS ?invalid)
+        (REPLACE("aba", "(a*)*", "$1|") AS ?capture)
+        WHERE {}"#;
+    let old = purrdf_core::xsd_regex::compile("(a*)*", "").unwrap();
+    let captured = old.replace_all("aba", "$1|").unwrap();
+    bounded_matrix(query, |result| {
+        let (_, rows) = result.solutions().unwrap();
+        assert_eq!(rows.len(), 1);
+        literal(&rows[0][0], "$1a$1é$1", None, None);
+        literal(&rows[0][1], "XbX", None, None);
+        literal(&rows[0][2], "$a$é$", None, None);
+        assert!(rows[0][3].is_none(), "invalid template is checked before an unmatched search");
+        literal(&rows[0][4], captured.as_ref(), None, None);
+    });
+}
+
+#[test]
+fn complete_unselected_regex_reaches_nonselect_entries_through_the_native_owner() {
+    bounded_matrix(r#"ASK { FILTER(REGEX("a\n", "^$", "m")) }"#,
+        |result| assert_eq!(result.boolean(), Some(true)));
+    bounded_matrix(r#"CONSTRUCT { <http://example.org/s> <http://example.org/p> ?text }
+        WHERE { BIND(REPLACE("aé", "", "|") AS ?text) }"#, |result| {
+        let graph = result.graph().unwrap();
+        assert_eq!(graph.quad_count(), 1);
+        let value = graph.term_value(graph.quads().next().unwrap().o);
+        assert!(matches!(value, TermValue::Literal { lexical_form, .. } if lexical_form == "|a|é|"));
+    });
+    bounded_matrix(r#"DESCRIBE <https://example.org/target>
+        WHERE { FILTER(REGEX("a\n", "^$", "m")) }"#, |result| {
+        assert!(result.graph().unwrap().quad_count() > 0);
+    });
+}

@@ -1,0 +1,529 @@
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0425]: cannot find function `survey_pattern_plans` in module `crate::bgp`
+    --> crates/sparql-eval/src/update.rs:876:17
+     |
+ 876 |     crate::bgp::survey_pattern_plans(
+     |                 ^^^^^^^^^^^^^^^^^^^^ not found in `crate::bgp`
+     |
+note: found an item that was configured out
+    --> crates/sparql-eval/src/bgp.rs:2788:15
+     |
+2787 | #[cfg(test)]
+     |       ---- the item is gated here
+2788 | pub(crate) fn survey_pattern_plans<D: DatasetView>(
+     |               ^^^^^^^^^^^^^^^^^^^^
+
+error: unused import: `crate::DetHashMap`
+  --> crates/sparql-eval/src/bgp.rs:44:5
+   |
+44 | use crate::DetHashMap;
+   |     ^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unused import: `TermValue`
+  --> crates/sparql-eval/src/path.rs:62:49
+   |
+62 | use purrdf_core::{DatasetView, TermId, TermRef, TermValue, ViewTermId};
+   |                                                 ^^^^^^^^^
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:432:30
+    |
+432 |             SharedWorkspace::new(seed.cloned().unwrap_or_default(), &workspace)?,
+    |                              ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:449:42
+    |
+449 |                         SharedWorkspace::new(SeedEstimate::default(), &workspace)?,
+    |                                          ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:469:38
+    |
+469 |                     SharedWorkspace::new(extended, &workspace)?,
+    |                                      ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:683:30
+    |
+683 |             SharedWorkspace::new(input.cloned().unwrap_or_default(), &workspace)?,
+    |                              ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:758:46
+    |
+758 | ...                   SharedWorkspace::new(SeedEstimate::default(), &workspace)?,
+    |                                        ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:764:46
+    |
+764 | ...                   SharedWorkspace::new(
+    |                                        ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0308]: `?` operator has incompatible types
+   --> crates/sparql-eval/src/bgp/positive.rs:811:26
+    |
+811 |                         &crate::eval::syntactic_schema_admitted(node, &workspace)?,
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `VarSchema`, found `Shared<VarSchema>`
+    |
+    = note: `?` operator cannot convert from `purrdf_core::small::Shared<VarSchema>` to `VarSchema`
+    = note: expected struct `VarSchema`
+               found struct `purrdf_core::small::Shared<VarSchema>`
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+  --> crates/sparql-eval/src/bgp.rs:75:42
+   |
+75 |         Ok(Self::Native(SharedWorkspace::new(order, workspace)?))
+   |                                          ^^^ associated function or constant not found in `SharedWorkspace<_>`
+   |
+  ::: crates/sparql-eval/src/workspace.rs:16:1
+   |
+16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+   | ------------------------------------ associated function or constant `new` not found for this struct
+   |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, EvalError>`
+  --> crates/sparql-eval/src/workspace.rs:66:5
+   |
+66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: items from traits can only be used if the trait is implemented and in scope
+   = note: the following traits define an item `new`, perhaps you need to implement one of them:
+           candidate #1: `Bit`
+           candidate #2: `KeyInit`
+           candidate #3: `KeyIvInit`
+           candidate #4: `TryKeyInit`
+           candidate #5: `VariableOutputCore`
+           candidate #6: `sha2::Digest`
+
+error[E0433]: cannot find type `VarSchema` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5449:26
+     |
+5449 |                         &VarSchema::from_vars(bound.iter().cloned()),
+     |                          ^^^^^^^^^ use of undeclared type `VarSchema`
+     |
+help: consider importing this struct through its public re-export
+     |
+5369 +     use crate::VarSchema;
+     |
+
+error[E0433]: cannot find type `VarSchema` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5568:54
+     |
+5568 |                 record_call_estimate(pattern, call, &VarSchema::default(), 1, relations, survey)
+     |                                                      ^^^^^^^^^ use of undeclared type `VarSchema`
+     |
+help: consider importing this struct through its public re-export
+     |
+5369 +     use crate::VarSchema;
+     |
+
+error[E0433]: cannot find type `VarSchema` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5607:20
+     |
+5607 |             bound: VarSchema::from_vars(bound),
+     |                    ^^^^^^^^^ use of undeclared type `VarSchema`
+     |
+help: consider importing this struct through its public re-export
+     |
+5369 +     use crate::VarSchema;
+     |
+
+error: unused import: `crate::convert::named_node_to_value`
+  --> crates/sparql-eval/src/bgp.rs:46:5
+   |
+46 | use crate::convert::named_node_to_value;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: unused import: `purrdf_sparql_algebra::Child`
+  --> crates/sparql-eval/src/convert.rs:18:5
+   |
+18 | use purrdf_sparql_algebra::Child;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:432:30
+    |
+432 |             SharedWorkspace::new(seed.cloned().unwrap_or_default(), &workspace)?,
+    |                              ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, error::EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:449:42
+    |
+449 |                         SharedWorkspace::new(SeedEstimate::default(), &workspace)?,
+    |                                          ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, error::EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:469:38
+    |
+469 |                     SharedWorkspace::new(extended, &workspace)?,
+    |                                      ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, error::EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:683:30
+    |
+683 |             SharedWorkspace::new(input.cloned().unwrap_or_default(), &workspace)?,
+    |                              ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, error::EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:758:46
+    |
+758 | ...                   SharedWorkspace::new(SeedEstimate::default(), &workspace)?,
+    |                                        ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, error::EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+   --> crates/sparql-eval/src/bgp/positive.rs:764:46
+    |
+764 | ...                   SharedWorkspace::new(
+    |                                        ^^^ associated function or constant not found in `SharedWorkspace<_>`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:16:1
+    |
+ 16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+    | ------------------------------------ associated function or constant `new` not found for this struct
+    |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, error::EvalError>`
+   --> crates/sparql-eval/src/workspace.rs:66:5
+    |
+ 66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Bit`
+            candidate #2: `KeyInit`
+            candidate #3: `KeyIvInit`
+            candidate #4: `TryKeyInit`
+            candidate #5: `VariableOutputCore`
+            candidate #6: `sha2::Digest`
+
+error[E0061]: this function takes 7 arguments but 6 arguments were supplied
+    --> crates/sparql-eval/src/bgp/positive.rs:964:9
+     |
+ 964 |           super::super::survey_bgp(
+     |  _________^^^^^^^^^^^^^^^^^^^^^^^^-
+ 965 | |             &*dataset,
+ 966 | |             &active,
+ 967 | |             GraphMatch::Default,
+...    |
+ 970 | |             &mut native,
+ 971 | |         )
+     | |_________- argument #7 of type `&QueryWorkspace<!>` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/bgp.rs:3080:4
+     |
+3080 | fn survey_bgp<D: DatasetView>(
+     |    ^^^^^^^^^^
+...
+3087 |     account: &crate::workspace::QueryWorkspace<D::ReadError>,
+     |     --------------------------------------------------------
+help: provide the argument
+     |
+ 964 |         super::super::survey_bgp(
+ ...
+ 970 |             &mut native,
+ 971 ~             /* &QueryWorkspace<!> */,
+ 972 ~         )
+     |
+
+error[E0599]: no associated function or constant named `new` found for struct `SharedWorkspace<_>` in the current scope
+  --> crates/sparql-eval/src/bgp.rs:75:42
+   |
+75 |         Ok(Self::Native(SharedWorkspace::new(order, workspace)?))
+   |                                          ^^^ associated function or constant not found in `SharedWorkspace<_>`
+   |
+  ::: crates/sparql-eval/src/workspace.rs:16:1
+   |
+16 | pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+   | ------------------------------------ associated function or constant `new` not found for this struct
+   |
+note: if you're trying to build a new `SharedWorkspace<_>`, consider using `SharedWorkspace::<T>::new_admitted` which returns `Result<SharedWorkspace<_>, error::EvalError>`
+  --> crates/sparql-eval/src/workspace.rs:66:5
+   |
+66 |     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: items from traits can only be used if the trait is implemented and in scope
+   = note: the following traits define an item `new`, perhaps you need to implement one of them:
+           candidate #1: `Bit`
+           candidate #2: `KeyInit`
+           candidate #3: `KeyIvInit`
+           candidate #4: `TryKeyInit`
+           candidate #5: `VariableOutputCore`
+           candidate #6: `sha2::Digest`
+
+error[E0277]: the size for values of type `impl std::fmt::Display + ?Sized` cannot be known at compilation time
+    --> crates/sparql-eval/src/workspace.rs:646:34
+     |
+ 644 |         &self, value: &(impl std::fmt::Display + ?Sized),
+     |                         ------------------------------- this type parameter needs to be `Sized`
+ 645 |     ) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
+ 646 |         let length = display_len(value)?;
+     |                      ----------- ^^^^^ doesn't have a size known at compile-time
+     |                      |
+     |                      required by a bound introduced by this call
+     |
+note: required by an implicit `Sized` bound in `display_len`
+    --> crates/sparql-eval/src/workspace.rs:1067:35
+     |
+1067 | pub(crate) fn display_len(value: &impl core::fmt::Display) -> Result<usize, EvalError> {
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^ required by the implicit `Sized` requirement on this type parameter in `display_len`
+help: consider removing the `?Sized` bound to make the type parameter `Sized`
+     |
+ 644 -         &self, value: &(impl std::fmt::Display + ?Sized),
+ 644 +         &self, value: &(impl std::fmt::Display),
+     |
+help: consider relaxing the implicit `Sized` restriction
+     |
+1067 | pub(crate) fn display_len(value: &impl core::fmt::Display + ?Sized) -> Result<usize, EvalError> {
+     |                                                           ++++++++
+
+error[E0277]: the size for values of type `impl std::fmt::Display + ?Sized` cannot be known at compilation time
+    --> crates/sparql-eval/src/workspace.rs:650:33
+     |
+ 644 |         &self, value: &(impl std::fmt::Display + ?Sized),
+     |                         ------------------------------- this type parameter needs to be `Sized`
+...
+ 650 |         let text = format_exact(value, length, "authored algebra text")?;
+     |                    ------------ ^^^^^ doesn't have a size known at compile-time
+     |                    |
+     |                    required by a bound introduced by this call
+     |
+note: required by an implicit `Sized` bound in `format_exact`
+    --> crates/sparql-eval/src/workspace.rs:1082:13
+     |
+1081 | pub(crate) fn format_exact(
+     |               ------------ required by a bound in this function
+1082 |     value: &impl core::fmt::Display, length: usize, construct: &'static str,
+     |             ^^^^^^^^^^^^^^^^^^^^^^^ required by the implicit `Sized` requirement on this type parameter in `format_exact`
+help: consider removing the `?Sized` bound to make the type parameter `Sized`
+     |
+ 644 -         &self, value: &(impl std::fmt::Display + ?Sized),
+ 644 +         &self, value: &(impl std::fmt::Display),
+     |
+help: consider relaxing the implicit `Sized` restriction
+     |
+1082 |     value: &impl core::fmt::Display + ?Sized, length: usize, construct: &'static str,
+     |                                     ++++++++
+
+Some errors have detailed explanations: E0277, E0308, E0425, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 13 previous errors
+warning: build failed, waiting for other jobs to finish...
+Some errors have detailed explanations: E0061, E0277, E0308, E0433, E0599.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 17 previous errors

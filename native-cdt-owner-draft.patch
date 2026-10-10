@@ -1,0 +1,2023 @@
+diff --git a/crates/cdt/src/memory.rs b/crates/cdt/src/memory.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/cdt/src/memory.rs
+@@ -0,0 +1,78 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! The CDT lexical diagnostic and caller-supplied fallible box factories.
++
++use alloc::boxed::Box;
++use core::alloc::Layout;
++use core::fmt;
++use crate::{CdtError, CdtTripleTerm, CdtValue};
++
++pub use purrdf_lex::allocation::{Admission, StorageError};
++pub(crate) type Memory<'a> = purrdf_lex::allocation::Memory<'a, dyn Storage + 'a>;
++
++/// The leaf's lexical diagnostic or a physical failure.
++#[derive(Debug)]
++pub enum ReadError {
++    /// The existing exact diagnostic, including its original offset and text.
++    Lexical(CdtError),
++    /// Physical failure; must never be collapsed into a malformed literal.
++    Storage(StorageError),
++}
++
++impl From<CdtError> for ReadError {
++    fn from(error: CdtError) -> Self { Self::Lexical(error) }
++}
++
++impl From<StorageError> for ReadError {
++    fn from(error: StorageError) -> Self { Self::Storage(error) }
++}
++
++impl fmt::Display for ReadError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Lexical(error) => fmt::Display::fmt(error, f),
++            Self::Storage(error) => fmt::Display::fmt(error, f),
++        }
++    }
++}
++
++/// A caller's concrete storage owner and fallible native box factory.
++/// `resize` covers live requested layouts, including both buffers during replacement.
++/// Parse success transfers the surviving payload to a caller retaining its original
++/// admission. Diagnostics and call locals die before admission is released on error.
++/// Factories run only after `Layout::new::<Payload>()` admission and must allocate
++/// exactly that payload fallibly, with no unpriced alternate destination.
++pub trait Storage: Admission {
++    /// Fallibly allocate the already admitted nested composite payload.
++    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError>;
++    /// Fallibly allocate the already admitted nested triple payload.
++    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError>;
++}
++
++pub(crate) struct Resident;
++
++impl Admission for Resident {
++    fn resize(&mut self, _live_bytes: usize) -> Result<(), StorageError> { Ok(()) }
++}
++
++impl Storage for Resident {
++    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> { Ok(Box::new(value)) }
++    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> { Ok(Box::new(value)) }
++}
++
++pub(crate) trait CdtMemory {
++    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError>;
++    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError>;
++}
++
++impl CdtMemory for Memory<'_> {
++    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
++        self.add_bytes(Layout::new::<CdtValue>().size())?;
++        self.admission_mut().boxed_value(value)
++    }
++    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
++        self.add_bytes(Layout::new::<CdtTripleTerm>().size())?;
++        self.admission_mut().boxed_triple(value)
++    }
++}
+diff --git a/crates/cdt/src/lib.rs b/crates/cdt/src/lib.rs
+--- a/crates/cdt/src/lib.rs
++++ b/crates/cdt/src/lib.rs
+@@ -140,6 +140,7 @@
+ pub mod error;
+ pub mod functions;
+ pub mod limits;
++pub mod memory;
+ pub mod literal;
+ pub mod ops;
+ pub mod parse;
+diff --git a/crates/cdt/src/parse.rs b/crates/cdt/src/parse.rs
+--- a/crates/cdt/src/parse.rs
++++ b/crates/cdt/src/parse.rs
+@@ -56,15 +56,16 @@
+ //! nests, and the byte bound on the canonical form is answered at the root from the
+ //! root's own measure.
+ 
+-use alloc::string::{String, ToString};
++use alloc::string::String;
+ use alloc::vec::Vec;
+ 
+ use purrdf_iri::{langtag, terminals};
+ 
+ use crate::datatype::{CdtDatatype, XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER};
+ use crate::error::CdtError;
+-use crate::limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, list_extent, map_extent};
+-use crate::render::canonical_key_lexical;
++use crate::limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, try_list_extent, try_map_extent};
++use crate::memory::{CdtMemory, Memory, ReadError, Resident, Storage};
++use crate::render::try_canonical_key_lexical;
+ use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm, TextDirection};
+ use crate::value::CdtValue;
+ 
+@@ -147,19 +148,36 @@
+ /// # Ok::<(), purrdf_cdt::CdtError>(())
+ /// ```
+ pub fn parse_cdt(lexical: &str, datatype: CdtDatatype) -> Result<CdtValue, CdtError> {
++    match try_parse_cdt(lexical, datatype, &mut Resident) {
++        Ok((value, _)) => Ok(value),
++        Err(ReadError::Lexical(error)) => Err(error),
++        Err(ReadError::Storage(error)) => panic!("resident composite allocation failed: {error}"),
++    }
++}
++
++/// Run the same scanner with a caller's physical admission and fallible boxes.
++/// Returns the parsed value and the exact surviving requested heap bytes. The
++/// caller must retain its original storage admission with the returned value;
++/// lexical diagnostics likewise die before that admission is released.
++///
++/// # Errors
++/// The existing lexical diagnostic or a distinct native physical failure.
++pub fn try_parse_cdt(
++    lexical: &str, datatype: CdtDatatype, storage: &mut impl Storage,
++) -> Result<(CdtValue, usize), ReadError> {
+     if lexical.len() > MAX_LEXICAL_BYTES {
+         return Err(CdtError::InputTooLarge {
+             offset: MAX_LEXICAL_BYTES,
+             length: lexical.len(),
+-        });
+-    }
+-    let mut scanner = Scanner::new(lexical);
++        }.into());
++    }
++    let mut scanner = Scanner::new(lexical, storage);
+     let value = scanner.parse_root(datatype)?;
+     scanner.skip_whitespace();
+     if scanner.position < scanner.bytes.len() {
+         return Err(CdtError::TrailingText {
+             offset: scanner.position,
+-        });
++        }.into());
+     }
+     // The canonical form spells every shorthand out, so it can be far longer than the
+     // input that was accepted: `[1]` is three bytes in and forty-eight out. The
+@@ -173,9 +191,9 @@
+         return Err(CdtError::InputTooLarge {
+             offset: MAX_LEXICAL_BYTES,
+             length: bytes,
+-        });
+-    }
+-    Ok(value)
++        }.into());
++    }
++    Ok((value, scanner.memory.live_bytes()))
+ }
+ 
+ /// Parse a lexical form by datatype IRI, preserving the same tri-state
+@@ -262,15 +280,17 @@
+     Delim,
+ }
+ 
+-struct Scanner<'a> {
++struct Scanner<'a, 'm> {
++    memory: Memory<'m>,
+     input: &'a str,
+     bytes: &'a [u8],
+     position: usize,
+ }
+ 
+-impl<'a> Scanner<'a> {
+-    fn new(input: &'a str) -> Self {
++impl<'a, 'm> Scanner<'a, 'm> {
++    fn new(input: &'a str, storage: &'m mut dyn Storage) -> Self {
+         Self {
++            memory: Memory::new(storage),
+             input,
+             bytes: input.as_bytes(),
+             position: 0,
+@@ -296,7 +316,7 @@
+     }
+ 
+     /// Consume one byte, or report what the grammar admitted here.
+-    fn expect(&mut self, byte: u8, expected: &'static str) -> Result<(), CdtError> {
++    fn expect(&mut self, byte: u8, expected: &'static str) -> Result<(), ReadError> {
+         match self.peek() {
+             Some(found) if found == byte => {
+                 self.bump();
+@@ -305,15 +325,15 @@
+             Some(_) => Err(CdtError::Unexpected {
+                 offset: self.position,
+                 expected,
+-            }),
++            }.into()),
+             None => Err(CdtError::UnexpectedEnd {
+                 offset: self.position,
+                 expected,
+-            }),
+-        }
+-    }
+-
+-    fn expect_str(&mut self, text: &'static str, expected: &'static str) -> Result<(), CdtError> {
++            }.into()),
++        }
++    }
++
++    fn expect_str(&mut self, text: &'static str, expected: &'static str) -> Result<(), ReadError> {
+         if self.starts_with(text) {
+             self.position += text.len();
+             Ok(())
+@@ -321,12 +341,12 @@
+             Err(CdtError::Unexpected {
+                 offset: self.position,
+                 expected,
+-            })
++            }.into())
+         } else {
+             Err(CdtError::UnexpectedEnd {
+                 offset: self.position,
+                 expected,
+-            })
++            }.into())
+         }
+     }
+ 
+@@ -338,7 +358,7 @@
+     }
+ 
+     /// The whole two-state machine. Returns the root composite.
+-    fn parse_root(&mut self, datatype: CdtDatatype) -> Result<CdtValue, CdtError> {
++    fn parse_root(&mut self, datatype: CdtDatatype) -> Result<CdtValue, ReadError> {
+         self.skip_whitespace();
+         self.expect(
+             datatype.open(),
+@@ -349,7 +369,7 @@
+         )?;
+ 
+         let mut stack: Vec<Frame> = Vec::new();
+-        stack.push(Frame::new(datatype));
++        self.memory.push(&mut stack, Frame::new(datatype))?;
+         let mut elements: usize = 0;
+         let mut step = Step::Item;
+ 
+@@ -367,6 +387,7 @@
+                     {
+                         self.bump();
+                         if let Some(value) = self.close_frame(&mut stack)? {
++                            self.memory.release_vec(stack)?;
+                             return Ok(value);
+                         }
+                         step = Step::Delim;
+@@ -393,7 +414,7 @@
+                         return Err(CdtError::TooManyElements {
+                             offset: self.position,
+                             limit: MAX_ELEMENTS,
+-                        });
++                        }.into());
+                     }
+                     let opening = match self.peek() {
+                         Some(b'[') => Some(Frame::List(Vec::new())),
+@@ -410,11 +431,11 @@
+                         } else {
+                             1
+                         };
+-                        stack.push(frame);
++                        self.memory.push(&mut stack, frame)?;
+                         continue;
+                     }
+                     let term = self.parse_element()?;
+-                    push_item(&mut stack, term);
++                    push_item(&mut stack, term, &mut self.memory)?;
+                     step = Step::Delim;
+                 }
+                 Step::Delim => {
+@@ -427,6 +448,7 @@
+                         }
+                         self.expect_str(")>>", "`)>>` closing a triple term")?;
+                         if let Some(value) = self.close_frame(&mut stack)? {
++                            self.memory.release_vec(stack)?;
+                             return Ok(value);
+                         }
+                         continue;
+@@ -440,6 +462,7 @@
+                         Some(found) if found == close => {
+                             self.bump();
+                             if let Some(value) = self.close_frame(&mut stack)? {
++                                self.memory.release_vec(stack)?;
+                                 return Ok(value);
+                             }
+                         }
+@@ -447,13 +470,13 @@
+                             return Err(CdtError::Unexpected {
+                                 offset: self.position,
+                                 expected: "`,` or the closing delimiter",
+-                            });
++                            }.into());
+                         }
+                         None => {
+                             return Err(CdtError::UnexpectedEnd {
+                                 offset: self.position,
+                                 expected: "`,` or the closing delimiter",
+-                            });
++                            }.into());
+                         }
+                     }
+                 }
+@@ -463,40 +486,30 @@
+ 
+     /// Pop the top frame. Returns `Some` when the root composite just closed, and
+     /// otherwise appends the finished element to its parent.
+-    fn close_frame(&self, stack: &mut Vec<Frame>) -> Result<Option<CdtValue>, CdtError> {
++    fn close_frame(&mut self, stack: &mut Vec<Frame>) -> Result<Option<CdtValue>, ReadError> {
+         let frame = stack.pop().expect("the frame stack is never empty here");
+-        // The scanner has enforced the element bound as it went, before the offending
+-        // element was allocated, and the byte bound is checked at the root. Measuring
+-        // the closed frame here reads each nested composite's carried extent, so the
+-        // whole scan stays linear in the input however deep it nests.
+         let term = match frame {
+             Frame::List(items) => {
+-                let extent = list_extent(items.iter());
+-                CdtTerm::Composite(alloc::boxed::Box::new(CdtValue::from_checked_items(
+-                    items, extent,
+-                )))
++                let extent = try_list_extent(items.iter(), &mut self.memory)?;
++                let value = CdtValue::from_checked_items(items, extent);
++                if stack.is_empty() { return Ok(Some(value)); }
++                CdtTerm::Composite(self.memory.boxed_value(value)?)
+             }
+             Frame::Map { entries, .. } => {
+-                CdtTerm::Composite(alloc::boxed::Box::new(finish_map(entries)?))
++                let value = finish_map(entries, &mut self.memory)?;
++                if stack.is_empty() { return Ok(Some(value)); }
++                CdtTerm::Composite(self.memory.boxed_value(value)?)
+             }
+             Frame::Triple(mut parts) => {
+                 let object = parts.pop().expect("a triple frame closes with three parts");
+                 let predicate = parts.pop().expect("a triple frame closes with three parts");
+                 let subject = parts.pop().expect("a triple frame closes with three parts");
+-                CdtTerm::TripleTerm(alloc::boxed::Box::new(CdtTripleTerm {
+-                    subject,
+-                    predicate,
+-                    object,
+-                }))
++                let triple = self.memory.boxed_triple(CdtTripleTerm { subject, predicate, object })?;
++                self.memory.release_vec(parts)?;
++                CdtTerm::TripleTerm(triple)
+             }
+         };
+-        if stack.is_empty() {
+-            return match term {
+-                CdtTerm::Composite(value) => Ok(Some(*value)),
+-                _ => unreachable!("the root frame is always a list or a map"),
+-            };
+-        }
+-        push_item(stack, term);
++        push_item(stack, term, &mut self.memory)?;
+         Ok(None)
+     }
+ 
+@@ -504,7 +517,7 @@
+ 
+     /// `[3]` / `[8]`, minus the composite and triple-term alternatives (which the
+     /// frame machine opens itself).
+-    fn parse_element(&mut self) -> Result<CdtTerm, CdtError> {
++    fn parse_element(&mut self) -> Result<CdtTerm, ReadError> {
+         match self.peek() {
+             Some(b'<') => Ok(CdtTerm::Iri(self.parse_iriref()?)),
+             Some(b'_') => Ok(CdtTerm::Blank(self.parse_blank_node_label()?)),
+@@ -518,11 +531,11 @@
+             Some(_) => Err(CdtError::Unexpected {
+                 offset: self.position,
+                 expected: "an element: an IRI, a blank node, a literal, `null`, a list, a map or a triple term",
+-            }),
++            }.into()),
+             None => Err(CdtError::UnexpectedEnd {
+                 offset: self.position,
+                 expected: "an element",
+-            }),
++            }.into()),
+         }
+     }
+ 
+@@ -531,7 +544,7 @@
+     /// Narrower than [`Self::parse_element`] by construction: a blank node, `null`,
+     /// a nested composite and a triple term are all refused here, so the restriction
+     /// is enforced at the one place the grammar states it.
+-    fn parse_key(&mut self) -> Result<CdtKey, CdtError> {
++    fn parse_key(&mut self) -> Result<CdtKey, ReadError> {
+         const EXPECTED: &str = "a map key: an IRI, an RDF literal, a number or a boolean";
+         match self.peek() {
+             Some(b'<') if !self.starts_with("<<(") => Ok(CdtKey::Iri(self.parse_iriref()?)),
+@@ -541,17 +554,17 @@
+             Some(_) => Err(CdtError::Unexpected {
+                 offset: self.position,
+                 expected: EXPECTED,
+-            }),
++            }.into()),
+             None => Err(CdtError::UnexpectedEnd {
+                 offset: self.position,
+                 expected: EXPECTED,
+-            }),
++            }.into()),
+         }
+     }
+ 
+     /// `IRIREF ::= '<' ([^<>"{}|^\`\\] - [#x00-#x20])* '>'`, with `UCHAR` escapes,
+     /// followed by the absolute-IRI constraint.
+-    fn parse_iriref(&mut self) -> Result<String, CdtError> {
++    fn parse_iriref(&mut self) -> Result<String, ReadError> {
+         let start = self.position;
+         self.expect(b'<', "`<` opening an IRI")?;
+         let mut out = String::new();
+@@ -561,38 +574,38 @@
+                     return Err(CdtError::UnexpectedEnd {
+                         offset: self.position,
+                         expected: "`>` closing an IRI",
+-                    });
++                    }.into());
+                 }
+                 Some(b'>') => {
+                     self.bump();
+                     break;
+                 }
+-                Some(b'\\') => out.push(self.parse_uchar()?),
++                Some(b'\\') => { let ch = self.parse_uchar()?; self.memory.push_char(&mut out, ch)?; },
+                 Some(b'<' | b'"' | b'{' | b'}' | b'|' | b'^' | b'`' | 0x00..=0x20) => {
+                     return Err(CdtError::Unexpected {
+                         offset: self.position,
+                         expected: "an IRI character (delimiters and controls must ride as \\u escapes)",
+-                    });
++                    }.into());
+                 }
+                 Some(_) => {
+                     let ch = self.next_char().expect("peek reported a byte");
+-                    out.push(ch);
++                    self.memory.push_char(&mut out, ch)?;
+                 }
+             }
+         }
+         // CDT lexical forms carry no base, so only an absolute IRI is usable.
+-        match purrdf_iri::parse(&out) {
+-            Ok(iri) if iri.has_scheme() => Ok(out),
+-            Ok(_) => Err(CdtError::NotAbsoluteIri {
++        match purrdf_iri::absolute_verdict(&out) {
++            Some(true) => Ok(out),
++            Some(false) => Err(CdtError::NotAbsoluteIri {
+                 offset: start,
+                 iri: out,
+                 reason: "a relative IRI reference has no base to resolve against here",
+-            }),
+-            Err(_) => Err(CdtError::NotAbsoluteIri {
++            }.into()),
++            None => Err(CdtError::NotAbsoluteIri {
+                 offset: start,
+                 iri: out,
+                 reason: "not a syntactically valid IRI",
+-            }),
++            }.into()),
+         }
+     }
+ 
+@@ -630,7 +643,7 @@
+     /// The lawful neighbours this must not touch: `_:0a` and `_:_a` (a digit and
+     /// an underscore ARE the head class), `_:a-b` and `_:a.b` (hyphen and
+     /// internal dot in the tail), and `_:café` in either normalization.
+-    fn parse_blank_node_label(&mut self) -> Result<String, CdtError> {
++    fn parse_blank_node_label(&mut self) -> Result<String, ReadError> {
+         let start = self.position;
+         self.expect(b'_', "`_:` opening a blank node label")?;
+         self.expect(b':', "`_:` opening a blank node label")?;
+@@ -643,7 +656,7 @@
+                 return Err(CdtError::BadBlankNodeLabel {
+                     offset: start,
+                     reason: "the label must begin with PN_CHARS_U or [0-9]",
+-                });
++                }.into());
+             }
+         }
+         while let Some(ch) = self.input[self.position..].chars().next() {
+@@ -658,20 +671,20 @@
+             return Err(CdtError::BadBlankNodeLabel {
+                 offset: start,
+                 reason: "the label must not end with `.`",
+-            });
+-        }
+-        Ok(label.to_string())
++            }.into());
++        }
++        Ok(self.memory.string(label)?)
+     }
+ 
+     /// `[128s] RDFLiteral ::= String (LANGTAG | '^^' IRIREF)?`
+-    fn parse_rdf_literal(&mut self) -> Result<CdtLiteral, CdtError> {
++    fn parse_rdf_literal(&mut self) -> Result<CdtLiteral, ReadError> {
+         let lexical = self.parse_string()?;
+         if self.peek() == Some(b'@') {
+             let (language, direction) = self.parse_langtag()?;
+             let datatype = purrdf_iri::vocab::language_datatype_iri(direction.is_some());
+             return Ok(CdtLiteral {
+                 lexical,
+-                datatype: datatype.to_string(),
++                datatype: self.memory.string(datatype)?,
+                 language: Some(language),
+                 direction,
+             });
+@@ -679,13 +692,13 @@
+         if self.starts_with("^^") {
+             self.position += 2;
+             let datatype = self.parse_iriref()?;
+-            return Ok(CdtLiteral::typed(lexical, datatype));
+-        }
+-        Ok(CdtLiteral::plain(lexical))
++            return Ok(CdtLiteral { lexical, datatype, language: None, direction: None });
++        }
++        Ok(CdtLiteral { lexical, datatype: self.memory.string(crate::datatype::XSD_STRING)?, language: None, direction: None })
+     }
+ 
+     /// `String ::= STRING_LITERAL1 | STRING_LITERAL2 | STRING_LITERAL_LONG1 | STRING_LITERAL_LONG2`
+-    fn parse_string(&mut self) -> Result<String, CdtError> {
++    fn parse_string(&mut self) -> Result<String, ReadError> {
+         let (quote, long) = match self.peek() {
+             Some(b'"') if self.starts_with("\"\"\"") => (b'"', true),
+             Some(b'\'') if self.starts_with("'''") => (b'\'', true),
+@@ -695,13 +708,13 @@
+                 return Err(CdtError::Unexpected {
+                     offset: self.position,
+                     expected: "a quoted string",
+-                });
++                }.into());
+             }
+             None => {
+                 return Err(CdtError::UnexpectedEnd {
+                     offset: self.position,
+                     expected: "a quoted string",
+-                });
++                }.into());
+             }
+         };
+         self.position += if long { 3 } else { 1 };
+@@ -712,9 +725,9 @@
+                     return Err(CdtError::UnexpectedEnd {
+                         offset: self.position,
+                         expected: "the closing quote of a string",
+-                    });
++                    }.into());
+                 }
+-                Some(b'\\') => out.push(self.parse_escape()?),
++                Some(b'\\') => { let ch = self.parse_escape()?; self.memory.push_char(&mut out, ch)?; },
+                 Some(found) if found == quote => {
+                     if long {
+                         if self.starts_with(if quote == b'"' { "\"\"\"" } else { "'''" }) {
+@@ -722,7 +735,7 @@
+                             break;
+                         }
+                         self.bump();
+-                        out.push(quote as char);
++                        self.memory.push_char(&mut out, quote as char)?;
+                     } else {
+                         self.bump();
+                         break;
+@@ -732,11 +745,11 @@
+                     return Err(CdtError::Unexpected {
+                         offset: self.position,
+                         expected: "a raw newline is not allowed in a short string",
+-                    });
++                    }.into());
+                 }
+                 Some(_) => {
+                     let ch = self.next_char().expect("peek reported a byte");
+-                    out.push(ch);
++                    self.memory.push_char(&mut out, ch)?;
+                 }
+             }
+         }
+@@ -744,7 +757,7 @@
+     }
+ 
+     /// `ECHAR ::= '\\' [tbnrf"'\\]`, or a `UCHAR`.
+-    fn parse_escape(&mut self) -> Result<char, CdtError> {
++    fn parse_escape(&mut self) -> Result<char, ReadError> {
+         let start = self.position;
+         match self.bytes.get(self.position + 1) {
+             Some(b'u' | b'U') => self.parse_uchar(),
+@@ -759,12 +772,12 @@
+             None => Err(CdtError::BadEscape {
+                 offset: start,
+                 reason: "the lexical form ends inside an escape sequence",
+-            }),
++            }.into()),
+         }
+     }
+ 
+     /// `UCHAR ::= '\\u' HEX HEX HEX HEX | '\\U' HEX HEX HEX HEX HEX HEX HEX HEX`
+-    fn parse_uchar(&mut self) -> Result<char, CdtError> {
++    fn parse_uchar(&mut self) -> Result<char, ReadError> {
+         let start = self.position;
+         let (decoded, consumed) =
+             terminals::decode_uchar(&self.bytes[start..]).map_err(|defect| {
+@@ -817,7 +830,7 @@
+     /// `reason` now carries [`langtag::LanguageTagError::message`], which is a
+     /// `&'static str` and so fits the field exactly, naming the production that
+     /// refused instead of restating the terminal.
+-    fn parse_langtag(&mut self) -> Result<(String, Option<TextDirection>), CdtError> {
++    fn parse_langtag(&mut self) -> Result<(String, Option<TextDirection>), ReadError> {
+         let start = self.position;
+         self.expect(b'@', "`@` opening a language tag")?;
+         // The language tag ends where the `--` direction suffix begins; the suffix
+@@ -837,9 +850,9 @@
+             return Err(CdtError::BadLanguageTag {
+                 offset: start,
+                 reason: error.message(),
+-            });
+-        }
+-        Ok((language.to_string(), direction))
++            }.into());
++        }
++        Ok((self.memory.string(language)?, direction))
+     }
+ 
+     /// RDF 1.2's `'--' ('ltr' | 'rtl')` base-direction suffix, when one follows
+@@ -852,7 +865,7 @@
+     /// wrongly-cased suffix is an error here rather than a silently dropped
+     /// direction. `offset` is the whole tag's, matching every other refusal this
+     /// production makes.
+-    fn parse_direction_suffix(&mut self, start: usize) -> Result<Option<TextDirection>, CdtError> {
++    fn parse_direction_suffix(&mut self, start: usize) -> Result<Option<TextDirection>, ReadError> {
+         if !self.starts_with("--") {
+             return Ok(None);
+         }
+@@ -867,11 +880,11 @@
+             .ok_or(CdtError::BadLanguageTag {
+                 offset: start,
+                 reason: "a base direction must be `ltr` or `rtl`",
+-            })
++            }).map_err(Into::into)
+     }
+ 
+     /// `NumericLiteral`, in all three of its SPARQL shapes and all three signs.
+-    fn parse_numeric(&mut self) -> Result<CdtLiteral, CdtError> {
++    fn parse_numeric(&mut self) -> Result<CdtLiteral, ReadError> {
+         let start = self.position;
+         if matches!(self.peek(), Some(b'+' | b'-')) {
+             self.bump();
+@@ -895,7 +908,7 @@
+                 return Err(CdtError::BadNumericLiteral {
+                     offset: start,
+                     reason: "an exponent needs at least one digit",
+-                });
++                }.into());
+             }
+         }
+         let datatype = if has_exponent {
+@@ -909,7 +922,7 @@
+                 return Err(CdtError::BadNumericLiteral {
+                     offset: start,
+                     reason: "a double needs at least one digit before the exponent",
+-                });
++                }.into());
+             }
+             XSD_DOUBLE
+         } else if has_point {
+@@ -918,7 +931,7 @@
+                 return Err(CdtError::BadNumericLiteral {
+                     offset: start,
+                     reason: "a decimal needs at least one digit after the `.`",
+-                });
++                }.into());
+             }
+             XSD_DECIMAL
+         } else {
+@@ -927,14 +940,14 @@
+                 return Err(CdtError::BadNumericLiteral {
+                     offset: start,
+                     reason: "an integer needs at least one digit",
+-                });
++                }.into());
+             }
+             XSD_INTEGER
+         };
+-        Ok(CdtLiteral::typed(
+-            &self.input[start..self.position],
+-            datatype,
+-        ))
++        Ok(CdtLiteral {
++            lexical: self.memory.string(&self.input[start..self.position])?,
++            datatype: self.memory.string(datatype)?, language: None, direction: None,
++        })
+     }
+ 
+     fn digit_run(&mut self) -> usize {
+@@ -946,54 +959,69 @@
+     }
+ 
+     /// `BooleanLiteral ::= 'true' | 'false'`
+-    fn parse_boolean(&mut self) -> Result<CdtLiteral, CdtError> {
++    fn parse_boolean(&mut self) -> Result<CdtLiteral, ReadError> {
+         if self.starts_with("true") {
+             self.position += 4;
+-            return Ok(CdtLiteral::typed("true", XSD_BOOLEAN));
++            return self.boolean_literal("true");
+         }
+         if self.starts_with("false") {
+             self.position += 5;
+-            return Ok(CdtLiteral::typed("false", XSD_BOOLEAN));
++            return self.boolean_literal("false");
+         }
+         Err(CdtError::Unexpected {
+             offset: self.position,
+             expected: "the boolean literal `true` or `false`",
++        }.into())
++    }
++
++    fn boolean_literal(&mut self, lexical: &str) -> Result<CdtLiteral, ReadError> {
++        Ok(CdtLiteral {
++            lexical: self.memory.string(lexical)?, datatype: self.memory.string(XSD_BOOLEAN)?,
++            language: None, direction: None,
+         })
+     }
+ }
+ 
+ /// Append a finished element to the top frame.
+-fn push_item(stack: &mut [Frame], term: CdtTerm) {
+-    match stack
+-        .last_mut()
+-        .expect("the frame stack is never empty here")
+-    {
+-        Frame::List(items) | Frame::Triple(items) => items.push(term),
++fn push_item(stack: &mut [Frame], term: CdtTerm, memory: &mut Memory<'_>) -> Result<(), ReadError> {
++    match stack.last_mut().expect("the frame stack is never empty here") {
++        Frame::List(items) | Frame::Triple(items) => memory.push(items, term)?,
+         Frame::Map { entries, pending } => {
+-            let (offset, key) = pending
+-                .take()
+-                .expect("a map value is only read after its key");
+-            entries.push((offset, CdtEntry { key, value: term }));
+-        }
+-    }
++            let (offset, key) = pending.take().expect("a map value is only read after its key");
++            memory.push(entries, (offset, CdtEntry { key, value: term }))?;
++        }
++    }
++    Ok(())
+ }
+ 
+ /// Sort a map's entries into key order and reject duplicate keys.
+-fn finish_map(mut entries: Vec<(usize, CdtEntry)>) -> Result<CdtValue, CdtError> {
+-    entries.sort_by(|(_, left), (_, right)| crate::ops::total_key_cmp(&left.key, &right.key));
++fn finish_map(mut entries: Vec<(usize, CdtEntry)>, memory: &mut Memory<'_>) -> Result<CdtValue, ReadError> {
++    // Offsets strictly follow authoring order. This total tie-break reproduces
++    // stable key sorting (including the exact first duplicate diagnostic) with
++    // the native allocation-free unstable sorter and no hidden merge scratch.
++    entries.sort_unstable_by(|(lo, left), (ro, right)|
++        crate::ops::total_key_cmp(&left.key, &right.key).then_with(|| lo.cmp(ro)));
+     for window in entries.windows(2) {
+         let (left_offset, left) = &window[0];
+         let (right_offset, right) = &window[1];
+         if left.key == right.key {
++            let key = try_canonical_key_lexical(&left.key, memory)?;
+             return Err(CdtError::DuplicateMapKey {
+-                offset: *left_offset.max(right_offset),
+-                key: canonical_key_lexical(&left.key),
+-            });
+-        }
+-    }
+-    let entries: Vec<CdtEntry> = entries.into_iter().map(|(_, entry)| entry).collect();
+-    let extent = map_extent(entries.iter().map(|entry| (&entry.key, &entry.value)));
+-    Ok(CdtValue::from_checked_entries(entries, extent))
++                offset: *left_offset.max(right_offset), key,
++            }.into());
++        }
++    }
++    let old_bytes = core::alloc::Layout::array::<(usize, CdtEntry)>(entries.capacity())
++        .map_err(|_| crate::memory::StorageError::SizeOverflow)?.size();
++    let mut output = Vec::new();
++    memory.reserve(&mut output, entries.len())?;
++    // Move entries while the old and destination arrays are both admitted.
++    let mut source = entries.into_iter();
++    for (_, entry) in source.by_ref() { output.push(entry); }
++    drop(source);
++    memory.release_bytes(old_bytes)?;
++    let extent = try_map_extent(output.iter().map(|entry| (&entry.key, &entry.value)), memory)?;
++    Ok(CdtValue::from_checked_entries(output, extent))
+ }
+ 
+ // `PN_CHARS`, `PN_CHARS_U` and `PN_CHARS_BASE` were transcribed here once, as a
+diff --git a/crates/cdt/src/render.rs b/crates/cdt/src/render.rs
+--- a/crates/cdt/src/render.rs
++++ b/crates/cdt/src/render.rs
+@@ -59,6 +59,8 @@
+ use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri};
+ use purrdf_lex::text_out::TextOut;
+ 
++use crate::memory::{Memory, Resident, StorageError};
++
+ use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm};
+ use crate::value::{CdtContents, CdtValue};
+ 
+@@ -83,12 +85,12 @@
+ /// directly and the measure counts exactly the bytes they would write.
+ trait Sink: TextOut {
+     /// A nested composite: schedule its rendering, or account for its length.
+-    fn composite<'a>(&mut self, jobs: &mut Vec<Job<'a>>, value: &'a CdtValue);
++    fn composite<'a>(&mut self, jobs: &mut Vec<Job<'a>>, value: &'a CdtValue, memory: &mut Memory<'_>) -> Result<(), StorageError>;
+ }
+ 
+ impl Sink for String {
+-    fn composite<'a>(&mut self, jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
+-        push_value(jobs, value);
++    fn composite<'a>(&mut self, jobs: &mut Vec<Job<'a>>, value: &'a CdtValue, memory: &mut Memory<'_>) -> Result<(), StorageError> {
++        push_value(jobs, value, memory)
+     }
+ }
+ 
+@@ -120,8 +122,9 @@
+ }
+ 
+ impl Sink for Measure {
+-    fn composite<'a>(&mut self, _jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
++    fn composite<'a>(&mut self, _jobs: &mut Vec<Job<'a>>, value: &'a CdtValue, _memory: &mut Memory<'_>) -> Result<(), StorageError> {
+         self.0 = self.0.saturating_add(value.extent().bytes);
++        Ok(())
+     }
+ }
+ 
+@@ -151,9 +154,11 @@
+ #[must_use]
+ pub fn canonical_lexical(value: &CdtValue) -> String {
+     let mut out = String::new();
+-    let mut jobs: Vec<Job<'_>> = Vec::new();
+-    push_value(&mut jobs, value);
+-    run(&mut out, jobs);
++    let mut storage = Resident;
++    let mut memory = Memory::new(&mut storage);
++    let mut jobs = Vec::new();
++    push_value(&mut jobs, value, &mut memory).expect("resident renderer capacity");
++    run(&mut out, jobs, &mut memory).expect("resident renderer capacity");
+     out
+ }
+ 
+@@ -189,13 +194,28 @@
+     out
+ }
+ 
++pub(crate) fn try_canonical_key_lexical(key: &CdtKey, memory: &mut Memory<'_>) -> Result<String, StorageError> {
++    let length = key_lexical_len(key);
++    let mut output = String::new();
++    memory.reserve_string(&mut output, length)?;
++    write_key(&mut output, key);
++    if output.len() != length { return Err(StorageError::SizeOverflow); }
++    Ok(output)
++}
++
+ /// The byte length one element occupies in a canonical form, without allocating it.
+ /// A nested composite answers from its carried measure, so this costs the element's
+ /// own leaves and nothing below a composite.
+ pub(crate) fn term_lexical_len(term: &CdtTerm) -> usize {
++    try_term_lexical_len(term, &mut Memory::new(&mut Resident)).expect("resident measure capacity")
++}
++
++pub(crate) fn try_term_lexical_len(term: &CdtTerm, memory: &mut Memory<'_>) -> Result<usize, StorageError> {
+     let mut out = Measure(0);
+-    run(&mut out, alloc::vec![Job::Term(term)]);
+-    out.0
++    let mut jobs = Vec::new();
++    memory.push(&mut jobs, Job::Term(term))?;
++    run(&mut out, jobs, memory)?;
++    Ok(out.0)
+ }
+ 
+ /// The byte length one map key occupies in a canonical form, without allocating it.
+@@ -207,14 +227,14 @@
+ 
+ /// Drive the renderer's job stack into a sink. Iterative: nesting costs heap, never
+ /// stack.
+-fn run<S: Sink>(out: &mut S, mut jobs: Vec<Job<'_>>) {
++fn run<S: Sink>(out: &mut S, mut jobs: Vec<Job<'_>>, memory: &mut Memory<'_>) -> Result<(), StorageError> {
+     while let Some(job) = jobs.pop() {
+         match job {
+             Job::Punct(text) => out.push_str(text),
+             Job::Key(key) => write_key(out, key),
+             Job::Term(term) => match term {
+-                CdtTerm::Composite(inner) => out.composite(&mut jobs, inner.as_ref()),
+-                CdtTerm::TripleTerm(triple) => push_triple(&mut jobs, triple.as_ref()),
++                CdtTerm::Composite(inner) => out.composite(&mut jobs, inner.as_ref(), memory)?,
++                CdtTerm::TripleTerm(triple) => push_triple(&mut jobs, triple.as_ref(), memory)?,
+                 CdtTerm::Iri(iri) => write_iri(iri, out),
+                 CdtTerm::Blank(label) => write_blank(label, out),
+                 CdtTerm::Literal(literal) => write_literal(out, literal),
+@@ -222,47 +242,50 @@
+             },
+         }
+     }
++    memory.release_vec(jobs)
+ }
+ 
+ /// Push the jobs for a composite, in reverse emission order (the stack pops LIFO).
+-fn push_value<'a>(jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
++fn push_value<'a>(jobs: &mut Vec<Job<'a>>, value: &'a CdtValue, memory: &mut Memory<'_>) -> Result<(), StorageError> {
+     match value.contents() {
+         CdtContents::List(items) => {
+-            jobs.push(Job::Punct("]"));
++            memory.push(jobs, Job::Punct("]"))?;
+             for (index, item) in items.iter().enumerate().rev() {
+-                jobs.push(Job::Term(item));
++                memory.push(jobs, Job::Term(item))?;
+                 if index > 0 {
+-                    jobs.push(Job::Punct(","));
++                    memory.push(jobs, Job::Punct(","))?;
+                 }
+             }
+-            jobs.push(Job::Punct("["));
++            memory.push(jobs, Job::Punct("["))?;
+         }
+         CdtContents::Map(entries) => {
+-            jobs.push(Job::Punct("}"));
++            memory.push(jobs, Job::Punct("}"))?;
+             for (index, CdtEntry { key, value: item }) in entries.iter().enumerate().rev() {
+-                jobs.push(Job::Term(item));
+-                jobs.push(Job::Punct(":"));
+-                jobs.push(Job::Key(key));
++                memory.push(jobs, Job::Term(item))?;
++                memory.push(jobs, Job::Punct(":"))?;
++                memory.push(jobs, Job::Key(key))?;
+                 if index > 0 {
+-                    jobs.push(Job::Punct(","));
++                    memory.push(jobs, Job::Punct(","))?;
+                 }
+             }
+-            jobs.push(Job::Punct("{"));
+-        }
+-    }
++            memory.push(jobs, Job::Punct("{"))?;
++        }
++    }
++    Ok(())
+ }
+ 
+ /// Push the jobs for a triple term, in reverse emission order.
+-fn push_triple<'a>(jobs: &mut Vec<Job<'a>>, triple: &'a CdtTripleTerm) {
+-    jobs.push(Job::Punct(TRIPLE_TERM_CLOSE));
+-    jobs.push(Job::Punct(" "));
+-    jobs.push(Job::Term(&triple.object));
+-    jobs.push(Job::Punct(" "));
+-    jobs.push(Job::Term(&triple.predicate));
+-    jobs.push(Job::Punct(" "));
+-    jobs.push(Job::Term(&triple.subject));
+-    jobs.push(Job::Punct(" "));
+-    jobs.push(Job::Punct(TRIPLE_TERM_OPEN));
++fn push_triple<'a>(jobs: &mut Vec<Job<'a>>, triple: &'a CdtTripleTerm, memory: &mut Memory<'_>) -> Result<(), StorageError> {
++    memory.push(jobs, Job::Punct(TRIPLE_TERM_CLOSE))?;
++    memory.push(jobs, Job::Punct(" "))?;
++    memory.push(jobs, Job::Term(&triple.object))?;
++    memory.push(jobs, Job::Punct(" "))?;
++    memory.push(jobs, Job::Term(&triple.predicate))?;
++    memory.push(jobs, Job::Punct(" "))?;
++    memory.push(jobs, Job::Term(&triple.subject))?;
++    memory.push(jobs, Job::Punct(" "))?;
++    memory.push(jobs, Job::Punct(TRIPLE_TERM_OPEN))?;
++    Ok(())
+ }
+ 
+ fn write_key<S: Sink>(out: &mut S, key: &CdtKey) {
+diff --git a/crates/cdt/src/limits.rs b/crates/cdt/src/limits.rs
+--- a/crates/cdt/src/limits.rs
++++ b/crates/cdt/src/limits.rs
+@@ -69,7 +69,8 @@
+ use alloc::vec::Vec;
+ 
+ use crate::error::CdtError;
+-use crate::render::{key_lexical_len, term_lexical_len};
++use crate::render::{key_lexical_len, try_term_lexical_len};
++use crate::memory::{Memory, Resident, StorageError};
+ use crate::term::{CdtKey, CdtTerm};
+ 
+ /// Maximum number of elements (list items plus map entries, at every level) in one
+@@ -137,65 +138,83 @@
+ /// value's whole element count for a nested composite, and the sum over its
+ /// components for a triple term. Iterative, with an explicit worklist.
+ pub(crate) fn term_elements(term: &CdtTerm) -> usize {
++    try_term_elements(term, &mut Memory::new(&mut Resident)).expect("resident extent capacity")
++}
++
++fn try_term_elements(term: &CdtTerm, memory: &mut Memory<'_>) -> Result<usize, StorageError> {
+     let mut elements = 0usize;
+-    let mut work: Vec<&CdtTerm> = alloc::vec![term];
++    let mut work = Vec::new();
++    memory.push(&mut work, term)?;
+     while let Some(current) = work.pop() {
+         match current {
+             CdtTerm::Composite(inner) => {
+                 elements = elements.saturating_add(inner.extent().elements);
+             }
+             CdtTerm::TripleTerm(triple) => {
+-                work.push(&triple.subject);
+-                work.push(&triple.predicate);
+-                work.push(&triple.object);
++                memory.push(&mut work, &triple.subject)?;
++                memory.push(&mut work, &triple.predicate)?;
++                memory.push(&mut work, &triple.object)?;
+             }
+             CdtTerm::Iri(_) | CdtTerm::Blank(_) | CdtTerm::Literal(_) | CdtTerm::Null => {}
+         }
+     }
+-    elements
++    memory.release_vec(work)?;
++    Ok(elements)
+ }
+ 
+ /// The extent of the list these elements would form.
+ pub(crate) fn list_extent<'a>(items: impl IntoIterator<Item = &'a CdtTerm>) -> Extent {
++    try_list_extent(items, &mut Memory::new(&mut Resident)).expect("resident extent capacity")
++}
++
++pub(crate) fn try_list_extent<'a>(
++    items: impl IntoIterator<Item = &'a CdtTerm>, memory: &mut Memory<'_>,
++) -> Result<Extent, StorageError> {
+     let mut count = 0usize;
+     let mut elements = 0usize;
+     let mut bytes = 0usize;
+     for term in items {
+         count = count.saturating_add(1);
+-        elements = elements.saturating_add(term_elements(term));
+-        bytes = bytes.saturating_add(term_lexical_len(term));
+-    }
+-    Extent {
++        elements = elements.saturating_add(try_term_elements(term, memory)?);
++        bytes = bytes.saturating_add(try_term_lexical_len(term, memory)?);
++    }
++    Ok(Extent {
+         elements: elements.saturating_add(count),
+         // `[`, `]`, and one `,` between each adjacent pair.
+         bytes: bytes
+             .saturating_add(2)
+             .saturating_add(count.saturating_sub(1)),
+-    }
++    })
+ }
+ 
+ /// The extent of the map these key/value pairs would form. The pairs must already be
+ /// deduplicated by key.
+ pub(crate) fn map_extent<'a>(pairs: impl IntoIterator<Item = (&'a CdtKey, &'a CdtTerm)>) -> Extent {
++    try_map_extent(pairs, &mut Memory::new(&mut Resident)).expect("resident extent capacity")
++}
++
++pub(crate) fn try_map_extent<'a>(
++    pairs: impl IntoIterator<Item = (&'a CdtKey, &'a CdtTerm)>, memory: &mut Memory<'_>,
++) -> Result<Extent, StorageError> {
+     let mut count = 0usize;
+     let mut elements = 0usize;
+     let mut bytes = 0usize;
+     for (key, value) in pairs {
+         count = count.saturating_add(1);
+-        elements = elements.saturating_add(term_elements(value));
++        elements = elements.saturating_add(try_term_elements(value, memory)?);
+         // `key` `:` `value`.
+         bytes = bytes
+             .saturating_add(key_lexical_len(key))
+             .saturating_add(1)
+-            .saturating_add(term_lexical_len(value));
+-    }
+-    Extent {
++            .saturating_add(try_term_lexical_len(value, memory)?);
++    }
++    Ok(Extent {
+         elements: elements.saturating_add(count),
+         // `{`, `}`, and one `,` between each adjacent pair.
+         bytes: bytes
+             .saturating_add(2)
+             .saturating_add(count.saturating_sub(1)),
+-    }
++    })
+ }
+ 
+ /// Check a composite, built or prospective, against both bounds.
+diff --git a/crates/cdt/src/ops.rs b/crates/cdt/src/ops.rs
+--- a/crates/cdt/src/ops.rs
++++ b/crates/cdt/src/ops.rs
+@@ -85,6 +85,7 @@
+ use purrdf_xsd::XsdValue;
+ 
+ use crate::error::CdtTypeError;
++use crate::memory::{Memory, Resident, Storage, StorageError};
+ use crate::literal::LiteralValue;
+ use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm};
+ use crate::value::{CdtContents, CdtParts, CdtValue};
+@@ -187,7 +188,17 @@
+ /// ```
+ #[must_use]
+ pub fn total_term_cmp(a: &CdtTerm, b: &CdtTerm) -> Ordering {
+-    run_cmp(alloc::vec![CmpJob::Pair(a, b)])
++    try_total_term_cmp(a, b, &mut Resident).expect("resident composite comparison capacity")
++}
++
++/// Native syntactic term ordering through the caller's physical storage owner.
++/// # Errors
++/// Checked layout, admission or allocator refusal, separate from comparability.
++pub fn try_total_term_cmp(a: &CdtTerm, b: &CdtTerm, storage: &mut impl Storage) -> Result<Ordering, StorageError> {
++    let mut memory = Memory::new(storage);
++    let mut jobs = Vec::new();
++    memory.push(&mut jobs, CmpJob::Pair(a, b))?;
++    run_cmp(jobs, &mut memory)
+ }
+ 
+ /// The crate's syntactic total order over two composite values.
+@@ -196,13 +207,21 @@
+ /// the order [`crate::canonical_lexical`] writes a map in.
+ #[must_use]
+ pub fn total_value_cmp(a: &CdtValue, b: &CdtValue) -> Ordering {
+-    let mut jobs: Vec<CmpJob<'_>> = Vec::new();
+-    push_value_cmp(&mut jobs, a, b);
+-    run_cmp(jobs)
++    try_total_value_cmp(a, b, &mut Resident).expect("resident composite comparison capacity")
++}
++
++/// Native syntactic composite ordering through the same existing relation.
++/// # Errors
++/// Checked layout, admission or allocator refusal, separate from comparability.
++pub fn try_total_value_cmp(a: &CdtValue, b: &CdtValue, storage: &mut impl Storage) -> Result<Ordering, StorageError> {
++    let mut memory = Memory::new(storage);
++    let mut jobs = Vec::new();
++    push_value_cmp(&mut jobs, a, b, &mut memory)?;
++    run_cmp(jobs, &mut memory)
+ }
+ 
+ /// Drive the comparison worklist to a verdict.
+-fn run_cmp(mut jobs: Vec<CmpJob<'_>>) -> Ordering {
++fn run_cmp(mut jobs: Vec<CmpJob<'_>>, memory: &mut Memory<'_>) -> Result<Ordering, StorageError> {
+     while let Some(job) = jobs.pop() {
+         let decided = match job {
+             CmpJob::Decided(ordering) => ordering,
+@@ -210,7 +229,8 @@
+             CmpJob::Pair(x, y) => {
+                 let by_rank = x.rank().cmp(&y.rank());
+                 if by_rank != Ordering::Equal {
+-                    return by_rank;
++                    memory.release_vec(jobs)?;
++                    return Ok(by_rank);
+                 }
+                 match (x, y) {
+                     (CdtTerm::Null, CdtTerm::Null) => Ordering::Equal,
+@@ -218,13 +238,13 @@
+                     (CdtTerm::Iri(p), CdtTerm::Iri(q)) => p.cmp(q),
+                     (CdtTerm::Literal(p), CdtTerm::Literal(q)) => literal_cmp(p, q),
+                     (CdtTerm::TripleTerm(p), CdtTerm::TripleTerm(q)) => {
+-                        jobs.push(CmpJob::Pair(&p.object, &q.object));
+-                        jobs.push(CmpJob::Pair(&p.predicate, &q.predicate));
+-                        jobs.push(CmpJob::Pair(&p.subject, &q.subject));
++                        memory.push(&mut jobs, CmpJob::Pair(&p.object, &q.object))?;
++                        memory.push(&mut jobs, CmpJob::Pair(&p.predicate, &q.predicate))?;
++                        memory.push(&mut jobs, CmpJob::Pair(&p.subject, &q.subject))?;
+                         continue;
+                     }
+                     (CdtTerm::Composite(p), CdtTerm::Composite(q)) => {
+-                        push_value_cmp(&mut jobs, p.as_ref(), q.as_ref());
++                        push_value_cmp(&mut jobs, p.as_ref(), q.as_ref(), memory)?;
+                         continue;
+                     }
+                     // Equal ranks imply the same variant; answering `Equal` keeps the
+@@ -234,34 +254,35 @@
+             }
+         };
+         if decided != Ordering::Equal {
+-            return decided;
+-        }
+-    }
+-    Ordering::Equal
++            memory.release_vec(jobs)?;
++            return Ok(decided);
++        }
++    }
++    memory.release_vec(jobs)?;
++    Ok(Ordering::Equal)
+ }
+ 
+ /// Push the jobs comparing two composites, in reverse evaluation order (the
+ /// worklist pops LIFO, so the length tie-break goes on first and is consulted last).
+-fn push_value_cmp<'a>(jobs: &mut Vec<CmpJob<'a>>, a: &'a CdtValue, b: &'a CdtValue) {
++fn push_value_cmp<'a>(
++    jobs: &mut Vec<CmpJob<'a>>, a: &'a CdtValue, b: &'a CdtValue, memory: &mut Memory<'_>,
++) -> Result<(), StorageError> {
+     match (a.contents(), b.contents()) {
+-        (CdtContents::List(_), CdtContents::Map(_)) => jobs.push(CmpJob::Decided(Ordering::Less)),
+-        (CdtContents::Map(_), CdtContents::List(_)) => {
+-            jobs.push(CmpJob::Decided(Ordering::Greater));
+-        }
++        (CdtContents::List(_), CdtContents::Map(_)) => memory.push(jobs, CmpJob::Decided(Ordering::Less))?,
++        (CdtContents::Map(_), CdtContents::List(_)) => memory.push(jobs, CmpJob::Decided(Ordering::Greater))?,
+         (CdtContents::List(left), CdtContents::List(right)) => {
+-            jobs.push(CmpJob::Decided(left.len().cmp(&right.len())));
++            memory.push(jobs, CmpJob::Decided(left.len().cmp(&right.len())))?;
++            for (p, q) in left.iter().zip(right.iter()).rev() { memory.push(jobs, CmpJob::Pair(p, q))?; }
++        }
++        (CdtContents::Map(left), CdtContents::Map(right)) => {
++            memory.push(jobs, CmpJob::Decided(left.len().cmp(&right.len())))?;
+             for (p, q) in left.iter().zip(right.iter()).rev() {
+-                jobs.push(CmpJob::Pair(p, q));
++                memory.push(jobs, CmpJob::Pair(&p.value, &q.value))?;
++                memory.push(jobs, CmpJob::KeyPair(&p.key, &q.key))?;
+             }
+         }
+-        (CdtContents::Map(left), CdtContents::Map(right)) => {
+-            jobs.push(CmpJob::Decided(left.len().cmp(&right.len())));
+-            for (p, q) in left.iter().zip(right.iter()).rev() {
+-                jobs.push(CmpJob::Pair(&p.value, &q.value));
+-                jobs.push(CmpJob::KeyPair(&p.key, &q.key));
+-            }
+-        }
+-    }
++    }
++    Ok(())
+ }
+ 
+ // ── 2. The SEP-0009 value relations ─────────────────────────────────────────────
+diff --git a/crates/cdt/src/tree.rs b/crates/cdt/src/tree.rs
+--- a/crates/cdt/src/tree.rs
++++ b/crates/cdt/src/tree.rs
+@@ -12,9 +12,8 @@
+ //! whole tree is a loop over a heap stack:
+ //!
+ //! * **`Drop`** lives on the two owners whose contents are sealed or structural,
+-//!   [`CdtValue`] and [`CdtTripleTerm`]. Each moves the nodes it owns onto a work
+-//!   list and dismantles that list in a loop, taking every popped node's children
+-//!   before the node itself goes, so no drop it runs recurses. It does not live on
++//!   [`CdtValue`] and [`CdtTripleTerm`]. Each threads ancestors through already evacuated term
++//!   slots using the one allocation-free lexical dismantling loop, so no drop it runs recurses. It does not live on
+ //!   [`CdtTerm`]: a type that implements `Drop` cannot be destructured by value, and
+ //!   matching an element by value to move its payload out is how the scanner, the
+ //!   function library and every consumer take a term apart.
+@@ -49,67 +48,87 @@
+     matches!(term, CdtTerm::Composite(_) | CdtTerm::TripleTerm(_))
+ }
+ 
+-/// Move the nodes `parts` owns onto `work`; the leaves drop here, recursing nowhere.
+-fn release_parts(parts: CdtParts, work: &mut Vec<CdtTerm>) {
+-    match parts {
+-        CdtParts::List(items) => work.extend(items.into_iter().filter(owns_nodes)),
+-        CdtParts::Map(entries) => work.extend(
+-            entries
+-                .into_iter()
+-                .map(|entry| entry.value)
+-                .filter(owns_nodes),
+-        ),
+-    }
+-}
+-
+-/// Move the components `triple` owns onto `work`, leaving it holding three nulls.
+-fn release_components(triple: &mut CdtTripleTerm, work: &mut Vec<CdtTerm>) {
+-    for slot in [
+-        &mut triple.subject,
+-        &mut triple.predicate,
+-        &mut triple.object,
+-    ] {
+-        let component = mem::replace(slot, CdtTerm::Null);
+-        if owns_nodes(&component) {
+-            work.push(component);
+-        }
+-    }
+-}
+-
+-/// Dismantle `work`: every node popped gives its children up onto the list before it
+-/// is dropped, so the drop that then runs on it owns nothing and recurses nowhere.
+-fn reclaim(mut work: Vec<CdtTerm>) {
+-    while let Some(node) = work.pop() {
+-        match node {
+-            CdtTerm::Composite(mut value) => release_parts(value.take_parts(), &mut work),
+-            CdtTerm::TripleTerm(mut triple) => release_components(&mut triple, &mut work),
+-            CdtTerm::Iri(_) | CdtTerm::Blank(_) | CdtTerm::Literal(_) | CdtTerm::Null => {}
+-        }
++impl purrdf_lex::walk::DismantleOwned for CdtTerm {
++    fn take_child(&mut self) -> Option<Self> {
++        match self {
++            Self::Composite(value) => match value.dismantling_parts() {
++                CdtParts::List(items) => loop {
++                    let slot = items.last_mut()?;
++                    let child = mem::replace(slot, Self::Null);
++                    if owns_nodes(&child) { return Some(child); }
++                    drop(child);
++                    items.pop();
++                },
++                CdtParts::Map(entries) => loop {
++                    let slot = &mut entries.last_mut()?.value;
++                    let child = mem::replace(slot, Self::Null);
++                    if owns_nodes(&child) { return Some(child); }
++                    drop(child);
++                    entries.pop();
++                },
++            },
++            Self::TripleTerm(triple) => loop {
++                let child = mem::replace(&mut triple.object, Self::Null);
++                if owns_nodes(&child) { return Some(child); }
++                drop(child);
++                triple.object = mem::replace(&mut triple.predicate, Self::Null);
++                triple.predicate = mem::replace(&mut triple.subject, Self::Null);
++                if matches!((&triple.subject, &triple.predicate, &triple.object),
++                    (Self::Null, Self::Null, Self::Null)) { return None; }
++            },
++            Self::Iri(_) | Self::Blank(_) | Self::Literal(_) | Self::Null => None,
++        }
++    }
++
++    fn store_parent(&mut self, parent: Option<Self>) {
++        let parent = parent.unwrap_or(Self::Null);
++        match self {
++            Self::Composite(value) => match value.dismantling_parts() {
++                CdtParts::List(items) => *items.last_mut().expect("removed a child") = parent,
++                CdtParts::Map(entries) => entries.last_mut().expect("removed a child").value = parent,
++            },
++            Self::TripleTerm(triple) => triple.object = parent,
++            _ => unreachable!("only an owning node removes a child"),
++        }
++    }
++
++    fn take_parent(&mut self) -> Option<Self> {
++        let parent = match self {
++            Self::Composite(value) => match value.dismantling_parts() {
++                CdtParts::List(items) => items.pop().expect("a parent occupies the last slot"),
++                CdtParts::Map(entries) => entries.pop().expect("a parent occupies the last slot").value,
++            },
++            Self::TripleTerm(triple) => {
++                let parent = mem::replace(&mut triple.object, Self::Null);
++                triple.object = mem::replace(&mut triple.predicate, Self::Null);
++                triple.predicate = mem::replace(&mut triple.subject, Self::Null);
++                parent
++            }
++            _ => unreachable!("only an owning node resumes"),
++        };
++        owns_nodes(&parent).then_some(parent)
+     }
+ }
+ 
+ impl Drop for CdtValue {
+     fn drop(&mut self) {
+-        let nested = match self.contents() {
+-            CdtContents::List(items) => items.iter().any(owns_nodes),
+-            CdtContents::Map(entries) => entries.iter().any(|entry| owns_nodes(&entry.value)),
+-        };
+-        // A value of leaves drops as the compiler drops it; only a value that owns
+-        // another node is taken apart on the work list.
+-        if nested {
+-            let mut work = Vec::new();
+-            release_parts(self.take_parts(), &mut work);
+-            reclaim(work);
++        // Each existing top-level term is the root of the same shared loop. The
++        // loop empties every existing box before its ordinary Drop can recurse.
++        match self.take_parts() {
++            CdtParts::List(items) => {
++                for item in items { purrdf_lex::walk::dismantle_owned(item); }
++            }
++            CdtParts::Map(entries) => {
++                for entry in entries { purrdf_lex::walk::dismantle_owned(entry.value); }
++            }
+         }
+     }
+ }
+ 
+ impl Drop for CdtTripleTerm {
+     fn drop(&mut self) {
+-        if owns_nodes(&self.subject) || owns_nodes(&self.predicate) || owns_nodes(&self.object) {
+-            let mut work = Vec::new();
+-            release_components(self, &mut work);
+-            reclaim(work);
++        for slot in [&mut self.subject, &mut self.predicate, &mut self.object] {
++            purrdf_lex::walk::dismantle_owned(mem::replace(slot, CdtTerm::Null));
+         }
+     }
+ }
+diff --git a/crates/cdt/src/value.rs b/crates/cdt/src/value.rs
+--- a/crates/cdt/src/value.rs
++++ b/crates/cdt/src/value.rs
+@@ -257,6 +257,10 @@
+         self.extent = Extent::EMPTY;
+         core::mem::replace(&mut self.parts, CdtParts::List(Vec::new()))
+     }
++
++    /// Destruction-only mutable slots. No borrowed public value is mutated;
++    /// the shared dismantling loop drains the contents before normal drop.
++    pub(crate) fn dismantling_parts(&mut self) -> &mut CdtParts { &mut self.parts }
+ 
+     /// A borrowed view of the contents, for matching on which datatype this is.
+     ///
+diff --git a/crates/lex/src/walk.rs b/crates/lex/src/walk.rs
+--- a/crates/lex/src/walk.rs
++++ b/crates/lex/src/walk.rs
+@@ -267,23 +267,50 @@
+ /// Dismantle existing nested boxes without a destructor worklist allocation.
+ /// The emptied child stores the older ancestor while the loop owns the parent.
+ /// Every continuation is removed before ordinary drop; no cycle survives.
+-pub fn dismantle_tree<T: DismantleTree>(mut node: Box<T>) {
++pub fn dismantle_tree<T: DismantleTree>(node: Box<T>) {
++    dismantle_owned(DismantlingBox(node));
++}
++
++/// Destructive child/ancestor access using only a node's existing vacant slots.
++/// An implementation removes one child, stores an older parent in the vacancy,
++/// and recovers that continuation when resumed. No link may survive normal drop.
++pub trait DismantleOwned: Sized {
++    /// Remove the next owned child, leaving its slot available for a parent.
++    fn take_child(&mut self) -> Option<Self>;
++    /// Store the older ancestor in the most recently evacuated child slot.
++    fn store_parent(&mut self, parent: Option<Self>);
++    /// Remove that continuation before the node resumes normal destruction.
++    fn take_parent(&mut self) -> Option<Self>;
++}
++
++/// The one allocation-free iterative destruction loop for existing owned trees.
++pub fn dismantle_owned<T: DismantleOwned>(mut node: T) {
+     let mut parent = None;
+     loop {
+-        let child = node.next_child().map(|slot| {
+-            let child = slot.take().expect("selected a populated dismantling child");
+-            slot.set_dismantle_parent(parent.take());
+-            child
+-        });
+-        if let Some(child) = child {
++        if let Some(child) = node.take_child() {
++            node.store_parent(parent.take());
+             parent = Some(node);
+             node = child;
+             continue;
+         }
+         drop(node);
+         let Some(mut resumed) = parent.take() else { break; };
+-        parent = resumed.last_child().expect("the resumed node removed a child").take_dismantle_parent();
++        parent = resumed.take_parent();
+         node = resumed;
++    }
++}
++
++struct DismantlingBox<T: DismantleTree>(Box<T>);
++
++impl<T: DismantleTree> DismantleOwned for DismantlingBox<T> {
++    fn take_child(&mut self) -> Option<Self> {
++        self.0.next_child().map(|slot| Self(slot.take().expect("selected a populated dismantling child")))
++    }
++    fn store_parent(&mut self, parent: Option<Self>) {
++        self.0.last_child().expect("removed a child").set_dismantle_parent(parent.map(|node| node.0));
++    }
++    fn take_parent(&mut self) -> Option<Self> {
++        self.0.last_child().expect("the resumed node removed a child").take_dismantle_parent().map(Self)
+     }
+ }
+ 
+diff --git a/crates/iri/src/parse.rs b/crates/iri/src/parse.rs
+--- a/crates/iri/src/parse.rs
++++ b/crates/iri/src/parse.rs
+@@ -305,6 +305,23 @@
+     })
+ }
+ 
++/// Absolute/relative/invalid verdict through the same scanner, without owning
++/// the parsed text or rendering an error which this caller will discard.
++#[must_use]
++pub fn absolute_verdict(s: &str) -> Option<bool> {
++    scan_with(s, Mode::Iri, Diagnostics::Verdict).ok().map(|spans| spans.scheme.is_some())
++}
++
++/// Internal diagnostic storage policy; it does not change any grammar decision.
++#[derive(Clone, Copy)]
++pub(crate) enum Diagnostics { Owned, Verdict }
++
++impl Diagnostics {
++    pub(crate) fn message(self, message: core::fmt::Arguments<'_>) -> String {
++        match self { Self::Owned => message.to_string(), Self::Verdict => String::new() }
++    }
++}
++
+ /// The component spans [`scan`] computes: [`Iri`] without its owned text.
+ struct Spans {
+     scheme: Option<Range<usize>>,
+@@ -329,6 +346,10 @@
+ /// Split and validate `s`'s components, returning their spans. The whole grammar
+ /// lives here; [`parse_inner`] adds the owned text and nothing else.
+ fn scan(s: &str, mode: Mode) -> Result<Spans> {
++    scan_with(s, mode, Diagnostics::Owned)
++}
++
++fn scan_with(s: &str, mode: Mode, diagnostics: Diagnostics) -> Result<Spans> {
+     if s.is_empty() {
+         return Err(IriError::Empty);
+     }
+@@ -341,7 +362,7 @@
+ 
+     let mut scheme: Option<Range<usize>> = None;
+     if let Some(colon) = find_scheme_colon(s) {
+-        validate_scheme(&s[..colon])?;
++        validate_scheme_with(&s[..colon], diagnostics)?;
+         scheme = Some(0..colon);
+         idx = colon + 1; // skip ':'
+     }
+@@ -352,7 +373,7 @@
+         let astart = idx + 2;
+         // authority runs until the next '/', '?', '#' or end.
+         let aend = astart + find_authority_end(&bytes[astart..]).unwrap_or(bytes.len() - astart);
+-        validate_authority(&s[astart..aend], astart, mode)?;
++        validate_authority_with(&s[astart..aend], astart, mode, diagnostics)?;
+         authority = Some(astart..aend);
+         idx = aend;
+     }
+@@ -418,18 +439,18 @@
+     }
+ }
+ 
+-fn validate_scheme(s: &str) -> Result<()> {
++fn validate_scheme_with(s: &str, diagnostics: Diagnostics) -> Result<()> {
+     let b = s.as_bytes();
+     if b.is_empty() {
+         return Err(IriError::MissingScheme);
+     }
+     if !b[0].is_ascii_alphabetic() {
+-        return Err(IriError::BadScheme(s.to_owned()));
++        return Err(IriError::BadScheme(diagnostics.message(format_args!("{s}"))));
+     }
+     for &c in &b[1..] {
+         // scheme tail = ALPHA / DIGIT / `+` `-` `.` (ASCII-only by grammar).
+         if !ascii_class(c, SCHEME_TAIL) {
+-            return Err(IriError::BadScheme(s.to_owned()));
++            return Err(IriError::BadScheme(diagnostics.message(format_args!("{s}"))));
+         }
+     }
+     Ok(())
+@@ -702,7 +723,7 @@
+     (u64::from_le_bytes(lanes).trailing_ones() / u8::BITS) as usize
+ }
+ 
+-fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
++fn validate_authority_with(s: &str, base_off: usize, mode: Mode, diagnostics: Diagnostics) -> Result<()> {
+     // authority = [ userinfo "@" ] host [ ":" port ]
+     // Userinfo cannot contain an unescaped '@', so the first '@' delimits it.
+     let (userinfo, rest, host_off) = match find_byte(s.as_bytes(), b'@') {
+@@ -726,13 +747,13 @@
+                     (host, Some(host_off + close + 2), Some(stripped))
+                 } else {
+                     return Err(IriError::BadAuthority(
+-                        "trailing characters after IP-literal".to_owned(),
++                        diagnostics.message(format_args!("trailing characters after IP-literal")),
+                     ));
+                 }
+             }
+             None => {
+                 return Err(IriError::BadAuthority(
+-                    "unterminated IP-literal '['".to_owned(),
++                    diagnostics.message(format_args!("unterminated IP-literal '['")),
+                 ));
+             }
+         }
+@@ -747,7 +768,7 @@
+         }
+     };
+ 
+-    crate::host::validate_host(host, host_off, mode)?;
++    crate::host::validate_host_with(host, host_off, mode, diagnostics)?;
+     if let (Some(p), Some(poff)) = (port, port_off) {
+         for (k, c) in p.char_indices() {
+             if !c.is_ascii_digit() {
+diff --git a/crates/iri/src/host.rs b/crates/iri/src/host.rs
+--- a/crates/iri/src/host.rs
++++ b/crates/iri/src/host.rs
+@@ -34,7 +34,7 @@
+ //! ```
+ 
+ use crate::error::{IriError, Result};
+-use crate::parse::validate_component;
++use crate::parse::{Diagnostics, validate_component};
+ 
+ /// Which grammar a production is read under.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+@@ -212,11 +212,11 @@
+ 
+ /// Validate an authority's `host` (`s`, found at byte `base_off` of the whole
+ /// reference).
+-pub(crate) fn validate_host(s: &str, base_off: usize, mode: Mode) -> Result<()> {
++pub(crate) fn validate_host_with(s: &str, base_off: usize, mode: Mode, diagnostics: Diagnostics) -> Result<()> {
+     if let Some(inner) = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
+         // IP-literal = "[" ( IPv6address / IPvFuture ) "]". Character
+         // membership alone does not establish either production.
+-        return validate_ip_literal(inner, base_off + 1);
++        return validate_ip_literal_with(inner, base_off + 1, diagnostics);
+     }
+     // IPv4address / reg-name. Every IPv4address is a reg-name spelling, so
+     // the reg-name check decides the union exactly.
+@@ -225,19 +225,19 @@
+ 
+ /// Validate an IP-literal's contents (`inner`, found at byte `base_off`)
+ /// without normalizing its spelling.
+-fn validate_ip_literal(inner: &str, base_off: usize) -> Result<()> {
++fn validate_ip_literal_with(inner: &str, base_off: usize, diagnostics: Diagnostics) -> Result<()> {
+     if matches!(inner.as_bytes().first(), Some(b'v' | b'V')) {
+         // IPvFuture = "v" 1*HEXDIG "." 1*( unreserved / sub-delims / ":" ).
+         // ABNF string literals are case-insensitive.
+         let (version, address) = inner[1..].split_once('.').ok_or_else(|| {
+-            IriError::BadAuthority(format!(
++            IriError::BadAuthority(diagnostics.message(format_args!(
+                 "IPvFuture at byte {base_off} requires a version and '.'"
+-            ))
++            )))
+         })?;
+         if version.is_empty() || address.is_empty() {
+-            return Err(IriError::BadAuthority(format!(
++            return Err(IriError::BadAuthority(diagnostics.message(format_args!(
+                 "IPvFuture at byte {base_off} needs a nonempty version and address"
+-            )));
++            ))));
+         }
+         for (at, ch) in version.char_indices() {
+             if !ch.is_ascii_hexdigit() {
+@@ -255,9 +255,9 @@
+     if is_ipv6_address(inner) {
+         Ok(())
+     } else {
+-        Err(IriError::BadAuthority(format!(
++        Err(IriError::BadAuthority(diagnostics.message(format_args!(
+             "invalid IPv6 address {inner:?} at byte {base_off}"
+-        )))
++        ))))
+     }
+ }
+ 
+diff --git a/crates/iri/src/lib.rs b/crates/iri/src/lib.rs
+--- a/crates/iri/src/lib.rs
++++ b/crates/iri/src/lib.rs
+@@ -173,5 +173,5 @@
+     split_local_name,
+ };
+ pub use error::{IriError, Result};
+-pub use parse::{Iri, is_absolute, parse, parse_uri};
++pub use parse::{Iri, absolute_verdict, is_absolute, parse, parse_uri};
+ pub use pos::{LineIndex, Position, PositionError};
+diff --git a/crates/sparql-eval/src/composite_value.rs b/crates/sparql-eval/src/composite_value.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/sparql-eval/src/composite_value.rs
+@@ -0,0 +1,142 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Immutable owned native composite keys, at the evaluator's parser adapter.
++
++use std::cmp::Ordering;
++use std::ops::Deref;
++use purrdf_core::small::Shared;
++use purrdf_cdt::{CdtDatatype, CdtTripleTerm, CdtValue};
++use purrdf_cdt::memory::{Admission, ReadError, Storage, StorageError};
++use crate::{EvalError, WorkspaceAllocation, WorkspaceCapability};
++
++pub(crate) struct CompositePayload {
++    value: CdtValue,
++    // The original value dies before its grant, including on the last shared view.
++    _allocation: WorkspaceAllocation,
++}
++
++/// Resident values remain explicit caller-owned allocations. Operational values
++/// have one immutable payload and original lease; there is no raw extraction.
++pub(crate) enum CompositeValue {
++    Resident(CdtValue),
++    Owned(Shared<CompositePayload>),
++}
++
++impl Deref for CompositeValue {
++    type Target = CdtValue;
++    fn deref(&self) -> &CdtValue {
++        match self { Self::Resident(value) => value, Self::Owned(value) => &value.value }
++    }
++}
++
++impl std::fmt::Debug for CompositeValue {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        // Engine diagnostics do not recursively format the composite payload.
++        f.debug_struct("CompositeValue").finish_non_exhaustive()
++    }
++}
++
++impl Clone for CompositeValue {
++    fn clone(&self) -> Self {
++        match self {
++            Self::Resident(value) => Self::Resident(value.clone()),
++            Self::Owned(value) => Self::Owned(value.clone()),
++        }
++    }
++}
++
++impl CompositeValue {
++    pub(crate) fn resident(value: CdtValue) -> Self { Self::Resident(value) }
++
++    /// Malformed lexical forms alone keep ORDER's original opaque-literal rule.
++    /// Every admission, capacity and allocator failure remains operational.
++    pub(crate) fn parse(
++        lexical: &str, datatype: &str, workspace: &WorkspaceCapability,
++    ) -> Result<Option<Self>, EvalError> {
++        let Some(datatype) = CdtDatatype::from_iri(datatype) else { return Ok(None); };
++        let mut frame = CompositeFrame::new(workspace);
++        let result = purrdf_cdt::parse::try_parse_cdt(lexical, datatype, &mut frame);
++        if let Some(error) = frame.failure.take() {
++            // A raw lexical diagnostic, if present, dies before the frame grant.
++            drop(result);
++            return Err(error);
++        }
++        let (value, bytes) = match result {
++            Ok(value) => value,
++            Err(ReadError::Lexical(error)) => { drop(error); return Ok(None); }
++            Err(ReadError::Storage(error)) => return Err(physical_error(error)),
++        };
++        let header = Shared::<CompositePayload>::allocation_layout().size();
++        let bytes = bytes.checked_add(header).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        if let Err(error) = frame.resize(bytes) {
++            return Err(frame.failure.take().unwrap_or_else(|| physical_error(error)));
++        }
++        let allocation = frame.allocation.take().ok_or(EvalError::WorkspaceBoundOverflow)?;
++        let value = Shared::try_new(CompositePayload { value, _allocation: allocation })
++            .map_err(|_| EvalError::AllocationFailed { construct: "parsed composite shared control" })?;
++        Ok(Some(Self::Owned(value)))
++    }
++
++    pub(crate) fn total_cmp(
++        &self, other: &Self, workspace: &WorkspaceCapability,
++    ) -> Result<Ordering, EvalError> {
++        let mut frame = CompositeFrame::new(workspace);
++        let result = purrdf_cdt::ops::try_total_value_cmp(self, other, &mut frame);
++        match frame.failure.take() {
++            Some(error) => Err(error),
++            None => result.map_err(physical_error),
++        }
++    }
++}
++
++/// One owner for the native call's exact live buffers; native helpers decrease it
++/// only after the allocation has actually died. No Vec of leases is required.
++struct CompositeFrame<'a> {
++    workspace: &'a WorkspaceCapability,
++    allocation: Option<WorkspaceAllocation>,
++    failure: Option<EvalError>,
++}
++
++impl<'a> CompositeFrame<'a> {
++    const fn new(workspace: &'a WorkspaceCapability) -> Self {
++        Self { workspace, allocation: None, failure: None }
++    }
++}
++
++impl Admission for CompositeFrame<'_> {
++    fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
++        if self.failure.is_some() { return Err(StorageError::AdmissionFailed); }
++        let bytes = u64::try_from(bytes).map_err(|_| StorageError::SizeOverflow)?;
++        let result = if let Some(allocation) = &mut self.allocation {
++            allocation.resize(bytes)
++        } else if bytes == 0 { Ok(()) } else {
++            self.workspace.charge(bytes).map(|allocation| { self.allocation = Some(allocation); })
++        };
++        if let Err(error) = result {
++            self.failure = Some(error);
++            return Err(StorageError::AdmissionFailed);
++        }
++        Ok(())
++    }
++}
++
++impl Storage for CompositeFrame<'_> {
++
++
++    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
++        purrdf_core::small::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
++    }
++
++    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
++        purrdf_core::small::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
++    }
++}
++
++fn physical_error(error: StorageError) -> EvalError {
++    match error {
++        StorageError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
++        StorageError::AllocationFailed => EvalError::AllocationFailed { construct: "native composite storage" },
++        StorageError::AdmissionFailed => EvalError::WorkspaceStopped,
++    }
++}
+diff --git a/crates/sparql-eval/src/lib.rs b/crates/sparql-eval/src/lib.rs
+--- a/crates/sparql-eval/src/lib.rs
++++ b/crates/sparql-eval/src/lib.rs
+@@ -116,6 +116,7 @@
+ pub(crate) mod parallel;
+ mod native_numeric;
+ mod parsed_value;
++mod composite_value;
+ mod xpath_regex;
+ pub use parallel::chunk_len_for_threads;
+ #[cfg(test)]
+diff --git a/crates/sparql-eval/src/modifier.rs b/crates/sparql-eval/src/modifier.rs
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -1341,7 +1341,7 @@
+     /// lexical form does NOT parse never reaches this variant at all — it is an
+     /// ordinary [`ValueClass::Opaque`] literal, sorted by its lexical form, one
+     /// rank below every composite that does parse.
+-    Composite(purrdf_cdt::CdtValue),
++    Composite(crate::composite_value::CompositeValue),
+     /// RDF 1.2 triple term, componentwise over `(s, p, o)`.
+     Triple(TripleKey<'a, V>),
+ }
+@@ -1491,13 +1491,9 @@
+         Some(TermValue::Blank { label, scope }) => SortKey::Blank(scope.ordinal(), label),
+         Some(TermValue::Iri(iri)) => SortKey::Iri(iri),
+         Some(TermValue::Literal { lexical_form, datatype, language, .. }) => {
+-            if matches!(datatype.as_str(), purrdf_cdt::CDT_LIST | purrdf_cdt::CDT_MAP)
+-                && let Ok(Some(composite)) = purrdf_cdt::parse_cdt_by_iri(lexical_form, datatype)
+-            {
+-                // The Stage integration notes identify this native CDT call's
+-                // required physical owner; it must be replaced before qualification.
+-                return Ok(SortKey::Composite(composite));
+-            }
++            if let Some(composite) = crate::composite_value::CompositeValue::parse(
++                lexical_form, datatype, workspace,
++            )? { return Ok(SortKey::Composite(composite)); }
+             let parsed = match XsdDatatype::from_iri(datatype) {
+                 Some(datatype) => crate::parsed_value::ParsedValue::parse(lexical_form, datatype, false, workspace)?,
+                 None => None,
+@@ -1534,7 +1530,7 @@
+                 purrdf_cdt::CDT_LIST | purrdf_cdt::CDT_MAP
+             ) && let Ok(Some(composite)) = purrdf_cdt::parse_cdt_by_iri(lexical_form, datatype)
+             {
+-                return SortKey::Composite(composite);
++                return SortKey::Composite(crate::composite_value::CompositeValue::resident(composite));
+             }
+             let parsed = parse_by_iri(lexical_form, datatype).ok().flatten();
+             let (class, value) = ValueClass::of(parsed, lexical_form);
+@@ -1632,8 +1628,7 @@
+             }
+             (x.datatype, x.language, x.lexical).cmp(&(y.datatype, y.language, y.lexical))
+         }
+-        // Native CDT parser/order admission remains a required integration owner.
+-        (SortKey::Composite(x), SortKey::Composite(y)) => purrdf_cdt::total_value_cmp(x, y),
++        (SortKey::Composite(x), SortKey::Composite(y)) => x.total_cmp(y, workspace)?,
+         (SortKey::Triple(_), SortKey::Triple(_)) => Ordering::Equal,
+         _ => a.rank().cmp(&b.rank()),
+     })
+diff --git a/crates/lex/src/allocation.rs b/crates/lex/src/allocation.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/lex/src/allocation.rs
+@@ -0,0 +1,161 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Fallible physical buffer growth for native lexical parsers and compilers.
++
++use alloc::string::String;
++use alloc::vec::Vec;
++use core::alloc::Layout;
++use core::fmt;
++
++/// A physical failure, separate from any native lexical language.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum StorageError {
++    /// A concrete allocation layout or live-byte sum cannot be represented.
++    SizeOverflow,
++    /// A fallible allocation refused its already admitted destination.
++    AllocationFailed,
++    /// The caller's admission callback refused; it retains its original typed error.
++    AdmissionFailed,
++}
++
++impl fmt::Display for StorageError {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str(match self {
++            Self::SizeOverflow => "native allocation layout overflow",
++            Self::AllocationFailed => "native destination allocation failed",
++            Self::AdmissionFailed => "native workspace admission refused",
++        })
++    }
++}
++
++/// A borrowed caller's live-capacity admission for one native computation.
++pub trait Admission {
++    /// Admit the next exact total before allocation; shrink only after destruction.
++    fn resize(&mut self, live_bytes: usize) -> Result<(), StorageError>;
++}
++
++/// Exact live-buffer accounting shared by native scanners, compilers and walks.
++/// The borrowed callback itself is stack storage, never a retained payload owner.
++/// After a native result leaves, its caller retains the original admission grant
++/// with that result; use `live_bytes` only after construction scratch has died.
++pub struct Memory<'a, S: Admission + ?Sized> {
++    storage: &'a mut S,
++    live: usize,
++}
++
++impl<'a, S: Admission + ?Sized> Memory<'a, S> {
++    pub fn new(storage: &'a mut S) -> Self {
++        Self { storage, live: 0 }
++    }
++
++    pub const fn live_bytes(&self) -> usize { self.live }
++
++    /// Admission callback, for native factories whose concrete payload lives above this leaf.
++    pub fn admission_mut(&mut self) -> &mut S { self.storage }
++
++    /// Admit a native payload's actual Layout before calling its fallible factory.
++    pub fn add_bytes(&mut self, bytes: usize) -> Result<(), StorageError> { self.add(bytes) }
++
++    pub fn release_bytes(&mut self, bytes: usize) -> Result<(), StorageError> {
++        self.remove(bytes)
++    }
++
++    fn add(&mut self, bytes: usize) -> Result<(), StorageError> {
++        let next = self.live.checked_add(bytes).ok_or(StorageError::SizeOverflow)?;
++        if next != self.live { self.storage.resize(next)?; }
++        self.live = next;
++        Ok(())
++    }
++
++    fn remove(&mut self, bytes: usize) -> Result<(), StorageError> {
++        let next = self.live.checked_sub(bytes).ok_or(StorageError::SizeOverflow)?;
++        if next != self.live { self.storage.resize(next)?; }
++        self.live = next;
++        Ok(())
++    }
++
++    pub fn reserve<T>(
++        &mut self, values: &mut Vec<T>, required: usize,
++    ) -> Result<(), StorageError> {
++        if required <= values.capacity() { return Ok(()); }
++        let old = Layout::array::<T>(values.capacity()).map_err(|_| StorageError::SizeOverflow)?.size();
++        let next = Layout::array::<T>(required).map_err(|_| StorageError::SizeOverflow)?.size();
++        self.add(next)?;
++        let mut replacement = Vec::new();
++        replacement.try_reserve_exact(required).map_err(|_| StorageError::AllocationFailed)?;
++        // Global Vec's exact reservation requests precisely the certified Layout.
++        // Refuse a violated allocator/collection certificate before using it.
++        if core::mem::size_of::<T>() != 0 && replacement.capacity() != required {
++            return Err(StorageError::SizeOverflow);
++        }
++        replacement.append(values);
++        drop(core::mem::replace(values, replacement));
++        self.remove(old)
++    }
++
++    pub fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), StorageError> {
++        let required = values.len().checked_add(1).ok_or(StorageError::SizeOverflow)?;
++        if required > values.capacity() {
++            let capacity = values.capacity().checked_mul(2).ok_or(StorageError::SizeOverflow)?
++                .max(required);
++            self.reserve(values, capacity)?;
++        }
++        values.push(value);
++        Ok(())
++    }
++
++    pub fn release_vec<T>(&mut self, values: Vec<T>) -> Result<(), StorageError> {
++        let bytes = Layout::array::<T>(values.capacity()).map_err(|_| StorageError::SizeOverflow)?.size();
++        drop(values);
++        self.remove(bytes)
++    }
++
++    /// Destroy owned UTF-8 storage before shrinking its original live admission.
++    pub fn release_string(&mut self, text: String) -> Result<(), StorageError> {
++        let bytes = text.capacity();
++        drop(text);
++        self.remove(bytes)
++    }
++
++    pub fn reserve_string(&mut self, text: &mut String, required: usize) -> Result<(), StorageError> {
++        if required <= text.capacity() { return Ok(()); }
++        let next = Layout::array::<u8>(required).map_err(|_| StorageError::SizeOverflow)?.size();
++        let old = text.capacity();
++        self.add(next)?;
++        let mut replacement = String::new();
++        replacement.try_reserve_exact(required).map_err(|_| StorageError::AllocationFailed)?;
++        if replacement.capacity() != required { return Err(StorageError::SizeOverflow); }
++        replacement.push_str(text);
++        drop(core::mem::replace(text, replacement));
++        self.remove(old)
++    }
++
++    pub fn push_char(&mut self, text: &mut String, ch: char) -> Result<(), StorageError> {
++        let required = text.len().checked_add(ch.len_utf8()).ok_or(StorageError::SizeOverflow)?;
++        if required > text.capacity() {
++            let capacity = text.capacity().checked_mul(2).ok_or(StorageError::SizeOverflow)?.max(required);
++            self.reserve_string(text, capacity)?;
++        }
++        text.push(ch);
++        Ok(())
++    }
++
++    pub fn string(&mut self, input: &str) -> Result<String, StorageError> {
++        let mut result = String::new();
++        self.reserve_string(&mut result, input.len())?;
++        result.push_str(input);
++        Ok(result)
++    }
++
++
++
++
++}
++
++
++impl<S: Admission + ?Sized> fmt::Debug for Memory<'_, S> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("Memory").field("live_bytes", &self.live).finish_non_exhaustive()
++    }
++}
+diff --git a/crates/lex/src/lib.rs b/crates/lex/src/lib.rs
+--- a/crates/lex/src/lib.rs
++++ b/crates/lex/src/lib.rs
+@@ -154,6 +154,7 @@
+ pub mod text_out;
+ pub mod unicode;
+ mod unicode_tables;
++pub mod allocation;
+ pub mod walk;
+ pub mod xml;
+ pub mod yaml;

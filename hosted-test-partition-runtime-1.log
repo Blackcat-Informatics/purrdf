@@ -1,0 +1,2467 @@
++ cargo test --workspace --locked --test '[e-j]*'
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shex)
+   Compiling purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/columnar)
+   Compiling purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/markdown)
+   Compiling purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/json)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/entail)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/geo)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/mime)
+   Compiling purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/conformance-kit)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shapes)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/helper-census)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/retrieval)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/validate)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/purrdf)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cli)
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-conformance)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/ed25519)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Finished `test` profile [optimized] target(s) in 2m 37s
+     Running tests/glossary_callers.rs (/opt/purrdf-508-qualification/build/debug/build/helper-census/f27d6a5ee91e5635/out/glossary_callers-f27d6a5ee91e5635)
+
+running 2 tests
+test production_parity_refuses_missing_native_glossary_callers ... ok
+test external_inputs_and_content_selected_renamed_markdown ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.86s
+
+     Running tests/fused_approximation.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf/74353bc827d3278e/out/fused_approximation-74353bc827d3278e)
+
+running 6 tests
+test the_answer_is_estimated_and_names_only_the_responsible_stratum ... ok
+test a_fused_answer_names_which_stratum_was_served_approximately ... ok
+test a_status_and_a_fidelity_are_read_together_end_to_end ... ok
+test the_answer_bounds_each_row_and_names_its_certain_prefix ... ok
+test the_approximate_stratum_declares_the_generation_that_answered ... ok
+test the_whole_answer_is_byte_identical_across_two_runs ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/governed_entailment.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf/064f5a34275ebaf8/out/governed_entailment-064f5a34275ebaf8)
+
+running 14 tests
+test an_expired_deadline_stops_the_closure_with_nothing_claimed ... ok
+test a_cancellation_stops_the_closure_and_names_itself ... ok
+test every_regime_honours_a_signal_that_is_already_firing ... ok
+test the_reasoning_report_travels_with_a_tripped_answer ... ok
+test no_witness_reaches_a_partial_constructed_graph ... ok
+test no_witness_reaches_a_partial_solution_sequence ... ok
+test the_remote_request_ceiling_is_in_force_over_the_closure ... ok
+test witness_triples_are_in_the_closure_the_scrub_runs_over ... ok
+test a_custom_aggregate_registry_reaches_the_governed_entailed_closure ... ok
+test an_entailment_query_closes_over_the_import_table ... ok
+test each_ceiling_trips_over_the_entailed_closure ... ok
+test an_unreached_ceiling_answers_exactly_as_the_ungoverned_lane_does ... ok
+test a_signal_that_never_fires_changes_no_closure ... ok
+test the_ungoverned_lane_is_byte_for_byte_unchanged ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/hnsw_facade.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf/83247ea5a5115650/out/hnsw_facade-83247ea5a5115650)
+
+running 1 test
+test the_umbrella_carries_approximate_retrieval_to_a_sparql_query ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/functions.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-cdt/6158a8b329631623/out/functions-6158a8b329631623)
+
+running 68 tests
+test a_definite_hit_dominates_an_undecidable_comparison ... ok
+test a_failed_constructor_argument_becomes_a_null_element ... ok
+test arities_match_the_call_shapes_the_corpus_uses ... ok
+test a_stored_null_wins_a_merge_conflict_like_any_other_value ... ok
+test a_constructed_list_keeps_a_blank_node_argument ... ok
+test concat_raises_for_a_map_argument ... ok
+test contains_raises_for_a_map_and_defers_to_contains_key ... ok
+test every_function_iri_lives_under_the_spec_namespace_and_round_trips ... ok
+test contains_key_raises_for_a_list ... ok
+test keys_raises_for_a_list ... ok
+test list_concat_copies_nulls_as_positions ... ok
+test contains_key_is_not_the_same_question_as_get ... ok
+test an_iri_outside_the_library_is_not_a_cdt_function ... ok
+test list_concat_joins_in_argument_order ... ok
+test get_is_one_function_over_both_composite_datatypes ... ok
+test list_contains_compares_blank_nodes_by_identity ... ok
+test list_get_is_one_based ... ok
+test list_contains_finds_nested_composites_in_either_spelling ... ok
+test a_null_element_neither_matches_nor_poisons_the_search ... ok
+test list_concat_is_variadic_from_zero ... ok
+test list_contains_compares_by_value ... ok
+test list_get_on_a_null_position_is_an_error ... ok
+test list_get_out_of_range_is_a_sparql_error_not_a_null ... ok
+test list_get_returns_a_nested_composite_and_a_blank_node_as_they_are ... ok
+test list_head_is_the_first_element ... ok
+test list_head_of_an_empty_list_or_a_leading_null_is_an_error ... ok
+test list_reverse_carries_nulls_through ... ok
+test list_reverse_reverses_and_never_raises ... ok
+test list_get_with_a_non_integer_index_is_an_error ... ok
+test list_subseq_takes_a_one_based_start_and_a_length ... ok
+test list_subseq_admits_a_start_one_past_the_end ... ok
+test list_size_counts_every_element_including_nulls ... ok
+test list_tail_drops_the_first_element_even_when_it_is_a_null ... ok
+test list_tail_of_an_empty_list_is_an_error ... ok
+test map_get_matches_keys_by_term_not_by_value ... ok
+test map_contains_key_is_total_and_matches_by_term ... ok
+test map_get_raises_for_an_absent_key_and_for_a_null_value ... ok
+test map_get_returns_blank_node_values_as_they_are ... ok
+test map_keys_is_a_list_of_the_keys ... ok
+test list_subseq_refuses_a_range_that_leaves_the_list ... ok
+test map_put_refuses_a_key_that_cannot_be_a_key ... ok
+test map_merge_keeps_the_first_map_on_a_conflict ... ok
+test map_put_stores_a_null_value_without_raising ... ok
+test map_put_treats_the_key_as_a_term ... ok
+test map_put_sets_an_entry ... ok
+test map_size_counts_every_entry_including_null_values ... ok
+test merge_raises_for_a_list_argument ... ok
+test map_remove_drops_the_entry_under_a_key ... ok
+test put_raises_for_a_list ... ok
+test map_merge_unions_the_arguments ... ok
+test map_remove_reports_that_it_changed_nothing ... ok
+test remove_raises_for_a_list ... ok
+test only_an_integer_is_an_index ... ok
+test size_is_one_function_over_both_composite_datatypes ... ok
+test the_list_constructor_builds_in_argument_order ... ok
+test the_list_only_functions_raise_for_a_map ... ok
+test the_map_constructor_drops_a_pair_whose_key_cannot_be_a_key ... ok
+test the_map_constructor_lets_the_last_binding_of_a_key_win ... ok
+test the_map_constructor_pairs_keys_with_values ... ok
+test the_map_constructor_keeps_an_entry_whose_value_failed ... ok
+test the_two_constructors_share_their_iris_with_the_two_datatypes ... ok
+test only_iris_and_literals_can_be_map_keys ... ok
+test the_map_only_functions_raise_for_a_list ... ok
+test a_minted_value_may_not_exceed_the_lexical_byte_bound ... ok
+test the_three_outcomes_are_distinguishable ... ok
+test a_minted_value_nests_as_deep_as_its_elements_allow ... ok
+test concat_refuses_to_exceed_the_element_bound ... ok
+test repeated_self_insertion_hits_the_element_bound_instead_of_memory ... ok
+
+test result: ok. 68 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+     Running tests/grammar_productions.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-cdt/8f2b815218d9b571/out/grammar_productions-8f2b815218d9b571)
+
+running 30 tests
+test a_programmatic_duplicate_map_key_carries_the_same_diagnostic ... ok
+test canonical_form_always_spells_shorthands_explicitly ... ok
+test ill_formed_duplicate_map_key ... ok
+test a_blank_node_label_opens_at_a_narrower_class_than_it_continues_with ... ok
+test ill_formed_bad_escape ... ok
+test blank_node_label_still_admits_every_non_ascii_scalar_pn_chars_names ... ok
+test a_subtag_over_the_length_ceiling_is_refused_in_a_cdt_literal ... ok
+test blank_node_label_stops_at_a_no_break_space_rather_than_absorbing_it ... ok
+test ill_formed_unterminated_map ... ok
+test ill_formed_null_as_a_map_key ... ok
+test ill_formed_trailing_comma ... ok
+test ill_formed_unterminated_list ... ok
+test ill_formed_relative_iriref ... ok
+test every_tag_the_workspace_writes_still_parses_in_a_cdt_literal ... ok
+test production_128s_rdf_literal_covers_all_four_string_forms_and_both_suffixes ... ok
+test production_1_list_is_bracketed_and_may_be_empty ... ok
+test production_9_null_is_a_first_class_element ... ok
+test round_trip_language_tag_with_ltr_direction ... ok
+test production_4_map_is_braced_and_may_be_empty ... ok
+test production_2_elements_are_comma_separated_and_ordered ... ok
+test production_5_entries_are_comma_separated ... ok
+test production_3_every_list_element_alternative_is_admitted ... ok
+test production_6_entry_pairs_a_key_with_a_value_through_a_colon ... ok
+test production_8_every_map_value_alternative_is_admitted ... ok
+test round_trip_language_tag_with_no_direction ... ok
+test round_trip_language_tag_with_rtl_direction ... ok
+test superset_directional_literals_are_admitted_in_both_directions ... ok
+test superset_triple_term_is_admitted_as_an_element_and_a_value ... ok
+test the_langtag_terminals_own_refusals_still_bite_in_a_cdt_literal ... ok
+test production_7_map_keys_admit_exactly_four_alternatives ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/entails_cli.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-cli/428d61a2483917e7/out/entails_cli-428d61a2483917e7)
+
+running 31 tests
+test a_malformed_import_iri_names_the_half_and_the_shared_code ... ok
+test a_malformed_import_pair_is_a_usage_error ... ok
+test a_conclusion_the_table_refutes_is_not_entailed ... ok
+test a_pattern_answers_with_its_certain_answers ... ok
+test a_relative_import_iri_blames_the_argument_not_the_premise ... ok
+test a_pattern_projects_a_variable_in_predicate_position ... ok
+test a_negative_fact_is_entailed_by_refutation ... ok
+test a_stdin_premise_is_answered ... ok
+test an_inconsistent_premise_is_refused_with_its_witness ... ok
+test base_with_a_pack_document_is_refused_by_name ... ok
+test an_unserved_regime_is_refused_and_named ... ok
+test base_is_refused_only_when_no_document_can_spend_it ... ok
+test an_open_predicate_renders_the_limit_that_makes_the_answer_honest ... ok
+test a_schema_axiom_is_entailed_by_freezing ... ok
+test an_import_pair_answers_a_premise_that_imports ... ok
+test a_premise_importing_its_own_iri_needs_no_pair ... ok
+test consistency_decides_the_imports_closure ... ok
+test exactly_one_question_is_asked ... ok
+test a_conjunction_folds_into_a_composite_and_names_its_constituents ... ok
+test every_input_syntax_reaches_the_boundary ... ok
+test every_served_regime_answers ... ok
+test the_document_flags_are_refused_rather_than_ignored ... ok
+test two_stdin_documents_are_refused ... ok
+test query_entailment_closes_over_the_import_table ... ok
+test entails_and_query_take_the_evaluation_limits ... ok
+test the_rule_table_derives_a_conclusion_and_says_so ... ok
+test verify_without_a_warrant_is_not_applicable ... ok
+test the_report_distinguishes_a_resolved_import_from_an_unresolved_one ... ok
+test verify_re_decides_the_warrant ... ok
+test every_entailment_subcommand_refuses_an_unreached_import_pair ... ok
+test the_answer_and_the_certificate_are_separate_outputs ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running tests/exact_numerics_cli.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-cli/9058dc285c13f2d3/out/exact_numerics_cli-9058dc285c13f2d3)
+
+running 8 tests
+test owl_dl_tells_two_sixty_digit_values_apart ... ok
+test query_answers_past_machine_words_exactly ... ok
+test a_fuel_ceiling_refuses_a_squaring_blow_up_and_admits_its_neighbour ... ok
+test a_governed_query_names_the_errors_it_absorbed ... ok
+test a_governed_update_divides_under_its_policy_and_names_what_it_absorbed ... ok
+test shacl_range_constraints_compare_every_digit ... ok
+test shex_numeric_facets_compare_every_digit ... ok
+test division_policy_is_selectable_and_leaves_only_a_non_terminating_quotient_unbound ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/governors_cli.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-cli/670f8a40e52ecbc4/out/governors_cli-670f8a40e52ecbc4)
+
+running 25 tests
+test a_complete_governed_run_exits_0_and_answers_identically ... ok
+test a_nonzero_deadline_stops_work_inside_the_final_operator ... ok
+test a_deadline_without_a_unit_is_a_usage_error ... ok
+test a_reifier_query_certifies_its_partial_rows ... ok
+test a_deadline_stops_the_query_and_names_the_stop_cause ... ok
+test a_governed_query_over_a_pack_trips_identically ... ok
+test a_trip_exits_3_and_prints_the_certified_partial_answers ... ok
+test an_answer_cap_cuts_a_query_over_an_entailed_closure ... ok
+test an_expired_deadline_stops_the_closure_and_claims_nothing ... ok
+test an_ungoverned_invocation_is_unchanged ... ok
+test an_entailment_query_under_a_fuel_ceiling_trips_and_exits_three ... ok
+test every_governor_flag_reaches_the_engines_ceiling_vector ... ok
+test exists_counters_render_in_cli_explain ... ok
+test explain_renders_the_ledger_and_is_byte_identical_across_runs ... ok
+test construct_answer_cap_counts_rdf12_statements_not_solution_rows ... ok
+test explain_over_lateral_graph_variable_is_byte_identical_across_runs ... ok
+test the_governor_report_is_byte_identical_across_runs ... ok
+test withheld_answers_print_no_rows_and_name_the_barrier ... ok
+test unenforceable_flag_combinations_are_refused_by_name ... ok
+test a_partial_answer_does_not_corrupt_the_machine_readable_stream ... ok
+test no_ceiling_beside_a_ceiling_is_refused_by_name ... ok
+test each_numeric_ceiling_trips_under_its_own_governor ... ok
+test the_metered_default_refuses_an_over_cap_query_and_no_ceiling_answers_it ... ok
+test an_ungoverned_entailment_query_is_unchanged ... ok
+test optional_filter_keeps_answers_and_metered_cell_boundary ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests/help_cli.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-cli/675b1e0024ec0998/out/help_cli-675b1e0024ec0998)
+
+running 13 tests
+test convert_help_lists_options_and_format_choices ... ok
+test shex_help_lists_its_inputs_and_schema_syntaxes ... ok
+test top_level_help_lists_all_subcommands ... ok
+test query_help_lists_options_and_results_choices ... ok
+test describe_help_lists_its_subject_and_format_flags ... ok
+test entails_help_lists_the_boundary_flags_and_regime_choices ... ok
+test query_help_lists_every_execution_governor ... ok
+test unknown_flag_is_a_usage_error_exit_2 ... ok
+test reason_help_lists_options_and_regime_choices ... ok
+test validate_help_lists_its_inputs_formats_and_governors ... ok
+test update_help_lists_applicable_governors_and_no_answer_cap ... ok
+test project_and_lift_help_enumerate_truthful_profiles ... ok
+test every_subcommand_has_its_own_help ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/ingest_cli.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-cli/0398b012a43700dc/out/ingest_cli-0398b012a43700dc)
+
+running 33 tests
+test a_compressed_source_in_a_mixed_list_is_decoded ... ok
+test a_gzip_file_is_detected_decoded_and_classified_by_its_payload_extension ... ok
+test a_gts_source_in_a_list_still_reports_its_envelope ... ok
+test a_corrupt_compressed_stream_fails_closed ... ok
+test a_gts_bundle_is_admitted_on_stdin_plain_and_compressed ... ok
+test a_mixed_format_source_list_is_admitted ... ok
+test a_compressed_pack_source_is_refused_by_name ... ok
+test a_single_source_convert_is_not_routed_through_the_union ... ok
+test a_transport_suffixed_output_is_refused_by_name ... ok
+test an_unclassifiable_source_in_a_list_fails_before_anything_is_written ... ok
+test an_explicit_from_applies_to_every_source_in_the_list ... ok
+test a_streamed_line_source_and_a_buffered_source_agree ... ok
+test a_zstd_file_is_detected_decoded_and_classified_by_its_payload_extension ... ok
+test base_with_a_gts_source_is_refused_by_name ... ok
+test a_truncated_compressed_stream_fails_closed_without_partial_output ... ok
+test corrupt_gts_input_fails_closed ... ok
+test compressed_stdin_is_detected_from_its_leading_bytes ... ok
+test crlf_and_a_missing_final_newline_survive_streaming ... ok
+test gts_is_refused_as_an_output_target_by_name ... ok
+test gts_per_segment_blank_node_scope_is_preserved ... ok
+test invalid_utf8_in_a_streamed_source_fails_closed ... ok
+test stdin_named_twice_in_a_source_list_is_refused ... ok
+test gts_envelope_is_surfaced_in_the_loss_ledger_with_exact_counts ... ok
+test the_base_iri_is_threaded_into_every_source ... ok
+test gts_input_is_admitted_and_inferred_from_its_extension ... ok
+test the_streaming_lane_is_shared_by_every_reading_verb ... ok
+test two_sources_merge_with_dedup_and_per_source_blank_scopes ... ok
+test transport_against_a_pack_source_is_refused_by_name ... ok
+test transport_is_explicitly_selectable_and_a_mismatch_hard_fails ... ok
+test the_union_is_deterministic_and_order_independent ... ok
+test the_transform_lane_runs_over_the_whole_source_list ... ok
+test a_compressed_line_source_streams_through_the_decoder_on_stdin ... ok
+test a_large_line_source_streams_identically_from_a_file_and_from_stdin ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/golden_bytes.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-columnar/10b23c7bae79cead/out/golden_bytes-10b23c7bae79cead)
+
+running 1 test
+test seeded_files_are_the_pinned_bytes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/grading.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-conformance-kit/0d8f3258c6170b3c/out/grading-0d8f3258c6170b3c)
+
+running 23 tests
+test empty_and_unbound_rows_are_observable ... ok
+test nested_triples_share_the_same_global_bijection ... ok
+test structural_result_reader_keeps_all_empty_solutions ... ok
+test header_order_is_metadata_and_row_order_is_explicit ... ok
+test expected_rejection_does_not_accept_environmental_failures ... ok
+test manifest_lists_use_the_same_selected_graph ... ok
+test report_only_relabelling_cannot_excuse_a_wrong_source_focus ... ok
+test scope_partition_and_global_row_links_are_observable ... ok
+test deliberate_shared_domain_allows_only_cross_role_aliases ... ok
+test composite_blank_renaming_is_global_across_permuted_rows ... ok
+test source_metadata_and_empty_graph_declarations_are_observable ... ok
+test earl_verdicts_require_valid_expectations_and_actual_observations ... ok
+test report_policy_preserves_obligations_and_path_topology ... ok
+test inference_metadata_requires_three_term_rows_and_keeps_source_scope ... ok
+test malformed_result_set_bindings_and_partial_indices_are_refused ... ok
+test service_inventory_preserves_independent_declared_sources ... ok
+test optional_details_are_selected_per_corresponding_result ... ok
+test composite_literals_share_direct_and_nested_blank_identity ... ok
+test accepted_oracles_require_exact_input_and_derivation_bytes ... ok
+test all_catalogued_inventory_schemas_preserve_every_case ... ok
+test inventory_operation_and_carrier_cannot_be_changed_independently ... ok
+test deep_terms_respect_kernel_admission_without_stack_recursion ... ok
+test seeded_global_bags_preserve_bijection_and_duplicate_counts ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/graph_existence_modes.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-core/1e641aa0a423377f/out/graph_existence_modes-1e641aa0a423377f)
+
+running 11 tests
+test an_empty_graph_declaration_sets_the_frozen_capability ... ok
+test a_graph_name_already_interned_as_an_object_gets_its_own_slot ... ok
+test removing_the_last_added_row_preserves_only_remembered_slots ... ok
+test create_obeys_mode_and_explicit_declaration_remains_idempotent ... ok
+test declarations_stay_distinct_across_blank_scopes_and_bulk_withdrawal ... ok
+test mode_selection_is_local_and_default_construction_remains_implicit ... ok
+test withdrawing_a_populated_graph_answers_the_same_across_a_freeze ... ok
+test graph_ingress_refusals_do_not_create_a_slot_and_valid_neighbors_succeed ... ok
+test withdrawing_an_empty_remembered_slot_removes_it_from_either_origin ... ok
+test base_ordinary_reifier_and_annotation_rows_each_keep_remembered_slots ... ok
+test withdrawing_the_only_named_graph_clears_the_snapshot_capability ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/import_view.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-core/2f0d3dbd5dc81d3a/out/import_view-2f0d3dbd5dc81d3a)
+
+running 2 tests
+test separate_imports_do_not_alias_source_local_ids_or_scoped_blanks ... ok
+test materialization_preserves_empty_graphs_and_the_complete_statement_layer ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ir_absolute_iri.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-core/cd54c9110306d535/out/ir_absolute_iri-cd54c9110306d535)
+
+running 14 tests
+test a_malformed_iri_is_not_reported_as_a_missing_base ... ok
+test absolute_iris_of_every_shape_still_freeze ... ok
+test builder_refuses_the_empty_iri ... ok
+test an_unreferenced_relative_iri_is_still_fatal ... ok
+test builder_refuses_to_freeze_a_relative_iri ... ok
+test every_iri_position_is_covered ... ok
+test only_the_first_violation_is_recorded_however_often_it_is_re_interned ... ok
+test the_event_ingest_path_is_covered ... ok
+test skolem_minted_iris_satisfy_the_invariant ... ok
+test the_overlay_leaves_non_iri_strings_alone ... ok
+test the_owned_model_boundary_is_covered ... ok
+test the_gate_never_normalizes_the_iri_it_admits ... ok
+test the_mutable_overlay_refuses_at_the_insert_not_at_the_freeze ... ok
+test the_overlay_checks_every_iri_position_of_an_inserted_quad ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ir_zero_alloc.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-core/c5bb58b25fc5cd0d/out/ir_zero_alloc-c5bb58b25fc5cd0d)
+
+running 5 tests
+test destructive_drop_resumes_uneven_leaf_tails_without_allocation ... ok
+test quad_refs_resolution_allocates_zero ... ok
+test quads_iteration_allocates_zero ... ok
+test generic_resident_guards_batches_and_workspace_allocate_zero ... ok
+test destructive_term_drop_allocates_no_traversal_storage ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/iri_authority.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-core/caf362592b57215d/out/iri_authority-caf362592b57215d)
+
+running 2 tests
+test generic_ports_and_valid_ip_literals_remain_valid_rdf_identifiers ... ok
+test invalid_ip_literals_cannot_enter_either_rdf_dictionary ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/factor_allocation.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-datalog/8d5b3c9f3cf859de/out/factor_allocation-8d5b3c9f3cf859de)
+
+running 1 test
+test independent_existential_factor_work_and_allocation_grow_additively ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/edge_cases.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-ed25519/6379b99eefdc5be1/out/edge_cases-6379b99eefdc5be1)
+
+running 13 tests
+test an_r_with_y_at_or_above_p_is_refused_and_its_reduced_form_decodes ... ok
+test a_signature_under_one_key_is_refused_by_another ... ok
+test debug_output_never_shows_the_secret ... ok
+test an_r_off_the_curve_is_refused_and_an_on_curve_neighbour_decodes ... ok
+test an_r_encoding_x_zero_with_the_sign_bit_is_refused_and_without_it_decodes ... ok
+test keys_that_fail_rfc_8032_decoding_are_refused_beside_ones_that_pass ... ok
+test empty_and_large_messages_sign_and_verify ... ok
+test verify_is_the_strict_rule ... ok
+test s_equal_to_l_is_refused_and_l_minus_1_passes_the_scalar_gate ... ok
+test s_with_any_of_the_top_three_bits_set_is_refused ... ok
+test slices_of_the_wrong_length_are_refused_beside_the_right_length ... ok
+test truncated_and_extended_messages_are_refused ... ok
+test every_single_bit_flip_of_a_valid_signature_is_refused ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/event_bridge.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-gts/3e9ddb4200b79cfa/out/event_bridge-3e9ddb4200b79cfa)
+
+running 11 tests
+test bounded_memory_across_many_segments ... ok
+test bridge_break_cancels_drive ... ok
+test dangling_term_ref_is_err ... ok
+test bridge_calls_finish_once ... ok
+test stream_ids_are_file_order_deterministic ... ok
+test per_segment_blank_scopes_are_distinct ... ok
+test claimid_offset_index_single_pass ... ok
+test dangling_term_ref_real_bytes_is_err ... ok
+test bridge_events_equal_offline_read ... ok
+test graph_scoped_reifier_is_hard_error ... ok
+test incremental_reindex_from_diff_fetch ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/frozen_canonical_bytes.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-gts/d8b10c9c87ccd2c0/out/frozen_canonical_bytes-d8b10c9c87ccd2c0)
+
+running 1 test
+test every_decodable_frozen_item_is_canonical_byte_exact ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/frozen_conflicting_reifier_divergence.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-gts/3b9064cc384abaec/out/frozen_conflicting_reifier_divergence-3b9064cc384abaec)
+
+running 2 tests
+test purrdf_folds_the_frozen_vector_to_two_bindings_and_no_diagnostic ... ok
+test the_frozen_expectation_still_states_the_superseded_reading ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/frozen_identities.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-gts/5323b711460904ee/out/frozen_identities-5323b711460904ee)
+
+running 3 tests
+test the_mmr_proof_vector_is_what_this_implementation_proves ... ok
+test the_mmr_proof_vector_with_a_bad_root_is_refused ... ok
+test the_segment_heads_aggregate_of_a_frozen_file_is_frozen ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hedged_writer.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-gts/b4e01773c7705cf3/out/hedged_writer-b4e01773c7705cf3)
+
+running 13 tests
+test frozen_ed25519_writer_remains_byte_exact ... ok
+test snapshot_signer_debug_does_not_expose_secret_seed ... ok
+test opaque_absent_and_empty_ids_remain_distinct_at_file_resolution ... ok
+test unsigned_opt_in_refuses_invalid_framing_and_preserves_profile_findings ... ok
+test hedged_output_variation_and_portable_provider ... ok
+test signed_unknown_codec_remains_authenticated_opaque_payload ... ok
+test unsigned_evidence_retains_the_existing_sealed_source_exception ... ok
+test malformed_unsupported_unresolved_and_wrong_type_are_distinct ... ok
+test file_integrity_rejects_header_chain_and_torn_damage_but_allows_opaque_encryption ... ok
+test existing_openpgp_resolution_uses_the_same_integrity_core ... ok
+test writer_reader_mixed_algorithm_history_and_rotation ... ok
+test failed_missing_and_partial_entropy_preserve_every_append_contract ... ok
+test both_writer_produced_components_and_frame_content_are_mandatory ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/fixed_hasher.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-hash-conformance/7f7f07842565bfec/out/fixed_hasher-7f7f07842565bfec)
+
+running 14 tests
+test record_vectors_when_asked ... ok
+test short_packing_preserves_every_byte ... ok
+test integers_share_one_word ... ok
+test portable_structured_fields_do_not_cancel ... ok
+χ² portable corpus IRIs: 1000 keys, low 7 bits z = -0.71, top 7 bits z = -0.57
+test mixed_fields_preserve_context ... ok
+fixed hasher: this build selects portable
+test the_selected_function_answers_its_own_vectors ... ok
+fixed hasher: portable, 3676 records
+test portable_vectors_are_reproduced ... ok
+avalanche portable:   1 bytes, worst |p − ½| = 0.16406 (tolerance 0.2210)
+avalanche portable:   2 bytes, worst |p − ½| = 0.00916 (tolerance 0.0138)
+avalanche portable terminal:  2 bytes, worst |p − ½| = 0.01144 (tolerance 0.0138)
+avalanche portable:   3 bytes, worst |p − ½| = 0.00180 (tolerance 0.0100)
+portable sparse 256-bit keys: 2796417 keys, 0 collisions
+test portable_has_no_sparse_key_collisions ... ok
+avalanche portable:   4 bytes, worst |p − ½| = 0.00178 (tolerance 0.0100)
+avalanche portable:   5 bytes, worst |p − ½| = 0.00220 (tolerance 0.0100)
+χ² portable corpus IRIs × 0..8192: 8192000 keys, low 20 bits z = 0.84, top 7 bits z = 1.02
+portable u32 0..2^24: 16777216 keys, 0 collisions
+χ² portable u64 0..2^24: 16777216 keys, low 20 bits z = -0.65, top 7 bits z = -0.07
+test portable_is_uniform ... ok
+avalanche portable: u32 worst |p − ½| = 0.00150, u64 0.00181 (2^20 samples per cell)
+avalanche portable:   6 bytes, worst |p − ½| = 0.00170 (tolerance 0.0100)
+avalanche portable:  17 bytes, worst |p − ½| = 0.00192 (tolerance 0.0100)
+avalanche portable terminal: 16 bytes, worst |p − ½| = 0.00194 (tolerance 0.0100)
+avalanche portable:   7 bytes, worst |p − ½| = 0.00173 (tolerance 0.0100)
+portable u64 0..2^24: 16777216 keys, 0 collisions
+avalanche portable:   8 bytes, worst |p − ½| = 0.00196 (tolerance 0.0100)
+avalanche portable: u128 worst |p - 0.5| = 0.00188
+test portable_avalanche_integers ... ok
+avalanche portable terminal: 17 bytes, worst |p − ½| = 0.00198 (tolerance 0.0100)
+avalanche portable:   9 bytes, worst |p − ½| = 0.00200 (tolerance 0.0100)
+portable u64 (0..2^24)·2^40: 16777216 keys, 0 collisions
+test portable_has_no_integer_collisions ... ok
+avalanche portable:  24 bytes, worst |p − ½| = 0.00181 (tolerance 0.0100)
+avalanche portable:  10 bytes, worst |p − ½| = 0.00215 (tolerance 0.0100)
+avalanche portable:  11 bytes, worst |p − ½| = 0.00216 (tolerance 0.0100)
+avalanche portable terminal: 24 bytes, worst |p − ½| = 0.00210 (tolerance 0.0100)
+avalanche portable:  12 bytes, worst |p − ½| = 0.00200 (tolerance 0.0100)
+avalanche portable:  31 bytes, worst |p − ½| = 0.00204 (tolerance 0.0100)
+avalanche portable:  13 bytes, worst |p − ½| = 0.00192 (tolerance 0.0100)
+avalanche portable terminal: 31 bytes, worst |p − ½| = 0.00199 (tolerance 0.0100)
+avalanche portable:  14 bytes, worst |p − ½| = 0.00216 (tolerance 0.0100)
+avalanche portable:  32 bytes, worst |p − ½| = 0.00180 (tolerance 0.0100)
+avalanche portable:  15 bytes, worst |p − ½| = 0.00200 (tolerance 0.0100)
+avalanche portable terminal: 32 bytes, worst |p − ½| = 0.00204 (tolerance 0.0100)
+avalanche portable:  16 bytes, worst |p − ½| = 0.00192 (tolerance 0.0100)
+test portable_avalanche_short_slices ... ok
+avalanche portable:  33 bytes, worst |p − ½| = 0.00192 (tolerance 0.0100)
+avalanche portable terminal: 33 bytes, worst |p − ½| = 0.00197 (tolerance 0.0100)
+portable terminal sparse 256-bit keys: 2796417 keys, 0 collisions
+portable terminal tags and lengths: 254 keys, 0 collisions
+portable terminal corpus IRIs: 1000 keys, 0 collisions
+χ² portable terminal corpus IRIs: 1000 keys, low 7 bits z = 0.13, top 7 bits z = 0.96
+χ² portable terminal corpus IRIs × 0..8192: 8192000 keys, low 20 bits z = -1.80, top 7 bits z = 1.07
+test portable_terminal_hash_quality ... ok
+avalanche portable:  48 bytes, worst |p − ½| = 0.00204 (tolerance 0.0100)
+avalanche portable:  63 bytes, worst |p − ½| = 0.00208 (tolerance 0.0100)
+avalanche portable:  64 bytes, worst |p − ½| = 0.00226 (tolerance 0.0100)
+avalanche portable:  65 bytes, worst |p − ½| = 0.00196 (tolerance 0.0100)
+avalanche portable:  96 bytes, worst |p − ½| = 0.00231 (tolerance 0.0100)
+avalanche portable: 100 bytes, worst |p − ½| = 0.00208 (tolerance 0.0100)
+avalanche portable: 127 bytes, worst |p − ½| = 0.00190 (tolerance 0.0100)
+avalanche portable: 128 bytes, worst |p − ½| = 0.00201 (tolerance 0.0100)
+test portable_avalanche_long_slices ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 51.51s
+
+     Running tests/frame_le.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-hash-conformance/5c4e5d4d2d3d3d2a/out/frame_le-5c4e5d4d2d3d3d2a)
+
+running 6 tests
+test record_vectors_when_asked ... ok
+test streamed_frames_compose ... ok
+test frame_le_reproduces_the_vectors ... ok
+test the_vectors_are_the_specified_construction ... ok
+test frame_le_into_reproduces_the_vectors ... ok
+test frame_be_labelled_reproduces_the_vectors ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests/hex.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-hash-conformance/04a4ea155782c0a7/out/hex-04a4ea155782c0a7)
+
+running 18 tests
+test decode_refuses_an_odd_length_beside_its_even_neighbour ... ok
+test decode_refuses_signs_prefixes_and_whitespace ... ok
+test frozen_digits_read_through_every_reader ... ok
+test rendering_keeps_leading_zeros_and_two_digits_per_byte ... ok
+test digest_edge_values_render_whole ... ok
+test rfc4648_base16_vectors ... ok
+test inputs_across_the_length_switch_and_chunk_seams_render_whole ... ok
+test encode_to_slice_refuses_a_short_output_beside_the_exact_one ... ok
+test backend_encode_refuses_a_missized_output ... ok
+test formatter_options_match_str ... ok
+test required_paths_are_available_and_selected ... ok
+test digest32_renders_and_reads_its_canonical_form ... ok
+test errors_name_what_is_wrong ... ok
+test decode_32_judges_every_ascii_byte_at_every_position ... ok
+test readers_refuse_non_ascii_and_wrong_lengths ... ok
+hex: x86-ssse3, portable checked; x86-ssse3 selected
+test every_path_matches_portable ... ok
+test frozen_encodings_read_back_through_every_reader ... ok
+test frozen_encodings_render_through_every_entry_point ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/exclusion_membership.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-hnsw/5d86af7b9be3665d/out/exclusion_membership-5d86af7b9be3665d)
+
+running 10 tests
+test a_bound_count_keeps_its_cut_and_a_free_one_without_a_candidate_is_refused ... ok
+test a_reassociated_membership_lookup_computes_no_distance_and_visits_no_graph_node ... ok
+test a_membership_lookup_computes_no_distance_and_visits_no_graph_node ... ok
+test every_term_of_the_universe_agrees_with_its_row_under_the_reassociated_arithmetic ... ok
+test every_term_of_the_universe_agrees_with_its_row ... ok
+test the_membership_mode_is_new_and_the_ranked_one_is_untouched ... ok
+test a_membership_basis_is_declared_and_admitted_from_a_lossy_producer ... ok
+test the_distance_a_lookup_reports_is_the_one_the_beam_would_have ... ok
+test a_reassociated_lookup_reports_the_distance_its_beam_would_have ... ok
+test an_excluded_term_is_named_by_no_beam_at_any_width_and_a_held_one_is ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/float_environment.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-hnsw/ebe98e45ec8a4b12/out/float_environment-ebe98e45ec8a4b12)
+
+running 5 tests
+test every_norm_entry_point_needs_the_exact_handle_a_flushing_thread_cannot_obtain ... ok
+test every_pair_entry_point_needs_a_handle_a_flushing_thread_cannot_obtain ... ok
+test every_reassociated_entry_point_refuses_a_flushing_environment_and_answers_the_default ... ok
+test a_worker_thread_is_checked_where_it_computes_not_where_the_index_was_built ... ok
+test every_distance_entry_point_refuses_a_flushing_environment_and_answers_the_default ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/float_environment_rayon.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-hnsw/fd8d974d297a84c2/out/float_environment_rayon-fd8d974d297a84c2)
+
+running 1 test
+test a_flushing_rayon_worker_refuses_its_share_and_a_clean_one_answers_the_single_thread_bits ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/float_environment_x87.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-hnsw/bf402802fb8c290f/out/float_environment_x87-bf402802fb8c290f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/float_environment_x87_rayon.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-hnsw/69d64e3032be339d/out/float_environment_x87_rayon-69d64e3032be339d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/invariants.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-hnsw/0492e852345d7b63/out/invariants-0492e852345d7b63)
+
+running 13 tests
+test a_single_row_index_is_the_degenerate_bootstrap ... ok
+test degree_bounds_hold_at_every_layer ... ok
+test every_neighbor_is_a_valid_row_at_a_layer_that_row_occupies ... ok
+test levels_are_exactly_the_fixed_formula ... ok
+test adjacency_is_strictly_sorted_by_distance_then_row ... ok
+test asymmetric_adjacency_is_explained_by_the_degree_bound ... ok
+test the_canonical_image_round_trips_through_decode_byte_for_byte ... ok
+test no_node_links_to_itself_at_any_layer ... ok
+test the_entry_point_is_the_minimum_row_at_the_maximum_level ... ok
+test a_narrow_matrix_builds_the_identical_graph_to_its_widened_copy ... ok
+test an_index_is_a_pure_function_of_its_inputs ... ok
+test reachability_holds_at_the_scale_the_crate_claims ... ok
+test every_row_is_reachable_from_the_entry_point_at_layer_zero ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/host_differential.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-iri/39051a92eb6c88fa/out/host_differential-39051a92eb6c88fa)
+
+running 3 tests
+test the_table_exercises_both_verdicts_of_both_productions ... ok
+test every_frozen_address_verdict_is_reproduced ... ok
+test an_address_the_table_accepts_is_a_host_the_parser_accepts ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/idna.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-iri/6c137177840ece4a/out/idna-6c137177840ece4a)
+
+running 16 tests
+test bidi_rule_refuses_beside_accepted_neighbours ... ok
+test a_labels_refuse_beside_accepted_neighbours ... ok
+test empty_labels_refuse_beside_accepted_neighbours ... ok
+test hostname_is_ascii_ldh_only ... ok
+test contextual_rules_refuse_beside_accepted_neighbours ... ok
+test mapping_step ... ok
+test punycode_refusals_beside_accepted_neighbours ... ok
+test parsing_never_applies_idna ... ok
+test label_and_name_lengths_refuse_beside_accepted_neighbours ... ok
+test hyphen_rules_refuse_beside_accepted_neighbours ... ok
+test rfc_3987_section_3_1_examples ... ok
+test rfc_3492_samples_encode_and_decode ... ok
+test u_label_rules_refuse_beside_accepted_neighbours ... ok
+test to_uri_components_and_fallback ... ok
+test idna_test_v2_mapped ... ok
+test idna_test_v2_unmapped ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/iri_suite.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-iri/c9896bdcf3e30642/out/iri_suite-c9896bdcf3e30642)
+
+running 13 tests
+test accepts_non_ascii_in_iri_mode_only ... ok
+test contract_prefers_longest_namespace ... ok
+test contract_skips_empty_prefix_binding ... ok
+test curie_prefix_detection_matches_sssom_semantics ... ok
+test expand_resolve_and_contract_round_trip ... ok
+test normalize_case_and_pct_and_dots ... ok
+test generic_port_syntax_is_any_ascii_digit_string ... ok
+test normalize_is_idempotent ... ok
+test parses_assorted_valid_forms ... ok
+test parses_relative_references ... ok
+test parses_valid_iris_and_splits_components ... ok
+test rejects_colon_in_first_segment_of_relative_path ... ok
+test rejects_malformed_input ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/frozen_vectors.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-lex/c38d4762885d6aa2/out/frozen_vectors-c38d4762885d6aa2)
+
+running 8 tests
+percent set unreserved
+test escapes_replay_the_frozen_vectors ... ok
+test json_strings_replay_the_frozen_vectors ... ok
+test percent_decoders_replay_the_frozen_vectors ... ok
+test needle_searches_replay_the_frozen_vectors ... ok
+test json_pointers_replay_the_frozen_vectors ... ok
+percent set unreserved-slash
+test every_uchar_value_replays_the_frozen_digests ... ok
+percent set reg-name
+test every_json_unit_and_pair_replays_the_frozen_digests ... ok
+percent set path
+percent set fragment
+percent set uri-template-reserved
+percent set non-ascii
+test percent_sets_replay_the_frozen_vectors ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.56s
+
+     Running tests/html.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-lex/603c7d289f51a228/out/html-603c7d289f51a228)
+
+running 12 tests
+test every_control_and_noncharacter_reports_the_exact_error_class ... ok
+test data_identities_match_the_exact_frozen_bytes ... ok
+test decoding_is_once_and_alignment_is_per_scalar ... ok
+test numeric_recovery_and_missing_digit_reconsumption ... ok
+test only_reference_errors_are_reported_and_other_content_is_verbatim ... ok
+test reference_errors_have_exact_codes_and_original_spans ... ok
+test text_and_attribute_ambiguities_and_case_are_exact ... ok
+test arbitrarily_long_digits_saturate_without_truncating_the_reference ... ok
+test long_unknown_names_are_preserved_and_diagnosed_once ... ok
+test every_pinned_name_and_legacy_context_is_reproduced ... ok
+test longest_matching_is_independent_of_failed_longer_prefixes ... ok
+test every_numeric_value_has_the_specified_scalar_recovery ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/json_test_suite.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-lex/f2fe22693f92587a/out/json_test_suite-f2fe22693f92587a)
+
+running 9 tests
+test a_refused_encoding_has_an_accepted_neighbour ... ok
+test value_equality_and_hash_ignore_member_order_and_number_spelling_on_every_y_document ... ok
+test the_depth_refusal_is_the_cap_and_its_valid_neighbour_is_accepted ... ok
+test every_y_document_round_trips_to_an_equal_value ... ok
+test the_vendored_corpus_has_the_pinned_census ... ok
+test every_i_document_has_its_outcome_pinned ... ok
+test every_y_document_is_accepted ... ok
+test every_n_document_is_refused_at_the_default_and_at_an_unbounded_depth ... ok
+test checking_a_value_gives_the_verdict_reading_it_gives_on_every_document ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/json_value_equality.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-lex/7335eeb8b36472a2/out/json_value_equality-7335eeb8b36472a2)
+
+running 7 tests
+test a_repeated_name_is_compared_occurrence_by_occurrence ... ok
+test equal_values_hash_alike_and_structure_is_part_of_the_hash ... ok
+test objects_are_equal_whatever_their_member_order ... ok
+test same_text_sees_spelling_and_member_order ... ok
+test number_equality_is_by_value_and_same_text_is_by_spelling ... ok
+test numbers_are_equal_when_they_denote_one_decimal ... ok
+test values_a_hundred_thousand_levels_deep_compare_and_hash_on_a_small_stack ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/embedding_source.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-markdown/ec5d0271e0651107/out/embedding_source-ec5d0271e0651107)
+
+running 1 test
+test a_two_anchor_citation_certifies_with_a_source_ordinal_embedding_target ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gts_authorship_census.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/825a4abd467437b5/out/gts_authorship_census-825a4abd467437b5)
+
+running 14 tests
+test detector_self_tests::malformed_source_fails_loudly - should panic ... ok
+test detector_self_tests::cfg_test_modules_are_excluded_without_hiding_later_code ... ok
+test detector_self_tests::absolute_external_paths_bypass_local_module_shadowing ... ok
+test detector_self_tests::gts_crate_paths_and_glob_imports_resolve ... ok
+test detector_self_tests::comments_and_literals_cannot_mint_headers ... ok
+test detector_self_tests::opaque_grouped_imports_cannot_hide_renamed_authors - should panic ... ok
+test detector_self_tests::macro_arguments_and_opaque_token_paths_are_scanned ... ok
+test detector_self_tests::opaque_macro_bindings_cannot_silently_hide_authors - should panic ... ok
+test detector_self_tests::nested_scopes_shadow_and_restore_imported_names ... ok
+test detector_self_tests::unrelated_local_and_imported_writers_are_not_gts_authors ... ok
+test detector_self_tests::qualified_renamed_grouped_module_and_type_alias_paths_are_authors ... ok
+test the_public_authoring_facades_are_present_and_named ... ok
+test the_writer_constructor_set_is_exactly_the_pinned_minting_and_continuing_sets ... ok
+test every_production_gts_authorship_site_is_in_the_census ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.17s
+
+     Running tests/gts_certify.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/a016d49e1eebd2f4/out/gts_certify-a016d49e1eebd2f4)
+
+running 17 tests
+test certificate_canonical_cbor_round_trips_and_is_deterministic ... ok
+test certificate_cbor_with_trailing_bytes_is_refused_and_the_exact_item_is_accepted ... ok
+test broken_seam_is_detected_without_erroring ... ok
+test accretive_tail_after_pack_chains_cleanly_across_the_seam ... ok
+test compose_chains_matching_certificates_and_rejects_mismatched_ones ... ok
+test content_mutation_breaks_refold_equivalence ... ok
+test faithful_repack_verifies_all_ok ... ok
+test manifestation_typed_content_node_mutation_is_not_masked_by_projection ... ok
+test dropping_the_carried_suppression_flips_suppressions_ok_to_false ... ok
+test missing_authorship_key_fails_signatures_verify_but_full_keyring_succeeds ... ok
+test quad_suppression_commutes_through_compaction ... ok
+test torn_tail_prev_breaks_seam_chain_ok_without_erroring ... ok
+test term_suppression_commutes_through_compaction ... ok
+test signatures_survive_two_repacks_and_key_rotation ... ok
+test codec_recompression_preserves_refold_equivalence ... ok
+test verify_compaction_accepts_large_non_symmetric_content ... ok
+test verify_compaction_fails_closed_on_symmetric_poison_content ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+
+     Running tests/gts_codec_hygiene.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/62a558c8dcddfafd/out/gts_codec_hygiene-62a558c8dcddfafd)
+
+running 12 tests
+test tests::rule1_clean_native_source_is_not_flagged ... ok
+test tests::rule1_flags_purrdf_gts_anywhere_in_native_codecs ... ok
+test tests::rule2_doc_comment_mention_is_not_flagged ... ok
+test tests::rule2_flags_each_forbidden_codec_entrypoint ... ok
+test tests::rule3_allows_container_only_gts_dependencies ... ok
+test tests::rule2_allows_every_container_symbol ... ok
+test tests::rule2_flags_codec_call_in_cfg_test_region ... ok
+test tests::rule3_flags_the_cross_crate_codec_feature_edge ... ok
+test tests::rule3_flags_the_dependency_feature_edge ... ok
+test no_gts_codec_feature_edge_in_manifests ... ok
+test native_codecs_seam_is_totally_clean ... ok
+test no_gts_rdf_codec_entrypoint_anywhere ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/gts_composite_compaction.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/2fb6ae295bbdb1d7/out/gts_composite_compaction-2fb6ae295bbdb1d7)
+
+running 12 tests
+test literal_class_names_remain_content_and_do_not_fabricate_provenance ... ok
+test malformed_and_ambiguous_carried_nodes_are_never_silently_dropped ... ok
+test entropy_failure_returns_no_pack_and_explicit_fresh_retry_succeeds ... ok
+test a_pack_followed_by_new_authored_history_keeps_both_kinds_of_authorship ... ok
+test unrelated_valid_signature_cannot_replace_the_ordering_commitment ... ok
+test rewrite_timestamp_parameters_refuse_before_randomness_and_preserve_utc_bytes ... ok
+test authentic_composite_and_ed_packaging_preserve_exact_mixed_authorship ... ok
+test packaging_capability_resets_between_streamable_and_ordinary_segments ... ok
+test both_components_and_resolved_typed_keys_are_required ... ok
+test root_commitments_require_current_subject_literal_identity_and_cardinality ... ok
+test ordinary_compaction_type_keeps_verbatim_authored_index_in_both_readers ... ok
+test rewrite_timestamp_shape_preserves_authorship_and_classifies_only_utc ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/gts_corpus_expected_fold.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/121af8acb81c25ab/out/gts_corpus_expected_fold-121af8acb81c25ab)
+
+running 1 test
+test every_frozen_vector_matches_its_committed_expected_fold ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/gts_multi_binding_reifier.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/91d18c349353c695/out/gts_multi_binding_reifier-91d18c349353c695)
+
+running 6 tests
+test the_streaming_import_fails_closed_on_an_ambiguous_legacy_triple_term ... ok
+test multi_binding_reifier_writes_deterministically ... ok
+test multi_binding_reifier_survives_the_event_import ... ok
+test two_triple_terms_sharing_one_reifier_stay_distinct ... ok
+test multi_binding_reifier_survives_the_graph_import ... ok
+test an_unreified_quoted_triple_round_trips ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gts_selected_blobs.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/66fb4febde9a71c1/out/gts_selected_blobs-66fb4febde9a71c1)
+
+running 45 tests
+test a_digest_selector_requires_the_canonical_spelling ... ok
+test a_metadata_frame_may_precede_the_payload_it_describes ... ok
+test a_later_segments_payload_inherits_the_whole_declaration ... ok
+test a_refused_candidate_retagged_away_stops_being_a_candidate ... ok
+test a_budget_refusal_cannot_resolve_an_ambiguous_selector ... ok
+test a_refused_payload_is_not_reported_as_held_elsewhere ... ok
+test a_ceiling_never_decides_what_a_representation_finally_names ... ok
+test a_refused_duplicate_copy_does_not_invent_an_ambiguity ... ok
+test a_retagged_digest_is_not_refused_over_a_representation_it_lost ... ok
+test absent_public_metadata_preserves_previous_segment_metadata ... ok
+test a_first_declaration_over_the_metadata_ceiling_is_refused ... ok
+test an_external_blob_is_distinguished_from_a_metadata_only_update ... ok
+test an_unknown_extension_key_does_not_refuse_a_payload ... ok
+test an_untransformed_payload_obeys_the_decoded_ceiling ... ok
+test an_unselected_refusal_is_reported_rather_than_dropped ... ok
+test a_refused_declaration_obeys_the_metadata_ceiling ... ok
+test a_snapshot_cannot_smuggle_payloads_past_the_ceilings ... ok
+test an_unverified_declared_digest_cannot_collapse_two_candidates ... ok
+test container_supplied_text_cannot_forge_a_budget_refusal ... ok
+test declared_metadata_is_inherited_across_segment_boundaries ... ok
+test final_replacement_evicts_old_representation_and_reuses_one_digest ... ok
+test a_refused_frame_fails_rather_than_truncating_the_dataset ... ok
+test an_unverified_refusal_is_never_called_held_elsewhere ... ok
+test inherited_same_segment_metadata_keeps_its_original_frame_identity ... ok
+test externality_is_not_asserted_over_an_unidentified_refusal ... ok
+test malformed_public_metadata_is_not_silently_treated_as_absent ... ok
+test malformed_selected_metadata_and_declared_lengths_fail ... ok
+test legal_public_digest_encodings_preserve_raw_metadata_and_native_identity ... ok
+test malformed_payload_cannot_masquerade_as_a_metadata_only_update ... ok
+test metadata_naming_an_unreadable_digest_is_refused ... ok
+test missing_and_ambiguous_and_duplicate_selectors_fail_closed ... ok
+test eager_digest_resolution_enforces_the_original_encoded_length ... ok
+test retained_total_wire_and_metadata_budgets_are_independent ... ok
+test metadata_only_updates_preserve_payload_provenance_and_reject_unretained_ordering ... ok
+test snapshot_payload_selection_and_reader_diagnostics_remain_native ... ok
+test selected_import_preserves_native_scope_and_late_rdf_with_exact_provenance ... ok
+test oversized_unselected_payload_does_not_refuse_the_import ... ok
+test an_oversized_description_is_neither_retained_nor_lost_for_matching ... ok
+test naming_a_refused_payload_reports_the_budget_not_an_empty_match ... ok
+test the_longest_nameable_representation_still_matches ... ok
+test unselected_payload_integrity_remains_lazy_while_selected_integrity_is_mandatory ... ok
+test selected_import_decodes_each_supported_transform_with_bounded_growth ... ok
+test the_metadata_ceiling_does_not_decide_which_blob_a_selector_finds ... ok
+test selection_count_and_unadvertised_blob_expansion_are_bounded ... ok
+test the_transient_candidate_cap_admits_its_own_boundary ... ok
+
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/gts_self_describing_triple_terms.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/adc1bbd92bc51085/out/gts_self_describing_triple_terms-adc1bbd92bc51085)
+
+running 5 tests
+test the_flattened_load_path_carries_a_tt_only_triple_term ... ok
+test nested_tt_only_triple_terms_survive_to_their_leaves ... ok
+test a_tt_only_triple_term_folds_and_renders_as_a_quoted_triple ... ok
+test the_indirect_reifier_spelling_is_left_alone ... ok
+test a_quoted_triple_round_trips_through_gts_bytes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gts_self_reaching_terms.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/37eecfcfb5329f08/out/gts_self_reaching_terms-37eecfcfb5329f08)
+
+running 9 tests
+test a_datatype_cycle_through_a_triple_term_is_refused ... ok
+test a_dangling_component_id_is_not_reported_as_a_loop ... ok
+test a_literal_datatype_that_reaches_its_own_term_is_refused ... ok
+test a_triple_term_that_names_itself_is_refused ... ok
+test a_reifier_binding_that_reaches_its_own_triple_term_is_refused ... ok
+test an_implicit_self_binding_that_reaches_its_own_term_is_refused ... ok
+test a_self_reaching_tt_is_refused_even_beside_a_sound_reifier_row ... ok
+test two_triple_terms_that_name_each_other_are_refused ... ok
+test legitimately_nested_triple_terms_still_construct_and_render ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/gts_view_ingestion.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/315fadaae4d4d9ef/out/gts_view_ingestion-315fadaae4d4d9ef)
+
+running 15 tests
+test an_unrepresentable_quoted_triple_is_named_in_its_own_text ... ok
+test a_delta_that_removes_the_bases_only_reifier_still_ingests ... ok
+test a_graph_empty_in_one_source_and_filled_in_another_is_interned_once ... ok
+test a_view_that_faults_mid_ingestion_never_mints_a_snapshot ... ok
+test colliding_blank_wire_values_are_refused_and_neighbouring_ones_are_not ... ok
+test a_capability_claim_never_moves_a_byte_of_the_snapshot ... ok
+test the_dropped_datatype_iris_are_not_interned_by_either_surface ... ok
+test a_failed_ingestion_poisons_both_surfaces_and_emit ... ok
+test declaration_only_graphs_are_reported_and_never_interned ... ok
+test the_report_accounts_scratch_and_the_cumulative_view_is_monotone ... ok
+test the_statement_layer_rides_the_side_tables_and_is_not_double_ingested ... ok
+test two_sources_sharing_a_local_blank_label_stay_two_terms ... ok
+test a_refused_ingestion_leaves_the_snapshot_accessors_exactly_where_they_were ... ok
+test the_view_surface_and_the_flat_surface_mint_one_snapshot ... ok
+test a_view_carrier_publishes_gts_bytes_without_ever_freezing_its_surface ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/iri_authority.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/f6c2810374e2525d/out/iri_authority-f6c2810374e2525d)
+
+running 2 tests
+test rdf_irirefs_and_base_directives_reject_invalid_ip_literals ... ok
+test rdf_irirefs_accept_generic_ports_and_preserve_ip_literal_spelling ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/json_number_rounding.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/2ec905d1205b81ed/out/json_number_rounding-2ec905d1205b81ed)
+
+running 5 tests
+test csvw_schema_bounds_admit_the_value_they_spell ... ok
+test json_ld_numbers_expand_to_the_correctly_rounded_double ... ok
+test csvw_metadata_numbers_become_the_correctly_rounded_literal ... ok
+test the_json_reader_reads_every_witness_and_midpoint_correctly_rounded ... ok
+test okf_structured_numbers_read_and_write_back_correctly_rounded ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+
+     Running tests/jsonld_compaction_residency.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/23a8e85b00ad6e9d/out/jsonld_compaction_residency-23a8e85b00ad6e9d)
+
+running 3 tests
+test compaction_output_is_unchanged_by_taking_the_carrier_by_value ... ok
+test yamlld_does_not_cost_a_json_document_plus_its_parse_tree ... ok
+test compaction_does_not_hold_a_second_carrier ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/jsonld_context_lens.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/90b46edda7a0d9ed/out/jsonld_context_lens-90b46edda7a0d9ed)
+
+running 27 tests
+test authored_reverse_nest_and_scoped_contexts_expand_through_one_lens ... ok
+test a_well_formed_list_suffix_folds_behind_a_shared_head ... ok
+test a_standalone_named_graph_is_not_embedded_again_by_a_later_graph ... ok
+test compaction_bytes_ignore_input_insertion_order_and_are_idempotent ... ok
+test aliases_base_vocab_and_coercions_compact_and_expand_losslessly ... ok
+test configured_context_preserves_many_to_many_reifier_bindings ... ok
+test direct_set_objects_expand_and_lossy_value_shapes_fail_closed ... ok
+test duplicate_members_and_unmapped_index_metadata_fail_closed ... ok
+test generated_list_cells_do_not_collide_with_nested_annotation_ids ... ok
+test explicit_list_items_inherit_active_property_id_coercion ... ok
+test configured_context_preserves_named_graphs_and_rdf_1_2_statement_structures ... ok
+test graph_names_are_not_folded_as_list_heads ... ok
+test graph_id_and_mapped_graph_index_containers_preserve_named_graph_scope ... ok
+test graph_index_containers_apply_inside_named_graphs ... ok
+test heterogeneous_values_partition_across_compatible_aliases ... ok
+test language_and_id_maps_compact_and_expand_losslessly ... ok
+test mapped_index_type_and_set_containers_preserve_rdf ... ok
+test mixed_graph_nodes_numeric_lexicals_and_annotation_types_survive_expansion ... ok
+test list_coercion_and_shared_list_identity_are_preserved ... ok
+test null_entries_in_graph_id_type_and_index_containers_are_ignored ... ok
+test named_graph_references_compact_into_graph_id_maps ... ok
+test rdf_json_collapses_only_when_its_lexical_form_is_canonical ... ok
+test registry_backed_compaction_has_a_matching_parse_lens ... ok
+test derived_mode_uses_only_sorted_dataset_namespaces_and_round_trips ... ok
+test safe_rdf_lists_use_list_containers_and_reconstruct_isomorphically ... ok
+test reverse_aliases_and_graph_index_maps_compact_losslessly ... ok
+test compact_expand_is_an_isomorphic_idempotent_lens ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/jsonld_expanded_baseline.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/aaaed19296e043c2/out/jsonld_expanded_baseline-aaaed19296e043c2)
+
+running 1 test
+test direct_and_generic_expanded_bytes_are_frozen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/jsonld_options_apply_only_where_defined.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/f59ef1d57c74d117/out/jsonld_options_apply_only_where_defined-f59ef1d57c74d117)
+
+running 3 tests
+test a_format_without_jsonld_options_refuses_them ... ok
+test every_format_still_serializes_without_options ... ok
+test jsonld_and_yamlld_still_accept_their_own_options ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/jsonld_w3c_conformance.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-rdf/7e8c0d869dfbe726/out/jsonld_w3c_conformance-7e8c0d869dfbe726)
+
+running 2 tests
+test pinned_w3c_compaction_vectors_match_the_independent_json_oracle ... ok
+test pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/error_chain.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-retrieval/617ba9741149f31e/out/error_chain-617ba9741149f31e)
+
+running 2 tests
+test a_search_error_names_the_stage_error_it_wraps_as_its_source ... ok
+test an_invalid_iri_names_the_kernel_parser_refusal_as_its_source ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/exclusion_lookup.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-retrieval/300449a4feb200ab/out/exclusion_lookup-300449a4feb200ab)
+
+running 9 tests
+test a_basis_needs_a_point_bound_candidate_mode ... ok
+test declaring_no_basis_is_admitted_from_every_producer ... ok
+test membership_is_admitted_whatever_the_search_dropped ... ok
+test a_failed_lookup_fails_the_request_rather_than_answering_possible ... ok
+test calling_a_candidate_possible_outside_the_declared_domain_is_refused ... ok
+test a_stream_that_declares_no_basis_is_not_asked_and_refuses_if_it_is ... ok
+test an_attested_short_index_excluding_a_candidate_still_owes_it_the_residual ... ok
+test a_lossy_search_excluding_by_membership_discharges_the_residual ... ok
+test excluding_a_candidate_and_then_naming_it_is_refused ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/execute_dataset.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-retrieval/b0472c550d170de4/out/execute_dataset-b0472c550d170de4)
+
+running 15 tests
+test a_short_index_that_served_no_row_still_reports_its_shortfall ... ok
+test a_forced_failure_isolates_to_its_stratum ... ok
+test a_relation_whose_index_moved_mid_run_refuses_the_whole_run ... ok
+test a_producers_declared_contract_travels_the_pipeline_to_the_fusion_protocol ... ok
+test a_fused_candidate_round_trips_as_the_seed_of_a_follow_up_request ... ok
+test a_pinned_generation_reaches_the_stream_and_the_fused_trailer ... ok
+test a_bundle_retagged_after_assembly_is_refused_and_one_assembled_by_hand_is_not ... ok
+test candidates_are_the_canonical_lexical_and_not_an_opaque_blob ... ok
+test an_under_declared_row_bound_is_refused_and_an_honest_one_is_not ... ok
+test an_incomplete_index_is_carried_beside_an_exhausted_read ... ok
+test an_unbound_projection_fails_its_stratum_while_a_bound_one_streams ... ok
+test the_unbounded_lane_keeps_one_ceiling_and_a_unit_cannot_charge_it ... ok
+test execute_answers_from_the_callers_dataset ... ok
+test the_probe_separates_a_cut_read_from_an_exhausted_one ... ok
+test a_supplied_dataset_clause_reads_the_graphs_it_names_wrapped_or_whole ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/fusion.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-retrieval/31a912c1c3fa6852/out/fusion-31a912c1c3fa6852)
+
+running 122 tests
+test a_bounded_stop_and_an_incomplete_index_both_survive_in_one_trailer ... ok
+test a_backwards_rank_and_a_skipped_rank_are_refused_while_their_valid_neighbours_fuse ... ok
+test a_bound_larger_than_the_answer_returns_everything_and_refuses_nothing ... ok
+test a_candidate_contributed_to_more_times_than_there_are_strata_is_refused ... ok
+test a_bounded_stop_closes_a_single_stratum_stream_instead_of_draining_it ... ok
+test a_candidate_in_every_stratum_fuses_rather_than_refusing ... ok
+test a_class_with_no_end_inside_a_plans_range_is_a_saturation_point_and_not_a_width ... ok
+test a_candidate_two_rows_place_in_two_blocks_is_refused_and_one_block_fuses ... ok
+test a_candidate_the_lossy_stratum_never_named_can_unseat_an_emitted_row ... ok
+test a_declared_contribution_maximum_must_match_the_stratum_count ... ok
+test a_declared_unique_streams_repeat_is_refused ... ok
+test a_declared_allowed_stream_is_deduplicated_rather_than_refused ... ok
+test a_depth_ending_is_carried_and_its_rank_is_still_measured_against_the_rows ... ok
+test a_declared_fidelity_moves_the_compiled_plan_identity ... ok
+test a_depth_bounded_exact_stratum_is_still_exact ... ok
+test a_dropped_duplicate_may_not_place_its_candidate_in_a_second_block ... ok
+test a_depth_that_outruns_every_plan_is_saturation_and_not_the_ceiling_as_a_number ... ok
+test a_failed_stratum_is_reported_by_name_and_leaves_the_scores_exact ... ok
+test a_failure_after_rows_is_refused_while_a_producer_that_fails_before_any_row_is_reported ... ok
+test a_checked_addition_inside_the_range_is_not_refused ... ok
+test a_fidelity_declaration_changes_no_certified_row ... ok
+test a_live_zero_contribution_stream_in_the_same_domain_still_blocks_certification ... ok
+test a_fusion_of_exhaustive_producers_is_still_exact ... ok
+test a_live_zero_contribution_stream_is_not_mistaken_for_an_exhausted_one ... ok
+test a_perturbed_order_leaves_no_finite_bound ... ok
+test a_rival_left_in_the_frontier_by_the_bound_is_bounded_too ... ok
+test a_producer_that_declined_its_terms_is_not_a_producer_that_found_nothing ... ok
+test a_re_read_trailer_moves_the_read_and_never_the_evidence ... ok
+test a_row_a_lossy_stratum_named_carries_an_inflation_term ... ok
+test a_stratum_added_after_the_fact_declares_nothing ... ok
+test a_stratum_this_profile_does_not_weight_is_an_absence_and_never_a_refusal ... ok
+test a_stream_that_will_not_end_is_refused_while_the_same_rows_with_a_declared_end_fuse ... ok
+test a_stratum_that_cannot_name_a_candidate_is_not_charged_for_it ... ok
+test a_small_top_k_certifies_early_and_never_reaches_the_collision ... ok
+test a_stream_naming_a_candidate_outside_its_declared_domains_is_refused ... ok
+test a_tolerance_of_zero_is_refused_at_both_altitudes_and_a_tolerance_of_one_answers ... ok
+test a_stream_whose_stratum_the_profile_never_weights_is_refused_while_the_weighted_neighbour_fuses ... ok
+test a_sum_landing_on_the_ceiling_is_refused_by_the_contribution_count ... ok
+test a_top_k_that_stops_an_approximate_stream_still_reports_its_fidelity ... ok
+test a_unique_declarations_repeat_is_refused_past_the_frontier_and_allowed_is_the_remedy ... ok
+test a_volunteered_block_is_honoured_and_a_silent_unrestricted_stream_still_fuses ... ok
+test a_wrong_contribution_at_a_plateau_rank_is_still_a_mismatch ... ok
+test a_bounded_domain_run_reports_a_ceiling_and_an_exhausted_one_reports_exhaustion ... ok
+test a_zero_top_k_still_reports_one_rank_pulled ... ok
+test an_empty_stream_reports_zero_ranks_pulled ... ok
+test an_exhausted_zero_contribution_stream_delays_no_certification ... ok
+test an_approximate_stratum_is_distinguishable_from_an_exact_one_in_the_trailer ... ok
+test an_exhaustive_fusion_carries_zero_width_intervals ... ok
+test an_exhaustive_stratum_is_reported_rather_than_left_out ... ok
+test an_operand_the_decay_rule_refuses_is_propagated_rather_than_measured_as_a_class_of_one ... ok
+test an_incomplete_stratum_makes_the_scores_estimates_without_refusing_the_rows ... ok
+test an_open_stream_is_charged_its_head_and_a_lossy_one_its_first_rank ... ok
+test class_width_is_the_curve_the_bound_is_one_point_of ... ok
+test completeness_is_asserted_by_the_trailer_never_by_the_rows_in_hand ... ok
+test contributions_sum_to_the_fused_score ... ok
+test cross_stratum_sum_is_the_checked_sum ... ok
+test checked_addition_overflow_is_refused ... ok
+test cut_on_a_tie_turns_on_the_bound_and_on_nothing_else ... ok
+test an_interval_that_cannot_be_computed_is_refused_and_never_reported_as_zero ... ok
+test decoded_profile_bytes_are_held_to_the_positive_weight_law ... ok
+test deepest_rank_within_width_matches_an_independently_walked_truth_at_several_tolerances ... ok
+test differential_against_eager_oracle ... ok
+test a_strictly_descending_stream_fuses_past_the_decay_collision ... ok
+test drop_cancellation_and_receipts ... ok
+test equal_scores_use_the_declared_tie_break ... ok
+test every_profile_the_separation_derivation_accepted_before_still_builds_with_its_identity ... ok
+test exhausted_on_an_approximate_stratum_does_not_make_the_answer_exact ... ok
+test fuse_returns_at_most_k_rows_in_the_declared_order ... ok
+test deepest_rank_within_width_is_the_last_depth_the_offending_run_still_fits_in ... ok
+test golden_output_is_byte_identical ... ok
+test maximal_legitimate_score_stays_below_the_ceiling ... ok
+test native_and_wasm_share_canonical_bytes_and_output ... ok
+test fusion_past_the_collision_is_deterministic ... ok
+test both_decay_rules_fuse_past_their_own_collision ... ok
+test a_declaration_never_moves_the_fusion_profiles_identity ... ok
+test output_is_score_descending ... ok
+test protocol_violations_are_typed ... ok
+test no_weight_lighter_than_the_one_named_reaches_the_depth ... ok
+test reaching_a_depth_is_not_monotone_in_the_weight ... ok
+test the_bound_at_the_reported_depth_holds_where_the_width_is_nowhere_near_the_tolerance ... ok
+test the_certain_prefix_shrinks_as_the_declared_loss_widens ... ok
+test the_class_at_the_reported_depth_is_the_run_the_bounded_read_never_finishes ... ok
+test the_collided_regime_has_a_byte_identical_golden ... ok
+test profile_construction_is_validated ... ok
+test the_contribution_law_no_longer_depends_on_a_declared_ordering ... ok
+test the_decay_rule_reports_a_class_width_with_no_stratum_in_the_question ... ok
+test the_decay_rules_stratum_free_class_width_refuses_the_operands_it_cannot_evaluate ... ok
+test the_emitted_sequence_matches_an_explicit_expected_order ... ok
+test the_evidence_identity_moves_exactly_when_the_evidence_does ... ok
+test an_undeclared_read_that_may_ask_bounds_itself_where_the_threshold_falls ... ok
+test the_exactness_verdict_does_not_move_as_a_caller_reads_deeper ... ok
+test the_existing_decay_rules_identity_bytes_are_where_they_always_were ... ok
+test the_fidelity_map_is_keyed_like_the_maps_beside_it ... ok
+test the_plan_range_refusal_and_the_saturation_refusal_are_different_variants ... ok
+test the_reported_single_stratum_repeat_is_refused_naming_the_item_and_the_stratum ... ok
+test the_resolution_map_keys_every_weighted_stream_including_one_that_yielded_nothing ... ok
+test the_smallest_k_and_the_smallest_weight_set_a_profile_admits_are_not_refused ... ok
+test the_backward_pass_agrees_with_the_quadratic_definition ... ok
+test the_trailer_carries_every_handed_streams_attestation_and_invents_none ... ok
+test the_trailer_names_a_plan_only_when_every_stream_names_the_same_one ... ok
+test every_weight_in_the_measurement_table_fuses ... ok
+test the_truncated_rule_saturates_where_no_weight_can_lift_it ... ok
+test the_weighted_rule_is_a_separate_identity_and_round_trips ... ok
+test the_weighted_rule_still_orders_at_fourteen_million_ranks ... ok
+test threshold_witness_is_recorded_before_exhaustion ... ok
+test tied_rows_in_an_exhaustive_answer_are_all_certain ... ok
+test tied_rows_stop_being_certain_once_a_stratum_declares_a_loss ... ok
+test trailer_names_the_pinned_plan ... ok
+test trailer_preserves_each_producer_status ... ok
+test two_producers_naming_one_entity_fuse_normally_unless_they_declared_otherwise ... ok
+test two_ranks_fuse_at_the_weight_that_used_to_refuse_them ... ok
+test two_streams_tagged_with_one_stratum_are_refused_while_two_distinct_strata_fuse ... ok
+test declared_domains_bound_the_reading_over_disjoint_strata ... ok
+test weight_for_depth_refuses_a_depth_of_zero_and_answers_a_depth_of_one ... ok
+test weight_for_depth_names_a_weight_that_reaches_it ... ok
+test the_resolution_counters_stay_observations_under_a_declared_domain ... ok
+test the_trailer_reports_the_declarations_the_fusion_ran_under ... ok
+test a_declaration_changes_the_reading_and_never_the_answer ... ok
+test the_differential_holds_under_declared_domains_over_many_configurations ... ok
+test weight_for_depth_answers_at_the_deepest_depth_a_plan_can_record_and_refuses_past_it ... ok
+test no_fused_answer_ever_contains_one_entity_twice ... ok
+test weight_for_depth_refuses_only_where_no_weight_can_reach ... ok
+
+test result: ok. 122 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.59s
+
+     Running tests/fusion_frontier_alloc.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-retrieval/c55f473dca21c314/out/fusion_frontier_alloc-c55f473dca21c314)
+
+running 5 tests
+test disjoint_strata_declaring_their_blocks_read_and_hold_the_same_at_any_length ... ok
+test the_frontier_stays_bounded_past_the_collision ... ok
+test the_frontier_peak_tracks_the_profile_bound_and_not_the_stream_length ... ok
+test the_peak_follows_the_rows_certified_when_a_stream_declares_allowed_duplicates ... ok
+test a_unique_declaration_is_what_keeps_a_deep_answer_affordable ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/emitter_projections.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/98077c8e54452b29/out/emitter_projections-98077c8e54452b29)
+
+running 139 tests
+test graphql_projects_computed_values ... ok
+test graphql_projects_debug_severity ... ok
+test graphql_projects_max_list_length ... ok
+test graphql_projects_iri_pair ... ok
+test graphql_projects_closed_by_types ... ok
+test graphql_projects_list_valued_datatype ... ok
+test graphql_projects_list_valued_class ... ok
+test graphql_projects_list_valued_node_kind ... ok
+test graphql_projects_node_expression_target ... ok
+test graphql_projects_path_valued_pairs ... ok
+test graphql_projects_reifier_severity ... ok
+test graphql_projects_min_list_length ... ok
+test graphql_projects_root_class ... ok
+test graphql_projects_member_shape ... ok
+test graphql_projects_single_line ... ok
+test graphql_projects_node_list ... ok
+test graphql_projects_subset_of ... ok
+test graphql_projects_target_where ... ok
+test graphql_projects_unique_values_for ... ok
+test json_schema_projects_closed_by_types ... ok
+test json_schema_projects_computed_values ... ok
+test graphql_projects_unique_members ... ok
+test json_schema_projects_debug_severity ... ok
+test graphql_projects_some_value ... ok
+test json_schema_projects_iri_pair ... ok
+test json_schema_projects_list_valued_datatype ... ok
+test json_schema_projects_list_valued_class ... ok
+test json_schema_projects_max_list_length ... ok
+test json_schema_projects_focus_node_constraints ... ok
+test json_schema_projects_node_expression_target ... ok
+test json_schema_projects_list_valued_node_kind ... ok
+test json_schema_projects_min_list_length ... ok
+test json_schema_projects_member_shape ... ok
+test json_schema_projects_path_valued_pairs ... ok
+test json_schema_projects_reifier_severity ... ok
+test json_schema_projects_root_class ... ok
+test json_schema_projects_subset_of ... ok
+test json_schema_projects_single_line ... ok
+test json_schema_projects_node_list ... ok
+test json_schema_projects_target_where ... ok
+test json_schema_projects_unique_values_for ... ok
+test json_schema_projects_unique_members ... ok
+test linkml_projects_computed_values ... ok
+test linkml_projects_closed_by_types ... ok
+test json_schema_projects_some_value ... ok
+test linkml_projects_debug_severity ... ok
+test linkml_projects_iri_pair ... ok
+test linkml_projects_list_valued_datatype ... ok
+test linkml_projects_list_valued_class ... ok
+test linkml_projects_node_expression_target ... ok
+test linkml_projects_max_list_length ... ok
+test linkml_projects_min_list_length ... ok
+test linkml_projects_list_valued_node_kind ... ok
+test linkml_projects_member_shape ... ok
+test linkml_projects_path_valued_pairs ... ok
+test linkml_projects_root_class ... ok
+test linkml_projects_reifier_severity ... ok
+test linkml_projects_single_line ... ok
+test linkml_projects_subset_of ... ok
+test linkml_projects_node_list ... ok
+test json_schema_records_shape_based_property_constraints ... ok
+test linkml_projects_target_where ... ok
+test linkml_projects_unique_values_for ... ok
+test linkml_projects_unique_members ... ok
+test linkml_projects_some_value ... ok
+test observed::json_schema_deactivated_property_shape_agrees_with_validation ... ok
+test observed::json_schema_a_recursive_value_shape_is_inlined_once ... ok
+test observed::json_schema_closed_by_types_is_recorded_where_declared_closure_projects ... ok
+test observed::json_schema_in_lists_intersect ... ok
+test observed::json_schema_has_value_agrees_with_validation ... ok
+test observed::json_schema_and_agrees_with_validation ... ok
+test observed::json_schema_base_direction_agrees_with_validation ... ok
+test observed::json_schema_datatypes_agree_with_validation ... ok
+test observed::json_schema_language_in_agrees_with_validation ... ok
+test observed::json_schema_node_agrees_with_validation ... ok
+test observed::json_schema_node_list_components_agree_with_validation ... ok
+test observed::json_schema_node_property_shapes_are_proven_unreachable ... ok
+test observed::json_schema_not_and_xone_over_a_wider_shape_are_proven_inexpressible ... ok
+test observed::json_schema_node_kinds_agree_with_validation ... ok
+test observed::json_schema_list_components_agree_with_validation ... ok
+test observed::json_schema_not_agrees_with_validation ... ok
+test observed::json_schema_or_agrees_with_validation ... ok
+test observed::json_schema_lengths_agree_with_validation ... ok
+test observed::json_schema_pattern_on_integers_is_proven_inexpressible ... ok
+test observed::json_schema_severity_agrees_with_validation ... ok
+test observed::json_schema_several_values_are_each_judged ... ok
+test observed::json_schema_numeric_datatypes_agree_with_validation ... ok
+test observed::json_schema_single_line_agrees_with_validation ... ok
+test observed::json_schema_pattern_agrees_with_validation ... ok
+test observed::json_schema_some_value_agrees_with_validation ... ok
+test pydantic_projects_closed_by_types ... ok
+test pydantic_projects_computed_values ... ok
+test observed::json_schema_case_insensitive_flag_agrees_with_validation ... ok
+test pydantic_projects_iri_pair ... ok
+test pydantic_projects_debug_severity ... ok
+test pydantic_projects_list_valued_datatype ... ok
+test pydantic_projects_list_valued_class ... ok
+test observed::json_schema_pattern_on_iris_agrees_with_validation ... ok
+test observed::json_schema_xone_agrees_with_validation ... ok
+test pydantic_projects_max_list_length ... ok
+test pydantic_projects_list_valued_node_kind ... ok
+test pydantic_projects_member_shape ... ok
+test pydantic_projects_min_list_length ... ok
+test pydantic_projects_node_expression_target ... ok
+test pydantic_projects_path_valued_pairs ... ok
+test pydantic_projects_root_class ... ok
+test pydantic_projects_node_list ... ok
+test pydantic_projects_reifier_severity ... ok
+test pydantic_projects_single_line ... ok
+test pydantic_projects_subset_of ... ok
+test pydantic_projects_target_where ... ok
+test pydantic_projects_some_value ... ok
+test pydantic_projects_unique_values_for ... ok
+test typescript_projects_closed_by_types ... ok
+test pydantic_projects_unique_members ... ok
+test typescript_projects_computed_values ... ok
+test typescript_projects_debug_severity ... ok
+test typescript_projects_iri_pair ... ok
+test observed::json_schema_focus_node_constraints_agree_with_validation ... ok
+test typescript_projects_list_valued_class ... ok
+test typescript_projects_list_valued_datatype ... ok
+test typescript_projects_list_valued_node_kind ... ok
+test typescript_projects_max_list_length ... ok
+test typescript_projects_min_list_length ... ok
+test typescript_projects_member_shape ... ok
+test typescript_projects_node_expression_target ... ok
+test typescript_projects_path_valued_pairs ... ok
+test typescript_projects_reifier_severity ... ok
+test typescript_projects_single_line ... ok
+test typescript_projects_node_list ... ok
+test typescript_projects_root_class ... ok
+test typescript_projects_subset_of ... ok
+test typescript_projects_target_where ... ok
+test typescript_projects_unique_values_for ... ok
+test typescript_projects_unique_members ... ok
+test typescript_projects_some_value ... ok
+test observed::json_schema_numeric_bounds_agree_with_validation ... ok
+test observed::json_schema_typed_numeric_bounds_agree_with_validation ... ok
+test observed::json_schema_temporal_bounds_agree_with_validation ... ok
+
+test result: ok. 139 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.55s
+
+     Running tests/evaluated_targets.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/caba9aab8c8cbb20/out/evaluated_targets-caba9aab8c8cbb20)
+
+running 28 tests
+test a_property_shape_that_is_a_class_targets_its_instances ... ok
+test a_data_graph_sh_shape_statement_makes_its_subject_a_focus_node ... ok
+test a_class_that_is_a_shape_only_by_its_parameters_gets_no_implicit_target ... ok
+test a_class_declared_only_in_the_data_graph_triggers_no_implicit_target ... ok
+test a_narrowed_where_target_agrees_with_the_full_scan ... ok
+test a_sh_shape_statement_naming_no_shape_targets_nothing ... ok
+test a_sh_shape_statement_can_name_a_shape_reached_only_through_another ... ok
+test a_sh_shape_statement_in_a_shared_graph_can_name_a_blank_shape ... ok
+test a_shape_class_targets_the_instances_of_its_subclasses ... ok
+test a_shape_that_is_not_a_class_gets_no_implicit_target ... ok
+test a_sparql_target_ask_must_be_an_ask_that_meets_the_prebinding_restrictions ... ok
+test a_rule_fires_at_an_explicit_shape_target ... ok
+test a_sparql_target_with_two_ask_values_is_refused ... ok
+test a_where_constraint_that_does_not_count_against_conformance_narrows_nothing ... ok
+test a_where_target_ranges_over_the_nodes_of_the_data_graph_triple_terms_included ... ok
+test an_implicit_class_target_follows_shacl_instances_in_the_shapes_graph ... ok
+test a_function_call_target_node_targets_its_output ... ok
+test an_ill_formed_node_expression_target_is_refused_and_the_well_formed_one_targets ... ok
+test a_sparql_target_ask_answers_for_a_node_the_data_graph_does_not_hold ... ok
+test a_select_node_expression_target_selects_its_output_nodes ... ok
+test explicit_shape_targets_union_with_declared_targets ... ok
+test a_consistent_ask_and_select_validate_on_the_candidate_path ... ok
+test unique_values_for_compares_the_explicit_shape_targets ... ok
+test extension_usage_reads_the_sparql_inside_a_target_node_expression ... ok
+test a_candidate_is_checked_against_a_sparql_target_by_its_select ... ok
+test function_resolution_reports_the_calls_inside_targets ... ok
+test a_sparql_target_with_an_ask_validates_as_its_select_does ... ok
+test an_inconsistent_ask_and_select_are_refused_on_the_candidate_path ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/exact_numeric_ranges.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/24e4c20f9d7d4786/out/exact_numeric_ranges-24e4c20f9d7d4786)
+
+running 3 tests
+test decimal_ranges_are_exact_past_eighteen_digits ... ok
+test an_ill_typed_numeric_literal_violates_beside_its_well_formed_neighbour ... ok
+test integer_ranges_are_exact_at_any_size ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/execution_scope.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/e0255ec053050781/out/execution_scope-e0255ec053050781)
+
+running 5 tests
+test a_service_in_a_constraint_query_is_refused_at_load_with_or_without_a_scope ... ok
+test replacing_the_ambient_context_takes_every_scope_off_the_thread_and_puts_it_back ... ok
+test rule_application_polls_the_stop_signal_between_focus_nodes ... ok
+test the_stop_signal_is_polled_between_focus_nodes_of_a_validation_with_no_sparql ... ok
+test a_service_target_is_refused_at_load_with_or_without_a_source_and_a_local_target_answers ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/exists_relation_prebinding.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f9a9826194712da5/out/exists_relation_prebinding-f9a9826194712da5)
+
+running 8 tests
+test exists_over_a_free_capable_relation ... ok
+test exists_over_a_bound_only_relation ... ok
+test not_exists_over_a_bound_only_relation ... ok
+test not_exists_over_a_free_capable_relation ... ok
+test a_bind_of_this_over_a_free_capable_relation ... ok
+test a_filter_of_this_beneath_the_seed ... ok
+test a_bind_of_this_over_a_bound_only_relation ... ok
+test not_exists_with_the_call_after_an_atom ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/foreign_value_nodes.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/ad838df5eb8e14ea/out/foreign_value_nodes-ad838df5eb8e14ea)
+
+running 2 tests
+test the_target_node_is_really_absent_from_the_data_graph ... ok
+test constraints_decide_foreign_value_nodes_by_term_equality ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/function_body_relation.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/59111e64fe78af8f/out/function_body_relation-59111e64fe78af8f)
+
+running 26 tests
+test a_cycle_between_a_function_body_and_a_shape_terminates ... ok
+test a_function_called_from_two_branches_is_walked_both_times ... ok
+test a_select_inside_a_custom_function_body_is_reported ... ok
+test a_declared_namespace_reaches_a_sparql_constraint_body ... ok
+test a_registered_iri_reaches_its_relation_from_a_sparql_constraint_body ... ok
+test a_registered_iri_under_a_declared_namespace_still_reaches_its_relation ... ok
+test a_body_naming_no_registered_relation_is_ordinary_data ... ok
+test a_function_body_reaches_a_registered_relation ... ok
+test a_declared_namespace_makes_an_unregistered_iri_under_it_a_hard_error ... ok
+test a_select_nested_in_a_union_operand_is_reported ... ok
+test a_site_this_environment_cannot_read_is_reported_with_its_reason ... ok
+test an_inline_filter_shape_s_sparql_is_reported_like_a_named_one_s ... ok
+test extension_usage_does_not_claim_a_merely_same_prefixed_sibling ... ok
+test an_incomplete_index_declared_from_a_function_body_refuses_the_verdict ... ok
+test extension_usage_names_the_declaration_a_predicate_sits_in ... ok
+test a_sibling_iri_sharing_a_registered_prefix_stays_ordinary_data ... ok
+test a_sparql_rule_takes_a_declared_namespace_and_still_answers_without_one ... ok
+test the_same_graph_under_an_empty_environment_reads_completely ... ok
+test extension_usage_reports_whether_a_function_body_reaches_its_relation ... ok
+test extension_usage_walks_every_sparql_bearing_construct ... ok
+test every_remaining_door_takes_a_declared_namespace_and_still_answers_without_one ... ok
+test without_the_declaration_the_same_constraint_body_is_ordinary_data ... ok
+test without_a_registry_the_same_body_is_ordinary_data ... ok
+test without_the_declaration_the_same_iri_is_ordinary_data ... ok
+test extension_usage_reads_component_validators_and_inline_nested_shapes ... ok
+test a_registered_iri_outside_predicate_position_is_not_a_call ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/governor_inheritance.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/2b74ed3f30cec69c/out/governor_inheritance-2b74ed3f30cec69c)
+
+running 4 tests
+test an_ungoverned_validation_is_unchanged ... ok
+test shacl_sparql_constraints_inherit_governors ... ok
+test an_exhausted_validation_never_reports_a_verdict ... ok
+test governed_focus_fanout_has_schedule_independent_evidence ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/host_entry_points.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/50214126514db55a/out/host_entry_points-50214126514db55a)
+
+running 11 tests
+test a_term_argument_is_an_n_triples_term_or_an_absolute_iri ... ok
+test run_rules_over_an_srl_rule_set_is_the_srl_engine_run ... ok
+test a_scope_binding_that_could_never_be_read_is_refused ... ok
+test a_labelled_blank_node_reads_the_scope ... ok
+test a_sparql_expr_node_evaluates_natively_with_its_prefixes ... ok
+test the_term_generating_round_limit_is_exact ... ok
+test the_inference_graph_and_its_proof_render_deterministically ... ok
+test run_rules_over_a_shapes_graph_is_the_shacl_engine_run ... ok
+test lint_reports_a_malformed_graph_and_not_its_well_formed_neighbour ... ok
+test lint_supersedes_what_shacl_1_2_core_makes_well_formed ... ok
+test lint_certifies_the_sparql_expr_declaration_clean_and_binds_it_natively ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/exact_facets.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shex/395c3a25f2259c42/out/exact_facets-395c3a25f2259c42)
+
+running 17 tests
+test bounds_survive_start_and_nesting ... ok
+test a_lossy_bound_does_not_leak_into_an_unrelated_constraint_shexc ... ok
+test a_lossy_bound_does_not_leak_into_an_unrelated_constraint_shexj ... ok
+test bounds_survive_imports ... ok
+test a_double_bound_keeps_binary_semantics_and_a_decimal_bound_is_exact ... ok
+test a_double_bound_past_the_double_range_is_infinite ... ok
+test bounds_sharing_one_double_parse_and_decide_by_their_digits ... ok
+test exact_shape_maps_hold_under_a_selected_xpath_law ... ok
+test exact_bounds_hold_under_a_selected_xpath_law ... ok
+test imports_merge_equal_exact_bounds_and_refuse_different_ones ... ok
+test integer_bounds_past_machine_words_are_exact ... ok
+test the_exact_writer_matches_the_plain_one_on_exact_bounds ... ok
+test the_lossy_ast_path_is_unchanged_and_the_shape_map_path_is_exact ... ok
+test a_bound_past_the_f64_range_is_kept_by_the_exact_parsers_only ... ok
+test two_bounds_of_one_constraint_sharing_an_ast_value_stay_apart ... ok
+test the_exact_writer_round_trips_shexc_through_shexj ... ok
+test the_exact_writer_round_trips_shexj ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/imports_unit.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shex/29a0ca84c22a4e92/out/imports_unit-29a0ca84c22a4e92)
+
+running 6 tests
+test conflicting_redefinition_errors ... ok
+test cyclic_imports_terminate ... ok
+test root_start_wins_over_import ... ok
+test unresolved_import_errors ... ok
+test self_import_dedups ... ok
+test transitive_import_merges_and_validates ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fixtures.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-algebra/71850564fb472124/out/fixtures-71850564fb472124)
+
+running 2 tests
+test negative_out_of_scope_and_malformed ... ok
+test positive_in_scope_features ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/iterative_traits.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-algebra/0c8222b74ffcd9ca/out/iterative_traits-0c8222b74ffcd9ca)
+
+running 3 tests
+test a_generated_tree_matches_the_derived_reference ... ok
+test generated_pairs_compare_as_the_derived_reference ... ok
+test every_corpus_tree_matches_the_derived_reference ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.05s
+
+     Running tests/evaluator_trace.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-conformance/bcf1f7724338317e/out/evaluator_trace-bcf1f7724338317e)
+
+running 4 tests
+test regenerate_evaluator_trace ... ignored, regeneration path: writes the committed golden
+test regenerate_update_trace ... ignored, regeneration path: writes the committed golden
+test the_evaluator_trace_over_every_update_evaluation_case_matches_the_golden ... ok
+test the_evaluator_trace_over_every_query_evaluation_case_matches_the_golden ... ok
+
+test result: ok. 2 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 5.15s
+
+     Running tests/governor_corpus.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-conformance/cf6ba75b54588350/out/governor_corpus-cf6ba75b54588350)
+
+running 16 tests
+test regenerate_fuel_sweep_trace ... ignored, regeneration path: writes the committed golden
+test every_governor_carries_a_zero_a_boundary_and_an_over_bound_case ... ok
+test a_relation_that_ignores_the_stop_signal_is_bounded_per_invocation ... ok
+test a_transport_that_ignores_the_stop_signal_is_bounded_per_request ... ok
+test the_parallel_drive_is_actually_above_the_fork_threshold ... ok
+test a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape ... ok
+test the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state ... ok
+test the_two_aggregate_charge_points_are_banded_separately ... ok
+test the_rdf12_statement_layer_is_governed ... ok
+test the_two_property_function_charge_points_are_banded_separately ... ok
+test a_fuel_ceiling_between_an_invocation_and_its_first_row_truncates_deterministically ... ok
+test the_parallel_drive_spends_what_the_sequential_measurement_spent ... ok
+test the_corpus_matches_its_pinned_expectations ... ok
+test the_corpus_is_reproducible_within_a_run ... ok
+test every_boundary_is_derived_from_a_metered_run ... ok
+test the_fuel_sweep_over_the_corpus_matches_its_trace ... ok
+
+test result: ok. 15 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 6.93s
+
+     Running tests/governor_correctness_corpus.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-conformance/231c9251cb94d1dd/out/governor_correctness_corpus-231c9251cb94d1dd)
+
+running 1 test
+test d0_governed_unbounded_is_byte_identical_to_ungoverned ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.93s
+
+     Running tests/embedding_knn_e2e.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/068be5c9f085cfc1/out/embedding_knn_e2e-068be5c9f085cfc1)
+
+running 12 tests
+test an_iri_that_is_not_registered_is_an_ordinary_triple_pattern ... ok
+test a_neighbour_joins_back_to_the_graph_by_basic_graph_pattern ... ok
+test one_artifact_under_one_binding_attests_one_generation ... ok
+test a_declared_row_bound_lets_a_cell_ceiling_admit_the_call_rather_than_refuse_it ... ok
+test a_registered_space_answers_a_knn_query_in_rank_order ... ok
+test a_fuel_ceiling_one_unit_below_the_metered_spend_trips ... ok
+test a_limit_yields_the_prefix_of_the_unlimited_answer_at_every_k ... ok
+test the_answer_is_byte_identical_across_two_independently_built_artifacts ... ok
+test the_governor_charges_the_search_in_proportion_to_the_candidates_it_examined ... ok
+test the_same_artifact_under_different_terms_attests_a_different_generation ... ok
+test the_search_charge_follows_the_space_size_rather_than_the_rows_returned ... ok
+test the_k_returned_are_the_true_k_nearest_of_a_crowded_space ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/evaluation_stack.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/da8648c17978bbfd/out/evaluation_stack-da8648c17978bbfd)
+
+running 10 tests
+test a_suspension_inside_a_path_traversal_leaves_the_evaluation_and_the_waiting_computation_intact ... ok
+test an_update_on_a_small_stack_applies_whole_or_is_refused_and_applies_nothing ... ok
+test a_deep_forwarded_body_answers_or_is_the_typed_refusal_under_silent ... ok
+test the_small_stack_still_answers_a_shallow_request_after_a_deep_one ... ok
+test an_in_process_service_on_a_small_stack_answers_or_its_refusal_is_not_silenced ... ok
+test the_whole_request_path_answers_or_refuses_a_flat_spine_on_a_small_stack ... ok
+test a_deep_request_on_a_small_stack_answers_or_is_the_typed_refusal_and_answers_on_a_large_one ... ok
+test the_deep_answers_equal_their_shallow_twins ... ok
+test a_thousand_nested_laterals_answer_inside_an_allocation_ceiling ... ok
+test every_stack_from_the_margin_up_answers_or_refuses_typed_far_past_the_removed_counts ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.24s
+
+     Running tests/exact_numerics.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/33a0bf051dacfd83/out/exact_numerics-33a0bf051dacfd83)
+
+running 7 tests
+test the_division_policy_is_the_query_s_and_leaves_only_non_terminating_quotients_unbound ... ok
+test arithmetic_past_machine_words_is_exact ... ok
+test numeric_functions_and_promotion_are_exact ... ok
+test comparison_order_and_extremes_see_every_digit ... ok
+test casts_in_both_directions_are_exact ... ok
+test sum_count_and_avg_agree_under_every_policy ... ok
+test the_governor_refuses_a_squaring_blow_up_and_admits_its_large_neighbour ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/exists_sep0007.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/103a6112c0359357/out/exists_sep0007-103a6112c0359357)
+
+running 25 tests
+test exists_graph_iri_name_with_correlated_body ... ok
+test exists_bare_values_inner ... ok
+test exists_bare_subselect_inner ... ok
+test exists_bind_fresh_variable_evaluates ... ok
+test exists_having_sees_only_the_subselect_scope ... ok
+test exists_nested_not_exists_correlates ... ok
+test exists_blank_node_outer_binding_correlates ... ok
+test exists_correlated_graph_variable_e2e ... ok
+test exists_optional_padding_answers_per_spec ... ok
+test exists_over_distinct_subselect ... ok
+test exists_optional_beside_a_bgp_answers_per_spec ... ok
+test exists_over_limit_one_subselect ... ok
+test exists_over_order_by_subselect ... ok
+test exists_over_group_by_subselect_correlates ... ok
+test exists_over_offset_subselect_commits_per_row ... ok
+test exists_property_function_inner_sees_outer_binding ... ok
+test matrix_is_complete ... ok
+test exists_sep_minus_example_answers ... ok
+test exists_sep_disconnected_variable_example ... ok
+test exists_unprojected_outer_variable_stays_unseen ... ok
+test exists_quoted_triple_outer_binding_correlates ... ok
+test not_exists_nested_not_exists_correlates ... ok
+test not_exists_optional_padding_does_not_fabricate ... ok
+test exists_sep_count_example_answers ... ok
+test exists_triple_nesting_alternating_polarity ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/expr_vm_owned_strings.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/b7ad65111df84365/out/expr_vm_owned_strings-b7ad65111df84365)
+
+running 8 tests
+test shallow_authored_leaf_clone_keeps_original_text_until_last_owner ... ok
+test nested_constructor_value_owners_survive_until_component_interning ... ok
+test string_views_preserve_plain_tagged_directional_type_errors_and_duplicate_bags ... ok
+test complete_unselected_regex_reaches_nonselect_entries_through_the_native_owner ... ok
+test complete_unselected_regex_entries_preserve_bags_unicode_and_final_newline_law ... ok
+test scalar_producers_preserve_native_values_and_original_output_owners ... ok
+test composite_fold_and_unfold_keep_original_owners_on_every_entry ... ok
+test complete_unselected_replace_entries_keep_empty_utf8_q_and_lexical_errors ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/fallible_query.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/bd3e0cad1af38d6a/out/fallible_query-bd3e0cad1af38d6a)
+
+running 17 tests
+test fallible_explain_discards_the_ledger_after_a_mid_measuring_provider_failure ... ok
+test a_failed_paged_view_outranks_an_explain_stop_signal ... ok
+test fallible_explain_options_measure_the_same_registered_relation_as_resident ... ok
+test cold_and_warm_bgp_planning_have_identical_demand_paging_evidence ... ok
+test operational_failure_taxonomy_is_not_an_empty_answer ... ok
+test parse_failure_remains_an_ordinary_query_error_with_evidence ... ok
+test prepared_entry_uses_the_same_completeness_boundary ... ok
+test identical_executions_have_identical_results_status_and_evidence ... ok
+test healthy_fallible_explain_is_byte_identical_on_cold_warm_and_signalled_entries ... ok
+test every_required_query_form_and_operator_propagates_page_failure ... ok
+test query_fallible_view_dispatches_a_registered_relation_with_options ... ok
+test query_time_failure_cannot_masquerade_as_an_empty_result ... ok
+test operational_root_cause_wins_over_a_derived_evaluator_error ... ok
+test successful_and_empty_results_are_explicitly_complete ... ok
+test query_prepared_fallible_view_with_a_mismatched_registry_is_refused_and_the_matched_registry_answers ... ok
+test production_query_budget_boundaries_are_exact_and_distinct ... ok
+test resident_and_pack_views_keep_the_ordinary_byte_identical_result_path ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/flat_operator_chains.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/3543fd5501e531ab/out/flat_operator_chains-3543fd5501e531ab)
+
+running 7 tests
+test a_ten_thousand_term_sum_is_the_left_fold_bit_for_bit ... ok
+test a_type_error_anywhere_in_a_long_sum_is_the_chain_s_error ... ok
+test a_ten_thousand_operand_or_chain_answers_what_the_in_list_answers ... ok
+test a_ten_thousand_arm_union_answers_every_arm_in_order ... ok
+test a_ten_thousand_operand_or_chain_keeps_three_valued_errors ... ok
+test true_nesting_is_bounded_by_the_stack ... ok
+test five_thousand_term_chains_cross_a_service_as_text ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+     Running tests/flat_property_paths.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/32741e2ccc94a4f1/out/flat_property_paths-32741e2ccc94a4f1)
+
+running 8 tests
+test deeply_nested_plain_paths_translate_before_evaluation ... ok
+test modified_steps_inside_a_long_chain_keep_their_meaning ... ok
+test nested_path_groups_are_bounded_by_the_stack ... ok
+test every_short_flat_sequence_is_its_nested_chain_and_its_translation ... ok
+test a_five_thousand_arm_alternative_is_the_bag_union_of_its_arms ... ok
+test every_short_flat_alternative_is_its_nested_chain_and_its_union ... ok
+test two_thousand_step_paths_cross_a_service_as_text ... ok
+test a_five_thousand_step_sequence_answers_the_one_pair_it_connects ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.32s
+
+     Running tests/fold_e2e.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/ad34dc04f008fd0e/out/fold_e2e-ad34dc04f008fd0e)
+
+running 21 tests
+test fold_empty_group_is_the_empty_map ... ok
+test fold_distinct_collapses_a_repeated_term ... ok
+test fold_keeps_every_null_element_without_distinct ... ok
+test fold_map_drops_a_pair_with_a_blank_node_key ... ok
+test fold_distinct_collapses_repeated_nulls_to_one ... ok
+test fold_distinct_separates_two_spellings_of_one_value ... ok
+test fold_map_drops_a_pair_with_an_unbound_key ... ok
+test fold_one_element_list ... ok
+test fold_map_keeps_a_pair_with_an_unbound_value ... ok
+test fold_map_order_by_keeps_the_last_binding_of_a_repeated_key ... ok
+test fold_map_order_by_desc_changes_which_binding_survives ... ok
+test fold_order_by_applies_multiple_conditions_in_order ... ok
+test fold_order_by_sorts_an_unbound_key_first ... ok
+test fold_order_by_sorts_the_group_before_folding ... ok
+test fold_order_by_desc_reverses_the_group ... ok
+test fold_produces_one_composite_per_group ... ok
+test fold_two_arguments_build_a_map ... ok
+test fold_writes_an_unbound_argument_as_a_null_element ... ok
+test two_evaluations_of_one_fold_are_the_same_term ... ok
+test a_large_group_folds_to_the_same_list_a_small_one_would ... ok
+test fold_empty_group_is_the_empty_list ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/function_body_relation_witness.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/6e5ab9ee81bbf08b/out/function_body_relation_witness-6e5ab9ee81bbf08b)
+
+running 7 tests
+test a_body_is_parsed_once_per_text_and_environment ... ok
+test a_different_environment_reparses_the_same_body ... ok
+test an_expression_body_that_invokes_no_relation_attests_nothing ... ok
+test an_expression_body_s_relation_attests_on_the_calling_query_s_receipt ... ok
+test a_sibling_iri_sharing_a_registered_prefix_stays_ordinary_data ... ok
+test a_function_body_s_relation_attests_on_the_calling_query_s_receipt ... ok
+test a_body_naming_no_registered_relation_is_ordinary_data_and_attests_nothing ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/governed_parallel_allocation.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/7dbd09d9a33309c9/out/governed_parallel_allocation-7dbd09d9a33309c9)
+
+running 1 test
+test forked_high_cost_rows_stop_with_bounded_workspace_and_work ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.59s
+
+     Running tests/governed_query.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/d7c920d4964078d1/out/governed_query-d7c920d4964078d1)
+
+running 27 tests
+test ac1_query_governors_accepts_every_governor_and_reaches_evaluation ... ok
+test a_fallible_federated_view_composes_page_and_remote_evidence ... ok
+test admission_refuses_an_estimated_ceiling_breach_before_evaluating ... ok
+test ac2_trip_is_neither_complete_nor_error ... ok
+test answer_cap_boundary_is_inclusive ... ok
+test ac2_ask_with_a_nonempty_certain_set_keeps_the_trip_and_carries_true ... ok
+test budget_trip_can_never_masquerade_as_an_empty_complete_result ... ok
+test bookkeeping_cell_limit_retains_saturated_forecast_refusal ... ok
+test bnode_reservation_exhaustion_is_a_governor_outcome_not_an_unbound_answer ... ok
+test a_withheld_bound_names_the_barrier_that_withheld_it ... ok
+test construct_blank_reservations_obey_scratch_bytes_after_where_completes ... ok
+test d6_precedence_order ... ok
+test every_complete_outcome_has_complete_evidence ... ok
+test an_earlier_fuel_trip_cannot_bypass_the_answer_cap_on_any_result_sequence ... ok
+test explain_reports_a_deterministic_per_node_ledger ... ok
+test metered_governors_measure_an_execution_without_bounding_it ... ok
+test ledger_attributes_nested_lateral_rhs_rows_to_the_true_output ... ok
+test cutting_an_upper_bound_at_the_answer_cap_withholds_the_bound ... ok
+test ledger_attributes_lateral_rhs_work_to_the_rhs_nodes ... ok
+test prepared_plans_do_not_share_a_budget_across_runs ... ok
+test public_blank_node_filter_cannot_forge_an_upper_bound ... ok
+test the_answer_cap_governs_describe_output_triples_at_the_same_inclusive_boundary ... ok
+test the_answer_cap_governs_construct_output_triples_at_the_same_inclusive_boundary ... ok
+test stop_only_governors_checkpoint_inside_large_bgp_path_and_expression_loops ... ok
+test a_fallible_view_reports_a_trip_as_budget_exhausted_with_both_meters ... ok
+test answer_cap_stops_the_scan_rather_than_materializing_everything ... ok
+test plain_bind_reuse_preserves_bound_unbound_rows_and_projected_multiplicity ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/governed_update.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/10377c193faab046/out/governed_update-10377c193faab046)
+
+running 26 tests
+test a_parse_failure_is_an_error_not_an_exhausted_budget ... ok
+test a_missing_host_seam_is_an_error_not_an_exhausted_budget ... ok
+test a_trip_inside_a_bulk_operation_still_leaves_the_store_byte_identical ... ok
+test a_remote_request_ceiling_bounds_load_before_the_fetch ... ok
+test a_latched_stop_signal_stops_every_operation_kind_before_it_runs ... ok
+test a_where_stopped_part_way_applies_none_of_the_mutation_it_had_computed ... ok
+test an_intermediate_cell_ceiling_refuses_an_update_whose_where_would_breach_it ... ok
+test an_intermediate_cell_ceiling_bounds_update_staging_before_limit_plus_one ... ok
+test a_where_clause_stops_on_the_fuel_ceiling_and_applies_nothing ... ok
+test a_governor_trip_inside_the_where_crosses_as_a_typed_governor_not_a_diagnostic ... ok
+test a_where_clause_charges_exactly_as_the_same_pattern_in_a_select ... ok
+test a_governed_update_over_triple_terms_charges_and_rolls_back ... ok
+test an_ungoverned_update_is_the_execution_it_was_before_governors_existed ... ok
+test graph_publication_observes_the_post_freeze_stop_before_assigning_the_arc ... ok
+test every_mutating_operation_kind_charges_and_stops ... ok
+test load_is_not_issued_when_the_stop_signal_latches_at_the_host_seam ... ok
+test load_is_not_issued_when_the_stop_signal_is_already_latched ... ok
+test graph_silent_semantic_noops_do_not_suppress_cancellation_or_deadline ... ok
+test load_charges_for_the_document_it_ingests ... ok
+test load_silent_does_not_launder_a_governor_trip_into_a_noop_success ... ok
+test graph_publication_bulk_withdrawal_stops_between_empty_declarations ... ok
+test load_returning_after_cancellation_is_discarded_before_publication ... ok
+test the_answer_cap_does_not_bound_a_mutation ... ok
+test insert_template_blank_reservations_trip_atomically_after_where_completes ... ok
+test update_governed_trip_leaves_the_store_byte_identical ... ok
+test graph_metadata_does_not_reprice_transfer_fuel_or_publish_an_earlier_create_on_refusal ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/governor_correctness.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/c2f9fc301a3f46fc/out/governor_correctness-c2f9fc301a3f46fc)
+
+running 9 tests
+test an_early_where_trip_is_sound_for_ask_construct_and_describe ... ok
+test every_non_select_result_form_matches_the_ungoverned_oracle ... ok
+test an_ungoverned_run_keeps_the_fork_it_always_had ... ok
+test a_governed_union_reports_one_outcome_however_it_is_scheduled ... ok
+test filter_exists_fuel_is_invariant_under_worker_count ... ok
+test certain_answers_are_always_a_subset_of_the_ungoverned_answers ... ok
+test possible_answers_always_contain_the_ungoverned_answers ... ok
+test a_larger_budget_never_yields_fewer_certain_answers ... ok
+test certified_prefix_is_stable_across_budget_increases ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.66s
+
+     Running tests/graph_constant_membership.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/726ff7db27484dba/out/graph_constant_membership-726ff7db27484dba)
+
+running 3 tests
+test delta_snapshot_addresses_only_named_graphs ... ok
+test frozen_dataset_addresses_only_named_graphs ... ok
+test composite_view_addresses_only_named_graphs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/graph_scope_admission.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/0201be7611ad78bc/out/graph_scope_admission-0201be7611ad78bc)
+
+running 1 test
+test a_graph_name_that_names_no_graph_is_priced_as_an_empty_scope ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/graph_var_narrowing.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/e6c5338a6f14dc87/out/graph_var_narrowing-e6c5338a6f14dc87)
+
+running 8 tests
+test a_result_whose_every_graph_was_row_free_still_carries_the_right_columns ... ok
+test graph_var_binds_every_named_graph_including_empty_and_side_table_only ... ok
+test graph_var_materializes_only_the_pages_that_own_a_named_graph ... ok
+test graph_var_whole_graph_scan_agrees_across_backends ... ok
+test a_row_free_graph_costs_no_data_probe_yet_still_enumerates ... ok
+test retaining_a_declared_empty_graph_keeps_it_bound_by_graph_var ... ok
+test graph_var_answers_from_a_graph_whose_only_rows_are_statement_layer_rows ... ok
+test graph_var_keeps_evaluating_shapes_that_answer_without_any_row ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/join_output_alloc.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/b08adabbf86bce09/out/join_output_alloc-b08adabbf86bce09)
+
+running 1 test
+test explaining_sparse_materializing_joins_allocates_for_real_results ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/golden.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-testkit/dc980d564bac837a/out/golden-dc980d564bac837a)
+
+running 11 tests
+test bytes_probe ... ok
+test mode_probe ... ok
+test a_missing_binary_golden_fails_and_names_its_own_switch ... ok
+test an_identical_binary_golden_passes_and_a_difference_names_its_offset ... ok
+test a_missing_golden_fails_and_names_the_regeneration_switch ... ok
+test a_text_check_against_a_golden_that_is_not_utf8_reports_a_byte_difference ... ok
+test an_identical_golden_passes_and_any_byte_difference_fails ... ok
+test regeneration_writes_the_bytes_verbatim_and_creates_directories ... ok
+test the_macro_resolves_the_calling_crates_golden_directory ... ok
+test a_binary_golden_regenerates_only_when_its_own_switch_is_one ... ok
+test only_the_value_one_switches_to_regeneration ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/harness.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-testkit/e63cf44bdc5a1a41/out/harness-e63cf44bdc5a1a41)
+
+running 28 tests
+test a_conclusion_fails_exactly_when_a_case_failed ... ok
+test a_returned_failure_is_reported_with_its_message ... ok
+test a_trial_reports_its_name_and_ignored_flag ... ok
+test failed_carries_its_message_or_none ... ok
+test duplicate_case_names_are_refused_and_distinct_names_run ... ok
+test every_case_runs_across_many_threads ... ok
+test help_prints_usage_and_succeeds ... ok
+test color_always_paints_the_result_words ... ok
+test an_unknown_flag_is_refused_and_a_known_one_runs_every_case ... ok
+test filters_skip_and_exact_select_cases_and_count_the_rest_as_filtered_out ... ok
+test a_failed_run_and_a_refused_command_line_exit_with_the_error_code ... ok
+test nocapture_prints_the_panic_as_it_happens ... ok
+test list_prints_names_in_libtest_form ... ok
+test ignored_and_include_ignored_run_the_ignored_case ... ok
+test show_output_lists_the_successes ... ok
+test terse_prints_one_character_per_case ... ok
+test the_parallel_run_has_the_same_lines_and_tally ... ok
+test the_fixture_reports_libtest_output_serially_and_exits_non_zero ... ok
+test the_parser_accepts_the_libtest_flag_set ... ok
+test the_parser_refuses_what_libtest_refuses_and_accepts_the_neighbours ... ok
+test the_seal_is_transparent_natively ... ok
+test required_exact_filters_execute_every_requested_case ... ok
+test the_tally_line_is_the_one_the_conformance_scraper_reads ... ok
+test a_serial_run_prints_every_line_too ... ok
+test cases_printing_from_worker_and_spawned_threads_do_not_block_the_run ... ok
+test the_environment_supplies_threads_and_nocapture_when_the_flags_are_absent ... ok
+test required_exact_filters_refuse_incomplete_execution ... ok
+test harness_main_registers_cases_by_name_in_written_order ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/emoji_predicate.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-text/f4aba642ed772f20/out/emoji_predicate-f4aba642ed772f20)
+
+running 1 test
+test every_emoji_spelling_and_protected_scalar_matches_the_input_data ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/exclusion_membership.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-text/4c5ec7f0bb587c4d/out/exclusion_membership-4c5ec7f0bb587c4d)
+
+running 10 tests
+test the_declared_basis_is_membership_and_it_registers ... ok
+test an_unbound_document_is_not_a_lookup ... ok
+test a_candidate_bound_invocation_is_a_point_lookup ... ok
+test membership_is_admitted_from_an_exhaustive_host_and_from_a_lossy_one ... ok
+test every_document_agrees_with_the_stream_in_both_directions ... ok
+test an_observed_rank_is_still_ranked ... ok
+test the_point_score_is_the_streamed_score_exactly ... ok
+test the_engine_reports_a_lone_blank_as_unobserved_and_nothing_else ... ok
+test a_rank_blank_shared_with_a_triple_is_observed_and_ranked ... ok
+test a_possible_lookup_scores_one_document_whatever_the_corpus_holds ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/field_populations.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-text/9ed937f8fdfacc82/out/field_populations-9ed937f8fdfacc82)
+
+running 5 tests
+test populations_and_totals_are_checked_before_scoring ... ok
+test dense_populations_preserve_every_raw_score_and_legacy_identity ... ok
+test sparse_shortest_normalization_and_bounds_match_the_reference ... ok
+test index_carriers_follow_partition_and_remapping_facts ... ok
+test sparse_field_means_match_the_unbounded_reference ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/fixed_point.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-text/b7a942eb58d77b3e/out/fixed_point-b7a942eb58d77b3e)
+
+running 9 tests
+test checked_mul_and_div_round_trip ... ok
+test ln_of_e_is_one ... ok
+test ln_of_one_is_zero ... ok
+test ln_of_zero_and_negative_are_domain_errors ... ok
+test overflow_is_a_hard_error_not_a_wrap ... ok
+test ln_agrees_with_the_f64_oracle ... ok
+test the_range_extremes_are_admitted_not_only_refused ... ok
+test to_decimal_lexical_is_exact_and_fixed_width ... ok
+test ln_is_a_pure_function ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/index.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-text/f851e6a9edac3ff1/out/index-f851e6a9edac3ff1)
+
+running 21 tests
+test a_duplicate_predicate_is_a_config_error ... ok
+test a_document_without_lexical_terms_retains_auxiliary_evidence ... ok
+test an_empty_predicate_set_is_a_config_error ... ok
+test a_non_iri_predicate_is_a_config_error ... ok
+test a_mistyped_predicate_is_named_and_the_intended_configuration_is_clean ... ok
+test an_empty_dataset_is_no_shortfall_and_still_attests_a_generation ... ok
+test an_annotation_only_predicate_is_found_by_the_coverage ... ok
+test a_named_graph_selector_restricts_the_walk ... ok
+test a_predicate_absent_from_the_dataset_contributes_no_rows ... ok
+test annotation_layer_literals_are_indexed ... ok
+test an_index_over_an_empty_dataset_holds_nothing_and_still_attests_a_generation ... ok
+test asserted_and_annotation_text_merge_into_one_document ... ok
+test an_unloaded_predicate_reads_as_a_shortfall_and_an_iri_valued_one_does_not ... ok
+test blank_node_subjects_are_indexed ... ok
+test blank_node_labels_change_the_fingerprint ... ok
+test non_literal_objects_are_skipped_not_errors ... ok
+test language_splits_documents_but_base_direction_does_not ... ok
+test triple_term_subjects_are_indexed ... ok
+test statistics_are_per_partition_not_pooled ... ok
+test two_independently_built_datasets_share_a_fingerprint ... ok
+test untagged_literals_do_not_collide_with_a_real_language_tag ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/evaluation_limits.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-validate/583046f00635b39c/out/evaluation_limits-583046f00635b39c)
+
+running 4 tests
+test a_rules_refusal_names_the_hosts_knob_and_the_neighbour_completes ... ok
+test the_limits_in_force_reach_the_reports_contract_hash ... ok
+test a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes ... ok
+test a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answers ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/identity_empty_component.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-validate/2521134903860b26/out/identity_empty_component-2521134903860b26)
+
+running 3 tests
+test explain_renders_the_empty_component_as_quoted_empty_text ... ok
+test an_admission_refusal_renders_the_empty_component_as_quoted_empty_text ... ok
+test diff_renders_the_empty_component_on_either_side_and_beside_a_missing_one ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/import_key_policy.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-validate/a8c197fec1a1972f/out/import_key_policy-a8c197fec1a1972f)
+
+running 4 tests
+test a_relative_or_empty_key_is_refused_by_both_boundaries ... ok
+test the_empty_key_is_refused_by_both_boundaries ... ok
+test two_distinct_absolute_keys_are_accepted_by_both_boundaries ... ok
+test a_repeated_key_is_refused_by_both_boundaries ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/exact_governance.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-xsd/447c8d17f0672c81/out/exact_governance-447c8d17f0672c81)
+
+running 14 tests
+test admitted_operator_comparison_preserves_lossy_promotion_and_physical_refusal ... ok
+test inline_ieee_append_refuses_before_mutation_and_never_grows ... ok
+test inline_ieee_text_preserves_extreme_values_without_heap_traffic ... ok
+test rounded_division_prices_a_long_scaled_dividend ... ok
+test rounded_division_prices_a_long_scaled_divisor ... ok
+test temporal_native_values_and_deferred_refusals_allocate_no_heap ... ok
+test exact_division_positive_scale_gap_covers_retained_result ... ok
+test full_native_parser_preserves_all_value_families_and_original_heap_owners ... ok
+test a_vast_scale_is_charged_where_it_is_paid ... ok
+test unary_functions_are_linear ... ok
+test division_is_charged_at_its_policy ... ok
+test a_long_integer_converts_to_a_float_from_its_length ... ok
+test a_lopsided_product_costs_what_it_is_charged ... ok
+test alignment_is_charged_at_the_scale_gap ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.05s
+
+     Running tests/exact_tower.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-xsd/02915e52891f3d6b/out/exact_tower-02915e52891f3d6b)
+
+running 23 tests
+test division_by_zero_is_refused_and_a_unit_divisor_is_not ... ok
+test factorials_past_i128_are_exact ... ok
+test a_scaled_divisor_past_two_to_the_127_rounds_like_the_oracle ... ok
+test comparison_with_a_double_matches_the_oracle ... ok
+test cost_estimates_bound_the_result ... ok
+test bounded_narrowing_is_exact_or_refused ... ok
+test lexical_refusals_have_valid_neighbours ... ok
+test narrowing_refuses_one_past_each_bound_and_accepts_the_bound ... ok
+test non_finite_sources_are_refused_and_finite_extremes_are_not ... ok
+test non_terminating_quotients_are_refused_and_terminating_ones_are_exact ... ok
+test power_estimates_track_the_actual_size ... ok
+test decimal_rounding_matches_the_oracle ... ok
+test scale_overflow_is_refused_and_a_representable_product_is_not ... ok
+test the_tower_agrees_with_the_bounded_arithmetic ... ok
+test decimal_division_matches_the_oracle ... ok
+test zero_rounds_to_zero_in_every_direction_at_every_precision ... ok
+test integer_arithmetic_matches_the_oracle ... ok
+test float_sources_convert_exactly ... ok
+test float_conversions_round_once ... ok
+test rational_arithmetic_matches_the_oracle ... ok
+test decimal_arithmetic_matches_the_oracle ... ok
+test karatsuba_products_match_the_oracle ... ok
+test vast_scales_match_the_oracle ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.54s
+
+     Running tests/exact_values.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-xsd/d6f319f2efab130e/out/exact_values-d6f319f2efab130e)
+
+running 9 tests
+test arithmetic_that_overflowed_now_returns_the_exact_value ... ok
+test comparison_and_the_exact_order_see_every_digit ... ok
+test cost_is_charged_for_every_tower_operation ... ok
+test decimals_past_the_bounded_form_parse_exactly ... ok
+test data_ranges_and_value_identity_are_exact_at_any_size ... ok
+test derived_integer_bounds_still_refuse_and_unbounded_derived_types_do_not ... ok
+test division_follows_the_policy_and_refuses_only_what_it_must ... ok
+test integers_past_i128_parse_exactly_and_in_range_ones_stay_bounded ... ok
+test rounding_functions_keep_the_family ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/exact_wasm_determinism.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-xsd/886843c43585b4fe/out/exact_wasm_determinism-886843c43585b4fe)
+
+running 3 tests
+test the_hand_values_are_reproduced_on_this_target ... ok
+test the_oracle_vectors_replay_on_this_target ... ok
+determinism-digest case=exact-tower-transcript digest=7d6b1f15734f09aa corpus_len=365276
+test the_transcript_digest_is_reproduced_on_this_target ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/frozen_vectors.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-xsd/6ac1914d3fe58168/out/frozen_vectors-6ac1914d3fe58168)
+
+running 7 tests
+test numeric_predicates_match_the_frozen_vectors ... ok
+test json_number_order_matches_the_frozen_pairs ... ok
+test gcd_matches_the_frozen_divisors ... ok
+test calendar_matches_the_frozen_months ... ok
+test from_binary_matches_the_frozen_expansions ... ok
+test wide_arithmetic_matches_the_frozen_vectors ... ok
+test rfc3339_matches_every_frozen_spelling ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
++ cargo test --workspace --locked --test '[k-o]*'
+   Compiling purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/bench)
+   Compiling purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shex)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/slice)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shapes)
+   Compiling purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/validate)
+   Compiling purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-capi)
+   Compiling purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cli)
+   Compiling purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-conformance)
+   Compiling purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/purrdf)
+   Compiling purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/geo)
+   Compiling helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/helper-census)
+   Compiling purrdf-mime v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/mime)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/retrieval)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/entail)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Finished `test` profile [optimized] target(s) in 2m 12s
+     Running tests/non_rust_ratchet.rs (/opt/purrdf-508-qualification/build/debug/build/helper-census/1caa3bd2c1ec531b/out/non_rust_ratchet-1caa3bd2c1ec531b)
+
+running 40 tests
+test a_missing_integration_ref_is_an_error_that_says_so ... ok
+test a_whitespace_only_python_file_needs_no_explanation ... ok
+test a_short_or_misplaced_reason_is_refused ... ok
+test a_whitespace_only_neighbour_with_code_is_refused ... ok
+test an_explained_new_test_file_is_accepted ... ok
+test an_explicit_base_compares_against_that_commit ... ok
+test an_unchanged_legacy_tree_is_accepted ... ok
+test a_change_without_non_rust_code_is_accepted ... ok
+test binary_attributes_cannot_hide_growth ... ok
+test binary_neighbour_shrinking_under_binary_attributes_is_accepted ... ok
+test f1_neighbour_a_moved_script_that_says_why_not_rust_is_accepted ... ok
+test f1_a_script_renamed_inside_scripts_and_grown_is_refused ... ok
+test f1_a_script_moved_out_of_scripts_and_grown_is_refused ... ok
+test f3_neighbour_an_unexplained_file_over_64_kib_is_refused ... ok
+test f3_an_explained_file_over_64_kib_is_accepted ... ok
+test f4_cjs_growth_in_scripts_is_refused ... ok
+test f4_mts_growth_in_scripts_is_refused ... ok
+test f4_cjs_and_mts_growth_in_crate_tests_is_refused ... ok
+test f4_neighbour_cjs_and_mts_shrinking_is_accepted ... ok
+test f6_a_new_shell_script_embedding_python_needs_an_explanation ... ok
+test f6_adding_a_node_heredoc_to_a_legacy_shell_script_is_refused ... ok
+test f2_neighbour_an_explained_copy_is_accepted_under_every_setting ... ok
+test f5_neighbour_readding_no_larger_is_accepted ... ok
+test f6_extensionless_shebang_scripts_need_an_explanation ... ok
+test f6_growing_a_python_heredoc_in_a_legacy_shell_script_is_refused ... ok
+test f2_rename_and_copy_configuration_cannot_change_the_verdict ... ok
+test f7_f8_every_enforcement_point_runs_the_ratchet ... ok
+test f5_deleting_then_readding_a_grown_legacy_file_is_refused ... ok
+test f6_neighbour_a_new_shell_script_embedding_python_with_a_reason_is_accepted ... ok
+test f6_neighbour_explained_files_under_every_code_extension_are_accepted ... ok
+test f6_neighbour_shebang_scripts_with_a_reason_and_plain_shell_are_accepted ... ok
+test f6_neighbour_shell_growth_outside_runtime_heredocs_and_shrinking_are_accepted ... ok
+test f6_new_pyw_pyi_cts_tsx_jsx_files_need_an_explanation ... ok
+test growth_under_every_ratcheted_root_is_refused ... ok
+test new_files_under_the_classic_code_extensions_need_an_explanation ... ok
+test shipped_index_mjs_growth_is_accepted ... ok
+test f8_a_merge_bringing_in_an_unexplained_file_is_refused ... ok
+test vectors_and_generated_additions_need_no_explanation ... ok
+test f8_neighbour_merging_the_integration_branch_is_accepted ... ok
+test the_working_tree_target_sees_unstaged_and_untracked_files ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.68s
+
+     Running tests/multimodal_exact_knn.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf/74d77ec61a50a0a8/out/multimodal_exact_knn-74d77ec61a50a0a8)
+
+running 2 tests
+test a_bound_candidate_beside_a_bound_count_is_the_ranked_reading_at_a_search_per_candidate ... ok
+test a_text_and_exact_knn_read_stops_early_on_lookups_and_scans_the_space_once ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/multimodal_exclusion_lookup.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf/de920420bcf96577/out/multimodal_exclusion_lookup-de920420bcf96577)
+
+running 2 tests
+test a_vector_lookup_computes_no_distance_and_visits_no_graph_node ... ok
+test a_declared_basis_shortens_a_text_and_vector_read_without_moving_the_answer ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/lane_common_laws.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-bench/b5ac02f77c955bb9/out/lane_common_laws-b5ac02f77c955bb9)
+
+running 35 tests
+test a_missing_query_file_is_refused_naming_the_file_and_the_arena_knob ... ok
+test a_certificate_does_not_outlive_the_run_that_wrote_it ... ok
+test a_file_that_is_not_n_quads_is_refused_and_a_real_one_is_not ... ok
+test a_file_whose_magic_is_wrong_is_refused_and_a_correct_one_is_not ... ok
+test a_query_file_is_accepted_when_it_is_present_readable_and_non_empty ... ok
+test a_capture_is_read_only_when_there_is_something_to_read ... ok
+test a_capture_taken_outside_the_scratch_directory_is_still_swept_on_a_signal ... ok
+test a_binary_that_cannot_run_is_refused_for_every_lane_at_once ... ok
+test a_multi_line_diagnostic_survives_flattening_instead_of_being_truncated ... ok
+test a_uint_knob_accepts_the_largest_value_it_can_carry_intact ... ok
+test a_uint_knob_is_normalised_so_one_run_cannot_publish_two_labels_for_one_number ... ok
+test a_positive_knob_refuses_zero_and_accepts_one ... ok
+test an_empty_query_file_is_refused_rather_than_sent_to_the_engine ... ok
+test an_empty_artifact_is_refused_and_a_non_empty_one_is_not ... ok
+test a_short_query_set_is_refused_and_a_complete_one_is_not ... ok
+test a_uint_knob_refuses_a_value_bash_would_wrap_rather_than_substituting_a_different_number ... ok
+test a_write_that_cannot_be_opened_names_the_knob_and_not_the_payload ... ok
+test a_certificate_does_not_depend_on_the_scratch_directory ... ok
+test an_unreadable_query_file_is_refused_when_the_process_genuinely_cannot_read_it ... ok
+test every_shared_lane_helper_appears_in_the_design_doc_inventory ... ok
+test every_stderr_capture_into_the_scratch_directory_is_reset_first ... ok
+test an_unwritable_capture_path_is_a_scratch_failure_named_as_one ... ok
+test sourcing_the_shared_laws_pins_collation_whatever_the_caller_had ... ok
+test the_digest_fallback_names_the_directory_once_and_quotes_the_status_it_has ... ok
+test a_uint_knob_refuses_what_is_not_an_unsigned_integer_and_quotes_it_back ... ok
+test the_query_set_digest_distinguishes_sets_a_concatenation_would_conflate ... ok
+test the_query_set_digest_names_a_vanished_directory_instead_of_raising ... ok
+test the_query_set_digest_refuses_a_name_a_manifest_record_cannot_represent ... ok
+test the_query_set_digest_is_identical_for_identical_content_elsewhere ... ok
+test digesting_a_file_is_streamed_stable_and_refuses_what_it_cannot_read ... ok
+test the_query_set_digest_refuses_an_empty_directory_rather_than_certifying_nothing ... ok
+test a_required_pin_is_returned_and_a_missing_one_is_refused_by_name ... ok
+test the_query_set_digest_refuses_a_symlink_so_the_certificate_stays_closed ... ok
+test the_query_set_tripwire_fires_when_the_set_changes_under_it ... ok
+test an_optional_pin_reports_absence_and_dies_on_a_broken_lookup ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+     Running tests/lubm_check_cli.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-bench/f29f703a103f4df2/out/lubm_check_cli-f29f703a103f4df2)
+
+running 5 tests
+test schema_projection_changes_all_rdf_positions_and_preserves_w3c_and_lexical_content ... ok
+test external_output_admission_uses_source_rules_and_rejects_personal_exclusions ... ok
+test native_config_results_and_cargo_readers_fail_actionably ... ok
+test retained_receipts_refuse_inventory_payload_conversion_and_acceptance_tampering ... ok
+test complete_graph_receipts_and_exact_native_oracles_use_real_entrypoints ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.11s
+
+     Running tests/lubm_cli.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-bench/bd45cd0069bd4eb6/out/lubm_cli-bd45cd0069bd4eb6)
+
+running 4 tests
+test invalid_arguments_and_existing_outputs_never_succeed_or_overwrite ... ok
+test independent_graph_controls_refuse_removed_relationships_and_invented_membership ... ok
+test named_seed_index_matrix_satisfies_every_published_graph_constraint ... ok
+test processes_paths_locale_ranges_and_configuration_have_declared_identity ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.60s
+
+     Running tests/make_bench_lanes.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-bench/9464cce4fa54fc7d/out/make_bench_lanes-9464cce4fa54fc7d)
+
+running 17 tests
+test a_stand_in_writes_nowhere_but_the_destination_a_lane_actually_names ... ok
+test every_lane_refuses_a_directory_as_its_binary_knob_and_names_it ... ok
+test every_lane_refuses_a_binary_that_produces_nothing_and_publishes_no_digest ... ok
+test every_lane_refuses_a_binary_knob_that_does_not_exist_and_quotes_the_bytes_back ... ok
+test every_lane_refuses_a_binary_that_cannot_run_without_blaming_the_corpus ... ok
+test every_lane_refuses_a_binary_that_converts_everything_to_nothing_and_publishes_no_digest ... ok
+test the_watdiv_lane_accepts_the_pinned_scale_and_an_ordinary_seed ... ok
+test the_watdiv_lane_refuses_a_pack_that_is_not_a_pack_and_stamps_nothing ... ok
+test the_watdiv_lane_refuses_a_seed_that_is_not_a_number ... ok
+test the_watdiv_lane_refuses_an_unpinned_scale_by_name ... ok
+test every_lane_accepts_a_credible_binary_at_an_awkward_but_legal_path has been running for over 60 seconds
+test every_lane_names_its_arena_knob_when_the_arena_cannot_be_created has been running for over 60 seconds
+test native_lubm_seed_index_keep_u64_identity_before_acquisition has been running for over 60 seconds
+test the_lubm_join_budget_is_admitted_before_acquisition has been running for over 60 seconds
+test the_lubm_lane_refuses_a_document_base_that_is_not_an_absolute_iri has been running for over 60 seconds
+test the_lubm_lane_refuses_a_zero_university_count_and_accepts_one has been running for over 60 seconds
+test the_lubm_lane_refuses_an_ontology_iri_that_is_not_absolute has been running for over 60 seconds
+test the_lubm_lane_refuses_a_zero_university_count_and_accepts_one ... ok
+test the_lubm_lane_refuses_a_document_base_that_is_not_an_absolute_iri ... ok
+test the_lubm_lane_refuses_an_ontology_iri_that_is_not_absolute ... ok
+test every_lane_accepts_a_credible_binary_at_an_awkward_but_legal_path ... ok
+test every_lane_names_its_arena_knob_when_the_arena_cannot_be_created ... ok
+test native_lubm_seed_index_keep_u64_identity_before_acquisition ... ok
+test the_lubm_join_budget_is_admitted_before_acquisition ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 340.75s
+
+     Running tests/make_scale_corpus.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-bench/f3238953d79eac6c/out/make_scale_corpus-f3238953d79eac6c)
+
+running 29 tests
+test make_scale_corpus_fails_the_shard_when_a_binary_exits_zero_without_writing_its_file ... ok
+test make_scale_corpus_files_mode_fails_loudly_when_a_shard_cannot_be_written ... ok
+test make_scale_corpus_keeps_every_shard_manifest_of_a_run_that_succeeded ... ok
+test make_scale_corpus_files_mode_sorted_cat_matches_a_direct_whole_run_byte_for_byte ... ok
+test make_scale_corpus_leaves_no_shard_manifest_behind_a_failed_run ... ok
+test make_scale_corpus_keeps_the_whole_run_manifest_of_a_run_that_succeeded ... ok
+test make_scale_corpus_leaves_no_whole_run_manifest_behind_a_failed_run ... ok
+test make_scale_corpus_accepts_empty_and_absolute_path_knobs ... ok
+test make_scale_corpus_manifest_path_with_a_space_survives_the_make_entry_point ... ok
+test make_scale_corpus_accepts_a_scale_bin_reached_by_symlink_or_a_relative_path ... ok
+test make_scale_corpus_names_the_knob_when_the_whole_run_manifest_cannot_be_written ... ok
+test make_scale_corpus_never_lets_a_manifest_path_reach_a_shell ... ok
+test make_scale_corpus_out_path_with_a_space_survives_the_make_entry_point ... ok
+test make_scale_corpus_never_certifies_a_corpus_a_binary_did_not_produce ... ok
+test make_scale_corpus_pipe_mode_fails_when_a_shard_fails ... ok
+test make_scale_corpus_accepts_a_scale_bin_whose_path_is_unusual_but_real ... ok
+test make_scale_corpus_pipe_mode_at_level_one_is_bare_banner_free_only_from_gnu_make_4_4 ... ok
+test make_scale_corpus_refuses_a_directory_as_scale_bin ... ok
+test documented_pipe_idiom_is_banner_free_under_a_wrapper_make_on_every_make_version ... ok
+test make_scale_corpus_pipe_mode_is_banner_free_at_level_one_when_suppression_is_explicit ... ok
+test make_scale_corpus_scale_bin_is_taken_literally_and_never_resolves_to_another_binary ... ok
+test make_scale_corpus_pipe_mode_matches_a_direct_whole_run_byte_for_byte ... ok
+test make_scale_corpus_rejects_an_unrunnable_sink_with_a_lane_diagnostic ... ok
+test make_scale_corpus_sink_argument_survives_the_make_entry_point ... ok
+test make_scale_corpus_stream_mode_fails_when_a_shard_fails ... ok
+test make_scale_corpus_takes_shell_and_make_metacharacters_in_a_path_literally ... ok
+test make_scale_corpus_reproduces_a_whole_run_at_uneven_and_oversized_shard_counts ... ok
+test make_scale_corpus_refuses_a_run_that_produced_less_than_its_manifest_certifies ... ok
+test make_scale_corpus_still_runs_a_legitimately_tiny_corpus ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.21s
+
+     Running tests/native_profile.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-capi/7a0132bd7f858782/out/native_profile-7a0132bd7f858782)
+
+running 36 tests
+test hosted::tests::cargo_c_identity_refuses_successful_generic_help_and_wrong_release ... ok
+test hosted::tests::hosted_inventory_and_exact_counterfactual_are_closed ... ok
+test hosted::tests::physical_runner_identity_ignores_frequency_but_refuses_missing_observations ... ok
+test hosted::tests::execution_windows_refuse_missing_and_reversed_clocks ... ok
+test hosted::tests::actual_workflow_preserves_full_optional_inventory_and_failure_uploads ... FAILED
+test hosted::tests::shared_setup_requires_ordered_endpoints_and_all_owned_source_records ... ok
+test hosted::tests::private_cache_boundaries_and_upload_outputs_are_mandatory ... ok
+test hosted::tests::symlinked_case_or_cache_never_reclaims_foreign_bytes ... ok
+test phases::tests::mixed_harness_frames_preserve_strict_artifact_selection ... ok
+test hosted::tests::restoration_never_follows_an_alias_to_prior_evidence ... ok
+test phases::tests::rejects_malformed_missing_unrelated_and_ambiguous_artifacts ... ok
+test phases::tests::nul_inventory_preserves_literal_paths_and_refuses_lossy_decoding ... ok
+test phases::tests::selects_exact_package_and_retains_freshness_metadata ... ok
+test hosted::tests::restored_destinations_are_never_overwritten ... ok
+test profile::tests::cargo_configuration_absence_is_bound_and_private_values_are_excluded ... ok
+test profile::tests::cargo_configuration_malformed_responses_never_become_absence ... ok
+test profile::tests::admits_exact_nested_profile_delta_and_refuses_extra_source_changes ... ok
+test profile::tests::cold_build_and_target_are_independent_and_warm_admission_is_explicit ... ok
+test profile::tests::libtest_frames_preserve_inventory_without_inventing_c_libraries ... ok
+test profile::tests::complete_comparison_records_aggregate_cost_but_never_invents_runner_wall_time ... ok
+test profile::tests::lost_or_changed_compiler_receipts_cannot_qualify_observed_reduction ... ok
+test hosted::tests::restores_only_complete_current_attempt_and_preserves_prior_evidence ... ok
+test profile::tests::missing_malformed_ambiguous_and_tampered_child_bindings_refuse ... ok
+test profile::tests::physical_roots_normalize_without_losing_package_or_target_identity ... ok
+test profile::tests::partition_coverage_keeps_workspace_and_every_baseline_dependency_variant ... ok
+test profile::tests::mixed_children_bind_libraries_before_cleanup_and_match_actual_c_smoke ... ok
+test profile::tests::rejects_missing_failed_mismatched_tools_config_concurrency_cache_and_coverage ... ok
+test profile::tests::telemetry_preserves_selection_and_harness_arguments_and_nonbuild_commands ... ok
+test hosted::tests::stale_wrong_prefix_wrong_case_and_partial_attempt_refuse_before_any_move ... ok
+test profile::tests::warm_arm_retains_old_reports_but_attributes_only_new_or_changed_reports ... ok
+test hosted::tests::incomplete_or_changed_case_refuses_before_reclaiming_any_cache ... ok
+test hosted::tests::uploaded_case_reclamation_preserves_proof_and_all_siblings ... ok
+cargo 1.100.0-nightly (7941be6fb 2026-09-11)
+test profile::tests::actual_delegate_failures_and_missing_requests_are_hard_and_retained ... ok
+test phases::tests::child_and_validation_failures_are_recorded_and_receipt_failures_are_hard ... ok
+test profile::tests::real_sdk_metadata_uses_admitted_arm_directories_and_preserves_inventory ... ok
+test profile::tests::real_sdk_configuration_query_admits_absence_and_refuses_private_errors ... ok
+
+failures:
+
+---- hosted::tests::actual_workflow_preserves_full_optional_inventory_and_failure_uploads stdout ----
+
+thread 'hosted::tests::actual_workflow_preserves_full_optional_inventory_and_failure_uploads' (3912787) panicked at crates/rdf-capi/tests/support/hosted.rs:1050:33:
+called `Result::unwrap()` on an `Err` value: Custom { kind: Other, error: "one owned fixture parent setup must precede only the native integration-2 shard" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    hosted::tests::actual_workflow_preserves_full_optional_inventory_and_failure_uploads
+
+test result: FAILED. 35 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p purrdf-capi --test native_profile`
+make: *** [Makefile:276: test-shard] Error 101

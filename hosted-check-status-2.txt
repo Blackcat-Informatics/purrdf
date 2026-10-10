@@ -1,0 +1,8 @@
+IN_PROGRESS Build The PurRDF Book  https://github.com/Blackcat-Informatics/purrdf/actions/runs/38040854063/job/114180679554
+IN_PROGRESS Analyze (actions)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/38040851400/job/114180627348
+IN_PROGRESS Analyze (javascript-typescript)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/38040851400/job/114180627262
+IN_PROGRESS Analyze (python)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/38040851400/job/114180627226
+IN_PROGRESS Analyze (c-cpp)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/38040851400/job/114180627214
+IN_PROGRESS Analyze (rust)  https://github.com/Blackcat-Informatics/purrdf/actions/runs/38040851400/job/114180627046
+SUCCESS    CodeRabbit
+state: pending

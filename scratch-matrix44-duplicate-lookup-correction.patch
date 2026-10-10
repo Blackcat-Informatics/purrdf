@@ -1,0 +1,25 @@
+diff --git a/crates/sparql-eval/src/scratch.rs b/crates/sparql-eval/src/scratch.rs
+--- a/crates/sparql-eval/src/scratch.rs
++++ b/crates/sparql-eval/src/scratch.rs
+@@ -941,15 +941,17 @@
+         storage_error: impl FnOnce(std::collections::TryReserveError) -> E,
+         track_value: impl FnOnce(&TermValue, &mut BlankLabels, &mut u64) -> Result<(), E>,
+     ) -> Result<SolutionTerm<D::Id>, E> {
++        // A computed identity already passed promotion in this execution.
++        // Reusing it must not repeat the source lookup or retain a duplicate.
++        let hash = hash_value(&value)?;
++        if let Some(sid) = self.find_with(hash, &value, &mut equal)? {
++            return Ok(SolutionTerm::Computed(sid));
++        }
+         if !is_query_scoped_blank(&value)
+             && let Some(id) = dataset.term_id_by_value(&value).map_err(read_error)?
+         {
+             return Ok(SolutionTerm::Existing(id));
+         }
+-        let hash = hash_value(&value)?;
+-        if let Some(sid) = self.find_with(hash, &value, &mut equal)? {
+-            return Ok(SolutionTerm::Computed(sid));
+-        }
+         admit(self)?;
+         let sid = ScratchId::from_index(self.computed_count());
+         // A ghost's bytes, its labels included, were counted when it became one.

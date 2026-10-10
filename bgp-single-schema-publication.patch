@@ -1,0 +1,89 @@
+--- a/crates/sparql-eval/src/bgp.rs
++++ b/crates/sparql-eval/src/bgp.rs
+@@ -417,10 +417,7 @@
+ ) -> Result<CompiledBgp<D::Id>, EvalError> {
+     // Pass 1: collect every slot variable (real + synthetic blank) in first-seen
+     // (subject, predicate, object) order — the working column layout.
+-    let mut working = input.cloned().unwrap_or_default();
+-    for pattern in patterns {
+-        register_slots_admitted(pattern, &mut working, &ctx.growth)?;
+-    }
++    let working = collect_slots_admitted(patterns, input, &ctx.growth)?;
+ 
+     let projection = retain_projection
+         .then(|| BgpProjection::new_admitted(&working, &ctx.growth))
+@@ -1884,25 +1881,45 @@
+     Predicate(&'a NamedNodePattern),
+ }
+ 
+-/// Visit the borrowed slots on `pending`, with its top next in `(s, p, o)`
+-/// order. Nested quoted triples use that same order; ground terms yield nothing.
+-fn register_slots_admitted(
+-    pattern: &TriplePattern,
+-    schema: &mut VarSchema,
++/// Collect slots in the original subject/predicate/object first-seen order.
++/// The input keeps its original owner when no columns are added. New columns
++/// use one admitted builder, so immutable prefixes are not republished per slot.
++fn collect_slots_admitted(
++    patterns: &[TriplePattern],
++    input: Option<&VarSchema>,
+     workspace: &crate::WorkspaceCapability,
+-) -> Result<(), EvalError> {
+-    visit_triple_slots_admitted(pattern, workspace, |slot| {
+-        let variable = match slot {
+-            SlotKey::Variable(variable) => variable.clone(),
+-            SlotKey::Blank(label) => {
+-                if blank_slot_col(schema, label).is_some() {
+-                    return Ok(());
++) -> Result<VarSchema, EvalError> {
++    let empty = VarSchema::default();
++    let input = input.unwrap_or(&empty);
++    let mut builder: Option<crate::solution::SchemaBuilder> = None;
++    for pattern in patterns {
++        visit_triple_slots_admitted(pattern, workspace, |slot| {
++            let variable = match slot {
++                SlotKey::Variable(variable) => {
++                    if builder.is_none() && input.index_of(variable).is_some() {
++                        return Ok(());
++                    }
++                    variable.clone()
+                 }
+-                blank_var_admitted(label, workspace)?
+-            }
+-        };
+-        schema.push_admitted(variable, workspace).map(|_| ())
+-    })
++                SlotKey::Blank(label) => {
++                    let columns = builder.as_ref().map_or_else(|| input.vars(), crate::solution::SchemaBuilder::vars);
++                    if columns.iter().any(|variable| {
++                        variable.as_str().strip_prefix(BLANK_VAR_PREFIX) == Some(label)
++                    }) {
++                        return Ok(());
++                    }
++                    blank_var_admitted(label, workspace)?
++                }
++            };
++            if builder.is_none() {
++                let mut value = crate::solution::SchemaBuilder::new(workspace);
++                value.try_extend(input.vars().iter().cloned())?;
++                builder = Some(value);
++            }
++            builder.as_mut().expect("slot builder initialized").push(variable).map(|_| ())
++        })?;
++    }
++    builder.map_or_else(|| Ok(input.clone()), crate::solution::SchemaBuilder::finish)
+ }
+ 
+ fn blank_slot_col(schema: &VarSchema, label: &str) -> Option<usize> {
+@@ -3219,10 +3236,7 @@
+ ) -> Result<(VarSchema, PlanEstimate, AdmittedVec<usize>), EvalError> {
+     let workspace = account.capability();
+     let scope = active_dataset.scope_for(active_graph);
+-    let mut working = seed.schema.clone();
+-    for pattern in patterns {
+-        register_slots_admitted(pattern, &mut working, &workspace)?;
+-    }
++    let working = collect_slots_admitted(patterns, Some(&seed.schema), &workspace)?;
+     let seeded = !seed.schema.is_empty() || !seed.bound.is_empty() || seed.rows != 1;
+     let mut initial =
+         AdmittedVec::with_capacity(if seeded { working.len() } else { 0 }, &workspace)?;

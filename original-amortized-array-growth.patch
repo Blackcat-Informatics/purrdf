@@ -1,0 +1,100 @@
+--- a/crates/lex/src/allocation.rs
++++ b/crates/lex/src/allocation.rs
+@@ -82,6 +82,30 @@
+     reserve(&mut text, input.len())?;
+     text.push_str(input);
+     Ok(text)
++}
++
++/// Amortized array capacity shared by native vectors and UTF-8 buffers.
++/// Small buffers retain the original vector policy: eight byte elements, four
++/// elements up to 1 KiB each, or one larger element. The returned concrete layout
++/// must be admitted before allocating; this function itself allocates nothing.
++///
++/// # Errors
++/// Returns capacity overflow before any destination allocation.
++pub fn growth_capacity<T>(capacity: usize, required: usize) -> Result<usize, StorageError> {
++    if required <= capacity {
++        return Ok(capacity);
++    }
++    let first = if size_of::<T>() == 1 {
++        8
++    } else if size_of::<T>() <= 1024 {
++        4
++    } else {
++        1
++    };
++    capacity
++        .checked_mul(2)
++        .map(|doubled| doubled.max(required).max(first))
++        .ok_or(StorageError::SizeOverflow)
+ }
+ 
+ /// Exact live-buffer accounting shared by native scanners, compilers and walks.
+@@ -317,11 +341,7 @@
+             .checked_add(1)
+             .ok_or(StorageError::SizeOverflow)?;
+         if required > values.capacity() {
+-            let capacity = values
+-                .capacity()
+-                .checked_mul(2)
+-                .ok_or(StorageError::SizeOverflow)?
+-                .max(required);
++            let capacity = growth_capacity::<T>(values.capacity(), required)?;
+             self.reserve(values, capacity)?;
+         }
+         Ok(())
+@@ -480,11 +500,7 @@
+             .checked_add(suffix.len())
+             .ok_or(StorageError::SizeOverflow)?;
+         if required > text.capacity() {
+-            let capacity = text
+-                .capacity()
+-                .checked_mul(2)
+-                .ok_or(StorageError::SizeOverflow)?
+-                .max(required);
++            let capacity = growth_capacity::<u8>(text.capacity(), required)?;
+             self.reserve_string(text, capacity)?;
+         }
+         text.push_str(suffix);
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -9,17 +9,12 @@
+ 
+ use crate::EvalError;
+ 
+-fn append_capacity(len: usize, capacity: usize, additional: usize) -> Result<usize, EvalError> {
++fn append_capacity<T>(len: usize, capacity: usize, additional: usize) -> Result<usize, EvalError> {
+     let required = len
+         .checked_add(additional)
+         .ok_or(EvalError::WorkspaceBoundOverflow)?;
+-    if required <= capacity {
+-        return Ok(capacity);
+-    }
+-    capacity
+-        .checked_mul(2)
+-        .map(|doubled| doubled.max(required))
+-        .ok_or(EvalError::WorkspaceBoundOverflow)
++    purrdf_lex::allocation::growth_capacity::<T>(capacity, required)
++        .map_err(|_| EvalError::WorkspaceBoundOverflow)
+ }
+ 
+ /// Shared execution controls keep their actual payload and admission together.
+@@ -1461,7 +1456,7 @@
+         allocation: &mut Option<WorkspaceAllocation>,
+         additional: usize,
+     ) -> Result<(), EvalError> {
+-        let capacity = append_capacity(values.len(), values.capacity(), additional)?;
++        let capacity = append_capacity::<T>(values.len(), values.capacity(), additional)?;
+         self.reserve_vec(values, allocation, capacity)
+     }
+ 
+@@ -1475,7 +1470,7 @@
+         allocation: &mut Option<WorkspaceAllocation>,
+         additional: usize,
+     ) -> Result<(), EvalError> {
+-        let capacity = append_capacity(value.len(), value.capacity(), additional)?;
++        let capacity = append_capacity::<u8>(value.len(), value.capacity(), additional)?;
+         self.reserve_string(value, allocation, capacity)
+     }
+ 

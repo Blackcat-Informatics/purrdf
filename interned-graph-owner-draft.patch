@@ -1,0 +1,227 @@
+--- a/crates/sparql-eval/src/interned.rs
++++ b/crates/sparql-eval/src/interned.rs
+@@ -204,8 +204,9 @@
+     /// every borrowed result, on every row of every SHACL focus node, for an empty
+     /// dataset nobody reads. Asked or not, a query that invented no cells walks no
+     /// rows here.
+-    pub fn try_constructed_dataset(&self) -> Result<Arc<RdfDataset>, crate::EvalError> {
+-        self.ctx.constructed_dataset_of(self.seq)
++    pub fn try_constructed_dataset(&self) -> Result<crate::RetainedGraph, crate::EvalError> {
++        let graph = self.ctx.constructed_dataset_of(self.seq)?;
++        InternedGraph::new(&graph, &self.ctx.growth).retain()
+     }
+ 
+     /// Materialize a cell of a resident result.
+@@ -226,13 +227,62 @@
+             .map(|term| self.value_of(term))
+     }
+     /// The auxiliary graph of a resident result.
+-    pub fn constructed_dataset(&self) -> Arc<RdfDataset>
++    pub fn constructed_dataset(&self) -> crate::RetainedGraph
+     where
+         D: DatasetView<ReadError = core::convert::Infallible>,
+     {
+         self.try_constructed_dataset()
+             .expect("resident result terms were admitted by this view")
+     }
++}
++
++/// A graph borrowed inside the evaluator's read scope. Retaining it transfers
++/// its original execution account with the shared frozen dataset, so an Arc
++/// handle cannot escape while its admission is destroyed.
++///
++/// ```compile_fail
++/// use std::sync::Arc;
++/// use purrdf_core::RdfDataset;
++/// use purrdf_sparql_eval::InternedGraph;
++/// fn escape(graph: InternedGraph<'_>) -> Arc<RdfDataset> {
++///     Arc::clone(&graph)
++/// }
++/// ```
++///
++/// ```
++/// use purrdf_sparql_eval::{EvalError, InternedGraph, RetainedGraph};
++/// fn retain(graph: InternedGraph<'_>) -> Result<RetainedGraph, EvalError> {
++///     graph.retain()
++/// }
++/// ```
++#[derive(Debug, Clone, Copy)]
++pub struct InternedGraph<'a> {
++    graph: &'a Arc<RdfDataset>,
++    workspace: &'a crate::WorkspaceCapability,
++}
++
++impl<'a> InternedGraph<'a> {
++    pub(crate) const fn new(graph: &'a Arc<RdfDataset>, workspace: &'a crate::WorkspaceCapability) -> Self {
++        Self { graph, workspace }
++    }
++
++    /// Retain the existing frozen graph and its original account without
++    /// copying the dataset. The new shared control is admitted before allocation.
++    ///
++    /// # Errors
++    /// Returns physical admission, overflow or native allocator refusal.
++    pub fn retain(self) -> Result<crate::RetainedGraph, crate::EvalError> {
++        let result = crate::RetainedSparqlResult::new(
++            purrdf_core::SparqlResult::Graph(Arc::clone(self.graph)),
++            self.workspace.clone(), self.workspace,
++        )?;
++        Ok(crate::RetainedGraph::from_result(result))
++    }
++}
++
++impl std::ops::Deref for InternedGraph<'_> {
++    type Target = RdfDataset;
++    fn deref(&self) -> &Self::Target { self.graph }
+ }
+ 
+ /// A borrowed result of any query form, handed to an interned visitor.
+@@ -247,8 +297,8 @@
+     /// nothing was materialized to produce it.
+     Boolean(bool),
+     /// A CONSTRUCT/DESCRIBE result. The frozen graph is already built and shared
+-    /// by `Arc`; a visitor that keeps it clones the handle, not the data.
+-    Graph(&'a Arc<RdfDataset>),
++    /// by its original owner; a visitor retaining it keeps the admission too.
++    Graph(InternedGraph<'a>),
+ }
+ 
+ /// The outcome of a governed interned execution.
+--- a/crates/sparql-eval/src/retained.rs
++++ b/crates/sparql-eval/src/retained.rs
+@@ -214,6 +214,35 @@
+ 
+ }
+ 
++/// An immutable frozen graph whose shared original account survives every
++/// shallow clone and extraction. Borrowed datasets expose no raw Arc escape.
++#[derive(Debug, Clone)]
++pub struct RetainedGraph {
++    result: RetainedSparqlResult,
++}
++
++impl RetainedGraph {
++    pub(crate) fn from_result(result: RetainedSparqlResult) -> Self {
++        assert!(result.graph().is_some(), "graph carrier requires a graph result");
++        Self { result }
++    }
++
++    /// Borrow the immutable dataset while its original admission remains live.
++    #[must_use]
++    pub fn as_dataset(&self) -> &RdfDataset {
++        self.result.graph().expect("graph extraction preserves its query form")
++    }
++
++    /// Move the same original owner into the common result vocabulary.
++    #[must_use]
++    pub fn into_result(self) -> RetainedSparqlResult { self.result }
++}
++
++impl std::ops::Deref for RetainedGraph {
++    type Target = RdfDataset;
++    fn deref(&self) -> &Self::Target { self.as_dataset() }
++}
++
+ /// Ownership-carrying extraction of a SELECT output.
+ #[derive(Debug, Clone)]
+ pub struct RetainedSolutions {
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -6234,7 +6234,7 @@
+ ) -> InternedOutcome<'a, 'd, D> {
+     match outcome {
+         Outcome::Solutions(seq) => InternedOutcome::Solutions(InternedSolutions::new(seq, ctx)),
+-        Outcome::Graph(graph) => InternedOutcome::Graph(graph),
++        Outcome::Graph(graph) => InternedOutcome::Graph(crate::interned::InternedGraph::new(graph, &ctx.growth)),
+         Outcome::Boolean(value) => InternedOutcome::Boolean(*value),
+     }
+ }
+--- a/crates/sparql-eval/src/lib.rs
++++ b/crates/sparql-eval/src/lib.rs
+@@ -135,7 +135,7 @@
+ pub use rdflib::select_query_dataset;
+ mod registry_id;
+ mod retained;
+-pub use retained::{RetainedDiagnostic, RetainedEvidence, RetainedPartialSparqlResult, RetainedQueryExplanation, RetainedSolutions, RetainedSparqlResult};
++pub use retained::{RetainedGraph, RetainedDiagnostic, RetainedEvidence, RetainedPartialSparqlResult, RetainedQueryExplanation, RetainedSolutions, RetainedSparqlResult};
+ // The SPARQL 1.1 Protocol request surface: HTTP request → operation, dataset
+ // parameters applied as text, and response-format negotiation. No I/O.
+ pub mod protocol;
+@@ -222,7 +222,7 @@
+ // caller that reads two columns of a wide row does not pay for the other twenty.
+ // Additive beside `SparqlResult`, never a replacement for it.
+ pub use interned::{
+-    InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions, Prebinding,
++    InternedGraph, InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions, Prebinding,
+ };
+ pub use plan_cache::{CacheLimits, CacheStats};
+ pub use plan_memory::{PlanMemoryObserver, PlanMemoryStats};
+--- a/crates/shapes/src/sparql.rs
++++ b/crates/shapes/src/sparql.rs
+@@ -1995,11 +1995,11 @@
+ #[allow(clippy::needless_pass_by_value)]
+ fn project_graph<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
+     outcome: InternedOutcome<'_, '_, D>,
+-) -> Result<Arc<RdfDataset>, String> {
++) -> Result<purrdf_sparql_eval::RetainedGraph, String> {
+     match outcome {
+-        // The graph is already frozen and shared by `Arc`; taking it out of the
+-        // evaluation is a handle clone, not a copy of the derived triples.
+-        InternedOutcome::Graph(graph) => Ok(Arc::clone(graph)),
++        // Keep the original account with the shared frozen graph through rule
++        // consumption; retaining copies no derived triples.
++        InternedOutcome::Graph(graph) => graph.retain().map_err(|error| error.to_string()),
+         InternedOutcome::Solutions(_) => {
+             Err("query must be a CONSTRUCT, got a SELECT result".to_owned())
+         }
+@@ -2075,7 +2075,7 @@
+     handle: &mut ShaclExecution,
+     bnode_mint_prefix: Option<&str>,
+     invocation: crate::query_law::Invocation<'_>,
+-) -> Result<Arc<RdfDataset>, String> {
++) -> Result<purrdf_sparql_eval::RetainedGraph, String> {
+     run_bound_view(
+         dataset,
+         handle,
+--- a/crates/sparql-eval/tests/segmented_query.rs
++++ b/crates/sparql-eval/tests/segmented_query.rs
+@@ -1519,3 +1519,39 @@
+         }
+     }
+ }
++
++/// A borrowed graph can leave the scoped visitor only with its original lease.
++#[test]
++fn interned_graph_retention_keeps_original_account_until_last_extraction() {
++    let (image, _) = fixture();
++    let engine = NativeSparqlEngine::new();
++    let query = "CONSTRUCT { <https://example.org/target> <https://example.org/p> ?o } WHERE { <https://example.org/target> <https://example.org/p> ?o }";
++    let mut execution = engine.prepare_execution(query, None, &[], QueryOptions::EMPTY).unwrap();
++    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
++    let source = open(&image, CEILING);
++    let (graph, evidence) = engine.execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |outcome| {
++        let purrdf_sparql_eval::InternedOutcome::Graph(graph) = outcome else { panic!("CONSTRUCT returns graph") };
++        graph.retain()
++    }).unwrap();
++    let graph = graph.unwrap();
++    let measured = window.close();
++    assert_eq!(graph.quad_count(), 1);
++    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= evidence.peak_bytes());
++    assert!(evidence.peak_bytes() <= CEILING);
++    let retained = source.evidence().live_bytes();
++    drop(execution);
++    drop(engine);
++    assert_eq!(source.evidence().live_bytes(), retained, "graph owns the original account after evaluation and engine destruction");
++    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
++    let shared = graph.clone();
++    let clones = window.close();
++    assert_eq!(clones.peak_working_bytes, 0, "graph clone shares payload and admission");
++    drop(graph);
++    assert_eq!(source.evidence().live_bytes(), retained);
++    let result = shared.into_result();
++    assert_eq!(result.graph().unwrap().quad_count(), 1);
++    assert_eq!(source.evidence().live_bytes(), retained, "common result extraction keeps the original grant");
++    drop(result);
++    assert!(source.evidence().live_bytes() < retained, "last graph owner releases admission");
++    assert!(source.read_error().is_none());
++}

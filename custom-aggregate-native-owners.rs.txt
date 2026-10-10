@@ -1,0 +1,101 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+/// Borrowed custom-aggregate ABI metadata with its original lexical/term owners.
+/// Values and the values' array are destroyed before either grant array.
+struct AggregateScalarvals {
+    values: AdmittedVec<(String, TermValue)>,
+    owners: AdmittedVec<[crate::WorkspaceAllocation; 2]>,
+}
+
+impl std::ops::Deref for AggregateScalarvals {
+    type Target = [(String, TermValue)];
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
+
+impl AggregateScalarvals {
+    fn resolve(
+        aggregate: &AggregateExpression,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let length = aggregate.scalarvals().len();
+        let mut result = Self {
+            values: AdmittedVec::with_capacity(length, workspace)?,
+            owners: AdmittedVec::with_capacity(length, workspace)?,
+        };
+        for (name, literal) in aggregate.scalarvals() {
+            // Both metadata destinations exist before creating their payload.
+            // `string` uses one fallible exact-capacity copy at the shared home.
+            let name_owner = workspace.charge(
+                u64::try_from(name.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+            )?;
+            let name = crate::workspace::string(name, "aggregate scalarval name")?;
+            let term = crate::convert::literal_to_workspace_value(literal, workspace)?;
+            let (value, term_owner) = term.into_parts();
+            result.values.push_reserved((name, value));
+            result.owners.push_reserved([name_owner, term_owner]);
+        }
+        Ok(result)
+    }
+}
+
+/// DISTINCT's identity witnesses borrow the already retained survivor payloads.
+/// Hash collisions still compare exact RDF terms through the admitted native walk.
+/// No second term copy or independently unowned recursive Hash/Eq is created.
+#[derive(Default)]
+struct AggregateTupleWitnesses {
+    buckets: crate::AdmittedMap<u64, AdmittedVec<usize>>,
+}
+
+impl AggregateTupleWitnesses {
+    fn keep(
+        &mut self,
+        tuple: &[TermValue],
+        survivors: &[Vec<TermValue>],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<bool, EvalError> {
+        use std::hash::Hasher as _;
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
+        hasher.write_usize(tuple.len());
+        for value in tuple {
+            hasher.write_u64(workspace.term_hash(value)?);
+        }
+        let hash = hasher.finish();
+        if let Some(bucket) = self.buckets.get(&hash) {
+            for &ordinal in bucket.iter() {
+                let previous = &survivors[ordinal];
+                let mut equal = previous.len() == tuple.len();
+                if equal {
+                    for (left, right) in previous.iter().zip(tuple) {
+                        if !workspace.terms_equal(left, right)? {
+                            equal = false;
+                            break;
+                        }
+                    }
+                }
+                if equal {
+                    return Ok(false);
+                }
+            }
+        }
+        let ordinal = survivors.len();
+        if let Some(bucket) = self.buckets.get_mut(&hash) {
+            bucket.push(ordinal)?;
+        } else {
+            let mut bucket = AdmittedVec::new(workspace);
+            bucket.push(ordinal)?;
+            self.buckets.insert_admitted(hash, bucket, workspace)?;
+        }
+        Ok(true)
+    }
+}
+
+fn missing_custom_aggregate(iri: &str, workspace: &crate::WorkspaceCapability) -> EvalError {
+    crate::NativeDiagnostic::error(
+        crate::NativeDiagnosticKind::Function,
+        format_args!("no custom aggregate is registered for <{iri}>"),
+        workspace,
+    )
+}

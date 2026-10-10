@@ -1,0 +1,14 @@
+--- a/crates/rdf-core/src/xsd_regex/xpath/pike.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/pike.rs
+@@ -587,2 +587,9 @@
+-        let Self { mut ctx, .. } = self;
+-        ctx.live_slots = 0;
++        let Self {
++            mut ctx, scratch, current, next, stack, visited, marks, sets,
++            moves, probe_stack, probe_visited, found, ..
++        } = self;
++        // Move and destroy every heap-owning field explicitly. Ignored fields
++        // of a partially moved value need not die before the next statement.
++        drop((scratch, current, next, stack, visited, marks, sets,
++            moves, probe_stack, probe_visited, found));
++        ctx.live_slots = 0;

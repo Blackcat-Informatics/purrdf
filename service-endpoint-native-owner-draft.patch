@@ -1,0 +1,1906 @@
+--- a/crates/sparql-eval/src/service_endpoints.rs
++++ b/crates/sparql-eval/src/service_endpoints.rs
+@@ -47,7 +47,7 @@
+ //! is therefore exactly the one the union over every conceivable endpoint would give.
+ //! That argument holds only while every row the clause produces carries `?e` up to the
+ //! enclosing operator, which is why the positions it is used in are the ones
+-//! [`served_endpoint_variables`] classifies as direct.
++//! [`served_endpoint_variables_admitted`] classifies as direct.
+ //!
+ //! # `SILENT`, and `MINUS`
+ //!
+@@ -76,9 +76,10 @@
+ //! and the rewrite, with or without `SILENT`: `SILENT` absorbs an invocation that fails,
+ //! and there is none.
+ 
++#[cfg(test)]
+ use std::sync::Arc;
+ 
+-use purrdf_core::{DatasetView, TermValue, write_term_value};
++use purrdf_core::{DatasetView, TermValue};
+ use purrdf_sparql_algebra::{Expression, GraphPattern, NamedNodePattern, Variable};
+ 
+ use crate::error::EvalError;
+@@ -116,6 +117,7 @@
+ /// Shared endpoint variables retain their native arrays and shared control.
+ #[derive(Debug, Clone)]
+ enum EndpointVariables {
++    #[cfg(test)]
+     Caller(Arc<[Variable]>),
+     Native(SharedWorkspace<AdmittedVec<Variable>>),
+ }
+@@ -123,11 +125,13 @@
+     type Target = [Variable];
+     fn deref(&self) -> &[Variable] {
+         match self {
++            #[cfg(test)]
+             Self::Caller(values) => values,
+             Self::Native(values) => values,
+         }
+     }
+ }
++#[cfg(test)]
+ impl From<Arc<[Variable]>> for EndpointVariables {
+     fn from(values: Arc<[Variable]>) -> Self {
+         Self::Caller(values)
+@@ -156,7 +160,7 @@
+ #[derive(Debug)]
+ pub(crate) struct ServedIndex {
+     /// Every operand of a group join (both sides), an `OPTIONAL` (right) and a `MINUS`
+-    /// (right): the endpoint variables served in it (see [`served_endpoint_variables`]).
++    /// (right): the endpoint variables served in it (see [`served_endpoint_variables_admitted`]).
+     served: AdmittedVec<Option<EndpointVariables>>,
+     /// Every `EXISTS` body: the variable-endpoint `SERVICE` variables in it that no
+     /// `SELECT` inside it hides.
+@@ -217,7 +221,7 @@
+ pub(crate) enum EndpointBinding<I> {
+     /// The distinct terms the left operand of the enclosing join binds the variable to,
+     /// in first-occurrence order.
+-    Endpoints(Arc<[SolutionTerm<I>]>),
++    Endpoints(SharedWorkspace<AdmittedVec<SolutionTerm<I>>>),
+     /// The left operand binds the variable in some of its solutions but not all.
+     PartlyUnbound,
+     /// A sub-`SELECT` between the frame and the `SERVICE` does not project the variable:
+@@ -250,6 +254,63 @@
+     role: FrameRole,
+ }
+ 
++/// The mutable endpoint-frame array retains its ORIGINAL capacity grant outside
++/// the vector. Payload frames and the actual array die before that grant.
++#[derive(Debug)]
++pub(crate) struct EndpointFrames<I> {
++    frames: Vec<EndpointFrame<I>>,
++    allocation: Option<crate::WorkspaceAllocation>,
++}
++
++impl<I> Default for EndpointFrames<I> {
++    fn default() -> Self {
++        Self {
++            frames: Vec::new(),
++            allocation: None,
++        }
++    }
++}
++
++impl<I> std::ops::Deref for EndpointFrames<I> {
++    type Target = [EndpointFrame<I>];
++    fn deref(&self) -> &[EndpointFrame<I>] {
++        &self.frames
++    }
++}
++
++impl<I: purrdf_core::ViewTermId> EndpointFrames<I> {
++    fn push(
++        &mut self,
++        frame: EndpointFrame<I>,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<(), EvalError> {
++        let required = self
++            .frames
++            .len()
++            .checked_add(1)
++            .ok_or(EvalError::WorkspaceBoundOverflow)?;
++        workspace.reserve_vec(&mut self.frames, &mut self.allocation, required)?;
++        self.frames.push(frame);
++        Ok(())
++    }
++
++    fn truncate(&mut self, depth: usize) {
++        self.frames.truncate(depth);
++    }
++
++    pub(crate) fn clone_admitted(
++        &self,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Self, EvalError> {
++        let mut copy = Self::default();
++        workspace.reserve_vec(&mut copy.frames, &mut copy.allocation, self.len())?;
++        // Variables and immutable endpoint arrays share their original controls.
++        // Only this concrete metadata array is new; no scratch value is copied.
++        copy.frames.extend(self.frames.iter().cloned());
++        Ok(copy)
++    }
++}
++
+ /// How a `SERVICE ?v` inside an operand is reached from the operand's root.
+ #[derive(Debug)]
+ #[cfg_attr(test, derive(PartialEq, Eq))]
+@@ -277,46 +338,76 @@
+ /// The endpoint variables of `right` this module can serve from the enclosing operator's
+ /// left operand: those of a `SERVICE ?v` reached only in direct positions (see the module
+ /// doc for why only those).
++fn served_endpoint_variables_admitted(
++    right: &GraphPattern,
++    placeholders: Option<&crate::deferred_exists::DeferredMap>,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<AdmittedVec<Variable>, EvalError> {
++    let mut uses = AdmittedVec::new(workspace);
++    classify_admitted(right, true, &mut uses, placeholders, workspace)?;
++    let mut served = AdmittedVec::new(workspace);
++    for endpoint in uses {
++        if endpoint.direct && !endpoint.conflict {
++            served.push(endpoint.variable)?;
++        }
++    }
++    Ok(served)
++}
++
++#[cfg(test)]
+ fn served_endpoint_variables(
+     right: &GraphPattern,
+     placeholders: Option<&crate::deferred_exists::DeferredMap>,
+ ) -> Vec<Variable> {
+-    let mut uses = Vec::new();
+-    classify(right, true, &mut uses, placeholders);
+-    uses.into_iter()
+-        .filter(|u| u.direct && !u.conflict)
+-        .map(|u| u.variable)
+-        .collect()
++    served_endpoint_variables_admitted(right, placeholders, &crate::WorkspaceCapability::default())
++        .expect("resident endpoint classification")
++        .try_into_resident()
++        .unwrap_or_else(|_| unreachable!("resident capability"))
+ }
+ 
+ /// Record one reached `SERVICE ?variable`.
+-fn record(variable: &Variable, direct: bool, scopes: &[Scope<'_>], uses: &mut Vec<EndpointUse>) {
++fn record_admitted(
++    variable: &Variable,
++    direct: bool,
++    scopes: &[Scope<'_>],
++    uses: &mut AdmittedVec<EndpointUse>,
++) -> Result<(), EvalError> {
+     let mut direct = direct;
+     for scope in scopes {
+         match scope {
+-            Scope::Project(vars) if !vars.contains(variable) => return,
++            Scope::Project(vars) if !vars.contains(variable) => return Ok(()),
+             Scope::Group(vars) if !vars.contains(variable) => direct = false,
+             Scope::Project(_) | Scope::Group(_) => {}
+         }
+     }
+-    let index = if let Some(i) = uses.iter().position(|u| &u.variable == variable) {
+-        i
++    let index = if let Some(index) = uses.iter().position(|used| &used.variable == variable) {
++        index
+     } else {
+         uses.push(EndpointUse {
+             variable: variable.clone(),
+             direct: false,
+             conflict: false,
+-        });
++        })?;
+         uses.len() - 1
+     };
+     if direct {
+-        uses[index].direct = true;
++        uses.as_mut_slice()[index].direct = true;
+     } else {
+-        uses[index].conflict = true;
+-    }
+-}
+-
+-/// One step of [`classify`]'s walk.
++        uses.as_mut_slice()[index].conflict = true;
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++fn record(variable: &Variable, direct: bool, scopes: &[Scope<'_>], uses: &mut Vec<EndpointUse>) {
++    let mut owned = AdmittedVec::from_resident(std::mem::take(uses));
++    record_admitted(variable, direct, scopes, &mut owned).expect("resident endpoint record");
++    *uses = owned
++        .try_into_resident()
++        .unwrap_or_else(|_| unreachable!("resident capability"));
++}
++
++/// One step of [`classify_admitted`]'s walk.
+ enum ClassifyStep<'a> {
+     /// A pattern, and whether it stands in a direct position.
+     Pattern(&'a GraphPattern, bool),
+@@ -341,151 +432,150 @@
+ ///
+ /// The match is wildcard-free so a new algebra variant is a compile error here rather
+ /// than a position silently classified.
+-fn classify(
++fn classify_admitted(
+     pattern: &GraphPattern,
+     direct: bool,
+-    uses: &mut Vec<EndpointUse>,
++    uses: &mut AdmittedVec<EndpointUse>,
+     placeholders: Option<&crate::deferred_exists::DeferredMap>,
+-) {
+-    let mut scopes: Vec<Scope<'_>> = Vec::new();
+-    let mut pending = vec![ClassifyStep::Pattern(pattern, direct)];
++    workspace: &crate::WorkspaceCapability,
++) -> Result<(), EvalError> {
++    let mut scopes = AdmittedVec::new(workspace);
++    let mut pending = AdmittedVec::with_capacity(1, workspace)?;
++    pending.push_reserved(ClassifyStep::Pattern(pattern, direct));
+     while let Some(step) = pending.pop() {
+         match step {
+-            ClassifyStep::Pattern(pattern, direct) => {
+-                match pattern {
+-                    GraphPattern::Bgp { .. }
+-                    | GraphPattern::Path { .. }
+-                    | GraphPattern::Values { .. }
+-                    | GraphPattern::PropertyFunction(_) => {}
+-                    // The body is forwarded as text, never evaluated here, so a `SERVICE`
+-                    // nested in it is the remote endpoint's to resolve.
+-                    GraphPattern::Service { name, .. } => {
+-                        if let NamedNodePattern::Variable(variable) = name {
+-                            record(variable, direct, &scopes, uses);
++            ClassifyStep::Pattern(pattern, direct) => match pattern {
++                GraphPattern::Bgp { .. }
++                | GraphPattern::Path { .. }
++                | GraphPattern::Values { .. }
++                | GraphPattern::PropertyFunction(_) => {}
++                GraphPattern::Service { name, .. } => {
++                    if let NamedNodePattern::Variable(variable) = name {
++                        record_admitted(variable, direct, &scopes, uses)?;
++                    }
++                }
++                GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
++                    pending.push(ClassifyStep::Pattern(right, direct))?;
++                    pending.push(ClassifyStep::Pattern(left, direct))?;
++                }
++                GraphPattern::Apply {
++                    left,
++                    right,
++                    policy,
++                } => {
++                    pending.push(ClassifyStep::Pattern(
++                        right,
++                        direct && policy.optional.is_none(),
++                    ))?;
++                    pending.push(ClassifyStep::Pattern(left, direct))?;
++                }
++                GraphPattern::Union { arms } => {
++                    pending.try_extend(
++                        arms.iter()
++                            .rev()
++                            .map(|arm| ClassifyStep::Pattern(arm, direct)),
++                    )?;
++                }
++                GraphPattern::LeftJoin {
++                    left,
++                    right,
++                    expression,
++                } => {
++                    if let Some(expression) = expression {
++                        pending.push(ClassifyStep::Expression(expression))?;
++                    }
++                    pending.push(ClassifyStep::Pattern(right, false))?;
++                    pending.push(ClassifyStep::Pattern(left, direct))?;
++                }
++                GraphPattern::Minus { left, right } => {
++                    pending.push(ClassifyStep::Pattern(right, false))?;
++                    pending.push(ClassifyStep::Pattern(left, direct))?;
++                }
++                GraphPattern::Filter { expr, inner } => {
++                    pending.push(ClassifyStep::Expression(expr))?;
++                    pending.push(ClassifyStep::Pattern(inner, direct))?;
++                }
++                GraphPattern::Extend {
++                    inner, expression, ..
++                }
++                | GraphPattern::Unfold {
++                    inner, expression, ..
++                } => {
++                    pending.push(ClassifyStep::Expression(expression))?;
++                    pending.push(ClassifyStep::Pattern(inner, direct))?;
++                }
++                GraphPattern::Graph { inner, .. }
++                | GraphPattern::Distinct { inner }
++                | GraphPattern::Reduced { inner } => {
++                    pending.push(ClassifyStep::Pattern(inner, direct))?
++                }
++                GraphPattern::OrderBy { inner, expression } => {
++                    pending.try_extend(
++                        expression
++                            .iter()
++                            .rev()
++                            .map(|key| ClassifyStep::Expression(key.expression())),
++                    )?;
++                    pending.push(ClassifyStep::Pattern(inner, direct))?;
++                }
++                GraphPattern::Project { inner, variables } => {
++                    scopes.push(Scope::Project(variables))?;
++                    pending.push(ClassifyStep::LeaveScope)?;
++                    pending.push(ClassifyStep::Pattern(inner, direct))?;
++                }
++                GraphPattern::Slice {
++                    inner,
++                    start,
++                    length,
++                } => {
++                    let identity = *start == 0 && length.is_none();
++                    pending.push(ClassifyStep::Pattern(inner, direct && identity))?;
++                }
++                GraphPattern::Group {
++                    inner,
++                    variables,
++                    aggregates,
++                } => {
++                    scopes.push(Scope::Group(variables))?;
++                    let first = pending.len();
++                    for (_, aggregate) in aggregates {
++                        for expression in aggregate.args().iter().chain(
++                            aggregate
++                                .order_by()
++                                .iter()
++                                .map(purrdf_sparql_algebra::OrderExpression::expression),
++                        ) {
++                            pending.push(ClassifyStep::Expression(expression))?;
+                         }
+                     }
+-                    GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+-                        pending.push(ClassifyStep::Pattern(right, direct));
+-                        pending.push(ClassifyStep::Pattern(left, direct));
++                    pending.as_mut_slice()[first..].reverse();
++                    pending.push(ClassifyStep::LeaveScope)?;
++                    pending.push(ClassifyStep::Pattern(inner, direct))?;
++                }
++            },
++            ClassifyStep::Expression(expression) => {
++                let first = pending.len();
++                let mut failure = None;
++                crate::governor::soundness::visit_expression_parts(expression, &mut |part| {
++                    if failure.is_none() {
++                        let result = match part {
++                            ExpressionPart::Sub(sub) => pending.push(ClassifyStep::Expression(sub)),
++                            ExpressionPart::Exists(body) => {
++                                pending.push(ClassifyStep::Exists(body))
++                            }
++                            ExpressionPart::Call(_) => Ok(()),
++                        };
++                        if let Err(error) = result {
++                            failure = Some(error);
++                        }
+                     }
+-                    GraphPattern::Apply {
+-                        left,
+-                        right,
+-                        policy,
+-                    } => {
+-                        pending.push(ClassifyStep::Pattern(
+-                            right,
+-                            direct && policy.optional.is_none(),
+-                        ));
+-                        pending.push(ClassifyStep::Pattern(left, direct));
+-                    }
+-                    GraphPattern::Union { arms } => {
+-                        pending.extend(
+-                            arms.iter()
+-                                .rev()
+-                                .map(|arm| ClassifyStep::Pattern(arm, direct)),
+-                        );
+-                    }
+-                    GraphPattern::LeftJoin {
+-                        left,
+-                        right,
+-                        expression,
+-                    } => {
+-                        if let Some(expression) = expression {
+-                            pending.push(ClassifyStep::Expression(expression));
+-                        }
+-                        pending.push(ClassifyStep::Pattern(right, false));
+-                        pending.push(ClassifyStep::Pattern(left, direct));
+-                    }
+-                    GraphPattern::Minus { left, right } => {
+-                        pending.push(ClassifyStep::Pattern(right, false));
+-                        pending.push(ClassifyStep::Pattern(left, direct));
+-                    }
+-                    GraphPattern::Filter { expr, inner } => {
+-                        pending.push(ClassifyStep::Expression(expr));
+-                        pending.push(ClassifyStep::Pattern(inner, direct));
+-                    }
+-                    GraphPattern::Extend {
+-                        inner, expression, ..
+-                    }
+-                    | GraphPattern::Unfold {
+-                        inner, expression, ..
+-                    } => {
+-                        pending.push(ClassifyStep::Expression(expression));
+-                        pending.push(ClassifyStep::Pattern(inner, direct));
+-                    }
+-                    GraphPattern::Graph { inner, .. }
+-                    | GraphPattern::Distinct { inner }
+-                    | GraphPattern::Reduced { inner } => {
+-                        pending.push(ClassifyStep::Pattern(inner, direct));
+-                    }
+-                    GraphPattern::OrderBy { inner, expression } => {
+-                        pending.extend(
+-                            expression
+-                                .iter()
+-                                .rev()
+-                                .map(|key| ClassifyStep::Expression(key.expression())),
+-                        );
+-                        pending.push(ClassifyStep::Pattern(inner, direct));
+-                    }
+-                    GraphPattern::Project { inner, variables } => {
+-                        scopes.push(Scope::Project(variables));
+-                        pending.push(ClassifyStep::LeaveScope);
+-                        pending.push(ClassifyStep::Pattern(inner, direct));
+-                    }
+-                    // A slice keeps a positional selection of its input, and which rows it
+-                    // keeps depends on every row before them — including rows from endpoints
+-                    // outside the list. The identity slice selects nothing.
+-                    GraphPattern::Slice {
+-                        inner,
+-                        start,
+-                        length,
+-                    } => {
+-                        let identity = *start == 0 && length.is_none();
+-                        pending.push(ClassifyStep::Pattern(inner, direct && identity));
+-                    }
+-                    // The aggregates' expressions are classified once the list is left.
+-                    GraphPattern::Group {
+-                        inner,
+-                        variables,
+-                        aggregates,
+-                    } => {
+-                        scopes.push(Scope::Group(variables));
+-                        let first = pending.len();
+-                        for (_, aggregate) in aggregates {
+-                            for e in aggregate.args().iter().chain(
+-                                aggregate
+-                                    .order_by()
+-                                    .iter()
+-                                    .map(purrdf_sparql_algebra::OrderExpression::expression),
+-                            ) {
+-                                pending.push(ClassifyStep::Expression(e));
+-                            }
+-                        }
+-                        pending[first..].reverse();
+-                        pending.push(ClassifyStep::LeaveScope);
+-                        pending.push(ClassifyStep::Pattern(inner, direct));
+-                    }
+-                }
+-            }
+-            // The `SERVICE ?v` clauses inside an expression's `EXISTS` patterns are never
+-            // direct, since an `EXISTS` answers a boolean rather than carrying rows
+-            // upwards.
+-            ClassifyStep::Expression(expr) => {
+-                let first = pending.len();
+-                crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+-                    match part {
+-                        ExpressionPart::Sub(sub) => pending.push(ClassifyStep::Expression(sub)),
+-                        ExpressionPart::Exists(body) => pending.push(ClassifyStep::Exists(body)),
+-                        ExpressionPart::Call(_) => {}
+-                    }
+-                    false
++                    failure.is_some()
+                 });
+-                pending[first..].reverse();
+-            }
+-            // A substituted copy's placeholder stands for a body the walk cannot see: its
+-            // site lists the body's `SERVICE ?v` clauses, and the substitution it is owed
+-            // decides which of them are still variable endpoints.
++                if let Some(error) = failure {
++                    return Err(error);
++                }
++                pending.as_mut_slice()[first..].reverse();
++            }
+             ClassifyStep::Exists(body) => {
+                 match placeholders
+                     .and_then(|map| map.get(&(std::ptr::from_ref(body) as usize)))
+@@ -494,11 +584,11 @@
+                     Some(slot) => {
+                         for variable in &slot.site.service_uses {
+                             if !slot.env.resolves_endpoint(variable) {
+-                                record(variable, false, &scopes, uses);
++                                record_admitted(variable, false, &scopes, uses)?;
+                             }
+                         }
+                     }
+-                    None => pending.push(ClassifyStep::Pattern(body, false)),
++                    None => pending.push(ClassifyStep::Pattern(body, false))?,
+                 }
+             }
+             ClassifyStep::LeaveScope => {
+@@ -506,6 +596,28 @@
+             }
+         }
+     }
++    Ok(())
++}
++
++#[cfg(test)]
++fn classify(
++    pattern: &GraphPattern,
++    direct: bool,
++    uses: &mut Vec<EndpointUse>,
++    placeholders: Option<&crate::deferred_exists::DeferredMap>,
++) {
++    let mut owned = AdmittedVec::from_resident(std::mem::take(uses));
++    classify_admitted(
++        pattern,
++        direct,
++        &mut owned,
++        placeholders,
++        &crate::WorkspaceCapability::default(),
++    )
++    .expect("resident endpoint classification");
++    *uses = owned
++        .try_into_resident()
++        .unwrap_or_else(|_| unreachable!("resident capability"));
+ }
+ 
+ /// One node of [`mentions_variable_endpoint`]'s work list.
+@@ -625,7 +737,7 @@
+ /// One variable's variable-endpoint `SERVICE` occurrences below a node, relative to that
+ /// node: `direct` when some occurrence carries its rows up to it, `conflict` when some
+ /// occurrence reaches it only through an operator that could absorb, drop or re-select
+-/// them. The bottom-up form of [`classify`].
++/// them. The bottom-up form of [`classify_admitted`].
+ #[derive(Debug)]
+ #[cfg_attr(test, derive(PartialEq, Eq))]
+ struct Occurrence {
+@@ -745,7 +857,7 @@
+     }
+ 
+     /// The occurrences below `pattern`, indexing every operand and `EXISTS` body on the
+-    /// way. Wildcard-free, like [`classify`], whose classification it computes.
++    /// way. Wildcard-free, like [`classify_admitted`], whose classification it computes.
+     ///
+     /// A loop over an explicit frame stack and a stack of the summaries computed so
+     /// far: a node is entered, its parts are pushed above it in the order the node
+@@ -1102,24 +1214,27 @@
+     }
+ }
+ 
+-/// The endpoint variables served in `operand` (see [`served_endpoint_variables`]): read
++/// The endpoint variables served in `operand` (see [`served_endpoint_variables_admitted`]): read
+ /// from the query's index when `operand` is one of its nodes and no deferred `EXISTS`
+ /// placeholder is in scope, and analysed here otherwise.
+ fn served_in<D: DatasetView + Sync>(
+     operand: &GraphPattern,
+     index: &ServedIndex,
+     ctx: &EvalCtx<'_, D>,
+-) -> EndpointVariables {
++) -> Result<EndpointVariables, EvalError> {
+     if ctx.deferred_exists.is_none()
+         && let Some(served) = ctx
+             .plan_node(operand)
+             .and_then(|operand| index.served_at(operand))
+     {
+-        return served.clone();
+-    }
+-    EndpointVariables::Caller(
+-        served_endpoint_variables(operand, ctx.deferred_exists.as_deref()).into(),
+-    )
++        return Ok(served.clone());
++    }
++    let variables =
++        served_endpoint_variables_admitted(operand, ctx.deferred_exists.as_deref(), &ctx.growth)?;
++    Ok(EndpointVariables::Native(SharedWorkspace::new_admitted(
++        variables,
++        &ctx.growth,
++    )?))
+ }
+ 
+ /// The innermost frame for `variable`, if any frame names it.
+@@ -1159,45 +1274,52 @@
+         return eval_evaluated(right, ctx);
+     };
+     let index = index.clone();
+-    let served = served_in(right, &index, ctx);
++    let served = served_in(right, &index, ctx)?;
+     if served.is_empty() {
+         return eval_evaluated(right, ctx);
+     }
+     let depth = ctx.endpoint_frames.len();
+-    for variable in served.iter() {
+-        let column = left.schema.index_of(variable);
+-        let binding = match column {
+-            Some(c) if left.rows.iter().all(|row| row[c].is_some()) => {
+-                let mut seen = crate::DetHashSet::default();
+-                let endpoints: Vec<SolutionTerm<D::Id>> = left
+-                    .rows
+-                    .iter()
+-                    .filter_map(|row| row[c])
+-                    .filter(|term| seen.insert(*term))
+-                    .collect();
+-                EndpointBinding::Endpoints(endpoints.into())
+-            }
+-            // An enclosing operator already lists this variable's endpoints, and this
+-            // operand is in a direct position of that operator's right side (it would not
+-            // have listed them otherwise), so its rows reach that operator's join on the
+-            // variable: its list stays the one in force.
+-            _ if matches!(
+-                binding_for(&ctx.endpoint_frames[..depth], variable),
+-                Some(EndpointBinding::Endpoints(_))
+-            ) =>
+-            {
+-                continue;
+-            }
+-            Some(_) => EndpointBinding::PartlyUnbound,
+-            None => continue,
+-        };
+-        ctx.endpoint_frames.push(EndpointFrame {
+-            variable: variable.clone(),
+-            binding,
+-            role,
+-        });
+-    }
+-    let evaluated = eval_evaluated(right, ctx);
++    let evaluated = (|| {
++        for variable in served.iter() {
++            let column = left.schema.index_of(variable);
++            let binding = match column {
++                Some(c) if left.rows.iter().all(|row| row[c].is_some()) => {
++                    let mut seen = crate::AdmittedMap::default();
++                    let mut endpoints = AdmittedVec::new(&ctx.growth);
++                    for term in left.rows.iter().filter_map(|row| row[c]) {
++                        if !seen.contains_key(&term) {
++                            seen.insert_admitted(term, (), &ctx.growth)?;
++                            endpoints.push(term)?;
++                        }
++                    }
++                    EndpointBinding::Endpoints(SharedWorkspace::new_admitted(
++                        endpoints,
++                        &ctx.growth,
++                    )?)
++                }
++                _ if matches!(
++                    binding_for(&ctx.endpoint_frames[..depth], variable),
++                    Some(EndpointBinding::Endpoints(_))
++                ) =>
++                {
++                    continue;
++                }
++                Some(_) => EndpointBinding::PartlyUnbound,
++                None => continue,
++            };
++            ctx.endpoint_frames.push(
++                EndpointFrame {
++                    variable: variable.clone(),
++                    binding,
++                    role,
++                },
++                &ctx.growth,
++            )?;
++        }
++        eval_evaluated(right, ctx)
++    })();
++    // Choose the original result before destroying frame payloads. This also
++    // runs on admission failure during frame construction, not only evaluation.
+     ctx.endpoint_frames.truncate(depth);
+     evaluated
+ }
+@@ -1205,10 +1327,8 @@
+ /// One partition of a `MINUS`'s left solutions: the positions of the solutions that bind
+ /// every partitioning variable to `endpoints`, in left order.
+ pub(crate) struct MinusPartition<I> {
+-    /// Each partitioning variable with the term this partition binds it to.
+-    endpoints: Vec<(Variable, SolutionTerm<I>)>,
+-    /// The positions, in `left`, of the solutions in this partition.
+-    pub(crate) rows: Vec<usize>,
++    endpoints: AdmittedVec<(Variable, SolutionTerm<I>)>,
++    pub(crate) rows: AdmittedVec<usize>,
+ }
+ 
+ /// Partition `left`, the left solutions of `left MINUS right`, by the endpoints of the
+@@ -1225,47 +1345,80 @@
+     left: &SolutionSeq<D::Id>,
+     right: &GraphPattern,
+     ctx: &EvalCtx<'_, D>,
+-) -> Option<Vec<MinusPartition<D::Id>>> {
++) -> Result<Option<AdmittedVec<MinusPartition<D::Id>>>, EvalError> {
++    use std::hash::{Hash, Hasher};
+     let EndpointScan::Present(index) = ctx.endpoint_scan() else {
+-        return None;
++        return Ok(None);
+     };
+-    let served = served_in(right, index, ctx);
+-    let mut columns: Vec<(Variable, usize)> = Vec::new();
++    let served = served_in(right, index, ctx)?;
++    let mut columns = AdmittedVec::new(&ctx.growth);
+     for variable in served.iter() {
+         match left.schema.index_of(variable) {
+             Some(c) if left.rows.iter().all(|row| row[c].is_some()) => {
+-                columns.push((variable.clone(), c));
++                columns.push((variable.clone(), c))?;
+             }
+             _ if matches!(
+                 binding_for(&ctx.endpoint_frames, variable),
+                 Some(EndpointBinding::Endpoints(_))
+             ) => {}
+-            Some(_) => return None,
++            Some(_) => return Ok(None),
+             None => {}
+         }
+     }
+     if columns.is_empty() {
+-        return None;
+-    }
+-    let mut partitions: Vec<MinusPartition<D::Id>> = Vec::new();
+-    let mut by_key: crate::DetHashMap<Vec<SolutionTerm<D::Id>>, usize> =
+-        crate::DetHashMap::default();
++        return Ok(None);
++    }
++    let mut partitions = AdmittedVec::<MinusPartition<D::Id>>::new(&ctx.growth);
++    // Buckets point into the immutable partition keys already retained below.
++    // No raw/deep-cloned Vec key exists; collisions compare every original cell.
++    let mut by_key = crate::AdmittedMap::<u64, AdmittedVec<usize>>::default();
+     for (position, row) in left.rows.iter().enumerate() {
+-        let key: Vec<SolutionTerm<D::Id>> = columns.iter().filter_map(|&(_, c)| row[c]).collect();
+-        let slot = *by_key.entry(key).or_insert_with_key(|key| {
+-            partitions.push(MinusPartition {
+-                endpoints: columns
++        let mut hash = purrdf_hash::fixed::FixedHasher::default();
++        columns.len().hash(&mut hash);
++        for (_, column) in columns.iter() {
++            row[*column]
++                .expect("partition columns are bound in every left row")
++                .hash(&mut hash);
++        }
++        let hash = hash.finish();
++        let known = by_key.get(&hash).and_then(|bucket| {
++            bucket.iter().copied().find(|&slot| {
++                partitions[slot]
++                    .endpoints
+                     .iter()
+-                    .zip(key)
+-                    .map(|((variable, _), term)| (variable.clone(), *term))
+-                    .collect(),
+-                rows: Vec::new(),
+-            });
+-            partitions.len() - 1
++                    .zip(columns.iter())
++                    .all(|((_, term), (_, column))| row[*column] == Some(*term))
++            })
+         });
+-        partitions[slot].rows.push(position);
+-    }
+-    Some(partitions)
++        let slot = match known {
++            Some(slot) => slot,
++            None => {
++                partitions.reserve_next()?;
++                let mut endpoints = AdmittedVec::with_capacity(columns.len(), &ctx.growth)?;
++                for (variable, column) in columns.iter() {
++                    endpoints.push_reserved((
++                        variable.clone(),
++                        row[*column].expect("partition columns are bound in every left row"),
++                    ));
++                }
++                let slot = partitions.len();
++                partitions.push_reserved(MinusPartition {
++                    endpoints,
++                    rows: AdmittedVec::new(&ctx.growth),
++                });
++                if let Some(bucket) = by_key.get_mut(&hash) {
++                    bucket.push(slot)?;
++                } else {
++                    let mut bucket = AdmittedVec::with_capacity(1, &ctx.growth)?;
++                    bucket.push_reserved(slot);
++                    by_key.insert_admitted(hash, bucket, &ctx.growth)?;
++                }
++                slot
++            }
++        };
++        partitions.as_mut_slice()[slot].rows.push(position)?;
++    }
++    Ok(Some(partitions))
+ }
+ 
+ /// Evaluate `right` for one [`MinusPartition`]: every partitioning variable's clause
+@@ -1280,14 +1433,22 @@
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+     let depth = ctx.endpoint_frames.len();
+-    for (variable, endpoint) in &partition.endpoints {
+-        ctx.endpoint_frames.push(EndpointFrame {
+-            variable: variable.clone(),
+-            binding: EndpointBinding::Endpoints(Arc::from([*endpoint])),
+-            role: FrameRole::Minus,
+-        });
+-    }
+-    let evaluated = eval_evaluated(right, ctx);
++    let evaluated = (|| {
++        for (variable, endpoint) in partition.endpoints.iter() {
++            let mut endpoints = AdmittedVec::with_capacity(1, &ctx.growth)?;
++            endpoints.push_reserved(*endpoint);
++            let endpoints = SharedWorkspace::new_admitted(endpoints, &ctx.growth)?;
++            ctx.endpoint_frames.push(
++                EndpointFrame {
++                    variable: variable.clone(),
++                    binding: EndpointBinding::Endpoints(endpoints),
++                    role: FrameRole::Minus,
++                },
++                &ctx.growth,
++            )?;
++        }
++        eval_evaluated(right, ctx)
++    })();
+     ctx.endpoint_frames.truncate(depth);
+     evaluated
+ }
+@@ -1310,13 +1471,13 @@
+     left: &GraphPattern,
+     right: &GraphPattern,
+     ctx: &EvalCtx<'_, D>,
+-) -> bool {
++) -> Result<bool, EvalError> {
+     let EndpointScan::Present(index) = ctx.endpoint_scan() else {
+-        return false;
++        return Ok(false);
+     };
+-    let served = served_in(left, index, ctx);
+-    if served.is_empty() || !served_in(right, index, ctx).is_empty() {
+-        return false;
++    let served = served_in(left, index, ctx)?;
++    if served.is_empty() || !served_in(right, index, ctx)?.is_empty() {
++        return Ok(false);
+     }
+     if served.iter().any(|variable| {
+         matches!(
+@@ -1324,11 +1485,10 @@
+             Some(EndpointBinding::Endpoints(_))
+         )
+     }) {
+-        return false;
+-    }
+-    let mut mentioned = crate::DetHashSet::default();
+-    crate::expr::pattern_all_vars(right, &mut mentioned);
+-    served.iter().any(|variable| mentioned.contains(variable))
++        return Ok(false);
++    }
++    let mentioned = crate::expr::pattern_all_vars_admitted(right, &ctx.growth)?;
++    Ok(served.iter().any(|variable| mentioned.contains(variable)))
+ }
+ 
+ /// Refuse a `LATERAL` whose right operand holds a variable-endpoint `SERVICE ?v` that
+@@ -1367,26 +1527,34 @@
+     if ctx.endpoint_scan().is_absent() || left.rows.is_empty() {
+         return Ok(());
+     }
+-    let mut uses: Vec<(Variable, bool)> = Vec::new();
+-    lateral_endpoint_uses(right, &mut uses);
+-    uses.retain(|(variable, _)| {
+-        let mut outside = crate::DetHashSet::default();
+-        crate::expr::pattern_vars_outside(right, Some(variable), &mut outside);
+-        !outside.contains(variable)
+-    });
++    let mut uses = AdmittedVec::new(&ctx.growth);
++    lateral_endpoint_uses_admitted(right, &mut uses, &ctx.growth)?;
++    let mut kept = 0;
++    for index in 0..uses.len() {
++        let outside =
++            crate::expr::pattern_vars_outside_admitted(right, Some(&uses[index].0), &ctx.growth)?;
++        if !outside.contains(&uses[index].0) {
++            uses.as_mut_slice().swap(kept, index);
++            kept += 1;
++        }
++    }
++    uses.truncate(kept);
+     for (variable, silent) in uses {
+         let column = left.schema.index_of(&variable);
+         let mut unbound = 0_usize;
+-        for row in &left.rows {
++        for row in left.rows.iter() {
+             match column.and_then(|c| row[c]) {
+                 None => unbound += 1,
+                 Some(term) if !silent => {
+-                    let value = ctx
+-                        .scratch
+-                        .try_value_of(ctx.dataset, term)
+-                        .map_err(EvalError::source_read)?;
+-                    if !matches!(value, TermValue::Iri(_)) {
+-                        return Err(non_iri_endpoint(&variable, &value));
++                    let source = ctx.workspace.clone();
++                    let value = ctx.scratch.try_owned_value_of(
++                        ctx.dataset,
++                        term,
++                        &ctx.growth,
++                        |error| source.source_error(error),
++                    )?;
++                    if !matches!(&*value, TermValue::Iri(_)) {
++                        return Err(non_iri_endpoint(&variable, &value, &ctx.growth));
+                     }
+                 }
+                 Some(_) => {}
+@@ -1405,7 +1573,7 @@
+                 } else {
+                     "it is not bound to an IRI where the SERVICE is evaluated"
+                 };
+-                return Err(unbound_endpoint(&variable, cause));
++                return Err(unbound_endpoint(&variable, cause, &ctx.growth));
+             }
+         }
+     }
+@@ -1421,48 +1589,58 @@
+ /// A loop over an explicit work list, popping each node's children in written order, so
+ /// `uses` fills in the order the clauses are written and a right operand of any depth
+ /// costs heap and never stack.
+-fn lateral_endpoint_uses(pattern: &GraphPattern, uses: &mut Vec<(Variable, bool)>) {
+-    /// One step of the walk.
++fn lateral_endpoint_uses_admitted(
++    pattern: &GraphPattern,
++    uses: &mut AdmittedVec<(Variable, bool)>,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<(), EvalError> {
+     enum Step<'a> {
+-        /// A pattern to walk.
+         Pattern(&'a GraphPattern),
+-        /// A sub-`SELECT` whose inner pattern is walked: of the uses the walk added
+-        /// below it — from position `first` on — keep those it projects.
+         LeaveProject(&'a [Variable], usize),
+     }
+-    let mut pending = vec![Step::Pattern(pattern)];
++    let mut pending = AdmittedVec::with_capacity(1, workspace)?;
++    pending.push_reserved(Step::Pattern(pattern));
+     while let Some(step) = pending.pop() {
+         match step {
+             Step::Pattern(GraphPattern::Service { name, silent, .. }) => {
+                 if let NamedNodePattern::Variable(variable) = name {
+-                    if let Some((_, all_silent)) =
+-                        uses.iter_mut().find(|(seen, _)| seen == variable)
++                    if let Some((_, all_silent)) = uses
++                        .as_mut_slice()
++                        .iter_mut()
++                        .find(|(seen, _)| seen == variable)
+                     {
+                         *all_silent &= *silent;
+                     } else {
+-                        uses.push((variable.clone(), *silent));
++                        uses.push((variable.clone(), *silent))?;
+                     }
+                 }
+             }
+             Step::Pattern(GraphPattern::Project { inner, variables }) => {
+-                pending.push(Step::LeaveProject(variables, uses.len()));
+-                pending.push(Step::Pattern(inner));
++                pending.push(Step::LeaveProject(variables, uses.len()))?;
++                pending.push(Step::Pattern(inner))?;
+             }
+             Step::Pattern(pattern) => {
+                 let first = pending.len();
++                let mut failure = None;
+                 crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+-                    if let PatternPart::Child(child, _) = part {
+-                        pending.push(Step::Pattern(child));
++                    if failure.is_none()
++                        && let PatternPart::Child(child, _) = part
++                        && let Err(error) = pending.push(Step::Pattern(child))
++                    {
++                        failure = Some(error);
+                     }
+-                    false
++                    failure.is_some()
+                 });
+-                pending[first..].reverse();
++                if let Some(error) = failure {
++                    return Err(error);
++                }
++                pending.as_mut_slice()[first..].reverse();
+             }
+             Step::LeaveProject(variables, first) => {
+                 let mut kept = first;
+                 for index in first..uses.len() {
+                     if variables.contains(&uses[index].0) {
+-                        uses.swap(kept, index);
++                        uses.as_mut_slice().swap(kept, index);
+                         kept += 1;
+                     }
+                 }
+@@ -1470,6 +1648,17 @@
+             }
+         }
+     }
++    Ok(())
++}
++
++#[cfg(test)]
++fn lateral_endpoint_uses(pattern: &GraphPattern, uses: &mut Vec<(Variable, bool)>) {
++    let mut owned = AdmittedVec::from_resident(std::mem::take(uses));
++    lateral_endpoint_uses_admitted(pattern, &mut owned, &crate::WorkspaceCapability::default())
++        .expect("resident per-solution endpoint classification");
++    *uses = owned
++        .try_into_resident()
++        .unwrap_or_else(|_| unreachable!("resident capability"));
+ }
+ 
+ /// Evaluate a sub-`SELECT`'s `inner` with every endpoint variable it does not project
+@@ -1488,19 +1677,25 @@
+         return eval_evaluated(inner, ctx);
+     }
+     let depth = ctx.endpoint_frames.len();
+-    let hidden: Vec<Variable> = ctx.endpoint_frames[..depth]
+-        .iter()
+-        .filter(|frame| !variables.contains(&frame.variable))
+-        .map(|frame| frame.variable.clone())
+-        .collect();
+-    for variable in hidden {
+-        ctx.endpoint_frames.push(EndpointFrame {
+-            variable,
+-            binding: EndpointBinding::Hidden,
+-            role: FrameRole::Join,
+-        });
+-    }
+-    let evaluated = eval_evaluated(inner, ctx);
++    let evaluated = (|| {
++        let mut hidden = AdmittedVec::new(&ctx.growth);
++        for frame in ctx.endpoint_frames[..depth].iter() {
++            if !variables.contains(&frame.variable) {
++                hidden.push(frame.variable.clone())?;
++            }
++        }
++        for variable in hidden {
++            ctx.endpoint_frames.push(
++                EndpointFrame {
++                    variable,
++                    binding: EndpointBinding::Hidden,
++                    role: FrameRole::Join,
++                },
++                &ctx.growth,
++            )?;
++        }
++        eval_evaluated(inner, ctx)
++    })();
+     ctx.endpoint_frames.truncate(depth);
+     evaluated
+ }
+@@ -1525,7 +1720,7 @@
+             role,
+             ..
+         }) => {
+-            let endpoints = Arc::clone(endpoints);
++            let endpoints = endpoints.clone();
+             let role = *role;
+             eval_over_endpoints(node, variable, &endpoints, silent, role, ctx)
+         }
+@@ -1535,6 +1730,7 @@
+         }) => Err(unbound_endpoint(
+             variable,
+             "some solutions of the pattern before it leave it unbound",
++            &ctx.growth,
+         )),
+         Some(EndpointFrame {
+             binding: EndpointBinding::Hidden,
+@@ -1543,15 +1739,38 @@
+         | None => Err(unbound_endpoint(
+             variable,
+             "it is not bound to an IRI where the SERVICE is evaluated",
++            &ctx.growth,
+         )),
+     }
+ }
+ 
++/// Preserve the resident refusal variant and the exact original diagnostic law;
++/// bounded execution retains the native text grant through terminal publication.
++fn unsupported_endpoint(
++    message: impl std::fmt::Display,
++    workspace: &crate::WorkspaceCapability,
++) -> EvalError {
++    if workspace.is_bounded() {
++        crate::NativeDiagnostic::error(
++            crate::NativeDiagnosticKind::UnclassifiedUnsupported,
++            message,
++            workspace,
++        )
++    } else {
++        EvalError::unsupported(message.to_string())
++    }
++}
++
+ /// The refusal for a `SERVICE ?variable` no solution names an endpoint for.
+-pub(crate) fn unbound_endpoint(variable: &Variable, cause: &str) -> EvalError {
++pub(crate) fn unbound_endpoint(
++    variable: &Variable,
++    cause: &str,
++    workspace: &crate::WorkspaceCapability,
++) -> EvalError {
+     let v = variable.as_str();
+-    EvalError::unsupported(format!(
+-        "SERVICE ?{v} with no endpoint: ?{v} names the endpoint, but {cause}, so there is \
++    unsupported_endpoint(
++        format_args!(
++            "SERVICE ?{v} with no endpoint: ?{v} names the endpoint, but {cause}, so there is \
+          no endpoint to send the request to. A variable endpoint is evaluated once per \
+          distinct IRI ?{v} is bound to, wherever ?{v} is bound in every solution that \
+          reaches the SERVICE: by a pattern earlier in the same group (a triple pattern, \
+@@ -1563,45 +1782,152 @@
+          `?s <p> ?{v} . SERVICE ?{v} {{ … }}` or `?s <p> ?{v} LATERAL {{ SERVICE ?{v} {{ … }} \
+          }}`. SILENT does not change this: no invocation is made, so there is no failed \
+          invocation for it to absorb"
+-    ))
++        ),
++        workspace,
++    )
+ }
+ 
+ /// The error for a `SERVICE ?variable` whose variable is bound to a term that is not an
+ /// IRI: it names no endpoint, so there is nothing to send the request to. Under `SILENT`
+ /// the invocation is silenced with this message instead.
+-pub(crate) fn non_iri_endpoint(variable: &Variable, value: &TermValue) -> EvalError {
++pub(crate) fn non_iri_endpoint(
++    variable: &Variable,
++    value: &TermValue,
++    workspace: &crate::WorkspaceCapability,
++) -> EvalError {
++    // The canonical spelling uses the sole term-writer body and retains its
++    // original grant while the final diagnostic is counted and rendered.
++    let spelling = match value {
++        TermValue::Blank { .. } | TermValue::Triple { .. } => None,
++        TermValue::Literal { .. } | TermValue::Iri(_) => {
++            match term_text_admitted(value, false, workspace) {
++                Ok(text) => Some(text),
++                Err(error) => return error,
++            }
++        }
++    };
++    let description = match value {
++        TermValue::Blank { .. } => "a blank node",
++        TermValue::Triple { .. } => "a triple term",
++        TermValue::Literal { .. } => "the literal ",
++        TermValue::Iri(_) => "",
++    };
+     let v = variable.as_str();
+-    EvalError::unsupported(format!(
+-        "SERVICE ?{v}: ?{v} is bound to {}, which is not an IRI, so there is no endpoint to \
+-         send the request to",
+-        describe_non_iri(value)
+-    ))
++    unsupported_endpoint(
++        format_args!(
++            "SERVICE ?{v}: ?{v} is bound to {description}{}, which is not an IRI, so there is \
++         no endpoint to send the request to",
++            spelling.as_ref().map_or("", |text| text.as_str()),
++        ),
++        workspace,
++    )
+ }
+ 
+ /// A short description of a non-IRI term, for the error naming it.
+-fn describe_non_iri(value: &TermValue) -> String {
+-    let mut out = String::new();
+-    match value {
+-        TermValue::Blank { .. } => return "a blank node".to_owned(),
+-        TermValue::Triple { .. } => return "a triple term".to_owned(),
+-        TermValue::Literal { .. } => out.push_str("the literal "),
+-        TermValue::Iri(_) => {}
+-    }
+-    write_term_value(value, &mut out);
+-    out
+-}
+ 
+ /// `value` written out as the endpoint of a silenced-invocation record: an IRI as
+-/// itself, any other term in the RDF 1.2 term syntax ([`write_term_value`]) — a
++/// itself, any other term in the RDF 1.2 term syntax ([`purrdf_core::write_term_value`]) — a
+ /// literal with its tag, base direction or datatype, a triple term as
+ /// `<<( s p o )>>`.
++/// The native lexical destination retains its first physical failure. The
++/// emitter polls TextOut::failed and performs no private buffer growth.
++struct EndpointText<'a, 'storage> {
++    text: &'a mut String,
++    memory: &'a mut purrdf_lex::allocation::Memory<'storage, crate::workspace::LexicalFrame>,
++    failure: Option<purrdf_lex::allocation::StorageError>,
++}
++
++impl std::fmt::Write for EndpointText<'_, '_> {
++    fn write_str(&mut self, text: &str) -> std::fmt::Result {
++        if self.failure.is_some() {
++            return Err(std::fmt::Error);
++        }
++        match self.memory.push_str(self.text, text) {
++            Ok(()) => Ok(()),
++            Err(error) => {
++                self.failure = Some(error);
++                Err(std::fmt::Error)
++            }
++        }
++    }
++    fn write_char(&mut self, ch: char) -> std::fmt::Result {
++        let mut bytes = [0_u8; 4];
++        self.write_str(ch.encode_utf8(&mut bytes))
++    }
++}
++impl purrdf_lex::text_out::TextOut for EndpointText<'_, '_> {
++    fn push_str(&mut self, text: &str) {
++        let _ = std::fmt::Write::write_str(self, text);
++    }
++    fn push(&mut self, ch: char) {
++        let _ = std::fmt::Write::write_char(self, ch);
++    }
++    fn failed(&self) -> bool {
++        self.failure.is_some()
++    }
++}
++
++fn term_text_admitted(
++    value: &TermValue,
++    raw_iri: bool,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
++    use crate::workspace::LexicalFrame;
++    use purrdf_lex::allocation::Memory;
++    // Every concrete payload is declared after its original frame so failure
++    // destroys the actual string/work list before dropping the grant.
++    let mut output = LexicalFrame::new(workspace);
++    let mut text = Some(String::new());
++    {
++        let mut memory = Memory::new(&mut output);
++        let text = text.as_mut().expect("original endpoint output");
++        if raw_iri && let TermValue::Iri(iri) = value {
++            memory.push_str(text, iri).map_err(|error| {
++                memory
++                    .admission_mut()
++                    .storage_error(error, "SERVICE endpoint text")
++            })?;
++        } else {
++            let mut working = LexicalFrame::new(workspace);
++            let mut working_memory = Memory::new(&mut working);
++            let mut sink = EndpointText {
++                text,
++                memory: &mut memory,
++                failure: None,
++            };
++            let result =
++                purrdf_core::write_term_value_with_memory(value, &mut sink, &mut working_memory);
++            // Destination failure occurred inside the emitter before any later
++            // working failure; both original frames keep their first cause.
++            if let Some(error) = sink.failure {
++                return Err(sink
++                    .memory
++                    .admission_mut()
++                    .storage_error(error, "SERVICE endpoint text"));
++            }
++            result.map_err(|error| {
++                working_memory
++                    .admission_mut()
++                    .storage_error(error, "SERVICE endpoint term spelling")
++            })?;
++        }
++    }
++    output.finish_text(&mut text)
++}
++
++fn endpoint_text_admitted(
++    value: &TermValue,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
++    term_text_admitted(value, true, workspace)
++}
++
++#[cfg(test)]
+ fn endpoint_text(value: &TermValue) -> String {
+-    if let TermValue::Iri(iri) = value {
+-        return iri.clone();
+-    }
+-    let mut out = String::new();
+-    write_term_value(value, &mut out);
+-    out
++    endpoint_text_admitted(value, &crate::WorkspaceCapability::default())
++        .expect("resident endpoint text")
++        .as_str()
++        .to_owned()
+ }
+ 
+ /// What one endpoint contributed to the clause.
+@@ -1613,7 +1939,7 @@
+ }
+ 
+ /// Each endpoint's own contribution, in endpoint order.
+-type EndpointBlocks<I> = Vec<(SolutionTerm<I>, Block<I>)>;
++type EndpointBlocks<I> = AdmittedVec<(SolutionTerm<I>, Block<I>)>;
+ 
+ /// `⋃ { ?variable ↦ e } ⋈ Invocation(e, node's body)` over `endpoints`, in their order —
+ /// with a silenced invocation under a `MINUS` frame contributing Ω0 itself, untagged.
+@@ -1625,28 +1951,33 @@
+     role: FrameRole,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+-    let key = VarSchema::from_vars([variable.clone()]);
+-    let mut blocks: EndpointBlocks<D::Id> = Vec::with_capacity(endpoints.len());
++    let key = VarSchema::from_vars_admitted([variable.clone()], &ctx.growth)?;
++    let mut blocks: EndpointBlocks<D::Id> =
++        AdmittedVec::with_capacity(endpoints.len(), &ctx.growth)?;
+     let mut stopped = None;
+     // Without `SILENT`, a value that is not an IRI is refused before any request goes
+     // out, so whether one does never depends on the order the endpoints are listed in.
+     if !silent {
+         for &endpoint in endpoints {
+-            let value = ctx
+-                .scratch
+-                .try_value_of(ctx.dataset, endpoint)
+-                .map_err(EvalError::source_read)?;
+-            if !matches!(value, TermValue::Iri(_)) {
+-                return Err(non_iri_endpoint(variable, &value));
++            let source = ctx.workspace.clone();
++            let value =
++                ctx.scratch
++                    .try_owned_value_of(ctx.dataset, endpoint, &ctx.growth, |error| {
++                        source.source_error(error)
++                    })?;
++            if !matches!(&*value, TermValue::Iri(_)) {
++                return Err(non_iri_endpoint(variable, &value, &ctx.growth));
+             }
+         }
+     }
+     for &endpoint in endpoints {
+-        let value = ctx
+-            .scratch
+-            .try_value_of(ctx.dataset, endpoint)
+-            .map_err(EvalError::source_read)?;
+-        let invocation = if matches!(value, TermValue::Iri(_)) {
++        let source = ctx.workspace.clone();
++        let value =
++            ctx.scratch
++                .try_owned_value_of(ctx.dataset, endpoint, &ctx.growth, |error| {
++                    source.source_error(error)
++                })?;
++        let invocation = if matches!(&*value, TermValue::Iri(_)) {
+             // The same substitution a `LATERAL` makes for one solution: the IRI becomes
+             // the clause's endpoint and is injected into its body wherever the body names
+             // it.
+@@ -1658,24 +1989,26 @@
+                 silent: substituted_silent,
+             } = substituted.as_ref()
+             else {
+-                return Err(EvalError::internal(
+-                    "substituting an IRI endpoint into a variable-endpoint SERVICE did not \
++                return Err(crate::NativeDiagnostic::error(
++                    crate::NativeDiagnosticKind::Internal,
++                    &"substituting an IRI endpoint into a variable-endpoint SERVICE did not \
+                      resolve its endpoint",
++                    &ctx.growth,
+                 ));
+             };
+             crate::remote::invoke_service(iri.as_str(), inner, *substituted_silent, ctx)?
+         } else {
+             crate::remote::failed_invocation(
+-                &endpoint_text(&value),
++                &endpoint_text_admitted(&value, &ctx.growth)?,
+                 purrdf_core::SilencedKind::NotAnIri,
+-                non_iri_endpoint(variable, &value),
++                non_iri_endpoint(variable, &value, &ctx.growth),
+                 silent,
+                 &ctx.growth,
+             )?
+         };
+         match invocation {
+             Invocation::Answered(Evaluated::Complete(seq)) => {
+-                blocks.push((endpoint, Block::Rows(seq)));
++                blocks.push_reserved((endpoint, Block::Rows(seq)));
+             }
+             // Commit per endpoint: the block this endpoint was producing is discarded
+             // whole, and every block before it is complete — a prefix of this clause's
+@@ -1686,7 +2019,7 @@
+             }
+             Invocation::Silenced(record) => {
+                 record.record(ctx)?;
+-                blocks.push((
++                blocks.push_reserved((
+                     endpoint,
+                     match role {
+                         FrameRole::Join | FrameRole::Optional => {
+@@ -1699,18 +2032,17 @@
+         }
+     }
+ 
+-    let mut schema = VarSchema::from_vars_admitted([variable.clone()], &ctx.growth)?;
+-    for (_, block) in &blocks {
++    let mut schema = crate::solution::SchemaBuilder::new(&ctx.growth);
++    let _ = schema.push(variable.clone())?;
++    for (_, block) in blocks.iter() {
+         if let Block::Rows(block) = block {
+-            for v in block.schema.vars() {
+-                schema.push_admitted(v.clone(), &ctx.growth)?;
+-            }
+-        }
+-    }
+-    let schema = schema.shared_admitted(&ctx.growth)?;
++            schema.try_extend(block.schema.vars().iter().cloned())?;
++        }
++    }
++    let schema = schema.finish()?.shared_admitted(&ctx.growth)?;
+     let width = schema.len();
+     let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
+-    for (endpoint, block) in &blocks {
++    for (endpoint, block) in blocks.iter() {
+         let block = match block {
+             Block::Rows(block) => block,
+             Block::Identity => {
+@@ -1721,7 +2053,11 @@
+         let mut to_out = AdmittedVec::with_capacity(block.schema.len(), &ctx.growth)?;
+         for variable in block.schema.vars() {
+             to_out.push(schema.index_of(variable).ok_or_else(|| {
+-                EvalError::internal("SERVICE block column is absent from its union schema")
++                crate::NativeDiagnostic::error(
++                    crate::NativeDiagnosticKind::Internal,
++                    &"SERVICE block column is absent from its union schema",
++                    &ctx.growth,
++                )
+             })?)?;
+         }
+         let own = block.schema.index_of(variable);
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -623,7 +623,7 @@
+     /// variable-endpoint `SERVICE` clauses in their right operands, innermost last — see
+     /// [`crate::service_endpoints`]. Empty outside such an operand, which is always, for
+     /// a query without a variable endpoint.
+-    pub(crate) endpoint_frames: Vec<crate::service_endpoints::EndpointFrame<D::Id>>,
++    pub(crate) endpoint_frames: crate::service_endpoints::EndpointFrames<D::Id>,
+     /// The numbered tree of the pattern being evaluated: its shape (the variable-endpoint
+     /// `SERVICE` analysis, the `EXISTS` sites) and the key its node ids are read against.
+     /// Installed with the tree by every evaluation entry ([`prepare_query_context`],
+@@ -1160,7 +1160,7 @@
+             correlated_node_maps: crate::expr::CorrelatedMaps::default(),
+             deferred_exists: None,
+             plan_exists_sites: None,
+-            endpoint_frames: Vec::new(),
++            endpoint_frames: crate::service_endpoints::EndpointFrames::default(),
+             // The tree is installed when a pattern is prepared for evaluation
+             // (`prepare_query_context`, `eval`, an UPDATE's `WHERE`).
+             plan: None,
+@@ -2638,7 +2638,7 @@
+             // `UNION` arm) must answer a variable-endpoint `SERVICE` over the same
+             // endpoints its parent would. The terms are the parent's, and a worker's
+             // scratch is a clone of the parent's, so they read back the same.
+-            endpoint_frames: self.endpoint_frames.clone(),
++            endpoint_frames: self.endpoint_frames.clone_admitted(&self.growth)?,
+             // SHARED: the worker evaluates part of the same tree.
+             plan: self.plan.clone(),
+             // Scoped workers finish while the numbered temporary AST is alive.
+@@ -2956,7 +2956,7 @@
+             plan_exists_sites: None,
+             // A function body is its own query: no join of the caller's encloses its
+             // clauses, so no endpoint list of the caller's applies to them.
+-            endpoint_frames: Vec::new(),
++            endpoint_frames: crate::service_endpoints::EndpointFrames::default(),
+             // The body's own tree is installed when it is prepared for evaluation
+             // (`prepare_query_context`); nothing of the caller's applies to it.
+             plan: None,
+--- a/crates/sparql-eval/src/binop.rs
++++ b/crates/sparql-eval/src/binop.rs
+@@ -112,7 +112,7 @@
+     // the right operand is evaluated first, the left over its endpoint list, and the
+     // join then runs left against right as always, so the output is the one the
+     // left-bound order gives. See `crate::service_endpoints::binds_left_endpoints`.
+-    if crate::service_endpoints::binds_left_endpoints(left, right, ctx) {
++    if crate::service_endpoints::binds_left_endpoints(left, right, ctx)? {
+         let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+             return Ok(lift.withheld());
+         };
+@@ -2835,18 +2835,18 @@
+     // list of endpoints to invoke comes from the left: a row from any other endpoint binds
+     // the endpoint variable to a different IRI than every row of the partition, so it
+     // could remove none of them. See `crate::service_endpoints`.
+-    if let Some(partitions) = crate::service_endpoints::minus_partitions(&l, right, ctx) {
++    if let Some(partitions) = crate::service_endpoints::minus_partitions(&l, right, ctx)? {
+         let mut removed = crate::AdmittedVec::with_capacity(l.rows.len(), &ctx.growth)?;
+         for _ in 0..l.rows.len() {
+             removed.push(false)?;
+         }
+-        for partition in &partitions {
++        for partition in partitions.iter() {
+             let evaluated = crate::service_endpoints::eval_minus_partition(partition, right, ctx)?;
+             let Some(r) = lift.absorb(1, evaluated) else {
+                 return Ok(lift.withheld());
+             };
+             let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
+-            for &position in &partition.rows {
++            for &position in partition.rows.iter() {
+                 let lrow = &l.rows[position];
+                 removed.as_mut_slice()[position] = r.rows.iter().any(|rrow| {
+                     compatible(lrow, rrow, &shared)
+--- a/crates/sparql-eval/src/error.rs
++++ b/crates/sparql-eval/src/error.rs
+@@ -97,6 +97,8 @@
+     Internal,
+     /// A classified unsupported construct, preserving its stable diagnostic code.
+     Unsupported(UnsupportedKind),
++    /// An unclassified request refusal, preserving the original Unsupported code.
++    UnclassifiedUnsupported,
+     /// A SEP-0009 semantic construction bound, with its original diagnostic code.
+     CompositeBound,
+ }
+@@ -197,7 +199,8 @@
+             NativeDiagnosticKind::Data => "malformed RDF input",
+             NativeDiagnosticKind::Config => "invalid evaluation configuration",
+             NativeDiagnosticKind::Internal => "internal evaluator error",
+-            NativeDiagnosticKind::Unsupported(_) => "unsupported",
++            NativeDiagnosticKind::Unsupported(_)
++            | NativeDiagnosticKind::UnclassifiedUnsupported => "unsupported",
+             NativeDiagnosticKind::CompositeBound => {
+                 "the composite value this query asked for exceeds a SEP-0009 resource bound"
+             }
+@@ -651,7 +654,8 @@
+                 NativeDiagnosticKind::CompositeBound => Some(Self::COMPOSITE_BOUND_CODE),
+                 NativeDiagnosticKind::Function
+                 | NativeDiagnosticKind::Data
+-                | NativeDiagnosticKind::Config => None,
++                | NativeDiagnosticKind::Config
++                | NativeDiagnosticKind::UnclassifiedUnsupported => None,
+             },
+             Self::UnstableNativeDiagnostic => Some("native-sparql-unstable-native-diagnostic"),
+             Self::SourceRead(_) | Self::WorkspaceStopped => Some("native-sparql-source-read"),
+@@ -705,6 +709,11 @@
+             Self::RetainedServiceFailure(error) => Some(error.code()),
+             Self::Dataset(diagnostic) => Some(&diagnostic.code),
+             Self::Unsupported { kind: None, .. } => Some(Self::UNSUPPORTED_CODE),
++            Self::NativeDiagnostic(message)
++                if message.kind() == NativeDiagnosticKind::UnclassifiedUnsupported =>
++            {
++                Some(Self::UNSUPPORTED_CODE)
++            }
+             Self::ServiceDenied(_) => Some(Self::SERVICE_DENIED_CODE),
+             Self::ServiceHostDenied { .. } => Some(Self::SERVICE_HOST_DENIED_CODE),
+             Self::ServiceHostFault { .. } => Some(Self::HOST_FAULT_CODE),
+--- a/crates/rdf-core/src/term_writer.rs
++++ b/crates/rdf-core/src/term_writer.rs
+@@ -7,7 +7,7 @@
+ //! Every spelling decision is [`purrdf_lex::term_syntax`]'s — the escaped
+ //! `IRIREF`, the canonical literal with `xsd:string` elided, the `<<( … )>>`
+ //! delimiters — and every blank-node label is made legal (and injective over
+-//! blank-node scopes) by [`encode_blank_label`]. What this adds is the one
++//! blank-node scopes) by [`crate::blank_label::encode_blank_label`]. What this adds is the one
+ //! thing the lexical layer cannot know: the shape of a [`TermValue`], a triple
+ //! term nesting other terms. It walks that nesting over an explicit work list,
+ //! so a deeply nested triple term costs heap, not call frames.
+@@ -16,14 +16,14 @@
+     TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+ };
+ 
+-use crate::blank_label::{LabelAlphabet, encode_blank_label};
++use crate::blank_label::LabelAlphabet;
+ use crate::ir::TermValue;
+ use crate::sink::TextOut;
+ 
+ /// Append `term` in the RDF 1.2 canonical term syntax.
+ ///
+ /// * An IRI is `<…>`, escaped by [`purrdf_lex::iri_escape`].
+-/// * A blank node is `_:` and its label under [`encode_blank_label`]'s
++/// * A blank node is `_:` and its label under [`crate::blank_label::encode_blank_label`]'s
+ ///   `BLANK_NODE_LABEL` alphabet, so a label from any scope re-parses to the
+ ///   same `(label, scope)` pair.
+ /// * A literal is its canonical form ([`purrdf_lex::term_syntax::write_literal`]):
+@@ -43,53 +43,95 @@
+ /// assert_eq!(out, "<<( <http://example.org/s> <http://example.org/p> \"o\" )>>");
+ /// ```
+ pub fn write_term_value<W: TextOut + ?Sized>(term: &TermValue, out: &mut W) {
++    let mut resident = purrdf_lex::allocation::Resident;
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
++    write_term_value_with_memory(term, out, &mut memory).expect("resident RDF term spelling");
++}
++
++/// Append the same canonical RDF 1.2 term under original native working admission.
++///
++/// The destination keeps its own physical owner. This memory covers the actual
++/// nested-term work list and temporary canonical blank label; each is destroyed
++/// before its grant is released. Destination failure stops the same emitter.
++///
++/// # Errors
++/// Returns the first working-layout, admission or allocator failure.
++pub fn write_term_value_with_memory<
++    W: TextOut + ?Sized,
++    S: purrdf_lex::allocation::Admission + ?Sized,
++>(
++    term: &TermValue,
++    out: &mut W,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<(), purrdf_lex::allocation::StorageError> {
+     enum Step<'t> {
+         Term(&'t TermValue),
+         Text(&'static str),
+     }
+-    let mut held: Vec<Step<'_>> = Vec::new();
+-    let mut next = Some(Step::Term(term));
+-    while let Some(step) = next.take().or_else(|| held.pop()) {
+-        let term = match step {
+-            Step::Text(text) => {
+-                out.push_str(text);
+-                continue;
+-            }
+-            Step::Term(term) => term,
+-        };
+-        match term {
+-            TermValue::Iri(iri) => write_iri(iri, out),
+-            TermValue::Blank { label, scope } => write_blank(
+-                &encode_blank_label(label, *scope, LabelAlphabet::BlankNodeLabel),
+-                out,
+-            ),
+-            TermValue::Literal {
+-                lexical_form,
+-                datatype,
+-                language,
+-                direction,
+-            } => write_literal(
+-                lexical_form,
+-                datatype,
+-                language.as_deref(),
+-                direction.map(crate::RdfTextDirection::as_str),
+-                out,
+-            ),
+-            TermValue::Triple { s, p, o } => {
+-                out.push_str(TRIPLE_TERM_OPEN);
+-                out.push(' ');
+-                held.extend([
+-                    Step::Text(TRIPLE_TERM_CLOSE),
+-                    Step::Text(" "),
+-                    Step::Term(o),
+-                    Step::Text(" "),
+-                    Step::Term(p),
+-                    Step::Text(" "),
+-                ]);
+-                next = Some(Step::Term(s));
++    memory.scope(|memory| {
++        let mut held = Vec::new();
++        let mut next = Some(Step::Term(term));
++        while !out.failed() {
++            let Some(step) = next.take().or_else(|| held.pop()) else {
++                break;
++            };
++            let term = match step {
++                Step::Text(text) => {
++                    out.push_str(text);
++                    continue;
++                }
++                Step::Term(term) => term,
++            };
++            match term {
++                TermValue::Iri(iri) => write_iri(iri, out),
++                TermValue::Blank { label, scope } => {
++                    let encoded = crate::blank_label::encode_blank_label_with_memory(
++                        label,
++                        *scope,
++                        LabelAlphabet::BlankNodeLabel,
++                        memory,
++                    )?;
++                    write_blank(&encoded, out);
++                    if let std::borrow::Cow::Owned(encoded) = encoded {
++                        memory.release_string(encoded)?;
++                    }
++                }
++                TermValue::Literal {
++                    lexical_form,
++                    datatype,
++                    language,
++                    direction,
++                } => {
++                    write_literal(
++                        lexical_form,
++                        datatype,
++                        language.as_deref(),
++                        direction.map(crate::RdfTextDirection::as_str),
++                        out,
++                    );
++                }
++                TermValue::Triple { s, p, o } => {
++                    out.push_str(TRIPLE_TERM_OPEN);
++                    out.push(' ');
++                    if out.failed() {
++                        break;
++                    }
++                    for step in [
++                        Step::Text(TRIPLE_TERM_CLOSE),
++                        Step::Text(" "),
++                        Step::Term(o),
++                        Step::Text(" "),
++                        Step::Term(p),
++                        Step::Text(" "),
++                    ] {
++                        memory.push(&mut held, step)?;
++                    }
++                    next = Some(Step::Term(s));
++                }
+             }
+         }
+-    }
++        memory.release_vec(held)
++    })
+ }
+ 
+ #[cfg(test)]
+--- a/crates/rdf-core/src/lib.rs
++++ b/crates/rdf-core/src/lib.rs
+@@ -298,7 +298,7 @@
+     SssomMeta, SssomSetComment,
+ };
+ pub use store::RdfStoreCapabilities;
+-pub use term_writer::write_term_value;
++pub use term_writer::{write_term_value, write_term_value_with_memory};
+ pub use turtle::{
+     display_term, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri,
+     write_dataset_annotation, write_dataset_annotation_nquad, write_dataset_nquad,
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -3216,6 +3216,153 @@
+     }
+ 
+     #[test]
++    fn native_service_index_clones_keep_original_metadata_until_the_last_owner() {
++        use purrdf_sparql_algebra::{Child, GraphPattern, NamedNodePattern, Variable};
++        let pattern = GraphPattern::Service {
++            name: NamedNodePattern::Variable(Variable::new("endpoint")),
++            inner: Child::new(GraphPattern::Bgp {
++                patterns: Vec::new(),
++            }),
++            silent: false,
++        };
++        let (workspace, ledger, base) = account(262_144);
++        let capability = workspace.capability();
++        let tree =
++            crate::plan::Tree::build_admitted(&pattern, &capability).expect("native service shape");
++        let index = tree.shape().endpoints().clone();
++        assert!(!index.is_absent());
++        drop(tree);
++        let live = ledger.live.load(Ordering::Relaxed);
++        assert!(live > base);
++        let copy = index.clone();
++        drop(index);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
++        drop(capability);
++        drop(workspace);
++        assert!(ledger.live.load(Ordering::Relaxed) > 0);
++        drop(copy);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn native_service_metadata_refusal_keeps_first_cause_and_destroys_partial_owners() {
++        use purrdf_sparql_algebra::{Child, GraphPattern, NamedNodePattern, Variable};
++        let mut pattern = GraphPattern::Bgp {
++            patterns: Vec::new(),
++        };
++        for ordinal in 0..64 {
++            pattern = GraphPattern::Join {
++                left: Child::new(pattern),
++                right: Child::new(GraphPattern::Service {
++                    name: NamedNodePattern::Variable(Variable::new(format!("endpoint{ordinal}"))),
++                    inner: Child::new(GraphPattern::Bgp {
++                        patterns: Vec::new(),
++                    }),
++                    silent: true,
++                }),
++            };
++        }
++        let base = QueryWorkspace::<Refusal>::control_bytes().expect("original account layout");
++        for extra in [0, 1, 64, 256, 1024] {
++            let (workspace, ledger, _) = account(base + extra);
++            let capability = workspace.capability();
++            let error = crate::plan::Tree::build_admitted(&pattern, &capability)
++                .err()
++                .expect("actual SERVICE preparation cannot fit");
++            assert!(matches!(error, EvalError::WorkspaceStopped));
++            drop(error);
++            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
++            assert_eq!(
++                workspace.take_failure().expect("original cause").identity,
++                7
++            );
++            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++            assert!(workspace.take_failure().is_none());
++            drop(capability);
++            drop(workspace);
++            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++        }
++    }
++
++    #[test]
++    fn native_service_unsupported_retains_original_code_text_and_grant() {
++        use purrdf_sparql_algebra::{Child, GraphPattern, NamedNodePattern, Variable};
++        let dataset = purrdf_core::RdfDatasetBuilder::new()
++            .freeze()
++            .expect("empty source");
++        let variable = Variable::new("endpoint");
++        let node = GraphPattern::Service {
++            name: NamedNodePattern::Variable(variable.clone()),
++            inner: Child::new(GraphPattern::Bgp {
++                patterns: Vec::new(),
++            }),
++            silent: true,
++        };
++        let mut resident = crate::EvalCtx::new(dataset.as_ref());
++        let expected =
++            crate::service_endpoints::eval_variable_endpoint(&node, &variable, true, &mut resident)
++                .err()
++                .expect("no endpoint has no failed invocation to silence");
++        let (workspace, ledger, base) = account(65_536);
++        let capability = workspace.capability();
++        let mut native = crate::EvalCtx::new(dataset.as_ref());
++        native.growth = capability.clone();
++        let error =
++            crate::service_endpoints::eval_variable_endpoint(&node, &variable, true, &mut native)
++                .err()
++                .expect("native unbound endpoint refusal");
++        assert_eq!(error.to_string(), expected.to_string());
++        assert_eq!(error.code(), expected.code());
++        assert_eq!(error.code(), Some(EvalError::UNSUPPORTED_CODE));
++        assert_eq!(error.diagnostic_code(), expected.diagnostic_code());
++        assert!(matches!(&error, EvalError::NativeDiagnostic(value)
++            if value.kind() == crate::NativeDiagnosticKind::UnclassifiedUnsupported));
++        let live = ledger.live.load(Ordering::Relaxed);
++        assert!(live > base);
++        let copy = error.clone();
++        drop(error);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
++        drop(native);
++        drop(capability);
++        drop(workspace);
++        assert!(ledger.live.load(Ordering::Relaxed) > 0);
++        drop(copy);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn native_service_literal_render_refusal_is_physical_and_silent_cannot_absorb_it() {
++        let variable = purrdf_sparql_algebra::Variable::new("endpoint");
++        let value = purrdf_core::TermValue::simple_literal("original endpoint".repeat(8192));
++        let base = QueryWorkspace::<Refusal>::control_bytes().expect("original account layout");
++        let (workspace, ledger, _) = account(base + 1);
++        let capability = workspace.capability();
++        let error = crate::service_endpoints::non_iri_endpoint(&variable, &value, &capability);
++        assert!(matches!(&error, EvalError::WorkspaceStopped));
++        let result = crate::remote::failed_invocation::<TermId>(
++            "original caller endpoint",
++            purrdf_core::SilencedKind::NotAnIri,
++            error,
++            true,
++            &capability,
++        );
++        assert!(matches!(result, Err(EvalError::WorkspaceStopped)));
++        drop(result);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
++        assert_eq!(
++            workspace
++                .take_failure()
++                .expect("original typed refusal")
++                .identity,
++            7
++        );
++        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
+     fn native_scope_preflight_failure_leaves_flags_maps_and_placeholders_unmodified() {
+         let dataset = purrdf_core::RdfDatasetBuilder::new()
+             .freeze()
+--- a/crates/sparql-eval/tests/correlated_owned_admission.rs
++++ b/crates/sparql-eval/tests/correlated_owned_admission.rs
+@@ -180,6 +180,17 @@
+         .with_endpoint("https://example.org/service", resident.clone());
+     let options = QueryOptions::EMPTY.with_remote(Some(&remote));
+     let queries = [
++        r#"SELECT ?e ?x WHERE { VALUES ?e {<https://example.org/service> <https://example.org/service>} SERVICE ?e {VALUES ?x {"same" "same"}} }"#,
++        r#"SELECT ?e ?x WHERE { { SERVICE ?e {VALUES ?x {"same" "same"}} } { VALUES ?e {<https://example.org/service> <https://example.org/service>} } }"#,
++        r#"SELECT ?e ?x WHERE { VALUES ?e {<https://example.org/service> <https://example.org/missing>} OPTIONAL { SERVICE SILENT ?e {VALUES ?x {"same" "same"}} } }"#,
++        r#"SELECT ?e ?x WHERE { VALUES (?e ?x) {(<https://example.org/service> "same") (<https://example.org/missing> "kept")} MINUS { SERVICE SILENT ?e {VALUES ?x {"same" "same"}} } }"#,
++        r#"SELECT ?e ?x WHERE { VALUES ?e {<https://example.org/service> <https://example.org/service>} LATERAL { SERVICE ?e {VALUES ?x {"same" "same"}} } }"#,
++        r#"SELECT ?e ?x WHERE { VALUES ?e {<https://example.org/service>} { SELECT ?e ?x WHERE { SERVICE ?e {VALUES ?x {"same" "same"}} } } }"#,
++        r#"SELECT ?e WHERE { VALUES ?e {"not an IRI"} SERVICE SILENT ?e {VALUES ?x {"unused"}} }"#,
++        r#"SELECT ?e ?x WHERE { VALUES ?e {<https://example.org/service>} LATERAL { VALUES ?x {"same" "same"} FILTER EXISTS { SERVICE ?e {VALUES ?x {"same"}} } } }"#,
++        r#"ASK WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?x {1}} }"#,
++        r#"CONSTRUCT {<https://example.org/target> <https://example.org/copied> ?x} WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?x {"same" "same"}} }"#,
++        r#"DESCRIBE ?s WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?s {<https://example.org/target>}} }"#,
+         r#"SELECT ?x WHERE {SERVICE <https://example.org/service> {VALUES ?x {"same" "same"}}}"#,
+         r#"SELECT ?s ?label WHERE {SERVICE <https://example.org/service> {VALUES ?s {<https://example.org/target> <https://example.org/target>} ?s <https://example.org/p> ?label}}"#,
+         r#"ASK WHERE {SERVICE <https://example.org/service> {VALUES ?x {1}}}"#,

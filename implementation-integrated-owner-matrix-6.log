@@ -1,0 +1,389 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error: unnecessary qualification
+   --> crates/sparql-eval/src/bgp.rs:178:22
+    |
+178 |     compiled: Option<crate::workspace::AdmittedVec<CompiledPattern<I>>>,
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+178 -     compiled: Option<crate::workspace::AdmittedVec<CompiledPattern<I>>>,
+178 +     compiled: Option<AdmittedVec<CompiledPattern<I>>>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/bgp.rs:192:29
+    |
+192 |     fn project(&self, rows: crate::workspace::AdmittedVec<RetainedRow<I>>, workspace: &crate::WorkspaceCapability) -> Result<Soluti...
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+192 -     fn project(&self, rows: crate::workspace::AdmittedVec<RetainedRow<I>>, workspace: &crate::WorkspaceCapability) -> Result<SolutionSeq<I>, EvalError> {
+192 +     fn project(&self, rows: AdmittedVec<RetainedRow<I>>, workspace: &crate::WorkspaceCapability) -> Result<SolutionSeq<I>, EvalError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/bgp.rs:285:24
+    |
+285 |     let mut compiled = crate::workspace::AdmittedVec::new(&ctx.growth);
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+285 -     let mut compiled = crate::workspace::AdmittedVec::new(&ctx.growth);
+285 +     let mut compiled = AdmittedVec::new(&ctx.growth);
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/bgp.rs:425:20
+    |
+425 |     let mut seed = crate::workspace::AdmittedVec::new(&ctx.growth);
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+425 -     let mut seed = crate::workspace::AdmittedVec::new(&ctx.growth);
+425 +     let mut seed = AdmittedVec::new(&ctx.growth);
+    |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/bgp.rs:2666:11
+     |
+2666 |     keep: crate::workspace::AdmittedVec<usize>,
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2666 -     keep: crate::workspace::AdmittedVec<usize>,
+2666 +     keep: AdmittedVec<usize>,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/bgp.rs:2673:24
+     |
+2673 |         let mut keep = crate::workspace::AdmittedVec::new(workspace);
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2673 -         let mut keep = crate::workspace::AdmittedVec::new(workspace);
+2673 +         let mut keep = AdmittedVec::new(workspace);
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/bgp.rs:2688:42
+     |
+2688 |     fn apply<I: ViewTermId>(&self, rows: crate::workspace::AdmittedVec<RetainedRow<I>>, workspace: &crate::WorkspaceCapability) ->...
+     |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2688 -     fn apply<I: ViewTermId>(&self, rows: crate::workspace::AdmittedVec<RetainedRow<I>>, workspace: &crate::WorkspaceCapability) -> Result<SolutionSeq<I>, EvalError> {
+2688 +     fn apply<I: ViewTermId>(&self, rows: AdmittedVec<RetainedRow<I>>, workspace: &crate::WorkspaceCapability) -> Result<SolutionSeq<I>, EvalError> {
+     |
+
+error: unused import: `visit_exists_patterns`
+  --> crates/sparql-eval/src/plan/mod.rs:42:66
+   |
+42 |     ChildEdge, PATTERN_LABELS, PatternPart, pattern_label_index, visit_exists_patterns,
+   |                                                                  ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/service_endpoints.rs:1623:26
+     |
+1623 |         let mut to_out = crate::AdmittedVec::with_capacity(block.schema.len(), &ctx.growth)?;
+     |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1623 -         let mut to_out = crate::AdmittedVec::with_capacity(block.schema.len(), &ctx.growth)?;
+1623 +         let mut to_out = AdmittedVec::with_capacity(block.schema.len(), &ctx.growth)?;
+     |
+
+error[E0533]: expected value, found struct variant `EvalError::AllocationFailed`
+  --> crates/sparql-eval/src/path.rs:95:24
+   |
+95 |         }).map_err(|_| EvalError::AllocationFailed("property-path owner"))
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a value
+   |
+help: you might have meant to create a new value of the struct
+   |
+95 -         }).map_err(|_| EvalError::AllocationFailed("property-path owner"))
+95 +         }).map_err(|_| EvalError::AllocationFailed { construct: /* value */ })
+   |
+
+error[E0533]: expected value, found struct variant `EvalError::AllocationFailed`
+   --> crates/sparql-eval/src/path.rs:218:30
+    |
+218 |                 storage.fail(EvalError::AllocationFailed("path reach-set owner"));
+    |                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a value
+    |
+help: you might have meant to create a new value of the struct
+    |
+218 -                 storage.fail(EvalError::AllocationFailed("path reach-set owner"));
+218 +                 storage.fail(EvalError::AllocationFailed { construct: /* value */ });
+    |
+
+error[E0533]: expected value, found struct variant `EvalError::AllocationFailed`
+   --> crates/sparql-eval/src/path.rs:281:34
+    |
+281 |         Err(_) => { storage.fail(EvalError::AllocationFailed("path power memo")); None }
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a value
+    |
+help: you might have meant to create a new value of the struct
+    |
+281 -         Err(_) => { storage.fail(EvalError::AllocationFailed("path power memo")); None }
+281 +         Err(_) => { storage.fail(EvalError::AllocationFailed { construct: /* value */ }); None }
+    |
+
+error[E0599]: no method named `record_silenced` found for reference `&Arc<GovernorState>` in the current scope
+    --> crates/sparql-eval/src/update.rs:1023:15
+     |
+1023 |         state.record_silenced(purrdf_core::SilencedInvocation::new(
+     |         ------^^^^^^^^^^^^^^^
+     |
+help: there is a method `record_silenced_admitted` with a similar name, but with different arguments
+    --> crates/sparql-eval/src/governor/mod.rs:919:5
+     |
+ 919 | /     pub(crate) fn record_silenced_admitted(
+ 920 | |         &self,
+ 921 | |         invocation: SilencedInvocation,
+ 922 | |         workspace: &crate::WorkspaceCapability,
+ 923 | |     ) -> Result<(), crate::EvalError> {
+     | |_____________________________________^
+
+error[E0282]: type annotations needed for `Result<(), _>`
+   --> crates/sparql-eval/src/workspace.rs:97:13
+    |
+ 97 |         let resized = (|| {
+    |             ^^^^^^^
+...
+110 |             self.failure = Some(error.clone());
+    |                                 ----- type must be known at this point
+    |
+help: consider giving `resized` an explicit type, where the type for type parameter `E` is specified
+    |
+ 97 |         let resized: Result<_, E> = (|| {
+    |                    ++++++++++++++
+
+error[E0597]: `e` does not live long enough
+    --> crates/sparql-eval/src/engine.rs:4925:38
+     |
+4919 |       let diagnostic = |code, message: &dyn std::fmt::Display| {
+     |           ---------- lifetime `'1` appears in the type of `diagnostic`
+...
+4923 |           .map_err(|e| {
+     |                     - binding `e` declared here
+4924 | /             diagnostic(
+4925 | |                 eval_diagnostic_code(&e, "native-sparql-property-function"),
+     | |                                      ^^ borrowed value does not live long enough
+4926 | |                 &e,
+4927 | |             )
+     | |_____________- argument requires that `e` is borrowed for `'1`
+4928 |           })?;
+     |           - `e` dropped here while still borrowed
+
+error[E0597]: `e` does not live long enough
+    --> crates/sparql-eval/src/engine.rs:4941:38
+     |
+4919 |       let diagnostic = |code, message: &dyn std::fmt::Display| {
+     |           ---------- lifetime `'1` appears in the type of `diagnostic`
+...
+4939 |           crate::agg_fn::registry_fingerprint(options.aggregates()).map_err(|e| {
+     |                                                                              - binding `e` declared here
+4940 | /             diagnostic(
+4941 | |                 eval_diagnostic_code(&e, "native-sparql-aggregate-function"),
+     | |                                      ^^ borrowed value does not live long enough
+4942 | |                 &e,
+4943 | |             )
+     | |_____________- argument requires that `e` is borrowed for `'1`
+4944 |           })?;
+     |           - `e` dropped here while still borrowed
+
+Some errors have detailed explanations: E0282, E0533, E0597, E0599.
+For more information about an error, try `rustc --explain E0282`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 16 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: unnecessary qualification
+    --> crates/sparql-eval/src/path.rs:2352:28
+     |
+2352 |     static LEVEL_ADVANCES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+     |                            ^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2352 -     static LEVEL_ADVANCES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+2352 +     static LEVEL_ADVANCES: Cell<u64> = const { std::cell::Cell::new(0) };
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/path.rs:2352:59
+     |
+2352 |     static LEVEL_ADVANCES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+     |                                                           ^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2352 -     static LEVEL_ADVANCES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+2352 +     static LEVEL_ADVANCES: std::cell::Cell<u64> = const { Cell::new(0) };
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/path.rs:2354:30
+     |
+2354 |     static POWER_EXPANSIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+     |                              ^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2354 -     static POWER_EXPANSIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+2354 +     static POWER_EXPANSIONS: Cell<u64> = const { std::cell::Cell::new(0) };
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/path.rs:2354:61
+     |
+2354 |     static POWER_EXPANSIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+     |                                                             ^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2354 -     static POWER_EXPANSIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+2354 +     static POWER_EXPANSIONS: std::cell::Cell<u64> = const { Cell::new(0) };
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/path.rs:2382:33
+     |
+2382 |     (value, LEVEL_ADVANCES.with(std::cell::Cell::get))
+     |                                 ^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2382 -     (value, LEVEL_ADVANCES.with(std::cell::Cell::get))
+2382 +     (value, LEVEL_ADVANCES.with(Cell::get))
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/path.rs:2391:35
+     |
+2391 |     (value, POWER_EXPANSIONS.with(std::cell::Cell::get))
+     |                                   ^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2391 -     (value, POWER_EXPANSIONS.with(std::cell::Cell::get))
+2391 +     (value, POWER_EXPANSIONS.with(Cell::get))
+     |
+
+error[E0369]: binary operation `==` cannot be applied to type `AdmittedRecords<std::string::String>`
+   --> crates/sparql-eval/src/bgp/positive.rs:773:9
+    |
+773 |         assert_eq!(retained.orders, native.orders);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         AdmittedRecords<std::string::String>
+    |         AdmittedRecords<std::string::String>
+    |
+note: an implementation of `PartialEq` might be missing for `AdmittedRecords<std::string::String>`
+   --> crates/sparql-eval/src/workspace.rs:165:1
+    |
+165 | pub(crate) struct AdmittedRecords<T> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ must implement `PartialEq`
+help: consider annotating `AdmittedRecords<std::string::String>` with `#[derive(PartialEq)]`
+   --> crates/sparql-eval/src/workspace.rs:165:1
+    |
+165 + #[derive(PartialEq)]
+166 | pub(crate) struct AdmittedRecords<T> {
+    |
+
+error[E0308]: arguments to this function are incorrect
+    --> crates/sparql-eval/src/plan/mod.rs:946:17
+     |
+ 946 |         assert!(std::sync::Arc::ptr_eq(
+     |                 ^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: expected `&Arc<_, _>`, found `&SharedWorkspace<PlanShape>`
+    --> crates/sparql-eval/src/plan/mod.rs:947:13
+     |
+ 947 |             first.handle().shape(),
+     |             ^^^^^^^^^^^^^^^^^^^^^^
+     = note: expected reference `&std::sync::Arc<_, _>`
+                found reference `&SharedWorkspace<PlanShape>`
+note: expected `&Arc<_, _>`, found `&SharedWorkspace<PlanShape>`
+    --> crates/sparql-eval/src/plan/mod.rs:948:13
+     |
+ 948 |             first.shape()
+     |             ^^^^^^^^^^^^^
+     = note: expected reference `&std::sync::Arc<_, _>`
+                found reference `&SharedWorkspace<PlanShape>`
+note: associated function defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/sync.rs:2278:12
+     |
+2278 |     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
+     |            ^^^^^^
+
+error[E0277]: the trait bound `EndpointVariables: AsRef<_>` is not satisfied
+    --> crates/sparql-eval/src/service_endpoints.rs:3274:17
+     |
+3274 | /                 tree.shape()
+3275 | |                     .node_of(right)
+3276 | |                     .and_then(|right| index.served_at(right))
+3277 | |                     .map(AsRef::as_ref),
+     | |_______________________________________^ unsatisfied trait bound
+     |
+help: the trait `AsRef<_>` is not implemented for `EndpointVariables`
+    --> crates/sparql-eval/src/service_endpoints.rs:118:1
+     |
+ 118 | enum EndpointVariables {
+     | ^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0277]: the trait bound `EndpointVariables: AsRef<_>` is not satisfied
+    --> crates/sparql-eval/src/service_endpoints.rs:3277:22
+     |
+3277 |                     .map(AsRef::as_ref),
+     |                      ^^^ unsatisfied trait bound
+     |
+help: the trait `AsRef<_>` is not implemented for `EndpointVariables`
+    --> crates/sparql-eval/src/service_endpoints.rs:118:1
+     |
+ 118 | enum EndpointVariables {
+     | ^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0277]: the trait bound `EndpointVariables: AsRef<_>` is not satisfied
+    --> crates/sparql-eval/src/service_endpoints.rs:3277:26
+     |
+3277 |                     .map(AsRef::as_ref),
+     |                          ^^^^^^^^^^^^^ unsatisfied trait bound
+     |
+help: the trait `AsRef<_>` is not implemented for `EndpointVariables`
+    --> crates/sparql-eval/src/service_endpoints.rs:118:1
+     |
+ 118 | enum EndpointVariables {
+     | ^^^^^^^^^^^^^^^^^^^^^^
+
+error: unused variable: `source`
+   --> crates/sparql-eval/src/xpath_regex.rs:580:14
+    |
+580 |         let (source, workspace, _) = account();
+    |              ^^^^^^ help: if this is intentional, prefix it with an underscore: `_source`
+    |
+    = note: `-D unused-variables` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_variables)]`
+
+Some errors have detailed explanations: E0277, E0282, E0308, E0369, E0533, E0597.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 27 previous errors

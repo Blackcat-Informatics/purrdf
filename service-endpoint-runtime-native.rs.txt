@@ -1,0 +1,313 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+fn served_in<D: DatasetView + Sync>(
+    operand: &GraphPattern,
+    index: &ServedIndex,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<EndpointVariables, EvalError> {
+    if ctx.deferred_exists.is_none()
+        && let Some(served) = ctx
+            .plan_node(operand)
+            .and_then(|operand| index.served_at(operand))
+    {
+        return Ok(served.clone());
+    }
+    let variables = served_endpoint_variables_admitted(
+        operand,
+        ctx.deferred_exists.as_deref(),
+        &ctx.growth,
+    )?;
+    Ok(EndpointVariables::Native(SharedWorkspace::new_admitted(
+        variables,
+        &ctx.growth,
+    )?))
+}
+
+pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
+    left: &SolutionSeq<D::Id>,
+    right: &GraphPattern,
+    role: FrameRole,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let EndpointScan::Present(index) = ctx.endpoint_scan() else {
+        return eval_evaluated(right, ctx);
+    };
+    let index = index.clone();
+    let served = served_in(right, &index, ctx)?;
+    if served.is_empty() {
+        return eval_evaluated(right, ctx);
+    }
+    let depth = ctx.endpoint_frames.len();
+    let evaluated = (|| {
+        for variable in served.iter() {
+            let column = left.schema.index_of(variable);
+            let binding = match column {
+                Some(c) if left.rows.iter().all(|row| row[c].is_some()) => {
+                    let mut seen = crate::AdmittedMap::default();
+                    let mut endpoints = AdmittedVec::new(&ctx.growth);
+                    for term in left.rows.iter().filter_map(|row| row[c]) {
+                        if !seen.contains_key(&term) {
+                            seen.insert_admitted(term, (), &ctx.growth)?;
+                            endpoints.push(term)?;
+                        }
+                    }
+                    EndpointBinding::Endpoints(SharedWorkspace::new_admitted(
+                        endpoints,
+                        &ctx.growth,
+                    )?)
+                }
+                _ if matches!(
+                    binding_for(&ctx.endpoint_frames[..depth], variable),
+                    Some(EndpointBinding::Endpoints(_))
+                ) => continue,
+                Some(_) => EndpointBinding::PartlyUnbound,
+                None => continue,
+            };
+            ctx.endpoint_frames.push(
+                EndpointFrame {
+                    variable: variable.clone(),
+                    binding,
+                    role,
+                },
+                &ctx.growth,
+            )?;
+        }
+        eval_evaluated(right, ctx)
+    })();
+    // Choose the original result before destroying frame payloads. This also
+    // runs on admission failure during frame construction, not only evaluation.
+    ctx.endpoint_frames.truncate(depth);
+    evaluated
+}
+
+pub(crate) struct MinusPartition<I> {
+    endpoints: AdmittedVec<(Variable, SolutionTerm<I>)>,
+    pub(crate) rows: AdmittedVec<usize>,
+}
+
+pub(crate) fn minus_partitions<D: DatasetView + Sync>(
+    left: &SolutionSeq<D::Id>,
+    right: &GraphPattern,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Option<AdmittedVec<MinusPartition<D::Id>>>, EvalError> {
+    use std::hash::{Hash, Hasher};
+    let EndpointScan::Present(index) = ctx.endpoint_scan() else {
+        return Ok(None);
+    };
+    let served = served_in(right, index, ctx)?;
+    let mut columns = AdmittedVec::new(&ctx.growth);
+    for variable in served.iter() {
+        match left.schema.index_of(variable) {
+            Some(c) if left.rows.iter().all(|row| row[c].is_some()) => {
+                columns.push((variable.clone(), c))?;
+            }
+            _ if matches!(
+                binding_for(&ctx.endpoint_frames, variable),
+                Some(EndpointBinding::Endpoints(_))
+            ) => {}
+            Some(_) => return Ok(None),
+            None => {}
+        }
+    }
+    if columns.is_empty() {
+        return Ok(None);
+    }
+    let mut partitions = AdmittedVec::<MinusPartition<D::Id>>::new(&ctx.growth);
+    // Buckets point into the immutable partition keys already retained below.
+    // No raw/deep-cloned Vec key exists; collisions compare every original cell.
+    let mut by_key = crate::AdmittedMap::<u64, AdmittedVec<usize>>::default();
+    for (position, row) in left.rows.iter().enumerate() {
+        let mut hash = purrdf_hash::fixed::FixedHasher::default();
+        columns.len().hash(&mut hash);
+        for (_, column) in columns.iter() {
+            row[*column]
+                .expect("partition columns are bound in every left row")
+                .hash(&mut hash);
+        }
+        let hash = hash.finish();
+        let known = by_key.get(&hash).and_then(|bucket| {
+            bucket.iter().copied().find(|&slot| {
+                partitions[slot]
+                    .endpoints
+                    .iter()
+                    .zip(columns.iter())
+                    .all(|((_, term), (_, column))| row[*column] == Some(*term))
+            })
+        });
+        let slot = match known {
+            Some(slot) => slot,
+            None => {
+                partitions.reserve_next()?;
+                let mut endpoints = AdmittedVec::with_capacity(columns.len(), &ctx.growth)?;
+                for (variable, column) in columns.iter() {
+                    endpoints.push_reserved((
+                        variable.clone(),
+                        row[*column].expect("partition columns are bound in every left row"),
+                    ));
+                }
+                let slot = partitions.len();
+                partitions.push_reserved(MinusPartition {
+                    endpoints,
+                    rows: AdmittedVec::new(&ctx.growth),
+                });
+                if let Some(bucket) = by_key.get_mut(&hash) {
+                    bucket.push(slot)?;
+                } else {
+                    let mut bucket = AdmittedVec::with_capacity(1, &ctx.growth)?;
+                    bucket.push_reserved(slot);
+                    by_key.insert_admitted(hash, bucket, &ctx.growth)?;
+                }
+                slot
+            }
+        };
+        partitions.as_mut_slice()[slot].rows.push(position)?;
+    }
+    Ok(Some(partitions))
+}
+
+pub(crate) fn eval_minus_partition<D: DatasetView + Sync>(
+    partition: &MinusPartition<D::Id>,
+    right: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let depth = ctx.endpoint_frames.len();
+    let evaluated = (|| {
+        for (variable, endpoint) in partition.endpoints.iter() {
+            let mut endpoints = AdmittedVec::with_capacity(1, &ctx.growth)?;
+            endpoints.push_reserved(*endpoint);
+            let endpoints = SharedWorkspace::new_admitted(endpoints, &ctx.growth)?;
+            ctx.endpoint_frames.push(
+                EndpointFrame {
+                    variable: variable.clone(),
+                    binding: EndpointBinding::Endpoints(endpoints),
+                    role: FrameRole::Minus,
+                },
+                &ctx.growth,
+            )?;
+        }
+        eval_evaluated(right, ctx)
+    })();
+    ctx.endpoint_frames.truncate(depth);
+    evaluated
+}
+
+pub(crate) fn binds_left_endpoints<D: DatasetView + Sync>(
+    left: &GraphPattern,
+    right: &GraphPattern,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<bool, EvalError> {
+    let EndpointScan::Present(index) = ctx.endpoint_scan() else {
+        return Ok(false);
+    };
+    let served = served_in(left, index, ctx)?;
+    if served.is_empty() || !served_in(right, index, ctx)?.is_empty() {
+        return Ok(false);
+    }
+    if served.iter().any(|variable| {
+        matches!(
+            binding_for(&ctx.endpoint_frames, variable),
+            Some(EndpointBinding::Endpoints(_))
+        )
+    }) {
+        return Ok(false);
+    }
+    let mentioned = crate::expr::pattern_all_vars_admitted(right, &ctx.growth)?;
+    Ok(served.iter().any(|variable| mentioned.contains(variable)))
+}
+
+pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
+    left: &SolutionSeq<D::Id>,
+    right: &GraphPattern,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<(), EvalError> {
+    if ctx.endpoint_scan().is_absent() || left.rows.is_empty() {
+        return Ok(());
+    }
+    let mut uses = AdmittedVec::new(&ctx.growth);
+    lateral_endpoint_uses_admitted(right, &mut uses, &ctx.growth)?;
+    let mut kept = 0;
+    for index in 0..uses.len() {
+        let outside = crate::expr::pattern_vars_outside_admitted(
+            right,
+            Some(&uses[index].0),
+            &ctx.growth,
+        )?;
+        if !outside.contains(&uses[index].0) {
+            uses.as_mut_slice().swap(kept, index);
+            kept += 1;
+        }
+    }
+    uses.truncate(kept);
+    for (variable, silent) in uses {
+        let column = left.schema.index_of(&variable);
+        let mut unbound = 0_usize;
+        for row in left.rows.iter() {
+            match column.and_then(|c| row[c]) {
+                None => unbound += 1,
+                Some(term) if !silent => {
+                    let source = ctx.workspace.clone();
+                    let value = ctx.scratch.try_owned_value_of(
+                        ctx.dataset,
+                        term,
+                        &ctx.growth,
+                        |error| source.source_error(error),
+                    )?;
+                    if !matches!(&*value, TermValue::Iri(_)) {
+                        return Err(non_iri_endpoint(&variable, &value, &ctx.growth));
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+        if unbound == 0 {
+            continue;
+        }
+        match binding_for(&ctx.endpoint_frames, &variable) {
+            Some(EndpointBinding::Endpoints(_)) => {}
+            binding => {
+                let cause = if unbound < left.rows.len()
+                    || matches!(binding, Some(EndpointBinding::PartlyUnbound))
+                {
+                    "some solutions of the pattern before it leave it unbound"
+                } else {
+                    "it is not bound to an IRI where the SERVICE is evaluated"
+                };
+                return Err(unbound_endpoint(&variable, cause, &ctx.growth));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn eval_projected<D: DatasetView + Sync>(
+    inner: &GraphPattern,
+    variables: &[Variable],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if ctx.endpoint_frames.is_empty() {
+        return eval_evaluated(inner, ctx);
+    }
+    let depth = ctx.endpoint_frames.len();
+    let evaluated = (|| {
+        let mut hidden = AdmittedVec::new(&ctx.growth);
+        for frame in ctx.endpoint_frames[..depth].iter() {
+            if !variables.contains(&frame.variable) {
+                hidden.push(frame.variable.clone())?;
+            }
+        }
+        for variable in hidden {
+            ctx.endpoint_frames.push(
+                EndpointFrame {
+                    variable,
+                    binding: EndpointBinding::Hidden,
+                    role: FrameRole::Join,
+                },
+                &ctx.growth,
+            )?;
+        }
+        eval_evaluated(inner, ctx)
+    })();
+    ctx.endpoint_frames.truncate(depth);
+    evaluated
+}

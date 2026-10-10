@@ -1,0 +1,3577 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/entail)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/columnar)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/conformance-kit)
+error: non-NFC Unicode sequence detected
+   --> crates/rdf-core/tests/native_regex_storage.rs:549:9
+    |
+549 |         "K",
+    |         ^^^ help: consider replacing the string with: `"K"`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unicode_not_nfc
+    = note: `-D clippy::unicode-not-nfc` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unicode_not_nfc)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/rdf-core/tests/native_regex_storage.rs:695:25
+    |
+695 |                         assert!(matches!(actual.value(), xpath::Error::Replacement(_)))
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `assert!(matches!(actual.value(), xpath::Error::Replacement(_)));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: could not compile `purrdf-core` (test "native_regex_storage") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: unnested or-patterns
+   --> crates/sparql-eval/src/convert.rs:270:13
+    |
+270 | /             Step::Predicate(n)
+271 | |             | Step::Term(GroundSource::Pattern(TermPattern::NamedNode(n)))
+272 | |             | Step::Term(GroundSource::Ground(GroundTerm::NamedNode(n))) => {
+    | |________________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnested_or_patterns
+    = note: `-D clippy::unnested-or-patterns` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnested_or_patterns)]`
+help: nest the patterns
+    |
+270 ~             Step::Predicate(n) |
+271 + Step::Term(GroundSource::Pattern(TermPattern::NamedNode(n)) |
+272 ~ GroundSource::Ground(GroundTerm::NamedNode(n))) => {
+    |
+
+error: unnested or-patterns
+   --> crates/sparql-eval/src/convert.rs:275:13
+    |
+275 | /             Step::Term(GroundSource::Pattern(TermPattern::Literal(l)))
+276 | |             | Step::Term(GroundSource::Ground(GroundTerm::Literal(l))) => {
+    | |______________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnested_or_patterns
+help: nest the patterns
+    |
+275 ~             Step::Term(GroundSource::Pattern(TermPattern::Literal(l)) |
+276 ~ GroundSource::Ground(GroundTerm::Literal(l))) => {
+    |
+
+error: empty line after doc comment
+   --> crates/sparql-eval/src/engine.rs:683:1
+    |
+683 | / /// binding lands. Every other admission passes the empty set and assumes nothing.
+684 | |
+    | |_^
+685 |   fn admit_algebra_with<const CONTEXTUAL: bool>(
+    |   --------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = note: `-D clippy::empty-line-after-doc-comments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_doc_comments)]`
+    = help: if the empty line is unintentional, remove it
+
+error: empty line after doc comment
+    --> crates/sparql-eval/src/expr.rs:2839:1
+     |
+2839 | / /// leaf/wrapper count times term length.
+2840 | |
+     | |_^
+2841 |   pub(crate) type CorrelatedMemory<'a> =
+     |   -------------------------------- the comment documents this type alias
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+     = help: if the empty line is unintentional, remove it
+
+error: empty line after doc comment
+    --> crates/sparql-eval/src/expr.rs:5566:1
+     |
+5566 | / /// * A value casts to its own datatype unchanged; every other pair is refused.
+5567 | |
+     | |_^
+5568 |   #[inline(never)]
+5569 |   fn cast_duration_or_binary<D: DatasetView + Sync>(
+     |   -------------------------- the comment documents this function
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+     = help: if the empty line is unintentional, remove it
+
+error: unnested or-patterns
+    --> crates/sparql-eval/src/modifier.rs:3990:13
+     |
+3990 | /             (Self::Ok { acc: a, count: ac }, Self::Ok { acc: b, count: bc })
+3991 | |             | (Self::Int { sum: a, count: ac }, Self::Ok { acc: b, count: bc })
+3992 | |             | (Self::Ok { acc: b, count: bc }, Self::Int { sum: a, count: ac }) => {
+     | |_______________________________________________________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnested_or_patterns
+help: nest the patterns
+     |
+3990 ~             (Self::Ok { acc: a, count: ac } | Self::Int { sum: a, count: ac }, Self::Ok {
+3991 + acc: b, count: bc }) |
+3992 ~ (Self::Ok { acc: b, count: bc }, Self::Int { sum: a, count: ac }) => {
+     |
+
+error: this sequence of operators looks suspiciously like a bug
+    --> crates/sparql-eval/src/property_fn_plan.rs:1562:45
+     |
+1562 |   ...                   && (certain.contains(retry_driver)
+     |  ___________________________^
+1563 | | ...                       || promised.writes(retry_driver))
+     | |__________________________________________________________^ help: did you mean: `certain.contains(retry_driver) || promised.contains(retry_driver)`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#suspicious_operation_groupings
+     = note: `-D clippy::suspicious-operation-groupings` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::suspicious_operation_groupings)]`
+
+error: empty line after doc comment
+   --> crates/sparql-eval/src/scratch.rs:482:5
+    |
+482 | /     /// computed-term table. Its counter is shared with the calling evaluation.
+483 | |
+    | |_^
+484 |       pub(crate) fn fresh_for_user_function_admitted(
+    |       ---------------------------------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = help: if the empty line is unintentional, remove it
+
+error: empty line after doc comment
+    --> crates/sparql-eval/src/service_endpoints.rs:1826:1
+     |
+1826 | / /// A short description of a non-IRI term, for the error naming it.
+1827 | |
+     | |_^
+...
+1834 |   struct EndpointText<'a, 'storage> {
+     |   ------------------- the comment documents this struct
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+     = help: if the empty line is unintentional, remove it
+help: if the documentation should include the empty line include it in the comment
+     |
+1827 | ///
+     |
+
+error: empty line after doc comment
+   --> crates/sparql-eval/src/substitute.rs:157:5
+    |
+157 | /     /// before it reaches this.
+158 | |
+    | |_^
+159 |       fn ground_with_memory(
+    |       --------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = help: if the empty line is unintentional, remove it
+
+error: empty line after doc comment
+   --> crates/sparql-eval/src/substitute.rs:184:5
+    |
+184 | /     /// validated and copied again; the term is equal to the one [`Self::ground_with_memory`] builds.
+185 | |
+    | |_^
+186 |       fn ground_reusing_with_memory(
+    |       ----------------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = help: if the empty line is unintentional, remove it
+
+error: empty lines after doc comment
+   --> crates/sparql-eval/src/substitute.rs:497:1
+    |
+497 | / /// and hold the node open until the operand comes back.
+498 | |
+499 | | /// Put the rewritten `operand` back into `frame`'s node, and go on: enter the node's
+500 | | /// next operand, or finish the node.
+501 | |
+    | |_^
+...
+528 |   pub(crate) fn group_key_carries(keys: &[Variable], variable: &Variable) -> bool {
+    |   ------------------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = help: if the empty lines are unintentional, remove them
+help: if the documentation should include the empty lines include them in the comment
+    |
+498 + ///
+499 | /// Put the rewritten `operand` back into `frame`'s node, and go on: enter the node's
+500 | /// next operand, or finish the node.
+501 + ///
+    |
+
+error: empty line after doc comment
+    --> crates/sparql-eval/src/substitute.rs:1422:1
+     |
+1422 | / /// sort keys, aggregate by aggregate.
+1423 | |
+     | |_^
+1424 |   /// The operand `pattern` hands to the substitution walk, and the scope it is in.
+1425 |   type SubstituteDescent = (GraphPattern, WalkScope);
+     |   ---------------------- the comment documents this type alias
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+     = help: if the empty line is unintentional, remove it
+help: if the documentation should include the empty line include it in the comment
+     |
+1423 | ///
+     |
+
+error: empty line after doc comment
+   --> crates/sparql-eval/src/template.rs:718:1
+    |
+718 | / /// The [`TriplePattern`] half of [`template_has_blank_node`]'s scan.
+719 | |
+    | |_^
+...
+723 |   pub(crate) fn term_pattern_has_blank_node_admitted(
+    |   -------------------------------------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = help: if the empty line is unintentional, remove it
+help: if the documentation should include the empty line include it in the comment
+    |
+719 | ///
+    |
+
+error: redundant clone
+   --> crates/sparql-eval/src/bgp/positive.rs:376:48
+    |
+376 | ...                   None => arm.certain.clone(),
+    |                                          ^^^^^^^^ help: remove this
+    |
+note: this value is dropped without further use
+   --> crates/sparql-eval/src/bgp/positive.rs:376:37
+    |
+376 | ...                   None => arm.certain.clone(),
+    |                               ^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+    = note: `-D clippy::redundant-clone` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_clone)]`
+
+error: this function has too many arguments (8/7)
+   --> crates/sparql-eval/src/bgp/positive.rs:652:5
+    |
+652 | /     pub(crate) fn survey_seeded_admitted<D: DatasetView>(
+653 | |         &self,
+654 | |         dataset: &D,
+655 | |         active_dataset: &ActiveDataset<D::Id>,
+...   |
+660 | |         account: &QueryWorkspace<D::ReadError>,
+661 | |     ) -> Result<(), EvalError> {
+    | |______________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: used underscore-prefixed binding
+   --> crates/sparql-eval/src/bgp.rs:247:39
+    |
+247 |             child.parent_allocation = parent._allocation;
+    |                                       ^^^^^^^^^^^^^^^^^^
+    |
+note: binding is defined here
+   --> crates/sparql-eval/src/bgp.rs:178:5
+    |
+178 |     _allocation: Option<crate::workspace::WorkspaceAllocation>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+    = note: `-D clippy::used-underscore-binding` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::used_underscore_binding)]`
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-eval/src/bgp.rs:470:5
+    |
+470 | /     if !(program.projection.is_some() && compiled.len() == 1) {
+471 | |         if let Some(input) = borrowed {
+472 | |             initial = AdmittedVec::with_capacity(working.len(), &ctx.growth)?;
+473 | |             for variable in working.vars() {
+...   |
+479 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+470 ~     if !(program.projection.is_some() && compiled.len() == 1)
+471 ~         && let Some(input) = borrowed {
+472 |             initial = AdmittedVec::with_capacity(working.len(), &ctx.growth)?;
+...
+477 |             }
+478 ~         }
+    |
+
+error: unneeded `return` statement
+   --> crates/sparql-eval/src/bgp.rs:692:33
+    |
+692 | ...                   return;
+    |                       ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_return
+    = note: `-D clippy::needless-return` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_return)]`
+help: remove `return`
+    |
+691 -                                 acc.fail(error);
+692 -                                 return;
+691 +                                 acc.fail(error);
+    |
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-eval/src/bgp.rs:956:5
+    |
+956 | /     if let Some(order) = cached {
+957 | |         if order.len() == compiled.len() {
+958 | |             return Ok(order);
+959 | |         }
+960 | |     }
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+956 ~     if let Some(order) = cached
+957 ~         && order.len() == compiled.len() {
+958 |             return Ok(order);
+959 ~         }
+    |
+
+error: the loop variable `index` is used to index `compiled`
+    --> crates/sparql-eval/src/bgp.rs:1521:22
+     |
+1521 |         for index in 0..n {
+     |                      ^^^^
+     |
+note: for this index operation
+    --> crates/sparql-eval/src/bgp.rs:1523:48
+     |
+1523 |                 && pattern_connected_admitted(&compiled[index], &bound, workspace)?
+     |                                                ^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_range_loop
+     = note: `-D clippy::needless-range-loop` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_range_loop)]`
+help: consider using an iterator and `.enumerate()`
+     |
+1521 -         for index in 0..n {
+1521 +         for (index, <item>) in compiled.iter().enumerate().take(n) {
+     |
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/bgp.rs:1759:17
+     |
+1759 |                 visit(SlotKey::Variable(variable))?
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `visit(SlotKey::Variable(variable))?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+     = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/bgp.rs:1762:17
+     |
+1762 |                 visit(SlotKey::Blank(blank.as_str()))?
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `visit(SlotKey::Blank(blank.as_str()))?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: collection is never read
+    --> crates/sparql-eval/src/bgp.rs:2313:5
+     |
+2313 |     let mut _allocation = None;
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collection_is_never_read
+     = note: `-D clippy::collection-is-never-read` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::collection_is_never_read)]`
+
+error: this function has too many arguments (8/7)
+    --> crates/sparql-eval/src/bgp.rs:3193:1
+     |
+3193 | / fn survey_bgp_seeded<D: DatasetView>(
+3194 | |     dataset: &D,
+3195 | |     active_dataset: &ActiveDataset<D::Id>,
+3196 | |     active_graph: GraphMatch<D::Id>,
+...    |
+3201 | |     account: &crate::workspace::QueryWorkspace<D::ReadError>,
+3202 | | ) -> Result<(), EvalError> {
+     | |__________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+
+error: redundant closure
+   --> crates/sparql-eval/src/binop.rs:541:61
+    |
+541 |         let enclosing = ctx.correlated_node_maps.last().map(|map| map.as_ref());
+    |                                                             ^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::convert::AsRef::as_ref`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+    = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: redundant clone
+   --> crates/sparql-eval/src/binop.rs:904:32
+    |
+904 |                     schema: out.clone(),
+    |                                ^^^^^^^^ help: remove this
+    |
+note: this value is dropped without further use
+   --> crates/sparql-eval/src/binop.rs:904:29
+    |
+904 |                     schema: out.clone(),
+    |                             ^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/binop.rs:1220:27
+     |
+1220 |     'left: for (mu, r) in per_row.iter() {
+     |                           ^^^^^^^^^^^^^^ help: to write this more concisely, try: `&per_row`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+     = note: `-D clippy::explicit-iter-loop` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::explicit_iter_loop)]`
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/binop.rs:1569:16
+     |
+1569 |     for arm in arms.iter() {
+     |                ^^^^^^^^^^^ help: to write this more concisely, try: `&arms`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/binop.rs:1846:33
+     |
+1846 |                     for &idx in wild.iter() {
+     |                                 ^^^^^^^^^^^ help: to write this more concisely, try: `&wild`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/binop.rs:1908:37
+     |
+1908 |                         for &idx in wild.iter() {
+     |                                     ^^^^^^^^^^^ help: to write this more concisely, try: `&wild`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: redundant clone
+    --> crates/sparql-eval/src/binop.rs:2444:26
+     |
+2444 |             joined.schema.clone(),
+     |                          ^^^^^^^^ help: remove this
+     |
+note: this value is dropped without further use
+    --> crates/sparql-eval/src/binop.rs:2444:13
+     |
+2444 |             joined.schema.clone(),
+     |             ^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/binop.rs:2760:33
+     |
+2760 |                     for &idx in wild.iter() {
+     |                                 ^^^^^^^^^^^ help: to write this more concisely, try: `&wild`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/binop.rs:2830:37
+     |
+2830 |                         for &idx in wild.iter() {
+     |                                     ^^^^^^^^^^^ help: to write this more concisely, try: `&wild`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/binop.rs:2929:26
+     |
+2929 |         for partition in partitions.iter() {
+     |                          ^^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&partitions`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/binop.rs:2935:30
+     |
+2935 |             for &position in partition.rows.iter() {
+     |                              ^^^^^^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&partition.rows`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/blank_scope.rs:341:19
+    |
+341 |     for labels in per_leaf.iter() {
+    |                   ^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&per_leaf`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/blank_scope.rs:342:23
+    |
+342 |         for &label in labels.iter() {
+    |                       ^^^^^^^^^^^^^ help: to write this more concisely, try: `labels`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/blank_scope.rs:547:21
+    |
+547 |                     pending.try_push_admitted(Node::Pattern(pattern), memory)?
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `pending.try_push_admitted(Node::Pattern(pattern), memory)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: `drain(..)` used on a `Vec`
+   --> crates/sparql-eval/src/blank_scope.rs:817:30
+    |
+817 |         for argument in args.drain(..) {
+    |                              ^^^^^^^^^ help: try: `into_iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_with_drain
+    = note: `-D clippy::iter-with-drain` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::iter_with_drain)]`
+
+error: `drain(..)` used on a `Vec`
+   --> crates/sparql-eval/src/blank_scope.rs:821:31
+    |
+821 |         for order in order_by.drain(..) {
+    |                               ^^^^^^^^^ help: try: `into_iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_with_drain
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/blank_scope.rs:844:28
+    |
+844 |         for &descending in aggregate.descending.iter() {
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&aggregate.descending`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: large size difference between variants
+   --> crates/sparql-eval/src/blank_scope.rs:871:1
+    |
+871 | /   enum Shell {
+872 | | /     Pattern {
+873 | | |         node: GraphPattern,
+874 | | |         children: usize,
+875 | | |         aggregates: AdmittedVec<TakenAggregate>,
+876 | | |     },
+    | | |_____- the largest variant contains at least 384 bytes
+877 | | /     Expression {
+878 | | |         node: Expression,
+879 | | |         children: usize,
+880 | | |     },
+    | | |_____- the second-largest variant contains at least 136 bytes
+881 | |   }
+    | |___^ the entire enum is at least 384 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+    = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+873 -         node: GraphPattern,
+873 +         node: Box<GraphPattern>,
+    |
+
+error: `drain(..)` used on a `Vec`
+   --> crates/sparql-eval/src/blank_scope.rs:927:23
+    |
+927 |     for text in names.drain(..) {
+    |                       ^^^^^^^^^ help: try: `into_iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_with_drain
+
+error: the borrowed expression implements the required traits
+   --> crates/sparql-eval/src/cdt_agg.rs:299:17
+    |
+299 | ...   &"FOLD combined two partial accumulators built for different composite datatypes; every partial of one fold comes from the same init factory",
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `"FOLD combined two partial accumulators built for different composite datatypes; every partial of one fold comes from the same init factory"`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+    = note: `-D clippy::needless-borrows-for-generic-args` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_borrows_for_generic_args)]`
+
+error: redundant closure
+   --> crates/sparql-eval/src/cdt_fn.rs:476:14
+    |
+476 |         .map(|answer| answer.ok())
+    |              ^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `std::result::Result::ok`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-eval/src/cdt_fn.rs:618:17
+    |
+618 | /                 if lift && language.is_none() {
+619 | |                     if let Some(value) = crate::composite_value::CompositeValue::parse(
+620 | |                         lexical_form,
+621 | |                         datatype,
+...   |
+646 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+618 ~                 if lift && language.is_none()
+619 ~                     && let Some(value) = crate::composite_value::CompositeValue::parse(
+620 |                         lexical_form,
+...
+644 |                         }
+645 ~                     }
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/cdt_fn.rs:786:17
+    |
+786 |                 done.push(cdt_literal_admitted(literal, workspace)?)?
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `done.push(cdt_literal_admitted(literal, workspace)?)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/cdt_fn.rs:789:17
+    |
+789 |                 done.push(composite_literal_admitted(value, workspace)?)?
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `done.push(composite_literal_admitted(value, workspace)?)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/construct.rs:964:35
+    |
+964 |                     for triple in patterns.iter() {
+    |                                   ^^^^^^^^^^^^^^^ help: to write this more concisely, try: `patterns`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/construct.rs:980:37
+    |
+980 | ...                   memory.push(&mut variables, variable.as_str())?
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `memory.push(&mut variables, variable.as_str())?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: this function has too many arguments (8/7)
+    --> crates/sparql-eval/src/construct.rs:1114:1
+     |
+1114 | / fn emit_dropped_losses<D: DatasetView + Sync>(
+1115 | |     dropped: &[DroppedReifier<'_>],
+1116 | |     ordinals: &[TermOrdinal],
+1117 | |     row: &Solution<D::Id>,
+...    |
+1122 | |     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+1123 | | ) -> Result<(), GraphConstructionError> {
+     | |_______________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/src/deferred_exists.rs:534:21
+    |
+511 |           SiteSlot::Plan => {
+    |  ___________________________-
+512 | |             if ctx.plan_exists_sites.is_none() {
+513 | |                 ctx.plan_exists_sites = Some(SharedWorkspace::new_admitted(
+514 | |                     PlanSites::default(),
+...   |
+534 | |             let mut table = plan_sites
+    | |                     ^^^^^
+...   |
+545 | |             SitesRef::Owned(kept)
+546 | |         }
+    | |_________- temporary `table` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+    = note: `-D clippy::significant-drop-tightening` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::significant_drop_tightening)]`
+help: drop the temporary after the end of its last usage
+    |
+541 ~                     table.insert_admitted(root, sites.clone(), &workspace)?;
+542 +                     drop(table);
+    |
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-eval/src/deferred_exists.rs:721:21
+    |
+721 | /                     if failure.is_none()
+722 | |                         && let crate::blank_scope::ChildMut::Pattern(child) = child
+723 | |                     {
+724 | |                         if let Err(error) = pending.push(child) {
+...   |
+727 | |                     }
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+722 ~                         && let crate::blank_scope::ChildMut::Pattern(child) = child
+723 ~                         && let Err(error) = pending.push(child) {
+724 |                             failure = Some(error);
+725 ~                         }
+    |
+
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/src/deferred_exists.rs:762:17
+    |
+761 |       let copy = {
+    |  ________________-
+762 | |         let mut frame = owner
+    | |                 ^^^^^
+763 | |             .lock()
+764 | |             .unwrap_or_else(std::sync::PoisonError::into_inner);
+...   |
+769 | |         crate::expr::correlated_box(copy, &mut memory)?
+770 | |     };
+    | |_____- temporary `frame` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+help: drop the temporary after the end of its last usage
+    |
+765 ~         let mut memory = purrdf_lex::allocation::Memory::new(&mut *frame);
+766 +         drop(frame);
+    |
+
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/src/deferred_exists.rs:787:17
+    |
+785 |       while let Some(Piece { mut body, parent }) = queue.pop() {
+    |  ______________________________________________________________-
+786 | |         let index = pieces.len();
+787 | |         let mut frame = owner
+    | |                 ^^^^^
+788 | |             .lock()
+...   |
+808 | |         pieces.push(Piece { body, parent })?;
+809 | |     }
+    | |_____- temporary `frame` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+help: drop the temporary after the end of its last usage
+    |
+791 ~         let mut memory = purrdf_lex::allocation::Memory::resume(&mut *frame, live);
+792 +         drop(frame);
+    |
+
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/src/deferred_exists.rs:834:21
+    |
+833 |           if !children.is_empty() {
+    |  _________________________________-
+834 | |             let mut frame = owner
+    | |                     ^^^^^
+835 | |                 .lock()
+836 | |                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+...   |
+858 | |             )?;
+859 | |         }
+    | |_________- temporary `frame` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+help: drop the temporary after the end of its last usage
+    |
+838 ~             let mut memory = purrdf_lex::allocation::Memory::resume(&mut *frame, live);
+839 +             drop(frame);
+    |
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/deferred_exists.rs:827:38
+    |
+827 |         for &(placeholder, child) in children_of[index].iter() {
+    |                                      ^^^^^^^^^^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&children_of[index]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: this `if` guard returns a bool literal and is followed by another
+    --> crates/sparql-eval/src/deferred_exists.rs:1005:25
+     |
+1005 | /                         if remember_failure(
+1006 | |                             pending.push(match part {
+1007 | |                                 PatternPart::Child(child, _) => Node::Pattern(child, scope),
+1008 | |                                 PatternPart::Expression(expr) => Node::Expression(expr, scope),
+...    |
+1013 | |                         };
+1014 | |                         false
+     | |_____________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_bool
+     = note: `-D clippy::needless-bool` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_bool)]`
+help: you can reduce it to
+     |
+1005 ~                         remember_failure(
+1006 +                             pending.push(match part {
+1007 +                                 PatternPart::Child(child, _) => Node::Pattern(child, scope),
+1008 +                                 PatternPart::Expression(expr) => Node::Expression(expr, scope),
+1009 +                             }),
+1010 +                             &mut failure,
+1011 +                         )
+     |
+
+error: unnecessary semicolon
+    --> crates/sparql-eval/src/deferred_exists.rs:1013:26
+     |
+1013 |                         };
+     |                          ^ help: remove
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_semicolon
+     = note: `-D clippy::unnecessary-semicolon` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::unnecessary_semicolon)]`
+
+error: large size difference between variants
+   --> crates/sparql-eval/src/enf.rs:263:1
+    |
+263 | / pub(crate) enum Enf {
+264 | |     /// The normalized pattern: `exists(pattern, μ)` and `exists(original, μ)` agree
+265 | |     /// for every μ (this module's laws are emptiness-preserving), so evaluating THIS
+266 | |     /// pattern's non-emptiness answers the original `EXISTS` exactly.
+267 | |     Pattern(GraphPattern),
+    | |     --------------------- the largest variant contains at least 320 bytes
+...   |
+272 | |     FoldedEmpty,
+    | |     ----------- the second-largest variant carries no data at all
+273 | | }
+    | |_^ the entire enum is at least 320 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+267 -     Pattern(GraphPattern),
+267 +     Pattern(Box<GraphPattern>),
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/enf.rs:419:17
+    |
+419 |                 original = left
+    |                 ^^^^^^^^^^^^^^^ help: add a `;` here: `original = left;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: the following explicit lifetimes could be elided: 'a
+   --> crates/sparql-eval/src/engine/bounded_workspace.rs:135:33
+    |
+135 | pub(super) fn reserve_execution<'a, D: DatasetView>(
+    |                                 ^^
+136 |     view: &'a D,
+    |            ^^
+...
+140 |     ExecutionWorkspace<impl WorkspaceReservation<Error = D::ReadError> + 'a, D::ReadError>,
+    |                                                                          ^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#elidable_lifetime_names
+    = note: `-D clippy::elidable-lifetime-names` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::elidable_lifetime_names)]`
+help: elide the lifetimes
+    |
+135 ~ pub(super) fn reserve_execution<D: DatasetView>(
+136 ~     view: &D,
+137 |     owner: QueryWorkspace<D::ReadError>,
+138 | ) -> AdmissionResult<
+139 |     D,
+140 ~     ExecutionWorkspace<impl WorkspaceReservation<Error = D::ReadError> + '_, D::ReadError>,
+    |
+
+error: large size difference between variants
+  --> crates/sparql-eval/src/engine/graph_build.rs:34:1
+   |
+34 | /  pub enum GraphBuildError {
+35 | |      /// Admission, substitution, evaluation or RDF validation failed.
+36 | |      Query(RdfDiagnostic),
+   | |      -------------------- the second-largest variant contains at least 96 bytes
+37 | |      /// A native control allocation failed before diagnostic publication.
+...  |
+40 | |/     BudgetExhausted {
+41 | ||         /// The ceiling or stop signal that ended evaluation.
+42 | ||         tripped: crate::TrippedGovernor,
+43 | ||         /// The operation's accumulated resource evidence.
+44 | ||         evidence: crate::GovernorEvidence,
+45 | ||     },
+   | ||_____- the largest variant contains at least 320 bytes
+46 | |  }
+   | |__^ the entire enum is at least 320 bytes
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+   |
+44 -         evidence: crate::GovernorEvidence,
+44 +         evidence: Box<crate::GovernorEvidence>,
+   |
+
+error: the `Err`-variant returned from this function is very large
+  --> crates/sparql-eval/src/engine/graph_build.rs:93:10
+   |
+40 | /     BudgetExhausted {
+41 | |         /// The ceiling or stop signal that ended evaluation.
+42 | |         tripped: crate::TrippedGovernor,
+43 | |         /// The operation's accumulated resource evidence.
+44 | |         evidence: crate::GovernorEvidence,
+45 | |     },
+   | |_____- the largest variant contains at least 320 bytes
+...
+93 |       ) -> Result<GraphBuildStats, GraphBuildError> {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: try reducing the size of `engine::graph_build::GraphBuildError`, for example by boxing large elements or replacing it with `Box<engine::graph_build::GraphBuildError>`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+   = note: `-D clippy::result-large-err` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/engine/graph_build.rs:130:10
+    |
+ 40 | /     BudgetExhausted {
+ 41 | |         /// The ceiling or stop signal that ended evaluation.
+ 42 | |         tripped: crate::TrippedGovernor,
+ 43 | |         /// The operation's accumulated resource evidence.
+ 44 | |         evidence: crate::GovernorEvidence,
+ 45 | |     },
+    | |_____- the largest variant contains at least 320 bytes
+...
+130 |       ) -> Result<GraphBuildStats, GraphBuildError> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `engine::graph_build::GraphBuildError`, for example by boxing large elements or replacing it with `Box<engine::graph_build::GraphBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: used underscore-prefixed binding
+   --> crates/sparql-eval/src/engine/graph_build.rs:178:68
+    |
+178 |         let workspace = super::reserve_fallible_execution(dataset, _reporting.execution())
+    |                                                                    ^^^^^^^^^^
+    |
+note: binding is defined here
+   --> crates/sparql-eval/src/engine/graph_build.rs:175:13
+    |
+175 |         let _reporting = super::reserve_fallible_reporting(dataset).map_err(|error| {
+    |             ^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/engine/graph_build.rs:287:10
+    |
+ 40 | /     BudgetExhausted {
+ 41 | |         /// The ceiling or stop signal that ended evaluation.
+ 42 | |         tripped: crate::TrippedGovernor,
+ 43 | |         /// The operation's accumulated resource evidence.
+ 44 | |         evidence: crate::GovernorEvidence,
+ 45 | |     },
+    | |_____- the largest variant contains at least 320 bytes
+...
+287 |       ) -> Result<StagedGraph, GraphBuildError> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `engine::graph_build::GraphBuildError`, for example by boxing large elements or replacing it with `Box<engine::graph_build::GraphBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/engine/graph_build.rs:332:10
+    |
+ 40 | /     BudgetExhausted {
+ 41 | |         /// The ceiling or stop signal that ended evaluation.
+ 42 | |         tripped: crate::TrippedGovernor,
+ 43 | |         /// The operation's accumulated resource evidence.
+ 44 | |         evidence: crate::GovernorEvidence,
+ 45 | |     },
+    | |_____- the largest variant contains at least 320 bytes
+...
+332 |       ) -> Result<StagedGraph, GraphBuildError> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `engine::graph_build::GraphBuildError`, for example by boxing large elements or replacing it with `Box<engine::graph_build::GraphBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/engine/graph_build.rs:392:10
+    |
+ 40 | /     BudgetExhausted {
+ 41 | |         /// The ceiling or stop signal that ended evaluation.
+ 42 | |         tripped: crate::TrippedGovernor,
+ 43 | |         /// The operation's accumulated resource evidence.
+ 44 | |         evidence: crate::GovernorEvidence,
+ 45 | |     },
+    | |_____- the largest variant contains at least 320 bytes
+...
+392 |       ) -> Result<(), GraphBuildError> {
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `engine::graph_build::GraphBuildError`, for example by boxing large elements or replacing it with `Box<engine::graph_build::GraphBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/engine/graph_build.rs:467:6
+    |
+ 40 | /     BudgetExhausted {
+ 41 | |         /// The ceiling or stop signal that ended evaluation.
+ 42 | |         tripped: crate::TrippedGovernor,
+ 43 | |         /// The operation's accumulated resource evidence.
+ 44 | |         evidence: crate::GovernorEvidence,
+ 45 | |     },
+    | |_____- the largest variant contains at least 320 bytes
+...
+467 |   ) -> Result<StagedGraph, GraphBuildError> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `engine::graph_build::GraphBuildError`, for example by boxing large elements or replacing it with `Box<engine::graph_build::GraphBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/engine/graph_build.rs:518:6
+    |
+ 40 | /     BudgetExhausted {
+ 41 | |         /// The ceiling or stop signal that ended evaluation.
+ 42 | |         tripped: crate::TrippedGovernor,
+ 43 | |         /// The operation's accumulated resource evidence.
+ 44 | |         evidence: crate::GovernorEvidence,
+ 45 | |     },
+    | |_____- the largest variant contains at least 320 bytes
+...
+518 |   ) -> Result<GraphBuildStats, GraphBuildError> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `engine::graph_build::GraphBuildError`, for example by boxing large elements or replacing it with `Box<engine::graph_build::GraphBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+   --> crates/sparql-eval/src/engine.rs:543:13
+    |
+543 |             drop(memory);
+    |             ^^^^^^^^^^^^
+    |
+note: argument has type `purrdf_lex::allocation::Memory<'_, workspace::LexicalFrame>`
+   --> crates/sparql-eval/src/engine.rs:543:18
+    |
+543 |             drop(memory);
+    |                  ^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#drop_non_drop
+    = note: `-D clippy::drop-non-drop` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::drop_non_drop)]`
+
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+    --> crates/sparql-eval/src/engine.rs:1198:9
+     |
+1198 |         drop(memory);
+     |         ^^^^^^^^^^^^
+     |
+note: argument has type `purrdf_lex::allocation::Memory<'_, workspace::LexicalFrame>`
+    --> crates/sparql-eval/src/engine.rs:1198:14
+     |
+1198 |         drop(memory);
+     |              ^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#drop_non_drop
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/engine.rs:1804:13
+     |
+1804 |             _reporting.execution(),
+     |             ^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/engine.rs:1798:13
+     |
+1798 |         let _reporting = reserve_fallible_reporting(dataset)?;
+     |             ^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: enclosing `Ok` and `?` operator are unneeded
+    --> crates/sparql-eval/src/engine.rs:2151:9
+     |
+2151 | /         Ok(apply_query_options(
+2152 | |             self.eval_ctx(dataset, workspace)?,
+2153 | |             options,
+2154 | |         )?)
+     | |___________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_question_mark
+     = note: `-D clippy::needless-question-mark` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_question_mark)]`
+help: remove the enclosing `Ok` and `?` operator
+     |
+2151 ~         apply_query_options(
+2152 |             self.eval_ctx(dataset, workspace)?,
+2153 |             options,
+2154 ~         )
+     |
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/engine.rs:2268:28
+     |
+2268 |                 _identity: identity_owner._frame,
+     |                            ^^^^^^^^^^^^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/engine.rs:6041:5
+     |
+6041 |     _frame: crate::workspace::LexicalFrame,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/engine.rs:2286:24
+     |
+2286 |             _identity: identity_owner._frame,
+     |                        ^^^^^^^^^^^^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/engine.rs:6041:5
+     |
+6041 |     _frame: crate::workspace::LexicalFrame,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/engine.rs:3336:14
+     |
+3336 |             &_reporting.capability(),
+     |              ^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/engine.rs:3331:13
+     |
+3331 |         let _reporting = reserve_fallible_reporting(dataset)?;
+     |             ^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/engine.rs:3340:72
+     |
+3340 |                 return finish_fallible_read(dataset, Err(error), Some(&_reporting.execution()));
+     |                                                                        ^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/engine.rs:3331:13
+     |
+3331 |         let _reporting = reserve_fallible_reporting(dataset)?;
+     |             ^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/engine.rs:3343:61
+     |
+3343 |         let workspace = reserve_fallible_execution(dataset, _reporting.execution())?;
+     |                                                             ^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/engine.rs:3331:13
+     |
+3331 |         let _reporting = reserve_fallible_reporting(dataset)?;
+     |             ^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/engine.rs:3910:65
+     |
+3910 |             let workspace = reserve_fallible_execution(dataset, _reporting.execution())?;
+     |                                                                 ^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/engine.rs:3909:17
+     |
+3909 |             let _reporting = reserve_fallible_reporting(dataset)?;
+     |                 ^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: try not to call a closure in the expression where it is declared
+    --> crates/sparql-eval/src/engine.rs:3994:22
+     |
+3994 |           let result = (|| {
+     |  ______________________^
+3995 | |             let publication = crate::user_fn::RefusalPublication::default();
+3996 | |             checked_query_read(dataset, &publication, || {
+3997 | |                 let options = publication.options(dataset, options)?;
+...    |
+4007 | |             })
+4008 | |         })();
+     | |____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_call
+     = note: `-D clippy::redundant-closure-call` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_call)]`
+help: try doing something like
+     |
+3994 ~         let result = {
+3995 +             let publication = crate::user_fn::RefusalPublication::default();
+3996 +             checked_query_read(dataset, &publication, || {
+3997 +                 let options = publication.options(dataset, options)?;
+3998 +                 let workspace = bounded_workspace::reserve(
+3999 +                     dataset,
+4000 +                     &execution.prepared.query,
+4001 +                     !execution.parameters().is_empty(),
+4002 +                     options,
+4003 +                 )?;
+4004 +                 self.execute_ungoverned_admitted(
+4005 +                     execution, dataset, options, witnessing, sequencing, &workspace, visit,
+4006 +                 )
+4007 +             })
+4008 ~         };
+     |
+
+error: useless conversion to the same type: `engine::EvaluationFailure`
+    --> crates/sparql-eval/src/engine.rs:4060:37
+     |
+4060 |                 Err(refused) => Err(refused.into()),
+     |                                     ^^^^^^^^^^^^^^ help: consider removing `.into()`: `refused`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#useless_conversion
+     = note: `-D clippy::useless-conversion` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::useless_conversion)]`
+
+error: try not to call a closure in the expression where it is declared
+    --> crates/sparql-eval/src/engine.rs:4117:22
+     |
+4117 |           let result = (|| {
+     |  ______________________^
+4118 | |             let publication = crate::user_fn::RefusalPublication::default();
+4119 | |             checked_query_read(dataset, &publication, || {
+4120 | |                 let options = publication.options(dataset, options)?;
+...    |
+4203 | |             })
+4204 | |         })();
+     | |____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_call
+help: try doing something like
+     |
+4117 ~         let result = {
+4118 +             let publication = crate::user_fn::RefusalPublication::default();
+4119 +             checked_query_read(dataset, &publication, || {
+4120 +                 let options = publication.options(dataset, options)?;
+4121 +                 let workspace = bounded_workspace::reserve(
+4122 +                     dataset,
+4123 +                     &execution.prepared.query,
+4124 +                     !execution.parameters().is_empty(),
+4125 +                     options,
+4126 +                 )?;
+4127 +                 let unbound = execution.unbound();
+4128 +                 if !unbound.is_empty() {
+4129 +                     return Err(EvaluationFailure::native_diagnostic(
+4130 +                         "native-sparql-execution-parameter",
+4131 +                         &format_args!("parameters still unbound: {unbound}"),
+4132 +                         &workspace.capability(),
+4133 +                     ));
+4134 +                 }
+4135 +                 check_prepared_registries_unchanged(
+4136 +                     &execution.prepared,
+4137 +                     options,
+4138 +                     &workspace.capability(),
+4139 +                 )?;
+4140 +                 let prepared = Arc::clone(&execution.prepared);
+4141 +                 let mut identity_owner = relation_identity(
+4142 +                     &prepared,
+4143 +                     options.property_functions(),
+4144 +                     &workspace.capability(),
+4145 +                 )?;
+4146 +                 if let Some(refused) = self.admit_refusal(
+4147 +                     dataset,
+4148 +                     &prepared.query,
+4149 +                     options.property_functions(),
+4150 +                     state,
+4151 +                     &mut identity_owner.value,
+4152 +                     &workspace,
+4153 +                 ) {
+4154 +                     return refused
+4155 +                         .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
+4156 +                 }
+4157 +                 let mut ctx = self.governed_ctx(dataset, state.clone(), options, &workspace)?;
+4158 ~                 // The retained workspace, exactly as on the ungoverned twin — and taken
+4159 +                 // here rather than inside `governed_ctx` so both lanes spell it at the same
+4160 +                 // level, beside the `substituted` call whose borrow it has to sit outside.
+4161 +                 if dataset.storage_live_budget().is_none() {
+4162 +                     ctx.scratch = execution.check_out_workspace();
+4163 +                 }
+4164 +                 let evaluated = match execution.substituted_admitted(&workspace.capability()) {
+4165 +                     Ok(substituted) => evaluate_query_evaluated_over(
+4166 +                         substituted.query(),
+4167 +                         substituted.plan(),
+4168 +                         &mut ctx,
+4169 +                     )
+4170 +                     .map_err(EvaluationFailure::Evaluation),
+4171 +                     Err(refused) => Err(refused.into()),
+4172 +                 };
+4173 +                 let answer = evaluated.and_then(|evaluated| {
+4174 +                     let evaluated = prepared
+4175 +                         .restore_evaluated_layout(evaluated, &ctx.growth)
+4176 +                         .map_err(EvaluationFailure::Evaluation)?;
+4177 +                     Ok(
+4178 +                         match resolve_governed(
+4179 +                             evaluated,
+4180 +                             &mut ctx,
+4181 +                             state,
+4182 +                             core::mem::replace(&mut identity_owner.value, RelationIdentity::EMPTY),
+4183 +                         )? {
+4184 +                             GovernedResolution::Complete {
+4185 +                                 outcome,
+4186 +                                 evidence,
+4187 +                                 relations,
+4188 +                             } => InternedGoverned::Complete {
+4189 +                                 value: visit(borrow_outcome(&outcome, &ctx)),
+4190 +                                 evidence,
+4191 +                                 relations,
+4192 +                             },
+4193 +                             GovernedResolution::Exhausted(exhausted) => {
+4194 +                                 InternedGoverned::BudgetExhausted(Box::new(exhausted))
+4195 +                             }
+4196 +                         },
+4197 +                     )
+4198 +                 });
+4199 +                 if dataset.storage_live_budget().is_none() {
+4200 +                     execution.check_in_workspace(&mut ctx.scratch);
+4201 +                 }
+4202 +                 answer
+4203 +             })
+4204 ~         };
+     |
+
+error: useless conversion to the same type: `engine::EvaluationFailure`
+    --> crates/sparql-eval/src/engine.rs:4171:41
+     |
+4171 |                     Err(refused) => Err(refused.into()),
+     |                                         ^^^^^^^^^^^^^^ help: consider removing `.into()`: `refused`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#useless_conversion
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/sparql-eval/src/engine.rs:4665:6
+     |
+4665 |   ) -> Result<
+     |  ______^
+4666 | |     bounded_workspace::ReportingWorkspace<
+4667 | |         impl purrdf_core::WorkspaceReservation<Error = D::ReadError> + '_,
+4668 | |         D::ReadError,
+4669 | |     >,
+4670 | |     FallibleSparqlError<D::Error, D::Evidence>,
+4671 | | >
+     | |_^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+     = note: `-D clippy::type-complexity` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: the following explicit lifetimes could be elided: 'a
+    --> crates/sparql-eval/src/engine.rs:4715:31
+     |
+4715 | fn reserve_fallible_execution<'a, D>(
+     |                               ^^
+4716 |     dataset: &'a D,
+     |               ^^
+...
+4720 |         impl purrdf_core::WorkspaceReservation<Error = D::ReadError> + 'a,
+     |                                                                        ^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#elidable_lifetime_names
+help: elide the lifetimes
+     |
+4715 ~ fn reserve_fallible_execution<D>(
+4716 ~     dataset: &D,
+4717 |     workspace: crate::workspace::QueryWorkspace<D::ReadError>,
+4718 | ) -> Result<
+4719 |     bounded_workspace::ExecutionWorkspace<
+4720 ~         impl purrdf_core::WorkspaceReservation<Error = D::ReadError> + '_,
+     |
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/sparql-eval/src/engine.rs:4718:6
+     |
+4718 |   ) -> Result<
+     |  ______^
+4719 | |     bounded_workspace::ExecutionWorkspace<
+4720 | |         impl purrdf_core::WorkspaceReservation<Error = D::ReadError> + 'a,
+4721 | |         D::ReadError,
+4722 | |     >,
+4723 | |     FallibleSparqlError<D::Error, D::Evidence>,
+4724 | | >
+     | |_^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/sparql-eval/src/engine.rs:4768:6
+     |
+4768 |   ) -> Result<
+     |  ______^
+4769 | |     (
+4770 | |         crate::RetainedSparqlResult,
+4771 | |         crate::workspace::QueryWorkspace<D::ReadError>,
+4772 | |     ),
+4773 | |     FallibleSparqlError<D::Error, D::Evidence>,
+4774 | | > {
+     | |_^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: redundant clone
+    --> crates/sparql-eval/src/engine.rs:4889:38
+     |
+4889 | ...                   governors.clone(),
+     |                                ^^^^^^^^ help: remove this
+     |
+note: this value is dropped without further use
+    --> crates/sparql-eval/src/engine.rs:4889:29
+     |
+4889 | ...                   governors.clone(),
+     |                       ^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_clone
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/engine.rs:4871:26
+     |
+4871 |                     drop(_identity);
+     |                          ^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/engine.rs:4868:21
+     |
+4868 |                     _identity,
+     |                     ^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/engine.rs:4904:26
+     |
+4904 |                     drop(_identity);
+     |                          ^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/engine.rs:4895:21
+     |
+4895 |                     _identity,
+     |                     ^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+    --> crates/sparql-eval/src/engine.rs:6088:5
+     |
+6088 |     drop(memory);
+     |     ^^^^^^^^^^^^
+     |
+note: argument has type `purrdf_lex::allocation::Memory<'_, workspace::LexicalFrame>`
+    --> crates/sparql-eval/src/engine.rs:6088:10
+     |
+6088 |     drop(memory);
+     |          ^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#drop_non_drop
+
+error: temporary with significant `Drop` can be early dropped
+   --> crates/sparql-eval/src/eval.rs:232:17
+    |
+229 |       ) -> Result<Option<I>, EvalError> {
+    |  _______________________________________-
+230 | |         let hash = workspace.term_hash(value)?;
+231 | |         let shared = self.shared(workspace)?;
+232 | |         let mut entries = shared
+    | |                 ^^^^^^^
+...   |
+256 | |         Ok(id)
+257 | |     }
+    | |_____- temporary `entries` is currently being dropped at the end of its contained scope
+    |
+    = note: this might lead to unnecessary resource contention
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+help: drop the temporary after the end of its last usage
+    |
+254 ~             entries.insert_admitted(hash, bucket, workspace)?;
+255 +             drop(entries);
+    |
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/eval.rs:236:26
+    |
+236 |             for entry in bucket.iter() {
+    |                          ^^^^^^^^^^^^^ help: to write this more concisely, try: `bucket`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: the borrowed expression implements the required traits
+    --> crates/sparql-eval/src/eval.rs:1432:17
+     |
+1432 | /                 &format_args!(
+1433 | |                     "blank-node mint prefix {prefix:?} is not a legal BLANK_NODE_LABEL prefix"
+1434 | |                 ),
+     | |_________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+help: change this to
+     |
+1432 ~                 format_args!(
+1433 +                     "blank-node mint prefix {prefix:?} is not a legal BLANK_NODE_LABEL prefix"
+1434 ~                 ),
+     |
+
+error: implicit borrow as raw pointer
+    --> crates/sparql-eval/src/eval.rs:1608:50
+     |
+1608 |             .is_none_or(|previous| !std::ptr::eq(&**previous, &*governors))
+     |                                                  ^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+     = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+     |
+1608 |             .is_none_or(|previous| !std::ptr::eq(&raw const **previous, &*governors))
+     |                                                   +++++++++
+
+error: implicit borrow as raw pointer
+    --> crates/sparql-eval/src/eval.rs:1608:63
+     |
+1608 |             .is_none_or(|previous| !std::ptr::eq(&**previous, &*governors))
+     |                                                               ^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+     |
+1608 |             .is_none_or(|previous| !std::ptr::eq(&**previous, &raw const *governors))
+     |                                                                +++++++++
+
+error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`
+    --> crates/sparql-eval/src/eval.rs:2649:5
+     |
+2649 |     pub(crate) fn fork_for_worker(&self) -> Result<Self, EvalError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove `must_use`
+    --> crates/sparql-eval/src/eval.rs:2648:5
+     |
+2648 |     #[must_use]
+     |     ^^^^^^^^^^^
+     = note: alternatively, you may add an explicit reason to the `must_use` attribute
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#double_must_use
+     = note: `-D clippy::double-must-use` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::double_must_use)]`
+
+error: calling `WorkList::default()` is more clear than this expression
+    --> crates/sparql-eval/src/expr.rs:1210:80
+     |
+1210 |     let mut pending: purrdf_lex::walk::WorkList<(&TermValue, &TermValue), 8> = Default::default();
+     |                                                                                ^^^^^^^^^^^^^^^^^^ help: try: `WorkList::default()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#default_trait_access
+     = note: `-D clippy::default-trait-access` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::default_trait_access)]`
+
+error: calling `WorkList::default()` is more clear than this expression
+    --> crates/sparql-eval/src/expr.rs:1347:66
+     |
+1347 |     let mut pending: purrdf_lex::walk::WorkList<&TermValue, 8> = Default::default();
+     |                                                                  ^^^^^^^^^^^^^^^^^^ help: try: `WorkList::default()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#default_trait_access
+
+error: this `if` can be collapsed into the outer `match`
+    --> crates/sparql-eval/src/expr.rs:1371:17
+     |
+1371 | /                 if parse_owned_xsd(lexical_form, datatype, workspace)?
+1372 | |                     .as_deref()
+1373 | |                     .is_some_and(is_xsd_nan)
+...    |
+1376 | |                 }
+     | |_________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_match
+     = note: `-D clippy::collapsible-match` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::collapsible_match)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/expr.rs:3387:21
+     |
+3387 |                     self.expr_vars_of_body(body, out, &workspace)?
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `self.expr_vars_of_body(body, out, &workspace)?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: redundant closure
+    --> crates/sparql-eval/src/expr.rs:4761:67
+     |
+4761 |                 }) if XsdDatatype::from_iri(datatype).is_some_and(|kind| kind.is_numeric()) => {
+     |                                                                   ^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_xsd::XsdDatatype::is_numeric`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/expr.rs:5072:77
+     |
+5072 |                     match purrdf_xsd::temporal::adjust_datetime_to_timezone(&dt, tz) {
+     |                                                                             ^^^ help: change this to: `dt`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+     = note: `-D clippy::needless-borrow` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/expr.rs:5078:73
+     |
+5078 |                     match purrdf_xsd::temporal::adjust_date_to_timezone(&d, tz) {
+     |                                                                         ^^ help: change this to: `d`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/expr.rs:5084:73
+     |
+5084 |                     match purrdf_xsd::temporal::adjust_time_to_timezone(&t, tz) {
+     |                                                                         ^^ help: change this to: `t`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: collection is never read
+    --> crates/sparql-eval/src/expr.rs:5416:5
+     |
+5416 |     let mut _collapsed_owner = None;
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collection_is_never_read
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/expr.rs:6525:29
+     |
+6525 |     if !well_formed_langtag(&lang) {
+     |                             ^^^^^ help: change this to: `lang`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/expr.rs:6556:29
+     |
+6556 |     if !well_formed_langtag(&lang) {
+     |                             ^^^^^ help: change this to: `lang`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/expr.rs:6561:60
+     |
+6561 |     let Some(direction) = RdfTextDirection::from_str_token(&dir) else {
+     |                                                            ^^^^ help: change this to: `dir`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/sparql-eval/src/expr.rs:6618:29
+     |
+6618 |     Ok(Some(typed_term(ctx, &lex, dt)?))
+     |                             ^^^^ help: change this to: `lex`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/sparql-eval/src/expr.rs:6950:12
+     |
+6950 |     value: crate::parsed_value::ParsedValue,
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+     = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+     |
+6950 |     value: &crate::parsed_value::ParsedValue,
+     |            +
+
+error: assigning the result of `Clone::clone()` may be inefficient
+     --> crates/sparql-eval/src/expr.rs:14192:9
+      |
+14192 |         self.0 = layer.parent.0.clone();
+      |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `self.0.clone_from(&layer.parent.0)`
+      |
+      = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+      = note: `-D clippy::assigning-clones` implied by `-D warnings`
+      = help: to override `-D warnings` add `#[allow(clippy::assigning_clones)]`
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/governor/ledger.rs:613:21
+    |
+613 |         for node in self.ledger.iter() {
+    |                     ^^^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&self.ledger`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: used underscore-prefixed binding
+   --> crates/sparql-eval/src/governor/soundness.rs:882:13
+    |
+882 |             out._allocation = Some(allocation);
+    |             ^^^^^^^^^^^^^^^
+    |
+note: binding is defined here
+   --> crates/sparql-eval/src/governor/soundness.rs:823:5
+    |
+823 |     _allocation: Option<crate::WorkspaceAllocation>,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/governor/soundness.rs:910:5
+    |
+910 | /     walk_spine_admitted(
+911 | |         root,
+912 | |         &WorkspaceCapability::resident(),
+913 | |         &mut |node, context, depth| {
+...   |
+918 | |     .expect("resident plan walk")
+    | |_________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+910 |     walk_spine_admitted(
+...
+917 |     )
+918 ~     .expect("resident plan walk");
+    |
+
+error: the following explicit lifetimes could be elided: 'p, 't
+    --> crates/sparql-eval/src/governor/soundness.rs:2826:29
+     |
+2826 | fn pattern_probe_admissible<'p, 't>(
+     |                             ^^  ^^
+2827 |     pattern: &'p GraphPattern,
+     |               ^^
+2828 |     current_row_vars: &VarSchema,
+2829 |     table: &'t NodeAnalysisTable,
+     |             ^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_lifetimes
+     = note: `-D clippy::needless-lifetimes` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_lifetimes)]`
+help: elide the lifetimes
+     |
+2826 ~ fn pattern_probe_admissible(
+2827 ~     pattern: &GraphPattern,
+2828 |     current_row_vars: &VarSchema,
+2829 ~     table: &NodeAnalysisTable,
+     |
+
+error: `drain(..)` used on a `Vec`
+   --> crates/sparql-eval/src/join_plan.rs:377:36
+    |
+377 |     for (index, triple) in triples.drain(..).enumerate() {
+    |                                    ^^^^^^^^^ help: try: `into_iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_with_drain
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-eval/src/knn/invocation.rs:815:17
+    |
+815 | /                 if let Some(want) = want {
+816 | |                     if !self.workspace.terms_equal(want, have)? {
+817 | |                         agrees = false;
+818 | |                         break;
+819 | |                     }
+820 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+815 ~                 if let Some(want) = want
+816 ~                     && !self.workspace.terms_equal(want, have)? {
+817 |                         agrees = false;
+818 |                         break;
+819 ~                     }
+    |
+
+error: unnecessary structure name repetition
+   --> crates/sparql-eval/src/knn/metric.rs:387:9
+    |
+387 |         std::collections::BinaryHeap::len(self)
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+    = note: `-D clippy::use-self` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::use_self)]`
+
+error: unnecessary structure name repetition
+   --> crates/sparql-eval/src/knn/metric.rs:390:9
+    |
+390 |         std::collections::BinaryHeap::peek(self)
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: unnecessary structure name repetition
+   --> crates/sparql-eval/src/knn/metric.rs:393:17
+    |
+393 |         let _ = std::collections::BinaryHeap::pop(self);
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: unnecessary structure name repetition
+   --> crates/sparql-eval/src/knn/metric.rs:396:9
+    |
+396 |         std::collections::BinaryHeap::push(self, candidate);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: unnecessary structure name repetition
+   --> crates/sparql-eval/src/knn/metric.rs:404:9
+    |
+404 |         crate::AdmittedHeap::len(self)
+    |         ^^^^^^^^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: unnecessary structure name repetition
+   --> crates/sparql-eval/src/knn/metric.rs:407:9
+    |
+407 |         crate::AdmittedHeap::peek(self)
+    |         ^^^^^^^^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: unnecessary structure name repetition
+   --> crates/sparql-eval/src/knn/metric.rs:410:17
+    |
+410 |         let _ = crate::AdmittedHeap::pop(self);
+    |                 ^^^^^^^^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: unnecessary structure name repetition
+   --> crates/sparql-eval/src/knn/metric.rs:413:9
+    |
+413 |         crate::AdmittedHeap::push(self, candidate)
+    |         ^^^^^^^^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/modifier.rs:573:18
+    |
+573 |     for value in values.iter() {
+    |                  ^^^^^^^^^^^^^ help: to write this more concisely, try: `&values`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/src/modifier.rs:625:11
+    |
+625 |     keys: impl Iterator<Item = &'key SortKey<'value, V>> + Clone,
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+    |
+625 |     keys: &impl Iterator<Item = &'key SortKey<'value, V>> + Clone,
+    |           +
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/modifier.rs:1996:21
+     |
+1996 |         for name in self.iter() {
+     |                     ^^^^^^^^^^^ help: to write this more concisely, try: `*self`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/modifier.rs:2211:31
+     |
+2211 |         for (_, key, idxs) in groups.iter() {
+     |                               ^^^^^^^^^^^^^ help: to write this more concisely, try: `&groups`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/modifier.rs:2479:22
+     |
+2479 |                 drop(_allocation);
+     |                      ^^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/modifier.rs:2476:17
+     |
+2476 |                 _allocation,
+     |                 ^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/modifier.rs:3011:29
+     |
+3011 |             for &ordinal in bucket.iter() {
+     |                             ^^^^^^^^^^^^^ help: to write this more concisely, try: `bucket`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: redundant closure
+    --> crates/sparql-eval/src/modifier.rs:4241:13
+     |
+4241 |             |summary, value| summary.step(value),
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `NumericSummary::step`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: this could be rewritten as `let...else`
+  --> crates/sparql-eval/src/native_numeric.rs:52:9
+   |
+52 | /         let bytes = match u64::try_from(layout.peak_bytes()) {
+53 | |             Ok(bytes) => bytes,
+54 | |             Err(_) => return Err(LimbScratchError::SizeOverflow),
+55 | |         };
+   | |__________^ help: consider writing: `let Ok(bytes) = u64::try_from(layout.peak_bytes()) else { return Err(LimbScratchError::SizeOverflow) };`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_let_else
+   = note: `-D clippy::manual-let-else` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::manual_let_else)]`
+
+error: unnecessary semicolon
+    --> crates/sparql-eval/src/parallel.rs:3114:22
+     |
+3114 |                     };
+     |                      ^ help: remove
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_semicolon
+
+error: unnecessary semicolon
+    --> crates/sparql-eval/src/parallel.rs:3157:22
+     |
+3157 |                     };
+     |                      ^ help: remove
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_semicolon
+
+error: this could be rewritten as `let...else`
+  --> crates/sparql-eval/src/parsed_value.rs:90:9
+   |
+90 | /         let retained = match bytes
+91 | |             .checked_add(header)
+92 | |             .and_then(|bytes| u64::try_from(bytes).ok())
+...  |
+99 | |         };
+   | |__________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_let_else
+help: consider writing
+   |
+90 ~         let Some(retained) = bytes
+91 +             .checked_add(header)
+92 +             .and_then(|bytes| u64::try_from(bytes).ok()) else {
+93 +                 drop(value);
+94 +                 return Err(EvalError::WorkspaceBoundOverflow);
+95 +             };
+   |
+
+error: use of `Option<Option<T>>`
+   --> crates/sparql-eval/src/parsed_value.rs:172:41
+    |
+172 |     pub(crate) fn get(&self, key: K) -> Option<Option<ParsedValue>> {
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: consider using `Option<ParsedValue>`, or a custom enum if you need to distinguish all 3 cases
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#option_option
+    = note: `-D clippy::option-option` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::option_option)]`
+
+error: unnecessary structure name repetition
+  --> crates/sparql-eval/src/xpath_regex.rs:50:9
+   |
+50 |         LexicalFrame::take_failure(self)
+   |         ^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: unnecessary structure name repetition
+  --> crates/sparql-eval/src/xpath_regex.rs:53:9
+   |
+53 |         LexicalFrame::workspace(self)
+   |         ^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: unnecessary structure name repetition
+  --> crates/sparql-eval/src/xpath_regex.rs:56:9
+   |
+56 |         LexicalFrame::storage_error(self, error, "native XPath storage")
+   |         ^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/xpath_regex.rs:144:10
+    |
+144 |     ) -> Result<xpath::OwnedPatternValue<bool, LexicalFrame>, xpath::OwnedPatternError<LexicalFrame>>
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 192 bytes
+    |
+    = help: try reducing the size of `purrdf_core::xsd_regex::xpath::OwnedPatternValue<purrdf_core::xsd_regex::xpath::Error, workspace::LexicalFrame>`, for example by boxing large elements or replacing it with `Box<purrdf_core::xsd_regex::xpath::OwnedPatternValue<purrdf_core::xsd_regex::xpath::Error, workspace::LexicalFrame>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/xpath_regex.rs:158:10
+    |
+158 |       ) -> Result<
+    |  __________^
+159 | |         xpath::OwnedReplacement<'h, LexicalFrame, LexicalFrame>,
+160 | |         xpath::OwnedPatternError<(LexicalFrame, LexicalFrame)>,
+161 | |     > {
+    | |_____^ the `Err`-variant is at least 336 bytes
+    |
+    = help: try reducing the size of `purrdf_core::xsd_regex::xpath::OwnedPatternValue<purrdf_core::xsd_regex::xpath::Error, (workspace::LexicalFrame, workspace::LexicalFrame)>`, for example by boxing large elements or replacing it with `Box<purrdf_core::xsd_regex::xpath::OwnedPatternValue<purrdf_core::xsd_regex::xpath::Error, (workspace::LexicalFrame, workspace::LexicalFrame)>>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-eval/src/path.rs:431:9
+    |
+431 | /         if let Some(id) = dataset.term_id_by_value(&term).map_err(&source_error)? {
+432 | |             if let Err(index) = target.binary_search(&id) {
+433 | |                 target.push(id)?;
+434 | |                 target.as_mut_slice()[index..].rotate_right(1);
+435 | |             }
+436 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+431 ~         if let Some(id) = dataset.term_id_by_value(&term).map_err(&source_error)?
+432 ~             && let Err(index) = target.binary_search(&id) {
+433 |                 target.push(id)?;
+434 |                 target.as_mut_slice()[index..].rotate_right(1);
+435 ~             }
+    |
+
+error: large size difference between variants
+    --> crates/sparql-eval/src/path.rs:1257:1
+     |
+1257 | / enum Step<I: ViewTermId> {
+1258 | |     /// Run `frame` to completion, then resume this frame with its value.
+1259 | |     Call(Frame<I>),
+     | |     -------------- the largest variant contains at least 280 bytes
+1260 | |     /// This frame is finished with this value.
+1261 | |     Return(Value<I>),
+     | |     ---------------- the second-largest variant contains at least 72 bytes
+1262 | | }
+     | |_^ the entire enum is at least 280 bytes
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+     |
+1259 -     Call(Frame<I>),
+1259 +     Call(Box<Frame<I>>),
+     |
+
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+   --> crates/sparql-eval/src/plan/mod.rs:600:9
+    |
+600 |         drop(memory);
+    |         ^^^^^^^^^^^^
+    |
+note: argument has type `purrdf_lex::allocation::Memory<'_, workspace::LexicalFrame>`
+   --> crates/sparql-eval/src/plan/mod.rs:600:14
+    |
+600 |         drop(memory);
+    |              ^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#drop_non_drop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/plan/mod.rs:611:20
+    |
+611 |         for row in rows.iter() {
+    |                    ^^^^^^^^^^^ help: to write this more concisely, try: `&rows`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: assigning the result of `Clone::clone()` may be inefficient
+   --> crates/sparql-eval/src/plan_cache.rs:118:17
+    |
+118 |                 key = entry.next.clone();
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `key.clone_from(&entry.next)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+
+error: assigning the result of `Clone::clone()` may be inefficient
+   --> crates/sparql-eval/src/plan_cache.rs:132:13
+    |
+132 | /             self.entries
+133 | |                 .get_mut(previous_key)
+134 | |                 .expect("previous recency entry exists")
+135 | |                 .next = next.clone();
+    | |____________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+help: use `clone_from()`
+    |
+132 ~             self.entries
+133 +                 .get_mut(previous_key)
+134 +                 .expect("previous recency entry exists")
+135 ~                 .next.clone_from(&next);
+    |
+
+error: assigning the result of `Clone::clone()` may be inefficient
+   --> crates/sparql-eval/src/plan_cache.rs:137:13
+    |
+137 |             self.oldest = next.clone();
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: use `clone_from()`: `self.oldest.clone_from(&next)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+
+error: assigning the result of `Clone::clone()` may be inefficient
+   --> crates/sparql-eval/src/plan_cache.rs:140:13
+    |
+140 | /             self.entries
+141 | |                 .get_mut(next_key)
+142 | |                 .expect("next recency entry exists")
+143 | |                 .previous = previous.clone();
+    | |____________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assigning_clones
+help: use `clone_from()`
+    |
+140 ~             self.entries
+141 +                 .get_mut(next_key)
+142 +                 .expect("next recency entry exists")
+143 ~                 .previous.clone_from(&previous);
+    |
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/src/plan_cache.rs:224:14
+    |
+224 |         key: K,
+    |              ^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+    |
+224 |         key: &K,
+    |              +
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/property_fn.rs:1965:12
+     |
+1965 |         if self._admission.is_bounded()
+     |            ^^^^^^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/property_fn.rs:1955:5
+     |
+1955 |     _admission: crate::WorkspaceAllocation,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/property_fn.rs:1966:16
+     |
+1966 |               || self
+     |  ________________^
+1967 | |                 ._term_admissions
+     | |_________________________________^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/property_fn.rs:1954:5
+     |
+1954 |     _term_admissions: crate::workspace::AdmittedVec<crate::WorkspaceAllocation>,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: call to `std::mem::drop` with a value that does not implement `Drop`. Dropping such a type only extends its contained lifetimes
+   --> crates/sparql-eval/src/property_fn_eval.rs:280:9
+    |
+280 |         drop(memory);
+    |         ^^^^^^^^^^^^
+    |
+note: argument has type `purrdf_lex::allocation::Memory<'_, workspace::LexicalFrame>`
+   --> crates/sparql-eval/src/property_fn_eval.rs:280:14
+    |
+280 |         drop(memory);
+    |              ^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#drop_non_drop
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/property_fn_eval.rs:390:17
+    |
+390 | /                 occurrences[*slot] = occurrences[*slot]
+391 | |                     .checked_add(1)
+392 | |                     .ok_or(EvalError::WorkspaceBoundOverflow)?
+    | |______________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+390 |                 occurrences[*slot] = occurrences[*slot]
+391 |                     .checked_add(1)
+392 ~                     .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    |
+
+error: this function has too many arguments (9/7)
+   --> crates/sparql-eval/src/property_fn_eval.rs:423:1
+    |
+423 | / fn compile_arg_native<S: purrdf_lex::allocation::Admission + ?Sized>(
+424 | |     term: &TermPattern,
+425 | |     slots: &mut crate::AdmittedMap<Variable, usize>,
+426 | |     schema: &mut VarSchema,
+...   |
+432 | |     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+433 | | ) -> Result<Arg, EvalError> {
+    | |___________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+
+error: this function has too many arguments (9/7)
+   --> crates/sparql-eval/src/property_fn_eval.rs:527:1
+    |
+527 | / fn slot_for_native<S: purrdf_lex::allocation::Admission + ?Sized>(
+528 | |     variable: Variable,
+529 | |     projected: bool,
+530 | |     slots: &mut crate::AdmittedMap<Variable, usize>,
+...   |
+536 | |     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+537 | | ) -> Result<usize, EvalError> {
+    | |_____________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/property_fn_eval.rs:870:22
+    |
+870 |         for value in args.iter() {
+    |                      ^^^^^^^^^^^ help: to write this more concisely, try: `&args`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/property_fn_plan.rs:635:17
+    |
+635 |                 planner.enter_expression(expr, scope, promise)?
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `planner.enter_expression(expr, scope, promise)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/property_fn_plan.rs:638:17
+    |
+638 |                 planner.enter_aggregate(aggregate, scope, promise)?
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `planner.enter_aggregate(aggregate, scope, promise)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/property_fn_plan.rs:3727:17
+     |
+3727 |                 values.push(needs_admitted(variable, workspace)?)?
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `values.push(needs_admitted(variable, workspace)?)?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/property_fn_plan.rs:3783:17
+     |
+3783 |                 values.push(needs_admitted(variable, workspace)?)?
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `values.push(needs_admitted(variable, workspace)?)?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/remote.rs:441:39
+    |
+441 |     pub fn try_into_resident(self) -> Result<ResolvedBindings, Self> {
+    |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 272 bytes
+    |
+    = help: try reducing the size of `remote::AdmittedResolvedBindings`, for example by boxing large elements or replacing it with `Box<remote::AdmittedResolvedBindings>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: used underscore-prefixed binding
+   --> crates/sparql-eval/src/remote.rs:546:49
+    |
+546 |         if self.payload.storage.is_bounded() || self.payload._control.is_bounded() {
+    |                                                 ^^^^^^^^^^^^^^^^^^^^^
+    |
+note: binding is defined here
+   --> crates/sparql-eval/src/remote.rs:481:5
+    |
+481 |     _control: crate::WorkspaceAllocation,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: used underscore-prefixed binding
+   --> crates/sparql-eval/src/remote.rs:609:55
+    |
+609 |         if self.error.payload.storage.is_bounded() || self.error.payload._control.is_bounded() {
+    |                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: binding is defined here
+   --> crates/sparql-eval/src/remote.rs:481:5
+    |
+481 |     _control: crate::WorkspaceAllocation,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: redundant closure
+    --> crates/sparql-eval/src/remote.rs:1031:61
+     |
+1031 |             patterns: clone_service_slice(patterns, memory, |v, m| v.clone_with_memory(m))?,
+     |                                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_sparql_algebra::TriplePattern::clone_with_memory`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: redundant closure
+    --> crates/sparql-eval/src/remote.rs:1143:65
+     |
+1143 |             expression: clone_service_slice(expression, memory, |v, m| v.clone_with_memory(m))?,
+     |                                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_sparql_algebra::OrderExpression::clone_with_memory`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: very complex type used. Consider factoring parts into `type` definitions
+    --> crates/sparql-eval/src/remote.rs:1225:6
+     |
+1225 | ) -> Result<(Vec<Variable>, Vec<Vec<Option<GroundTerm>>>), EvalError> {
+     |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+
+error: this `if` statement can be collapsed
+    --> crates/sparql-eval/src/remote.rs:1230:13
+     |
+1230 | /             if let Some(Some(term)) = row.get(column) {
+1231 | |                 if ground_term_has_blank_node_with_memory(term, memory)? {
+1232 | |                     keep_column = false;
+1233 | |                     break;
+1234 | |                 }
+1235 | |             }
+     | |_____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+     |
+1230 ~             if let Some(Some(term)) = row.get(column)
+1231 ~                 && ground_term_has_blank_node_with_memory(term, memory)? {
+1232 |                     keep_column = false;
+1233 |                     break;
+1234 ~                 }
+     |
+
+error: deref which would be done by auto-deref
+    --> crates/sparql-eval/src/remote.rs:1760:28
+     |
+1760 |                 construct: *construct,
+     |                            ^^^^^^^^^^ help: try: `construct`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_auto_deref
+     = note: `-D clippy::explicit-auto-deref` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::explicit_auto_deref)]`
+
+error: deref which would be done by auto-deref
+    --> crates/sparql-eval/src/remote.rs:1765:28
+     |
+1765 |                 construct: *construct,
+     |                            ^^^^^^^^^^ help: try: `construct`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_auto_deref
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/sparql-eval/src/remote.rs:2075:15
+     |
+2075 |     resolved: AdmittedResolvedBindings,
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+     |
+2075 |     resolved: &AdmittedResolvedBindings,
+     |               +
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/remote.rs:2234:28
+     |
+2234 |                 for row in seq.rows.iter() {
+     |                            ^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&seq.rows`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/sparql-eval/src/remote_http.rs:194:39
+    |
+194 |     pub fn try_into_resident(self) -> Result<Vec<u8>, Self> {
+    |                                       ^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 176 bytes
+    |
+    = help: try reducing the size of `remote_http::AdmittedHttpBody`, for example by boxing large elements or replacing it with `Box<remote_http::AdmittedHttpBody>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: used underscore-prefixed binding
+   --> crates/sparql-eval/src/remote_http.rs:195:30
+    |
+195 |         let bounded = match &self._storage {
+    |                              ^^^^^^^^^^^^^
+    |
+note: binding is defined here
+   --> crates/sparql-eval/src/remote_http.rs:183:5
+    |
+183 |     _storage: HttpStorage,
+    |     ^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/src/remote_http.rs:234:20
+    |
+234 |         workspace: crate::WorkspaceCapability,
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+    |
+234 |         workspace: &crate::WorkspaceCapability,
+    |                    +
+
+error: redundant closure
+   --> crates/sparql-eval/src/scratch.rs:925:13
+    |
+925 |             |dataset, value| dataset.term_id_by_value(value),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::DatasetView::term_id_by_value`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: this function has too many arguments (9/7)
+   --> crates/sparql-eval/src/scratch.rs:937:5
+    |
+937 | /     fn intern_value_with<D: DatasetView, E>(
+938 | |         &mut self,
+939 | |         dataset: &D,
+940 | |         value: TermValue,
+...   |
+946 | |         track_value: impl FnOnce(&TermValue, &mut BlankLabels, &mut u64) -> Result<(), E>,
+947 | |     ) -> Result<SolutionTerm<D::Id>, E> {
+    | |_______________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+
+error: the borrowed expression implements the required traits
+    --> crates/sparql-eval/src/scratch.rs:1062:33
+     |
+1062 | ...                   &"foreign dataset term id",
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `"foreign dataset term id"`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/service_endpoints.rs:510:21
+    |
+510 |                     pending.push(ClassifyStep::Pattern(inner, direct))?
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `pending.push(ClassifyStep::Pattern(inner, direct))?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-eval/src/service_endpoints.rs:693:21
+    |
+693 | /                     if let Some(child) = child {
+694 | |                         if let Err(error) = pending.try_push_admitted(child, &mut memory) {
+695 | |                             failure = Some(
+696 | |                                 memory
+...   |
+702 | |                     }
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+693 ~                     if let Some(child) = child
+694 ~                         && let Err(error) = pending.try_push_admitted(child, &mut memory) {
+695 |                             failure = Some(
+...
+700 |                             return true;
+701 ~                         }
+    |
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-eval/src/service_endpoints.rs:913:25
+    |
+913 | /                         if failure.is_none() {
+914 | |                             if let Err(error) =
+915 | |                                 frames.try_push_admitted(SummaryFrame::Enter(part), &mut memory)
+...   |
+923 | |                         }
+    | |_________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+913 ~                         if failure.is_none()
+914 ~                             && let Err(error) =
+915 |                                 frames.try_push_admitted(SummaryFrame::Enter(part), &mut memory)
+...
+921 |                                 );
+922 ~                             }
+    |
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/service_endpoints.rs:1378:28
+     |
+1378 |         for (_, column) in columns.iter() {
+     |                            ^^^^^^^^^^^^^^ help: to write this more concisely, try: `&columns`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/service_endpoints.rs:1398:43
+     |
+1398 |                 for (variable, column) in columns.iter() {
+     |                                           ^^^^^^^^^^^^^^ help: to write this more concisely, try: `&columns`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/service_endpoints.rs:1437:37
+     |
+1437 |         for (variable, endpoint) in partition.endpoints.iter() {
+     |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&partition.endpoints`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/service_endpoints.rs:1545:20
+     |
+1545 |         for row in left.rows.iter() {
+     |                    ^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&left.rows`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/service_endpoints.rs:1682:22
+     |
+1682 |         for frame in ctx.endpoint_frames[..depth].iter() {
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&ctx.endpoint_frames[..depth]`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: the borrowed expression implements the required traits
+    --> crates/sparql-eval/src/service_endpoints.rs:1994:21
+     |
+1994 | /                     &"substituting an IRI endpoint into a variable-endpoint SERVICE did not \
+1995 | |                      resolve its endpoint",
+     | |__________________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+help: change this to
+     |
+1994 ~                     "substituting an IRI endpoint into a variable-endpoint SERVICE did not \
+1995 ~                      resolve its endpoint",
+     |
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/service_endpoints.rs:2037:23
+     |
+2037 |     for (_, block) in blocks.iter() {
+     |                       ^^^^^^^^^^^^^ help: to write this more concisely, try: `&blocks`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/service_endpoints.rs:2045:30
+     |
+2045 |     for (endpoint, block) in blocks.iter() {
+     |                              ^^^^^^^^^^^^^ help: to write this more concisely, try: `&blocks`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: the borrowed expression implements the required traits
+    --> crates/sparql-eval/src/service_endpoints.rs:2058:21
+     |
+2058 |                     &"SERVICE block column is absent from its union schema",
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `"SERVICE block column is absent from its union schema"`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+
+error: wildcard matches only a single variant and will also match any future added variants
+   --> crates/sparql-eval/src/solution.rs:511:13
+    |
+511 |             storage => Err(Self { storage }),
+    |             ^^^^^^^ help: try: `storage @ RowStorage::Shared(_)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#match_wildcard_for_single_variants
+    = note: `-D clippy::match-wildcard-for-single-variants` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::match_wildcard_for_single_variants)]`
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/solution.rs:739:33
+    |
+739 |                 for &ordinal in order.iter() {
+    |                                 ^^^^^^^^^^^^ help: to write this more concisely, try: `&order`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-eval/src/stack/height.rs:156:17
+    |
+156 | /                 if failure.is_none() {
+157 | |                     if let Err(error) = stack.try_push_admitted((child, below), memory) {
+158 | |                         failure = Some(error);
+159 | |                     }
+160 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+156 ~                 if failure.is_none()
+157 ~                     && let Err(error) = stack.try_push_admitted((child, below), memory) {
+158 |                         failure = Some(error);
+159 ~                     }
+    |
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/sparql-eval/src/stat_agg.rs:439:14
+    |
+439 |     for x in shapes.iter() {
+    |              ^^^^^^^^^^^^^ help: to write this more concisely, try: `&shapes`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: function call inside of `unwrap_or`
+   --> crates/sparql-eval/src/stat_agg.rs:564:46
+    |
+564 |                           Some(value.as_i128().unwrap_or(if decimal.is_negative() {
+    |  ______________________________________________^
+565 | |                             i128::MIN
+566 | |                         } else {
+567 | |                             i128::MAX
+568 | |                         }))
+    | |__________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#or_fun_call
+    = note: `-D clippy::or-fun-call` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::or_fun_call)]`
+help: try
+    |
+564 ~                         Some(value.as_i128().unwrap_or_else(|| if decimal.is_negative() {
+565 +                             i128::MIN
+566 +                         } else {
+567 +                             i128::MAX
+568 ~                         }))
+    |
+
+error: this `if` statement can be collapsed
+    --> crates/sparql-eval/src/stat_agg.rs:1243:9
+     |
+1243 | /         if self.last || self.value.is_none() {
+1244 | |             if let Some(value) = other.finish_admitted(&self.workspace)? {
+1245 | |                 self.value = Some(value);
+1246 | |             }
+1247 | |         }
+     | |_________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+     |
+1243 ~         if (self.last || self.value.is_none()) {
+1244 ~             && let Some(value) = other.finish_admitted(&self.workspace)? {
+1245 |                 self.value = Some(value);
+1246 ~             }
+     |
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/sparql-eval/src/substitute.rs:1183:56
+     |
+1183 | pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+     |                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider changing the type to: `&[(Variable, GroundTerm)]`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/sparql-eval/src/substitute.rs:1189:55
+     |
+1189 | pub(crate) fn walk_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+     |                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider changing the type to: `&[(Variable, GroundTerm)]`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/substitute.rs:2709:19
+     |
+2709 |     for &index in reads.plain.iter() {
+     |                   ^^^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&reads.plain`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/substitute.rs:2738:19
+     |
+2738 |     for &index in reads.in_exists.iter() {
+     |                   ^^^^^^^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&reads.in_exists`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: do not call a function with mutable arguments inside of `debug_assert!`
+    --> crates/sparql-eval/src/substitute.rs:2938:19
+     |
+2938 |     debug_assert!(bodies.next().is_none(), "every taken body goes back");
+     |                   ^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#debug_assert_with_mut_call
+     = note: `-D clippy::debug-assert-with-mut-call` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::debug_assert_with_mut_call)]`
+
+error: do not call a function with mutable arguments inside of `debug_assert!`
+    --> crates/sparql-eval/src/substitute.rs:3111:35
+     |
+3111 |                     debug_assert!(done.next().is_none());
+     |                                   ^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#debug_assert_with_mut_call
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/sparql-eval/src/substitute.rs:3266:31
+     |
+3266 |             for (name, to) in moved.iter() {
+     |                               ^^^^^^^^^^^^ help: to write this more concisely, try: `&moved`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: enclosing `Ok` and `?` operator are unneeded
+    --> crates/sparql-eval/src/substitute.rs:3968:20
+     |
+3968 |             return Ok(descend_into_inner_with_memory(frame, open, memory)?);
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_question_mark
+help: remove the enclosing `Ok` and `?` operator
+     |
+3968 -             return Ok(descend_into_inner_with_memory(frame, open, memory)?);
+3968 +             return descend_into_inner_with_memory(frame, open, memory);
+     |
+
+error: large size difference between variants
+    --> crates/sparql-eval/src/substitute.rs:4056:5
+     |
+4056 | /     enum Then {
+4057 | |         /// Enter another operand.
+4058 | |         Descend(GraphPattern, SubstituteStage, WalkScope),
+     | |         ------------------------------------------------- the largest variant contains at least 337 bytes
+4059 | |         /// Substitute in the node's own expressions, then finish.
+...    |
+4062 | |         Finish(SeedColumns),
+     | |         ------------------- the second-largest variant contains at least 8 bytes
+4063 | |     }
+     | |_____^ the entire enum is at least 344 bytes
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+     |
+4058 -         Descend(GraphPattern, SubstituteStage, WalkScope),
+4058 +         Descend(Box<GraphPattern>, SubstituteStage, WalkScope),
+     |
+
+error: enclosing `Ok` and `?` operator are unneeded
+    --> crates/sparql-eval/src/substitute.rs:4216:32
+     |
+4216 |                         return Ok(descend_into_inner_with_memory(frame, open, memory)?);
+     |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_question_mark
+help: remove the enclosing `Ok` and `?` operator
+     |
+4216 -                         return Ok(descend_into_inner_with_memory(frame, open, memory)?);
+4216 +                         return descend_into_inner_with_memory(frame, open, memory);
+     |
+
+error: the `Err`-variant returned from this function is very large
+    --> crates/sparql-eval/src/substitute.rs:4429:35
+     |
+4429 |     fn try_into_resident(self) -> Result<GroundTerm, Self> {
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^ the `Err`-variant is at least 152 bytes
+     |
+     = help: try reducing the size of `substitute::AdmittedGroundTerm`, for example by boxing large elements or replacing it with `Box<substitute::AdmittedGroundTerm>`
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/template.rs:240:21
+    |
+240 |                     terms.push(TermOrdinal::Variable(schema.index_of(v)))?
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `terms.push(TermOrdinal::Variable(schema.index_of(v)))?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/template.rs:403:21
+    |
+403 |                     values.push(named_node_to_workspace_value(n, workspace)?)?
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `values.push(named_node_to_workspace_value(n, workspace)?)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/template.rs:406:21
+    |
+406 |                     values.push(literal_to_workspace_value(l, workspace)?)?
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `values.push(literal_to_workspace_value(l, workspace)?)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/template.rs:422:21
+    |
+422 |                     values.push(named_node_to_workspace_value(n, workspace)?)?
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `values.push(named_node_to_workspace_value(n, workspace)?)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/template.rs:495:21
+    |
+495 |                     values.push(named_node_to_workspace_value(n, &workspace)?)?
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `values.push(named_node_to_workspace_value(n, &workspace)?)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/template.rs:498:21
+    |
+498 |                     values.push(literal_to_workspace_value(l, &workspace)?)?
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `values.push(literal_to_workspace_value(l, &workspace)?)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/vm/compile.rs:343:21
+    |
+343 |                     compiler.labels[label as usize] = compiler.program.ops.len() as u32
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `compiler.labels[label as usize] = compiler.program.ops.len() as u32;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: the borrowed expression implements the required traits
+   --> crates/sparql-eval/src/workspace.rs:400:17
+    |
+400 |                 &"native text publication has no payload",
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `"native text publication has no payload"`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+
+error: the borrowed expression implements the required traits
+   --> crates/sparql-eval/src/workspace.rs:407:17
+    |
+407 |                 &"native text publication retains unmatched working storage",
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `"native text publication retains unmatched working storage"`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrows_for_generic_args
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/workspace.rs:1247:9
+     |
+1247 |         self._owner.is_some()
+     |         ^^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/workspace.rs:1111:5
+     |
+1111 |     _owner: Option<Box<dyn AllocationOwner>>,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: used underscore-prefixed binding
+    --> crates/sparql-eval/src/workspace.rs:1256:9
+     |
+1256 |         self._owner
+     |         ^^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/sparql-eval/src/workspace.rs:1111:5
+     |
+1111 |     _owner: Option<Box<dyn AllocationOwner>>,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+
+error: temporary with significant `Drop` can be early dropped
+    --> crates/sparql-eval/src/workspace.rs:1582:17
+     |
+1581 |       fn retain(&self, bytes: u64) -> Result<(), EvalError> {
+     |  ___________________________________________________________-
+1582 | |         let mut account = lock(&self.account);
+     | |                 ^^^^^^^
+1583 | |         if account.failed {
+1584 | |             return Err(EvalError::WorkspaceStopped);
+...    |
+1600 | |         Ok(())
+1601 | |     }
+     | |_____- temporary `account` is currently being dropped at the end of its contained scope
+     |
+     = note: this might lead to unnecessary resource contention
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#significant_drop_tightening
+help: drop the temporary after the end of its last usage
+     |
+1599 ~         account.base = base;
+1600 +         drop(account);
+     |
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/src/witness.rs:200:53
+    |
+200 |     pub fn record(&mut self, iri: &str, generation: IndexGeneration, service: ServiceLevel) {
+    |                                                     ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+    |
+200 |     pub fn record(&mut self, iri: &str, generation: &IndexGeneration, service: ServiceLevel) {
+    |                                                     +
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/src/witness.rs:200:79
+    |
+200 |     pub fn record(&mut self, iri: &str, generation: IndexGeneration, service: ServiceLevel) {
+    |                                                                               ^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+    |
+200 |     pub fn record(&mut self, iri: &str, generation: IndexGeneration, service: &ServiceLevel) {
+    |                                                                               +
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/src/witness.rs:229:36
+    |
+229 |     pub fn merge(&mut self, other: Self) {
+    |                                    ^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+    |
+229 |     pub fn merge(&mut self, other: &Self) {
+    |                                    +
+
+error: this could be rewritten as `let...else`
+   --> crates/sparql-eval/src/witness.rs:383:9
+    |
+383 | /         let index = match self.values.as_ref().map_or(Err(0), |values| {
+384 | |             values.binary_search_by(|candidate| (**candidate).cmp(&*value))
+385 | |         }) {
+386 | |             Ok(_) => return Ok(false),
+387 | |             Err(index) => index,
+388 | |         };
+    | |__________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_let_else
+help: consider writing
+    |
+383 ~         let Err(index) = self.values.as_ref().map_or(Err(0), |values| {
+384 +             values.binary_search_by(|candidate| (**candidate).cmp(&*value))
+385 +         }) else { return Ok(false) };
+    |
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/src/witness.rs:424:37
+    |
+424 |     pub fn insert(&mut self, value: T) -> bool {
+    |                                     ^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+    |
+424 |     pub fn insert(&mut self, value: &T) -> bool {
+    |                                     +
+
+error: this parameter is a mutable reference but is not used mutably
+    --> crates/sparql-eval/src/expr.rs:4628:10
+     |
+4628 |     ctx: &mut EvalCtx<'_, D>,
+     |          ^----^^^^^^^^^^^^^^
+     |           |
+     |           help: consider removing this `mut`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+     = note: `-D clippy::needless-pass-by-ref-mut` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_ref_mut)]`
+
+error: this parameter is a mutable reference but is not used mutably
+    --> crates/sparql-eval/src/workspace.rs:1804:28
+     |
+1804 |     pub(crate) fn set_base(&mut self, bytes: u64) -> Result<(), EvalError> {
+     |                            ^----^^^^
+     |                             |
+     |                             help: consider removing this `mut`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_ref_mut
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 231 previous errors
+error: empty lines after doc comment
+    --> crates/sparql-eval/src/substitute.rs:1428:1
+     |
+1428 | / /// hold the node open until the operand comes back.
+1429 | |
+1430 | | /// Take `frame`'s inner pattern out and enter it in the node's own scope.
+...    |
+1433 | | /// next operand, or finish the node and report what it carries.
+1434 | |
+     | |_^
+...
+1451 |   fn carry_past_group(
+     |   ------------------- the comment documents this function
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+     = help: if the empty lines are unintentional, remove them
+help: if the documentation should include the empty lines include them in the comment
+     |
+1429 + ///
+1430 | /// Take `frame`'s inner pattern out and enter it in the node's own scope.
+1431 + ///
+1432 | /// Put the substituted `operand` back into `frame`'s node, and go on: enter the node's
+1433 | /// next operand, or finish the node and report what it carries.
+1434 + ///
+     |
+
+error: empty line after doc comment
+    --> crates/sparql-eval/src/substitute.rs:1565:1
+     |
+1565 | / /// here what it holds.
+1566 | |
+     | |_^
+...
+1571 |   fn for_each_node_expression(node: &GraphPattern, f: &mut dyn FnMut(&Expression)) {
+     |   --------------------------- the comment documents this function
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+     = help: if the empty line is unintentional, remove it
+help: if the documentation should include the empty line include it in the comment
+     |
+1566 | ///
+     |
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/bgp.rs:1054:5
+     |
+1054 |     hash_pos_admitted(pos, h, &crate::WorkspaceCapability::resident()).expect("resident shape hash")
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `hash_pos_admitted(pos, h, &crate::WorkspaceCapability::resident()).expect("resident shape hash");`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+     = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/bgp.rs:1605:5
+     |
+1605 | /     mark_bound_admitted(cp, bound, &crate::WorkspaceCapability::resident())
+1606 | |         .expect("resident bound mask")
+     | |______________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+     |
+1605 |     mark_bound_admitted(cp, bound, &crate::WorkspaceCapability::resident())
+1606 ~         .expect("resident bound mask");
+     |
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/bgp.rs:1627:5
+     |
+1627 | /     for_each_slot_admitted(
+1628 | |         pos,
+1629 | |         &crate::WorkspaceCapability::resident(),
+1630 | |         &mut |column| {
+...    |
+1635 | |     .expect("resident slot walk")
+     | |_________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+     |
+1627 |     for_each_slot_admitted(
+ ...
+1634 |     )
+1635 ~     .expect("resident slot walk");
+     |
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/bgp.rs:1759:17
+     |
+1759 |                 visit(SlotKey::Variable(variable))?
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `visit(SlotKey::Variable(variable))?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: calling `QueryDataset::default()` is more clear than this expression
+    --> crates/sparql-eval/src/blank_scope.rs:1041:18
+     |
+1041 |         dataset: Default::default(),
+     |                  ^^^^^^^^^^^^^^^^^^ help: try: `QueryDataset::default()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#default_trait_access
+     = note: `-D clippy::default-trait-access` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::default_trait_access)]`
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/src/cdt_unfold.rs:407:12
+    |
+407 |     value: Option<TermValue>,
+    |            ^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+407 |     value: Option<&TermValue>,
+    |                   +
+
+error: calling `WorkList::default()` is more clear than this expression
+    --> crates/sparql-eval/src/expr.rs:1210:80
+     |
+1210 |     let mut pending: purrdf_lex::walk::WorkList<(&TermValue, &TermValue), 8> = Default::default();
+     |                                                                                ^^^^^^^^^^^^^^^^^^ help: try: `WorkList::default()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#default_trait_access
+
+error: this argument is passed by value, but not consumed in the function body
+    --> crates/sparql-eval/src/expr.rs:6950:12
+     |
+6950 |     value: crate::parsed_value::ParsedValue,
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+     |
+6950 |     value: &crate::parsed_value::ParsedValue,
+     |            +
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/sparql-eval/src/expr/cast_rounding_tests.rs:432:13
+    |
+432 |             &xpath_double_text(value).as_str(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `xpath_double_text(value).as_str()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/sparql-eval/src/expr/cast_rounding_tests.rs:443:33
+    |
+443 |         match purrdf_xsd::parse(&xpath_double_text(value).as_str(), XsdDatatype::Double) {
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `xpath_double_text(value).as_str()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/sparql-eval/src/expr/cast_rounding_tests.rs:468:13
+    |
+468 |             &xpath_float_text(value).as_str(),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `xpath_float_text(value).as_str()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: this expression creates a reference which is immediately dereferenced by the compiler
+   --> crates/sparql-eval/src/expr/cast_rounding_tests.rs:479:33
+    |
+479 |         match purrdf_xsd::parse(&xpath_float_text(value).as_str(), XsdDatatype::Float) {
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `xpath_float_text(value).as_str()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+
+error: matching over `()` is more explicit
+     --> crates/sparql-eval/src/expr.rs:13598:59
+      |
+13598 |                 sorted(ours.direct.iter().map(|(variable, _)| variable)),
+      |                                                           ^ help: use `()` instead of `_`: `()`
+      |
+      = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ignored_unit_patterns
+      = note: `-D clippy::ignored-unit-patterns` implied by `-D warnings`
+      = help: to override `-D warnings` add `#[allow(clippy::ignored_unit_patterns)]`
+
+error: matching over `()` is more explicit
+     --> crates/sparql-eval/src/expr.rs:13628:59
+      |
+13628 |                 sorted(ours.direct.iter().map(|(variable, _)| variable)),
+      |                                                           ^ help: use `()` instead of `_`: `()`
+      |
+      = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ignored_unit_patterns
+
+error: matching over `()` is more explicit
+     --> crates/sparql-eval/src/expr.rs:13689:67
+      |
+13689 |                     sorted(deferred.direct.iter().map(|(variable, _)| variable)),
+      |                                                                   ^ help: use `()` instead of `_`: `()`
+      |
+      = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ignored_unit_patterns
+
+error: matching over `()` is more explicit
+     --> crates/sparql-eval/src/expr.rs:13693:65
+      |
+13693 |                     sorted(direct.direct.iter().map(|(variable, _)| variable)),
+      |                                                                 ^ help: use `()` instead of `_`: `()`
+      |
+      = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ignored_unit_patterns
+
+error: implicit borrow as raw pointer
+   --> crates/sparql-eval/src/governor/charge_points.rs:639:17
+    |
+639 |                 &**context.governor_state().expect("governed"),
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+639 |                 &raw const **context.governor_state().expect("governed"),
+    |                  +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/sparql-eval/src/xpath_regex.rs:763:30
+    |
+763 |         assert!(std::ptr::eq(&*first, &*cloned));
+    |                              ^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+763 |         assert!(std::ptr::eq(&raw const *first, &*cloned));
+    |                               +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/sparql-eval/src/xpath_regex.rs:763:39
+    |
+763 |         assert!(std::ptr::eq(&*first, &*cloned));
+    |                                       ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+763 |         assert!(std::ptr::eq(&*first, &raw const *cloned));
+    |                                        +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/sparql-eval/src/xpath_regex.rs:943:30
+    |
+943 |         assert!(std::ptr::eq(&*program, &*cloned));
+    |                              ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+943 |         assert!(std::ptr::eq(&raw const *program, &*cloned));
+    |                               +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/sparql-eval/src/xpath_regex.rs:943:41
+    |
+943 |         assert!(std::ptr::eq(&*program, &*cloned));
+    |                                         ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+943 |         assert!(std::ptr::eq(&*program, &raw const *cloned));
+    |                                          +++++++++
+
+error: this `if` statement can be collapsed
+    --> crates/sparql-eval/src/path.rs:3690:25
+     |
+3690 | /                         if let Some(id) = dataset
+3691 | |                             .term_id_by_value(&named_node_to_value(&e.predicate))
+3692 | |                             .unwrap()
+...    |
+3700 | |                         }
+     | |_________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+     |
+3692 ~                             .unwrap()
+3693 ~                             && let Err(index) = target.binary_search(&id) {
+3694 |                                 target
+ ...
+3697 |                                 target.as_mut_slice()[index..].rotate_right(1);
+3698 ~                             }
+     |
+
+error: implicit borrow as raw pointer
+    --> crates/sparql-eval/src/plan/mod.rs:1038:30
+     |
+1038 |         assert!(std::ptr::eq(&**first.handle().shape(), &**first.shape()));
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+     |
+1038 |         assert!(std::ptr::eq(&raw const **first.handle().shape(), &**first.shape()));
+     |                               +++++++++
+
+error: implicit borrow as raw pointer
+    --> crates/sparql-eval/src/plan/mod.rs:1038:57
+     |
+1038 |         assert!(std::ptr::eq(&**first.handle().shape(), &**first.shape()));
+     |                                                         ^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+     |
+1038 |         assert!(std::ptr::eq(&**first.handle().shape(), &raw const **first.shape()));
+     |                                                          +++++++++
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/service_endpoints.rs:844:9
+    |
+844 | /         self.note_admitted(operand, summary, ids)
+845 | |             .expect("resident endpoint oracle note")
+    | |____________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+844 |         self.note_admitted(operand, summary, ids)
+845 ~             .expect("resident endpoint oracle note");
+    |
+
+error: implicit borrow as raw pointer
+    --> crates/sparql-eval/src/solution.rs:1349:27
+     |
+1349 |             core::ptr::eq(&*first, &*second),
+     |                           ^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+     |
+1349 |             core::ptr::eq(&raw const *first, &*second),
+     |                            +++++++++
+
+error: implicit borrow as raw pointer
+    --> crates/sparql-eval/src/solution.rs:1349:36
+     |
+1349 |             core::ptr::eq(&*first, &*second),
+     |                                    ^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+     |
+1349 |             core::ptr::eq(&*first, &raw const *second),
+     |                                     +++++++++
+
+error: implicit borrow as raw pointer
+    --> crates/sparql-eval/src/solution.rs:1363:28
+     |
+1363 |             !core::ptr::eq(&*layout_ab, &*layout_ba),
+     |                            ^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+     |
+1363 |             !core::ptr::eq(&raw const *layout_ab, &*layout_ba),
+     |                             +++++++++
+
+error: implicit borrow as raw pointer
+    --> crates/sparql-eval/src/solution.rs:1363:41
+     |
+1363 |             !core::ptr::eq(&*layout_ab, &*layout_ba),
+     |                                         ^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+     |
+1363 |             !core::ptr::eq(&*layout_ab, &raw const *layout_ba),
+     |                                          +++++++++
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/src/substitute.rs:382:50
+    |
+382 | pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider changing the type to: `&[(Variable, GroundTerm)]`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/substitute.rs:417:5
+    |
+417 |     resident_rewrite(|memory| push_probes_with_memory(pattern, probes, at_core_root, memory))
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `resident_rewrite(|memory| push_probes_with_memory(pattern, probes, at_core_root, memory));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/substitute.rs:690:5
+    |
+690 |     resident_rewrite(|memory| plant_stand_alone_driver_with_memory(call, seed, memory))
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `resident_rewrite(|memory| plant_stand_alone_driver_with_memory(call, seed, memory));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/substitute.rs:697:5
+    |
+697 |     resident_rewrite(|memory| plant_left_driver_with_memory(left, seed, memory))
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `resident_rewrite(|memory| plant_left_driver_with_memory(left, seed, memory));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/substitute.rs:764:5
+    |
+764 |     resident_rewrite(|memory| plant_scoped_driver_with_memory(call, seed, kept, memory))
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `resident_rewrite(|memory| plant_scoped_driver_with_memory(call, seed, kept, memory));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/substitute.rs:817:5
+    |
+817 | /     resident_rewrite(|memory| {
+818 | |         restore_probed_bindings_with_memory(leaf, probed, probes, at_core_root, memory)
+819 | |     })
+    | |______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+817 |     resident_rewrite(|memory| {
+818 |         restore_probed_bindings_with_memory(leaf, probed, probes, at_core_root, memory)
+819 ~     });
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/substitute.rs:831:5
+    |
+831 | /     resident_rewrite(|memory| {
+832 | |         let bytes = std::alloc::Layout::array::<usize>(probed.capacity())
+833 | |             .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?
+834 | |             .size();
+...   |
+837 | |         probe_term_pattern_with_memory(term, probes, probed, memory)
+838 | |     })
+    | |______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+831 |     resident_rewrite(|memory| {
+...
+837 |         probe_term_pattern_with_memory(term, probes, probed, memory)
+838 ~     });
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/substitute.rs:934:5
+    |
+934 |     resident_rewrite(|memory| complete_shacl_leaf_with_memory(leaf, probes, scope, memory))
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `resident_rewrite(|memory| complete_shacl_leaf_with_memory(leaf, probes, scope, memory));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/src/substitute.rs:945:5
+    |
+945 | /     resident_rewrite(|memory| {
+946 | |         restore_shacl_bindings_with_memory(leaf, bound, probes, scope, memory)
+947 | |     })
+    | |______^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+help: add a `;` here
+    |
+945 |     resident_rewrite(|memory| {
+946 |         restore_shacl_bindings_with_memory(leaf, bound, probes, scope, memory)
+947 ~     });
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/substitute.rs:1558:5
+     |
+1558 |     resident_rewrite(|memory| rename_reads_with_memory(expr, renames, memory))
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `resident_rewrite(|memory| rename_reads_with_memory(expr, renames, memory));`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-eval/src/substitute.rs:1658:5
+     |
+1658 |     resident_rewrite(|memory| substitute_in_term_pattern_with_memory(term, values, memory))
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `resident_rewrite(|memory| substitute_in_term_pattern_with_memory(term, values, memory));`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: redundant closure
+    --> crates/sparql-eval/src/substitute.rs:1725:22
+     |
+1725 |     resident_rewrite(|memory| true_literal_with_memory(memory))
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the function itself: `true_literal_with_memory`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure
+     = note: `-D clippy::redundant-closure` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_closure)]`
+
+error: redundant closure
+    --> crates/sparql-eval/src/workspace.rs:2245:45
+     |
+2245 |         let pointers = input.each_ref().map(|cells| cells.as_ptr());
+     |                                             ^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_core::SmallVec::as_ptr`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: used `assert!` to check that a value is empty
+    --> crates/sparql-eval/src/workspace.rs:2951:9
+     |
+2951 |         assert!(probes.entries().is_empty());
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+     = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+help: use `assert_eq!` to show the value on failure
+     |
+2951 -         assert!(probes.entries().is_empty());
+2951 +         assert_eq!(probes.entries(), []);
+     |
+
+error: used `assert!` to check that a value is not empty
+    --> crates/sparql-eval/src/workspace.rs:3225:9
+     |
+3225 |         assert!(!retained.term.is_empty());
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_ne!` to show the value on failure
+     |
+3225 -         assert!(!retained.term.is_empty());
+3225 +         assert_ne!(retained.term, [] as [(purrdf_sparql_algebra::Variable, purrdf_sparql_algebra::GroundTerm); 0]);
+     |
+
+error: called `.err().expect()` on a `Result` value
+    --> crates/sparql-eval/src/workspace.rs:3365:18
+     |
+3365 |                   .err()
+     |  __________________^
+3366 | |                 .expect("no endpoint has no failed invocation to silence");
+     | |_______________________^ help: try: `expect_err`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#err_expect
+     = note: `-D clippy::err-expect` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::err_expect)]`
+
+error: called `.err().expect()` on a `Result` value
+    --> crates/sparql-eval/src/workspace.rs:3373:18
+     |
+3373 |                   .err()
+     |  __________________^
+3374 | |                 .expect("native unbound endpoint refusal");
+     | |_______________________^ help: try: `expect_err`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#err_expect
+
+error: called `.err().expect()` on a `Result` value
+    --> crates/sparql-eval/src/workspace.rs:4026:18
+     |
+4026 |                   .err()
+     |  __________________^
+4027 | |                 .expect("actual payload cannot fit this original account");
+     | |_______________________^ help: try: `expect_err`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#err_expect
+
+error: called `.err().expect()` on a `Result` value
+    --> crates/sparql-eval/src/workspace.rs:4072:14
+     |
+4072 |               .err()
+     |  ______________^
+4073 | |             .expect("exact datatype read fails after completed leaves");
+     | |___________________^ help: try: `expect_err`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#err_expect
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 278 previous errors

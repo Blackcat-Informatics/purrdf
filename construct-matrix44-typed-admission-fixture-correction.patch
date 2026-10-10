@@ -1,0 +1,22 @@
+diff --git a/crates/sparql-eval/tests/construct_builder.rs b/crates/sparql-eval/tests/construct_builder.rs
+--- a/crates/sparql-eval/tests/construct_builder.rs
++++ b/crates/sparql-eval/tests/construct_builder.rs
+@@ -360,11 +360,15 @@
+         )
+     })
+     .expect("the publishing stack runs the construction");
+-    let Err(GraphBuildError::Query(diagnostic)) = result else {
+-        panic!("a plan too tall for the publishing stack must be refused")
++    let code = match &result {
++        Err(GraphBuildError::Query(diagnostic)) => diagnostic.code.as_str(),
++        Err(GraphBuildError::Evaluation(error)) => error
++            .code()
++            .expect("native stack admission preserves its diagnostic code"),
++        other => panic!("a plan too tall for the publishing stack must be refused: {other:?}"),
+     };
+     assert_eq!(
+-        diagnostic.code,
++        code,
+         purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
+     );
+     assert_eq!(state.evidence(), before, "admission precedes governor work");

@@ -1,0 +1,342 @@
+--- a/crates/lex/src/allocation.rs
++++ b/crates/lex/src/allocation.rs
+@@ -170,6 +170,23 @@
+         replacement.append(values);
+         drop(core::mem::replace(values, replacement));
+         self.remove(old)
++    }
++
++    /// Admit a single boxed value before fallible physical construction.
++    /// Its existing payload already belongs to this memory or an independent owner.
++    ///
++    /// # Errors
++    /// Returns original admission, layout or allocator refusal.
++    pub fn boxed<T>(&mut self, value: T) -> Result<Box<T>, StorageError> {
++        let bytes = Layout::new::<T>().size();
++        self.add_bytes(bytes)?;
++        match try_boxed(value) {
++            Ok(value) => Ok(value),
++            Err(_) => {
++                self.release_bytes(bytes)?;
++                Err(StorageError::AllocationFailed)
++            }
++        }
+     }
+ 
+     /// Freeze an originally admitted array without an infallible shrinking
+--- a/crates/lex/src/diagnostic.rs
++++ b/crates/lex/src/diagnostic.rs
+@@ -6,7 +6,7 @@
+ use std::fmt;
+ 
+ /// A presentation argument's value, independent of its human rendering.
+-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
++#[derive(Debug, PartialEq, Eq, Hash)]
+ #[non_exhaustive]
+ pub enum DiagnosticValue {
+     /// Verbatim text, such as a reference or a codec name.
+@@ -21,7 +21,32 @@
+     Character(char),
+ }
+ 
++impl Clone for DiagnosticValue {
++    fn clone(&self) -> Self {
++        let mut resident = crate::allocation::Resident;
++        self.clone_with_memory(&mut crate::allocation::Memory::new(&mut resident))
++            .expect("resident diagnostic clone allocation")
++    }
++}
++
+ impl DiagnosticValue {
++    /// Copy immutable typed presentation data through original physical admission.
++    /// The caller retains this memory with the returned payload.
++    ///
++    /// # Errors
++    /// Returns the first physical storage refusal before publication.
++    pub fn clone_with_memory<S: crate::allocation::Admission + ?Sized>(
++        &self, memory: &mut crate::allocation::Memory<'_,S>,
++    ) -> Result<Self, crate::allocation::StorageError> {
++        Ok(match self {
++            Self::Text(value) => Self::Text(memory.string(value)?),
++            Self::Unsigned(value) => Self::Unsigned(*value),
++            Self::Signed(value) => Self::Signed(*value),
++            Self::Boolean(value) => Self::Boolean(*value),
++            Self::Character(value) => Self::Character(*value),
++        })
++    }
++
+     fn to_json(&self) -> crate::json::Value {
+         use crate::json::{Object, Value};
+         let (kind, value) = match self {
+@@ -56,13 +81,31 @@
+ }
+ 
+ /// One named presentation argument. Names are validated with the template.
+-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
++#[derive(Debug, PartialEq, Eq, Hash)]
+ pub struct DiagnosticParameter {
+     name: String,
+     value: DiagnosticValue,
+ }
+ 
++impl Clone for DiagnosticParameter {
++    fn clone(&self) -> Self {
++        let mut resident = crate::allocation::Resident;
++        self.clone_with_memory(&mut crate::allocation::Memory::new(&mut resident))
++            .expect("resident diagnostic clone allocation")
++    }
++}
++
+ impl DiagnosticParameter {
++    /// Copy the original name and typed value after each allocation is admitted.
++    ///
++    /// # Errors
++    /// Returns physical refusal, retaining already admitted scratch in the caller.
++    pub fn clone_with_memory<S: crate::allocation::Admission + ?Sized>(
++        &self, memory: &mut crate::allocation::Memory<'_,S>,
++    ) -> Result<Self, crate::allocation::StorageError> {
++        Ok(Self { name: memory.string(&self.name)?, value: self.value.clone_with_memory(memory)? })
++    }
++
+     /// Construct a named typed argument.
+     pub fn new(name: impl Into<String>, value: DiagnosticValue) -> Self {
+         Self {
+@@ -146,7 +189,7 @@
+ 
+ /// Validated, extensible presentation data. Its identity is distinct from a code:
+ /// one diagnostic code can cover multiple message templates.
+-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
++#[derive(Debug, PartialEq, Eq, Hash)]
+ pub struct DiagnosticPresentation {
+     message_id: String,
+     parameters: Vec<DiagnosticParameter>,
+@@ -154,7 +197,37 @@
+     detail: Option<Box<Self>>,
+ }
+ 
++impl Clone for DiagnosticPresentation {
++    fn clone(&self) -> Self {
++        let mut resident = crate::allocation::Resident;
++        self.clone_with_memory(&mut crate::allocation::Memory::new(&mut resident))
++            .expect("resident diagnostic clone allocation")
++    }
++}
++
+ impl DiagnosticPresentation {
++    /// Copy the validated identity, typed arguments and verbatim English.
++    /// Secondary detail is bounded by the existing construction invariant.
++    ///
++    /// # Errors
++    /// Returns original physical refusal before publishing any replacement.
++    pub fn clone_with_memory<S: crate::allocation::Admission + ?Sized>(
++        &self, memory: &mut crate::allocation::Memory<'_,S>,
++    ) -> Result<Self, crate::allocation::StorageError> {
++        let mut parameters = Vec::new();
++        memory.reserve(&mut parameters,self.parameters.len())?;
++        for parameter in &self.parameters { parameters.push(parameter.clone_with_memory(memory)?); }
++        Ok(Self {
++            message_id: memory.string(&self.message_id)?,
++            parameters,
++            english: memory.string(&self.english)?,
++            detail: self.detail.as_deref().map(|detail| {
++                let detail = detail.clone_with_memory(memory)?;
++                memory.boxed(detail)
++            }).transpose()?,
++        })
++    }
++
+     /// Validate a template and its exact argument set, rendering English once.
+     /// Placeholders are `{name}` or `{name:?}`; doubled braces are literals.
+     ///
+@@ -295,11 +368,7 @@
+         if detail.detail.is_some() {
+             return Err(DiagnosticPresentationError::NestedDetail);
+         }
+-        memory.add_bytes(size_of::<Self>())?;
+-        self.detail = Some(
+-            crate::allocation::try_boxed(detail)
+-                .map_err(|_| crate::allocation::StorageError::AllocationFailed)?,
+-        );
++        self.detail = Some(memory.boxed(detail)?);
+         Ok(self)
+     }
+ 
+--- a/crates/iri/src/base.rs
++++ b/crates/iri/src/base.rs
+@@ -464,7 +464,7 @@
+ /// scope" is a first-class RFC-3986 §5.1.4 answer with its own rendering, not the
+ /// absence of one, and this crate's `Option`-returning surfaces are a closed list of
+ /// two ([`expand_curie`](crate::expand_curie) and [`BaseIri::relativize`]).
+-#[derive(Clone, Debug, PartialEq, Eq)]
++#[derive(Debug, PartialEq, Eq)]
+ pub enum BaseInScope {
+     /// No base IRI was in scope at all — RFC-3986 §5.1.4.
+     Absent,
+@@ -477,7 +477,27 @@
+     },
+ }
+ 
++impl Clone for BaseInScope {
++    fn clone(&self) -> Self {
++        let mut resident = purrdf_lex::allocation::Resident;
++        self.clone_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
++            .expect("resident diagnostic clone allocation")
++    }
++}
++
+ impl BaseInScope {
++    /// Preserve the exact base and provenance through before-copy admission.
++    ///
++    /// # Errors
++    /// Returns the original physical refusal.
++    pub fn clone_with_memory<S: Admission + ?Sized>(&self, memory: &mut Memory<'_,S>)
++        -> core::result::Result<Self,purrdf_lex::allocation::StorageError> {
++        Ok(match self {
++            Self::Absent => Self::Absent,
++            Self::InForce { iri, origin } => Self::InForce { iri: memory.string(iri)?, origin: *origin },
++        })
++    }
++
+     /// The state of the innermost base of `scope`.
+     #[must_use]
+     pub fn of(scope: &BaseScope) -> Self {
+--- a/crates/iri/src/error.rs
++++ b/crates/iri/src/error.rs
+@@ -35,7 +35,7 @@
+ const REMEDY_MISSING_SCHEME: &str = "write the IRI in absolute form, with a scheme";
+ 
+ /// Why an IRI/URI string (or a reference-resolution / CURIE operation) failed.
+-#[derive(Clone, PartialEq, Eq)]
++#[derive(PartialEq, Eq)]
+ #[non_exhaustive]
+ pub enum IriError {
+     /// The string is empty where a non-empty IRI/URI was required.
+@@ -95,7 +95,38 @@
+     },
+ }
+ 
++impl Clone for IriError {
++    fn clone(&self) -> Self {
++        let mut resident = purrdf_lex::allocation::Resident;
++        self.clone_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
++            .expect("resident diagnostic clone allocation")
++    }
++}
++
+ impl IriError {
++    /// Copy every original typed IRI failure field under before-copy admission.
++    /// Text stays verbatim; no parse or diagnostic re-rendering changes identity.
++    ///
++    /// # Errors
++    /// Returns physical storage refusal before the copied error is published.
++    pub fn clone_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++        &self, memory: &mut purrdf_lex::allocation::Memory<'_,S>,
++    ) -> core::result::Result<Self,purrdf_lex::allocation::StorageError> {
++        Ok(match self {
++            Self::Empty => Self::Empty,
++            Self::MissingScheme => Self::MissingScheme,
++            Self::BadScheme(text) => Self::BadScheme(memory.string(text)?),
++            Self::BadPercentEncoding(offset) => Self::BadPercentEncoding(*offset),
++            Self::DisallowedChar(character,offset) => Self::DisallowedChar(*character,*offset),
++            Self::BadAuthority(text) => Self::BadAuthority(memory.string(text)?),
++            Self::NonAbsoluteBase(text) => Self::NonAbsoluteBase(memory.string(text)?),
++            Self::NoBase { reference } => Self::NoBase { reference: memory.string(reference)? },
++            Self::NotAbsoluteByGrammar { reference,base } => Self::NotAbsoluteByGrammar {
++                reference: memory.string(reference)?, base: base.clone_with_memory(memory)?,
++            },
++        })
++    }
++
+     /// Exact owned-text capacities, for releasing original native error storage.
+     /// This is a destruction census, never an admission certificate.
+     #[must_use]
+--- a/crates/rdf-core/src/diagnostic.rs
++++ b/crates/rdf-core/src/diagnostic.rs
+@@ -48,7 +48,7 @@
+ /// so the struct derives a total order directly — the loss ledger relies on
+ /// this to sort runtime entries deterministically without a separate
+ /// `display()`-string comparison.
+-#[derive(Debug, Clone, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
++#[derive(Debug, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
+ pub struct RdfLocation {
+     /// The source file path (physical location anchor).
+     pub path: Option<String>,
+@@ -75,7 +75,33 @@
+     pub gts_segment_index: Option<u64>,
+ }
+ 
++impl Clone for RdfLocation {
++    fn clone(&self) -> Self {
++        let mut resident = purrdf_lex::allocation::Resident;
++        self.clone_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
++            .expect("resident diagnostic clone allocation")
++    }
++}
++
+ impl RdfLocation {
++    /// Copy physical and logical locations without allocating ahead of admission.
++    ///
++    /// # Errors
++    /// Returns the original physical refusal, preserving the source location.
++    pub fn clone_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++        &self, memory: &mut purrdf_lex::allocation::Memory<'_,S>,
++    ) -> Result<Self,purrdf_lex::allocation::StorageError> {
++        Ok(Self {
++            path: self.path.as_deref().map(|text| memory.string(text)).transpose()?,
++            line: self.line, column: self.column,
++            logical: self.logical.as_deref().map(|text| memory.string(text)).transpose()?,
++            subject: self.subject.as_deref().map(|text| memory.string(text)).transpose()?,
++            gts_term_id: self.gts_term_id, gts_quad_index: self.gts_quad_index,
++            gts_reifier_id: self.gts_reifier_id, gts_frame_index: self.gts_frame_index,
++            gts_segment_index: self.gts_segment_index,
++        })
++    }
++
+     /// A purely logical location (no file path), from its label.
+     pub fn logical(logical: impl Into<String>) -> Self {
+         Self {
+@@ -204,7 +230,7 @@
+ ///     message: "failure".to_owned(), detail: None, location: None,
+ /// };
+ /// ```
+-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
++#[derive(Debug, PartialEq, Eq, Hash)]
+ #[non_exhaustive]
+ pub struct RdfDiagnostic {
+     /// The diagnostic severity level.
+@@ -220,7 +246,35 @@
+     presentation: Option<Box<DiagnosticPresentation>>,
+ }
+ 
++impl Clone for RdfDiagnostic {
++    fn clone(&self) -> Self {
++        let mut resident = purrdf_lex::allocation::Resident;
++        self.clone_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
++            .expect("resident diagnostic clone allocation")
++    }
++}
++
+ impl RdfDiagnostic {
++    /// Copy original typed diagnostic data through its actual allocation owner.
++    /// All boxes and text are admitted before physical allocation or copying.
++    ///
++    /// # Errors
++    /// Returns the first physical refusal before the replacement is published.
++    pub fn clone_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++        &self, memory: &mut purrdf_lex::allocation::Memory<'_,S>,
++    ) -> Result<Self,purrdf_lex::allocation::StorageError> {
++        Ok(Self {
++            severity: self.severity, code: memory.string(&self.code)?, message: memory.string(&self.message)?,
++            detail: self.detail.as_deref().map(|text| memory.string(text)).transpose()?,
++            location: self.location.as_deref().map(|location| {
++                let location = location.clone_with_memory(memory)?; memory.boxed(location)
++            }).transpose()?,
++            presentation: self.presentation.as_deref().map(|presentation| {
++                let presentation = presentation.clone_with_memory(memory)?; memory.boxed(presentation)
++            }).transpose()?,
++        })
++    }
++
+     /// Exact concrete heap capacity, excluding the outer diagnostic value.
+     /// Location and presentation boxes, spare arrays and all owned text count.
+     #[must_use]

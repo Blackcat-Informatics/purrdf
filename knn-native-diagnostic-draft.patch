@@ -1,0 +1,590 @@
+diff --git a/crates/sparql-eval/src/knn/invocation.rs b/crates/sparql-eval/src/knn/invocation.rs
+--- a/crates/sparql-eval/src/knn/invocation.rs
++++ b/crates/sparql-eval/src/knn/invocation.rs
+@@ -318,276 +318,292 @@
+         } else { crate::AdmittedVec::new(workspace) };
+         let supplied = args.arity();
+         if supplied != KNN_ARITY {
+-            return Err(EvalError::function(format!(
+-                "{relation} expects {KNN_ARITY} argument(s), got {supplied}"
+-            )));
+-        }
+-        let Some(query) = args.get(KNN_QUERY) else {
+-            return Err(EvalError::function(format!(
+-                "the query term at position {KNN_QUERY} is free; this relation retrieves the \
+-                 neighbours of a seed and cannot enumerate seeds, which is why both of its \
+-                 declared modes — `{KNN_MODE}` and `{KNN_MEMBERSHIP_MODE}` — demand it"
+-            )));
+-        };
+-        let query_row = rows.row_of_admitted(query, workspace)?;
+-        let (answer, count_term) = if let Some(count) = args.get(KNN_COUNT) {
+-            let k = neighbour_count_with(count, guard, workspace)?;
+-            let post_selection_filtered =
+-                args.get(KNN_NEIGHBOUR).is_some() || args.get(KNN_DISTANCE).is_some();
+-            let select_k = if post_selection_filtered {
+-                k
+-            } else {
+-                ceiling.map_or(k, |ceiling| k.min(usize::try_from(ceiling).unwrap_or(k)))
+-            };
+-            (
+-                KnnAnswer::Search {
+-                    query_row,
+-                    select_k,
+-                },
+-                copy_invocation_term(count, workspace, &mut admissions)?,
+-            )
+-        } else {
+-            let Some(candidate) = args.get(KNN_NEIGHBOUR) else {
+-                return Err(EvalError::function(format!(
+-                    "the neighbour count at position {KNN_COUNT} is free and so is the \
+-                     neighbour at position {KNN_NEIGHBOUR}; how many neighbours to retrieve \
+-                     is a question this relation is asked, not one it answers, so the only \
+-                     call it serves without a count is the membership lookup \
+-                     `{KNN_MEMBERSHIP_MODE}`, which names the one term it is about"
+-                )));
+-            };
+-            membership_lookups.fetch_add(1, Ordering::Relaxed);
+-            let (count, allocation) = admitted_universe_size(rows.len(), workspace)?.into_parts();
+-            if allocation.is_bounded() { admissions.push(allocation)?; }
+-            (KnnAnswer::Membership(query_row.zip(rows.row_of_admitted(candidate, workspace)?)), count)
+-        };
+-        let query_term = copy_invocation_term(query, workspace, &mut admissions)?;
+-        let mut bound = crate::AdmittedVec::with_capacity(supplied, workspace)?;
+-        for term in args.flattened() {
+-            bound.push(match term {
+-                Some(term) => Some(copy_invocation_term(term, workspace, &mut admissions)?),
+-                None => None,
+-            })?;
+-        }
+-        let (bound, allocation) = bound.into_parts();
+-        Ok((Self { answer, query_term, count_term, bound, remaining: ceiling },
+-            InvocationAdmission { _terms: admissions, _bound: allocation }))
+-    }
+-}
+-
+-/// Read `k` off the invocation's neighbour-count argument.
+-///
+-/// # Errors
+-///
+-/// [`EvalError::Function`] when the value is not an integer literal, is negative,
+-/// exceeds the guard's `max_neighbours` (a clamp would be a short answer reported as a
+-/// complete one), or does not fit this platform's index range.
+-pub fn neighbour_count(value: &TermValue, guard: KnnGuard) -> Result<usize, EvalError> {
+-    neighbour_count_with(value, guard, &crate::WorkspaceCapability::default())
+-}
+-
+-fn neighbour_count_with(
+-    value: &TermValue,
+-    guard: KnnGuard,
+-    workspace: &crate::WorkspaceCapability,
+-) -> Result<usize, EvalError> {
+-    let parsed = if let TermValue::Literal { lexical_form, datatype, .. } = value {
+-        match purrdf_xsd::XsdDatatype::from_iri(datatype) {
+-            Some(datatype) if datatype.is_integer_family() => {
+-                crate::parsed_value::ParsedValue::parse(lexical_form, datatype, false, workspace)?
+-            }
+-            _ => None,
+-        }
+-    } else { None };
+-    let Some(purrdf_xsd::XsdValue::Integer { value: count, .. }) = parsed.as_deref() else {
+-        return Err(EvalError::function(format!(
+-            "the neighbour count at position {KNN_COUNT} is {value:?}, which is not an integer \
+-             literal; there is no number of neighbours that names"
+-        )));
+-    };
+-    if *count < 0 {
+-        return Err(EvalError::function(format!(
+-            "the neighbour count at position {KNN_COUNT} is {count}; a search cannot return a \
+-             negative number of neighbours"
+-        )));
+-    }
+-    let count = *count;
+-    let bound = i128::from(guard.max_neighbours());
+-    if count > bound {
+-        return Err(EvalError::function(format!(
+-            "the invocation asks for {count} neighbour(s), and the configured guard admits at \
+-             most {bound}; returning the {bound} nearest instead would be a short answer \
+-             reported as a complete one, so the request is refused rather than clamped"
+-        )));
+-    }
+-    usize::try_from(count).map_err(|_| {
+-        EvalError::function(format!(
+-            "the neighbour count {count} does not fit this platform's index range"
+-        ))
+-    })
+-}
+-
+-/// The value the count position carries in a **membership** answer: the number of rows
+-/// the space holds, as an `xsd:integer`.
+-///
+-/// A [`PfRow`] carries a value for every flattened position, so a mode that leaves the
+-/// count free must still fill it. Under [`KNN_MEMBERSHIP_MODE`] there is no request to
+-/// echo, so the position is an output, and what it outputs is a fact about the producer
+-/// rather than a request it was never given: the size of its term universe. It is
+-/// single-valued, so the mode's declared row bound of one is exact, and it is
+-/// emphatically **not** a fabricated `k` — a point lookup claims no rank.
+-#[must_use]
+-pub fn universe_size(rows: usize) -> TermValue {
+-    TermValue::integer(rows as u64)
+-}
+-
+-/// How a relation ranks: the one part of the call protocol that differs between an
+-/// exhaustive scan and an index traversal.
+-///
+-/// Each method records its own observations (how many searches ran, how many candidates
+-/// they examined), so a counter a host reads is a measurement of the calls actually
+-/// made.
+-pub trait RankSource {
+-    /// Rank the neighbourhood of `query_row`, retaining `select_k` rows nearest first,
+-    /// and report how many candidates the ranking examined.
+-    ///
+-    /// # Errors
+-    ///
+-    /// Whatever the ranking refuses; the error aborts the query.
+-    fn search(&self, query_row: usize, select_k: usize) -> Result<(Vec<Ranked>, u64), EvalError>;
+-
+-    /// Rank with actual query-owned storage admission. Native producers override
+-    /// this method with their physical buffer ownership; resident custom sources
+-    /// retain their original search implementation.
+-    ///
+-    /// # Errors
+-    /// Returns the ranking error, or refuses an opaque bounded source before its
+-    /// search body can allocate without an admission contract.
+-    fn search_admitted(
+-        &self,
+-        query_row: usize,
+-        select_k: usize,
+-        workspace: &crate::WorkspaceCapability,
+-    ) -> Result<(crate::AdmittedVec<Ranked>, u64), EvalError> {
+-        if workspace.is_bounded() {
+-            return Err(EvalError::WorkspaceUnpriced("an opaque ranked source without allocation admission"));
+-        }
+-        let (ranked, examined) = self.search(query_row, select_k)?;
+-        Ok((crate::AdmittedVec::from_parts(ranked, None, workspace), examined))
+-    }
+-
+-    /// The distance between two rows: one pairwise evaluation, charged as the one
+-    /// candidate it examines.
+-    ///
+-    /// # Errors
+-    ///
+-    /// Whatever the evaluation refuses; the error aborts the query.
+-    fn distance(&self, query_row: usize, row: usize) -> Result<f64, EvalError>;
+-
+-    /// The RDF term row `row` stands for.
+-    fn term(&self, row: usize) -> Option<&TermValue>;
+-
+-    /// The generation of the space that answers. The space is immutable once built, so
+-    /// the reading is true for every row a cursor goes on to emit.
+-    fn generation(&self) -> Arc<str>;
+-}
+-
+-/// The cursor a nearest-neighbour relation's `open` returns: the ranked neighbours,
+-/// filtered on every bound position, cut at the engine's licence, and reporting the
+-/// ranking's work.
+-///
+-/// # Why the ranking is lazy
+-///
+-/// It runs on the first [`PfCursor::next`], not in `open`. The engine checks its own
+-/// ceiling before pulling, so a call whose ceiling is already exhausted never pulls at
+-/// all and is charged nothing: "no rows were wanted" and "no work was done" are the same
+-/// statement. This is the **only** caller of [`RankSource::search`] and
+-/// [`RankSource::distance`], which is what makes a source's counters measurements rather
+-/// than estimates.
+-///
+-/// # The two properties that make the licence sound
+-///
+-/// * It filters on **every** bound position, including `?neighbour` and `?distance`,
+-///   which the ranking cannot see.
+-/// * It decrements the licence only on rows it actually **emits**; a skipped row
+-///   disagrees with a bound position and the engine would have dropped it anyway.
+-#[derive(Debug)]
+-pub struct RankedCursor<S> {
+-    /// How this relation ranks.
+-    source: S,
+-    /// The call being answered.
+-    invocation: KnnInvocation,
+-    /// The ranked neighbours, once the ranking has run.
+-    ranked: Option<crate::AdmittedVec<Ranked>>,
+-    /// How far into `ranked` this cursor has read.
+-    at: usize,
+-    /// Candidates examined and not yet reported to the governor.
+-    unreported_work: u64,
+-    workspace: crate::WorkspaceCapability,
+-    _invocation_admission: Option<InvocationAdmission>,
+-    _cursor_admission: Option<crate::WorkspaceAllocation>,
+-}
+-
+-impl<S: RankSource> RankedCursor<S> {
+-    /// A cursor answering `invocation` through `source`. Nothing is ranked until the
+-    /// first pull.
+-    #[must_use]
+-    pub const fn new(source: S, invocation: KnnInvocation) -> Self {
+-        Self {
+-            source,
+-            invocation,
+-            ranked: None,
+-            at: 0,
+-            unreported_work: 0,
+-            workspace: crate::WorkspaceCapability::resident(),
+-            _invocation_admission: None,
+-            _cursor_admission: None,
+-        }
+-    }
+-
+-    pub(crate) fn with_admission(
+-        source: S,
+-        invocation: KnnInvocation,
+-        admission: InvocationAdmission,
+-        workspace: crate::WorkspaceCapability,
+-        cursor_admission: crate::WorkspaceAllocation,
+-    ) -> Self {
+-        Self { source, invocation, ranked: None, at: 0, unreported_work: 0,
+-            workspace, _invocation_admission: Some(admission),
+-            _cursor_admission: Some(cursor_admission) }
+-    }
+-
+-    /// Rank, if this invocation has not ranked yet, recording the work examined.
+-    fn ensure_ranked(&mut self) -> Result<&[Ranked], EvalError> {
+-        if self.ranked.is_none() {
+-            let (ranked, work) = match self.invocation.answer {
+-                KnnAnswer::Search {
+-                    query_row: Some(row),
+-                    select_k,
+-                } => self.source.search_admitted(row, select_k, &self.workspace)?,
+-                KnnAnswer::Search {
+-                    query_row: None, ..
+-                }
+-                | KnnAnswer::Membership(None) => (crate::AdmittedVec::new(&self.workspace), 0),
+-                KnnAnswer::Membership(Some((query_row, row))) => {
+-                    let distance = self.source.distance(query_row, row)?;
+-                    let mut ranked = crate::AdmittedVec::with_capacity(1, &self.workspace)?;
+-                    ranked.push(Ranked { distance, row })?;
+-                    (ranked, 1)
+-                }
+-            };
+-            self.unreported_work = self.unreported_work.saturating_add(work);
+-            self.ranked = Some(ranked);
+-        }
+-        Ok(self.ranked.as_deref().unwrap_or_default())
+-    }
+-
+-    /// The same admitted construction supplies resident and bounded pull paths.
+-    fn build(&self, scored: Ranked) -> Result<crate::property_fn::AdmittedPfRow, EvalError> {
+-        let neighbour = self.source.term(scored.row).ok_or_else(|| {
+-            EvalError::data(format!(
+-                "the ranking named row {}, which the space does not hold", scored.row,
+-            ))
++            return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
++                "{relation} expects {KNN_ARITY} argument(s), got {supplied}"
++            ), workspace,
++            ));
++        }
++        let Some(query) = args.get(KNN_QUERY) else {
++            return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
++                "the query term at position {KNN_QUERY} is free; this relation retrieves the \
++                 neighbours of a seed and cannot enumerate seeds, which is why both of its \
++                 declared modes — `{KNN_MODE}` and `{KNN_MEMBERSHIP_MODE}` — demand it"
++            ), workspace,
++            ));
++        };
++        let query_row = rows.row_of_admitted(query, workspace)?;
++        let (answer, count_term) = if let Some(count) = args.get(KNN_COUNT) {
++            let k = neighbour_count_with(count, guard, workspace)?;
++            let post_selection_filtered =
++                args.get(KNN_NEIGHBOUR).is_some() || args.get(KNN_DISTANCE).is_some();
++            let select_k = if post_selection_filtered {
++                k
++            } else {
++                ceiling.map_or(k, |ceiling| k.min(usize::try_from(ceiling).unwrap_or(k)))
++            };
++            (
++                KnnAnswer::Search {
++                    query_row,
++                    select_k,
++                },
++                copy_invocation_term(count, workspace, &mut admissions)?,
++            )
++        } else {
++            let Some(candidate) = args.get(KNN_NEIGHBOUR) else {
++                return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
++                    "the neighbour count at position {KNN_COUNT} is free and so is the \
++                     neighbour at position {KNN_NEIGHBOUR}; how many neighbours to retrieve \
++                     is a question this relation is asked, not one it answers, so the only \
++                     call it serves without a count is the membership lookup \
++                     `{KNN_MEMBERSHIP_MODE}`, which names the one term it is about"
++                ), workspace,
++            ));
++            };
++            membership_lookups.fetch_add(1, Ordering::Relaxed);
++            let (count, allocation) = admitted_universe_size(rows.len(), workspace)?.into_parts();
++            if allocation.is_bounded() { admissions.push(allocation)?; }
++            (KnnAnswer::Membership(query_row.zip(rows.row_of_admitted(candidate, workspace)?)), count)
++        };
++        let query_term = copy_invocation_term(query, workspace, &mut admissions)?;
++        let mut bound = crate::AdmittedVec::with_capacity(supplied, workspace)?;
++        for term in args.flattened() {
++            bound.push(match term {
++                Some(term) => Some(copy_invocation_term(term, workspace, &mut admissions)?),
++                None => None,
++            })?;
++        }
++        let (bound, allocation) = bound.into_parts();
++        Ok((Self { answer, query_term, count_term, bound, remaining: ceiling },
++            InvocationAdmission { _terms: admissions, _bound: allocation }))
++    }
++}
++
++/// Read `k` off the invocation's neighbour-count argument.
++///
++/// # Errors
++///
++/// [`EvalError::Function`] when the value is not an integer literal, is negative,
++/// exceeds the guard's `max_neighbours` (a clamp would be a short answer reported as a
++/// complete one), or does not fit this platform's index range.
++pub fn neighbour_count(value: &TermValue, guard: KnnGuard) -> Result<usize, EvalError> {
++    neighbour_count_with(value, guard, &crate::WorkspaceCapability::default())
++}
++
++fn neighbour_count_with(
++    value: &TermValue,
++    guard: KnnGuard,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<usize, EvalError> {
++    let parsed = if let TermValue::Literal { lexical_form, datatype, .. } = value {
++        match purrdf_xsd::XsdDatatype::from_iri(datatype) {
++            Some(datatype) if datatype.is_integer_family() => {
++                crate::parsed_value::ParsedValue::parse(lexical_form, datatype, false, workspace)?
++            }
++            _ => None,
++        }
++    } else { None };
++    let Some(purrdf_xsd::XsdValue::Integer { value: count, .. }) = parsed.as_deref() else {
++        return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
++            "the neighbour count at position {KNN_COUNT} is not an integer literal; \
++             there is no number of neighbours that names"
++        ), workspace,
++            ));
++    };
++    if *count < 0 {
++        return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
++            "the neighbour count at position {KNN_COUNT} is {count}; a search cannot return a \
++             negative number of neighbours"
++        ), workspace,
++            ));
++    }
++    let count = *count;
++    let bound = i128::from(guard.max_neighbours());
++    if count > bound {
++        return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
++            "the invocation asks for {count} neighbour(s), and the configured guard admits at \
++             most {bound}; returning the {bound} nearest instead would be a short answer \
++             reported as a complete one, so the request is refused rather than clamped"
++        ), workspace,
++            ));
++    }
++    usize::try_from(count).map_err(|_| {
++        crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
++            "the neighbour count {count} does not fit this platform's index range"
++        ), workspace,
++            )
++    })
++}
++
++/// The value the count position carries in a **membership** answer: the number of rows
++/// the space holds, as an `xsd:integer`.
++///
++/// A [`PfRow`] carries a value for every flattened position, so a mode that leaves the
++/// count free must still fill it. Under [`KNN_MEMBERSHIP_MODE`] there is no request to
++/// echo, so the position is an output, and what it outputs is a fact about the producer
++/// rather than a request it was never given: the size of its term universe. It is
++/// single-valued, so the mode's declared row bound of one is exact, and it is
++/// emphatically **not** a fabricated `k` — a point lookup claims no rank.
++#[must_use]
++pub fn universe_size(rows: usize) -> TermValue {
++    TermValue::integer(rows as u64)
++}
++
++/// How a relation ranks: the one part of the call protocol that differs between an
++/// exhaustive scan and an index traversal.
++///
++/// Each method records its own observations (how many searches ran, how many candidates
++/// they examined), so a counter a host reads is a measurement of the calls actually
++/// made.
++pub trait RankSource {
++    /// Rank the neighbourhood of `query_row`, retaining `select_k` rows nearest first,
++    /// and report how many candidates the ranking examined.
++    ///
++    /// # Errors
++    ///
++    /// Whatever the ranking refuses; the error aborts the query.
++    fn search(&self, query_row: usize, select_k: usize) -> Result<(Vec<Ranked>, u64), EvalError>;
++
++    /// Rank with actual query-owned storage admission. Native producers override
++    /// this method with their physical buffer ownership; resident custom sources
++    /// retain their original search implementation.
++    ///
++    /// # Errors
++    /// Returns the ranking error, or refuses an opaque bounded source before its
++    /// search body can allocate without an admission contract.
++    fn search_admitted(
++        &self,
++        query_row: usize,
++        select_k: usize,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<(crate::AdmittedVec<Ranked>, u64), EvalError> {
++        if workspace.is_bounded() {
++            return Err(EvalError::WorkspaceUnpriced("an opaque ranked source without allocation admission"));
++        }
++        let (ranked, examined) = self.search(query_row, select_k)?;
++        Ok((crate::AdmittedVec::from_parts(ranked, None, workspace), examined))
++    }
++
++    /// The distance between two rows: one pairwise evaluation, charged as the one
++    /// candidate it examines.
++    ///
++    /// # Errors
++    ///
++    /// Whatever the evaluation refuses; the error aborts the query.
++    fn distance(&self, query_row: usize, row: usize) -> Result<f64, EvalError>;
++
++    /// The RDF term row `row` stands for.
++    fn term(&self, row: usize) -> Option<&TermValue>;
++
++    /// The generation of the space that answers. The space is immutable once built, so
++    /// the reading is true for every row a cursor goes on to emit.
++    fn generation(&self) -> Arc<str>;
++}
++
++/// The cursor a nearest-neighbour relation's `open` returns: the ranked neighbours,
++/// filtered on every bound position, cut at the engine's licence, and reporting the
++/// ranking's work.
++///
++/// # Why the ranking is lazy
++///
++/// It runs on the first [`PfCursor::next`], not in `open`. The engine checks its own
++/// ceiling before pulling, so a call whose ceiling is already exhausted never pulls at
++/// all and is charged nothing: "no rows were wanted" and "no work was done" are the same
++/// statement. This is the **only** caller of [`RankSource::search`] and
++/// [`RankSource::distance`], which is what makes a source's counters measurements rather
++/// than estimates.
++///
++/// # The two properties that make the licence sound
++///
++/// * It filters on **every** bound position, including `?neighbour` and `?distance`,
++///   which the ranking cannot see.
++/// * It decrements the licence only on rows it actually **emits**; a skipped row
++///   disagrees with a bound position and the engine would have dropped it anyway.
++#[derive(Debug)]
++pub struct RankedCursor<S> {
++    /// How this relation ranks.
++    source: S,
++    /// The call being answered.
++    invocation: KnnInvocation,
++    /// The ranked neighbours, once the ranking has run.
++    ranked: Option<crate::AdmittedVec<Ranked>>,
++    /// How far into `ranked` this cursor has read.
++    at: usize,
++    /// Candidates examined and not yet reported to the governor.
++    unreported_work: u64,
++    workspace: crate::WorkspaceCapability,
++    _invocation_admission: Option<InvocationAdmission>,
++    _cursor_admission: Option<crate::WorkspaceAllocation>,
++}
++
++impl<S: RankSource> RankedCursor<S> {
++    /// A cursor answering `invocation` through `source`. Nothing is ranked until the
++    /// first pull.
++    #[must_use]
++    pub const fn new(source: S, invocation: KnnInvocation) -> Self {
++        Self {
++            source,
++            invocation,
++            ranked: None,
++            at: 0,
++            unreported_work: 0,
++            workspace: crate::WorkspaceCapability::resident(),
++            _invocation_admission: None,
++            _cursor_admission: None,
++        }
++    }
++
++    pub(crate) fn with_admission(
++        source: S,
++        invocation: KnnInvocation,
++        admission: InvocationAdmission,
++        workspace: crate::WorkspaceCapability,
++        cursor_admission: crate::WorkspaceAllocation,
++    ) -> Self {
++        Self { source, invocation, ranked: None, at: 0, unreported_work: 0,
++            workspace, _invocation_admission: Some(admission),
++            _cursor_admission: Some(cursor_admission) }
++    }
++
++    /// Rank, if this invocation has not ranked yet, recording the work examined.
++    fn ensure_ranked(&mut self) -> Result<&[Ranked], EvalError> {
++        if self.ranked.is_none() {
++            let (ranked, work) = match self.invocation.answer {
++                KnnAnswer::Search {
++                    query_row: Some(row),
++                    select_k,
++                } => self.source.search_admitted(row, select_k, &self.workspace)?,
++                KnnAnswer::Search {
++                    query_row: None, ..
++                }
++                | KnnAnswer::Membership(None) => (crate::AdmittedVec::new(&self.workspace), 0),
++                KnnAnswer::Membership(Some((query_row, row))) => {
++                    let distance = self.source.distance(query_row, row)?;
++                    let mut ranked = crate::AdmittedVec::with_capacity(1, &self.workspace)?;
++                    ranked.push(Ranked { distance, row })?;
++                    (ranked, 1)
++                }
++            };
++            self.unreported_work = self.unreported_work.saturating_add(work);
++            self.ranked = Some(ranked);
++        }
++        Ok(self.ranked.as_deref().unwrap_or_default())
++    }
++
++    /// The same admitted construction supplies resident and bounded pull paths.
++    fn build(&self, scored: Ranked) -> Result<crate::property_fn::AdmittedPfRow, EvalError> {
++        let neighbour = self.source.term(scored.row).ok_or_else(|| {
++            crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Data, format_args!(
++                "the ranking named row {}, which the space does not hold", scored.row,
++            ), &self.workspace,
++            )
+         })?;
+         let text = purrdf_xsd::numeric::canonical_double_text(scored.distance);
+         let bytes = text.len().checked_add(XSD_DOUBLE.len())
+diff --git a/crates/sparql-eval/src/knn/mod.rs b/crates/sparql-eval/src/knn/mod.rs
+--- a/crates/sparql-eval/src/knn/mod.rs
++++ b/crates/sparql-eval/src/knn/mod.rs
+@@ -706,12 +706,14 @@
+         let mut scored = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
+         for (row, distance) in distances.into_iter().enumerate() {
+             let distance = distance.ok_or_else(|| {
+-                EvalError::data(format!(
+-                    "the distance from row {query_row} to row {row} left the finite range \
+-                     under {:?}; the artifact's magnitudes cannot be ranked under this \
+-                     metric",
+-                    self.metric
+-                ))
++                crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Data, format_args!(
++                    "the distance from row {query_row} to row {row} left the finite range \
++                     under {:?}; the artifact's magnitudes cannot be ranked under this \
++                     metric",
++                    self.metric
++                ), workspace,
++            )
+             })?;
+             scored.push(Ranked { distance, row })?;
+         }

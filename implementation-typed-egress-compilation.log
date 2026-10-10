@@ -1,0 +1,215 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/engine/prepared_fallible.rs:108:71
+    |
+108 |             return finish_governed_fallible_query(dataset, state, Err(diagnostic), None);
+    |                                                                   --- ^^^^^^^^^^ expected `EvaluationFailure`, found `RdfDiagnostic`
+    |                                                                   |
+    |                                                                   arguments to this enum variant are incorrect
+    |
+help: the type constructed contains `RdfDiagnostic` due to the type of the argument passed
+   --> crates/sparql-eval/src/engine/prepared_fallible.rs:108:67
+    |
+108 |             return finish_governed_fallible_query(dataset, state, Err(diagnostic), None);
+    |                                                                   ^^^^----------^
+    |                                                                       |
+    |                                                                       this argument influences the type of `Err`
+note: tuple variant defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:567:5
+    |
+567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+    |     ^^^
+help: try wrapping the expression in `engine::EvaluationFailure::Diagnostic`
+    |
+108 |             return finish_governed_fallible_query(dataset, state, Err(engine::EvaluationFailure::Diagnostic(diagnostic)), None);
+    |                                                                       ++++++++++++++++++++++++++++++++++++++          +
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/engine.rs:1768:20
+     |
+1755 |     ) -> Result<GovernedOutcome, EvaluationFailure> {
+     |          ------------------------------------------ expected `Result<GovernedOutcome, EvaluationFailure>` because of return type
+...
+1768 |             return refused.map(GovernedOutcome::BudgetExhausted);
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Result<GovernedOutcome, _>`, found `Result<GovernedOutcome, RdfDiagnostic>`
+     |
+     = note: expected enum `Result<_, EvaluationFailure>`
+                found enum `Result<_, RdfDiagnostic>`
+help: use `?` to coerce and return an appropriate `Err`, and wrap the resulting value in `Ok` so the expression remains of type `Result`
+     |
+1768 |             return Ok(refused.map(GovernedOutcome::BudgetExhausted)?);
+     |                    +++                                             ++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/engine.rs:2761:73
+     |
+2761 |             Err(diagnostic) => return finish_fallible_read(dataset, Err(diagnostic)),
+     |                                                                     --- ^^^^^^^^^^ expected `EvaluationFailure`, found `RdfDiagnostic`
+     |                                                                     |
+     |                                                                     arguments to this enum variant are incorrect
+     |
+help: the type constructed contains `RdfDiagnostic` due to the type of the argument passed
+    --> crates/sparql-eval/src/engine.rs:2761:69
+     |
+2761 |             Err(diagnostic) => return finish_fallible_read(dataset, Err(diagnostic)),
+     |                                                                     ^^^^----------^
+     |                                                                         |
+     |                                                                         this argument influences the type of `Err`
+note: tuple variant defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/result.rs:567:5
+     |
+ 567 |     Err(#[stable(feature = "rust1", since = "1.0.0")] E),
+     |     ^^^
+help: try wrapping the expression in `engine::EvaluationFailure::Diagnostic`
+     |
+2761 |             Err(diagnostic) => return finish_fallible_read(dataset, Err(engine::EvaluationFailure::Diagnostic(diagnostic))),
+     |                                                                         ++++++++++++++++++++++++++++++++++++++          +
+
+error[E0283]: type annotations needed
+    --> crates/sparql-eval/src/engine.rs:2925:13
+     |
+2925 |             Ok(survey)
+     |             ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+     |
+     = note: the type must implement `Into<EvaluationFailure>`
+note: required by a bound in `checked_query_read`
+    --> crates/sparql-eval/src/engine.rs:3847:45
+     |
+3847 | fn checked_query_read<D: DatasetView, T, E: Into<EvaluationFailure>>(
+     |                                             ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `checked_query_read`
+help: consider specifying the generic arguments
+     |
+2925 |             Ok::<PlanSurvey, E>(survey)
+     |               +++++++++++++++++
+
+error[E0277]: `?` couldn't convert the error to `RdfDiagnostic`
+    --> crates/sparql-eval/src/engine.rs:3563:81
+     |
+3563 |                     match resolve_governed(evaluated, &mut ctx, state, identity)? {
+     |                           ------------------------------------------------------^ the trait `From<EvaluationFailure>` is not implemented for `RdfDiagnostic`
+     |                           |
+     |                           this can't be annotated with `?` because it has type `Result<_, EvaluationFailure>`
+     |
+note: `EvaluationFailure` needs to implement `Into<RdfDiagnostic>`
+    --> crates/sparql-eval/src/engine.rs:3805:1
+     |
+3805 | enum EvaluationFailure {
+     | ^^^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<EvaluationFailure>` is not implemented for `RdfDiagnostic`
+      but trait `From<CdtBlankError>` is implemented for it
+    --> crates/rdf-core/src/cdt_blank.rs:217:1
+     |
+ 217 | impl From<CdtBlankError> for crate::RdfDiagnostic {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `CdtBlankError`, found `EvaluationFailure`
+
+error[E0283]: type annotations needed
+    --> crates/sparql-eval/src/engine.rs:3645:13
+     |
+3645 |             Ok(visit(borrow_outcome(&outcome, &ctx)))
+     |             ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+     |
+     = note: the type must implement `Into<EvaluationFailure>`
+note: required by a bound in `checked_query_read`
+    --> crates/sparql-eval/src/engine.rs:3847:45
+     |
+3847 | fn checked_query_read<D: DatasetView, T, E: Into<EvaluationFailure>>(
+     |                                             ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `checked_query_read`
+help: consider specifying the generic arguments
+     |
+3645 |             Ok::<R, E>(visit(borrow_outcome(&outcome, &ctx)))
+     |               ++++++++
+
+error[E0277]: `?` couldn't convert the error to `RdfDiagnostic`
+    --> crates/sparql-eval/src/engine.rs:3708:14
+     |
+3704 |               let evaluated = evaluate_governed_with_substitutions(
+     |  _____________________________-
+3705 | |                 &prepared,
+3706 | |                 Prebindings::Borrowed(request.substitutions),
+3707 | |                 &mut ctx,
+3708 | |             )?;
+     | |             -^ the trait `From<EvaluationFailure>` is not implemented for `RdfDiagnostic`
+     | |_____________|
+     |               this can't be annotated with `?` because it has type `Result<_, EvaluationFailure>`
+     |
+note: `EvaluationFailure` needs to implement `Into<RdfDiagnostic>`
+    --> crates/sparql-eval/src/engine.rs:3805:1
+     |
+3805 | enum EvaluationFailure {
+     | ^^^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<EvaluationFailure>` is not implemented for `RdfDiagnostic`
+      but trait `From<CdtBlankError>` is implemented for it
+    --> crates/rdf-core/src/cdt_blank.rs:217:1
+     |
+ 217 | impl From<CdtBlankError> for crate::RdfDiagnostic {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `CdtBlankError`, found `EvaluationFailure`
+
+error[E0277]: `?` couldn't convert the error to `RdfDiagnostic`
+    --> crates/sparql-eval/src/engine.rs:3710:77
+     |
+3710 |                 match resolve_governed(evaluated, &mut ctx, state, identity)? {
+     |                       ------------------------------------------------------^ the trait `From<EvaluationFailure>` is not implemented for `RdfDiagnostic`
+     |                       |
+     |                       this can't be annotated with `?` because it has type `Result<_, EvaluationFailure>`
+     |
+note: `EvaluationFailure` needs to implement `Into<RdfDiagnostic>`
+    --> crates/sparql-eval/src/engine.rs:3805:1
+     |
+3805 | enum EvaluationFailure {
+     | ^^^^^^^^^^^^^^^^^^^^^^
+     = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+help: the trait `From<EvaluationFailure>` is not implemented for `RdfDiagnostic`
+      but trait `From<CdtBlankError>` is implemented for it
+    --> crates/rdf-core/src/cdt_blank.rs:217:1
+     |
+ 217 | impl From<CdtBlankError> for crate::RdfDiagnostic {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `CdtBlankError`, found `EvaluationFailure`
+
+error[E0533]: expected value, found struct variant `EvalError::AllocationFailed`
+   --> crates/sparql-eval/src/workspace.rs:105:26
+    |
+105 |             .map_err(|_| EvalError::AllocationFailed("workspace allocation owner"))?;
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a value
+    |
+help: you might have meant to create a new value of the struct
+    |
+105 -             .map_err(|_| EvalError::AllocationFailed("workspace allocation owner"))?;
+105 +             .map_err(|_| EvalError::AllocationFailed { construct: /* value */ })?;
+    |
+
+error[E0004]: non-exhaustive patterns: `&RemoteError::WorkspaceStopped` not covered
+    --> crates/sparql-eval/src/protocol.rs:1305:15
+     |
+1305 |         match error {
+     |               ^^^^^ pattern `&RemoteError::WorkspaceStopped` not covered
+     |
+note: `RemoteError` defined here
+    --> crates/sparql-eval/src/remote.rs:118:10
+     |
+ 118 | pub enum RemoteError {
+     |          ^^^^^^^^^^^
+...
+ 205 |     WorkspaceStopped,
+     |     ---------------- not covered
+     = note: the matched value is of type `&RemoteError`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+     |
+1316 ~             RemoteError::HostStackExhausted(_) => Self::HostStackExhausted,
+1317 ~             &RemoteError::WorkspaceStopped => todo!(),
+     |
+
+Some errors have detailed explanations: E0004, E0277, E0283, E0308, E0533.
+For more information about an error, try `rustc --explain E0004`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 10 previous errors

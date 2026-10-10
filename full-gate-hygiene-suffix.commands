@@ -1,0 +1,38 @@
+python3 scripts/check-hash-domains.py --self-test
+python3 scripts/check-hash-domains.py
+python3 scripts/check-corpus-frozen.py
+bash scripts/check-generated.sh
+python3 scripts/check-issue-refs.py
+python3 scripts/check-brand-casing.py
+python3 scripts/check-spec-attribution.py --self-test
+python3 scripts/check-doc-claims.py
+cargo run -q --locked -p helper-census -- --glossary-gate
+python3 scripts/check-versions.py
+python3 scripts/check-release-notes.py --self-test
+python3 scripts/check-release-notes.py
+python3 scripts/check-publish-order.py
+bash scripts/check-crates-io-records.sh --self-test
+bash scripts/publish-release-crates.sh --self-test
+python3 scripts/publish-github-release.py --self-test
+python3 scripts/test_git_sync.py
+python3 scripts/publish-npm.py --self-test
+bash scripts/bootstrap-crates-io.sh --self-test
+python3 scripts/check-wasm-js-exports.py
+python3 scripts/check-entailment-surface.py
+python3 scripts/check-python-stub-parity.py
+python3 scripts/conformance-matrix.py --self-test
+python3 scripts/check-simd-asm.py --self-test
+python3 scripts/bench-suite-targets.py --self-test
+python3 scripts/cleanroom/transcript_audit.py --self-test
+python3 scripts/cleanroom/guard_hook.py --self-test
+python3 scripts/cleanroom/deny_settings.py --self-test
+python3 scripts/cleanroom/similarity.py --self-test
+python3 scripts/cleanroom/provenance.py --self-test
+python3 scripts/check-tracked-paths.py --self-test
+python3 scripts/check-tracked-paths.py
+python3 scripts/check-test-shards.py --self-test
+python3 scripts/check-test-shards.py
+python3 scripts/benchmark-acquire.py --self-test
+python3 scripts/watdiv-queries.py --offline-self-test
+python3 scripts/lubm-queries.py --offline-self-test
+python3 crates/text/tests/reference/bm25f.py --check

@@ -1,0 +1,1699 @@
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+error[E0425]: cannot find function `language_datatype_iri` in module `purrdf_iri::vocab::rdf`
+     --> crates/sparql-eval/src/expr.rs:12891:62
+      |
+12891 | ...   Some(language)=>(purrdf_iri::vocab::rdf::language_datatype_iri(direction.is_some()),Some(workspace.authored_text(&language....
+      |                                                ^^^^^^^^^^^^^^^^^^^^^ not found in `purrdf_iri::vocab::rdf`
+      |
+help: consider importing one of these functions
+      |
+   33 + use purrdf_core::vocab::language_datatype_iri;
+      |
+   33 + use purrdf_iri::vocab::language_datatype_iri;
+      |
+help: if you import `language_datatype_iri`, refer to it directly
+      |
+12891 -                     Some(language)=>(purrdf_iri::vocab::rdf::language_datatype_iri(direction.is_some()),Some(workspace.authored_text(&language.as_str())?),*direction),
+12891 +                     Some(language)=>(language_datatype_iri(direction.is_some()),Some(workspace.authored_text(&language.as_str())?),*direction),
+      |
+
+error[E0425]: cannot find function `substitute_pattern` in module `crate::expr`
+    --> crates/sparql-eval/src/service_endpoints.rs:1549:44
+     |
+1549 |             let substituted = crate::expr::substitute_pattern(node, &row)?;
+     |                                            ^^^^^^^^^^^^^^^^^^ not found in `crate::expr`
+     |
+note: similarly named function `substitute_pattern_impl` defined here
+    --> crates/sparql-eval/src/expr.rs:3204:1
+     |
+3204 | / fn substitute_pattern_impl<const PRESERVE: bool>(
+3205 | |     pattern: &GraphPattern,
+3206 | |     row: &SubstitutionRow,
+3207 | |     map: &mut Option<&mut SubstitutionTracking<'_>>,
+...    |
+3633 | |     })
+3634 | | }
+     | |_^
+note: found an item that was configured out
+    --> crates/sparql-eval/src/expr.rs:2815:15
+     |
+2814 | #[cfg(test)]
+     |       ---- the item is gated here
+2815 | pub(crate) fn substitute_pattern(
+     |               ^^^^^^^^^^^^^^^^^^
+help: a function with a similar name exists
+     |
+1549 |             let substituted = crate::expr::substitute_pattern_impl(node, &row)?;
+     |                                                              +++++
+
+error: unused import: `std::sync::Arc`
+  --> crates/sparql-eval/src/binop.rs:19:5
+   |
+19 | use std::sync::Arc;
+   |     ^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/blank_scope.rs:122:20
+    |
+122 |     let mut keep = crate::workspace::AdmittedVec::new(workspace);
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+122 -     let mut keep = crate::workspace::AdmittedVec::new(workspace);
+122 +     let mut keep = AdmittedVec::new(workspace);
+    |
+
+error: unused import: `Child`
+   --> crates/sparql-eval/src/enf.rs:254:36
+    |
+254 | use purrdf_sparql_algebra::{Chain, Child};
+    |                                    ^^^^^
+
+error: unused import: `std::borrow::Cow`
+  --> crates/sparql-eval/src/engine.rs:28:5
+   |
+28 | use std::borrow::Cow;
+   |     ^^^^^^^^^^^^^^^^
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/engine.rs:506:34
+    |
+506 |             let mut diagnostic = purrdf_core::RdfDiagnostic::try_error_with_memory(
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+506 -             let mut diagnostic = purrdf_core::RdfDiagnostic::try_error_with_memory(
+506 +             let mut diagnostic = RdfDiagnostic::try_error_with_memory(
+    |
+
+error: unused import: `DetHashSet`
+  --> crates/sparql-eval/src/eval.rs:45:25
+   |
+45 | use crate::{DetHashMap, DetHashSet};
+   |                         ^^^^^^^^^^
+
+error: unused import: `std::sync::Arc`
+  --> crates/sparql-eval/src/expr.rs:35:5
+   |
+35 | use std::sync::Arc;
+   |     ^^^^^^^^^^^^^^
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/expr.rs:1309:13
+     |
+1309 | ) -> Result<crate::solution::VarSchema, EvalError> {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1309 - ) -> Result<crate::solution::VarSchema, EvalError> {
+1309 + ) -> Result<VarSchema, EvalError> {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/expr.rs:1552:13
+     |
+1552 | ) -> Result<crate::solution::VarSchema, EvalError> {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1552 - ) -> Result<crate::solution::VarSchema, EvalError> {
+1552 + ) -> Result<VarSchema, EvalError> {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/expr.rs:1558:13
+     |
+1558 | ) -> Result<crate::solution::VarSchema, EvalError> {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1558 - ) -> Result<crate::solution::VarSchema, EvalError> {
+1558 + ) -> Result<VarSchema, EvalError> {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/expr.rs:1564:13
+     |
+1564 | ) -> Result<crate::solution::VarSchema, EvalError> {
+     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1564 - ) -> Result<crate::solution::VarSchema, EvalError> {
+1564 + ) -> Result<VarSchema, EvalError> {
+     |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:715:17
+    |
+715 |     workspace: &crate::WorkspaceCapability,
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+715 -     workspace: &crate::WorkspaceCapability,
+715 +     workspace: &WorkspaceCapability,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:716:62
+    |
+716 |     visit: &mut impl FnMut(&'a GraphPattern) -> Result<bool, crate::EvalError>,
+    |                                                              ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+716 -     visit: &mut impl FnMut(&'a GraphPattern) -> Result<bool, crate::EvalError>,
+716 +     visit: &mut impl FnMut(&'a GraphPattern) -> Result<bool, EvalError>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:717:19
+    |
+717 | ) -> Result<bool, crate::EvalError> {
+    |                   ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+717 - ) -> Result<bool, crate::EvalError> {
+717 + ) -> Result<bool, EvalError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:763:50
+    |
+763 |     visit_classified_children_admitted(pattern, &crate::WorkspaceCapability::resident(), &mut |child, edge| Ok(visit(child, edge)))
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+763 -     visit_classified_children_admitted(pattern, &crate::WorkspaceCapability::resident(), &mut |child, edge| Ok(visit(child, edge)))
+763 +     visit_classified_children_admitted(pattern, &WorkspaceCapability::resident(), &mut |child, edge| Ok(visit(child, edge)))
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:769:17
+    |
+769 |     workspace: &crate::WorkspaceCapability,
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+769 -     workspace: &crate::WorkspaceCapability,
+769 +     workspace: &WorkspaceCapability,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:770:73
+    |
+770 |     visit: &mut impl FnMut(&'a GraphPattern, ChildEdge) -> Result<bool, crate::EvalError>,
+    |                                                                         ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+770 -     visit: &mut impl FnMut(&'a GraphPattern, ChildEdge) -> Result<bool, crate::EvalError>,
+770 +     visit: &mut impl FnMut(&'a GraphPattern, ChildEdge) -> Result<bool, EvalError>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:771:19
+    |
+771 | ) -> Result<bool, crate::EvalError> {
+    |                   ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+771 - ) -> Result<bool, crate::EvalError> {
+771 + ) -> Result<bool, EvalError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:877:32
+    |
+877 |     walk_spine_admitted(root, &crate::WorkspaceCapability::resident(), &mut |node, context, depth| {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+877 -     walk_spine_admitted(root, &crate::WorkspaceCapability::resident(), &mut |node, context, depth| {
+877 +     walk_spine_admitted(root, &WorkspaceCapability::resident(), &mut |node, context, depth| {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:885:17
+    |
+885 |     workspace: &crate::WorkspaceCapability,
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+885 -     workspace: &crate::WorkspaceCapability,
+885 +     workspace: &WorkspaceCapability,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:886:81
+    |
+886 |     visit: &mut impl FnMut(&'a GraphPattern, SpineContext, usize) -> Result<(), crate::EvalError>,
+    |                                                                                 ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+886 -     visit: &mut impl FnMut(&'a GraphPattern, SpineContext, usize) -> Result<(), crate::EvalError>,
+886 +     visit: &mut impl FnMut(&'a GraphPattern, SpineContext, usize) -> Result<(), EvalError>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:887:17
+    |
+887 | ) -> Result<(), crate::EvalError> {
+    |                 ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+887 - ) -> Result<(), crate::EvalError> {
+887 + ) -> Result<(), EvalError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:897:51
+    |
+897 |             let next = depth.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+897 -             let next = depth.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+897 +             let next = depth.checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:926:79
+    |
+926 | pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), crate::EvalError> {
+    |                                                                               ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+926 - pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), crate::EvalError> {
+926 + pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), EvalError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:927:22
+    |
+927 |     let capability = crate::WorkspaceCapability::resident();
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+927 -     let capability = crate::WorkspaceCapability::resident();
+927 +     let capability = WorkspaceCapability::resident();
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:938:17
+    |
+938 | ) -> Result<(), crate::EvalError> {
+    |                 ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+938 - ) -> Result<(), crate::EvalError> {
+938 + ) -> Result<(), EvalError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:947:28
+    |
+947 |                 return Err(crate::EvalError::HostStackExhausted { construct: "graph pattern" });
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+947 -                 return Err(crate::EvalError::HostStackExhausted { construct: "graph pattern" });
+947 +                 return Err(EvalError::HostStackExhausted { construct: "graph pattern" });
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/governor/soundness.rs:950:55
+    |
+950 |                 let next = depth.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+    |                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+950 -                 let next = depth.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+950 +                 let next = depth.checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
+    |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/parallel.rs:3030:161
+     |
+3030 | ..._>,workspace:&crate::WorkspaceCapability)->Result<bool,crate::EvalError> {
+     |                                                           ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3030 - fn reaches_unsafe_builtin_admitted(root:Reach<'_>,registries:SafetyRegistries<'_>,verdict:ExistsVerdict<'_>,workspace:&crate::WorkspaceCapability)->Result<bool,crate::EvalError> {
+3030 + fn reaches_unsafe_builtin_admitted(root:Reach<'_>,registries:SafetyRegistries<'_>,verdict:ExistsVerdict<'_>,workspace:&crate::WorkspaceCapability)->Result<bool,EvalError> {
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/parallel.rs:3101:186
+     |
+3101 | ..._>,workspace:&crate::WorkspaceCapability)->Result<bool,crate::EvalError> {
+     |                                                           ^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3101 - pub(crate) fn is_parallel_safe_pattern_with_admitted(pattern:&GraphPattern,registries:SafetyRegistries<'_>,verdict:ExistsVerdict<'_>,workspace:&crate::WorkspaceCapability)->Result<bool,crate::EvalError> {
+3101 + pub(crate) fn is_parallel_safe_pattern_with_admitted(pattern:&GraphPattern,registries:SafetyRegistries<'_>,verdict:ExistsVerdict<'_>,workspace:&crate::WorkspaceCapability)->Result<bool,EvalError> {
+     |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/plan/mod.rs:142:24
+    |
+142 |     prepared: OnceLock<crate::workspace::SharedWorkspace<PreparedExists>>,
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+142 -     prepared: OnceLock<crate::workspace::SharedWorkspace<PreparedExists>>,
+142 +     prepared: OnceLock<SharedWorkspace<PreparedExists>>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/plan/mod.rs:310:15
+    |
+310 |     )->Result<crate::workspace::SharedWorkspace<PreparedExists>,crate::EvalError> {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+310 -     )->Result<crate::workspace::SharedWorkspace<PreparedExists>,crate::EvalError> {
+310 +     )->Result<SharedWorkspace<PreparedExists>,crate::EvalError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/plan/mod.rs:314:19
+    |
+314 |         let built=crate::workspace::SharedWorkspace::new_admitted(build()?,workspace)?;
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+314 -         let built=crate::workspace::SharedWorkspace::new_admitted(build()?,workspace)?;
+314 +         let built=SharedWorkspace::new_admitted(build()?,workspace)?;
+    |
+
+error: unused imports: `AssertUnwindSafe` and `catch_unwind`
+  --> crates/sparql-eval/src/property_fn.rs:57:18
+   |
+57 | use std::panic::{AssertUnwindSafe, catch_unwind};
+   |                  ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:173:13
+    |
+173 |     Storage(purrdf_lex::allocation::StorageError),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+173 -     Storage(purrdf_lex::allocation::StorageError),
+173 +     Storage(StorageError),
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:181:11
+    |
+181 | impl From<purrdf_lex::allocation::StorageError> for PreparationError {
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+181 - impl From<purrdf_lex::allocation::StorageError> for PreparationError {
+181 + impl From<StorageError> for PreparationError {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:182:20
+    |
+182 |     fn from(error: purrdf_lex::allocation::StorageError) -> Self { Self::Storage(error) }
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+182 -     fn from(error: purrdf_lex::allocation::StorageError) -> Self { Self::Storage(error) }
+182 +     fn from(error: StorageError) -> Self { Self::Storage(error) }
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:188:28
+    |
+188 |         self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+188 -         self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+188 +         self, memory: &mut Memory<'_, crate::workspace::LexicalFrame>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:188:63
+    |
+188 |         self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+    |                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+188 -         self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+188 +         self, memory: &mut purrdf_lex::allocation::Memory<'_, LexicalFrame>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:205:37
+    |
+205 |     fn into_plan(self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>) -> PlanError {
+    |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+205 -     fn into_plan(self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>) -> PlanError {
+205 +     fn into_plan(self, memory: &mut Memory<'_, crate::workspace::LexicalFrame>) -> PlanError {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:205:72
+    |
+205 |     fn into_plan(self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>) -> PlanError {
+    |                                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+205 -     fn into_plan(self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>) -> PlanError {
+205 +     fn into_plan(self, memory: &mut purrdf_lex::allocation::Memory<'_, LexicalFrame>) -> PlanError {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:859:14
+    |
+859 |         &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+859 -         &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+859 +         &mut Memory::new(&mut purrdf_lex::allocation::Resident),
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:869:18
+    |
+869 |     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+869 -     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+869 +     memory: &mut Memory<'_, S>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:870:29
+    |
+870 | ) -> Result<BindingPattern, purrdf_lex::allocation::StorageError> {
+    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+870 - ) -> Result<BindingPattern, purrdf_lex::allocation::StorageError> {
+870 + ) -> Result<BindingPattern, StorageError> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:909:18
+    |
+909 |     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+909 -     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+909 +     memory: &mut Memory<'_, S>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:910:19
+    |
+910 | ) -> Result<bool, purrdf_lex::allocation::StorageError> {
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+910 - ) -> Result<bool, purrdf_lex::allocation::StorageError> {
+910 + ) -> Result<bool, StorageError> {
+    |
+
+error[E0277]: the trait bound `T: Dismantle` is not satisfied
+    --> crates/sparql-eval/src/substitute.rs:1864:20
+     |
+1864 | ) -> RewriteResult<Child<T>> {
+     |                    ^^^^^^^^ the trait `Dismantle` is not implemented for `T`
+     |
+note: required by a bound in `purrdf_lex::walk::Nested`
+    --> crates/lex/src/walk.rs:373:22
+     |
+ 373 | pub struct Nested<T: Dismantle, C = Box<T>>(Option<Box<T>>, Option<C>);
+     |                      ^^^^^^^^^ required by this bound in `Nested`
+help: consider further restricting type parameter `T` with trait `Dismantle`
+     |
+1861 | fn rewrite_child<T: purrdf_sparql_algebra::Subtree + purrdf_lex::walk::Dismantle>(
+     |                                                    +++++++++++++++++++++++++++++
+
+error[E0432]: unresolved import `super::copied`
+    --> crates/sparql-eval/src/enf.rs:1027:22
+     |
+1027 |     use super::{Enf, copied, ledger_source_map, left_join_erasable, normalize, order_by_erasable};
+     |                      ^^^^^^ no `copied` in `enf`
+
+error[E0599]: no method named `source_error` found for struct `WorkspaceCapability` in the current scope
+   --> crates/sparql-eval/src/construct.rs:892:40
+    |
+892 |                     |error| ctx.growth.source_error(error),
+    |                                        ^^^^^^^^^^^^ method not found in `WorkspaceCapability`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:979:1
+    |
+979 | pub struct WorkspaceCapability {
+    | ------------------------------ method `source_error` not found for this struct
+
+error[E0433]: cannot find type `WorkspaceCapability` in this scope
+    --> crates/sparql-eval/src/workspace.rs:2690:26
+     |
+2690 |         let capability = WorkspaceCapability::resident();
+     |                          ^^^^^^^^^^^^^^^^^^^ use of undeclared type `WorkspaceCapability`
+     |
+help: consider importing this struct through its public re-export
+     |
+1808 +     use crate::WorkspaceCapability;
+     |
+
+error[E0599]: no method named `source_error` found for struct `WorkspaceCapability` in the current scope
+   --> crates/sparql-eval/src/describe_query.rs:85:40
+    |
+ 85 | ...                   ctx.growth.source_error(error)
+    |                                  ^^^^^^^^^^^^ method not found in `WorkspaceCapability`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:979:1
+    |
+979 | pub struct WorkspaceCapability {
+    | ------------------------------ method `source_error` not found for this struct
+
+error[E0599]: no method named `source_error` found for struct `WorkspaceCapability` in the current scope
+   --> crates/sparql-eval/src/describe_query.rs:113:35
+    |
+113 |             return Err(ctx.growth.source_error(error));
+    |                                   ^^^^^^^^^^^^ method not found in `WorkspaceCapability`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:979:1
+    |
+979 | pub struct WorkspaceCapability {
+    | ------------------------------ method `source_error` not found for this struct
+
+error: unused import: `crate::DetHashMap`
+  --> crates/sparql-eval/src/blank_scope.rs:75:5
+   |
+75 | use crate::DetHashMap;
+   |     ^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unused import: `visit_term_labels`
+  --> crates/sparql-eval/src/blank_scope.rs:77:107
+   |
+77 | use purrdf_sparql_algebra::scope::{spine_leaves, visit_leaf_labels, visit_spine_leaves as any_spine_leaf, visit_term_labels};
+   |                                                                                                           ^^^^^^^^^^^^^^^^^
+
+error: unused import: `RdfLiteral`
+  --> crates/sparql-eval/src/construct.rs:40:19
+   |
+40 | use purrdf_core::{RdfLiteral, TermFactory};
+   |                   ^^^^^^^^^^
+
+error: unused imports: `DetHashMap` and `DetHashSet`
+  --> crates/sparql-eval/src/construct.rs:50:13
+   |
+50 | use crate::{DetHashMap, DetHashSet};
+   |             ^^^^^^^^^^  ^^^^^^^^^^
+
+error[E0425]: cannot find function `changed_source_schema` in this scope
+   --> crates/sparql-eval/src/engine.rs:332:29
+    |
+332 |         let source_schema = changed_source_schema(&query, planned.as_ref());
+    |                             ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error: unused import: `TermFactory`
+  --> crates/sparql-eval/src/eval.rs:27:42
+   |
+27 |     DatasetView, GraphMatch, RdfDataset, TermFactory, TermId, TermValue, TrippedGovernor,
+   |                                          ^^^^^^^^^^^
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/governor/soundness.rs:3177:33
+     |
+3177 |                 matches!(error, crate::EvalError::StackExhausted { .. }),
+     |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3177 -                 matches!(error, crate::EvalError::StackExhausted { .. }),
+3177 +                 matches!(error, EvalError::StackExhausted { .. }),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/property_fn_eval.rs:5554:47
+     |
+5554 |             expression: Expression::NamedNode(purrdf_sparql_algebra::NamedNode::new_unchecked(
+     |                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+5554 -             expression: Expression::NamedNode(purrdf_sparql_algebra::NamedNode::new_unchecked(
+5554 +             expression: Expression::NamedNode(NamedNode::new_unchecked(
+     |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/property_fn_plan.rs:897:14
+    |
+897 |         &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+897 -         &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+897 +         &mut Memory::new(&mut purrdf_lex::allocation::Resident),
+    |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/workspace.rs:2585:20
+     |
+2585 |         let base = super::QueryWorkspace::<Refusal>::control_bytes().expect("account layout");
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2585 -         let base = super::QueryWorkspace::<Refusal>::control_bytes().expect("account layout");
+2585 +         let base = QueryWorkspace::<Refusal>::control_bytes().expect("account layout");
+     |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/witness.rs:256:24
+    |
+256 | impl<T: Ord> PartialEq<std::collections::BTreeSet<T>> for WitnessSet<T> {
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+256 - impl<T: Ord> PartialEq<std::collections::BTreeSet<T>> for WitnessSet<T> {
+256 + impl<T: Ord> PartialEq<BTreeSet<T>> for WitnessSet<T> {
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/witness.rs:257:26
+    |
+257 |     fn eq(&self, other: &std::collections::BTreeSet<T>) -> bool { self.iter().eq(other.iter()) }
+    |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+257 -     fn eq(&self, other: &std::collections::BTreeSet<T>) -> bool { self.iter().eq(other.iter()) }
+257 +     fn eq(&self, other: &BTreeSet<T>) -> bool { self.iter().eq(other.iter()) }
+    |
+
+error[E0308]: mismatched types
+   --> crates/sparql-results/src/csv.rs:447:47
+    |
+447 |         let err = to_csv(&SparqlResult::Graph(dataset), &ResultProvenance::default())
+    |                           ------------------- ^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |                           |
+    |                           arguments to this enum variant are incorrect
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+note: tuple variant defined here
+   --> crates/rdf-core/src/backend.rs:225:5
+    |
+225 |     Graph(DatasetHandle),
+    |     ^^^^^
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+447 |         let err = to_csv(&SparqlResult::Graph(dataset.into()), &ResultProvenance::default())
+    |                                                      +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-results/src/json.rs:903:42
+    |
+903 |         let result = SparqlResult::Graph(dataset);
+    |                      ------------------- ^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |                      |
+    |                      arguments to this enum variant are incorrect
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+note: tuple variant defined here
+   --> crates/rdf-core/src/backend.rs:225:5
+    |
+225 |     Graph(DatasetHandle),
+    |     ^^^^^
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+903 |         let result = SparqlResult::Graph(dataset.into());
+    |                                                 +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-results/src/json.rs:935:42
+    |
+935 |         let result = SparqlResult::Graph(dataset);
+    |                      ------------------- ^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |                      |
+    |                      arguments to this enum variant are incorrect
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+note: tuple variant defined here
+   --> crates/rdf-core/src/backend.rs:225:5
+    |
+225 |     Graph(DatasetHandle),
+    |     ^^^^^
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+935 |         let result = SparqlResult::Graph(dataset.into());
+    |                                                 +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-results/src/tsv.rs:358:47
+    |
+358 |         let err = to_tsv(&SparqlResult::Graph(dataset), &ResultProvenance::default())
+    |                           ------------------- ^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |                           |
+    |                           arguments to this enum variant are incorrect
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+note: tuple variant defined here
+   --> crates/rdf-core/src/backend.rs:225:5
+    |
+225 |     Graph(DatasetHandle),
+    |     ^^^^^
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+358 |         let err = to_tsv(&SparqlResult::Graph(dataset.into()), &ResultProvenance::default())
+    |                                                      +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-results/src/xml.rs:956:42
+    |
+956 |         let result = SparqlResult::Graph(dataset);
+    |                      ------------------- ^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |                      |
+    |                      arguments to this enum variant are incorrect
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+note: tuple variant defined here
+   --> crates/rdf-core/src/backend.rs:225:5
+    |
+225 |     Graph(DatasetHandle),
+    |     ^^^^^
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+956 |         let result = SparqlResult::Graph(dataset.into());
+    |                                                 +++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-results` (lib test) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0369]: binary operation `==` cannot be applied to type `&RetainedDiagnostic`
+   --> crates/sparql-eval/src/error.rs:212:24
+    |
+206 | #[derive(Clone, Debug, PartialEq, Eq)]
+    |                        --------- in this derive macro expansion
+...
+212 |     RetainedDiagnostic(crate::RetainedDiagnostic),
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0277]: the trait bound `RetainedDiagnostic: std::cmp::Eq` is not satisfied
+   --> crates/sparql-eval/src/error.rs:212:24
+    |
+206 | #[derive(Clone, Debug, PartialEq, Eq)]
+    |                                   -- in this derive macro expansion
+...
+212 |     RetainedDiagnostic(crate::RetainedDiagnostic),
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+    |
+help: the trait `std::cmp::Eq` is not implemented for `RetainedDiagnostic`
+   --> crates/sparql-eval/src/retained.rs:425:1
+    |
+425 | pub struct RetainedDiagnostic {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `std::cmp::AssertParamIsEq`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/cmp.rs:395:31
+    |
+395 | pub struct AssertParamIsEq<T: Eq + PointeeSized> {
+    |                               ^^ required by this bound in `AssertParamIsEq`
+
+error[E0277]: `SharedText` doesn't implement `std::fmt::Display`
+   --> crates/sparql-eval/src/error.rs:892:37
+    |
+892 |                 "property function <{iri}> served this query from an index it declares was \
+    |                                     ^^^^^ `SharedText` cannot be formatted with the default formatter
+    |
+    = help: the trait `std::fmt::Display` is not implemented for `SharedText`
+    = note: in format strings you may be able to use `{:?}` (or `{:#?}` for pretty-print) instead
+    = note: required for `&SharedText` to implement `std::fmt::Display`
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+    --> crates/sparql-eval/src/eval.rs:1012:24
+     |
+1012 |                 label: crate::workspace::string(label.as_str())?,
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^---------------- argument #2 of type `&'static str` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/workspace.rs:1725:15
+     |
+1725 | pub(crate) fn string(value: &str, construct: &'static str) -> Result<String, EvalError> {
+     |               ^^^^^^              -----------------------
+help: provide the argument
+     |
+1012 |                 label: crate::workspace::string(label.as_str(), /* &str */)?,
+     |                                                               ++++++++++++
+
+error[E0599]: no method named `source_error` found for struct `WorkspaceCapability` in the current scope
+    --> crates/sparql-eval/src/eval.rs:1301:41
+     |
+1301 |                     |error| self.growth.source_error(error),
+     |                                         ^^^^^^^^^^^^ method not found in `WorkspaceCapability`
+     |
+    ::: crates/sparql-eval/src/workspace.rs:979:1
+     |
+ 979 | pub struct WorkspaceCapability {
+     | ------------------------------ method `source_error` not found for this struct
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/eval.rs:1342:26
+     |
+1333 |             for previous in &visited {
+     |                              ------- here the type of `visited` is inferred to be `AdmittedVec<TermValue>`
+...
+1342 |             visited.push(node)?;
+     |                     ---- ^^^^ expected `TermValue`, found `&TermValue`
+     |                     |
+     |                     arguments to this method are incorrect
+     |
+note: method defined here
+    --> crates/sparql-eval/src/workspace.rs:568:12
+     |
+ 568 |     pub fn push(&mut self, value: T) -> Result<(), EvalError> {
+     |            ^^^^            --------
+help: consider using clone here
+     |
+1342 |             visited.push(node.clone())?;
+     |                              ++++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/expr.rs:3956:50
+     |
+3956 |             Expression::Arithmetic(first.into(), Chain::try_from(copied).expect("one arithmetic step per source step"))
+     |             ----------------------               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `NonEmpty<(ArithmeticOperator, _)>`, found `Chain<(ArithmeticOperator, Expression)>`
+     |             |
+     |             arguments to this enum variant are incorrect
+     |
+     = note: expected struct `NonEmpty<(ArithmeticOperator, Expression)>`
+                found struct `purrdf_sparql_algebra::Chain<(ArithmeticOperator, Expression)>`
+note: tuple variant defined here
+    --> crates/sparql-algebra/src/algebra.rs:1389:5
+     |
+1389 |     Arithmetic(Child<Self>, NonEmpty<(ArithmeticOperator, Self)>),
+     |     ^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/expr.rs:3996:35
+     |
+3996 |             Expression::In(needle,items)
+     |             --------------        ^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |             |
+     |             arguments to this enum variant are incorrect
+     |
+     = note: expected struct `purrdf_sparql_algebra::Args<Expression>`
+                found struct `Vec<Expression>`
+note: tuple variant defined here
+    --> crates/sparql-algebra/src/algebra.rs:1397:5
+     |
+1397 |     In(Child<Self>, Args<Self>),
+     |     ^^
+help: call `Into::into` on this expression to convert `Vec<Expression>` into `purrdf_sparql_algebra::Args<Expression>`
+     |
+3996 |             Expression::In(needle,items.into())
+     |                                        +++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/expr.rs:3999:34
+     |
+3999 |             Expression::Coalesce(substitute_expression_list::<PRESERVE>(items,row,map,defer,memory)?)
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |
+     = note: `?` operator cannot convert from `Vec<Expression>` to `purrdf_sparql_algebra::Args<Expression>`
+     = note: expected struct `purrdf_sparql_algebra::Args<Expression>`
+                found struct `Vec<Expression>`
+help: call `Into::into` on this expression to convert `Vec<Expression>` into `purrdf_sparql_algebra::Args<Expression>`
+     |
+3999 |             Expression::Coalesce(substitute_expression_list::<PRESERVE>(items,row,map,defer,memory)?.into())
+     |                                                                                                     +++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/expr.rs:4002:122
+     |
+4002 | ...))?,substitute_expression_list::<PRESERVE>(args,row,map,defer,memory)?)
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |
+     = note: `?` operator cannot convert from `Vec<Expression>` to `purrdf_sparql_algebra::Args<Expression>`
+     = note: expected struct `purrdf_sparql_algebra::Args<Expression>`
+                found struct `Vec<Expression>`
+help: call `Into::into` on this expression to convert `Vec<Expression>` into `purrdf_sparql_algebra::Args<Expression>`
+     |
+4002 |             Expression::FunctionCall(function.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory,e))?,substitute_expression_list::<PRESERVE>(args,row,map,defer,memory)?.into())
+     |                                                                                                                                                                                            +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/governed.rs:532:78
+    |
+532 |                 if let Some(filtered) = dataset_without_withheld_blank_nodes(aux, withhold) {
+    |                                         ------------------------------------ ^^^ expected `&Arc<RdfDataset>`, found `&mut DatasetHandle`
+    |                                         |
+    |                                         arguments to this function are incorrect
+    |
+    = note:      expected reference `&Arc<purrdf_core::RdfDataset>`
+            found mutable reference `&mut DatasetHandle`
+note: function defined here
+   --> crates/sparql-eval/src/governed.rs:604:4
+    |
+604 | fn dataset_without_withheld_blank_nodes(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+605 |     dataset: &Arc<RdfDataset>,
+    |     -------------------------
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/governed.rs:533:28
+    |
+533 |                     *aux = filtered;
+    |                     ----   ^^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |                     |
+    |                     expected due to the type of this binding
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+533 |                     *aux = filtered.into();
+    |                                    +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/governed.rs:541:74
+    |
+541 |             if let Some(filtered) = dataset_without_withheld_blank_nodes(graph, withhold) {
+    |                                     ------------------------------------ ^^^^^ expected `&Arc<RdfDataset>`, found `&mut DatasetHandle`
+    |                                     |
+    |                                     arguments to this function are incorrect
+    |
+    = note:      expected reference `&Arc<purrdf_core::RdfDataset>`
+            found mutable reference `&mut DatasetHandle`
+note: function defined here
+   --> crates/sparql-eval/src/governed.rs:604:4
+    |
+604 | fn dataset_without_withheld_blank_nodes(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+605 |     dataset: &Arc<RdfDataset>,
+    |     -------------------------
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/governed.rs:542:26
+    |
+542 |                 *graph = filtered;
+    |                 ------   ^^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |                 |
+    |                 expected due to the type of this binding
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+542 |                 *graph = filtered.into();
+    |                                  +++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/governor/soundness.rs:2658:24
+     |
+2617 | ) -> Result<bool, EvalError> {
+     |      ----------------------- expected `Result<bool, EvalError>` because of return type
+...
+2658 |                 return false;
+     |                        ^^^^^ expected `Result<bool, EvalError>`, found `bool`
+     |
+     = note: expected enum `Result<bool, EvalError>`
+                found type `bool`
+help: try wrapping the expression in `Ok`
+     |
+2658 |                 return Ok(false);
+     |                        +++     +
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/property_fn_plan.rs:1980:70
+     |
+1980 |                 Expression::In(Child::try_new(needle, self.memory)?, self.memory.collect(parts.map(Planned::expression))?)
+     |                                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |
+     = note: `?` operator cannot convert from `Vec<Expression>` to `purrdf_sparql_algebra::Args<Expression>`
+     = note: expected struct `purrdf_sparql_algebra::Args<Expression>`
+                found struct `Vec<Expression>`
+help: call `Into::into` on this expression to convert `Vec<Expression>` into `purrdf_sparql_algebra::Args<Expression>`
+     |
+1980 |                 Expression::In(Child::try_new(needle, self.memory)?, self.memory.collect(parts.map(Planned::expression))?.into())
+     |                                                                                                                          +++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/property_fn_plan.rs:1985:42
+     |
+1985 |                     Expression::Coalesce(self.memory.collect(parts.map(Planned::expression))?)
+     |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |
+     = note: `?` operator cannot convert from `Vec<Expression>` to `purrdf_sparql_algebra::Args<Expression>`
+     = note: expected struct `purrdf_sparql_algebra::Args<Expression>`
+                found struct `Vec<Expression>`
+help: call `Into::into` on this expression to convert `Vec<Expression>` into `purrdf_sparql_algebra::Args<Expression>`
+     |
+1985 |                     Expression::Coalesce(self.memory.collect(parts.map(Planned::expression))?.into())
+     |                                                                                              +++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/property_fn_plan.rs:1991:21
+     |
+1991 |                     self.memory.collect(parts.map(Planned::expression))?)
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |
+     = note: `?` operator cannot convert from `Vec<Expression>` to `purrdf_sparql_algebra::Args<Expression>`
+     = note: expected struct `purrdf_sparql_algebra::Args<Expression>`
+                found struct `Vec<Expression>`
+help: call `Into::into` on this expression to convert `Vec<Expression>` into `purrdf_sparql_algebra::Args<Expression>`
+     |
+1991 |                     self.memory.collect(parts.map(Planned::expression))?.into())
+     |                                                                         +++++++
+
+error[E0599]: no method named `source_error` found for struct `workspace::WorkspaceCapability` in the current scope
+   --> crates/sparql-eval/src/construct.rs:892:40
+    |
+892 |                     |error| ctx.growth.source_error(error),
+    |                                        ^^^^^^^^^^^^ method not found in `workspace::WorkspaceCapability`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:979:1
+    |
+979 | pub struct WorkspaceCapability {
+    | ------------------------------ method `source_error` not found for this struct
+
+error[E0614]: type `bool` cannot be dereferenced
+    --> crates/sparql-eval/src/service_endpoints.rs:1561:64
+     |
+1561 |             crate::remote::invoke_service(iri.as_str(), inner, *substituted_silent, ctx)?
+     |                                                                ^^^^^^^^^^^^^^^^^^^ can't be dereferenced
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/service_endpoints.rs:1561:57
+     |
+1561 |             crate::remote::invoke_service(iri.as_str(), inner, *substituted_silent, ctx)?
+     |             -----------------------------               ^^^^^ expected `&GraphPattern`, found `Nested<GraphPattern, DropOwner>`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&GraphPattern`
+                   found struct `purrdf_lex::walk::Nested<GraphPattern, purrdf_sparql_algebra::owned::DropOwner>`
+note: function defined here
+    --> crates/sparql-eval/src/remote.rs:1004:15
+     |
+1004 | pub(crate) fn invoke_service<D: DatasetView + Sync>(
+     |               ^^^^^^^^^^^^^^
+1005 |     endpoint: &str,
+1006 |     inner: &GraphPattern,
+     |     --------------------
+help: consider borrowing here
+     |
+1561 |             crate::remote::invoke_service(iri.as_str(), &inner, *substituted_silent, ctx)?
+     |                                                         +
+
+error[E0599]: no method named `unwrap` found for enum `purrdf_core::TermValue` in the current scope
+    --> crates/sparql-eval/src/construct.rs:2178:49
+     |
+2178 |             let object = out.term_value(quad.o).unwrap();
+     |                                                 ^^^^^^ method not found in `purrdf_core::TermValue`
+
+error[E0277]: the trait bound `T: Dismantle` is not satisfied
+    --> crates/sparql-eval/src/substitute.rs:1866:5
+     |
+1866 |     native_storage(memory, result)?;
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `Dismantle` is not implemented for `T`
+     |
+note: required by a bound in `purrdf_lex::walk::Nested`
+    --> crates/lex/src/walk.rs:373:22
+     |
+ 373 | pub struct Nested<T: Dismantle, C = Box<T>>(Option<Box<T>>, Option<C>);
+     |                      ^^^^^^^^^ required by this bound in `Nested`
+help: consider further restricting type parameter `T` with trait `Dismantle`
+     |
+1861 | fn rewrite_child<T: purrdf_sparql_algebra::Subtree + purrdf_lex::walk::Dismantle>(
+     |                                                    +++++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `T: Dismantle` is not satisfied
+    --> crates/sparql-eval/src/substitute.rs:1868:9
+     |
+1868 | /         purrdf_core::small::try_boxed(value).map_err(|_| crate::EvalError::AllocationFailed {
+1869 | |             construct: "prebinding algebra child",
+1870 | |         })?;
+     | |___________^ the trait `Dismantle` is not implemented for `T`
+     |
+note: required by a bound in `purrdf_lex::walk::Nested`
+    --> crates/lex/src/walk.rs:373:22
+     |
+ 373 | pub struct Nested<T: Dismantle, C = Box<T>>(Option<Box<T>>, Option<C>);
+     |                      ^^^^^^^^^ required by this bound in `Nested`
+help: consider further restricting type parameter `T` with trait `Dismantle`
+     |
+1861 | fn rewrite_child<T: purrdf_sparql_algebra::Subtree + purrdf_lex::walk::Dismantle>(
+     |                                                    +++++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `purrdf_lex::walk::Nested<_, purrdf_sparql_algebra::owned::DropOwner>: From<Box<T>>` is not satisfied
+    --> crates/sparql-eval/src/substitute.rs:1871:8
+     |
+1871 |     Ok(Child::from(boxed))
+     |        ^^^^^ the trait `From<Box<T>>` is not implemented for `purrdf_lex::walk::Nested<_, purrdf_sparql_algebra::owned::DropOwner>`
+     |
+help: the trait `From<Box<T>>` is conditionally implemented for `purrdf_lex::walk::Nested<T, C>`
+    --> crates/lex/src/walk.rs:489:1
+     |
+ 489 | impl<T: Dismantle, C> From<Box<T>> for Nested<T, C> {
+     | ^^^^^^^^---------^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |         |
+     |         unsatisfied requirement introduced here: `_: Dismantle`
+
+error[E0277]: the trait bound `T: Dismantle` is not satisfied
+    --> crates/sparql-eval/src/substitute.rs:1871:5
+     |
+1871 |     Ok(Child::from(boxed))
+     |     ^^ the trait `Dismantle` is not implemented for `T`
+     |
+note: required by a bound in `purrdf_lex::walk::Nested`
+    --> crates/lex/src/walk.rs:373:22
+     |
+ 373 | pub struct Nested<T: Dismantle, C = Box<T>>(Option<Box<T>>, Option<C>);
+     |                      ^^^^^^^^^ required by this bound in `Nested`
+help: consider further restricting type parameter `T` with trait `Dismantle`
+     |
+1861 | fn rewrite_child<T: purrdf_sparql_algebra::Subtree + purrdf_lex::walk::Dismantle>(
+     |                                                    +++++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `T: Dismantle` is not satisfied
+    --> crates/sparql-eval/src/substitute.rs:1871:8
+     |
+1871 |     Ok(Child::from(boxed))
+     |        ^^^^^^^^^^^^^^^^^^ the trait `Dismantle` is not implemented for `T`
+     |
+note: required by a bound in `purrdf_lex::walk::Nested`
+    --> crates/lex/src/walk.rs:373:22
+     |
+ 373 | pub struct Nested<T: Dismantle, C = Box<T>>(Option<Box<T>>, Option<C>);
+     |                      ^^^^^^^^^ required by this bound in `Nested`
+help: consider further restricting type parameter `T` with trait `Dismantle`
+     |
+1861 | fn rewrite_child<T: purrdf_sparql_algebra::Subtree + purrdf_lex::walk::Dismantle>(
+     |                                                    +++++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `T: Dismantle` is not satisfied
+    --> crates/sparql-eval/src/substitute.rs:1871:5
+     |
+1871 |     Ok(Child::from(boxed))
+     |     ^^^^^^^^^^^^^^^^^^^^^^ the trait `Dismantle` is not implemented for `T`
+     |
+note: required by a bound in `purrdf_lex::walk::Nested`
+    --> crates/lex/src/walk.rs:373:22
+     |
+ 373 | pub struct Nested<T: Dismantle, C = Box<T>>(Option<Box<T>>, Option<C>);
+     |                      ^^^^^^^^^ required by this bound in `Nested`
+help: consider further restricting type parameter `T` with trait `Dismantle`
+     |
+1861 | fn rewrite_child<T: purrdf_sparql_algebra::Subtree + purrdf_lex::walk::Dismantle>(
+     |                                                    +++++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `T: Dismantle` is not satisfied
+    --> crates/sparql-eval/src/substitute.rs:1871:8
+     |
+1871 |     Ok(Child::from(boxed))
+     |        ^^^^^ the trait `Dismantle` is not implemented for `T`
+     |
+note: required by a bound in `purrdf_lex::walk::Nested`
+    --> crates/lex/src/walk.rs:373:22
+     |
+ 373 | pub struct Nested<T: Dismantle, C = Box<T>>(Option<Box<T>>, Option<C>);
+     |                      ^^^^^^^^^ required by this bound in `Nested`
+help: consider further restricting type parameter `T` with trait `Dismantle`
+     |
+1861 | fn rewrite_child<T: purrdf_sparql_algebra::Subtree + purrdf_lex::walk::Dismantle>(
+     |                                                    +++++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `T: Dismantle` is not satisfied
+    --> crates/sparql-eval/src/substitute.rs:1871:8
+     |
+1871 |     Ok(Child::from(boxed))
+     |        ^^^^^^^^^^^ the trait `Dismantle` is not implemented for `T`
+     |
+note: required by a bound in `purrdf_lex::walk::Nested`
+    --> crates/lex/src/walk.rs:373:22
+     |
+ 373 | pub struct Nested<T: Dismantle, C = Box<T>>(Option<Box<T>>, Option<C>);
+     |                      ^^^^^^^^^ required by this bound in `Nested`
+help: consider further restricting type parameter `T` with trait `Dismantle`
+     |
+1861 | fn rewrite_child<T: purrdf_sparql_algebra::Subtree + purrdf_lex::walk::Dismantle>(
+     |                                                    +++++++++++++++++++++++++++++
+
+error[E0599]: no method named `source_error` found for struct `workspace::WorkspaceCapability` in the current scope
+   --> crates/sparql-eval/src/describe_query.rs:85:40
+    |
+ 85 | ...                   ctx.growth.source_error(error)
+    |                                  ^^^^^^^^^^^^ method not found in `workspace::WorkspaceCapability`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:979:1
+    |
+979 | pub struct WorkspaceCapability {
+    | ------------------------------ method `source_error` not found for this struct
+
+error[E0599]: no method named `source_error` found for struct `workspace::WorkspaceCapability` in the current scope
+   --> crates/sparql-eval/src/describe_query.rs:113:35
+    |
+113 |             return Err(ctx.growth.source_error(error));
+    |                                   ^^^^^^^^^^^^ method not found in `workspace::WorkspaceCapability`
+    |
+   ::: crates/sparql-eval/src/workspace.rs:979:1
+    |
+979 | pub struct WorkspaceCapability {
+    | ------------------------------ method `source_error` not found for this struct
+
+error[E0282]: type annotations needed
+    --> crates/sparql-eval/src/substitute.rs:2931:30
+     |
+2931 |                 .any(|&seen| expr_subs.entries()[seen].0 == *variable)
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^^ cannot infer type
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/substitute.rs:4383:24
+     |
+4383 |                 return Ok(Flow::Descend);
+     |                        ^^^^^^^^^^^^^^^^^ expected `Flow`, found `Result<Flow, _>`
+     |
+     = note: expected enum `Flow`
+                found enum `Result<Flow, _>`
+note: return type inferred to be `Flow` here
+    --> crates/sparql-eval/src/substitute.rs:4383:24
+     |
+4383 |                 return Ok(Flow::Descend);
+     |                        ^^^^^^^^^^^^^^^^^
+
+error[E0061]: this method takes 2 arguments but 1 argument was supplied
+    --> crates/sparql-eval/src/engine.rs:6538:10
+     |
+6538 |         .write_into(&mut key);
+     |          ^^^^^^^^^^---------- argument #2 of type `&workspace::WorkspaceCapability` is missing
+     |
+note: expected `&mut PlanKeyScratch`, found `&mut Vec<_>`
+    --> crates/sparql-eval/src/engine.rs:6538:21
+     |
+6538 |         .write_into(&mut key);
+     |                     ^^^^^^^^
+     = note: expected mutable reference `&mut PlanKeyScratch`
+                found mutable reference `&mut Vec<_>`
+note: method defined here
+    --> crates/sparql-eval/src/engine.rs:1273:8
+     |
+1273 |     fn write_into(
+     |        ^^^^^^^^^^
+1274 |         &self,
+1275 |         out: &mut PlanKeyScratch,
+     |         ------------------------
+1276 |         workspace: &crate::WorkspaceCapability,
+     |         --------------------------------------
+help: provide the argument
+     |
+6538 -         .write_into(&mut key);
+6538 +         .write_into(/* &mut PlanKeyScratch */, /* &WorkspaceCapability */);
+     |
+
+error[E0599]: no method named `source_error` found for struct `workspace::WorkspaceCapability` in the current scope
+    --> crates/sparql-eval/src/eval.rs:1301:41
+     |
+1301 |                     |error| self.growth.source_error(error),
+     |                                         ^^^^^^^^^^^^ method not found in `workspace::WorkspaceCapability`
+     |
+    ::: crates/sparql-eval/src/workspace.rs:979:1
+     |
+ 979 | pub struct WorkspaceCapability {
+     | ------------------------------ method `source_error` not found for this struct
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/eval.rs:1342:26
+     |
+1333 |             for previous in &visited {
+     |                              ------- here the type of `visited` is inferred to be `AdmittedVec<purrdf_core::TermValue>`
+...
+1342 |             visited.push(node)?;
+     |                     ---- ^^^^ expected `TermValue`, found `&TermValue`
+     |                     |
+     |                     arguments to this method are incorrect
+     |
+note: method defined here
+    --> crates/sparql-eval/src/workspace.rs:568:12
+     |
+ 568 |     pub fn push(&mut self, value: T) -> Result<(), EvalError> {
+     |            ^^^^            --------
+help: consider using clone here
+     |
+1342 |             visited.push(node.clone())?;
+     |                              ++++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/expr.rs:3956:50
+     |
+3956 |             Expression::Arithmetic(first.into(), Chain::try_from(copied).expect("one arithmetic step per source step"))
+     |             ----------------------               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `NonEmpty<(ArithmeticOperator, _)>`, found `Chain<(ArithmeticOperator, Expression)>`
+     |             |
+     |             arguments to this enum variant are incorrect
+     |
+     = note: expected struct `NonEmpty<(purrdf_sparql_algebra::ArithmeticOperator, purrdf_sparql_algebra::Expression)>`
+                found struct `purrdf_sparql_algebra::Chain<(purrdf_sparql_algebra::ArithmeticOperator, purrdf_sparql_algebra::Expression)>`
+note: tuple variant defined here
+    --> crates/sparql-algebra/src/algebra.rs:1389:5
+     |
+1389 |     Arithmetic(Child<Self>, NonEmpty<(ArithmeticOperator, Self)>),
+     |     ^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/expr.rs:3996:35
+     |
+3996 |             Expression::In(needle,items)
+     |             --------------        ^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |             |
+     |             arguments to this enum variant are incorrect
+     |
+     = note: expected struct `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+                found struct `Vec<purrdf_sparql_algebra::Expression>`
+note: tuple variant defined here
+    --> crates/sparql-algebra/src/algebra.rs:1397:5
+     |
+1397 |     In(Child<Self>, Args<Self>),
+     |     ^^
+help: call `Into::into` on this expression to convert `Vec<purrdf_sparql_algebra::Expression>` into `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     |
+3996 |             Expression::In(needle,items.into())
+     |                                        +++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/expr.rs:3999:34
+     |
+3999 |             Expression::Coalesce(substitute_expression_list::<PRESERVE>(items,row,map,defer,memory)?)
+     |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |
+     = note: `?` operator cannot convert from `Vec<purrdf_sparql_algebra::Expression>` to `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     = note: expected struct `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+                found struct `Vec<purrdf_sparql_algebra::Expression>`
+help: call `Into::into` on this expression to convert `Vec<purrdf_sparql_algebra::Expression>` into `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     |
+3999 |             Expression::Coalesce(substitute_expression_list::<PRESERVE>(items,row,map,defer,memory)?.into())
+     |                                                                                                     +++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/expr.rs:4002:122
+     |
+4002 | ...))?,substitute_expression_list::<PRESERVE>(args,row,map,defer,memory)?)
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |
+     = note: `?` operator cannot convert from `Vec<purrdf_sparql_algebra::Expression>` to `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     = note: expected struct `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+                found struct `Vec<purrdf_sparql_algebra::Expression>`
+help: call `Into::into` on this expression to convert `Vec<purrdf_sparql_algebra::Expression>` into `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     |
+4002 |             Expression::FunctionCall(function.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory,e))?,substitute_expression_list::<PRESERVE>(args,row,map,defer,memory)?.into())
+     |                                                                                                                                                                                            +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/governed.rs:532:78
+    |
+532 |                 if let Some(filtered) = dataset_without_withheld_blank_nodes(aux, withhold) {
+    |                                         ------------------------------------ ^^^ expected `&Arc<RdfDataset>`, found `&mut DatasetHandle`
+    |                                         |
+    |                                         arguments to this function are incorrect
+    |
+    = note:      expected reference `&std::sync::Arc<purrdf_core::RdfDataset>`
+            found mutable reference `&mut purrdf_core::DatasetHandle`
+note: function defined here
+   --> crates/sparql-eval/src/governed.rs:604:4
+    |
+604 | fn dataset_without_withheld_blank_nodes(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+605 |     dataset: &Arc<RdfDataset>,
+    |     -------------------------
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/governed.rs:533:28
+    |
+533 |                     *aux = filtered;
+    |                     ----   ^^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |                     |
+    |                     expected due to the type of this binding
+    |
+    = note: expected struct `purrdf_core::DatasetHandle`
+               found struct `std::sync::Arc<purrdf_core::RdfDataset>`
+help: call `Into::into` on this expression to convert `std::sync::Arc<purrdf_core::RdfDataset>` into `purrdf_core::DatasetHandle`
+    |
+533 |                     *aux = filtered.into();
+    |                                    +++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/governed.rs:541:74
+    |
+541 |             if let Some(filtered) = dataset_without_withheld_blank_nodes(graph, withhold) {
+    |                                     ------------------------------------ ^^^^^ expected `&Arc<RdfDataset>`, found `&mut DatasetHandle`
+    |                                     |
+    |                                     arguments to this function are incorrect
+    |
+    = note:      expected reference `&std::sync::Arc<purrdf_core::RdfDataset>`
+            found mutable reference `&mut purrdf_core::DatasetHandle`
+note: function defined here
+   --> crates/sparql-eval/src/governed.rs:604:4
+    |
+604 | fn dataset_without_withheld_blank_nodes(
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+605 |     dataset: &Arc<RdfDataset>,
+    |     -------------------------
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/governed.rs:542:26
+    |
+542 |                 *graph = filtered;
+    |                 ------   ^^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |                 |
+    |                 expected due to the type of this binding
+    |
+    = note: expected struct `purrdf_core::DatasetHandle`
+               found struct `std::sync::Arc<purrdf_core::RdfDataset>`
+help: call `Into::into` on this expression to convert `std::sync::Arc<purrdf_core::RdfDataset>` into `purrdf_core::DatasetHandle`
+    |
+542 |                 *graph = filtered.into();
+    |                                  +++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/governor/soundness.rs:2658:24
+     |
+2617 | ) -> Result<bool, EvalError> {
+     |      ----------------------- expected `Result<bool, error::EvalError>` because of return type
+...
+2658 |                 return false;
+     |                        ^^^^^ expected `Result<bool, EvalError>`, found `bool`
+     |
+     = note: expected enum `Result<bool, error::EvalError>`
+                found type `bool`
+help: try wrapping the expression in `Ok`
+     |
+2658 |                 return Ok(false);
+     |                        +++     +
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/list_fn.rs:949:65
+    |
+949 |             SparqlResult::Solutions { rows, aux, .. } => (rows, aux),
+    |                                                                 ^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+    |
+    = note: expected struct `std::sync::Arc<purrdf_core::RdfDataset>`
+               found struct `purrdf_core::DatasetHandle`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/list_fn.rs:974:39
+    |
+955 |     fn run_graph(ds: &Arc<RdfDataset>, query: &str) -> Arc<RdfDataset> {
+    |                                                        --------------- expected `std::sync::Arc<purrdf_core::RdfDataset>` because of return type
+...
+974 |             SparqlResult::Graph(g) => g,
+    |                                       ^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+    |
+    = note: expected struct `std::sync::Arc<purrdf_core::RdfDataset>`
+               found struct `purrdf_core::DatasetHandle`
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/list_fn.rs:1166:9
+     |
+1162 |       ) -> (Vec<String>, Arc<RdfDataset>) {
+     |            ------------------------------ expected `(Vec<std::string::String>, std::sync::Arc<purrdf_core::RdfDataset>)` because of return type
+...
+1166 | /         engine
+1167 | |             .query_interned_view(
+1168 | |                 ds.as_ref(),
+1169 | |                 InternedRequest {
+...    |
+1196 | |             .expect("interned query")
+     | |_____________________________________^ expected `(Vec<String>, Arc<RdfDataset>)`, found `(_, RetainedGraph)`
+     |
+     = note: expected tuple `(Vec<std::string::String>, std::sync::Arc<purrdf_core::RdfDataset>)`
+                found tuple `(_, RetainedGraph)`
+
+error: unused variable: `memory`
+    --> crates/sparql-eval/src/substitute.rs:4135:5
+     |
+4135 |     memory: &mut RewriteMemory<'_>,
+     |     ^^^^^^ help: if this is intentional, prefix it with an underscore: `_memory`
+     |
+     = note: `-D unused-variables` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_variables)]`
+
+Some errors have detailed explanations: E0061, E0277, E0282, E0308, E0369, E0425, E0599, E0614.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 85 previous errors
+error[E0614]: type `[purrdf_lex::walk::Nested<Arg>; 3]` cannot be dereferenced
+    --> crates/sparql-eval/src/property_fn_eval.rs:5991:34
+     |
+5991 |                     for part in &**parts {
+     |                                  ^^^^^^^ can't be dereferenced
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/property_fn_plan.rs:1980:70
+     |
+1980 |                 Expression::In(Child::try_new(needle, self.memory)?, self.memory.collect(parts.map(Planned::expression))?)
+     |                                                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |
+     = note: `?` operator cannot convert from `Vec<purrdf_sparql_algebra::Expression>` to `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     = note: expected struct `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+                found struct `Vec<purrdf_sparql_algebra::Expression>`
+help: call `Into::into` on this expression to convert `Vec<purrdf_sparql_algebra::Expression>` into `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     |
+1980 |                 Expression::In(Child::try_new(needle, self.memory)?, self.memory.collect(parts.map(Planned::expression))?.into())
+     |                                                                                                                          +++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/property_fn_plan.rs:1985:42
+     |
+1985 |                     Expression::Coalesce(self.memory.collect(parts.map(Planned::expression))?)
+     |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |
+     = note: `?` operator cannot convert from `Vec<purrdf_sparql_algebra::Expression>` to `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     = note: expected struct `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+                found struct `Vec<purrdf_sparql_algebra::Expression>`
+help: call `Into::into` on this expression to convert `Vec<purrdf_sparql_algebra::Expression>` into `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     |
+1985 |                     Expression::Coalesce(self.memory.collect(parts.map(Planned::expression))?.into())
+     |                                                                                              +++++++
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/property_fn_plan.rs:1991:21
+     |
+1991 |                     self.memory.collect(parts.map(Planned::expression))?)
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Args<Expression>`, found `Vec<Expression>`
+     |
+     = note: `?` operator cannot convert from `Vec<purrdf_sparql_algebra::Expression>` to `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     = note: expected struct `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+                found struct `Vec<purrdf_sparql_algebra::Expression>`
+help: call `Into::into` on this expression to convert `Vec<purrdf_sparql_algebra::Expression>` into `purrdf_sparql_algebra::Args<purrdf_sparql_algebra::Expression>`
+     |
+1991 |                     self.memory.collect(parts.map(Planned::expression))?.into())
+     |                                                                         +++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/remote.rs:1529:21
+     |
+1529 |                     aux,
+     |                     ^^^ expected `DatasetHandle`, found `Result<DatasetHandle, EvalError>`
+     |
+     = note: expected struct `DatasetHandle`
+                  found enum `Result<DatasetHandle, error::EvalError>`
+help: use the `?` operator to extract the `Result<purrdf_core::DatasetHandle, error::EvalError>` value, propagating a `Result::Err` value to the caller
+     |
+1529 |                     aux: aux?,
+     |                        ++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/remote.rs:1564:25
+     |
+1564 |                         aux,
+     |                         ^^^ expected `DatasetHandle`, found `Result<DatasetHandle, EvalError>`
+     |
+     = note: expected struct `DatasetHandle`
+                  found enum `Result<DatasetHandle, error::EvalError>`
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::DatasetHandle, error::EvalError>` value, panicking if the value is a `Result::Err`
+     |
+1564 |                         aux: aux.expect("REASON"),
+     |                            ++++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/substitute.rs:4383:24
+     |
+4383 |                 return Ok(Flow::Descend);
+     |                        ^^^^^^^^^^^^^^^^^ expected `Flow`, found `Result<Flow, _>`
+     |
+     = note: expected enum `Flow`
+                found enum `Result<Flow, _>`
+note: return type inferred to be `purrdf_sparql_algebra::Flow` here
+    --> crates/sparql-eval/src/substitute.rs:4383:24
+     |
+4383 |                 return Ok(Flow::Descend);
+     |                        ^^^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/workspace.rs:2530:28
+     |
+2530 |                     scope: None,
+     |                            ^^^^ expected `BlankScope`, found `Option<_>`
+     |
+     = note: expected struct `purrdf_core::BlankScope`
+                  found enum `Option<_>`
+
+Some errors have detailed explanations: E0061, E0277, E0282, E0308, E0369, E0425, E0432, E0433, E0599...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 101 previous errors

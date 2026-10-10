@@ -1,0 +1,3263 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The fallible `RdfDataset` builder: value-interning plus the quad / reifier /
+//! annotation / source-location tables, and the validate-then-freeze path (C1).
+//!
+//! This module owns term storage and value-interning. The C0 literal-identity
+//! policy (datatype expansion, language lowercasing, direction-in-key, verbatim
+//! lexical spelling — see `docs/design/819-rdf-ir-dataflow.md` *Appendix C0.1*) is
+//! applied here, at intern time, so that the frozen dataset carries fully resolved
+//! identity.
+//!
+//! Pushing structure (`push_quad` / `push_reifier` / `push_annotation` /
+//! `attach_location`) accumulates raw rows; [`RdfDatasetBuilder::freeze`] then runs
+//! structural validation ([`super::validate`]) and, on success, materializes an
+//! immutable, deterministically-ordered, deduplicated [`RdfDataset`]. Per the
+//! no-optionality doctrine, malformed structure is a HARD failure (`Err`), never a
+//! silent default.
+
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::sync::Arc;
+
+use hashbrown::HashTable;
+use purrdf_iri::IriError;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+
+use crate::blank_label::LabelAlphabet;
+use crate::{
+    Blake3ContentId, ContentIdScheme, RdfAnnotation, RdfLiteral, RdfQuad, RdfReifier, RdfTerm,
+    RdfTextDirection,
+};
+
+use super::dataset::{FastHasher, QuadHandle, QuadIds, QuadRow, RdfDataset, TermRef};
+use super::term::{
+    BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, arena_str,
+    push_arena_str_with_memory,
+};
+use crate::RdfLocation;
+// The store-once tables hash with the fixed-key `hash_of`, so they are
+// deterministic across runs. The frozen output is sorted by id, not
+// hash-iteration order, so any hash would do; the fixed key avoids SipHash on the
+// hot interning path.
+use crate::hash::hash_of;
+
+fn hash_lookup_value(lookup: &TermLookup<'_>) -> u64 {
+    match lookup {
+        TermLookup::Iri(iri) => crate::hash::hash_iri_for_interner(iri),
+        TermLookup::Blank { label, scope } => crate::hash::hash_blank_for_interner(label, scope.0),
+        TermLookup::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => crate::hash::hash_literal_for_interner(
+            lexical,
+            datatype.index() as u64,
+            *language,
+            *direction,
+        ),
+        TermLookup::Triple { s, p, o } => crate::hash::hash_triple_for_interner(
+            s.index() as u64,
+            p.index() as u64,
+            o.index() as u64,
+        ),
+    }
+}
+
+fn hash_stored_value(arena: &[u8], term: &InternedTerm) -> u64 {
+    match term {
+        InternedTerm::Iri(r) => crate::hash::hash_iri_for_interner(arena_str(arena, *r)),
+        InternedTerm::Blank { label, scope } => {
+            crate::hash::hash_blank_for_interner(arena_str(arena, *label), scope.0)
+        }
+        InternedTerm::Literal(lit) => crate::hash::hash_literal_for_interner(
+            arena_str(arena, lit.lexical_form),
+            lit.datatype.index() as u64,
+            lit.language.map(|r| arena_str(arena, r)),
+            lit.direction,
+        ),
+        InternedTerm::Triple { s, p, o } => crate::hash::hash_triple_for_interner(
+            s.index() as u64,
+            p.index() as u64,
+            o.index() as u64,
+        ),
+    }
+}
+
+/// **Store-once** insert-or-find (P3c): `vec` is the sole owner of the values;
+/// `table` holds only their `u32` indices, with hash/eq that look INTO `vec`. Returns
+/// the index of the (existing or newly pushed) value. No value is ever stored twice.
+///
+/// `vec` and `table` are distinct `&mut` params — callers pass disjoint struct fields,
+/// so the find-then-push-then-insert sequence has no overlapping borrow.
+fn store_once<T: Hash + Eq>(vec: &mut Vec<T>, table: &mut HashTable<u32>, value: T) -> u32 {
+    let mut resident = Resident;
+    let bytes = std::alloc::Layout::array::<T>(vec.capacity())
+        .expect("resident array layout")
+        .size()
+        .checked_add(
+            crate::hash::hash_table_allocation_bound::<u32>(table.capacity())
+                .expect("resident table layout"),
+        )
+        .expect("resident store-once layout");
+    let mut memory = Memory::resume(&mut resident, bytes);
+    store_once_with_memory(vec, table, value, &mut memory)
+        .expect("resident store-once allocation failed")
+}
+fn store_once_with_memory<T: Hash + Eq, S: Admission + ?Sized>(
+    vec: &mut Vec<T>,
+    table: &mut HashTable<u32>,
+    value: T,
+    memory: &mut Memory<'_, S>,
+) -> Result<u32, StorageError> {
+    let hash = hash_of(&value);
+    if let Some(&i) = table.find(hash, |&i| vec[i as usize] == value) {
+        return Ok(i);
+    }
+    let i = u32::try_from(vec.len()).map_err(|_| StorageError::SizeOverflow)?;
+    memory.push(vec, value)?;
+    crate::hash::reserve_table_with_memory(
+        table,
+        vec.len(),
+        |&i| hash_of(&vec[i as usize]),
+        memory,
+    )?;
+    table.insert_unique(hash, i, |&i| hash_of(&vec[i as usize]));
+    Ok(i)
+}
+
+fn clone_index_with_memory<T: Hash, S: Admission + ?Sized>(
+    source: &HashTable<u32>,
+    values: &[T],
+    destination: &mut HashTable<u32>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    crate::hash::reserve_table_with_memory(
+        destination,
+        source.len(),
+        |&id| hash_of(&values[id as usize]),
+        memory,
+    )?;
+    for &id in source.iter() {
+        destination.insert_unique(hash_of(&values[id as usize]), id, |&id| {
+            hash_of(&values[id as usize])
+        });
+    }
+    Ok(())
+}
+
+/// Reserve room for `additional` more values in a [`store_once`] pair: the table
+/// and its index grow together, the index rehashing through the values it points
+/// into, so a bulk load that states its size rehashes neither mid-way.
+fn reserve_store_once<T: Hash>(vec: &mut Vec<T>, table: &mut HashTable<u32>, additional: usize) {
+    vec.reserve(additional);
+    table.reserve(additional, |&i| hash_of(&vec[i as usize]));
+}
+
+/// A borrowed term lookup key (P3b): carries the string components by reference
+/// so the interner can dedup BY VALUE *before* anything is pushed to the arena.
+/// Mirrors [`InternedTerm`] but with `&str` where the stored form holds a `StrRange`.
+#[derive(Clone, Copy)]
+enum TermLookup<'a> {
+    Iri(&'a str),
+    Blank {
+        label: &'a str,
+        scope: BlankScope,
+    },
+    Literal {
+        lexical: &'a str,
+        datatype: TermId,
+        language: Option<&'a str>,
+        direction: Option<RdfTextDirection>,
+    },
+    Triple {
+        s: TermId,
+        p: TermId,
+        o: TermId,
+    },
+}
+
+/// One pending step of an owned-term interning walk
+/// ([`RdfDatasetBuilder::intern_owned_term_scoped`] and
+/// [`RdfDatasetBuilder::intern_owned_term_bound`]): a term to intern, a triple
+/// term's predicate IRI to intern, or a triple term to assemble from the three ids
+/// its components left.
+enum OwnedStep<'t> {
+    Term(&'t RdfTerm),
+    Predicate(&'t str),
+    Assemble,
+}
+
+/// Whether a stored term equals a lookup, resolving the stored ranges through `arena`.
+fn term_eq(arena: &[u8], term: &InternedTerm, lookup: &TermLookup<'_>) -> bool {
+    match (term, lookup) {
+        (InternedTerm::Iri(r), TermLookup::Iri(s)) => arena_str(arena, *r) == *s,
+        (
+            InternedTerm::Blank { label, scope },
+            TermLookup::Blank {
+                label: ls,
+                scope: ss,
+            },
+        ) => arena_str(arena, *label) == *ls && scope == ss,
+        (
+            InternedTerm::Literal(lit),
+            TermLookup::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            },
+        ) => {
+            arena_str(arena, lit.lexical_form) == *lexical
+                && lit.datatype == *datatype
+                && lit.direction == *direction
+                && lit.language.map(|r| arena_str(arena, r)) == *language
+        }
+        (
+            InternedTerm::Triple { s, p, o },
+            TermLookup::Triple {
+                s: ls,
+                p: lp,
+                o: lo,
+            },
+        ) => s == ls && p == lp && o == lo,
+        _ => false,
+    }
+}
+
+/// Term storage + value-interning dedup + the C0 identity policy, in one cohesive
+/// unit (SRP). Private: the builder is the only public surface.
+#[derive(Debug)]
+struct Interner {
+    /// The byte arena owning every interned string ONCE (P3b); terms hold ranges.
+    arena: Vec<u8>,
+    /// Dense table of interned terms (range-backed); the sole structural owner.
+    terms: Vec<InternedTerm>,
+    /// Store-once value→id index: `u32` indices into `terms`, with hash/eq resolving
+    /// ranges through the arena and comparing BY VALUE (so equal strings dedup to
+    /// one id even though the table itself stores neither strings nor ranges).
+    index: HashTable<u32>,
+    /// The caller-supplied content-id recognition spelling (e.g. `"blake3:"`).
+    /// `None` (the default) means recognition is INACTIVE: no fabricated default,
+    /// per the no-vocabulary-minting policy. Fixed at construction time (see
+    /// [`RdfDatasetBuilder::with_content_addressing`]) — there is no setter.
+    content_scheme: Option<ContentIdScheme>,
+    /// Side table from a recognized content-id term to its decoded
+    /// [`Blake3ContentId`]. Empty while recognition is inactive; populated at
+    /// intern time in the miss branch of [`Interner::intern`] (IRI arm only).
+    content_ids: HashMap<TermId, Blake3ContentId, FastHasher>,
+    /// The FIRST IRI that failed the IR-boundary absoluteness invariant, with the
+    /// typed reason. Recorded in the miss branch of [`Interner::intern`] (IRI arm
+    /// only) and turned into a hard `Err` by [`super::validate::validate`], which
+    /// [`RdfDatasetBuilder::freeze`] runs before any `RdfDataset` is materialized.
+    ///
+    /// Only the first is kept: `validate` reports the first violation for every
+    /// other structural invariant too, and once one is recorded the dataset can
+    /// never be frozen, so later ones cannot change the outcome.
+    relative_iri: Option<(String, IriError)>,
+    /// First refused literal, as `(diagnostic code, message)`, held for the
+    /// existing validation boundary. The code is the grammar's own `langtag-*`
+    /// when a language tag is malformed, and `model::LITERAL_SHAPE_CODE` when
+    /// the datatype, language and direction merely disagree.
+    invalid_literal: Option<(&'static str, &'static str)>,
+}
+
+impl Interner {
+    fn new() -> Self {
+        Self {
+            arena: Vec::new(),
+            terms: Vec::new(),
+            index: HashTable::new(),
+            content_scheme: None,
+            content_ids: crate::FastMap::default(),
+            relative_iri: None,
+            invalid_literal: None,
+        }
+    }
+
+    /// Append a string to the arena, returning its range.
+    fn push_str_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        s: &str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<StrRange, StorageError> {
+        push_arena_str_with_memory(&mut self.arena, s, memory)
+    }
+
+    fn buffer_bytes(&self) -> Result<usize, StorageError> {
+        let terms = std::alloc::Layout::array::<InternedTerm>(self.terms.capacity())
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size();
+        let index = crate::hash::hash_table_allocation_bound::<u32>(self.index.capacity())
+            .ok_or(StorageError::SizeOverflow)?;
+        let content = crate::hash::hash_table_allocation_bound::<(TermId, Blake3ContentId)>(
+            self.content_ids.capacity(),
+        )
+        .ok_or(StorageError::SizeOverflow)?;
+        [
+            self.arena.capacity(),
+            terms,
+            index,
+            content,
+            self.relative_iri
+                .as_ref()
+                .map_or(0, |(iri, error)| iri.capacity() + error.owned_text_bytes()),
+            self.content_scheme
+                .as_ref()
+                .map_or(0, ContentIdScheme::owned_text_bytes),
+        ]
+        .into_iter()
+        .try_fold(0usize, |total, bytes| {
+            total.checked_add(bytes).ok_or(StorageError::SizeOverflow)
+        })
+    }
+
+    /// Intern a term BY VALUE: dedups against existing terms (resolving their ranges
+    /// through the arena) and pushes the strings to the arena only on a MISS, so a
+    /// duplicate value costs no arena bytes. Idempotent: equal values map to one id.
+    ///
+    /// # The absoluteness invariant is checked here, on the MISS path only
+    ///
+    /// The early return below is the HIT path: re-interning a string this table has
+    /// already stored is a hash lookup and nothing else, so an IRI is validated for
+    /// absoluteness exactly once — when it is first inserted — no matter how many
+    /// times it is subsequently interned. See [`super::absolute`].
+    fn intern(&mut self, lookup: TermLookup<'_>) -> TermId {
+        let mut resident = Resident;
+        let mut memory = Memory::resume(
+            &mut resident,
+            self.buffer_bytes().expect("resident interner layout"),
+        );
+        self.intern_with_memory(lookup, &mut memory)
+            .expect("resident term interning allocation failed")
+    }
+    fn intern_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        lookup: TermLookup<'_>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, StorageError> {
+        let hash = hash_lookup_value(&lookup);
+        {
+            let (arena, terms) = (&self.arena, &self.terms);
+            if let Some(&i) = self
+                .index
+                .find(hash, |&i| term_eq(arena, &terms[i as usize], &lookup))
+            {
+                return Ok(TermId::from_index(i));
+            }
+        }
+        let i = u32::try_from(self.terms.len()).map_err(|_| StorageError::SizeOverflow)?;
+        // The IR-boundary absoluteness invariant (miss branch, IRI arm ONLY). A
+        // violation cannot be reported from this signature, so it is recorded and
+        // `super::validate::validate` turns it into the hard `Err` that
+        // `RdfDatasetBuilder::freeze` returns — before any `RdfDataset` exists.
+        // Skipped once a violation is already pending: the dataset can no longer be
+        // frozen, so re-validating later IRIs could not change the outcome and would
+        // only slow down the walk to the error.
+        if let TermLookup::Iri(iri) = lookup
+            && self.relative_iri.is_none()
+            && let Err(err) = super::absolute::check_absolute(iri)
+        {
+            self.relative_iri = Some((memory.string(iri)?, err));
+        }
+        // Content-id recognition (miss branch, IRI arm ONLY): gated first on
+        // `content_scheme` so the check is a single `Option` branch — skipped
+        // entirely, with zero further work, when recognition is inactive. Computed
+        // here (borrowing `&lookup`) BEFORE the moving `match lookup` below consumes
+        // `iri`. A prefix hit with a bad hex suffix is an ORDINARY IRI, not an error:
+        // `from_hex` returning `None` is correct, not a swallowed failure.
+        let recognized: Option<Blake3ContentId> = match &lookup {
+            TermLookup::Iri(iri) => self
+                .content_scheme
+                .as_ref()
+                .and_then(|scheme| iri.strip_prefix(scheme.prefix()))
+                .and_then(Blake3ContentId::from_hex),
+            _ => None,
+        };
+        // Miss: now (and only now) push the strings to the arena and build the term.
+        let term = match lookup {
+            TermLookup::Iri(iri) => InternedTerm::Iri(self.push_str_with_memory(iri, memory)?),
+            TermLookup::Blank { label, scope } => InternedTerm::Blank {
+                label: self.push_str_with_memory(label, memory)?,
+                scope,
+            },
+            TermLookup::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let lexical_form = self.push_str_with_memory(lexical, memory)?;
+                let language = language
+                    .map(|l| self.push_str_with_memory(l, memory))
+                    .transpose()?;
+                InternedTerm::Literal(InternedLiteral {
+                    lexical_form,
+                    datatype,
+                    language,
+                    direction,
+                })
+            }
+            TermLookup::Triple { s, p, o } => InternedTerm::Triple { s, p, o },
+        };
+        memory.push(&mut self.terms, term)?;
+        if let Some(id) = recognized {
+            let required = self
+                .content_ids
+                .len()
+                .checked_add(1)
+                .ok_or(StorageError::SizeOverflow)?;
+            crate::hash::reserve_map_with_memory(&mut self.content_ids, required, memory)?;
+            self.content_ids.insert(TermId::from_index(i), id);
+        }
+        let (arena, terms) = (&self.arena, &self.terms);
+        crate::hash::reserve_table_with_memory(
+            &mut self.index,
+            terms.len(),
+            |&i| hash_stored_value(arena, &terms[i as usize]),
+            memory,
+        )?;
+        self.index
+            .insert_unique(hash, i, |&i| hash_stored_value(arena, &terms[i as usize]));
+        Ok(TermId::from_index(i))
+    }
+
+    /// The decoded content id for a recognized term, if any (builder-level
+    /// accessor for tests; the frozen-dataset public accessor is separate).
+    #[cfg(test)]
+    fn content_id(&self, id: TermId) -> Option<Blake3ContentId> {
+        self.content_ids.get(&id).copied()
+    }
+
+    /// Look up the [`TermId`] of an already-interned IRI, WITHOUT interning a new
+    /// term on a miss. Mirrors the hit path of [`Interner::intern`]'s IRI arm
+    /// exactly (same hash, same `term_eq` comparison), so it agrees with `intern`
+    /// on every IRI that has actually been interned.
+    ///
+    /// Used at [`RdfDatasetBuilder::materialize`] to resolve the configured
+    /// derivation-predicate IRI to a frozen `TermId` without minting a new term
+    /// after the arena/term table are otherwise frozen-bound: terms are frozen at
+    /// that point, so a miss here must return `None`, never insert.
+    fn lookup_iri(&self, iri: &str) -> Option<TermId> {
+        let lookup = TermLookup::Iri(iri);
+        let hash = hash_lookup_value(&lookup);
+        let (arena, terms) = (&self.arena, &self.terms);
+        self.index
+            .find(hash, |&i| term_eq(arena, &terms[i as usize], &lookup))
+            .copied()
+            .map(TermId::from_index)
+    }
+
+    fn term(&self, id: TermId) -> &InternedTerm {
+        &self.terms[id.index()]
+    }
+
+    /// The byte arena backing this interner's term ranges (for the few build-time
+    /// readers that resolve a term's string before freeze).
+    fn arena(&self) -> &[u8] {
+        &self.arena
+    }
+
+    fn term_count(&self) -> usize {
+        self.terms.len()
+    }
+}
+
+/// The fallible builder that interns terms, accumulates structure, and freezes
+/// into an immutable `Arc<RdfDataset>`.
+///
+/// Pushed structure is accumulated in deterministic insertion order; quads and
+/// annotations are deduplicated *during* push (the dataset is a set, C0.5), while
+/// [`freeze`](RdfDatasetBuilder::freeze) re-sorts everything into a stable,
+/// reproducible order.
+#[derive(Debug)]
+pub struct RdfDatasetBuilder {
+    /// Owns terms + the value-intern index + the C0 identity policy.
+    interner: Interner,
+    /// Deduplicated quad rows in first-seen order; `g == None` is the default graph.
+    /// The **sole** owner of each row; `quad_index` holds only indices (P3c).
+    quads: Vec<QuadRow>,
+    /// Store-once dedup index into `quads` (replaces the duplicate `HashSet<QuadRow>`).
+    quad_index: HashTable<u32>,
+    /// `(reifier, triple-term, graph)` bindings. Several reifiers MAY bind one triple
+    /// term and the same binding MAY be pushed more than once; duplicates collapse
+    /// (C0.4). The `graph` slot (`None` = default graph) records the named graph the
+    /// reifier declaration was asserted in, so a reifier inside a TriG `GRAPH g { … }`
+    /// block is matchable under `GRAPH ?g`.
+    reifiers: Vec<(TermId, TermId, Option<TermId>)>,
+    reifier_index: HashTable<u32>,
+    /// `(reifier, predicate, object, graph)` annotations; duplicates collapse (C0.5).
+    /// The `graph` slot mirrors [`Self::reifiers`].
+    annotations: Vec<(TermId, TermId, TermId, Option<TermId>)>,
+    annotation_index: HashTable<u32>,
+    /// Sparse source locations keyed by the pushed-quad ordinal. Only quads with a
+    /// recorded location appear here.
+    locations: Vec<(QuadHandle, RdfLocation)>,
+    /// Named graphs EXPLICITLY declared to exist even with zero quads (see
+    /// [`declare_named_graph`](Self::declare_named_graph)). Deduplicated at freeze
+    /// alongside every graph term that DOES own a quad.
+    declared_graphs: Vec<TermId>,
+    /// Counter for the next blank-node scope to use when merging a foreign dataset
+    /// via [`push_dataset`](RdfDatasetBuilder::push_dataset). Each call to
+    /// `push_dataset` claims one fresh scope (starting at 1; 0 = DEFAULT) so that
+    /// blank nodes from different source datasets can never collide even when their
+    /// labels are identical (standardize-apart, C0.2).
+    next_merge_scope: u32,
+    /// Explicit and imported blank scopes reserved against independent merges.
+    used_scopes: Vec<BlankScope>,
+    /// The caller-supplied predicate IRI that marks a derivation edge between a
+    /// content-addressed term and the term(s) it was derived from. `None` (the
+    /// default) means no derivation predicate is configured — no fabricated
+    /// default, per the no-vocabulary-minting policy. Fixed at construction time
+    /// (see [`RdfDatasetBuilder::with_content_addressing`]) — there is no setter.
+    derivation_predicate: Option<String>,
+    /// The `rdf:reifies` predicate id, minted on the first reifier push and then
+    /// answered from here: the interner never forgets a term, so the id stays
+    /// valid for the builder's whole life, and every later push skips the
+    /// 47-byte hash + probe + compare a by-string re-intern would pay.
+    reifies_predicate: Option<TermId>,
+}
+
+/// A dataset builder whose structural validation has already passed.
+///
+/// This type-state splits validation from materialization for callers that need to
+/// make that phase boundary explicit, while [`RdfDatasetBuilder::freeze`] keeps the
+/// traditional one-shot validate-then-freeze API.
+#[derive(Debug)]
+pub struct ValidatedRdfDatasetBuilder {
+    inner: RdfDatasetBuilder,
+}
+
+impl ValidatedRdfDatasetBuilder {
+    /// Materialize validated native storage while retaining the original Memory.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before the corresponding allocation.
+    pub fn freeze_with_memory<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<RdfDataset, StorageError> {
+        self.inner.materialize_with_memory(memory)
+    }
+
+    /// Number of interned terms in this validated, unfrozen graph.
+    #[must_use]
+    pub fn term_count(&self) -> usize {
+        self.inner.term_count()
+    }
+
+    /// Resolve one staged term without materializing a dataset.
+    #[must_use]
+    pub fn resolve(&self, id: TermId) -> TermRef<'_> {
+        self.inner.resolve(id)
+    }
+
+    /// Number of distinct statements, including both RDF 1.2 overlay tables.
+    #[must_use]
+    pub fn statement_count(&self) -> usize {
+        self.inner.quads.len() + self.inner.reifiers.len() + self.inner.annotations.len()
+    }
+
+    /// Bytes occupied by the staged term payload, excluding indexes and rows.
+    #[must_use]
+    pub fn payload_bytes(&self) -> usize {
+        self.inner.interner.arena.len()
+    }
+
+    /// Materialize the already-validated builder into an immutable dataset.
+    #[must_use]
+    pub fn freeze(self) -> Arc<RdfDataset> {
+        Arc::new(self.inner.materialize())
+    }
+}
+
+purrdf_hash::default_from_new!(RdfDatasetBuilder);
+
+/// Bulk-push already-interned quads. The ids MUST belong to THIS builder's interner
+/// (C0.8 — `TermId`s are dataset-local), so this is the ergonomic bulk form of
+/// [`RdfDatasetBuilder::push_quad`], NOT a cross-dataset merge. (There is no
+/// `FromIterator<QuadIds>`: a fresh builder's interner is empty, so foreign ids
+/// would be out-of-range; a `FromIterator<RdfQuad>` that re-interns owned terms is
+/// the right cross-dataset form and is left as follow-up work.)
+impl Extend<QuadIds> for RdfDatasetBuilder {
+    fn extend<T: IntoIterator<Item = QuadIds>>(&mut self, iter: T) {
+        let iter = iter.into_iter();
+        // Reserve up front so a bulk push reallocates the quad table/dedup set at
+        // most once. The lower bound is exact for non-deduping sources; with
+        // duplicates the reserve is a harmless over-estimate.
+        let reserve = iter.size_hint().0;
+        if reserve > 0 {
+            // Fail BEFORE mutating: quad ids are u32 (C0.8), so a merge that would
+            // push the table past u32::MAX must abort up front rather than reserve
+            // and then panic mid-loop in `next_id`/`intern` with a half-grown table.
+            assert!(
+                u32::try_from(self.quads.len() + reserve).is_ok(),
+                "bulk quad push exceeds maximum quad capacity of u32::MAX"
+            );
+            reserve_store_once(&mut self.quads, &mut self.quad_index, reserve);
+        }
+        for q in iter {
+            self.push_quad(q.s, q.p, q.o, q.g);
+        }
+    }
+}
+
+/// A native graph build refuses physical storage separately from RDF structure.
+#[derive(Debug)]
+pub enum NativeBuildError {
+    /// Checked layout, original admission or physical allocator refusal.
+    Storage(StorageError),
+    /// The original RDF diagnostic; its producer's Memory retains its buffers.
+    Diagnostic(RdfDiagnostic),
+}
+impl From<StorageError> for NativeBuildError {
+    fn from(error: StorageError) -> Self {
+        Self::Storage(error)
+    }
+}
+impl core::fmt::Display for NativeBuildError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Storage(error) => core::fmt::Display::fmt(error, f),
+            Self::Diagnostic(error) => core::fmt::Display::fmt(error, f),
+        }
+    }
+}
+impl std::error::Error for NativeBuildError {}
+
+impl RdfDatasetBuilder {
+    /// Intern borrowed values while retaining their original allocation grant.
+    ///
+    /// # Errors
+    /// Returns physical layout, admission or allocator refusal.
+    pub fn intern_value_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        value: &super::term::TermValue,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, StorageError> {
+        crate::term_fixture::intern_value_with_memory(self, value, memory)
+    }
+
+    /// Native borrowed IRI ingress.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before any unadmitted allocation.
+    pub fn intern_iri_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        iri: &str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, StorageError> {
+        self.interner
+            .intern_with_memory(TermLookup::Iri(iri), memory)
+    }
+
+    /// Native already-bound blank ingress.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn intern_blank_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        label: &str,
+        scope: BlankScope,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, StorageError> {
+        self.reserve_scope_with_memory(scope, memory)?;
+        self.interner
+            .intern_with_memory(TermLookup::Blank { label, scope }, memory)
+    }
+
+    /// Native triple ingress, sharing the original interning body.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn intern_triple_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        s: TermId,
+        p: TermId,
+        o: TermId,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, StorageError> {
+        self.interner
+            .intern_with_memory(TermLookup::Triple { s, p, o }, memory)
+    }
+
+    /// Insert a native quad at the original store-once producer.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn push_quad_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        s: TermId,
+        p: TermId,
+        o: TermId,
+        g: Option<TermId>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        store_once_with_memory(
+            &mut self.quads,
+            &mut self.quad_index,
+            QuadRow { s, p, o, g },
+            memory,
+        )?;
+        Ok(())
+    }
+
+    /// Insert a native RDF 1.2 reifier binding.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn push_reifier_in_graph_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        reifier: TermId,
+        triple: TermId,
+        graph: Option<TermId>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        if self.reifies_predicate.is_none() {
+            self.reifies_predicate =
+                Some(self.intern_iri_with_memory(purrdf_iri::vocab::rdf::REIFIES, memory)?);
+        }
+        store_once_with_memory(
+            &mut self.reifiers,
+            &mut self.reifier_index,
+            (reifier, triple, graph),
+            memory,
+        )?;
+        Ok(())
+    }
+
+    /// Insert a native RDF 1.2 annotation.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn push_annotation_in_graph_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        reifier: TermId,
+        predicate: TermId,
+        object: TermId,
+        graph: Option<TermId>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        store_once_with_memory(
+            &mut self.annotations,
+            &mut self.annotation_index,
+            (reifier, predicate, object, graph),
+            memory,
+        )?;
+        Ok(())
+    }
+
+    /// Native literal identity and original arena allocation. Borrowed lexical
+    /// spelling remains verbatim; the shared language fold changes only its key.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn intern_literal_parts_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        lexical: &str,
+        datatype: Option<&str>,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, StorageError> {
+        let datatype_iri = match (language, datatype) {
+            (Some(_), _) => RdfLiteral::language_datatype_iri(direction),
+            (None, Some(explicit)) => explicit,
+            (None, None) => super::term::XSD_STRING,
+        };
+        if self.interner.invalid_literal.is_none() {
+            self.interner.invalid_literal =
+                RdfLiteral::diagnose_components(datatype_iri, language, direction).err();
+        }
+        let datatype_id = self.intern_iri_with_memory(datatype_iri, memory)?;
+        let blanks =
+            crate::cdt_blank::cdt_embedded_blanks_with_memory(lexical, datatype_iri, memory)?;
+        for (label, scope) in &blanks {
+            self.intern_blank_with_memory(label, *scope, memory)?;
+        }
+        let bytes = blanks.iter().try_fold(0usize, |bytes, (label, _)| {
+            bytes
+                .checked_add(label.capacity())
+                .ok_or(StorageError::SizeOverflow)
+        })?;
+        memory.release_vec(blanks)?;
+        memory.release_bytes(bytes)?;
+        let language = language
+            .map(|tag| super::term::interned_language_with_memory(tag, memory))
+            .transpose()?;
+        let result = self.interner.intern_with_memory(
+            TermLookup::Literal {
+                lexical,
+                datatype: datatype_id,
+                language: language.as_deref(),
+                direction,
+            },
+            memory,
+        )?;
+        if let Some(std::borrow::Cow::Owned(language)) = language {
+            memory.release_string(language)?;
+        }
+        Ok(result)
+    }
+
+    // Resident wrappers resume only their own resident buffers. Operational
+    // callers supply Memory from birth and never certify an already-built tree.
+    pub(crate) fn interner_buffer_bytes(&self) -> Result<usize, StorageError> {
+        self.interner.buffer_bytes()
+    }
+
+    /// A fresh, empty builder.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            interner: Interner::new(),
+            quads: Vec::new(),
+            quad_index: HashTable::new(),
+            reifiers: Vec::new(),
+            reifier_index: HashTable::new(),
+            annotations: Vec::new(),
+            annotation_index: HashTable::new(),
+            locations: Vec::new(),
+            declared_graphs: Vec::new(),
+            // Merge scopes start at 1; scope 0 is BlankScope::DEFAULT (local pushes).
+            next_merge_scope: 1,
+            used_scopes: Vec::new(),
+            derivation_predicate: None,
+            reifies_predicate: None,
+        }
+    }
+
+    /// A fresh builder configured for content addressing: `scheme` marks which
+    /// IRIs are content-id term references and `derivation_predicate`, if given,
+    /// is the predicate IRI used to record derivation edges.
+    ///
+    /// This is the **single** construction path for content addressing (§19
+    /// one-path): the config is fixed here, before any term is interned, and
+    /// deliberately has no setter — a builder's content-addressing config never
+    /// changes mid-build.
+    #[must_use]
+    pub fn with_content_addressing(
+        scheme: ContentIdScheme,
+        derivation_predicate: Option<String>,
+    ) -> Self {
+        let mut builder = Self::new();
+        builder.interner.content_scheme = Some(scheme);
+        builder.derivation_predicate = derivation_predicate;
+        builder
+    }
+
+    /// Intern an IRI term. Idempotent: the same IRI string yields the same id.
+    pub fn intern_iri(&mut self, iri: &str) -> TermId {
+        self.interner.intern(TermLookup::Iri(iri))
+    }
+
+    /// Reserve room for a bulk replay of `terms` distinct terms whose strings occupy
+    /// `term_bytes` bytes, plus `quads` base quads, so the string arena, the term
+    /// table, the value index, the quad table and the quad index each grow ONCE
+    /// instead of doubling their way through the replay.
+    ///
+    /// Every figure is a hint, never a contract: pushing more or fewer of anything is
+    /// correct and costs only the ordinary growth. Deliberately not public — the
+    /// caller that can state these numbers honestly is a whole-view import
+    /// ([`super::import::DatasetImporter`]), which reads all three off the source
+    /// view's own `term_count`/`term_bytes_hint`/`len_hint`, and a public `reserve`
+    /// would invite callers to guess.
+    ///
+    /// `term_bytes` of `0` means "no figure available" and reserves no arena at all,
+    /// rather than reserving a fabricated one: an over-reserved arena is retained for
+    /// the frozen dataset's entire lifetime, so guessing here costs memory forever
+    /// while guessing wrong on the tables costs one extra growth.
+    pub(crate) fn reserve_for_replay(&mut self, terms: usize, term_bytes: usize, quads: usize) {
+        let Interner {
+            arena,
+            terms: table,
+            index,
+            ..
+        } = &mut self.interner;
+        arena.reserve(term_bytes);
+        table.reserve(terms);
+        index.reserve(terms, |&i| hash_stored_value(arena, &table[i as usize]));
+
+        reserve_store_once(&mut self.quads, &mut self.quad_index, quads);
+    }
+
+    /// Explicitly declare that a named graph exists, even if it turns out to own
+    /// zero quads. The frozen dataset's `GRAPH ?g` enumeration
+    /// ([`RdfDataset::named_graphs`](super::dataset::RdfDataset::named_graphs))
+    /// is the union of this declaration list and every graph term that DOES own a
+    /// quad — everything else in the engine (quad matching, `CREATE`/`CLEAR`/`DROP
+    /// GRAPH`, capability flags) keeps the ordinary "a graph exists iff it holds a
+    /// quad" doctrine untouched. Idempotent (deduplicated at freeze); `g` must be a
+    /// [`TermId`] already interned in THIS builder (typically via
+    /// [`intern_iri`](Self::intern_iri)).
+    pub fn declare_named_graph(&mut self, g: TermId) {
+        self.declared_graphs.push(g);
+    }
+
+    /// Intern a blank node. Identity is `(label, scope)` (C0.2): same label + same
+    /// scope → same id; same label + different scope → different id.
+    pub fn intern_blank(&mut self, label: &str, scope: BlankScope) -> TermId {
+        let mut resident = Resident;
+        let bytes = self.native_buffer_bytes().expect("resident builder layout");
+        let mut memory = Memory::resume(&mut resident, bytes);
+        self.intern_blank_with_memory(label, scope, &mut memory)
+            .expect("resident blank storage")
+    }
+
+    fn reserve_scope_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        scope: BlankScope,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        if scope == BlankScope::DEFAULT {
+            return Ok(());
+        }
+        if let Err(position) = self.used_scopes.binary_search(&scope) {
+            let required = self
+                .used_scopes
+                .len()
+                .checked_add(1)
+                .ok_or(StorageError::SizeOverflow)?;
+            let capacity = required.max(
+                self.used_scopes
+                    .capacity()
+                    .checked_mul(2)
+                    .ok_or(StorageError::SizeOverflow)?,
+            );
+            memory.reserve(&mut self.used_scopes, capacity)?;
+            self.used_scopes.insert(position, scope);
+        }
+        Ok(())
+    }
+
+    /// Borrow every blank identity currently interned by this builder.
+    /// Includes unused terms, so a publication boundary can choose a mint
+    /// namespace disjoint from every identity the destination already owns.
+    pub fn blank_identities(&self) -> impl Iterator<Item = (&str, BlankScope)> + '_ {
+        self.interner.terms.iter().filter_map(|term| match term {
+            InternedTerm::Blank { label, scope } => Some((self.interned_str(*label), *scope)),
+            _ => None,
+        })
+    }
+
+    /// Intern a blank node from a **text codec's** parsed `_:` token, decoding the
+    /// egress encoding the serializers applied on the way out.
+    ///
+    /// This is the ingress choke point every native text codec (Turtle family,
+    /// RDF/XML, TriX, HexTuples, JSON-LD / YAML-LD) routes its blank-node tokens
+    /// through. The token is decoded by
+    /// [`decode_blank_label`](crate::blank_label::decode_blank_label) — the exact
+    /// inverse of [`encode_blank_label`](crate::blank_label::encode_blank_label)
+    /// — so a document this workspace wrote re-parses to the very
+    /// `(label, scope)` pair it was written from, and a token no serializer could
+    /// have written (which is every token in a foreign document) is interned
+    /// VERBATIM at [`BlankScope::DEFAULT`], byte for byte.
+    ///
+    /// `alphabet` is the label alphabet of the syntax the token was READ FROM —
+    /// `BLANK_NODE_LABEL` for the Turtle family / HexTuples / JSON-LD, `NCName`
+    /// for RDF/XML's `rdf:nodeID`, XML text for TriX's `<id>`. It is what the
+    /// decode's image test re-encodes against, so ingress inverts exactly the
+    /// egress that syntax performs and nothing else.
+    ///
+    /// Carrier formats (GTS, columnar, pack, OKF) deliberately do NOT use this:
+    /// they store the IR's `(label, scope)` pair structurally, so their labels
+    /// were never encoded and must stay opaque.
+    pub fn intern_text_blank(&mut self, token: &str, alphabet: LabelAlphabet) -> TermId {
+        let (label, scope) = crate::blank_label::decode_blank_label(token, alphabet);
+        self.intern_blank(&label, scope)
+    }
+
+    /// Intern a literal, applying the C0.1 identity policy:
+    ///
+    /// - A language tag → datatype `rdf:dirLangString` with a base direction,
+    ///   otherwise `rdf:langString`; the language is lowercased for the key.
+    /// - Otherwise an explicit datatype → that datatype.
+    /// - Otherwise → `xsd:string`.
+    ///
+    /// The datatype is always stored as an interned IRI [`TermId`]. The lexical
+    /// form is preserved byte-for-byte; base direction participates in identity.
+    /// Invalid language/datatype/direction combinations are recorded and refused
+    /// by [`validate`](Self::validate) or [`freeze`](Self::freeze), preserving this
+    /// method's infallible builder interface without publishing invalid RDF.
+    ///
+    /// # A composite literal also interns the blank nodes it names
+    ///
+    /// A `cdt:List` / `cdt:Map` lexical form is not opaque text: its
+    /// `BLANK_NODE_LABEL` tokens denote blank nodes of the enclosing document
+    /// (see [`crate::cdt_blank`]). Every `(label, scope)` pair such a literal
+    /// names is therefore interned here, exactly as though the label had been
+    /// written as a bare term, so the pair always resolves through
+    /// [`term_id_by_blank`](super::dataset::RdfDataset::term_id_by_blank) on the
+    /// frozen dataset. That invariant is what lets the canonicalizer, the
+    /// whole-dataset rewriters and the SPARQL evaluator's element accessors hand
+    /// back a REAL blank node of the dataset rather than a dangling label.
+    ///
+    /// The lexical form is expected to be already BOUND — the labels spell their
+    /// `(label, scope)` pairs. Ingress paths get that by routing through
+    /// [`intern_literal_bound`](Self::intern_literal_bound); this entry point is
+    /// the post-binding interner every other caller uses.
+    ///
+    /// The scan is guarded by the datatype IRI, so an ordinary literal pays two
+    /// string comparisons and nothing more.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the by-value `RdfLiteral` is this method's PUBLISHED signature and every \
+                  caller in and outside the workspace builds one inline, so narrowing it to a \
+                  borrow is a breaking change, not a cleanup. The body stopped needing \
+                  ownership when the work moved to `intern_literal_parts`, which borrows — the \
+                  interner copies a literal's strings into its own arena either way, so \
+                  consuming the literal here would free it a few lines earlier and nothing else"
+    )]
+    pub fn intern_literal(&mut self, lit: RdfLiteral) -> TermId {
+        self.intern_literal_parts(
+            &lit.lexical_form,
+            lit.datatype.as_deref(),
+            lit.language.as_deref(),
+            lit.direction,
+        )
+    }
+
+    /// [`intern_literal`](Self::intern_literal) over BORROWED components — the same
+    /// C0.1 identity policy, the same id, and no owned [`RdfLiteral`] in between.
+    ///
+    /// The interner's key ([`TermLookup`]) is borrowed and its arena is the only place
+    /// a literal's strings are ever stored, so a caller that already holds `&str`s —
+    /// a bulk import replaying another store's dictionary
+    /// ([`super::import::DatasetImporter`]) — was allocating an owned lexical form, an
+    /// owned datatype IRI and an owned language tag per literal purely to hand them to
+    /// a function that borrows them straight back. This is that function, and
+    /// `intern_literal` is now a thin owned wrapper over it, so the two cannot
+    /// disagree about identity.
+    ///
+    /// `datatype` is the literal's EXPLICIT datatype (`None` meaning "unstated"),
+    /// exactly as [`RdfLiteral::datatype`] carries it; the language-tag override and
+    /// the `xsd:string` default are applied here, so both entry points expand the
+    /// datatype the same way rather than each spelling the rule.
+    ///
+    /// The language tag is folded for the key ([`purrdf_iri::langtag::identity_fold`]) ONLY when
+    /// it is not already its own fold. BCP 47 tags are case-insensitive and ingress
+    /// normalizes them, so the common case is a tag that is already folded and a
+    /// fold whose output is a copy of its input. The LOOKUP path
+    /// (`RdfDataset::term_id_by_literal`) folds with the same function on purpose: a
+    /// lookup that folded tags differently from the interner would report a term
+    /// absent that this dataset holds.
+    ///
+    /// Crate-internal: the owned form is the published ingress, and a second public
+    /// spelling of the same operation would be surface with no caller.
+    pub(crate) fn intern_literal_parts(
+        &mut self,
+        lexical: &str,
+        datatype: Option<&str>,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> TermId {
+        let mut resident = Resident;
+        let mut memory = Memory::resume(
+            &mut resident,
+            self.interner
+                .buffer_bytes()
+                .expect("resident interner layout"),
+        );
+        self.intern_literal_parts_with_memory(lexical, datatype, language, direction, &mut memory)
+            .expect("resident literal interning allocation failed")
+    }
+
+    /// Intern a literal read from a document, binding the blank-node labels a
+    /// composite (`cdt:List` / `cdt:Map`) lexical form embeds into that
+    /// document's blank-node scope.
+    ///
+    /// This is the ingress choke point for literals, the twin of
+    /// [`intern_text_blank`](Self::intern_text_blank) for bare blank terms.
+    /// `binding` must be the SAME rule the path applies to its bare `_:` tokens
+    /// — [`BlankBinding::Decoded`](crate::cdt_blank::BlankBinding::Decoded) with the syntax's alphabet for a text codec,
+    /// [`BlankBinding::Ambient`](crate::cdt_blank::BlankBinding::Ambient) with the source's fixed scope for a carrier —
+    /// because that agreement is precisely what makes `_:b` written as a subject
+    /// and `_:b` written inside a composite literal the same node
+    /// (`bnodes-turtle-05`), and what keeps the same label in two different
+    /// documents two different nodes (`bnodes-turtle-15`).
+    ///
+    /// The binding is applied exactly ONCE, here, and never again: an
+    /// already-bound literal re-interned through
+    /// [`intern_literal`](Self::intern_literal) keeps its bytes.
+    ///
+    /// # Errors
+    /// [`CdtBlankError`](crate::cdt_blank::CdtBlankError) when the literal claims a composite datatype but its
+    /// lexical form is not a well-formed value of it, or breaks one of
+    /// `purrdf-cdt`'s resource limits. The caller must refuse the whole document:
+    /// an unparseable composite literal leaves the document's blank-node scope
+    /// undefined, so there is no safe way to admit it. Never fails for any other
+    /// datatype.
+    pub fn intern_literal_bound(
+        &mut self,
+        lit: RdfLiteral,
+        binding: crate::cdt_blank::BlankBinding,
+    ) -> Result<TermId, crate::cdt_blank::CdtBlankError> {
+        // The C0.1 datatype the literal will actually carry: a language tag wins
+        // over any explicit datatype, and a language-tagged literal is never
+        // composite.
+        let datatype_iri = lit.datatype_iri();
+        if !crate::cdt_blank::is_cdt_datatype(datatype_iri) {
+            return Ok(self.intern_literal(lit));
+        }
+        let bound =
+            crate::cdt_blank::bind_cdt_blank_labels(&lit.lexical_form, datatype_iri, binding)?;
+        let lexical_form = bound.into_owned();
+        Ok(self.intern_literal(RdfLiteral {
+            lexical_form,
+            ..lit
+        }))
+    }
+
+    /// Intern a triple term (RDF 1.2 quoted triple). Identified structurally by the
+    /// resolved `(s, p, o)` ids (C0.3); dedup is by that triple. Acyclicity is a
+    /// freeze-time concern ([`super::validate`]), not enforced here.
+    pub fn intern_triple(&mut self, s: TermId, p: TermId, o: TermId) -> TermId {
+        self.interner.intern(TermLookup::Triple { s, p, o })
+    }
+
+    /// Intern one owned model term into this builder, recursively for triple terms.
+    ///
+    /// This is the inverse of [`RdfDataset::to_owned_quad`](super::dataset::RdfDataset::to_owned_quad)
+    /// at the owned boundary: tests and adapter edges that already hold
+    /// [`RdfTerm`] values can freeze them into the concrete IR without detouring.
+    ///
+    /// # Blank labels are decoded, so the owned round trip is the identity
+    ///
+    /// The owned model has ONE string slot for a blank node, so
+    /// [`to_owned_quad`](super::dataset::RdfDataset::to_owned_quad) renders the
+    /// IR's `(label, scope)` pair into it through
+    /// [`BlankScope::qualify_label`]. This function is that rendering's exact
+    /// inverse: the label is decoded with
+    /// [`BlankScope::unqualify_label`] and interned at the scope it names, so
+    /// `dataset → owned → dataset` preserves blank-node IDENTITY rather than
+    /// merely isomorphism. Re-materializing a dataset through the owned model —
+    /// which the SHACL projection, the SHACL rules fixpoint, and the reasoning
+    /// withholding passes all do, repeatedly — therefore leaves its labels
+    /// untouched instead of encoding an already-encoded label once per pass.
+    ///
+    /// A caller minting a blank label of its own passes a label it has NOT
+    /// qualified, and the decode leaves any such label alone unless it is spelled
+    /// exactly as the encoder's output (see
+    /// [`unqualify_label`](BlankScope::unqualify_label) for that grammar).
+    ///
+    /// For cross-dataset merges use [`push_dataset`](Self::push_dataset), which
+    /// assigns a fresh scope per merged dataset (standardize-apart, C0.2).
+    pub fn intern_owned_term(&mut self, term: &RdfTerm) -> TermId {
+        self.intern_owned_term_scoped(term, BlankScope::DEFAULT)
+    }
+
+    /// Like [`intern_owned_term`](Self::intern_owned_term) but overrides the scope
+    /// used for every blank node (including blanks nested inside quoted triples).
+    ///
+    /// This is the scoped standardize-apart primitive (C0.2): callers merging
+    /// several native sources into one builder assign each source a FRESH
+    /// [`BlankScope`] so same-labelled blanks from different sources never collide
+    /// — exactly the discipline [`push_dataset`](Self::push_dataset) applies
+    /// internally. Direct `push_owned_*`/`intern_owned_term` pushes use
+    /// [`BlankScope::DEFAULT`] (scope 0).
+    ///
+    /// # Why only the default scope decodes the label
+    ///
+    /// At [`BlankScope::DEFAULT`] this is the exact inverse of the owned
+    /// rendering, so the label is decoded (see
+    /// [`intern_owned_term`](Self::intern_owned_term)). An EXPLICIT non-default
+    /// scope is a standardize-apart RELABELING, not an inverse: the merged
+    /// source's own scopes are being collapsed into one fresh scope, and the
+    /// qualified rendering is precisely what keeps two blanks the source held
+    /// apart (`b` at its scope 0 and `b` at its scope 1) apart in the target
+    /// scope. Decoding there would map both to the label `b` under one scope and
+    /// silently conflate two distinct nodes, so the qualified spelling is kept
+    /// verbatim as the merged node's raw label — injective, which is the property
+    /// standardize-apart actually needs.
+    /// # Composite literals bind here too
+    ///
+    /// A `cdt:List` / `cdt:Map` literal's embedded blank labels are bound by the
+    /// SAME rule this function applies to a bare
+    /// [`RdfTerm::BlankNode`], because a merge assigns
+    /// each source a fresh scope and an embedded label left unbound would name a
+    /// node the merged dataset does not have. Binding here is TOTAL — the owned
+    /// model is an internal bridge with no document to refuse — so a document
+    /// ingress that must reject an ill-formed composite literal uses
+    /// [`intern_owned_term_bound`](Self::intern_owned_term_bound) instead.
+    ///
+    /// A triple term is interned over a work list rather than the call stack: its
+    /// subject, then its predicate, then its object, each fully before the next, and
+    /// the triple itself once all three have ids — so a term nested to any depth
+    /// interns in the order a recursive descent would intern it, on constant stack.
+    pub fn intern_owned_term_scoped(&mut self, term: &RdfTerm, scope: BlankScope) -> TermId {
+        let mut steps: Vec<OwnedStep<'_>> = vec![OwnedStep::Term(term)];
+        let mut ids: Vec<TermId> = Vec::new();
+        while let Some(step) = steps.pop() {
+            match step {
+                OwnedStep::Term(RdfTerm::Iri(iri)) => ids.push(self.intern_iri(iri)),
+                OwnedStep::Term(RdfTerm::BlankNode(label)) if scope == BlankScope::DEFAULT => {
+                    let (label, scope) = BlankScope::unqualify_label(label);
+                    ids.push(self.intern_blank(&label, scope));
+                }
+                OwnedStep::Term(RdfTerm::BlankNode(label)) => {
+                    ids.push(self.intern_blank(label, scope));
+                }
+                OwnedStep::Term(RdfTerm::Literal(literal)) => {
+                    let literal = bind_owned_literal(literal, scope);
+                    ids.push(self.intern_literal(literal));
+                }
+                OwnedStep::Term(RdfTerm::Triple(triple)) => steps.extend([
+                    OwnedStep::Assemble,
+                    OwnedStep::Term(&triple.object),
+                    OwnedStep::Predicate(&triple.predicate),
+                    OwnedStep::Term(&triple.subject),
+                ]),
+                OwnedStep::Predicate(predicate) => ids.push(self.intern_iri(predicate)),
+                OwnedStep::Assemble => {
+                    let o = ids.pop().expect("a triple term's object is interned");
+                    let p = ids.pop().expect("a triple term's predicate is interned");
+                    let s = ids.pop().expect("a triple term's subject is interned");
+                    ids.push(self.intern_triple(s, p, o));
+                }
+            }
+        }
+        ids.pop()
+            .expect("the term's own id is the last one interned")
+    }
+
+    /// [`intern_owned_term_scoped`](Self::intern_owned_term_scoped) for a term
+    /// read from a DOCUMENT: identical binding, but an ill-formed composite
+    /// literal is refused rather than taken as given.
+    ///
+    /// The owned-model codecs (JSON-LD / YAML-LD) and the multi-source loader
+    /// use this, so a document reaches the store through exactly the same
+    /// validation every text codec applies.
+    ///
+    /// # Errors
+    /// [`CdtBlankError`](crate::cdt_blank::CdtBlankError) when a composite
+    /// literal anywhere in `term` — including inside a quoted triple — does not
+    /// parse. The caller must refuse the whole document.
+    ///
+    /// A triple term is interned over a work list in the same order as
+    /// [`intern_owned_term_scoped`](Self::intern_owned_term_scoped) — subject,
+    /// predicate, object, then the triple — and the first refused composite literal
+    /// ends the walk there, with everything interned before it left in place.
+    pub fn intern_owned_term_bound(
+        &mut self,
+        term: &RdfTerm,
+        scope: BlankScope,
+    ) -> Result<TermId, crate::cdt_blank::CdtBlankError> {
+        let mut steps: Vec<OwnedStep<'_>> = vec![OwnedStep::Term(term)];
+        let mut ids: Vec<TermId> = Vec::new();
+        while let Some(step) = steps.pop() {
+            match step {
+                OwnedStep::Term(RdfTerm::Literal(literal)) => {
+                    ids.push(self.intern_literal_bound(literal.clone(), owned_binding(scope))?);
+                }
+                OwnedStep::Term(RdfTerm::Triple(triple)) => steps.extend([
+                    OwnedStep::Assemble,
+                    OwnedStep::Term(&triple.object),
+                    OwnedStep::Predicate(&triple.predicate),
+                    OwnedStep::Term(&triple.subject),
+                ]),
+                OwnedStep::Term(leaf @ (RdfTerm::Iri(_) | RdfTerm::BlankNode(_))) => {
+                    ids.push(self.intern_owned_term_scoped(leaf, scope));
+                }
+                OwnedStep::Predicate(predicate) => ids.push(self.intern_iri(predicate)),
+                OwnedStep::Assemble => {
+                    let o = ids.pop().expect("a triple term's object is interned");
+                    let p = ids.pop().expect("a triple term's predicate is interned");
+                    let s = ids.pop().expect("a triple term's subject is interned");
+                    ids.push(self.intern_triple(s, p, o));
+                }
+            }
+        }
+        Ok(ids
+            .pop()
+            .expect("the term's own id is the last one interned"))
+    }
+
+    /// Push one owned model quad into this builder.
+    ///
+    /// The predicate is interned as an IRI term, and any source location on the
+    /// owned quad is preserved on the corresponding pushed quad handle. Structural
+    /// validity remains the normal [`freeze`](Self::freeze) contract.
+    pub fn push_owned_quad(&mut self, quad: &RdfQuad) {
+        self.push_owned_quad_scoped(quad, BlankScope::DEFAULT);
+    }
+
+    /// Like [`push_owned_quad`](Self::push_owned_quad) but routes blank interning
+    /// through `scope`.
+    ///
+    /// The scoped standardize-apart primitive (C0.2) for the quad path: a caller
+    /// merging several native sources assigns each source a fresh [`BlankScope`] so
+    /// same-labelled blanks from different sources never collide, the same
+    /// discipline [`push_dataset`](Self::push_dataset) applies internally. Direct
+    /// [`push_owned_quad`](Self::push_owned_quad) uses [`BlankScope::DEFAULT`].
+    pub fn push_owned_quad_scoped(&mut self, quad: &RdfQuad, scope: BlankScope) {
+        let s = self.intern_owned_term_scoped(&quad.subject, scope);
+        let p = self.intern_iri(&quad.predicate);
+        let o = self.intern_owned_term_scoped(&quad.object, scope);
+        let g = quad
+            .graph_name
+            .as_ref()
+            .map(|graph_name| self.intern_owned_term_scoped(graph_name, scope));
+        let handle = self.push_quad_with_handle(s, p, o, g);
+        if let Some(location) = &quad.location {
+            self.attach_location(handle, location.clone());
+        }
+    }
+
+    /// Push one owned RDF 1.2 reifier binding into this builder, re-interning the
+    /// reifier resource and the bound triple's `(s, p, o)` terms. The companion of
+    /// [`push_owned_quad`](Self::push_owned_quad) for the reifier side-table.
+    pub fn push_owned_reifier(&mut self, reifier: &RdfReifier) {
+        self.push_owned_reifier_scoped(reifier, BlankScope::DEFAULT);
+    }
+
+    /// Like [`push_owned_reifier`](Self::push_owned_reifier) but routes blank
+    /// interning through `scope`.
+    ///
+    /// The scoped standardize-apart primitive (C0.2) for the reifier side-table: a
+    /// caller merging several native sources assigns each source a fresh
+    /// [`BlankScope`] so same-labelled blanks from different sources never collide,
+    /// as [`push_dataset`](Self::push_dataset) does internally. Direct
+    /// [`push_owned_reifier`](Self::push_owned_reifier) uses [`BlankScope::DEFAULT`].
+    pub fn push_owned_reifier_scoped(&mut self, reifier: &RdfReifier, scope: BlankScope) {
+        let s = self.intern_owned_term_scoped(&reifier.statement.subject, scope);
+        let p = self.intern_iri(&reifier.statement.predicate);
+        let o = self.intern_owned_term_scoped(&reifier.statement.object, scope);
+        let triple = self.intern_triple(s, p, o);
+        let reifier_id = self.intern_owned_term_scoped(&reifier.reifier, scope);
+        let g = reifier
+            .graph
+            .as_ref()
+            .map(|g| self.intern_owned_term_scoped(g, scope));
+        self.push_reifier_in_graph(reifier_id, triple, g);
+    }
+
+    /// Push one owned RDF 1.2 statement annotation into this builder, re-interning
+    /// the reifier resource and the `(predicate, object)` terms.
+    pub fn push_owned_annotation(&mut self, annotation: &RdfAnnotation) {
+        self.push_owned_annotation_scoped(annotation, BlankScope::DEFAULT);
+    }
+
+    /// Like [`push_owned_annotation`](Self::push_owned_annotation) but routes blank
+    /// interning through `scope`.
+    ///
+    /// The scoped standardize-apart primitive (C0.2) for the annotation
+    /// side-table: a caller merging several native sources assigns each source a
+    /// fresh [`BlankScope`] so same-labelled blanks from different sources never
+    /// collide, as [`push_dataset`](Self::push_dataset) does internally. Direct
+    /// [`push_owned_annotation`](Self::push_owned_annotation) uses
+    /// [`BlankScope::DEFAULT`].
+    pub fn push_owned_annotation_scoped(&mut self, annotation: &RdfAnnotation, scope: BlankScope) {
+        let reifier_id = self.intern_owned_term_scoped(&annotation.reifier, scope);
+        let p = self.intern_iri(&annotation.predicate);
+        let o = self.intern_owned_term_scoped(&annotation.object, scope);
+        let g = annotation
+            .graph
+            .as_ref()
+            .map(|g| self.intern_owned_term_scoped(g, scope));
+        self.push_annotation_in_graph(reifier_id, p, o, g);
+    }
+
+    /// Merge every quad, reifier, and annotation of `other` into this builder,
+    /// re-interning each owned term into THIS builder's interner (`TermId`s are
+    /// dataset-local, C0.8). This is the cross-dataset form the
+    /// [`Extend<QuadIds>`] doc reserves as follow-up: unlike the id-based bulk push,
+    /// it carries the FULL RDF 1.2 statement layer — reifier bindings and
+    /// annotations, not just base quads — so merging a graph that carries `<<>>` /
+    /// `rdf:reifies` does not silently drop its side-tables. Duplicates collapse on
+    /// freeze per the normal C0.4/C0.5 contract.
+    ///
+    /// # Standardize-apart (blank-node safety)
+    ///
+    /// Each call to `push_dataset` allocates a FRESH [`BlankScope`] for `other`
+    /// (scopes 1, 2, 3, … on successive calls; scope 0 is [`BlankScope::DEFAULT`]
+    /// reserved for direct `push_owned_*` pushes). Blank nodes from different source
+    /// datasets can therefore never collide even when they share the same label
+    /// (e.g. both datasets have `_:b0`). The qualified label rendered for legacy
+    /// consumers is the scope envelope `"purrdfesc{n}_{body}"` per
+    /// [`BlankScope::qualify_label`] (C0.2).
+    pub fn push_dataset(&mut self, other: &RdfDataset) {
+        // Allocate one fresh scope for this entire `other` dataset.
+        while self
+            .used_scopes
+            .contains(&BlankScope(self.next_merge_scope))
+        {
+            self.next_merge_scope = self
+                .next_merge_scope
+                .checked_add(1)
+                .expect("merge scope counter exceeded u32::MAX");
+        }
+        let scope = BlankScope(self.next_merge_scope);
+        let mut resident = Resident;
+        let bytes = self.native_buffer_bytes().expect("resident builder layout");
+        self.reserve_scope_with_memory(scope, &mut Memory::resume(&mut resident, bytes))
+            .expect("resident merge scope storage");
+        self.next_merge_scope = self
+            .next_merge_scope
+            .checked_add(1)
+            .expect("merge scope counter exceeded u32::MAX");
+
+        // Reserve the dominant quad table up front (mirrors the Extend<QuadIds>
+        // reserve); the reifier/annotation tables grow on demand.
+        let reserve = other.quad_count();
+        if reserve > 0 {
+            // Fail BEFORE mutating: the merged quad table is u32-indexed, so abort
+            // up front if `other` would overflow it rather than corrupt builder
+            // state midway through the merge loop.
+            assert!(
+                u32::try_from(self.quads.len() + reserve).is_ok(),
+                "dataset merge exceeds maximum quad capacity of u32::MAX"
+            );
+            reserve_store_once(&mut self.quads, &mut self.quad_index, reserve);
+        }
+        for quad in other.owned_quads() {
+            self.push_owned_quad_scoped(&quad, scope);
+        }
+        for reifier in other.owned_reifiers() {
+            self.push_owned_reifier_scoped(&reifier, scope);
+        }
+        for annotation in other.owned_annotations() {
+            self.push_owned_annotation_scoped(&annotation, scope);
+        }
+        for graph in other.owned_named_graphs() {
+            let g = self.intern_owned_term_scoped(&graph, scope);
+            self.declare_named_graph(g);
+        }
+    }
+
+    /// Append a validated graph directly, without an intermediate frozen dataset.
+    ///
+    /// Terms are imported once by borrowed value, with a compact ID remap. Blank
+    /// scopes are preserved: this is composition within a shared identity space,
+    /// rather than an independent-document merge. Quads, graph-qualified overlays,
+    /// declaration-only graphs and source locations all retain their identity.
+    /// Validation happens before this method receives its input, so no fallible
+    /// operation can publish a prefix of the staged graph.
+    ///
+    /// The destination's content-address recognition and derivation configuration
+    /// remains authoritative. RDF terms and derivation triples are preserved;
+    /// source-side recognition caches are recomputed using the destination's
+    /// configured scheme rather than silently changing its policy.
+    ///
+    /// Returns the number of newly copied term-payload bytes. This operational
+    /// counter is independent of deterministic dataset content and ordering.
+    pub fn append_validated(&mut self, source: ValidatedRdfDatasetBuilder) -> usize {
+        let source = source.inner;
+        let before = self.interner.arena.len();
+        let mut remap = vec![None; source.term_count()];
+        for index in 0..source.term_count() {
+            let id = TermId::from_index(u32::try_from(index).expect("validated term index fits"));
+            self.import_builder_term(&source, id, &mut remap);
+        }
+        let mapped = |id: TermId| remap[id.index()].expect("all validated terms were mapped");
+        let mut quad_map = Vec::with_capacity(source.quads.len());
+        for quad in &source.quads {
+            let row = QuadRow {
+                s: mapped(quad.s),
+                p: mapped(quad.p),
+                o: mapped(quad.o),
+                g: quad.g.map(mapped),
+            };
+            let index = store_once(&mut self.quads, &mut self.quad_index, row);
+            quad_map.push(QuadHandle::from_index(index));
+        }
+        for &(reifier, triple, graph) in &source.reifiers {
+            self.push_reifier_in_graph(mapped(reifier), mapped(triple), graph.map(mapped));
+        }
+        for &(reifier, predicate, object, graph) in &source.annotations {
+            self.push_annotation_in_graph(
+                mapped(reifier),
+                mapped(predicate),
+                mapped(object),
+                graph.map(mapped),
+            );
+        }
+        for graph in source.declared_graphs {
+            self.declare_named_graph(mapped(graph));
+        }
+        for (handle, location) in source.locations {
+            // As in materialize, a proposed next-row handle may never have
+            // acquired a quad because its following push was a duplicate.
+            if let Some(&mapped) = quad_map.get(handle.index()) {
+                self.attach_location(mapped, location);
+            }
+        }
+        self.interner.arena.len() - before
+    }
+
+    /// Append validated statements transactionally under physical admission.
+    /// The destination is replaced only after every native allocation succeeds.
+    /// Its original term IDs and configuration are preserved exactly.
+    ///
+    /// # Errors
+    /// Returns storage refusal with the destination untouched.
+    pub fn append_validated_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        source: &ValidatedRdfDatasetBuilder,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<usize, StorageError> {
+        let mut replacement = self.clone_buffers_with_memory(memory)?;
+        let before = replacement.interner.arena.len();
+        replacement.append_builder_with_memory(&source.inner, memory)?;
+        let copied = replacement
+            .interner
+            .arena
+            .len()
+            .checked_sub(before)
+            .ok_or(StorageError::SizeOverflow)?;
+        *self = replacement;
+        Ok(copied)
+    }
+
+    fn clone_buffers_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        let mut result = Self::new();
+        memory.extend(
+            &mut result.interner.arena,
+            self.interner.arena.iter().copied(),
+        )?;
+        memory.extend(
+            &mut result.interner.terms,
+            self.interner.terms.iter().copied(),
+        )?;
+        let arena = &result.interner.arena;
+        let terms = &result.interner.terms;
+        crate::hash::reserve_table_with_memory(
+            &mut result.interner.index,
+            self.interner.index.len(),
+            |&id| hash_stored_value(arena, &terms[id as usize]),
+            memory,
+        )?;
+        for &id in self.interner.index.iter() {
+            result.interner.index.insert_unique(
+                hash_stored_value(arena, &terms[id as usize]),
+                id,
+                |&id| hash_stored_value(arena, &terms[id as usize]),
+            );
+        }
+        result.interner.content_scheme = self
+            .interner
+            .content_scheme
+            .as_ref()
+            .map(|scheme| scheme.clone_with_memory(memory))
+            .transpose()?;
+        crate::hash::reserve_map_with_memory(
+            &mut result.interner.content_ids,
+            self.interner.content_ids.len(),
+            memory,
+        )?;
+        result.interner.content_ids.extend(
+            self.interner
+                .content_ids
+                .iter()
+                .map(|(id, value)| (*id, *value)),
+        );
+        result.interner.relative_iri = self
+            .interner
+            .relative_iri
+            .as_ref()
+            .map(|(iri, error)| {
+                Ok::<_, StorageError>((memory.string(iri)?, error.clone_with_memory(memory)?))
+            })
+            .transpose()?;
+        result.interner.invalid_literal = self.interner.invalid_literal;
+        memory.extend(&mut result.quads, self.quads.iter().copied())?;
+        memory.extend(&mut result.reifiers, self.reifiers.iter().copied())?;
+        memory.extend(&mut result.annotations, self.annotations.iter().copied())?;
+        clone_index_with_memory(
+            &self.quad_index,
+            &result.quads,
+            &mut result.quad_index,
+            memory,
+        )?;
+        clone_index_with_memory(
+            &self.reifier_index,
+            &result.reifiers,
+            &mut result.reifier_index,
+            memory,
+        )?;
+        clone_index_with_memory(
+            &self.annotation_index,
+            &result.annotations,
+            &mut result.annotation_index,
+            memory,
+        )?;
+        for (handle, location) in &self.locations {
+            let location = location.clone_with_memory(memory)?;
+            memory.push(&mut result.locations, (*handle, location))?;
+        }
+        memory.extend(
+            &mut result.declared_graphs,
+            self.declared_graphs.iter().copied(),
+        )?;
+        memory.extend(&mut result.used_scopes, self.used_scopes.iter().copied())?;
+        result.next_merge_scope = self.next_merge_scope;
+        result.derivation_predicate = self
+            .derivation_predicate
+            .as_ref()
+            .map(|iri| memory.string(iri))
+            .transpose()?;
+        result.reifies_predicate = self.reifies_predicate;
+        Ok(result)
+    }
+
+    fn append_builder_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        source: &Self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        let mut remap = Vec::new();
+        for _ in 0..source.term_count() {
+            memory.push(&mut remap, None)?;
+        }
+        for index in 0..source.term_count() {
+            let id =
+                TermId::from_index(u32::try_from(index).map_err(|_| StorageError::SizeOverflow)?);
+            self.import_builder_term_with_memory(source, id, &mut remap, memory)?;
+        }
+        let mapped = |id: TermId| remap[id.index()].expect("validated term import completed");
+        let mut quad_map = Vec::new();
+        for quad in &source.quads {
+            let row = QuadRow {
+                s: mapped(quad.s),
+                p: mapped(quad.p),
+                o: mapped(quad.o),
+                g: quad.g.map(mapped),
+            };
+            let index = store_once_with_memory(&mut self.quads, &mut self.quad_index, row, memory)?;
+            memory.push(&mut quad_map, QuadHandle::from_index(index))?;
+        }
+        for &(r, t, g) in &source.reifiers {
+            self.push_reifier_in_graph_with_memory(mapped(r), mapped(t), g.map(mapped), memory)?;
+        }
+        for &(r, p, o, g) in &source.annotations {
+            self.push_annotation_in_graph_with_memory(
+                mapped(r),
+                mapped(p),
+                mapped(o),
+                g.map(mapped),
+                memory,
+            )?;
+        }
+        for &graph in &source.declared_graphs {
+            memory.push(&mut self.declared_graphs, mapped(graph))?;
+        }
+        for (handle, location) in &source.locations {
+            if let Some(&mapped) = quad_map.get(handle.index()) {
+                let location = location.clone_with_memory(memory)?;
+                memory.push(&mut self.locations, (mapped, location))?;
+            }
+        }
+        memory.release_vec(quad_map)?;
+        memory.release_vec(remap)
+    }
+
+    /// Import one of `source`'s terms, memoised in `remap` by the source id.
+    ///
+    /// The walk runs over a work list rather than the call stack. A term is entered
+    /// by first consulting `remap`; a literal's datatype is imported before the
+    /// literal itself, and a triple term's subject, predicate and object are each
+    /// imported fully, in that order, before the triple. Every term is recorded in
+    /// `remap` as soon as its own id exists, so a component shared by several terms
+    /// is imported once and found in the memo on every later visit.
+    fn import_builder_term(
+        &mut self,
+        source: &Self,
+        id: TermId,
+        remap: &mut [Option<TermId>],
+    ) -> TermId {
+        let mut resident = Resident;
+        let bytes = self.native_buffer_bytes().expect("resident builder layout");
+        let mut memory = Memory::resume(&mut resident, bytes);
+        self.import_builder_term_with_memory(source, id, remap, &mut memory)
+            .expect("resident builder import")
+    }
+
+    fn import_builder_term_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        source: &Self,
+        id: TermId,
+        remap: &mut [Option<TermId>],
+        memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, StorageError> {
+        enum Step<'s> {
+            /// Import this source term, unless `remap` already holds it.
+            Enter(TermId),
+            /// Intern this source literal from its imported datatype.
+            Literal {
+                id: TermId,
+                lexical: &'s str,
+                language: Option<&'s str>,
+                direction: Option<RdfTextDirection>,
+            },
+            /// Intern this source triple term from its three imported components.
+            Triple(TermId),
+        }
+        let mut steps: Vec<Step<'_>> = Vec::new();
+        memory.push(&mut steps, Step::Enter(id))?;
+        let mut imported: Vec<TermId> = Vec::new();
+        while let Some(step) = steps.pop() {
+            let (id, mapped) = match step {
+                Step::Enter(id) => {
+                    if let Some(mapped) = remap[id.index()] {
+                        memory.push(&mut imported, mapped)?;
+                        continue;
+                    }
+                    match source.resolve(id) {
+                        TermRef::Iri(iri) => (id, self.intern_iri_with_memory(iri, memory)?),
+                        TermRef::Blank { label, scope } => {
+                            (id, self.intern_blank_with_memory(label, scope, memory)?)
+                        }
+                        TermRef::Literal {
+                            lexical,
+                            datatype,
+                            language,
+                            direction,
+                        } => {
+                            memory.extend(
+                                &mut steps,
+                                [
+                                    Step::Literal {
+                                        id,
+                                        lexical,
+                                        language,
+                                        direction,
+                                    },
+                                    Step::Enter(datatype),
+                                ],
+                            )?;
+                            continue;
+                        }
+                        TermRef::Triple { s, p, o } => {
+                            memory.extend(
+                                &mut steps,
+                                [
+                                    Step::Triple(id),
+                                    Step::Enter(o),
+                                    Step::Enter(p),
+                                    Step::Enter(s),
+                                ],
+                            )?;
+                            continue;
+                        }
+                    }
+                }
+                Step::Literal {
+                    id,
+                    lexical,
+                    language,
+                    direction,
+                } => {
+                    let datatype = imported.pop().expect("a literal's datatype is imported");
+                    (
+                        id,
+                        self.interner.intern_with_memory(
+                            TermLookup::Literal {
+                                lexical,
+                                datatype,
+                                language,
+                                direction,
+                            },
+                            memory,
+                        )?,
+                    )
+                }
+                Step::Triple(id) => {
+                    let o = imported.pop().expect("a triple term's object is imported");
+                    let p = imported
+                        .pop()
+                        .expect("a triple term's predicate is imported");
+                    let s = imported.pop().expect("a triple term's subject is imported");
+                    (id, self.intern_triple_with_memory(s, p, o, memory)?)
+                }
+            };
+            remap[id.index()] = Some(mapped);
+            memory.push(&mut imported, mapped)?;
+        }
+        let result = imported
+            .pop()
+            .expect("the term's own id is the last one imported");
+        memory.release_vec(imported)?;
+        memory.release_vec(steps)?;
+        Ok(result)
+    }
+
+    /// Crate-internal read access to an interned term. [`freeze`](Self::freeze) and
+    /// [`super::validate`] consume this to materialize and check the dataset.
+    pub(crate) fn term(&self, id: TermId) -> &InternedTerm {
+        self.interner.term(id)
+    }
+
+    /// Resolve a term's [`StrRange`] to a `&str` borrowed from the builder's arena
+    /// (for build-time readers that have an interned term's range).
+    pub(crate) fn interned_str(&self, range: StrRange) -> &str {
+        arena_str(self.interner.arena(), range)
+    }
+
+    /// Resolve a builder-local term id to a borrowed term view.
+    ///
+    /// This mirrors [`RdfDataset::resolve`] for adapters that need to validate a
+    /// just-interned term before freezing the dataset.
+    pub fn resolve(&self, id: TermId) -> TermRef<'_> {
+        match self.term(id) {
+            InternedTerm::Iri(iri) => TermRef::Iri(self.interned_str(*iri)),
+            InternedTerm::Blank { label, scope } => TermRef::Blank {
+                label: self.interned_str(*label),
+                scope: *scope,
+            },
+            InternedTerm::Literal(literal) => TermRef::Literal {
+                lexical: self.interned_str(literal.lexical_form),
+                datatype: literal.datatype,
+                language: literal.language.map(|lang| self.interned_str(lang)),
+                direction: literal.direction,
+            },
+            InternedTerm::Triple { s, p, o } => TermRef::Triple {
+                s: *s,
+                p: *p,
+                o: *o,
+            },
+        }
+    }
+
+    /// The number of distinct interned terms. Used by validation (the ID-reference
+    /// bound) and as the frozen dataset's term count.
+    pub(crate) fn term_count(&self) -> usize {
+        self.interner.term_count()
+    }
+
+    /// The terms, RDF rows and payload bytes freezing this builder now would
+    /// retain, given the number of distinct named graphs it names: exactly what the
+    /// frozen dataset's [`term_count`](RdfDataset::term_count),
+    /// [`rdf_row_count`](RdfDataset::rdf_row_count) and
+    /// [`rdf_payload_bytes`](RdfDataset::rdf_payload_bytes) will report. Every
+    /// table already holds one entry per distinct term or row, and freezing only
+    /// sorts and boxes them; the named-graph table is the one that freezing
+    /// deduplicates, so its distinct count is the caller's. Each quantity only
+    /// grows as interning proceeds.
+    pub(crate) fn pending_extent(&self, named_graphs: usize) -> (usize, usize, usize) {
+        let rows = self.quads.len() + self.reifiers.len() + self.annotations.len();
+        let payload = self.interner.arena.len()
+            + size_of_val(self.interner.terms.as_slice())
+            + size_of_val(self.quads.as_slice())
+            + size_of_val(self.reifiers.as_slice())
+            + size_of_val(self.annotations.as_slice())
+            + named_graphs * size_of::<TermId>();
+        (self.interner.term_count(), rows, payload)
+    }
+
+    /// The first IRI interned into this builder that violated the IR-boundary
+    /// absoluteness invariant, with the typed reason.
+    ///
+    /// Read by [`super::validate`], which converts it into the hard `Err` that
+    /// [`freeze`](Self::freeze) returns, so no `RdfDataset` can be materialized
+    /// carrying a relative IRI term.
+    pub(crate) fn relative_iri(&self) -> Option<(&str, &IriError)> {
+        self.interner
+            .relative_iri
+            .as_ref()
+            .map(|(iri, err)| (iri.as_str(), err))
+    }
+
+    /// Read the first refused literal recorded by the infallible interner, as
+    /// `(diagnostic code, message)`.
+    pub(crate) fn invalid_literal(&self) -> Option<(&'static str, &'static str)> {
+        self.interner.invalid_literal
+    }
+
+    /// Push a quad. Duplicate quads collapse to a single row (C0.5); `g == None`
+    /// names the default graph. Use [`push_quad_with_handle`](Self::push_quad_with_handle)
+    /// when attaching a source location: it identifies the actual row even when
+    /// the quad was already present.
+    pub fn push_quad(&mut self, s: TermId, p: TermId, o: TermId, g: Option<TermId>) {
+        let _ = self.push_quad_with_handle(s, p, o, g);
+    }
+
+    /// Append an exact physical record after validating its complete RDF structure.
+    ///
+    /// # Errors
+    /// Refuses malformed terms, positions or a noncanonical reifier record before
+    /// adding any record to this builder.
+    pub fn push_record(
+        &mut self,
+        record: &super::mutable::RecordValues,
+    ) -> Result<(), RdfDiagnostic> {
+        super::validate::validate_record(record)?;
+        self.push_record_unchecked(record);
+        Ok(())
+    }
+
+    pub(crate) fn push_record_unchecked(&mut self, record: &super::mutable::RecordValues) {
+        use super::mutable::RecordKind;
+        use crate::backend::TermFactory as _;
+        let q = &record.quad;
+        let s = self.intern_value(&q.s);
+        let p = self.intern_value(&q.p);
+        let o = self.intern_value(&q.o);
+        let g = q.g.as_ref().map(|g| self.intern_value(g));
+        match record.kind {
+            RecordKind::Ordinary => self.push_quad(s, p, o, g),
+            RecordKind::Reifier => self.push_reifier_in_graph(s, o, g),
+            RecordKind::Annotation => self.push_annotation_in_graph(s, p, o, g),
+        }
+    }
+
+    /// Push a quad and return its actual deduplicated-row handle.
+    ///
+    /// A duplicate returns the existing row's handle; a new quad returns its
+    /// newly assigned handle. The handle is immediately valid for
+    /// [`attach_location`](Self::attach_location), and remains in builder push
+    /// order until freezing remaps source locations to the frozen row order.
+    /// `g == None` names the default graph, and graph identity participates in
+    /// deduplication.
+    #[must_use]
+    pub fn push_quad_with_handle(
+        &mut self,
+        s: TermId,
+        p: TermId,
+        o: TermId,
+        g: Option<TermId>,
+    ) -> QuadHandle {
+        let row = QuadRow { s, p, o, g };
+        QuadHandle::from_index(store_once(&mut self.quads, &mut self.quad_index, row))
+    }
+
+    /// Bind a reifier resource to a triple term (C0.4). Several reifiers MAY bind
+    /// one triple term; an identical `(reifier, triple)` binding pushed twice
+    /// collapses to one.
+    ///
+    /// Interns `rdf:reifies` into the term table so the side-table is always
+    /// projectable as virtual `reifier rdf:reifies <<…>>` quads
+    /// ([`RdfDataset::reifier_quads`]) — without it, a dataset rebuilt purely from
+    /// `push_owned_reifier` (e.g. a named-graph projection) would carry reifiers the
+    /// renderer / pattern-matcher cannot see, because the predicate id is absent.
+    pub fn push_reifier(&mut self, reifier: TermId, triple: TermId) {
+        self.push_reifier_in_graph(reifier, triple, None);
+    }
+
+    /// Like [`push_reifier`](Self::push_reifier) but records the named graph the
+    /// reifier declaration was asserted in (`None` = default graph). A `(reifier,
+    /// triple, graph)` triplet pushed twice collapses to one; the SAME `(reifier,
+    /// triple)` in two distinct graphs is two bindings.
+    pub fn push_reifier_in_graph(&mut self, reifier: TermId, triple: TermId, g: Option<TermId>) {
+        if self.reifies_predicate.is_none() {
+            self.reifies_predicate = Some(self.intern_iri(purrdf_iri::vocab::rdf::REIFIES));
+        }
+        let binding = (reifier, triple, g);
+        store_once(&mut self.reifiers, &mut self.reifier_index, binding);
+    }
+
+    /// Reserve room for `rows` more reifier bindings, table and dedup index together.
+    ///
+    /// The RDF 1.2 twin of [`reserve_for_replay`](Self::reserve_for_replay), split out
+    /// because a source states its overlay size separately from its base-quad count
+    /// (a graph with no reifiers at all must reserve nothing for them). A hint, never
+    /// a contract. See that method for why this is not public.
+    pub(crate) fn reserve_reifiers(&mut self, rows: usize) {
+        reserve_store_once(&mut self.reifiers, &mut self.reifier_index, rows);
+    }
+
+    /// Reserve room for `rows` more statement annotations, table and dedup index
+    /// together. The annotation twin of
+    /// [`reserve_reifiers`](Self::reserve_reifiers); the same hint discipline applies.
+    pub(crate) fn reserve_annotations(&mut self, rows: usize) {
+        reserve_store_once(&mut self.annotations, &mut self.annotation_index, rows);
+    }
+
+    /// The predicate implicitly interned by reifier insertion, if any. Native
+    /// rewrite observers use this actual ID without changing allocation order.
+    pub(crate) const fn reifies_predicate(&self) -> Option<TermId> {
+        self.reifies_predicate
+    }
+
+    /// Push a statement annotation `(reifier, predicate, object)`. Duplicate
+    /// annotations collapse to one (C0.5).
+    pub fn push_annotation(&mut self, reifier: TermId, p: TermId, o: TermId) {
+        self.push_annotation_in_graph(reifier, p, o, None);
+    }
+
+    /// Like [`push_annotation`](Self::push_annotation) but records the named graph the
+    /// annotation was asserted in (`None` = default graph); see
+    /// [`push_reifier_in_graph`](Self::push_reifier_in_graph).
+    pub fn push_annotation_in_graph(
+        &mut self,
+        reifier: TermId,
+        p: TermId,
+        o: TermId,
+        g: Option<TermId>,
+    ) {
+        let annotation = (reifier, p, o, g);
+        store_once(
+            &mut self.annotations,
+            &mut self.annotation_index,
+            annotation,
+        );
+    }
+
+    /// Attach a source location to a previously pushed quad, identified by its
+    /// [`QuadHandle`] (the dense ordinal of the deduplicated quad). Sparse: only
+    /// quads with a recorded location are stored. An empty location is ignored.
+    /// A handle that names no current row is also ignored; it cannot attach a
+    /// location to a different row inserted later.
+    pub fn attach_location(&mut self, handle: QuadHandle, loc: RdfLocation) {
+        if handle.index() < self.quads.len() && !loc.is_empty() {
+            self.locations.push((handle, loc));
+        }
+    }
+
+    /// The [`QuadHandle`] that the next [`push_quad`](Self::push_quad) call will
+    /// assign to a *newly seen* quad — i.e. the current deduplicated-quad count.
+    /// A duplicate push does not realize this proposed handle. Use
+    /// [`push_quad_with_handle`](Self::push_quad_with_handle) when the next quad
+    /// might already be present and its source location needs attaching.
+    pub fn next_quad_handle(&self) -> QuadHandle {
+        QuadHandle::from_index(self.quads.len() as u32)
+    }
+
+    /// Validate and freeze originally admitted native graph buffers by value.
+    /// Shared publication happens later at the caller's fallible shared home.
+    ///
+    /// # Errors
+    /// Returns physical refusal or the same RDF diagnostic as resident freeze.
+    pub fn freeze_with_memory<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<RdfDataset, NativeBuildError> {
+        let buffers = self.native_buffer_bytes()?;
+        if let Err(error) = super::validate::validate_with_memory(&self, memory) {
+            drop(self);
+            memory.release_bytes(buffers)?;
+            return Err(error);
+        }
+        self.materialize_with_memory(memory)
+            .map_err(NativeBuildError::Storage)
+    }
+
+    fn native_buffer_bytes(&self) -> Result<usize, StorageError> {
+        fn array<T>(values: &Vec<T>) -> Result<usize, StorageError> {
+            std::alloc::Layout::array::<T>(values.capacity())
+                .map(|layout| layout.size())
+                .map_err(|_| StorageError::SizeOverflow)
+        }
+        let dropped_indexes = [
+            self.quad_index.capacity(),
+            self.reifier_index.capacity(),
+            self.annotation_index.capacity(),
+        ]
+        .into_iter()
+        .try_fold(0usize, |total, capacity| {
+            total
+                .checked_add(
+                    crate::hash::hash_table_allocation_bound::<u32>(capacity)
+                        .ok_or(StorageError::SizeOverflow)?,
+                )
+                .ok_or(StorageError::SizeOverflow)
+        })?;
+        [
+            self.interner.buffer_bytes()?,
+            array(&self.quads)?,
+            array(&self.reifiers)?,
+            array(&self.annotations)?,
+            array(&self.locations)?,
+            self.locations
+                .iter()
+                .try_fold(0usize, |total, (_, location)| {
+                    [
+                        location.path.as_ref(),
+                        location.logical.as_ref(),
+                        location.subject.as_ref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .try_fold(total, |total, text| {
+                        total
+                            .checked_add(text.capacity())
+                            .ok_or(StorageError::SizeOverflow)
+                    })
+                })?,
+            array(&self.declared_graphs)?,
+            array(&self.used_scopes)?,
+            dropped_indexes,
+            self.derivation_predicate
+                .as_ref()
+                .map_or(0, String::capacity),
+        ]
+        .into_iter()
+        .try_fold(0usize, |total, bytes| {
+            total.checked_add(bytes).ok_or(StorageError::SizeOverflow)
+        })
+    }
+
+    /// Destroy originally admitted builder buffers before releasing their charge.
+    ///
+    /// # Errors
+    /// Returns layout overflow or the original admission's release failure.
+    pub fn discard_with_memory<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        let bytes = self.native_buffer_bytes()?;
+        drop(self);
+        memory.release_bytes(bytes)
+    }
+
+    /// Validate structure (positional constraints, ID-reference validity,
+    /// triple-term acyclicity) and FREEZE into an immutable, deterministically
+    /// ordered, deduplicated `Arc<RdfDataset>`.
+    ///
+    /// Per the no-optionality doctrine this HARD-fails (`Err`) on malformed
+    /// structure — there is no degraded fallback and no silent default.
+    pub fn freeze(self) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        self.validate().map(ValidatedRdfDatasetBuilder::freeze)
+    }
+
+    /// Validate structure and return the type-state that is allowed to materialize
+    /// the frozen dataset.
+    pub fn validate(self) -> Result<ValidatedRdfDatasetBuilder, RdfDiagnostic> {
+        super::validate::validate(&self)?;
+        Ok(ValidatedRdfDatasetBuilder { inner: self })
+    }
+
+    /// Validate native buffers under their original physical admission.
+    ///
+    /// # Errors
+    /// Returns storage refusal or the original admitted RDF diagnostic.
+    pub fn validate_with_memory<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<ValidatedRdfDatasetBuilder, NativeBuildError> {
+        let buffers = self.native_buffer_bytes()?;
+        if let Err(error) = super::validate::validate_with_memory(&self, memory) {
+            drop(self);
+            memory.release_bytes(buffers)?;
+            return Err(error);
+        }
+        Ok(ValidatedRdfDatasetBuilder { inner: self })
+    }
+
+    /// Borrow the accumulated quad rows (validation reads these).
+    pub(crate) fn quad_rows(&self) -> &[QuadRow] {
+        &self.quads
+    }
+
+    /// Borrow the accumulated named graph declarations (validation reads these).
+    pub(crate) fn declared_graph_rows(&self) -> &[TermId] {
+        &self.declared_graphs
+    }
+
+    /// Borrow the accumulated reifier bindings (validation reads these).
+    pub(crate) fn reifier_rows(&self) -> &[(TermId, TermId, Option<TermId>)] {
+        &self.reifiers
+    }
+
+    /// Borrow the accumulated annotation rows (validation reads these).
+    pub(crate) fn annotation_rows(&self) -> &[(TermId, TermId, TermId, Option<TermId>)] {
+        &self.annotations
+    }
+
+    /// Consume the builder and materialize the frozen dataset. Called only by
+    /// [`freeze`](Self::freeze) AFTER validation has passed.
+    fn materialize(self) -> RdfDataset {
+        let mut resident = Resident;
+        let mut memory = Memory::resume(
+            &mut resident,
+            self.native_buffer_bytes()
+                .expect("resident graph buffer layout"),
+        );
+        self.materialize_with_memory(&mut memory)
+            .expect("resident graph materialization allocation failed")
+    }
+    fn materialize_with_memory<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<RdfDataset, StorageError> {
+        let discarded_indexes = [
+            self.quad_index.capacity(),
+            self.reifier_index.capacity(),
+            self.annotation_index.capacity(),
+        ]
+        .into_iter()
+        .try_fold(0usize, |total, capacity| {
+            total
+                .checked_add(
+                    crate::hash::hash_table_allocation_bound::<u32>(capacity)
+                        .ok_or(StorageError::SizeOverflow)?,
+                )
+                .ok_or(StorageError::SizeOverflow)
+        })?;
+        let scope_bytes = std::alloc::Layout::array::<BlankScope>(self.used_scopes.capacity())
+            .map_err(|_| StorageError::SizeOverflow)?
+            .size();
+        let Self {
+            interner,
+            quads,
+            quad_index,
+            mut reifiers,
+            reifier_index,
+            mut annotations,
+            annotation_index,
+            locations,
+            declared_graphs,
+            used_scopes,
+            derivation_predicate,
+            ..
+        } = self;
+        drop(quad_index);
+        drop(reifier_index);
+        drop(annotation_index);
+        drop(used_scopes);
+        memory.release_bytes(discarded_indexes)?;
+        memory.release_bytes(scope_bytes)?;
+
+        // Resolve the configured derivation-predicate IRI to its frozen `TermId`
+        // via a lookup-only probe (never interns): terms are frozen from this
+        // point on, so an IRI that was configured but never actually interned
+        // resolves to `None` — "no derivations present", not an error.
+        let derivation_predicate_iri = derivation_predicate
+            .map(|text| -> Result<Box<str>, StorageError> {
+                let exact = memory.string(&text)?;
+                memory.release_string(text)?;
+                Ok(exact.into_boxed_str())
+            })
+            .transpose()?;
+        let derivation_predicate = derivation_predicate_iri
+            .as_deref()
+            .and_then(|iri| interner.lookup_iri(iri));
+
+        // Deterministic, reproducible frozen order: sort by id tuples. Terms keep
+        // their interning (allocation) order, which is itself deterministic for a
+        // fixed push sequence.
+        //
+        // A `QuadHandle` addresses a quad by its FROZEN ordinal, but locations are
+        // pushed keyed by the *push-order* ordinal. Sorting the quads moves each one
+        // to a new position, so every location handle must be remapped to its quad's
+        // post-sort index — otherwise `location_of` returns a *different* quad's
+        // location, an LSP break for any consumer reading through the compat bridge.
+        let (quads, mut locations) = if locations.is_empty() {
+            let mut quads = quads;
+            quads.sort_unstable();
+            (quads, locations)
+        } else {
+            let old_quad_bytes = std::alloc::Layout::array::<QuadRow>(quads.capacity())
+                .map_err(|_| StorageError::SizeOverflow)?
+                .size();
+            let mut indexed = memory.collect(
+                quads
+                    .into_iter()
+                    .enumerate()
+                    .map(|(push, row)| (row, push as u32)),
+            )?;
+            memory.release_bytes(old_quad_bytes)?;
+            indexed.sort_unstable_by_key(|(row, _)| *row);
+
+            // Push ordinals are dense, so a dense remap is both smaller and faster
+            // than hashing each ordinal. This allocation exists only for datasets
+            // that actually carry source locations.
+            let mut push_to_frozen =
+                memory.collect(core::iter::repeat_n(u32::MAX, indexed.len()))?;
+            let old_indexed_bytes = std::alloc::Layout::array::<(QuadRow, u32)>(indexed.capacity())
+                .map_err(|_| StorageError::SizeOverflow)?
+                .size();
+            let quads = memory.collect(indexed.into_iter().enumerate().map(
+                |(frozen, (row, push))| {
+                    push_to_frozen[push as usize] = frozen as u32;
+                    row
+                },
+            ))?;
+            memory.release_bytes(old_indexed_bytes)?;
+            let old_location_bytes =
+                std::alloc::Layout::array::<(QuadHandle, RdfLocation)>(locations.capacity())
+                    .map_err(|_| StorageError::SizeOverflow)?
+                    .size();
+            let locations = memory.collect(locations.into_iter().filter_map(|(handle, loc)| {
+                push_to_frozen
+                    .get(handle.index())
+                    .copied()
+                    .filter(|&frozen| frozen != u32::MAX)
+                    .map(|frozen| (QuadHandle::from_index(frozen), loc))
+            }))?;
+            memory.release_bytes(old_location_bytes)?;
+            memory.release_vec(push_to_frozen)?;
+            (quads, locations)
+        };
+        reifiers.sort_unstable();
+        annotations.sort_unstable();
+        locations.sort_unstable_by_key(|(handle, _)| *handle);
+
+        // The frozen `GRAPH ?g` enumeration set: every graph term that owns a quad,
+        // UNION every graph the caller explicitly declared (possibly empty).
+        let mut named_graphs: Vec<TermId> = declared_graphs;
+        // `filter_map` reports a zero lower bound, so the three `extend`s below
+        // would otherwise grow by doubling; the exact upper bound is known here.
+        //
+        // Guarded by a scan for any graph slot at all, because the upper bound is the
+        // ROW COUNT and the common dataset has no named graph whatsoever: reserving
+        // unconditionally asks the allocator for one `TermId` per row of a
+        // default-graph-only dataset and then frees every byte of it again at
+        // `into_boxed_slice`. The scan allocates nothing and reads the same slices the
+        // extends are about to.
+        if quads.iter().any(|q| q.g.is_some())
+            || reifiers.iter().any(|(_, _, g)| g.is_some())
+            || annotations.iter().any(|(_, _, _, g)| g.is_some())
+        {
+            let additional = quads
+                .len()
+                .checked_add(reifiers.len())
+                .and_then(|count| count.checked_add(annotations.len()))
+                .ok_or(StorageError::SizeOverflow)?;
+            let required = named_graphs
+                .len()
+                .checked_add(additional)
+                .ok_or(StorageError::SizeOverflow)?;
+            memory.reserve(&mut named_graphs, required)?;
+        }
+        memory.extend(&mut named_graphs, quads.iter().filter_map(|q| q.g))?;
+        // A reifier / annotation declared inside a `GRAPH g { … }` block owns no base
+        // quad in g (the `<< … >>` folds entirely into the side-tables), so g would be
+        // invisible to `GRAPH ?g` enumeration unless its overlay rows are counted too.
+        memory.extend(
+            &mut named_graphs,
+            reifiers.iter().filter_map(|(_, _, g)| *g),
+        )?;
+        memory.extend(
+            &mut named_graphs,
+            annotations.iter().filter_map(|(_, _, _, g)| *g),
+        )?;
+        named_graphs.sort_unstable();
+        named_graphs.dedup();
+
+        let caps = compute_capabilities(
+            &interner.terms,
+            !named_graphs.is_empty(),
+            &reifiers,
+            &annotations,
+            &locations,
+        );
+
+        Ok(RdfDataset::from_parts(
+            memory.boxed_slice(interner.arena)?,
+            memory.boxed_slice(interner.terms)?,
+            memory.boxed_slice(quads)?,
+            memory.boxed_slice(reifiers)?,
+            memory.boxed_slice(annotations)?,
+            memory.boxed_slice(locations)?,
+            caps,
+            memory.boxed_slice(named_graphs)?,
+            interner.index,
+            interner.content_ids,
+            interner.content_scheme,
+            derivation_predicate,
+            derivation_predicate_iri,
+        ))
+    }
+}
+
+use crate::{RdfDiagnostic, RdfStoreCapabilities};
+
+/// The composite blank-label binding that matches how
+/// [`RdfDatasetBuilder::intern_owned_term_scoped`] binds a bare
+/// [`RdfTerm::BlankNode`](crate::RdfTerm::BlankNode) at `scope`.
+///
+/// The two MUST agree, so this states the projection once instead of restating
+/// the rule: at [`BlankScope::DEFAULT`] the owned rendering is decoded (the
+/// exact inverse of [`BlankScope::qualify_label`]); at an explicit scope the
+/// label is a standardize-apart relabeling taken verbatim into that scope.
+fn owned_binding(scope: BlankScope) -> crate::cdt_blank::BlankBinding {
+    if scope == BlankScope::DEFAULT {
+        crate::cdt_blank::BlankBinding::Decoded(LabelAlphabet::Unconstrained)
+    } else {
+        crate::cdt_blank::BlankBinding::Ambient(scope)
+    }
+}
+
+/// Bind the blank labels a composite literal from the OWNED model embeds, and
+/// return the literal ready to intern. Any other literal is returned unchanged.
+fn bind_owned_literal(literal: &RdfLiteral, scope: BlankScope) -> RdfLiteral {
+    let datatype_iri = literal.datatype_iri();
+    if !crate::cdt_blank::is_cdt_datatype(datatype_iri) {
+        return literal.clone();
+    }
+    let bound = crate::cdt_blank::bind_cdt_blank_labels_unchecked(
+        &literal.lexical_form,
+        datatype_iri,
+        owned_binding(scope),
+    );
+    RdfLiteral {
+        lexical_form: bound.into_owned(),
+        ..literal.clone()
+    }
+}
+
+/// Compute the dataset's capability flags ONCE at freeze, from the frozen tables.
+fn compute_capabilities(
+    terms: &[InternedTerm],
+    named_graphs: bool,
+    reifiers: &[(TermId, TermId, Option<TermId>)],
+    annotations: &[(TermId, TermId, TermId, Option<TermId>)],
+    locations: &[(QuadHandle, RdfLocation)],
+) -> RdfStoreCapabilities {
+    RdfStoreCapabilities {
+        named_graphs,
+        quoted_triples: terms
+            .iter()
+            .any(|t| matches!(t, InternedTerm::Triple { .. })),
+        reifiers: !reifiers.is_empty(),
+        annotations: !annotations.is_empty(),
+        source_locations: !locations.is_empty(),
+        // The frozen dataset is the hot graph only; envelope concerns (loss
+        // records, lookaside) live elsewhere (C0.6).
+        loss_records: false,
+        lookaside: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RdfTextDirection;
+    use crate::ir::term::{RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_STRING};
+    use purrdf_testkit::prop::prelude::*;
+
+    /// The content-id recognition prefix these tests configure.
+    const SCHEME: &str = "blake3:";
+
+    fn lit_simple(s: &str) -> RdfLiteral {
+        RdfLiteral::simple(s)
+    }
+
+    #[test]
+    fn intern_iri_is_idempotent() {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri("http://example.org/x");
+        let c = b.intern_iri("http://example.org/x");
+        let d = b.intern_iri("http://example.org/y");
+        assert_eq!(a, c);
+        assert_ne!(a, d);
+    }
+
+    #[test]
+    fn iri_hash_matches_stored_form_across_lengths_and_table_growth() {
+        let mut interner = Interner::new();
+        let iris: Vec<String> = (2..=33)
+            .map(|len| format!("a:{}", "x".repeat(len - 2)))
+            .chain((0..=128).map(|len| format!("http://example.org/{}", "x".repeat(len))))
+            .collect();
+        let ids: Vec<TermId> = iris
+            .iter()
+            .map(|iri| interner.intern(TermLookup::Iri(iri)))
+            .collect();
+        for (iri, id) in iris.iter().zip(ids) {
+            assert_eq!(
+                hash_lookup_value(&TermLookup::Iri(iri)),
+                hash_stored_value(interner.arena(), interner.term(id)),
+                "borrowed and stored IRI hashes differ at length {}",
+                iri.len()
+            );
+            assert_eq!(interner.lookup_iri(iri), Some(id));
+            assert_eq!(interner.intern(TermLookup::Iri(iri)), id);
+        }
+    }
+
+    #[test]
+    fn all_term_kinds_match_borrowed_and_stored_hashes() {
+        let mut interner = Interner::new();
+        let iri = TermLookup::Iri(RDF_DIR_LANG_STRING);
+        let datatype = interner.intern(iri);
+        let blank = TermLookup::Blank {
+            label: "b",
+            scope: BlankScope(7),
+        };
+        let blank_id = interner.intern(blank);
+        let literal = TermLookup::Literal {
+            lexical: "hello",
+            datatype,
+            language: Some("en"),
+            direction: Some(RdfTextDirection::Ltr),
+        };
+        let literal_id = interner.intern(literal);
+        let triple = TermLookup::Triple {
+            s: blank_id,
+            p: datatype,
+            o: literal_id,
+        };
+        let triple_id = interner.intern(triple);
+        // Rehash the table after every variant is present, then verify that
+        // borrowed keys still find their original stored representatives.
+        for n in 0..256 {
+            interner.intern(TermLookup::Iri(&format!("http://example.org/fill/{n}")));
+        }
+        for (lookup, id) in [
+            (iri, datatype),
+            (blank, blank_id),
+            (literal, literal_id),
+            (triple, triple_id),
+        ] {
+            let hash = hash_lookup_value(&lookup);
+            assert_eq!(hash, hash_stored_value(interner.arena(), interner.term(id)));
+            assert_eq!(interner.intern(lookup), id);
+        }
+        assert_eq!(interner.term_count(), 260);
+    }
+
+    /// No fabricated default: a plain `new`/`default` builder has content-id
+    /// recognition INACTIVE.
+    #[test]
+    fn new_builder_has_no_content_scheme() {
+        let b = RdfDatasetBuilder::new();
+        assert!(b.interner.content_scheme.is_none());
+        assert!(b.derivation_predicate.is_none());
+    }
+
+    /// `with_content_addressing` is the single construction path: it fixes the
+    /// scheme (and, optionally, the derivation predicate) before any intern.
+    #[test]
+    fn with_content_addressing_sets_config() {
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
+        let b = RdfDatasetBuilder::with_content_addressing(
+            scheme.clone(),
+            Some("http://example.org/derivedFrom".to_string()),
+        );
+        assert_eq!(b.interner.content_scheme, Some(scheme));
+        assert_eq!(
+            b.derivation_predicate.as_deref(),
+            Some("http://example.org/derivedFrom")
+        );
+    }
+
+    /// A recognized `blake3:<64hex>` IRI gets a side-table entry with the exact
+    /// decoded bytes.
+    #[test]
+    fn intern_iri_recognizes_content_id() {
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let hex = "ab".repeat(32);
+        let id = b.intern_iri(&format!("{SCHEME}{hex}"));
+        let expected = Blake3ContentId::from_hex(&hex).expect("valid hex");
+        assert_eq!(b.interner.content_id(id), Some(expected));
+    }
+
+    /// Interning the same content-id IRI twice yields the same `TermId` and
+    /// exactly one side-table entry (idempotent, no double-insert drift).
+    #[test]
+    fn intern_iri_content_id_is_idempotent() {
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let iri = format!("{SCHEME}{}", "cd".repeat(32));
+        let a = b.intern_iri(&iri);
+        let c = b.intern_iri(&iri);
+        assert_eq!(a, c);
+        assert_eq!(b.interner.content_ids.len(), 1);
+    }
+
+    /// A prefix hit with a malformed hex suffix is an ORDINARY IRI, not an
+    /// error: no side-table entry, but interning still succeeds.
+    #[test]
+    fn intern_iri_rejects_malformed_suffix_as_ordinary_iri() {
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+
+        let too_short = format!("{SCHEME}{}", "a".repeat(63));
+        let too_long = format!("{SCHEME}{}", "a".repeat(65));
+        let non_hex = format!("{SCHEME}{}z", "a".repeat(63));
+        let uppercase = format!("{SCHEME}{}", "AB".repeat(32));
+
+        for iri in [&too_short, &too_long, &non_hex, &uppercase] {
+            let id = b.intern_iri(iri);
+            assert_eq!(
+                b.interner.content_id(id),
+                None,
+                "unexpected match for {iri}"
+            );
+        }
+        assert!(b.interner.content_ids.is_empty());
+    }
+
+    /// An ordinary IRI with no content-id prefix at all gets no entry.
+    #[test]
+    fn intern_iri_ordinary_iri_has_no_content_id() {
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let id = b.intern_iri("http://example.org/x");
+        assert_eq!(b.interner.content_id(id), None);
+    }
+
+    /// Recognition is IRI-arm only: a blank node whose label happens to look
+    /// like a content-id IRI is never recognized (rejected by construction,
+    /// not by a runtime check).
+    #[test]
+    fn intern_blank_never_recognized_as_content_id() {
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
+        let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
+        let label = format!("{SCHEME}{}", "ef".repeat(32));
+        let id = b.intern_blank(&label, BlankScope::DEFAULT);
+        assert_eq!(b.interner.content_id(id), None);
+        assert!(b.interner.content_ids.is_empty());
+    }
+
+    /// With recognition inactive (plain `new()`), a `blake3:<64hex>` IRI is
+    /// interned as an ordinary IRI: no side-table entry.
+    #[test]
+    fn intern_iri_no_recognition_when_scheme_inactive() {
+        let mut b = RdfDatasetBuilder::new();
+        let id = b.intern_iri(&format!("{SCHEME}{}", "12".repeat(32)));
+        assert_eq!(b.interner.content_id(id), None);
+        assert!(b.interner.content_ids.is_empty());
+    }
+
+    #[test]
+    fn intern_blank_is_idempotent() {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_blank("b0", BlankScope::DEFAULT);
+        let c = b.intern_blank("b0", BlankScope::DEFAULT);
+        assert_eq!(a, c);
+    }
+
+    #[test]
+    fn intern_literal_is_idempotent() {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_literal(lit_simple("x"));
+        let c = b.intern_literal(lit_simple("x"));
+        assert_eq!(a, c);
+    }
+
+    /// C0.1: a plain literal expands to `xsd:string`, so `"x"` and an explicit
+    /// `"x"^^xsd:string` intern to the same id.
+    #[test]
+    fn datatype_expansion_equality() {
+        let mut b = RdfDatasetBuilder::new();
+        let plain = b.intern_literal(RdfLiteral::simple("x"));
+        let explicit = b.intern_literal(RdfLiteral::typed("x", XSD_STRING));
+        assert_eq!(plain, explicit);
+    }
+
+    /// C0.1: base direction participates in identity — same lexical + language but
+    /// different direction are distinct.
+    #[test]
+    fn directional_literal_distinctness() {
+        let mut b = RdfDatasetBuilder::new();
+        let base = RdfLiteral {
+            lexical_form: "x".to_string(),
+            datatype: None,
+            language: Some("en".to_string()),
+            direction: Some(RdfTextDirection::Ltr),
+        };
+        let mut other = base.clone();
+        other.direction = Some(RdfTextDirection::Rtl);
+        let none = RdfLiteral {
+            direction: None,
+            ..base.clone()
+        };
+        let ltr = b.intern_literal(base);
+        let rtl = b.intern_literal(other);
+        let no_dir = b.intern_literal(none);
+        assert_ne!(ltr, rtl);
+        assert_ne!(ltr, no_dir);
+        assert_ne!(rtl, no_dir);
+        let dataset = b.freeze().unwrap();
+        for (id, direction, datatype) in [
+            (ltr, Some(RdfTextDirection::Ltr), RDF_DIR_LANG_STRING),
+            (rtl, Some(RdfTextDirection::Rtl), RDF_DIR_LANG_STRING),
+            (no_dir, None, RDF_LANG_STRING),
+        ] {
+            let expected = crate::TermValue::Literal {
+                lexical_form: "x".into(),
+                datatype: datatype.into(),
+                language: Some("en".into()),
+                direction,
+            };
+            assert_eq!(dataset.term_value(id), expected);
+            assert_eq!(dataset.term_id_by_value(&expected), Some(id));
+        }
+    }
+
+    /// C0.1: language tags are lowercased for the key, so `@EN` and `@en` are equal.
+    #[test]
+    fn language_lowercasing() {
+        let mut b = RdfDatasetBuilder::new();
+        let upper = b.intern_literal(RdfLiteral::language_tagged("x", "EN"));
+        let lower = b.intern_literal(RdfLiteral::language_tagged("x", "en"));
+        assert_eq!(upper, lower);
+    }
+
+    /// A language-tagged literal expands to `rdf:langString`, distinct from a plain
+    /// `xsd:string` literal of the same lexical form.
+    #[test]
+    fn lang_tagged_distinct_from_plain() {
+        let mut b = RdfDatasetBuilder::new();
+        let plain = b.intern_literal(RdfLiteral::simple("x"));
+        let tagged = b.intern_literal(RdfLiteral::language_tagged("x", "en"));
+        assert_ne!(plain, tagged);
+    }
+
+    /// C0.2: blank-node scope participates in the key.
+    #[test]
+    fn blank_scope_distinctness() {
+        let mut b = RdfDatasetBuilder::new();
+        let s1 = b.intern_blank("b", BlankScope(1));
+        let s2 = b.intern_blank("b", BlankScope(2));
+        let s1_again = b.intern_blank("b", BlankScope(1));
+        assert_ne!(s1, s2);
+        assert_eq!(s1, s1_again);
+    }
+
+    /// C0.3: triple terms are identified structurally by resolved `(s, p, o)`, and
+    /// a triple term nests as the object of another triple and stays reusable.
+    #[test]
+    fn nested_triple_term_structural_identity() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = b.intern_iri("http://example.org/s");
+        let p = b.intern_iri("http://example.org/p");
+        let o = b.intern_iri("http://example.org/o");
+
+        let t1 = b.intern_triple(s, p, o);
+        let t2 = b.intern_triple(s, p, o);
+        assert_eq!(t1, t2, "same (s,p,o) → same triple-term id");
+
+        // Nest the triple term as the object of an outer triple, twice.
+        let outer_p = b.intern_iri("http://example.org/asserts");
+        let outer1 = b.intern_triple(s, outer_p, t1);
+        let outer2 = b.intern_triple(s, outer_p, t2);
+        assert_eq!(outer1, outer2, "nested triple term is reusable by id");
+
+        // The inner triple term remains a distinct, single interned term.
+        let t3 = b.intern_triple(s, p, o);
+        assert_eq!(t1, t3);
+    }
+
+    /// A small helper interning a fresh IRI by suffix.
+    fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
+        b.intern_iri(&format!("http://example.org/{n}"))
+    }
+
+    /// `dataset → owned → dataset` preserves blank-node `(label, scope)` IDENTITY:
+    /// the owned rendering encodes, and re-interning at the default scope
+    /// decodes, so a re-materialized dataset holds the SAME nodes rather than a
+    /// doubly-encoded copy of them.
+    #[test]
+    fn the_owned_round_trip_preserves_blank_label_identity() {
+        for &(label, scope) in &[
+            ("b0", BlankScope::DEFAULT),
+            ("a.b", BlankScope::DEFAULT),
+            ("a.s1", BlankScope::DEFAULT),
+            ("x", BlankScope(2)),
+            ("a.b", BlankScope(3)),
+        ] {
+            let mut b = RdfDatasetBuilder::new();
+            let s = b.intern_blank(label, scope);
+            let (p, o) = (iri(&mut b, "p"), iri(&mut b, "o"));
+            b.push_quad(s, p, o, None);
+            let dataset = b.freeze().expect("valid");
+
+            let mut again = RdfDatasetBuilder::new();
+            for quad in dataset.owned_quads() {
+                again.push_owned_quad(&quad);
+            }
+            let round_tripped = again.freeze().expect("valid");
+
+            let blanks: Vec<(String, BlankScope)> = (0..round_tripped.term_count())
+                .filter_map(
+                    |index| match round_tripped.resolve(TermId::from_index(index as u32)) {
+                        TermRef::Blank { label, scope } => Some((label.to_owned(), scope)),
+                        _ => None,
+                    },
+                )
+                .collect();
+            assert_eq!(
+                blanks,
+                vec![(label.to_owned(), scope)],
+                "owned round trip of {label:?} @ {scope:?}"
+            );
+        }
+    }
+
+    /// Standardize-apart stays INJECTIVE: merging a dataset that holds the same
+    /// label at two different scopes keeps the two nodes apart in the merged
+    /// scope, which is why an explicit non-default scope keeps the qualified
+    /// spelling instead of decoding it.
+    #[test]
+    fn push_dataset_keeps_two_scopes_of_one_label_apart() {
+        let source = {
+            let mut b = RdfDatasetBuilder::new();
+            let zero = b.intern_blank("b", BlankScope::DEFAULT);
+            let one = b.intern_blank("b", BlankScope(1));
+            let (p, o) = (iri(&mut b, "p"), iri(&mut b, "o"));
+            b.push_quad(zero, p, o, None);
+            b.push_quad(one, p, o, None);
+            b.freeze().expect("valid")
+        };
+        let mut merged = RdfDatasetBuilder::new();
+        merged.push_dataset(&source);
+        let merged = merged.freeze().expect("valid");
+
+        let blanks: std::collections::BTreeSet<(String, BlankScope)> = (0..merged.term_count())
+            .filter_map(
+                |index| match merged.resolve(TermId::from_index(index as u32)) {
+                    TermRef::Blank { label, scope } => Some((label.to_owned(), scope)),
+                    _ => None,
+                },
+            )
+            .collect();
+        assert_eq!(
+            blanks.len(),
+            2,
+            "the merge must not conflate two scopes of one label: {blanks:?}"
+        );
+    }
+
+    #[test]
+    fn freeze_dedupes_quads() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, None);
+        let ds = b.freeze().expect("valid");
+        assert_eq!(ds.quads().count(), 1, "duplicate quads collapse to one row");
+    }
+
+    #[test]
+    fn validated_builder_type_state_freezes_after_validation() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        b.push_quad(s, p, o, None);
+
+        let validated = b.validate().expect("well-formed builder validates");
+        let ds = validated.freeze();
+        assert_eq!(ds.quads().count(), 1);
+    }
+
+    #[test]
+    fn freeze_preserves_named_graphs() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let g = iri(&mut b, "g");
+        b.push_quad(s, p, o, None);
+        b.push_quad(s, p, o, Some(g));
+        let ds = b.freeze().expect("valid");
+        assert_eq!(
+            ds.quads().count(),
+            2,
+            "default and named graph are distinct"
+        );
+        assert!(ds.capabilities().named_graphs);
+        let graphs: Vec<_> = ds.quads().map(|q| q.g).collect();
+        assert!(graphs.contains(&None));
+        assert!(graphs.contains(&Some(g)));
+    }
+
+    #[test]
+    fn freeze_keeps_multiple_reifiers_for_one_triple() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let triple = b.intern_triple(s, p, o);
+        let r1 = iri(&mut b, "r1");
+        let r2 = iri(&mut b, "r2");
+        b.push_reifier(r1, triple);
+        b.push_reifier(r2, triple);
+        b.push_reifier(r1, triple); // duplicate binding collapses
+        let ds = b.freeze().expect("valid");
+        let reifiers: Vec<_> = ds.reifiers().collect();
+        assert_eq!(
+            reifiers.len(),
+            2,
+            "two distinct reifiers survive, dup collapses"
+        );
+        assert!(reifiers.contains(&(r1, triple)));
+        assert!(reifiers.contains(&(r2, triple)));
+    }
+
+    #[test]
+    fn freeze_dedupes_annotations() {
+        let mut b = RdfDatasetBuilder::new();
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let triple = b.intern_triple(s, p, o);
+        let r = iri(&mut b, "r");
+        let ap = iri(&mut b, "ap");
+        let ao = iri(&mut b, "ao");
+        b.push_reifier(r, triple);
+        b.push_annotation(r, ap, ao);
+        b.push_annotation(r, ap, ao);
+        let ds = b.freeze().expect("valid");
+        assert_eq!(
+            ds.annotations().count(),
+            1,
+            "duplicate annotation collapses"
+        );
+    }
+
+    /// `push_dataset` re-interns a foreign dataset's base quads into a fresh
+    /// builder's interner; quads shared with an already-merged dataset collapse.
+    #[test]
+    fn push_dataset_merges_and_dedupes_quads() {
+        let dataset_a = {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, o, o2) = (
+                iri(&mut b, "s"),
+                iri(&mut b, "p"),
+                iri(&mut b, "o"),
+                iri(&mut b, "o2"),
+            );
+            b.push_quad(s, p, o, None);
+            b.push_quad(s, p, o2, None);
+            b.freeze().expect("valid A")
+        };
+        let dataset_b = {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, s2, p, o, o2) = (
+                iri(&mut b, "s"),
+                iri(&mut b, "s2"),
+                iri(&mut b, "p"),
+                iri(&mut b, "o"),
+                iri(&mut b, "o2"),
+            );
+            b.push_quad(s2, p, o, None); // B-only quad
+            b.push_quad(s, p, o2, None); // shared with A → collapses on merge
+            b.freeze().expect("valid B")
+        };
+
+        let mut merged = RdfDatasetBuilder::new();
+        merged.push_dataset(&dataset_a);
+        merged.push_dataset(&dataset_b);
+        let merged = merged.freeze().expect("valid merged");
+
+        assert_eq!(
+            merged.quad_count(),
+            3,
+            "A(2) + B(2) with one shared quad → 3 distinct rows"
+        );
+        // The B-only quad resolves through the merged interner.
+        let has_b_only = merged.owned_quads().any(|q| {
+            q.subject == RdfTerm::Iri("http://example.org/s2".to_string())
+                && q.predicate == "http://example.org/p"
+                && q.object == RdfTerm::Iri("http://example.org/o".to_string())
+        });
+        assert!(has_b_only, "B-only quad survives the cross-dataset merge");
+    }
+
+    /// `push_dataset` carries the FULL RDF 1.2 statement layer: a merged dataset's
+    /// reifier bindings AND annotations survive, not just its base quads. (A
+    /// quad-only merge would silently drop these — the regression this guards.)
+    #[test]
+    fn push_dataset_carries_reifiers_and_annotations() {
+        let dataset = {
+            let mut b = RdfDatasetBuilder::new();
+            let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+            let triple = b.intern_triple(s, p, o);
+            let r = iri(&mut b, "r");
+            let ap = iri(&mut b, "ap");
+            let ao = iri(&mut b, "ao");
+            b.push_reifier(r, triple);
+            b.push_annotation(r, ap, ao);
+            b.freeze().expect("valid source")
+        };
+
+        let mut merged = RdfDatasetBuilder::new();
+        merged.push_dataset(&dataset);
+        let merged = merged.freeze().expect("valid merged");
+
+        assert_eq!(
+            merged.reifiers().count(),
+            1,
+            "reifier binding survives merge"
+        );
+        assert_eq!(merged.annotations().count(), 1, "annotation survives merge");
+
+        let reifier = merged.owned_reifiers().next().expect("one reifier");
+        assert_eq!(
+            reifier.reifier,
+            RdfTerm::Iri("http://example.org/r".to_string())
+        );
+        assert_eq!(
+            reifier.statement.subject,
+            RdfTerm::Iri("http://example.org/s".to_string())
+        );
+        let annotation = merged.owned_annotations().next().expect("one annotation");
+        assert_eq!(
+            annotation.reifier,
+            RdfTerm::Iri("http://example.org/r".to_string())
+        );
+        assert_eq!(annotation.predicate, "http://example.org/ap");
+        assert_eq!(
+            annotation.object,
+            RdfTerm::Iri("http://example.org/ao".to_string())
+        );
+    }
+
+    /// `push_dataset` must NOT collapse blank nodes that have the same label but
+    /// originate from DIFFERENT source datasets (standardize-apart, C0.2).
+    ///
+    /// WITHOUT standardize-apart these would collapse to one node.
+    #[test]
+    fn push_dataset_standardizes_apart_blank_nodes() {
+        // Dataset A: single quad  _:b0 <ex:p> <ex:o1>
+        let dataset_a = {
+            let mut b = RdfDatasetBuilder::new();
+            let s = b.intern_blank("b0", BlankScope::DEFAULT);
+            let p = b.intern_iri("http://example.org/p");
+            let o = b.intern_iri("http://example.org/o1");
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("valid A")
+        };
+
+        // Dataset B: single quad  _:b0 <ex:p> <ex:o2>  (same blank label, different object)
+        let dataset_b = {
+            let mut b = RdfDatasetBuilder::new();
+            let s = b.intern_blank("b0", BlankScope::DEFAULT);
+            let p = b.intern_iri("http://example.org/p");
+            let o = b.intern_iri("http://example.org/o2");
+            b.push_quad(s, p, o, None);
+            b.freeze().expect("valid B")
+        };
+
+        let mut merged = RdfDatasetBuilder::new();
+        merged.push_dataset(&dataset_a);
+        merged.push_dataset(&dataset_b);
+        let merged = merged.freeze().expect("valid merged");
+
+        // Both quads must survive: without standardize-apart the two _:b0 subjects
+        // would collapse into one node and one of the two objects would be lost.
+        assert_eq!(merged.quad_count(), 2, "both quads survive the merge");
+
+        // The two blank subject nodes must be DISTINCT (different TermIds / qualified
+        // labels), because they came from different source datasets.
+        let subjects: Vec<_> = merged.owned_quads().map(|q| q.subject).collect();
+        assert_eq!(subjects.len(), 2);
+        // Collect the unique subject labels; standardize-apart gives them distinct
+        // qualified labels via BlankScope::qualify_label.
+        let subject_labels: crate::FastSet<String> = subjects
+            .iter()
+            .filter_map(|t| {
+                if let RdfTerm::BlankNode(label) = t {
+                    Some(label.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            subject_labels.len(),
+            2,
+            "two distinct blank-node subjects after standardize-apart; got: {subject_labels:?}"
+        );
+    }
+
+    /// A `Strategy` producing one of a small fixed pool of distinct intern calls,
+    /// so we can count the distinct *values* requested and compare to `term_count`.
+    #[derive(Clone, Debug)]
+    enum Op {
+        Iri(u8),
+        Blank(u8, u32),
+        Literal(u8),
+    }
+
+    fn op_strategy() -> impl Strategy<Value = Op> {
+        prop_oneof![
+            (0u8..4).prop_map(Op::Iri),
+            (0u8..4, 0u32..3).prop_map(|(l, s)| Op::Blank(l, s)),
+            (0u8..4).prop_map(Op::Literal),
+        ]
+    }
+
+    prop_test! {
+        /// Idempotence holds across arbitrary call sequences, and `term_count`
+        /// never exceeds the number of distinct values interned.
+        ///
+        /// The distinct-value count is computed independently of the interner: a
+        /// literal also interns its datatype IRI, so each literal value contributes
+        /// itself plus its (shared) datatype term to the upper bound.
+        #[test]
+        fn property_idempotence_and_bounded_count(ops in prop::collection::vec(op_strategy(), 0..64)) {
+            let mut b = RdfDatasetBuilder::new();
+            // Map a value-key → the id it first produced, to assert idempotence.
+            let mut seen: crate::FastMap<String, TermId> = crate::FastMap::default();
+            // The set of distinct *terms* (value keys, incl. datatype IRIs) that
+            // SHOULD exist after the run — the exact upper bound for term_count.
+            let mut distinct_terms: crate::FastSet<String> = crate::FastSet::default();
+
+            for op in ops {
+                let (call_key, id) = match op {
+                    Op::Iri(n) => {
+                        let iri = format!("http://example.org/i{n}");
+                        distinct_terms.insert(format!("iri:{iri}"));
+                        (format!("iri:{iri}"), b.intern_iri(&iri))
+                    }
+                    Op::Blank(l, s) => {
+                        let key = format!("blank:{l}:{s}");
+                        distinct_terms.insert(key.clone());
+                        (key, b.intern_blank(&format!("b{l}"), BlankScope(s)))
+                    }
+                    Op::Literal(n) => {
+                        let lex = format!("v{n}");
+                        // Plain literal → xsd:string; both the literal and its
+                        // datatype IRI become distinct interned terms.
+                        distinct_terms.insert(format!("lit:{lex}"));
+                        distinct_terms.insert(format!("iri:{XSD_STRING}"));
+                        (format!("lit:{lex}"), b.intern_literal(RdfLiteral::simple(lex)))
+                    }
+                };
+
+                match seen.get(&call_key) {
+                    Some(&prev) => prop_assert_eq!(prev, id, "intern not idempotent"),
+                    None => {
+                        seen.insert(call_key, id);
+                    }
+                }
+            }
+
+            prop_assert_eq!(b.term_count(), distinct_terms.len());
+        }
+    }
+}
+
+#[cfg(test)]
+mod native_graph_birth_tests {
+    use super::*;
+
+    struct Grant {
+        live: usize,
+        limit: usize,
+        peak: usize,
+    }
+    impl Admission for Grant {
+        fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+            if live > self.limit {
+                return Err(StorageError::AdmissionFailed);
+            }
+            self.live = live;
+            self.peak = self.peak.max(live);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn native_graph_refuses_before_the_first_arena_allocation() {
+        let mut grant = Grant {
+            live: 0,
+            limit: 0,
+            peak: 0,
+        };
+        let mut memory = Memory::new(&mut grant);
+        let mut builder = RdfDatasetBuilder::new();
+        assert_eq!(
+            builder.intern_iri_with_memory("http://example.org/subject", &mut memory),
+            Err(StorageError::AdmissionFailed)
+        );
+        assert_eq!(builder.interner.arena.capacity(), 0);
+        assert_eq!(builder.interner.terms.capacity(), 0);
+        assert_eq!(builder.interner.index.capacity(), 0);
+        assert_eq!(memory.live_bytes(), 0);
+    }
+
+    #[test]
+    fn native_freeze_preserves_rdf12_rows_and_original_grant_through_indexes() {
+        let mut resident = RdfDatasetBuilder::new();
+        let mut builder = RdfDatasetBuilder::new();
+        let mut grant = Grant {
+            live: 0,
+            limit: usize::MAX,
+            peak: 0,
+        };
+        let mut memory = Memory::new(&mut grant);
+        let mut ids = [TermId::from_index(0); 5];
+        let mut resident_ids = ids;
+        for (index, iri) in [
+            "http://example.org/s",
+            "http://example.org/p",
+            "http://example.org/o",
+            "http://example.org/r",
+            "http://example.org/g",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            ids[index] = builder
+                .intern_iri_with_memory(iri, &mut memory)
+                .expect("native IRI");
+            resident_ids[index] = resident.intern_iri(iri);
+        }
+        let [s, p, o, r, g] = ids;
+        let [rs, rp, ro, rr, rg] = resident_ids;
+        let triple = builder
+            .intern_triple_with_memory(s, p, o, &mut memory)
+            .expect("native triple");
+        let resident_triple = resident.intern_triple(rs, rp, ro);
+        builder
+            .push_quad_with_memory(s, p, triple, Some(g), &mut memory)
+            .expect("native quad");
+        builder
+            .push_reifier_in_graph_with_memory(r, triple, Some(g), &mut memory)
+            .expect("native reifier");
+        builder
+            .push_annotation_in_graph_with_memory(r, p, o, Some(g), &mut memory)
+            .expect("native annotation");
+        resident.push_quad(rs, rp, resident_triple, Some(rg));
+        resident.push_reifier_in_graph(rr, resident_triple, Some(rg));
+        resident.push_annotation_in_graph(rr, rp, ro, Some(rg));
+        let resident = resident.freeze().expect("resident RDF 1.2 graph");
+        let mut graph = builder
+            .freeze_with_memory(&mut memory)
+            .expect("native RDF 1.2 graph");
+        graph
+            .warm_query_indexes_with_memory(&mut memory)
+            .expect("originally admitted query indexes");
+        assert_eq!(graph.rdf_row_count(), resident.rdf_row_count());
+        assert_eq!(graph.term_count(), resident.term_count());
+        assert_eq!(
+            graph.named_graphs().collect::<Vec<_>>(),
+            resident.named_graphs().collect::<Vec<_>>()
+        );
+        for index in 0..graph.term_count() {
+            let id = TermId::from_index(index as u32);
+            assert_eq!(graph.term_value(id), resident.term_value(id));
+        }
+        let live = memory.live_bytes();
+        assert!(live > 0);
+        graph
+            .warm_query_indexes_with_memory(&mut memory)
+            .expect("warmed graph borrows the original indexes");
+        assert_eq!(memory.live_bytes(), live);
+        drop(graph);
+        memory
+            .release_bytes(live)
+            .expect("graph dies before its original grant");
+        assert_eq!(memory.live_bytes(), 0);
+    }
+
+    #[test]
+    fn native_structural_failure_releases_builder_and_retains_only_the_diagnostic() {
+        let mut grant = Grant {
+            live: 0,
+            limit: usize::MAX,
+            peak: 0,
+        };
+        let mut memory = Memory::new(&mut grant);
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder
+            .intern_literal_parts_with_memory("literal", None, None, None, &mut memory)
+            .expect("native literal");
+        let p = builder
+            .intern_iri_with_memory("http://example.org/p", &mut memory)
+            .expect("native predicate");
+        builder
+            .push_quad_with_memory(s, p, s, None, &mut memory)
+            .expect("native invalid row");
+        let NativeBuildError::Diagnostic(diagnostic) = builder
+            .freeze_with_memory(&mut memory)
+            .expect_err("RDF 1.2 rejects a literal subject")
+        else {
+            panic!("expected original structural diagnostic");
+        };
+        assert_eq!(diagnostic.code, "rdf-ir-literal-subject");
+        assert_eq!(
+            memory.live_bytes(),
+            diagnostic.code.capacity() + diagnostic.message.capacity()
+        );
+        let bytes = memory.live_bytes();
+        drop(diagnostic);
+        memory
+            .release_bytes(bytes)
+            .expect("diagnostic dies before its grant");
+        assert_eq!(memory.live_bytes(), 0);
+    }
+}

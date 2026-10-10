@@ -1,0 +1,65 @@
+diff --git a/crates/sparql-eval/src/workspace.rs b/crates/sparql-eval/src/workspace.rs
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -73,6 +73,61 @@
+     fn resize(&mut self, bytes: u64) -> Result<(), EvalError>;
+ }
+ 
++/// Immutable report records retain the actual arrays and each record's native
++/// payload grant. Moving records into a receipt never sheds those owners.
++#[derive(Debug)]
++pub(crate) struct AdmittedRecords<T> {
++    values: AdmittedVec<T>,
++    // Values and their buffers die before either payload or owner-array grants.
++    allocations: AdmittedVec<WorkspaceAllocation>,
++}
++
++impl<T> std::ops::Deref for AdmittedRecords<T> {
++    type Target = [T];
++    fn deref(&self) -> &[T] { &self.values }
++}
++
++impl<T> AdmittedRecords<T> {
++    pub(crate) fn with_capacity(capacity: usize, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
++        Ok(Self {
++            values: AdmittedVec::with_capacity(capacity, workspace)?,
++            allocations: if workspace.is_bounded() {
++                AdmittedVec::with_capacity(capacity, workspace)?
++            } else { AdmittedVec::new(workspace) },
++        })
++    }
++
++    pub(crate) fn new(workspace: &WorkspaceCapability) -> Self {
++        Self { values: AdmittedVec::new(workspace), allocations: AdmittedVec::new(workspace) }
++    }
++
++    pub(crate) fn resident(values: Vec<T>) -> Self {
++        let workspace = WorkspaceCapability::resident();
++        Self {
++            values: AdmittedVec::from_parts(values, None, &workspace),
++            allocations: AdmittedVec::new(&workspace),
++        }
++    }
++
++    pub(crate) fn push(&mut self, value: T, allocation: WorkspaceAllocation) -> Result<(), EvalError> {
++        // The tuple drops its payload before its original grant on either refusal.
++        let record = (value, allocation);
++        self.values.reserve_next()?;
++        if record.1.is_bounded() { self.allocations.reserve_next()?; }
++        let (value, allocation) = record;
++        self.values.push_reserved(value);
++        if allocation.is_bounded() { self.allocations.push_reserved(allocation); }
++        Ok(())
++    }
++
++    pub(crate) fn try_into_resident(self) -> Result<Vec<T>, Self> {
++        if self.values.workspace.is_bounded() { return Err(self); }
++        Ok(self.values.into_parts().0)
++    }
++
++    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] { self.values.as_mut_slice() }
++}
++
+ /// An internal vector whose immutable borrowed view cannot shed its owner.
+ /// Growth constructs a replacement while the original buffer stays covered,
+ /// so an allocator failure leaves the original allocation and grant intact.

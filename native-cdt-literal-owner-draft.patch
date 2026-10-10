@@ -1,0 +1,154 @@
+--- a/crates/cdt/src/memory.rs
++++ b/crates/cdt/src/memory.rs
+@@ -57,10 +57,10 @@
+ 
+ impl Storage for Resident {
+     fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
+-        Ok(Box::new(value))
++        purrdf_lex::allocation::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
+     }
+     fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
+-        Ok(Box::new(value))
++        purrdf_lex::allocation::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
+     }
+ }
+ 
+@@ -79,3 +79,54 @@
+         self.admission_mut().boxed_triple(value)
+     }
+ }
++
++/// A native child call's original storage updates its parent's live total before
++/// every allocation. The parent continues owning the surviving child payload.
++/// This bridge neither reserves a bound nor observes a resident factory result.
++pub(crate) struct ChildStorage<'m, 'a> {
++    parent: &'m mut Memory<'a>,
++    live: usize,
++}
++impl<'m, 'a> ChildStorage<'m, 'a> {
++    pub(crate) fn new(parent: &'m mut Memory<'a>) -> Self { Self { parent, live: 0 } }
++}
++impl Admission for ChildStorage<'_, '_> {
++    fn resize(&mut self, next: usize) -> Result<(), StorageError> {
++        if next >= self.live {
++            self.parent.add_bytes(next - self.live)?;
++        } else {
++            self.parent.release_bytes(self.live - next)?;
++        }
++        self.live = next;
++        Ok(())
++    }
++}
++impl Storage for ChildStorage<'_, '_> {
++    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
++        self.parent.admission_mut().boxed_value(value)
++    }
++    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
++        self.parent.admission_mut().boxed_triple(value)
++    }
++}
++
++/// Execute the existing parser under a native parent computation. Its own
++/// scratch release and surviving payload updates belong to the original grant.
++pub(crate) fn parse_cdt_in_memory(lexical: &str, datatype: crate::CdtDatatype, memory: &mut Memory<'_>) -> Result<Option<CdtValue>, StorageError> {
++    let mut child = ChildStorage::new(memory);
++    match crate::parse::try_parse_cdt(lexical, datatype, &mut child) {
++        Ok((value, _)) => Ok(Some(value)),
++        Err(ReadError::Lexical(error)) => {
++            // This denotation consumer reports ill-typed, not parser prose.
++            // All parser locals and this diagnostic die before their original
++            // child admission is released. No dropped scratch remains charged.
++            drop(error);
++            child.resize(0)?;
++            Ok(None)
++        }
++        Err(ReadError::Storage(error)) => {
++            child.resize(0)?;
++            Err(error)
++        }
++    }
++}
+--- a/crates/cdt/src/literal.rs
++++ b/crates/cdt/src/literal.rs
+@@ -13,12 +13,11 @@
+ //! difference between a defect a validator must report and an ordinary RDF term this
+ //! crate simply cannot decide about.
+ 
+-use alloc::string::{String, ToString};
++use alloc::string::String;
+ 
+ use purrdf_xsd::XsdValue;
+ 
+ use crate::datatype::CdtDatatype;
+-use crate::parse::parse_cdt;
+ use crate::value::CdtValue;
+ 
+ /// What a literal's `(lexical form, datatype IRI)` pair denotes.
+@@ -100,19 +99,53 @@
+ /// ```
+ #[must_use]
+ pub fn parse_literal(lexical: &str, datatype: &str) -> LiteralValue {
+-    let ill_typed = || LiteralValue::IllTyped {
+-        datatype: datatype.to_string(),
+-        lexical: lexical.to_string(),
+-    };
+-    if let Some(composite) = CdtDatatype::from_iri(datatype) {
+-        return match parse_cdt(lexical, composite) {
+-            Ok(value) => LiteralValue::Cdt(value),
+-            Err(_) => ill_typed(),
+-        };
+-    }
+-    match purrdf_xsd::parse_by_iri(lexical, datatype) {
+-        Ok(Some(value)) => LiteralValue::Xsd(value),
+-        Ok(None) => LiteralValue::Opaque,
+-        Err(_) => ill_typed(),
++    let mut storage = crate::memory::Resident;
++    let mut memory = crate::memory::Memory::new(&mut storage);
++    let result = resolve_literal_with_memory(lexical, datatype, &mut memory)
++        .expect("resident literal producer storage");
++    match result {
++        NativeLiteralValue::Xsd(value) => LiteralValue::Xsd(value),
++        NativeLiteralValue::Cdt(value) => LiteralValue::Cdt(value),
++        NativeLiteralValue::IllTyped => LiteralValue::IllTyped {
++            datatype: memory.string(datatype).expect("resident datatype text"),
++            lexical: memory.string(lexical).expect("resident lexical text"),
++        },
++        NativeLiteralValue::Opaque => LiteralValue::Opaque,
+     }
+ }
++
++/// Native literal denotation. Type-only refusals need no copied diagnostic pair;
++/// the caller still borrows the literal that was refused.
++pub(crate) enum NativeLiteralValue {
++    Xsd(XsdValue),
++    Cdt(CdtValue),
++    IllTyped,
++    Opaque,
++}
++
++/// The one composite/XSD dispatch law, with native producer ownership.
++pub(crate) fn resolve_literal_with_memory(
++    lexical: &str,
++    datatype: &str,
++    memory: &mut crate::memory::Memory<'_>,
++) -> Result<NativeLiteralValue, crate::memory::StorageError> {
++    if let Some(composite) = CdtDatatype::from_iri(datatype) {
++        return Ok(match crate::memory::parse_cdt_in_memory(lexical, composite, memory)? {
++            Some(value) => NativeLiteralValue::Cdt(value),
++            None => NativeLiteralValue::IllTyped,
++        });
++    }
++    let Some(datatype) = purrdf_xsd::XsdDatatype::from_iri(datatype) else { return Ok(NativeLiteralValue::Opaque); };
++    Ok(match purrdf_xsd::value::try_parse_with_memory(lexical, datatype, false, memory)? {
++        purrdf_xsd::value::ParsedValue::Value(value) => NativeLiteralValue::Xsd(value),
++        purrdf_xsd::value::ParsedValue::Invalid(_) => NativeLiteralValue::IllTyped,
++    })
++}
++
++/// Destroy a natively produced XSD payload before releasing its original layouts.
++pub(crate) fn release_xsd_with_memory(value: XsdValue, memory: &mut crate::memory::Memory<'_>) -> Result<(), crate::memory::StorageError> {
++    let bytes = value.owned_heap_bytes().ok_or(crate::memory::StorageError::SizeOverflow)?;
++    drop(value);
++    memory.release_bytes(bytes)
++}
++

@@ -1,0 +1,56 @@
+--- a/crates/sparql-eval/src/property_fn_eval.rs
++++ b/crates/sparql-eval/src/property_fn_eval.rs
+@@ -122,7 +122,7 @@
+     call: &PropertyFunctionCall,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+-    let unit = SolutionSeq::unit();
++    let unit = SolutionSeq::unit_admitted(&ctx.growth)?;
+     // This node IS the plan node being evaluated, so the ceiling that bounds its output
+     // is its own.
+     let ceiling = ctx.row_ceiling();
+--- a/crates/sparql-eval/src/solution.rs
++++ b/crates/sparql-eval/src/solution.rs
+@@ -1086,10 +1086,8 @@
+     /// table `Z`, i.e. the result of the empty BGP). Joining with `Z` is the
+     /// identity, so this is the correct seed for an empty group pattern.
+     pub fn unit() -> Self {
+-        Self {
+-            schema: VarSchema::empty_shared(),
+-            rows: vec![Solution::new()].into(),
+-        }
++        Self::unit_admitted(&crate::WorkspaceCapability::resident())
++            .expect("resident identity-row allocation")
+     }
+ 
+     pub(crate) fn unit_admitted(
+@@ -1098,7 +1096,11 @@
+         let mut rows = RowsBuilder::new(workspace);
+         rows.push_cells(0, std::iter::empty())?;
+         Ok(Self {
+-            schema: VarSchema::default().shared_admitted(workspace)?,
++            schema: if workspace.is_bounded() {
++                VarSchema::default().shared_admitted(workspace)?
++            } else {
++                VarSchema::empty_shared()
++            },
+             rows: rows.finish()?,
+         })
+     }
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -4467,7 +4467,13 @@
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<(), EvalError> {
+     admit_version(AdmittedRequest::Query(query))?;
+-    crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
++    {
++        let mut frame = crate::workspace::LexicalFrame::new(&ctx.growth);
++        crate::governor::soundness::validate_graph_pattern_depth_with_memory(
++            query_pattern(query),
++            &mut purrdf_lex::allocation::Memory::new(&mut frame),
++        )?;
++    }
+     // Concrete ground inputs can occur after a stateful expression in written
+     // order. Reserve their identities before any allocator can capture them;
+     // ordinary pure queries retain their existing scratch allocation path.

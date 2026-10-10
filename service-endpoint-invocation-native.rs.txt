@@ -1,0 +1,139 @@
+fn eval_over_endpoints<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    variable: &Variable,
+    endpoints: &[SolutionTerm<D::Id>],
+    silent: bool,
+    role: FrameRole,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let key = VarSchema::from_vars_admitted([variable.clone()], &ctx.growth)?;
+    let mut blocks: EndpointBlocks<D::Id> = AdmittedVec::with_capacity(endpoints.len(), &ctx.growth)?;
+    let mut stopped = None;
+    // Without `SILENT`, a value that is not an IRI is refused before any request goes
+    // out, so whether one does never depends on the order the endpoints are listed in.
+    if !silent {
+        for &endpoint in endpoints {
+            let source = ctx.workspace.clone();
+            let value = ctx.scratch.try_owned_value_of(
+                ctx.dataset, endpoint, &ctx.growth,
+                |error| source.source_error(error),
+            )?;
+            if !matches!(&*value, TermValue::Iri(_)) {
+                return Err(non_iri_endpoint(variable, &value, &ctx.growth));
+            }
+        }
+    }
+    for &endpoint in endpoints {
+        let source = ctx.workspace.clone();
+        let value = ctx.scratch.try_owned_value_of(
+            ctx.dataset, endpoint, &ctx.growth,
+            |error| source.source_error(error),
+        )?;
+        let invocation = if matches!(&*value, TermValue::Iri(_)) {
+            // The same substitution a `LATERAL` makes for one solution: the IRI becomes
+            // the clause's endpoint and is injected into its body wherever the body names
+            // it.
+            let row = crate::expr::outer_bindings_for_substitution(&[Some(endpoint)], &key, ctx)?;
+            let substituted = crate::expr::substitute_pattern_admitted(node, &row, &ctx.growth)?;
+            let GraphPattern::Service {
+                name: NamedNodePattern::NamedNode(iri),
+                inner,
+                silent: substituted_silent,
+            } = substituted.as_ref()
+            else {
+                return Err(crate::NativeDiagnostic::error(
+                    crate::NativeDiagnosticKind::Internal,
+                    &"substituting an IRI endpoint into a variable-endpoint SERVICE did not \
+                     resolve its endpoint", &ctx.growth,
+                ));
+            };
+            crate::remote::invoke_service(iri.as_str(), inner, *substituted_silent, ctx)?
+        } else {
+            crate::remote::failed_invocation(
+                &endpoint_text_admitted(&value, &ctx.growth)?,
+                purrdf_core::SilencedKind::NotAnIri,
+                non_iri_endpoint(variable, &value, &ctx.growth),
+                silent,
+                &ctx.growth,
+            )?
+        };
+        match invocation {
+            Invocation::Answered(Evaluated::Complete(seq)) => {
+                blocks.push_reserved((endpoint, Block::Rows(seq)));
+            }
+            // Commit per endpoint: the block this endpoint was producing is discarded
+            // whole, and every block before it is complete — a prefix of this clause's
+            // ordered output.
+            Invocation::Answered(Evaluated::Truncated(truncation)) => {
+                stopped = Some(truncation.split().1);
+                break;
+            }
+            Invocation::Silenced(record) => {
+                record.record(ctx)?;
+                blocks.push_reserved((
+                    endpoint,
+                    match role {
+                        FrameRole::Join | FrameRole::Optional => {
+                            Block::Rows(crate::remote::identity_seq(&ctx.growth)?)
+                        }
+                        FrameRole::Minus => Block::Identity,
+                    },
+                ));
+            }
+        }
+    }
+
+    let mut schema = crate::solution::SchemaBuilder::new(&ctx.growth);
+    let _ = schema.push(variable.clone())?;
+    for (_, block) in blocks.iter() {
+        if let Block::Rows(block) = block {
+            schema.try_extend(block.schema.vars().iter().cloned())?;
+        }
+    }
+    let schema = schema.finish()?.shared_admitted(&ctx.growth)?;
+    let width = schema.len();
+    let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
+    for (endpoint, block) in blocks.iter() {
+        let block = match block {
+            Block::Rows(block) => block,
+            Block::Identity => {
+                rows.push_cells(width, std::iter::repeat_n(None, width))?;
+                continue;
+            }
+        };
+        let mut to_out = AdmittedVec::with_capacity(block.schema.len(), &ctx.growth)?;
+        for variable in block.schema.vars() {
+            to_out.push(schema.index_of(variable).ok_or_else(|| {
+                crate::NativeDiagnostic::error(crate::NativeDiagnosticKind::Internal,
+                    &"SERVICE block column is absent from its union schema", &ctx.growth)
+            })?)?;
+        }
+        let own = block.schema.index_of(variable);
+        for row in &block.rows {
+            // A body that binds the endpoint variable itself was given the endpoint's IRI
+            // by the substitution; a row binding it to anything else is not a solution
+            // for this endpoint.
+            if own.is_some_and(|j| row[j].is_some_and(|t| t != *endpoint)) {
+                continue;
+            }
+            let out = crate::solution::RetainedRow::try_build(width, &ctx.growth, |out| {
+                out[0] = Some(*endpoint);
+                for (j, cell) in row.iter().enumerate() {
+                    if cell.is_some() {
+                        out[to_out[j]] = *cell;
+                    }
+                }
+                Ok(())
+            })?;
+            rows.push_row(out)?;
+        }
+    }
+    let seq = SolutionSeq {
+        schema,
+        rows: rows.finish()?,
+    };
+    Ok(match stopped {
+        None => Evaluated::Complete(seq),
+        Some(certificate) => Evaluated::Truncated(Truncation::new(seq, certificate)),
+    })
+}

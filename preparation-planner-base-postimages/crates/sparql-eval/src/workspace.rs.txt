@@ -1,0 +1,22 @@
+        self.values.clear();
+    }
+    /// Drop values after a prefix, retaining the existing buffer admission.
+    pub fn truncate(&mut self, length: usize) {
+        self.values.truncate(length);
+    }
+
+    /// Move the last element while retaining its vector metadata admission.
+    pub fn pop(&mut self) -> Option<T> {
+        self.values.pop()
+    }
+
+    /// Drain a suffix while borrowing the original admitted metadata owner.
+    pub fn drain_from(&mut self, start: usize) -> std::vec::Drain<'_, T> {
+        self.values.drain(start..)
+    }
+
+    /// Append after admitting and fallibly allocating replacement capacity.
+    ///
+    /// # Errors
+    /// Returns layout overflow, admission refusal or allocator failure.
+    pub fn push(&mut self, value: T) -> Result<(), EvalError> {

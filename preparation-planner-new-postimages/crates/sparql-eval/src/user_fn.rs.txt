@@ -1,0 +1,685 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Dynamic, host-injected user functions â of two kinds under one IRI namespace.
+//!
+//! A call-position IRI that is under no configured extension-function namespace
+//! (so not the closed, parse-time-resolved `PurrdfFn` set) is lowered by the
+//! parser to [`Function::Custom`](purrdf_sparql_algebra::Function::Custom) and
+//! resolved at eval time against a caller-injected [`UserFunctionRegistry`] â the
+//! open counterpart to `PurrdfFn` dispatch. The registry holds two independent
+//! kinds keyed by IRI, hard-failing on a cross-kind collision so an IRI is
+//! unambiguously one kind or the other:
+//!
+//! - **SHACL-AF SPARQL-bodied** ([`UserFunction`]) â declared by a shapes graph as
+//!   an IRI typed `sh:SPARQLFunction` with ordered `sh:parameter`s, an optional
+//!   `sh:returnType`, and a `sh:select`/`sh:ask` body. This kind is pure data
+//!   (parsed body + parameter metadata); executing a call binds the arguments to
+//!   the parameter variables as a pre-binding rewrite (the same `crate::substitute`
+//!   path `$this` injection uses) and evaluates the body in a recursion-bounded
+//!   child context, keeping SPARQL execution inside the evaluator and the registry
+//!   free of engine coupling.
+//!
+//! - **Native (host-Rust closure)** ([`NativeFunction`], registered via
+//!   [`UserFunctionRegistry::register_native`]) â a `Send + Sync` closure over the
+//!   already-evaluated argument values (see [`NativeFnBody`]) for scoring
+//!   predicates whose bodies cannot be expressed in SPARQL (e.g. an external-index
+//!   read). It carries a declared [`Arity`] (fail-fast checked before the closure
+//!   runs) and a [`Volatility`] the fork-join parallel-evaluation gate consults to
+//!   decide whether the call may run across worker threads. It takes no
+//!   [`EvalCtx`] and so cannot re-enter the evaluator.
+//!
+//! - **Dataset-aware (expression-bodied)** ([`ExprFunction`], registered via
+//!   [`UserFunctionRegistry::register_expr`]) â a `Send + Sync` closure that, unlike
+//!   the native kind, is handed the GRAPH the calling query is running over plus the
+//!   current call depth, through [`ExprFnCall`]. It exists for the SHACL 1.2 SPARQL
+//!   Extensions Â§7 "Declaring SPARQL Functions based on Node Expressions" seam, where
+//!   the body is a node expression evaluated against a focus graph rather than a
+//!   SPARQL query. See [`ExprFnCall::focus_graph`] for why the graph is a concrete
+//!   [`Arc<RdfDataset>`] rather than the context's own `D: DatasetView` (which is not
+//!   object-safe â it carries an associated `Id` type), and `eval_expr_function` for
+//!   the re-entrancy bound.
+//!
+//! # One error channel across all three kinds
+//!
+//! Every kind reports "this call has no value for this solution" the same way:
+//! `Ok(None)`, the SPARQL expression error of Â§17.2. `Err` is reserved for a hard
+//! failure that aborts the whole query. That uniformity is load-bearing rather than
+//! tidy â a seam without the `Ok(None)` exit forces a per-solution domain refusal
+//! (a malformed literal, an out-of-range index, a type mismatch) onto `Err`, which
+//! aborts a query the specification says should merely drop a row or leave a
+//! variable unbound. See [`NativeFnBody`] for the specification text and for why
+//! the enclosing operator, not the body, decides which of those two outcomes a
+//! given `Ok(None)` produces.
+
+use purrdf_hash::Domain;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
+
+use purrdf_core::{ContentDigest, DatasetView, RdfDataset, TermValue};
+
+use crate::DetHashMap;
+use crate::error::EvalError;
+use crate::eval::{
+    EvalCtx, EvaluatedOutcome, Outcome, evaluate_query_evaluated, materialize_solutions,
+};
+use crate::registry_id::{RegistryId, append_framed_part};
+use crate::witness::RelationWitness;
+use crate::workspace::{AdmittedVec, WorkspaceCapability, WorkspaceTerm};
+use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
+
+/// The result form of a function body: a `sh:select` returns the projected value of
+/// its one solution (a second solution is an error); a `sh:ask` returns an
+/// `xsd:boolean`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserFnBody {
+    /// A `sh:select` body: the return value is the projected variable of the one
+    /// solution row (an empty result is no value; a second row is an error).
+    Select,
+    /// A `sh:ask` body: the return value is the `xsd:boolean` of the ASK.
+    Ask,
+}
+
+/// The `sh:nodeKind` of a parameter or return value, when constrained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeKind {
+    /// `sh:IRI`.
+    Iri,
+    /// `sh:BlankNode`.
+    BlankNode,
+    /// `sh:Literal`.
+    Literal,
+    /// `sh:BlankNodeOrIRI`.
+    BlankNodeOrIri,
+    /// `sh:BlankNodeOrLiteral`.
+    BlankNodeOrLiteral,
+    /// `sh:IRIOrLiteral`.
+    IriOrLiteral,
+}
+
+/// The optional `sh:datatype`/`sh:nodeKind` type constraint on a parameter or the
+/// return value. An empty constraint (`None`/`None`) accepts any term.
+#[derive(Debug, Clone, Default)]
+pub struct TypeConstraint {
+    /// The required literal datatype IRI (`sh:datatype`), if any.
+    pub datatype: Option<String>,
+    /// The required node kind (`sh:nodeKind`), if any.
+    pub node_kind: Option<NodeKind>,
+}
+
+impl TypeConstraint {
+    /// Whether this constraint imposes any requirement.
+    fn is_any(&self) -> bool {
+        self.datatype.is_none() && self.node_kind.is_none()
+    }
+
+    /// Validate `value` against this constraint. `role` names the position
+    /// (`parameter ?var` / `return value`) for the error message.
+    fn check(&self, iri: &str, role: &str, value: &TermValue) -> Result<(), EvalError> {
+        if self.is_any() {
+            return Ok(());
+        }
+        if let Some(nk) = self.node_kind
+            && !matches_node_kind(value, nk)
+        {
+            return Err(EvalError::function(format!(
+                "SHACL-AF function <{iri}> {role} violates its sh:nodeKind constraint"
+            )));
+        }
+        if let Some(dt) = &self.datatype {
+            let ok = matches!(value, TermValue::Literal { datatype, .. } if datatype == dt);
+            if !ok {
+                return Err(EvalError::function(format!(
+                    "SHACL-AF function <{iri}> {role} is not a literal of datatype <{dt}>"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A parameter of a [`UserFunction`]: the pre-bound variable name plus its type
+/// constraint. Parameters are stored in call order (ascending `sh:order`, IRI as a
+/// deterministic tiebreak).
+#[derive(Debug, Clone)]
+pub struct UserFnParam {
+    /// The pre-bound SPARQL variable name (the local name of the parameter's
+    /// `sh:path`/`sh:predicate` predicate).
+    pub var: String,
+    /// The parameter's `sh:datatype`/`sh:nodeKind` constraint.
+    pub constraint: TypeConstraint,
+}
+
+/// A declared SHACL-AF SPARQL-based function: its ordered parameters, the count of
+/// leading required (non-`sh:optional`) parameters, the body's **text**, and the
+/// return-value constraint.
+///
+/// # Why the body is text and not algebra
+///
+/// A body is SPARQL like any other SPARQL, so whether a predicate IRI inside it is a
+/// data edge or a call to a registered relation is decided by the
+/// [`ExtensionEnv`](crate::extension_env::ExtensionEnv) in force â not by the text,
+/// and not by whoever happened to parse it first.
+///
+/// This field held an `Arc<Query>` and that was the defect. A declaration is read
+/// once, at shapes-load time, while the relation registry is a call-scoped table
+/// installed per validation; a body frozen to algebra at load time was therefore
+/// frozen under whatever options the loader had, which was none. A registered
+/// relation IRI in a body lowered to an ordinary triple pattern, matched the base
+/// graph, found nothing, and the validation reported conformance â with no
+/// diagnostic, because a bare IRI in predicate position is a perfectly legal triple
+/// pattern and nothing at parse time could know otherwise.
+///
+/// Keeping the text is what makes the body bindable later, and binding it later is
+/// the only correct time: the same declaration may be validated many times under
+/// different environments, so there is no single parse that is right for all of
+/// them. [`BoundFunctionRegistry`] is a registry whose every body has been bound to
+/// one environment, and it is the only form the evaluator accepts.
+#[derive(Debug, Clone)]
+pub struct UserFunction {
+    /// The parameters in call order.
+    pub params: Vec<UserFnParam>,
+    /// The number of leading required parameters (arity is `[required, params.len()]`).
+    pub required: usize,
+    /// The `sh:select`/`sh:ask` body's SPARQL text, prefix header included, exactly
+    /// as the declaration spelled it. See the type's docs for why this is text.
+    pub body: Arc<str>,
+    /// Whether the body is a SELECT or an ASK.
+    pub kind: UserFnBody,
+    /// The `sh:returnType` constraint on the produced value, if declared.
+    pub return_constraint: TypeConstraint,
+}
+
+/// A typed refusal of a SPARQL-bodied function's actual invocation.
+///
+/// The original error remains available through [`Self::cause`] across nested
+/// function calls and parallel worker reduction. Clones share its identity;
+/// equality compares that identity rather than its rendered message.
+#[derive(Clone)]
+pub struct UserFunctionRefusal {
+    cause: Arc<dyn std::error::Error + Send + Sync>,
+    observer: Option<Arc<dyn UserFunctionAdmission>>,
+}
+
+impl UserFunctionRefusal {
+    /// Retain an exact caller-owned cause. This allocates only on refusal.
+    pub fn new(cause: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self {
+            cause: Arc::new(cause),
+            observer: None,
+        }
+    }
+
+    /// The original typed cause, including its downcast identity.
+    #[must_use]
+    pub fn cause(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+        self.cause.as_ref()
+    }
+
+    fn with_observer(mut self, observer: &Arc<dyn UserFunctionAdmission>) -> Self {
+        self.observer = Some(Arc::clone(observer));
+        self
+    }
+
+    /// Retain the selected cause before diagnostic conversion discards its type.
+    /// An engine request decorates this observer until its final source checkpoint
+    /// has decided whether the query error is authoritative.
+    pub(crate) fn observe(&self) {
+        if let Some(observer) = &self.observer {
+            observer.observe_refusal(self);
+        }
+    }
+}
+
+purrdf_hash::debug_non_exhaustive!(UserFunctionRefusal { cause });
+
+impl PartialEq for UserFunctionRefusal {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.cause, &other.cause)
+    }
+}
+
+impl Eq for UserFunctionRefusal {}
+
+impl core::fmt::Display for UserFunctionRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.cause, f)
+    }
+}
+
+impl std::error::Error for UserFunctionRefusal {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause())
+    }
+}
+
+/// A caller-selected law for actual SPARQL-bodied function invocations.
+///
+/// Admission sees the original prepared query and every declared parameter,
+/// including optional parameters omitted on this call. It runs after argument
+/// validation and the invocation's governor charge, before substitution or body
+/// evaluation. A mandatory unbound argument or a short-circuited expression does
+/// not invoke it. Implementations must make admission deterministic and safe for
+/// concurrent calls; retain diagnostic evidence in [`Self::observe_refusal`],
+/// which receives only the authoritative query error after the engine's final
+/// source checkpoint. Operational source failures and suppressed errors are not
+/// observed.
+///
+/// Ordinary requests install no law and perform no callback or allocation.
+pub trait UserFunctionAdmission: Send + Sync {
+    /// Admit this original query under the function's declared parameter set.
+    ///
+    /// # Errors
+    ///
+    /// Return the exact typed cause when the selected law refuses invocation.
+    fn admit(
+        &self,
+        function: &UserFunction,
+        query: &purrdf_sparql_algebra::Query,
+    ) -> Result<(), UserFunctionRefusal>;
+
+    /// Recover the exact cause selected for the returned engine diagnostic after
+    /// its final source checkpoint. Worker-local refusals that lose to an earlier
+    /// error, and query refusals replaced by an operational failure, are not observed.
+    fn observe_refusal(&self, refusal: &UserFunctionRefusal);
+}
+
+/// Request-local publication of an admission cause after storage precedence is
+/// settled. The empty path allocates nothing; selected requests lazily allocate
+/// one decorator after their configured context passes workspace admission.
+#[derive(Default)]
+pub(crate) struct RefusalPublication {
+    admission: std::sync::OnceLock<DeferredAdmission>,
+}
+
+type DeferredAdmission = (
+    Arc<dyn UserFunctionAdmission>,
+    Arc<DeferredFunctionAdmission>,
+);
+
+impl RefusalPublication {
+    pub(crate) fn admission(
+        &self,
+        owner: &Arc<dyn UserFunctionAdmission>,
+    ) -> &Arc<dyn UserFunctionAdmission> {
+        &self
+            .admission
+            .get_or_init(|| {
+                let deferred = Arc::new(DeferredFunctionAdmission {
+                    owner: Arc::clone(owner),
+                    refusal: std::sync::Mutex::new(None),
+                });
+                (deferred.clone(), deferred)
+            })
+            .0
+    }
+
+    /// Publish only a returned query error. A discarded pending capsule has no
+    /// observer owner, so it cannot retain its decorator in an Arc cycle.
+    pub(crate) fn finish<T, E>(
+        &self,
+        result: Result<T, E>,
+        is_query_error: impl FnOnce(&E) -> bool,
+    ) -> Result<T, E> {
+        if let Some((_, admission)) = self.admission.get() {
+            let refusal = admission
+                .refusal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if result.as_ref().is_err_and(is_query_error)
+                && let Some(refusal) = refusal
+            {
+                admission.owner.observe_refusal(&refusal);
+            }
+        }
+        result
+    }
+}
+
+struct DeferredFunctionAdmission {
+    owner: Arc<dyn UserFunctionAdmission>,
+    refusal: std::sync::Mutex<Option<UserFunctionRefusal>>,
+}
+
+impl UserFunctionAdmission for DeferredFunctionAdmission {
+    fn admit(
+        &self,
+        function: &UserFunction,
+        query: &purrdf_sparql_algebra::Query,
+    ) -> Result<(), UserFunctionRefusal> {
+        self.owner.admit(function, query)
+    }
+
+    fn observe_refusal(&self, refusal: &UserFunctionRefusal) {
+        *self
+            .refusal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(UserFunctionRefusal {
+            cause: Arc::clone(&refusal.cause),
+            observer: None,
+        });
+    }
+}
+
+/// A native (host-Rust) user function body: a closure over the already-evaluated,
+/// dataset-independent argument values.
+///
+/// # The three exits, and why there are three
+///
+/// A body returns one of exactly three things, and picking the wrong one is a
+/// specification violation rather than a matter of taste:
+///
+/// * `Ok(Some(value))` â the function's value for this call.
+/// * `Ok(None)` â a SPARQL **expression error**: the arguments are the wrong type,
+///   or the operation is undefined on them, so *this call* has no value. It is
+///   scoped to the one solution being evaluated. SPARQL 1.1 Â§17.2 puts extension
+///   functions squarely in this channel â "Functions invoked with an argument of
+///   the wrong type will produce a type error" â and the enclosing operator then
+///   decides the outcome: a `FILTER` **drops that solution** (Â§17 "FILTERs
+///   eliminate any solutions that, when substituted into the expression, either
+///   result in an effective boolean value of false or produce an error"), while a
+///   `BIND`/`SELECT`-expression **leaves the variable unbound** (Â§10 "If the
+///   evaluation of the expression produces an error, the variable remains unbound
+///   for that solution but the query evaluation continues"; algebra Â§18.5
+///   `Extend(Î¼, var, expr) = Î¼ if var not in dom(Î¼) and expr(Î¼) is an error`).
+///   Those are two different outcomes from one signal, and the evaluator â not the
+///   host closure â is what knows which context the call sits in.
+/// * `Err(_)` â a **hard failure that aborts the whole query**, for a condition no
+///   per-solution outcome can honestly express: the host's wiring is unusable, or
+///   the function is registered but not implemented. `Ok(None)` there would be a
+///   silent wrong answer, because a dropped row and an unbound variable are
+///   indistinguishable from an honest empty result.
+///
+/// This is the same channel [`ExprFnBody`] carries, deliberately spelled the same
+/// way: the two seams differ in what the evaluator *hands* a body (see
+/// [`ExprFnCall`]), never in how a body reports that it has no value. A seam with
+/// no `Ok(None)` exit forces every domain refusal onto `Err`, which turns one bad
+/// literal in one row into a failed query â so there is no lossy variant of this
+/// type to pick by accident.
+///
+/// The arguments arrive as a slice of **borrows** (`&[&TermValue]`): every value
+/// already lives in the evaluator's per-call argument buffer for the duration of
+/// the call, so the dispatch path lends the closure those borrows rather than deep
+/// cloning each [`TermValue`] (which owns heap strings for IRIs/literals) on the
+/// per-row scoring hot path this seam exists to serve. A closure that needs to
+/// retain a value past the call clones it itself.
+///
+/// Unlike a [`UserFunction`]'s SPARQL body, this takes **no [`EvalCtx`]** â it
+/// therefore cannot re-enter the evaluator, so there is no recursion/re-entrancy
+/// boundary to bound (the SPARQL-bodied path's `MAX_UDF_DEPTH` guard does not
+/// apply here). When a function is declared non-[`Volatile`](Volatility::Volatile)
+/// it **must** be deterministic within a query: the fork-join parallel-evaluation
+/// gate relies on that declaration alone to decide whether the call may run across
+/// worker threads, so a closure that lies about its own volatility can silently
+/// diverge under parallel evaluation.
+pub type NativeFnBody =
+    Arc<dyn Fn(&[&TermValue]) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
+
+/// A native producer sharing the invocation's physical admission capability.
+///
+/// The body admits every temporary before allocating it and returns its original
+/// output owner. An operational refusal must stop production immediately.
+pub type AdmittedNativeFnBody = Arc<
+    dyn Fn(&[&TermValue], &WorkspaceCapability) -> Result<Option<WorkspaceTerm>, EvalError>
+        + Send + Sync,
+>;
+
+#[derive(Clone)]
+enum NativeBody {
+    Resident(NativeFnBody),
+    Admitted(AdmittedNativeFnBody),
+}
+
+/// Everything a dataset-aware (expression-bodied) user function is given when it is
+/// called: the IRI it was called through, the already-evaluated arguments, the graph
+/// the calling query is running over, and the current user-function call depth.
+///
+/// This is the whole of the difference between [`ExprFnBody`] and [`NativeFnBody`].
+/// A native closure sees only values and therefore cannot read a graph or re-enter
+/// an evaluator; an expression-bodied one is defined by a SHACL node expression,
+/// whose evaluation is a function OF a graph (`evalExpr(expr, focusGraph, focusNode,
+/// scope)`), so the graph has to travel with the call.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct ExprFnCall<'a> {
+    /// Where a body that re-enters the evaluator deposits what the relations it
+    /// invoked attested — see [`ExprFnCall::record_relations`].
+    ///
+    /// Private, and written only through that method: a witness is evidence about
+    /// this call, so a body may ADD to it and must not be able to read, replace or
+    /// clear what another call recorded.
+    relations: &'a core::cell::RefCell<RelationWitness>,
+    /// The call-position IRI the function was reached through.
+    pub iri: &'a str,
+    /// The already-evaluated argument values in call order; a `None` cell is an
+    /// unbound argument.
+    pub args: &'a [Option<TermValue>],
+    /// The graph the calling query is running over â the specification's
+    /// `focusGraph`.
+    ///
+    /// A concrete `Arc<RdfDataset>` rather than the evaluation context's own
+    /// `D: DatasetView`: `DatasetView` carries an associated `Id` type, so `&dyn
+    /// DatasetView` is not a legal type and the generic view cannot be erased behind
+    /// a trait object. The frozen dataset IS the erased handle â every backend that
+    /// can supply a focus graph supplies exactly this, and one that cannot supplies
+    /// none, in which case the call never reaches a body at all (see
+    /// `eval_expr_function`).
+    ///
+    /// It is supplied per QUERY, through
+    /// [`QueryOptions::focus_graph`](crate::QueryOptions::focus_graph), never captured
+    /// once at registration time. That is what makes a function called during round
+    /// *n* of a fixpoint read round *n*'s graph: the caller passes the graph it is
+    /// actually querying, so a rebuilt graph is a rebuilt argument rather than a stale
+    /// capture.
+    pub focus_graph: &'a Arc<RdfDataset>,
+    /// The user-function call depth this invocation sits at (1 for a call from the
+    /// top-level query). A callee that re-enters SPARQL evaluation propagates this
+    /// through [`QueryOptions::call_depth`](crate::QueryOptions::call_depth) so a
+    /// cycle that leaves and re-enters the evaluator is still bounded.
+    pub depth: u32,
+}
+
+/// A dataset-aware (expression-bodied) user function body: a closure over the
+/// evaluated argument values AND the calling query's focus graph (see
+/// [`ExprFnCall`]).
+///
+/// `Ok(None)` is the SPARQL "expression error / no value" result, exactly as it is
+/// for [`NativeFnBody`] â see that type's "three exits" section for the specification
+/// text and for why the *enclosing operator*, not the body, decides whether that
+/// becomes a dropped solution or an unbound variable. `Err` is a hard failure that
+/// aborts the query. A body that cannot evaluate something MUST take one of those two
+/// exits â never a value it did not compute.
+///
+/// The two body types differ ONLY in what they are handed ([`ExprFnCall`] adds the
+/// focus graph and the call depth; [`NativeFnBody`] sees values alone and carries a
+/// [`Volatility`] the fork-join gate reads). Their failure channels are identical, so
+/// neither is the "lossy" one and a host cannot pick the wrong seam and quietly lose
+/// per-solution error semantics.
+pub type ExprFnBody =
+    Arc<dyn Fn(&ExprFnCall<'_>) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
+
+/// A dataset-aware producer using the same physical capability as its caller.
+/// Temporary allocations and the returned term retain their original grants.
+pub type AdmittedExprFnBody = Arc<
+    dyn Fn(&ExprFnCall<'_>, &WorkspaceCapability) -> Result<Option<WorkspaceTerm>, EvalError>
+        + Send + Sync,
+>;
+
+#[derive(Clone)]
+enum ExprBody {
+    Resident(ExprFnBody),
+    Admitted(AdmittedExprFnBody),
+}
+
+impl ExprFnCall<'_> {
+    /// Record what the relations this body invoked attested, so it reaches the
+    /// CALLING query's receipt.
+    ///
+    /// A body is free to re-enter the evaluator — that is what distinguishes this
+    /// seam from the native one, whose closure gets no context and cannot. But a
+    /// nested run produces its OWN governed outcome, and everything that outcome
+    /// learned about the relations behind it dies with it unless it is handed back
+    /// here. A relation that really served this query and told nobody is
+    /// indistinguishable from one that was never asked, which is the failure this
+    /// workspace's witness channel exists to prevent — and the SPARQL-bodied door
+    /// already closes it (`eval_user_function` merges its child's witness on both of
+    /// its exits). This is the same channel for the door that re-enters through a
+    /// fresh evaluation rather than through a child context.
+    ///
+    /// Additive, and order-free in the way a witness is: [`RelationWitness::merge`]
+    /// is commutative and associative, so a body making several nested runs may call
+    /// this once per run in any order. A body that never re-enters the evaluator
+    /// never calls it and pays nothing for its existence.
+    pub fn record_relations(&self, witness: RelationWitness) {
+        self.relations.borrow_mut().merge(witness);
+    }
+}
+
+/// A registered dataset-aware function: its closure body plus its declared arity.
+///
+/// There is deliberately no [`Volatility`] axis. An expression-bodied function reads
+/// the focus graph and may re-enter a whole evaluator, so it is never a candidate for
+/// the fork-join parallel gate (`crate::parallel` refuses it unconditionally) and a
+/// declaration either way would be a distinction without a difference.
+#[derive(Clone)]
+pub struct ExprFunction {
+    body: ExprBody,
+    pub(crate) arity: Arity,
+}
+
+purrdf_hash::debug_non_exhaustive!(
+    /// The closure body has no `Debug` impl, so only the declared arity is shown.
+    ExprFunction { arity }
+);
+
+/// A native function's determinism class â the volatility axis of its descriptor
+/// (after PostgreSQL's `provolatile`).
+///
+/// The fork-join parallel-evaluation gate is this enum's sole consumer:
+/// [`Volatile`](Self::Volatile) pins the call to sequential evaluation;
+/// [`Stable`](Self::Stable) (deterministic *within one query* â e.g. a frozen
+/// external-index read, or pure math over its arguments) may run across workers.
+/// There is deliberately no bool-typed "purity" flag: the three-way Postgres
+/// vocabulary (`IMMUTABLE`/`STABLE`/`VOLATILE`) is honest about the difference
+/// between "never changes" and "fixed for the lifetime of one query", and a
+/// frozen-index read is the latter, not the former.
+///
+/// `#[non_exhaustive]`: a finer class (e.g. `Immutable`, for a future
+/// const-folding pass) is addable without a breaking change â no dead variant is
+/// carried now.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub enum Volatility {
+    /// Deterministic for the lifetime of one query (a frozen external-index read,
+    /// or pure math over its arguments). Safe to run across fork-join workers.
+    Stable,
+    /// May observe or mutate state that changes between calls within the same
+    /// query (a mutable external resource, wall-clock time, RNG). Pinned to
+    /// sequential evaluation.
+    Volatile,
+}
+
+impl Volatility {
+    /// A stable diagnostic label for this determinism class â shared by the
+    /// property-function registry fingerprint (`crate::property_fn_plan::registry_fingerprint`)
+    /// and every receipt that renders a [`PfDescriptor`](crate::property_fn::PfDescriptor),
+    /// so both name the same class in the same words.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Volatile => "volatile",
+        }
+    }
+}
+
+/// A native function's declared argument arity, checked before the closure is
+/// ever invoked (fail-fast: a wrong-count call never hands the host closure a
+/// short or long slice).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Arity {
+    /// Exactly `n` arguments.
+    Exact(usize),
+    /// Between `min` and `max` arguments, inclusive.
+    Range {
+        /// The minimum accepted argument count, inclusive.
+        min: usize,
+        /// The maximum accepted argument count, inclusive.
+        max: usize,
+    },
+    /// At least `n` arguments (no upper bound).
+    AtLeast(usize),
+}
+
+impl Arity {
+    /// Whether `count` arguments satisfies this declared arity.
+    ///
+    /// `pub(crate)` rather than private: `crate::property_fn_plan`'s prepare-time
+    /// walk checks a custom aggregate's supplied `AGG(<iri>, argsâ¦)` argument
+    /// count against its registered [`CustomAggregate`](crate::agg_fn::CustomAggregate)'s
+    /// declared [`Arity`] the same way this module checks a native function's.
+    pub(crate) fn accepts(self, count: usize) -> bool {
+        match self {
+            Self::Exact(n) => count == n,
+            Self::Range { min, max } => (min..=max).contains(&count),
+            Self::AtLeast(n) => count >= n,
+        }
+    }
+
+    /// A stable, machine-facing encoding of this arity â
+    /// deliberately INDEPENDENT of [`Display for Arity`](#impl-Display-for-Arity)
+    /// just below, which exists only for human-facing diagnostics and is free to
+    /// change wording (pluralization, punctuation, phrasing) without that being a
+    /// breaking change to anything.
+    ///
+    /// `crate::agg_fn::registry_fingerprint` folds this into a prepared plan's
+    /// identity. A load-bearing `Display` impl would mean a purely cosmetic
+    /// wording edit silently invalidates every previously-prepared plan's cache
+    /// key (or worse, two DIFFERENT arities that happen to render the same
+    /// diagnostic words would collide) â this encoding exists so that can never
+    /// happen: it is a variant tag plus its numeric fields, with no wording to
+    /// drift.
+    pub(crate) fn stable_encoding(self) -> String {
+        self.stable_display().to_string()
+    }
+
+    /// The stable identity encoding, borrowing no allocated rendering.
+    pub(crate) fn stable_display(self) -> impl core::fmt::Display {
+        struct Encoding(Arity);
+        impl core::fmt::Display for Encoding {
+            fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                match self.0 {
+                    Arity::Exact(n) => write!(out, "exact:{n}"),
+                    Arity::Range { min, max } => write!(out, "range:{min}:{max}"),
+                    Arity::AtLeast(n) => write!(out, "atleast:{n}"),
+                }
+            }
+        }
+        Encoding(self)
+    }
+}
+
+impl core::fmt::Display for Arity {
+    /// Human-facing wording only â NOT part of any stable fingerprint or cache-key
+    /// encoding. See `Arity::stable_encoding`, which
+    /// `crate::agg_fn::registry_fingerprint` uses instead, for the encoding that
+    /// IS load-bearing; this impl is free to change wording at any time.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Exact(n) => write!(f, "exactly {n}"),
+            Self::Range { min, max } => write!(f, "{min}..={max}"),
+            Self::AtLeast(n) => write!(f, "at least {n}"),
+        }
+    }
+}
+
+/// A registered native function: its closure body plus its declared arity and
+/// volatility. See [`NativeFnBody`] for the determinism contract the closure
+/// itself must uphold.
+#[derive(Clone)]
+pub struct NativeFunction {
+    body: NativeBody,
+    pub(crate) arity: Arity,
+    pub(crate) volatility: Volatility,
+}

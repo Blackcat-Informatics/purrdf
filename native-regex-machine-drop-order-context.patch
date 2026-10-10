@@ -1,0 +1,18 @@
+--- a/crates/rdf-core/src/xsd_regex/xpath/pike.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/pike.rs
+@@ -584,7 +584,14 @@
+ impl<'a> Pike<'a> {
+     /// Only the request budget survives; all native buffers die first.
+     pub(super) fn into_budget(self) -> Result<Budget<'a>, Error> {
+-        let Self { mut ctx, .. } = self;
++        let Self {
++            mut ctx, scratch, current, next, stack, visited, marks, sets,
++            moves, probe_stack, probe_visited, found, ..
++        } = self;
++        // Move and destroy every heap-owning field explicitly. Ignored fields
++        // of a partially moved value need not die before the next statement.
++        drop((scratch, current, next, stack, visited, marks, sets,
++            moves, probe_stack, probe_visited, found));
+         ctx.live_slots = 0;
+         ctx.budget.release_abandoned_machine()?;
+         Ok(ctx.budget)

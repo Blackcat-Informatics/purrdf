@@ -1,0 +1,306 @@
+diff --git a/crates/sparql-eval/src/knn/invocation.rs b/crates/sparql-eval/src/knn/invocation.rs
+--- a/crates/sparql-eval/src/knn/invocation.rs
++++ b/crates/sparql-eval/src/knn/invocation.rs
+@@ -204,146 +204,162 @@
+     /// The row `term` occupies, if there is one.
+     #[must_use]
+     pub fn row_of(&self, term: &TermValue) -> Option<usize> {
+-        self.rows_by_term
+-            .binary_search_by(|&row| self.terms[row].cmp(term))
+-            .ok()
+-            .map(|at| self.rows_by_term[at])
+-    }
+-}
+-
+-/// What one invocation is going to do, decided from the access pattern it arrived in.
+-///
+-/// Two shapes rather than one with an optional field, because they are two different
+-/// questions: one ranks a neighbourhood and the other asks whether a named term has a
+-/// row at all. Naming them apart is what makes "the ranking was not entered" a branch a
+-/// reader can see rather than a condition buried in a selection size.
+-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+-pub enum KnnAnswer {
+-    /// Rank the seed's neighbourhood: the offer of candidates.
+-    Search {
+-        /// The seed's row, or `None` when the space does not hold the seed term.
+-        query_row: Option<usize>,
+-        /// How many neighbours the ranking retains — `k`, or the engine's ceiling when
+-        /// it was safe to push it down.
+-        select_k: usize,
+-    },
+-    /// Answer *do you hold this candidate*: the seed's row and the candidate's row, or
+-    /// `None` when the space holds no row for one of them — which is equally an
+-    /// exclusion, because a search from a seed with no row names nothing at all.
+-    Membership(Option<(usize, usize)>),
+-}
+-
+-/// One nearest-neighbour call, read off its arguments: the question it asks and the
+-/// values every emitted row echoes or is filtered against.
+-#[derive(Debug, Clone)]
+-pub struct KnnInvocation {
+-    /// What the invocation is going to do.
+-    pub answer: KnnAnswer,
+-    /// The seed term, echoed verbatim into position 1 of every row.
+-    pub query_term: TermValue,
+-    /// The value position 2 carries: the requested count, echoed verbatim, or under
+-    /// membership the size of the term universe ([`universe_size`]).
+-    pub count_term: TermValue,
+-    /// The invocation's bound values by flattened position (`None` = free).
+-    pub bound: Vec<Option<TermValue>>,
+-    /// The rows the invocation may emit under the engine's licence.
+-    pub remaining: Option<u64>,
+-}
+-
+-impl KnnInvocation {
+-    /// Read one call of `relation` (named in refusals, e.g. `"the HNSW relation"`) over
+-    /// `rows`, under `guard` and the engine's `ceiling`, counting a membership lookup on
+-    /// `membership_lookups`.
+-    ///
+-    /// **The count decides which question this is, and nothing else does.** A bound count
+-    /// is the ranked read, down to the `k` cut on a bound `?neighbour`; a free count with
+-    /// a bound `?neighbour` is the membership lookup. Branching on the candidate instead
+-    /// would make one binding pattern mean two questions and silently widen the answer to
+-    /// `?n rel: (?q k ?d)` — a query nobody edited.
+-    ///
+-    /// `?neighbour` and `?distance` are both filtered after the ranking, so the ceiling
+-    /// is withheld from the selection when either is bound: pushing it down would rank a
+-    /// prefix, let the cursor filter it, and report fewer rows than the engine asked for
+-    /// as an exhausted answer.
+-    ///
+-    /// A seed the space does not hold is an honest empty answer, not a refusal.
+-    ///
+-    /// # Errors
+-    ///
+-    /// [`EvalError::Function`] when the call is not [`KNN_ARITY`], the seed is free, the
+-    /// count and the neighbour are both free, or the count is not an admissible `k`
+-    /// ([`neighbour_count`]).
+-    pub fn open(
+-        relation: &str,
+-        args: &PfArgs<'_>,
+-        ceiling: Option<u64>,
+-        rows: &TermRows,
+-        guard: KnnGuard,
+-        membership_lookups: &AtomicU64,
+-    ) -> Result<Self, EvalError> {
+-        let (invocation, _) = Self::open_admitted(
+-            relation, args, ceiling, rows, guard, membership_lookups,
+-            &crate::WorkspaceCapability::default(),
+-        )?;
+-        Ok(invocation)
+-    }
+-
+-    pub(crate) fn open_admitted(
+-        relation: &str,
+-        args: &PfArgs<'_>,
+-        ceiling: Option<u64>,
+-        rows: &TermRows,
+-        guard: KnnGuard,
+-        membership_lookups: &AtomicU64,
+-        workspace: &crate::WorkspaceCapability,
+-    ) -> Result<(Self, InvocationAdmission), EvalError> {
+-        let mut admissions = if workspace.is_bounded() {
+-            crate::AdmittedVec::with_capacity(6, workspace)?
+-        } else { crate::AdmittedVec::new(workspace) };
+-        let supplied = args.arity();
+-        if supplied != KNN_ARITY {
+-            return Err(EvalError::function(format!(
+-                "{relation} expects {KNN_ARITY} argument(s), got {supplied}"
+-            )));
+-        }
+-        let Some(query) = args.get(KNN_QUERY) else {
+-            return Err(EvalError::function(format!(
+-                "the query term at position {KNN_QUERY} is free; this relation retrieves the \
+-                 neighbours of a seed and cannot enumerate seeds, which is why both of its \
+-                 declared modes — `{KNN_MODE}` and `{KNN_MEMBERSHIP_MODE}` — demand it"
+-            )));
+-        };
+-        let query_row = rows.row_of(query);
+-        let (answer, count_term) = if let Some(count) = args.get(KNN_COUNT) {
+-            let k = neighbour_count_with(count, guard, workspace)?;
+-            let post_selection_filtered =
+-                args.get(KNN_NEIGHBOUR).is_some() || args.get(KNN_DISTANCE).is_some();
+-            let select_k = if post_selection_filtered {
+-                k
+-            } else {
+-                ceiling.map_or(k, |ceiling| k.min(usize::try_from(ceiling).unwrap_or(k)))
+-            };
+-            (
+-                KnnAnswer::Search {
+-                    query_row,
+-                    select_k,
+-                },
+-                copy_invocation_term(count, workspace, &mut admissions)?,
+-            )
+-        } else {
+-            let Some(candidate) = args.get(KNN_NEIGHBOUR) else {
+-                return Err(EvalError::function(format!(
+-                    "the neighbour count at position {KNN_COUNT} is free and so is the \
+-                     neighbour at position {KNN_NEIGHBOUR}; how many neighbours to retrieve \
+-                     is a question this relation is asked, not one it answers, so the only \
+-                     call it serves without a count is the membership lookup \
+-                     `{KNN_MEMBERSHIP_MODE}`, which names the one term it is about"
+-                )));
+-            };
+-            membership_lookups.fetch_add(1, Ordering::Relaxed);
+-            let (count, allocation) = admitted_universe_size(rows.len(), workspace)?.into_parts();
+-            if allocation.is_bounded() { admissions.push(allocation)?; }
+-            (KnnAnswer::Membership(query_row.zip(rows.row_of(candidate))), count)
++        self.row_of_admitted(term, &crate::WorkspaceCapability::default())
++            .expect("resident kNN term lookup allocation")
++    }
++
++    /// The same total-order lookup, admitting each native comparison work-list.
++    fn row_of_admitted(
++        &self, term: &TermValue, workspace: &crate::WorkspaceCapability,
++    ) -> Result<Option<usize>, EvalError> {
++        let mut lower = 0;
++        let mut upper = self.rows_by_term.len();
++        while lower < upper {
++            let middle = lower + (upper - lower) / 2;
++            let row = self.rows_by_term[middle];
++            match workspace.terms_cmp(&self.terms[row], term)? {
++                std::cmp::Ordering::Less => lower = middle + 1,
++                std::cmp::Ordering::Greater => upper = middle,
++                std::cmp::Ordering::Equal => return Ok(Some(row)),
++            }
++        }
++        Ok(None)
++    }
++}
++
++/// What one invocation is going to do, decided from the access pattern it arrived in.
++///
++/// Two shapes rather than one with an optional field, because they are two different
++/// questions: one ranks a neighbourhood and the other asks whether a named term has a
++/// row at all. Naming them apart is what makes "the ranking was not entered" a branch a
++/// reader can see rather than a condition buried in a selection size.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum KnnAnswer {
++    /// Rank the seed's neighbourhood: the offer of candidates.
++    Search {
++        /// The seed's row, or `None` when the space does not hold the seed term.
++        query_row: Option<usize>,
++        /// How many neighbours the ranking retains — `k`, or the engine's ceiling when
++        /// it was safe to push it down.
++        select_k: usize,
++    },
++    /// Answer *do you hold this candidate*: the seed's row and the candidate's row, or
++    /// `None` when the space holds no row for one of them — which is equally an
++    /// exclusion, because a search from a seed with no row names nothing at all.
++    Membership(Option<(usize, usize)>),
++}
++
++/// One nearest-neighbour call, read off its arguments: the question it asks and the
++/// values every emitted row echoes or is filtered against.
++#[derive(Debug, Clone)]
++pub struct KnnInvocation {
++    /// What the invocation is going to do.
++    pub answer: KnnAnswer,
++    /// The seed term, echoed verbatim into position 1 of every row.
++    pub query_term: TermValue,
++    /// The value position 2 carries: the requested count, echoed verbatim, or under
++    /// membership the size of the term universe ([`universe_size`]).
++    pub count_term: TermValue,
++    /// The invocation's bound values by flattened position (`None` = free).
++    pub bound: Vec<Option<TermValue>>,
++    /// The rows the invocation may emit under the engine's licence.
++    pub remaining: Option<u64>,
++}
++
++impl KnnInvocation {
++    /// Read one call of `relation` (named in refusals, e.g. `"the HNSW relation"`) over
++    /// `rows`, under `guard` and the engine's `ceiling`, counting a membership lookup on
++    /// `membership_lookups`.
++    ///
++    /// **The count decides which question this is, and nothing else does.** A bound count
++    /// is the ranked read, down to the `k` cut on a bound `?neighbour`; a free count with
++    /// a bound `?neighbour` is the membership lookup. Branching on the candidate instead
++    /// would make one binding pattern mean two questions and silently widen the answer to
++    /// `?n rel: (?q k ?d)` — a query nobody edited.
++    ///
++    /// `?neighbour` and `?distance` are both filtered after the ranking, so the ceiling
++    /// is withheld from the selection when either is bound: pushing it down would rank a
++    /// prefix, let the cursor filter it, and report fewer rows than the engine asked for
++    /// as an exhausted answer.
++    ///
++    /// A seed the space does not hold is an honest empty answer, not a refusal.
++    ///
++    /// # Errors
++    ///
++    /// [`EvalError::Function`] when the call is not [`KNN_ARITY`], the seed is free, the
++    /// count and the neighbour are both free, or the count is not an admissible `k`
++    /// ([`neighbour_count`]).
++    pub fn open(
++        relation: &str,
++        args: &PfArgs<'_>,
++        ceiling: Option<u64>,
++        rows: &TermRows,
++        guard: KnnGuard,
++        membership_lookups: &AtomicU64,
++    ) -> Result<Self, EvalError> {
++        let (invocation, _) = Self::open_admitted(
++            relation, args, ceiling, rows, guard, membership_lookups,
++            &crate::WorkspaceCapability::default(),
++        )?;
++        Ok(invocation)
++    }
++
++    pub(crate) fn open_admitted(
++        relation: &str,
++        args: &PfArgs<'_>,
++        ceiling: Option<u64>,
++        rows: &TermRows,
++        guard: KnnGuard,
++        membership_lookups: &AtomicU64,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<(Self, InvocationAdmission), EvalError> {
++        let mut admissions = if workspace.is_bounded() {
++            crate::AdmittedVec::with_capacity(6, workspace)?
++        } else { crate::AdmittedVec::new(workspace) };
++        let supplied = args.arity();
++        if supplied != KNN_ARITY {
++            return Err(EvalError::function(format!(
++                "{relation} expects {KNN_ARITY} argument(s), got {supplied}"
++            )));
++        }
++        let Some(query) = args.get(KNN_QUERY) else {
++            return Err(EvalError::function(format!(
++                "the query term at position {KNN_QUERY} is free; this relation retrieves the \
++                 neighbours of a seed and cannot enumerate seeds, which is why both of its \
++                 declared modes — `{KNN_MODE}` and `{KNN_MEMBERSHIP_MODE}` — demand it"
++            )));
++        };
++        let query_row = rows.row_of_admitted(query, workspace)?;
++        let (answer, count_term) = if let Some(count) = args.get(KNN_COUNT) {
++            let k = neighbour_count_with(count, guard, workspace)?;
++            let post_selection_filtered =
++                args.get(KNN_NEIGHBOUR).is_some() || args.get(KNN_DISTANCE).is_some();
++            let select_k = if post_selection_filtered {
++                k
++            } else {
++                ceiling.map_or(k, |ceiling| k.min(usize::try_from(ceiling).unwrap_or(k)))
++            };
++            (
++                KnnAnswer::Search {
++                    query_row,
++                    select_k,
++                },
++                copy_invocation_term(count, workspace, &mut admissions)?,
++            )
++        } else {
++            let Some(candidate) = args.get(KNN_NEIGHBOUR) else {
++                return Err(EvalError::function(format!(
++                    "the neighbour count at position {KNN_COUNT} is free and so is the \
++                     neighbour at position {KNN_NEIGHBOUR}; how many neighbours to retrieve \
++                     is a question this relation is asked, not one it answers, so the only \
++                     call it serves without a count is the membership lookup \
++                     `{KNN_MEMBERSHIP_MODE}`, which names the one term it is about"
++                )));
++            };
++            membership_lookups.fetch_add(1, Ordering::Relaxed);
++            let (count, allocation) = admitted_universe_size(rows.len(), workspace)?.into_parts();
++            if allocation.is_bounded() { admissions.push(allocation)?; }
++            (KnnAnswer::Membership(query_row.zip(rows.row_of_admitted(candidate, workspace)?)), count)
+         };
+         let query_term = copy_invocation_term(query, workspace, &mut admissions)?;
+         let mut bound = crate::AdmittedVec::with_capacity(supplied, workspace)?;

@@ -1,0 +1,144 @@
+cargo fmt --all --check
+cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/stack)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/alloc-probe)
+    Checking wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/wasm-link)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/testkit)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/deflate)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/ed25519)
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash-conformance)
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/lex/src/allocation/shared.rs:135:13
+    |
+135 | /             pointer.as_ptr().write(Header {
+136 | |                 strong: AtomicUsize::new(1),
+137 | |                 value,
+138 | |             })
+    | |______________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+help: add a `;` here
+    |
+135 |             pointer.as_ptr().write(Header {
+136 |                 strong: AtomicUsize::new(1),
+137 |                 value,
+138 ~             });
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/lex/src/html.rs:185:13
+    |
+185 |             result.diagnostics.push(diagnostic)
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `result.diagnostics.push(diagnostic);`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: the following explicit lifetimes could be elided: 'a
+   --> crates/lex/src/html.rs:317:29
+    |
+317 | pub fn resolve_preallocated<'a>(
+    |                             ^^
+318 |     input: &'a str,
+    |             ^^
+...
+324 | ) -> Result<Resolution<'a>, ResolveIntoError> {
+    |                        ^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#elidable_lifetime_names
+    = note: `-D clippy::elidable-lifetime-names` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::elidable_lifetime_names)]`
+help: elide the lifetimes
+    |
+317 ~ pub fn resolve_preallocated(
+318 ~     input: &str,
+319 |     mode: Mode,
+...
+323 |     mut diagnostics: Vec<Diagnostic>,
+324 ~ ) -> Result<Resolution<'_>, ResolveIntoError> {
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+  --> crates/lex/src/unicode/aligned.rs:38:9
+   |
+38 |         canonical_order(run, |scalar| ccc(scalar.value))
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `canonical_order(run, |scalar| ccc(scalar.value));`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+  --> crates/lex/src/unicode/aligned.rs:53:9
+   |
+53 |         super::canonical_order_by_index(run, order, |scalar| ccc(scalar.value))
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `super::canonical_order_by_index(run, order, |scalar| ccc(scalar.value));`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: could not compile `purrdf-lex` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: implicit borrow as raw pointer
+   --> crates/lex/src/allocation/shared.rs:511:31
+    |
+511 |         assert!(core::ptr::eq(&*value, &*clone));
+    |                               ^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+    = note: `-D clippy::borrow-as-ptr` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::borrow_as_ptr)]`
+help: use a raw pointer instead
+    |
+511 |         assert!(core::ptr::eq(&raw const *value, &*clone));
+    |                                +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/lex/src/allocation/shared.rs:511:40
+    |
+511 |         assert!(core::ptr::eq(&*value, &*clone));
+    |                                        ^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+511 |         assert!(core::ptr::eq(&*value, &raw const *clone));
+    |                                         +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/lex/src/allocation/shared.rs:519:31
+    |
+519 |         assert!(core::ptr::eq(&*original, &*survivor));
+    |                               ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+519 |         assert!(core::ptr::eq(&raw const *original, &*survivor));
+    |                                +++++++++
+
+error: implicit borrow as raw pointer
+   --> crates/lex/src/allocation/shared.rs:519:43
+    |
+519 |         assert!(core::ptr::eq(&*original, &*survivor));
+    |                                           ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+help: use a raw pointer instead
+    |
+519 |         assert!(core::ptr::eq(&*original, &raw const *survivor));
+    |                                            +++++++++
+
+error: borrow as raw pointer
+   --> crates/lex/src/allocation/shared.rs:555:21
+    |
+555 |         assert_eq!((&*aligned as *const Aligned).addr() % 256, 0);
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `&raw const *aligned`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#borrow_as_ptr
+
+error: could not compile `purrdf-lex` (lib test) due to 10 previous errors
+make: *** [Makefile:94: check] Error 101

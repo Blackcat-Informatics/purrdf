@@ -1,0 +1,111 @@
+diff --git a/crates/sparql-eval/src/property_fn_plan.rs b/crates/sparql-eval/src/property_fn_plan.rs
+index fc3807eab..fc4f6e80f 100644
+--- a/crates/sparql-eval/src/property_fn_plan.rs
++++ b/crates/sparql-eval/src/property_fn_plan.rs
+@@ -2,39 +2,88 @@ pub(crate) fn invocation_mode(
+     call: &PropertyFunctionCall,
+     bound: &DetHashSet<Variable>,
+ ) -> BindingPattern {
+-    BindingPattern::from_bools(
+-        call.subject_args
+-            .iter()
+-            .chain(&call.object_args)
+-            .map(|term| term_is_bound(term, bound)),
++    invocation_mode_with_memory(
++        call,
++        &|variable| bound.contains(variable),
++        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+     )
++    .expect("resident invocation-mode traversal allocation failed")
+ }
+ 
+-/// Whether an argument term denotes a known value under `bound`.
+-///
+-/// A blank node is a non-distinguished variable and is never bound; a quoted triple is
+-/// bound only when every component is, its nested triples walked over a work list.
++/// The same invocation law under the original physical walk admission.
++/// Membership borrows the caller's certainty owner rather than copying its set.
++pub(crate) fn invocation_mode_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++    call: &PropertyFunctionCall,
++    bound: &dyn Fn(&Variable) -> bool,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<BindingPattern, purrdf_lex::allocation::StorageError> {
++    // The existing BindingPattern contract is a 64-bit pure value. Its positions
++    // need no heap storage while each argument's traversal admits actual spill.
++    let mut bits = [false; BindingPattern::MAX_ARITY];
++    let mut arity = 0usize;
++    for (position, term) in call
++        .subject_args
++        .iter()
++        .chain(&call.object_args)
++        .enumerate()
++    {
++        assert!(
++            position < BindingPattern::MAX_ARITY,
++            "BindingPattern arity exceeds its bitset"
++        );
++        bits[position] = term_is_bound_with_memory(term, bound, memory)?;
++        arity = position + 1;
++    }
++    Ok(BindingPattern::from_bools(bits[..arity].iter().copied()))
++}
++
++/// Resident test entry for the same native term-boundness body.
++#[cfg(test)]
+ fn term_is_bound(term: &TermPattern, bound: &DetHashSet<Variable>) -> bool {
+-    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
++    term_is_bound_with_memory(
++        term,
++        &|variable| bound.contains(variable),
++        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
++    )
++    .expect("resident term-boundness traversal allocation failed")
++}
++
++/// Whether a term denotes a known value under the borrowed membership law.
++///
++/// Blank nodes remain non-distinguished variables. Every quoted-triple component
++/// must be bound; the original walk order uses the shared inline/spill work list.
++fn term_is_bound_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++    term: &TermPattern,
++    bound: &dyn Fn(&Variable) -> bool,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<bool, purrdf_lex::allocation::StorageError> {
++    let mut pending: purrdf_lex::walk::WorkList<_, 8> = purrdf_lex::walk::WorkList::with(term);
++    let mut answer = true;
+     while let Some(term) = pending.pop() {
+         match term {
+             TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
+-            TermPattern::BlankNode(_) => return false,
++            TermPattern::BlankNode(_) => {
++                answer = false;
++                break;
++            }
+             TermPattern::Variable(variable) => {
+-                if !bound.contains(variable) {
+-                    return false;
++                if !bound(variable) {
++                    answer = false;
++                    break;
+                 }
+             }
+             TermPattern::Triple(triple) => {
+                 if let NamedNodePattern::Variable(variable) = &triple.predicate
+-                    && !bound.contains(variable)
++                    && !bound(variable)
+                 {
+-                    return false;
++                    answer = false;
++                    break;
+                 }
+-                pending.push(&triple.object);
+-                pending.push(&triple.subject);
++                pending.try_push_admitted(&triple.object, memory)?;
++                pending.try_push_admitted(&triple.subject, memory)?;
+             }
+         }
+     }
+-    true
++    pending.release_admitted(memory)?;
++    Ok(answer)
+ }

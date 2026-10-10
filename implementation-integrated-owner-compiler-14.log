@@ -1,0 +1,31 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash)
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+    Checking syn v2.0.118
+error: unnecessary qualification
+  --> crates/hash/src/frame.rs:71:5
+   |
+71 |     core::mem::size_of::<u64>().checked_add(label.len())?
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-qualifications` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+   |
+71 -     core::mem::size_of::<u64>().checked_add(label.len())?
+71 +     size_of::<u64>().checked_add(label.len())?
+   |
+
+error: unnecessary qualification
+  --> crates/hash/src/frame.rs:72:22
+   |
+72 |         .checked_add(core::mem::size_of::<u64>())?.checked_add(value.len())
+   |                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: remove the unnecessary path segments
+   |
+72 -         .checked_add(core::mem::size_of::<u64>())?.checked_add(value.len())
+72 +         .checked_add(size_of::<u64>())?.checked_add(value.len())
+   |
+
+error: could not compile `purrdf-hash` (lib) due to 2 previous errors

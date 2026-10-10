@@ -1,0 +1,690 @@
+diff --git a/crates/hnsw/src/search.rs b/crates/hnsw/src/search.rs
+--- a/crates/hnsw/src/search.rs
++++ b/crates/hnsw/src/search.rs
+@@ -36,11 +36,10 @@
+ 
+ use std::cell::RefCell;
+ use std::cmp::Reverse;
+-use std::collections::BTreeMap;
+-use std::collections::BinaryHeap;
+ 
+ use purrdf_core::distance::{Arithmetic, Resolved};
+ use purrdf_sparql_eval::knn::{Kernel, Ranked};
++use purrdf_sparql_eval::{AdmittedHeap, AdmittedMap, AdmittedVec, WorkspaceAllocation, WorkspaceCapability};
+ 
+ use crate::error::{HnswError, Result};
+ use crate::graph::{Graph, VectorMatrix};
+@@ -50,15 +49,23 @@
+ pub(crate) struct Visited {
+     stamps: Vec<u32>,
+     generation: u32,
++    _allocation: Option<WorkspaceAllocation>,
+ }
+ 
+ impl Visited {
+     /// Scratch sized for a graph of `nodes` rows.
+     pub(crate) fn new(nodes: usize) -> Self {
++        Self::try_new(nodes, &WorkspaceCapability::resident())
++            .expect("resident HNSW visited storage")
++    }
++
++    /// Allocate the actual stamp array under this execution's ownership.
++    pub(crate) fn try_new(nodes: usize, workspace: &WorkspaceCapability) -> Result<Self> {
++        let mut stamps = Vec::new();
++        let mut allocation = None;
++        workspace.reserve_vec(&mut stamps, &mut allocation, nodes)?;
++        stamps.resize(nodes, 0);
++        Ok(Self { stamps, generation: 0, _allocation: allocation })
+-        Self {
+-            stamps: vec![0; nodes],
+-            generation: 0,
+-        }
+     }
+ 
+     /// Start a fresh search, invalidating every prior stamp.
+@@ -90,7 +97,7 @@
+ #[derive(Debug, Default)]
+ struct CacheState {
+     /// `row -> distance from this query`.
++    entries: AdmittedMap<usize, f64>,
+-    entries: BTreeMap<usize, f64>,
+     /// Kernel evaluations that actually ran, as opposed to cache hits.
+     ///
+     /// Incremented where the kernel is invoked and nowhere else, so it is exactly the
+@@ -102,9 +109,9 @@
+ 
+ /// A memoized `row -> distance` map owned by one query.
+ ///
++/// The fixed-key table is sparse and consulted only by row key. Iteration order
++/// never contributes to ranking, batch order or artifact bytes; its array owner
++/// uses the same admitted native table as the evaluator's parsed-value cache.
+-/// A `BTreeMap` rather than a hash map: the key is an integer, the map is consulted in a hot
+-/// loop, and a `BTreeMap` needs no hasher choice at all, which keeps the determinism argument
+-/// free of "which `BuildHasher`" entirely.
+ ///
+ /// The key is a single row, not a pair, because a query's own endpoint does not change while
+ /// it is being answered. That also lets the query be a vector that is not in the matrix at
+@@ -123,19 +130,26 @@
+ #[derive(Debug, Default)]
+ pub(crate) struct DistanceCache {
+     state: RefCell<CacheState>,
++    workspace: WorkspaceCapability,
+ }
+ 
+ impl DistanceCache {
++    /// A fresh sparse memo belonging to the query's native account.
++    pub(crate) fn admitted(workspace: &WorkspaceCapability) -> Self {
++        Self { state: RefCell::new(CacheState::default()), workspace: workspace.clone() }
++    }
++
+     /// A stored distance to `row`.
+     fn get(&self, row: usize) -> Option<f64> {
+         self.state.borrow().entries.get(&row).copied()
+     }
+ 
+     /// Record a distance and charge it as one evaluation.
++    fn insert(&self, row: usize, distance: f64) -> Result<()> {
+-    fn insert(&self, row: usize, distance: f64) {
+         let mut state = self.state.borrow_mut();
++        let _ = state.entries.insert_admitted(row, distance, &self.workspace)?;
+-        state.entries.insert(row, distance);
+         state.evaluations = state.evaluations.saturating_add(1);
++        Ok(())
+     }
+ 
+     /// The number of kernel evaluations performed through this cache.
+@@ -180,6 +194,9 @@
+ }
+ 
+ impl<'a, A: Arithmetic> Query<'a, A> {
++    /// The capability every traversal buffer and cached distance shares.
++    pub(crate) fn workspace(&self) -> &WorkspaceCapability { &self.cache.workspace }
++
+     /// Bind an arbitrary vector as the search's query.
+     ///
+     /// `vector` must have the matrix's dimension; the caller validates that once rather than
+@@ -268,7 +285,7 @@
+             ),
+         }
+         .ok_or(HnswError::NonFiniteDistance { row })?;
++        self.cache.insert(row, distance)?;
+-        self.cache.insert(row, distance);
+         Ok(distance)
+     }
+ 
+@@ -287,7 +304,14 @@
+         rows: &[usize],
+         scratch: &mut Scratch,
+         out: &mut Vec<f64>,
++        out_allocation: &mut Option<WorkspaceAllocation>,
+     ) -> Result<()> {
++        let workspace = self.workspace();
++        workspace.reserve_vec(out, out_allocation, rows.len())?;
++        let missing = rows.iter().filter(|&&row| self.cache.get(row).is_none()).count();
++        workspace.reserve_vec(&mut scratch.missing_rows, &mut scratch.rows_allocation, missing)?;
++        workspace.reserve_vec(&mut scratch.missing_at, &mut scratch.at_allocation, missing)?;
++        workspace.reserve_vec(&mut scratch.scored, &mut scratch.scored_allocation, missing)?;
+         out.clear();
+         scratch.missing_rows.clear();
+         scratch.missing_at.clear();
+@@ -332,7 +356,7 @@
+             .zip(&scratch.scored)
+         {
+             let distance = scored.ok_or(HnswError::NonFiniteDistance { row })?;
++            self.cache.insert(row, distance)?;
+-            self.cache.insert(row, distance);
+             out[at] = distance;
+         }
+         Ok(())
+@@ -355,6 +379,9 @@
+     missing_at: Vec<usize>,
+     /// The batch kernel's output for them.
+     scored: Vec<Option<f64>>,
++    rows_allocation: Option<WorkspaceAllocation>,
++    at_allocation: Option<WorkspaceAllocation>,
++    scored_allocation: Option<WorkspaceAllocation>,
+ }
+ 
+ /// The L2 norm of `row`, or `0.0` for a kernel that does not divide by one.
+@@ -380,6 +407,8 @@
+         return Ok((current, current_distance));
+     }
+     let mut scratch = Scratch::default();
++    let mut rows_allocation = None;
++    let mut distances_allocation = None;
+     let mut rows: Vec<usize> = Vec::new();
+     let mut distances: Vec<f64> = Vec::new();
+     for layer in (to_layer..=from_layer).rev() {
+@@ -389,8 +418,10 @@
+             // then compared in adjacency order exactly as a one-at-a-time climb would:
+             // a distance does not depend on which node is current.
+             rows.clear();
++            let neighbors = graph.neighbors(current, layer);
++            query.workspace().reserve_vec(&mut rows, &mut rows_allocation, neighbors.len())?;
++            rows.extend(neighbors.iter().map(|n| n.row));
++            query.of_many(&rows, &mut scratch, &mut distances, &mut distances_allocation)?;
+-            rows.extend(graph.neighbors(current, layer).iter().map(|n| n.row));
+-            query.of_many(&rows, &mut scratch, &mut distances)?;
+             for (&row, &distance) in rows.iter().zip(&distances) {
+                 let candidate = Ranked { distance, row };
+                 if candidate
+@@ -425,9 +456,21 @@
+     layer: u32,
+     ef: usize,
+ ) -> Result<Vec<Ranked>> {
++    crate::resident_ranked(search_layer_admitted(graph, query, visited, entry_points, layer, ef)?)
++}
++
++/// The same two-heap traversal retaining actual buffer admission through sorting.
++pub(crate) fn search_layer_admitted<A: Arithmetic>(
++    graph: &Graph,
++    query: &Query<'_, A>,
++    visited: &mut Visited,
++    entry_points: &[usize],
++    layer: u32,
++    ef: usize,
++) -> Result<AdmittedVec<Ranked>> {
+     visited.begin();
++    let mut candidates: AdmittedHeap<Reverse<Ranked>> = AdmittedHeap::new(query.workspace());
++    let mut results: AdmittedHeap<Ranked> = AdmittedHeap::new(query.workspace());
+-    let mut candidates: BinaryHeap<Reverse<Ranked>> = BinaryHeap::new();
+-    let mut results: BinaryHeap<Ranked> = BinaryHeap::new();
+ 
+     for &entry in entry_points {
+         if !visited.visit(entry) {
+@@ -437,14 +480,16 @@
+             distance: query.of(entry)?,
+             row: entry,
+         };
++        candidates.push(Reverse(score))?;
++        results.push(score)?;
+-        candidates.push(Reverse(score));
+-        results.push(score);
+         if results.len() > ef {
++            let _ = results.pop();
+-            results.pop();
+         }
+     }
+ 
+     let mut scratch = Scratch::default();
++    let mut fresh_allocation = None;
++    let mut distances_allocation = None;
+     let mut fresh: Vec<usize> = Vec::new();
+     let mut distances: Vec<f64> = Vec::new();
+     while let Some(Reverse(current)) = candidates.pop() {
+@@ -459,20 +504,24 @@
+         // order: visiting does not depend on admission, and admission sees exactly the
+         // beam a one-at-a-time expansion would have built up to that neighbour.
+         fresh.clear();
++        let neighbors = graph.neighbors(current.row, layer);
++        let unvisited = neighbors.iter()
++            .filter(|neighbor| visited.stamps[neighbor.row] != visited.generation).count();
++        query.workspace().reserve_vec(&mut fresh, &mut fresh_allocation, unvisited)?;
++        for neighbor in neighbors {
+-        for neighbor in graph.neighbors(current.row, layer) {
+             if visited.visit(neighbor.row) {
+                 fresh.push(neighbor.row);
+             }
+         }
++        query.of_many(&fresh, &mut scratch, &mut distances, &mut distances_allocation)?;
+-        query.of_many(&fresh, &mut scratch, &mut distances)?;
+         for (&row, &distance) in fresh.iter().zip(&distances) {
+             let score = Ranked { distance, row };
+             let admitted = results.len() < ef || results.peek().is_some_and(|worst| score < *worst);
+             if admitted {
++                candidates.push(Reverse(score))?;
++                results.push(score)?;
+-                candidates.push(Reverse(score));
+-                results.push(score);
+                 if results.len() > ef {
++                    let _ = results.pop();
+-                    results.pop();
+                 }
+             }
+         }
+diff --git a/crates/hnsw/src/lib.rs b/crates/hnsw/src/lib.rs
+--- a/crates/hnsw/src/lib.rs
++++ b/crates/hnsw/src/lib.rs
+@@ -122,10 +122,11 @@
+     Arithmetic, BuildShape, Exact, Reassociated, RecordedPathError, Resolved, Selected,
+ };
+ use rayon::prelude::*;
++use purrdf_sparql_eval::{AdmittedVec, EvalError, WorkspaceCapability};
+ 
+ use crate::graph::{Graph, Recorded, decode_image};
+ use crate::sealed::Compiled;
++use crate::search::{DistanceCache, Query, Visited, greedy_descend, search_layer_admitted};
+-use crate::search::{DistanceCache, Query, Visited, greedy_descend, search_layer};
+ 
+ /// The canonical image format version.
+ ///
+@@ -250,7 +251,13 @@
+ 
+ /// One search traversal, as [`Compiled`] holds it.
+ pub(crate) type Traverse<A> =
++    for<'q> fn(&HnswIndex<A>, &Query<'q, A>, usize, &mut Visited) -> Result<AdmittedVec<Ranked>>;
++
++/// Restore the resident API by moving its existing ranked buffer.
++fn resident_ranked(ranked: AdmittedVec<Ranked>) -> Result<Vec<Ranked>> {
++    ranked.try_into_resident().map_err(|_| HnswError::Workspace(EvalError::WorkspaceUnpriced(
++        "raw extraction of admitted HNSW ranking")))
++}
+-    for<'q> fn(&HnswIndex<A>, &Query<'q, A>, usize, &mut Visited) -> Result<Vec<Ranked>>;
+ 
+ /// One graph build, as [`Compiled`] holds it.
+ pub(crate) type BuildGraph<A> =
+@@ -649,6 +656,7 @@
+         let arithmetic = self.resolve_here()?;
+         let cache = DistanceCache::default();
+         self.with_scratch(|visited| self.search_with(arithmetic, query_row, k, &cache, visited))
++            .and_then(resident_ranked)
+     }
+ 
+     /// The `k` nearest rows to `query_row`, together with the number of candidate
+@@ -668,7 +676,28 @@
+         let arithmetic = self.resolve_here()?;
+         let cache = DistanceCache::default();
+         let ranked = self
++            .with_scratch(|visited| self.search_with(arithmetic, query_row, k, &cache, visited))
++            .and_then(resident_ranked)?;
++        Ok((ranked, cache.evaluations()))
++    }
++
++    /// The native row search with actual query-owned storage and retained ranking.
++    /// Unlike resident pooled scratch, buffers created here die with their grants.
++    ///
++    /// # Errors
++    /// As for [Self::search_rows_work], plus typed workspace admission or allocator
++    /// failure before constructing any required native buffer.
++    pub fn search_rows_work_admitted(
++        &self, query_row: usize, k: usize, workspace: &WorkspaceCapability,
++    ) -> Result<(AdmittedVec<Ranked>, u64)> {
++        let arithmetic = self.resolve_here()?;
++        let cache = DistanceCache::admitted(workspace);
++        let ranked = if workspace.is_bounded() {
++            let mut visited = Visited::try_new(if k == 0 { 0 } else { self.matrix.rows() }, workspace)?;
++            self.search_with(arithmetic, query_row, k, &cache, &mut visited)?
++        } else {
++            self.with_scratch(|visited| self.search_with(arithmetic, query_row, k, &cache, visited))?
++        };
+-            .with_scratch(|visited| self.search_with(arithmetic, query_row, k, &cache, visited))?;
+         Ok((ranked, cache.evaluations()))
+     }
+ 
+@@ -698,6 +727,7 @@
+         let cache = DistanceCache::default();
+         let bound = self.bind_vector(query, &cache)?;
+         self.with_scratch(|visited| (self.compiled.traverse)(self, &bound, k, visited))
++            .and_then(resident_ranked)
+     }
+ 
+     /// [`HnswIndex::search_vector`] with the candidate distance evaluations it cost.
+@@ -709,7 +739,8 @@
+         let cache = DistanceCache::default();
+         let bound = self.bind_vector(query, &cache)?;
+         let ranked =
++            self.with_scratch(|visited| (self.compiled.traverse)(self, &bound, k, visited))
++                .and_then(resident_ranked)?;
+-            self.with_scratch(|visited| (self.compiled.traverse)(self, &bound, k, visited))?;
+         Ok((ranked, cache.evaluations()))
+     }
+ 
+@@ -764,7 +795,7 @@
+                 |(visited, arithmetic), &query_row| {
+                     let arithmetic = arithmetic.clone()?;
+                     let cache = DistanceCache::default();
++                    self.search_with(arithmetic, query_row, k, &cache, visited).and_then(resident_ranked)
+-                    self.search_with(arithmetic, query_row, k, &cache, visited)
+                 },
+             )
+             .collect()
+@@ -778,7 +809,7 @@
+         k: usize,
+         cache: &DistanceCache,
+         visited: &mut Visited,
++    ) -> Result<AdmittedVec<Ranked>> {
+-    ) -> Result<Vec<Ranked>> {
+         let rows = self.matrix.rows();
+         if query_row >= rows {
+             return Err(HnswError::RowOutOfBounds {
+@@ -807,12 +838,12 @@
+         query: &Query<'_, A>,
+         k: usize,
+         visited: &mut Visited,
++    ) -> Result<AdmittedVec<Ranked>> {
+-    ) -> Result<Vec<Ranked>> {
+         if k == 0 {
++            return Ok(AdmittedVec::new(query.workspace()));
+-            return Ok(Vec::new());
+         }
+         let Some(entry) = self.graph.entry() else {
++            return Ok(AdmittedVec::new(query.workspace()));
+-            return Ok(Vec::new());
+         };
+         // `ef_search` is part of the declared artifact identity, so it is never widened to
+         // fit a request. A `k` larger than the beam is answered with fewer than `k` rows:
+@@ -821,7 +852,7 @@
+         // the guard committed to.
+         let ef = self.params.ef_search().min(self.matrix.rows());
+         let (start, _) = greedy_descend(&self.graph, query, entry, self.graph.max_level(), 1)?;
++        let mut result = search_layer_admitted(&self.graph, query, visited, &[start], 0, ef)?;
+-        let mut result = search_layer(&self.graph, query, visited, &[start], 0, ef)?;
+         result.truncate(k);
+         Ok(result)
+     }
+diff --git a/crates/hnsw/src/relation.rs b/crates/hnsw/src/relation.rs
+--- a/crates/hnsw/src/relation.rs
++++ b/crates/hnsw/src/relation.rs
+@@ -78,7 +78,7 @@
+ };
+ use purrdf_sparql_eval::knn::{
+     KNN_ARITY, KNN_COUNT, KNN_DISTANCE, KNN_MEMBERSHIP_MODE, KNN_MODE, KNN_NEIGHBOUR, KNN_QUERY,
++    KnnInvocation, RankSource, TermRows,
+-    KnnInvocation, RankSource, RankedCursor, TermRows,
+ };
+ use purrdf_sparql_eval::{
+     AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DuplicatePolicy, EvalError,
+@@ -98,10 +98,25 @@
+ fn eval_error(context: &str, error: HnswError) -> EvalError {
+     match error {
+         HnswError::FloatEnvironment(refusal) => EvalError::FloatEnvironment(refusal),
++        HnswError::Workspace(error) => error,
+         other => EvalError::data(format!("{context}: {other}")),
+     }
+ }
+ 
++/// Native query failures preserve typed storage causes without formatting them.
++fn eval_error_admitted(
++    context: &str, error: HnswError, workspace: &purrdf_sparql_eval::WorkspaceCapability,
++) -> EvalError {
++    match error {
++        HnswError::FloatEnvironment(refusal) => EvalError::FloatEnvironment(refusal),
++        HnswError::Workspace(error) => error,
++        other => purrdf_sparql_eval::NativeDiagnostic::error(
++            purrdf_sparql_eval::NativeDiagnosticKind::Data,
++            format_args!("{context}: {other}"), workspace,
++        ),
++    }
++}
++
+ // ---------------------------------------------------------------------------
+ // The space
+ // ---------------------------------------------------------------------------
+@@ -848,22 +863,22 @@
+         args: &PfArgs<'_>,
+         ceiling: Option<u64>,
+     ) -> Result<Box<dyn PfCursor>, EvalError> {
++        self.open_admitted(args, ceiling, purrdf_sparql_eval::WorkspaceCapability::resident())
++    }
++
++    fn open_admitted(
++        &self, args: &PfArgs<'_>, ceiling: Option<u64>,
++        workspace: purrdf_sparql_eval::WorkspaceCapability,
++    ) -> Result<Box<dyn PfCursor>, EvalError> {
++        KnnInvocation::open_owned(
++            "the HNSW relation", args, ceiling, &self.space.rows, self.space.guard(),
++            &self.observations.membership_lookups, workspace,
++        )?.cursor(HnswSource {
++            space: Arc::clone(&self.space),
++            observations: Arc::clone(&self.observations),
++        })
+-        let invocation = KnnInvocation::open(
+-            "the HNSW relation",
+-            args,
+-            ceiling,
+-            &self.space.rows,
+-            self.space.guard(),
+-            &self.observations.membership_lookups,
+-        )?;
+-        Ok(Box::new(RankedCursor::new(
+-            HnswSource {
+-                space: Arc::clone(&self.space),
+-                observations: Arc::clone(&self.observations),
+-            },
+-            invocation,
+-        )))
+     }
++
+ }
+ 
+ /// How an [`HnswRelation`] ranks: a beam search over the decoded graph, and one
+@@ -881,27 +896,38 @@
+     /// The **only** call site of [`HnswIndex::search_rows_work`] in this relation, which
+     /// is what makes [`HnswObservations::searches`] a measurement rather than an estimate.
+     fn search(&self, query_row: usize, select_k: usize) -> Result<(Vec<Ranked>, u64), EvalError> {
++        let (ranked, work) = self.search_admitted(
++            query_row, select_k, &purrdf_sparql_eval::WorkspaceCapability::resident(),
++        )?;
++        let ranked = ranked.try_into_resident().map_err(|_| EvalError::WorkspaceUnpriced(
++            "raw extraction of admitted HNSW source ranking"))?;
++        Ok((ranked, work))
++    }
++
++    fn search_admitted(
++        &self, query_row: usize, select_k: usize,
++        workspace: &purrdf_sparql_eval::WorkspaceCapability,
++    ) -> Result<(purrdf_sparql_eval::AdmittedVec<Ranked>, u64), EvalError> {
+         self.observations.searches.fetch_add(1, Ordering::Relaxed);
++        let (ranked, work) = self.space.index
++            .search_rows_work_admitted(query_row, select_k, workspace)
++            .map_err(|error| eval_error_admitted("the HNSW search failed", error, workspace))?;
++        self.observations.graph_candidates.fetch_add(work, Ordering::Relaxed);
+-        let (ranked, work) = self
+-            .space
+-            .index
+-            .search_rows_work(query_row, select_k)
+-            .map_err(|e| eval_error("the HNSW search failed", e))?;
+-        self.observations
+-            .graph_candidates
+-            .fetch_add(work, Ordering::Relaxed);
+         Ok((ranked, work))
+     }
+ 
+     /// One pairwise evaluation: no node is visited and no layer is consulted.
+     fn distance(&self, query_row: usize, row: usize) -> Result<f64, EvalError> {
++        self.distance_admitted(query_row, row, &purrdf_sparql_eval::WorkspaceCapability::resident())
++    }
++
++    fn distance_admitted(
++        &self, query_row: usize, row: usize,
++        workspace: &purrdf_sparql_eval::WorkspaceCapability,
++    ) -> Result<f64, EvalError> {
++        self.observations.membership_distances.fetch_add(1, Ordering::Relaxed);
++        self.space.index.row_distance(query_row, row)
++            .map_err(|error| eval_error_admitted("the HNSW membership lookup failed", error, workspace))
+-        self.observations
+-            .membership_distances
+-            .fetch_add(1, Ordering::Relaxed);
+-        self.space
+-            .index
+-            .row_distance(query_row, row)
+-            .map_err(|e| eval_error("the HNSW membership lookup failed", e))
+     }
+ 
+     fn term(&self, row: usize) -> Option<&TermValue> {
+diff --git a/crates/hnsw/src/error.rs b/crates/hnsw/src/error.rs
+--- a/crates/hnsw/src/error.rs
++++ b/crates/hnsw/src/error.rs
+@@ -16,6 +16,9 @@
+ /// Everything that can go wrong building, decoding, or searching an [`crate::HnswIndex`].
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub enum HnswError {
++    /// Native traversal allocation or admission failed under the query account.
++    Workspace(purrdf_sparql_eval::EvalError),
++
+     /// A parameter was outside its admitted range.
+     InvalidParameter {
+         /// Which parameter (`M`, `M0`, `ef_construction`, `ef_search`).
+@@ -199,6 +202,7 @@
+ impl fmt::Display for HnswError {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         match self {
++            Self::Workspace(error) => error.fmt(f),
+             Self::InvalidParameter {
+                 name,
+                 value,
+@@ -311,9 +315,14 @@
+     }
+ }
+ 
++impl std::error::Error for HnswError {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        match self { Self::Workspace(error) => Some(error), _ => None }
++    }
++}
+-impl std::error::Error for HnswError {}
+ 
+ purrdf_lex::variant_from!(HnswError {
++    Workspace(purrdf_sparql_eval::EvalError),
+     FloatEnvironment(purrdf_core::distance::FloatEnvironmentError),
+ });
+ 
+diff --git a/crates/sparql-eval/src/knn/invocation.rs b/crates/sparql-eval/src/knn/invocation.rs
+--- a/crates/sparql-eval/src/knn/invocation.rs
++++ b/crates/sparql-eval/src/knn/invocation.rs
+@@ -266,6 +266,33 @@
+     pub remaining: Option<u64>,
+ }
+ 
++/// A decoded native invocation retaining every copied term and bound-cell grant.
++/// Its fields are private: construction transfers the complete owner into a cursor.
++#[derive(Debug)]
++pub struct AdmittedKnnInvocation {
++    invocation: KnnInvocation,
++    admission: InvocationAdmission,
++    workspace: crate::WorkspaceCapability,
++}
++
++impl AdmittedKnnInvocation {
++    /// Construct the shared lazy ranked cursor after admitting its concrete box.
++    ///
++    /// # Errors
++    /// Returns checked layout overflow, workspace refusal or allocator failure.
++    pub fn cursor<S: RankSource + 'static>(self, source: S) -> Result<Box<dyn PfCursor>, EvalError> {
++        let layout = std::alloc::Layout::new::<RankedCursor<S>>();
++        let cursor_admission = self.workspace.charge(u64::try_from(layout.size())
++            .map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++        let cursor = RankedCursor::with_admission(
++            source, self.invocation, self.admission, self.workspace, cursor_admission,
++        );
++        let cursor = purrdf_core::small::try_boxed(cursor)
++            .map_err(|_| EvalError::AllocationFailed { construct: "native ranked cursor" })?;
++        Ok(cursor)
++    }
++}
++
+ impl KnnInvocation {
+     /// Read one call of `relation` (named in refusals, e.g. `"the HNSW relation"`) over
+     /// `rows`, under `guard` and the engine's `ceiling`, counting a membership lookup on
+@@ -304,6 +331,25 @@
+         Ok(invocation)
+     }
+ 
++    /// Decode under the native account, retaining copies until their cursor dies.
++    ///
++    /// # Errors
++    /// As for [Self::open], plus typed admission, size and allocator failures.
++    pub fn open_owned(
++        relation: &str,
++        args: &PfArgs<'_>,
++        ceiling: Option<u64>,
++        rows: &TermRows,
++        guard: KnnGuard,
++        membership_lookups: &AtomicU64,
++        workspace: crate::WorkspaceCapability,
++    ) -> Result<AdmittedKnnInvocation, EvalError> {
++        let (invocation, admission) = Self::open_admitted(
++            relation, args, ceiling, rows, guard, membership_lookups, &workspace,
++        )?;
++        Ok(AdmittedKnnInvocation { invocation, admission, workspace })
++    }
++
+     pub(crate) fn open_admitted(
+         relation: &str,
+         args: &PfArgs<'_>,
+diff --git a/crates/sparql-eval/src/knn/mod.rs b/crates/sparql-eval/src/knn/mod.rs
+--- a/crates/sparql-eval/src/knn/mod.rs
++++ b/crates/sparql-eval/src/knn/mod.rs
+@@ -141,7 +141,7 @@
+ use crate::property_fn::ExclusionBasis;
+ pub use invocation::{
+     KNN_ARITY, KNN_COUNT, KNN_DISTANCE, KNN_MEMBERSHIP_MODE, KNN_MODE, KNN_NEIGHBOUR, KNN_QUERY,
++    AdmittedKnnInvocation, KnnAnswer, KnnInvocation, RankSource, RankedCursor, TermRows, neighbour_count, universe_size,
+-    KnnAnswer, KnnInvocation, RankSource, RankedCursor, TermRows, neighbour_count, universe_size,
+ };
+ pub use metric::{
+     Arithmetic, Bound, Bounded, Exact, Kernel, Ranked, Reassociated, Resolved, Scalar, Selected,
+@@ -1631,46 +1631,23 @@
+         args: &PfArgs<'_>,
+         ceiling: Option<u64>,
+     ) -> Result<Box<dyn PfCursor>, EvalError> {
++        self.open_admitted(args, ceiling, crate::WorkspaceCapability::resident())
+-        let invocation = KnnInvocation::open(
+-            "the embedding kNN relation",
+-            args,
+-            ceiling,
+-            &self.space.rows,
+-            self.space.guard(),
+-            &self.observations.membership_lookups,
+-        )?;
+-        Ok(Box::new(RankedCursor::new(
+-            KnnSource {
+-                space: Arc::clone(&self.space),
+-                declared: self.declared,
+-                scan: self.scan,
+-                lookup: self.lookup,
+-                observations: Arc::clone(&self.observations),
+-            },
+-            invocation,
+-        )))
+     }
++
+     fn open_admitted(
+         &self,
+         args: &PfArgs<'_>,
+         ceiling: Option<u64>,
+         workspace: crate::WorkspaceCapability,
+     ) -> Result<Box<dyn PfCursor>, EvalError> {
++        KnnInvocation::open_owned(
+-        let layout = std::alloc::Layout::new::<RankedCursor<KnnSource<A>>>();
+-        let cursor_admission = workspace.charge(u64::try_from(layout.size())
+-            .map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+-        let (invocation, admission) = KnnInvocation::open_admitted(
+             "the embedding kNN relation", args, ceiling, &self.space.rows,
++            self.space.guard(), &self.observations.membership_lookups, workspace,
++        )?.cursor(KnnSource {
+-            self.space.guard(), &self.observations.membership_lookups, &workspace,
+-        )?;
+-        let cursor = RankedCursor::with_admission(KnnSource {
+             space: Arc::clone(&self.space), declared: self.declared,
+             scan: self.scan, lookup: self.lookup,
+             observations: Arc::clone(&self.observations),
++        })
+-        }, invocation, admission, workspace, cursor_admission);
+-        let cursor = purrdf_core::small::try_boxed(cursor)
+-            .map_err(|_| EvalError::AllocationFailed { construct: "kNN cursor" })?;
+-        Ok(cursor)
+     }
+ 
+ }
+diff --git a/crates/sparql-eval/src/workspace.rs b/crates/sparql-eval/src/workspace.rs
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -70,6 +70,16 @@
+         (self.values, self.allocation)
+     }
+ 
++    /// Move resident storage without copying its elements. A bounded vector
++    /// returns its complete unchanged owner rather than shedding admission.
++    ///
++    /// # Errors
++    /// Returns the original admitted owner for a bounded execution.
++    pub fn try_into_resident(self) -> Result<Vec<T>, Self> {
++        if self.workspace.is_bounded() { return Err(self); }
++        Ok(self.values)
++    }
++
+     /// Drop all values while retaining the existing metadata buffer admission.
+     pub fn clear(&mut self) { self.values.clear(); }
+     /// Drop values after a prefix, retaining the existing buffer admission.
+

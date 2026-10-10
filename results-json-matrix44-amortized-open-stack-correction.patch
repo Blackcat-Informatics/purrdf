@@ -1,0 +1,68 @@
+--- a/crates/lex/src/allocation.rs
++++ b/crates/lex/src/allocation.rs
+@@ -288,6 +288,16 @@
+     /// # Errors
+     /// Returns checked layout overflow, admission refusal or allocator refusal.
+     pub fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), StorageError> {
++        self.reserve_for_push(values)?;
++        values.push(value);
++        Ok(())
++    }
++
++    /// Admit amortized vector growth before constructing the value to append.
++    ///
++    /// # Errors
++    /// Returns checked layout overflow, admission refusal or allocator refusal.
++    pub fn reserve_for_push<T>(&mut self, values: &mut Vec<T>) -> Result<(), StorageError> {
+         let required = values
+             .len()
+             .checked_add(1)
+@@ -300,7 +310,6 @@
+                 .max(required);
+             self.reserve(values, capacity)?;
+         }
+-        values.push(value);
+         Ok(())
+     }
+ 
+--- a/crates/sparql-results/src/json_read.rs
++++ b/crates/sparql-results/src/json_read.rs
+@@ -1004,11 +1004,7 @@
+     reader
+         .next_event_with_memory(memory)
+         .map_err(|error| syntax_with_memory(error, memory))?;
+-    let required = open
+-        .len()
+-        .checked_add(1)
+-        .ok_or(Error::Storage(StorageError::SizeOverflow))?;
+-    memory.reserve(open, required).map_err(Error::Storage)?;
++    memory.reserve_for_push(open).map_err(Error::Storage)?;
+     let fields = memory
+         .boxed(BindingFields::default())
+         .map_err(Error::Storage)?;
+@@ -1056,11 +1052,7 @@
+                                 reader
+                                     .next_event_with_memory(memory)
+                                     .map_err(|error| syntax_with_memory(error, memory))?;
+-                                let required = open
+-                                    .len()
+-                                    .checked_add(1)
+-                                    .ok_or(Error::Storage(StorageError::SizeOverflow))?;
+-                                memory.reserve(open, required).map_err(Error::Storage)?;
++                                memory.reserve_for_push(open).map_err(Error::Storage)?;
+                                 let parts = memory
+                                     .boxed(TripleParts::default())
+                                     .map_err(Error::Storage)?;
+@@ -1116,11 +1108,7 @@
+                         .next_event_with_memory(memory)
+                         .map_err(|error| syntax_with_memory(error, memory))?;
+                     parts.reading = Some(component);
+-                    let required = open
+-                        .len()
+-                        .checked_add(1)
+-                        .ok_or(Error::Storage(StorageError::SizeOverflow))?;
+-                    memory.reserve(open, required).map_err(Error::Storage)?;
++                    memory.reserve_for_push(open).map_err(Error::Storage)?;
+                     let fields = memory
+                         .boxed(BindingFields::default())
+                         .map_err(Error::Storage)?;

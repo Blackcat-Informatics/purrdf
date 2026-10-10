@@ -1,0 +1,74 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Append to the existing composite_value.rs native owner home as its unit module.
+// This uses the actual segmented reservation factory, not a second fake account.
+// Proposal only: not compiled or run.
+#[cfg(test)]
+mod owned_composite_fixtures {
+    use std::sync::Arc;
+    use purrdf_core::{
+        DatasetView, SegmentedBuildLimits, SegmentedBuilder, SegmentedError,
+        SegmentedReadLimits, SegmentedSession,
+    };
+    use crate::workspace::QueryWorkspace;
+    use super::CompositeValue;
+
+    fn account() -> (SegmentedSession, QueryWorkspace<SegmentedError>, u64) {
+        let limits = SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap();
+        let image = SegmentedBuilder::new(limits).seal().unwrap();
+        let source = SegmentedSession::open(
+            Arc::new(image.provider()), image.receipt(),
+            SegmentedReadLimits::new(1_000_000, 2, 2048, 20_000_000, 8),
+        ).unwrap();
+        let baseline = source.evidence().live_bytes();
+        let control = QueryWorkspace::<SegmentedError>::control_bytes().unwrap();
+        let reservation = source.reserve_owned_workspace(control).unwrap().unwrap();
+        let workspace = QueryWorkspace::owned(reservation, 0).unwrap();
+        (source, workspace, baseline)
+    }
+
+    #[test]
+    fn original_payload_and_grant_survive_all_ordinary_clones() {
+        let (source, workspace, baseline) = account();
+        let capability = workspace.capability();
+        let first = CompositeValue::parse(
+            "[{'a':[1,'é'@fr--rtl]}]", purrdf_cdt::CDT_LIST, &capability,
+        ).unwrap().unwrap();
+        let loaded = source.evidence().live_bytes();
+        let cloned = first.clone();
+        assert!(std::ptr::eq(&*first, &*cloned));
+        assert_eq!(source.evidence().live_bytes(), loaded);
+        drop(first);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(source.evidence().live_bytes(), loaded);
+        assert_eq!(cloned.as_list().unwrap().len(), 1);
+        drop(cloned);
+        assert_eq!(source.evidence().live_bytes(), baseline);
+    }
+
+    #[test]
+    fn malformed_native_diagnostics_die_before_the_original_grant() {
+        let (source, workspace, _) = account();
+        let capability = workspace.capability();
+        let baseline = source.evidence().live_bytes();
+        for lexical in ["[<http://[invalid]>]", "[<relative>]", "[{'a':1,'a':2}]", "[[1],"] {
+            assert!(CompositeValue::parse(lexical, purrdf_cdt::CDT_LIST, &capability).unwrap().is_none());
+            assert_eq!(source.evidence().live_bytes(), baseline);
+            assert!(workspace.take_failure().is_none());
+        }
+    }
+
+    #[test]
+    fn comparator_work_is_released_while_original_inputs_remain_live() {
+        let (source, workspace, _) = account();
+        let capability = workspace.capability();
+        let a = CompositeValue::parse("[[1,2],3]", purrdf_cdt::CDT_LIST, &capability).unwrap().unwrap();
+        let b = CompositeValue::parse("[[1,2],4]", purrdf_cdt::CDT_LIST, &capability).unwrap().unwrap();
+        let baseline = source.evidence().live_bytes();
+        assert_eq!(a.total_cmp(&b, &capability).unwrap(), std::cmp::Ordering::Less);
+        assert_eq!(source.evidence().live_bytes(), baseline);
+        assert!(workspace.take_failure().is_none());
+    }
+}

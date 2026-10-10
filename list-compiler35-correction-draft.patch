@@ -1,0 +1,48 @@
+--- a/crates/sparql-eval/src/list_fn.rs
++++ b/crates/sparql-eval/src/list_fn.rs
+@@ -262,6 +262,9 @@
+     else {
+         return Ok(None);
+     };
++    let Some(datatype) = XsdDatatype::from_iri(datatype) else {
++        return Ok(None);
++    };
+     let Some(value) = ParsedValue::parse(lexical_form, datatype, false, workspace)? else {
+         return Ok(None);
+     };
+@@ -464,7 +467,7 @@
+ mod tests {
+     use std::sync::Arc;
+ 
+-    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
++    use purrdf_core::{DatasetHandle, RdfDataset, RdfDatasetBuilder, TermValue};
+ 
+     use crate::error::EvalError;
+     use crate::eval::{EvalCtx, Outcome, evaluate_query};
+@@ -1006,7 +1009,7 @@
+     fn run_constructed(
+         ds: &Arc<RdfDataset>,
+         query: &str,
+-    ) -> (Vec<Vec<Option<TermValue>>>, Arc<RdfDataset>) {
++    ) -> (Vec<Vec<Option<TermValue>>>, DatasetHandle) {
+         let env = crate::extension_env::ExtensionEnv::over_options(ext_options())
+             .expect("environment over declared parser options");
+         let engine = NativeSparqlEngine::new();
+@@ -1031,7 +1034,7 @@
+     }
+ 
+     /// Run a CONSTRUCT and return its output graph.
+-    fn run_graph(ds: &Arc<RdfDataset>, query: &str) -> Arc<RdfDataset> {
++    fn run_graph(ds: &Arc<RdfDataset>, query: &str) -> DatasetHandle {
+         let env = crate::extension_env::ExtensionEnv::over_options(ext_options())
+             .expect("environment over declared parser options");
+         let engine = NativeSparqlEngine::new();
+@@ -1238,7 +1241,7 @@
+     fn run_constructed_interned(
+         ds: &Arc<RdfDataset>,
+         query: &str,
+-    ) -> (Vec<String>, Arc<RdfDataset>) {
++    ) -> (Vec<String>, crate::RetainedGraph) {
+         let env = crate::extension_env::ExtensionEnv::over_options(ext_options())
+             .expect("environment over declared parser options");
+         let engine = NativeSparqlEngine::new();

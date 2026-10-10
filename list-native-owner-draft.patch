@@ -1,0 +1,1328 @@
+--- a/crates/sparql-eval/src/list_fn.rs
++++ b/crates/sparql-eval/src/list_fn.rs
+@@ -24,29 +24,29 @@
+ //!   [`materialize_list`].
+ //!
+ //! The walk is cycle-guarded: a cyclic or torn `rdf:List` is malformed input and
+-//! hard-fails ([`EvalError::Data`]) rather than looping forever.
++//! hard-fails with the native data diagnostic rather than looping forever.
+ 
+-use purrdf_core::collections::{ListVocab, SoleObject, try_build_rdf_list, walk_rdf_list};
++use purrdf_core::collections::{
++    ListVocab, SoleObject, try_build_rdf_list_with_copy, walk_rdf_list_with_memory,
++};
+ use purrdf_core::{BlankScope, DatasetView, ListError, ListErrorKind, TermValue};
++use purrdf_lex::allocation::Memory;
+ use purrdf_sparql_algebra::PurrdfFn;
+-use purrdf_xsd::XsdValue;
++use purrdf_xsd::{XsdDatatype, XsdValue};
+ 
+-use crate::error::EvalError;
++use crate::error::{EvalError, NativeDiagnostic, NativeDiagnosticKind};
+ use crate::eval::EvalCtx;
+-use crate::expr::{arg, intern, intern_boolean, intern_integer, xsd_of};
+-use crate::scratch::{SolutionTerm, try_term_id_to_value};
++use crate::expr::{arg, intern_boolean, xsd_to_term};
++use crate::parsed_value::ParsedValue;
++use crate::scratch::SolutionTerm;
++use crate::workspace::{AdmittedVec, LexicalFrame, WorkspaceDebug};
++use crate::{WorkspaceCapability, WorkspaceTerm};
+ 
+ use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+ use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+ use purrdf_iri::vocab::rdf::REST as RDF_REST;
+ 
+-/// Evaluate a PurRDF `rdf:List` extension function.
+-///
+-/// The parser has already resolved the call to a [`PurrdfFn`] variant, so this is a
+-/// total dispatch over the six list functions. The result follows the usual
+-/// expression contract: `Ok(Some)` is a value, `Ok(None)` is a SPARQL error/unbound,
+-/// and `Err` is a hard failure. The non-list [`PurrdfFn::HeldIn`] is handled by its
+-/// own arm in [`crate::expr`] and never reaches here (defensively an internal error).
++/// Evaluate the same six list functions through their original native owners.
+ pub(crate) fn dispatch<D: DatasetView + Sync>(
+     func: PurrdfFn,
+     vals: &[Option<TermValue>],
+@@ -59,174 +59,130 @@
+         PurrdfFn::ListContains => list_contains(ctx, vals),
+         PurrdfFn::ListSlice => list_slice(ctx, vals),
+         PurrdfFn::ListConcat => list_concat(ctx, vals),
+-        PurrdfFn::HeldIn => Err(EvalError::internal("heldIn is not an rdf:List function")),
++        PurrdfFn::HeldIn => Err(NativeDiagnostic::error(
++            NativeDiagnosticKind::Internal, "heldIn is not an rdf:List function", &ctx.growth)),
+     }
+ }
+ 
+-/// `listLength(list)` → the number of members, as `xsd:integer`. A non-list
+-/// argument yields a SPARQL error (`Ok(None)`).
++/// Return the cardinality without narrowing a native usize through i64.
++fn intern_count<D: DatasetView + Sync>(
++    ctx: &mut EvalCtx<'_, D>, count: usize,
++) -> Result<SolutionTerm<D::Id>, EvalError> {
++    let value = i128::try_from(count).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++    xsd_to_term(ctx, &XsdValue::Integer { value, datatype: XsdDatatype::Integer })
++}
++
++/// A valid list's exact number of members.
+ fn list_length<D: DatasetView + Sync>(
+-    ctx: &mut EvalCtx<'_, D>,
+-    vals: &[Option<TermValue>],
++    ctx: &mut EvalCtx<'_, D>, vals: &[Option<TermValue>],
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let Some(head) = arg(vals, 0) else {
+-        return Ok(None);
+-    };
++    let Some(head) = arg(vals, 0) else { return Ok(None); };
+     match walk(ctx, head)? {
+-        Some(members) => Ok(Some(intern_integer(ctx, members.len() as i64)?)),
++        Some(members) => intern_count(ctx, members.len()).map(Some),
+         None => Ok(None),
+     }
+ }
+ 
+-/// `listGet(list, index)` → the zero-based member, or a SPARQL error when the
+-/// index is out of range / not an integer.
++/// Move the selected member with its original lexical/box admission.
+ fn list_get<D: DatasetView + Sync>(
+-    ctx: &mut EvalCtx<'_, D>,
+-    vals: &[Option<TermValue>],
++    ctx: &mut EvalCtx<'_, D>, vals: &[Option<TermValue>],
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let (Some(head), Some(index)) = (arg(vals, 0), arg(vals, 1)) else {
+-        return Ok(None);
+-    };
+-    let Some(idx) = as_index(index) else {
+-        return Ok(None);
+-    };
+-    let Some(members) = walk(ctx, head)? else {
+-        return Ok(None);
+-    };
+-    if idx < 0 {
+-        return Ok(None);
++    let (Some(head), Some(index)) = (arg(vals, 0), arg(vals, 1)) else { return Ok(None); };
++    let Some(index) = as_index(index, &ctx.growth)? else { return Ok(None); };
++    let Some(members) = walk(ctx, head)? else { return Ok(None); };
++    let Ok(index) = usize::try_from(index) else { return Ok(None); };
++    match members.into_iter().nth(index) {
++        Some(value) => ctx.intern_workspace_term(value),
++        None => Ok(None),
+     }
+-    Ok(members
+-        .into_iter()
+-        .nth(idx as usize)
+-        .map(|value| intern(ctx, value))
+-        .transpose()?
+-        .flatten())
+ }
+ 
+-/// `listIndexOf(list, value)` → the zero-based index of the first occurrence,
+-/// or a SPARQL error when the value is absent.
++/// RDF identity comparisons retain the original term comparison work-list.
+ fn list_index_of<D: DatasetView + Sync>(
+-    ctx: &mut EvalCtx<'_, D>,
+-    vals: &[Option<TermValue>],
++    ctx: &mut EvalCtx<'_, D>, vals: &[Option<TermValue>],
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let (Some(head), Some(value)) = (arg(vals, 0), arg(vals, 1)) else {
+-        return Ok(None);
+-    };
+-    let Some(members) = walk(ctx, head)? else {
+-        return Ok(None);
+-    };
+-    match members.iter().position(|m| m == value) {
+-        Some(pos) => Ok(Some(intern_integer(ctx, pos as i64)?)),
+-        None => Ok(None),
++    let (Some(head), Some(value)) = (arg(vals, 0), arg(vals, 1)) else { return Ok(None); };
++    let Some(members) = walk(ctx, head)? else { return Ok(None); };
++    for (position, member) in members.iter().enumerate() {
++        if ctx.growth.terms_equal(member, value)? {
++            return intern_count(ctx, position).map(Some);
++        }
+     }
++    Ok(None)
+ }
+ 
+-/// `listContains(list, value)` → `xsd:boolean`. A non-list argument yields a
+-/// SPARQL error (`Ok(None)`); membership over a valid (possibly empty) list is total.
+ fn list_contains<D: DatasetView + Sync>(
+-    ctx: &mut EvalCtx<'_, D>,
+-    vals: &[Option<TermValue>],
++    ctx: &mut EvalCtx<'_, D>, vals: &[Option<TermValue>],
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let (Some(head), Some(value)) = (arg(vals, 0), arg(vals, 1)) else {
+-        return Ok(None);
+-    };
+-    let Some(members) = walk(ctx, head)? else {
+-        return Ok(None);
+-    };
+-    Ok(Some(intern_boolean(
+-        ctx,
+-        members.iter().any(|m| m == value),
+-    )?))
++    let (Some(head), Some(value)) = (arg(vals, 0), arg(vals, 1)) else { return Ok(None); };
++    let Some(members) = walk(ctx, head)? else { return Ok(None); };
++    let mut contains = false;
++    for member in &members {
++        if ctx.growth.terms_equal(member, value)? { contains = true; break; }
++    }
++    intern_boolean(ctx, contains).map(Some)
++}
++
++/// Clamping a nonnegative i64 beyond the target's usize range yields the end
++/// of the list, as the original half-open slice law requires.
++fn clamped_index(index: i64, len: usize) -> usize {
++    usize::try_from(index.max(0)).unwrap_or(usize::MAX).min(len)
+ }
+ 
+-/// `listSlice(list, start, end)` → a fresh `rdf:List` of the members in the
+-/// half-open index range `[start, end)`. Indices are clamped to the list bounds
+-/// (negatives to 0), so an out-of-range or inverted range yields `rdf:nil`. The new
+-/// cells are buffered on [`EvalCtx`] and surface at the result boundary (see
+-/// [`materialize_list`]). A non-list / non-integer argument yields a SPARQL error.
+ fn list_slice<D: DatasetView + Sync>(
+-    ctx: &mut EvalCtx<'_, D>,
+-    vals: &[Option<TermValue>],
++    ctx: &mut EvalCtx<'_, D>, vals: &[Option<TermValue>],
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let (Some(head), Some(start), Some(end)) = (arg(vals, 0), arg(vals, 1), arg(vals, 2)) else {
+-        return Ok(None);
+-    };
+-    let (Some(start), Some(end)) = (as_index(start), as_index(end)) else {
+-        return Ok(None);
+-    };
+-    let Some(members) = walk(ctx, head)? else {
+-        return Ok(None);
+-    };
+-    let len = members.len() as i64;
+-    let lo = start.clamp(0, len);
+-    let hi = end.clamp(lo, len); // also enforces hi >= lo → inverted ranges are empty
+-    let slice: Vec<TermValue> = members[lo as usize..hi as usize].to_vec();
+-    let Some(value) = materialize_list(ctx, slice)? else {
+-        return Ok(None);
+-    };
+-    intern(ctx, value)
++    let (Some(head), Some(start), Some(end)) = (arg(vals, 0), arg(vals, 1), arg(vals, 2))
++        else { return Ok(None); };
++    let (Some(start), Some(end)) = (as_index(start, &ctx.growth)?, as_index(end, &ctx.growth)?)
++        else { return Ok(None); };
++    let Some(members) = walk(ctx, head)? else { return Ok(None); };
++    let lo = clamped_index(start, members.len());
++    let hi = clamped_index(end, members.len()).max(lo);
++    let Some(value) = materialize_list(ctx, members.into_iter().skip(lo).take(hi - lo))?
++        else { return Ok(None); };
++    ctx.intern_workspace_term(value)
+ }
+ 
+-/// `listConcat(listA, listB)` → a fresh `rdf:List` of A's members followed by
+-/// B's. The new cells are buffered on [`EvalCtx`] and surface at the result boundary
+-/// (see [`materialize_list`]). A non-list argument yields a SPARQL error.
+ fn list_concat<D: DatasetView + Sync>(
+-    ctx: &mut EvalCtx<'_, D>,
+-    vals: &[Option<TermValue>],
++    ctx: &mut EvalCtx<'_, D>, vals: &[Option<TermValue>],
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let (Some(a), Some(b)) = (arg(vals, 0), arg(vals, 1)) else {
+-        return Ok(None);
+-    };
+-    let (Some(mut left), Some(right)) = (walk(ctx, a)?, walk(ctx, b)?) else {
+-        return Ok(None);
+-    };
+-    left.extend(right);
+-    let Some(value) = materialize_list(ctx, left)? else {
+-        return Ok(None);
+-    };
+-    intern(ctx, value)
++    let (Some(a), Some(b)) = (arg(vals, 0), arg(vals, 1)) else { return Ok(None); };
++    // The original left-then-right walk order is observable on source failure.
++    let (Some(mut left), Some(right)) = (walk(ctx, a)?, walk(ctx, b)?) else { return Ok(None); };
++    left.try_extend(right)?;
++    let Some(value) = materialize_list(ctx, left)? else { return Ok(None); };
++    ctx.intern_workspace_term(value)
+ }
+ 
+-/// Invent a fresh `rdf:List` carrying `members` in order, returning its head term
+-/// ([`try_build_rdf_list`]).
+-///
+-/// Each cell is a fresh blank node (minted from the shared `bnode_counter`, so
+-/// labels never collide with CONSTRUCT-template or `BNODE()` blanks). The cell quads
+-/// `cell rdf:first member` / `cell rdf:rest next` are pushed onto
+-/// [`EvalCtx::constructed`] to surface at the result boundary; the empty list is
+-/// simply `rdf:nil` (no cells).
++/// Use the sole core construction algorithm, supplying before-copy native term
++/// owners and fallible metadata destinations. Partial cell emission is rolled
++/// back on every stop/refusal, so an incomplete auxiliary list cannot escape.
+ fn materialize_list<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>,
+-    members: Vec<TermValue>,
+-) -> Result<Option<TermValue>, EvalError> {
+-    enum Aborted {
+-        Stopped,
+-        Failed(EvalError),
+-    }
++    members: impl IntoIterator<Item = WorkspaceTerm>,
++) -> Result<Option<WorkspaceTerm>, EvalError> {
++    enum Aborted { Stopped, Failed(EvalError) }
++    let workspace = ctx.growth.clone();
++    let vocab = ListVocab {
++        first: workspace.iri(RDF_FIRST)?,
++        rest: workspace.iri(RDF_REST)?,
++        nil: workspace.iri(RDF_NIL)?,
++    };
+     let committed = ctx.constructed.len();
+     let mut constructed = std::mem::take(&mut ctx.constructed);
+-    let head = try_build_rdf_list(
+-        members,
+-        &ListVocab::term_values(),
++    let head = try_build_rdf_list_with_copy(
++        members, &vocab,
+         |_| {
+-            let Some(label) = ctx.try_mint_blank_label("lc").map_err(Aborted::Failed)? else {
+-                return Err(Aborted::Stopped);
+-            };
+-            Ok(TermValue::Blank {
+-                label,
+-                scope: BlankScope::DEFAULT,
+-            })
+-        },
+-        |cell, predicate, object| {
+-            constructed.push((cell, predicate, object));
+-            Ok(())
++            let Some(label) = ctx.try_mint_blank_text("lc").map_err(Aborted::Failed)?
++                else { return Err(Aborted::Stopped); };
++            workspace.blank(label.as_str(), BlankScope::DEFAULT).map_err(Aborted::Failed)
+         },
++        |value| workspace.clone_term(value).map_err(Aborted::Failed),
++        |cell, predicate, object| constructed
++            .push_admitted((cell, predicate, object), &workspace).map_err(Aborted::Failed),
+     );
+-    if head.is_err() {
+-        // No incomplete list can escape as a constructed auxiliary graph.
+-        constructed.truncate(committed);
+-    }
++    if head.is_err() { constructed.truncate(committed); }
+     ctx.constructed = constructed;
+     match head {
+         Ok(head) => Ok(Some(head)),
+@@ -235,163 +191,116 @@
+     }
+ }
+ 
+-// ---------------------------------------------------------------------------
+-// internals
+-// ---------------------------------------------------------------------------
+-
+-/// Extract a zero-based index from an `xsd:integer`-derived literal.
+-fn as_index(value: &TermValue) -> Option<i64> {
+-    match xsd_of(value)? {
+-        XsdValue::Integer { value, .. } => i64::try_from(value).ok(),
++/// The original integer-derived-only index law, with shared native parse owner.
++fn as_index(value: &TermValue, workspace: &WorkspaceCapability) -> Result<Option<i64>, EvalError> {
++    let TermValue::Literal { lexical_form, datatype, .. } = value else { return Ok(None); };
++    let Some(value) = ParsedValue::parse(lexical_form, datatype, false, workspace)? else { return Ok(None); };
++    Ok(match &*value {
++        XsdValue::Integer { value, .. } => i64::try_from(*value).ok(),
+         _ => None,
+-    }
++    })
+ }
+ 
+-/// Walk an `rdf:List` from `head`, returning its member values in order.
+-///
+-/// Reads from the active dataset first, then from the per-query constructed buffer,
+-/// so a list freshly minted by `listSlice`/`listConcat` is readable by another list
+-/// function within the same query (e.g. `g:listLength(g:listSlice(?l, 1, 3))`).
+-///
+-/// * `Ok(Some(members))` — a well-formed list (an empty list, i.e. `rdf:nil`, gives
+-///   `[]`).
+-/// * `Ok(None)` — `head` is not a list node we can read: it is `rdf:nil`-free, not
+-///   interned in the active dataset nor minted in this query, or has no `rdf:first`
+-///   (a SPARQL error — the function yields unbound).
+-/// * `Err(EvalError::Data)` — a cyclic, torn, or multi-edge list (a cell revisited,
+-///   an interior cell missing `rdf:first`/`rdf:rest`, or a cell carrying two of
+-///   either edge): malformed input, a hard fail.
++/// Read dataset lists first and this query's minted lists second, unchanged.
+ fn walk<D: DatasetView + Sync>(
+-    ctx: &EvalCtx<'_, D>,
+-    head: &TermValue,
+-) -> Result<Option<Vec<TermValue>>, EvalError> {
+-    // The empty list is `rdf:nil`, whether or not it happens to be interned.
+-    if is_nil(head) {
+-        return Ok(Some(Vec::new()));
+-    }
+-    if let Some(members) = walk_dataset(ctx, head)? {
+-        return Ok(Some(members));
+-    }
+-    // Not a dataset list — it may be a list minted earlier in THIS query, whose cells
+-    // live only in the per-query constructed buffer (value-constructing functions used
+-    // nested, e.g. `g:listLength(g:listConcat(?a, ?b))`).
++    ctx: &EvalCtx<'_, D>, head: &TermValue,
++) -> Result<Option<AdmittedVec<WorkspaceTerm>>, EvalError> {
++    if is_nil(head) { return Ok(Some(AdmittedVec::new(&ctx.growth))); }
++    if let Some(members) = walk_dataset(ctx, head)? { return Ok(Some(members)); }
+     walk_constructed(ctx, head)
+ }
+ 
+-/// Walk a list interned in the active dataset (the common case), under the
+-/// query's active graph scope — one graph, or the merge a `FROM` clause names —
+-/// with the strict walker ([`walk_rdf_list`]).
++/// Keep the strict walk's actual native ID vector alive until every stored
++/// member has been copied through the source's before-allocation term door.
+ fn walk_dataset<D: DatasetView + Sync>(
+-    ctx: &EvalCtx<'_, D>,
+-    head: &TermValue,
+-) -> Result<Option<Vec<TermValue>>, EvalError> {
+-    let Some(head_id) = ctx
+-        .dataset
+-        .term_id_by_value(head)
+-        .map_err(EvalError::source_read)?
+-    else {
+-        return Ok(None);
+-    };
+-    let first = ctx
+-        .dataset
+-        .term_id_by_value(&iri(RDF_FIRST))
+-        .map_err(EvalError::source_read)?;
+-    let rest = ctx
+-        .dataset
+-        .term_id_by_value(&iri(RDF_REST))
+-        .map_err(EvalError::source_read)?;
+-    let nil = ctx
+-        .dataset
+-        .term_id_by_value(&iri(RDF_NIL))
+-        .map_err(EvalError::source_read)?;
++    ctx: &EvalCtx<'_, D>, head: &TermValue,
++) -> Result<Option<AdmittedVec<WorkspaceTerm>>, EvalError> {
++    let Some(head_id) = ctx.dataset.term_id_by_value(head)
++        .map_err(|error| ctx.workspace.source_error(error))? else { return Ok(None); };
++    let [first_value, rest_value, nil_value] = [
++        ctx.growth.iri(RDF_FIRST)?, ctx.growth.iri(RDF_REST)?, ctx.growth.iri(RDF_NIL)?,
++    ];
++    let first = ctx.dataset.term_id_by_value(&first_value)
++        .map_err(|error| ctx.workspace.source_error(error))?;
++    let rest = ctx.dataset.term_id_by_value(&rest_value)
++        .map_err(|error| ctx.workspace.source_error(error))?;
++    let nil = ctx.dataset.term_id_by_value(&nil_value)
++        .map_err(|error| ctx.workspace.source_error(error))?;
+     let scope = ctx.active_dataset.scope_for(ctx.active_graph);
+-    let walked = ctx
+-        .dataset
+-        .checked_read(|dataset| {
+-            let objects = |cell, predicate: Option<D::Id>| {
+-                let mut sole = SoleObject::None;
+-                if let Some(predicate) = predicate {
+-                    scope.for_each_quad(dataset, Some(cell), Some(predicate), None, |q| {
+-                        sole = sole.and(q.o);
+-                    });
+-                }
+-                sole
+-            };
+-            walk_rdf_list(
+-                head_id,
+-                nil,
+-                |cell| objects(cell, first),
+-                |cell| objects(cell, rest),
+-            )
+-        })
+-        .map_err(EvalError::source_read)?;
+-    list_members(head_id, walked)?
+-        .map(|ids| {
+-            ids.into_iter()
+-                .map(|id| try_term_id_to_value(ctx.dataset, id))
+-                .collect()
+-        })
+-        .transpose()
+-}
+-
+-/// Walk a list whose cells live only in the per-query constructed buffer
+-/// (`ctx.constructed`) — a list minted by `listSlice`/`listConcat` and read again
+-/// within the same query — with the same strict walker as [`walk_dataset`].
+-/// `Ok(None)` when `head` is not a constructed-list head (the caller then treats it
+-/// as a non-list / unbound).
++    let mut frame = LexicalFrame::new(&ctx.growth);
++    let mut memory = Memory::new(&mut frame);
++    let walked = ctx.dataset.checked_read(|dataset| {
++        let objects = |cell, predicate: Option<D::Id>| {
++            let mut sole = SoleObject::None;
++            if let Some(predicate) = predicate {
++                scope.for_each_quad(dataset, Some(cell), Some(predicate), None, |q| { sole = sole.and(q.o); });
++            }
++            sole
++        };
++        walk_rdf_list_with_memory(head_id, nil,
++            |cell| objects(cell, first), |cell| objects(cell, rest), &mut memory)
++    }).map_err(|error| ctx.workspace.source_error(error))?
++        .map_err(|error| memory.admission_mut().storage_error(error, "rdf:List member IDs"))?;
++    let Some(ids) = list_members(head_id, walked, |error| NativeDiagnostic::error(
++        NativeDiagnosticKind::Data, format_args!("{error}"), &ctx.growth))? else { return Ok(None); };
++    let mut members = AdmittedVec::with_capacity(ids.len(), &ctx.growth)?;
++    for id in &ids {
++        let value = ctx.scratch.try_owned_value_of(ctx.dataset, SolutionTerm::Existing(*id),
++            &ctx.growth, |error| ctx.workspace.source_error(error))?;
++        members.push(value)?;
++    }
++    memory.release_vec(ids)
++        .map_err(|error| memory.admission_mut().storage_error(error, "rdf:List member IDs"))?;
++    Ok(Some(members))
++}
++
++/// Only list construction writes this buffer: its cell/rest identities are
++/// minted flat blanks or rdf:nil. The strict iterator's identity/cycle checks
++/// therefore cannot grow a nested term work-list. Member equality still uses
++/// the independently admitted native term comparator above.
+ fn walk_constructed<D: DatasetView + Sync>(
+-    ctx: &EvalCtx<'_, D>,
+-    head: &TermValue,
+-) -> Result<Option<Vec<TermValue>>, EvalError> {
+-    let [first, rest, nil] = [RDF_FIRST, RDF_REST, RDF_NIL].map(iri);
+-    let objects = |cell: &TermValue, predicate: &TermValue| {
+-        SoleObject::of(
+-            ctx.constructed
+-                .iter()
+-                .filter(|(s, p, _)| s == cell && p == predicate)
+-                .map(|(_, _, o)| o),
+-        )
+-    };
+-    let walked = walk_rdf_list(
+-        head,
+-        Some(&nil),
+-        |cell| objects(cell, &first),
+-        |cell| objects(cell, &rest),
+-    );
+-    list_members(head, walked)
+-        .map(|members| members.map(|terms| terms.into_iter().cloned().collect()))
+-}
+-
+-/// A strict walk's outcome as a list function reads it: the members of a
+-/// well-formed list; `None` when `head` itself carries no `rdf:first`, so it is not
+-/// a list (a SPARQL error, unbound); and every malformed list
+-/// (a cycle, a torn cell, a cell with two of either edge, or an `rdf:nil` carrying
+-/// an edge) a hard [`EvalError::Data`].
+-fn list_members<Id: Copy + Eq + std::fmt::Debug>(
+-    head: Id,
+-    walked: Result<Vec<Id>, ListError<Id>>,
++    ctx: &EvalCtx<'_, D>, head: &TermValue,
++) -> Result<Option<AdmittedVec<WorkspaceTerm>>, EvalError> {
++    let [first, rest, nil] = [
++        ctx.growth.iri(RDF_FIRST)?, ctx.growth.iri(RDF_REST)?, ctx.growth.iri(RDF_NIL)?,
++    ];
++    let objects = |cell: &TermValue, predicate: &TermValue| SoleObject::of(
++        ctx.constructed.iter().filter(|(s, p, _)| s == cell && p == predicate).map(|(_, _, o)| o));
++    let mut frame = LexicalFrame::new(&ctx.growth);
++    let mut memory = Memory::new(&mut frame);
++    let walked = walk_rdf_list_with_memory(head, Some(&*nil),
++        |cell| objects(cell, &first), |cell| objects(cell, &rest), &mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "constructed list members"))?;
++    let Some(terms) = list_members(head, walked, |error| {
++        let node = WorkspaceDebug::new(error.node, &ctx.growth);
++        let diagnostic = NativeDiagnostic::error(NativeDiagnosticKind::Data,
++            format_args!("malformed rdf:List: {} (at {:?}, after {} member(s))",
++                error.kind, node, error.members.len()), &ctx.growth);
++        node.take_failure().unwrap_or(diagnostic)
++    })? else { return Ok(None); };
++    let mut members = AdmittedVec::with_capacity(terms.len(), &ctx.growth)?;
++    for term in &terms { members.push(ctx.growth.clone_term(term)?)?; }
++    memory.release_vec(terms)
++        .map_err(|error| memory.admission_mut().storage_error(error, "constructed list members"))?;
++    Ok(Some(members))
++}
++
++/// Missing rdf:first at the head is unbound; every other strict-walk fault
++/// keeps the original malformed-list message and native data classification.
++fn list_members<Id: Copy + Eq>(
++    head: Id, walked: Result<Vec<Id>, ListError<Id>>,
++    diagnostic: impl FnOnce(&ListError<Id>) -> EvalError,
+ ) -> Result<Option<Vec<Id>>, EvalError> {
+     match walked {
+         Ok(members) => Ok(Some(members)),
+-        Err(error)
+-            if error.kind == ListErrorKind::MissingFirst
+-                && error.node == head
+-                && error.members.is_empty() =>
+-        {
+-            Ok(None)
+-        }
+-        Err(error) => Err(EvalError::data(error.to_string())),
++        Err(error) if error.kind == ListErrorKind::MissingFirst
++            && error.node == head && error.members.is_empty() => Ok(None),
++        Err(error) => Err(diagnostic(&error)),
+     }
+ }
+ 
+-/// An IRI value.
+-fn iri(s: &str) -> TermValue {
+-    TermValue::Iri(s.to_owned())
+-}
+-
+-/// Whether a term is `rdf:nil`.
+ fn is_nil(value: &TermValue) -> bool {
+-    matches!(value, TermValue::Iri(i) if i == RDF_NIL)
++    matches!(value, TermValue::Iri(iri) if iri == RDF_NIL)
+ }
+ 
+ #[cfg(test)]
+@@ -644,7 +553,7 @@
+ 
+         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
+         let err = eval_err(&ds, &q);
+-        assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
++        assert!(matches!(&err, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data), "got {err:?}");
+         assert!(err.to_string().contains("rdf:rest chain returns"));
+     }
+ 
+@@ -713,7 +622,7 @@
+ 
+         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
+         let err = eval_err(&ds, &q);
+-        assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
++        assert!(matches!(&err, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data), "got {err:?}");
+         assert!(err.to_string().contains("has no rdf:rest"), "got {err}");
+     }
+ 
+@@ -736,7 +645,7 @@
+ 
+         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
+         let err = eval_err(&ds, &q);
+-        assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
++        assert!(matches!(&err, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data), "got {err:?}");
+         assert!(err.to_string().contains("has no rdf:first"), "got {err}");
+     }
+ 
+@@ -758,7 +667,7 @@
+ 
+         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
+         let err = eval_err(&ds, &q);
+-        assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
++        assert!(matches!(&err, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data), "got {err:?}");
+         assert!(
+             err.to_string().contains("more than one rdf:first"),
+             "got {err}"
+@@ -867,12 +776,13 @@
+             &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(69),
+         ));
+         let mut ctx = EvalCtx::new(ds.as_ref()).with_governors(Arc::clone(&state));
+-        let result = super::materialize_list(
+-            &mut ctx,
+-            vec![TermValue::iri("http://ex/x"), TermValue::iri("http://ex/y")],
+-        )
++        let members = vec![
++            ctx.growth.iri("http://ex/x").unwrap(),
++            ctx.growth.iri("http://ex/y").unwrap(),
++        ];
++        let result = super::materialize_list(&mut ctx, members)
+         .expect("a mint trip is not an EvalError");
+-        assert_eq!(result, None);
++        assert!(result.is_none());
+         assert!(
+             ctx.constructed.is_empty(),
+             "no torn list survives the failed constructor"
+--- a/crates/rdf-core/src/collections.rs
++++ b/crates/rdf-core/src/collections.rs
+@@ -380,21 +380,39 @@
+     first: impl FnMut(Id) -> SoleObject<Id>,
+     rest: impl FnMut(Id) -> SoleObject<Id>,
+ ) -> Result<Vec<Id>, ListError<Id>> {
++    walk_rdf_list_with_memory(head, nil, first, rest,
++        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident))
++        .expect("resident RDF list collection")
++}
++
++/// Collect the same strict iterator with before-growth physical admission.
++/// Its returned members, including a malformed prefix, remain in the original
++/// memory until the caller destroys them.
++///
++/// # Errors
++/// Returns native storage refusal separately from malformed collection input.
++pub fn walk_rdf_list_with_memory<Id: Copy + Eq, S: purrdf_lex::allocation::Admission + ?Sized>(
++    head: Id,
++    nil: Option<Id>,
++    first: impl FnMut(Id) -> SoleObject<Id>,
++    rest: impl FnMut(Id) -> SoleObject<Id>,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<Result<Vec<Id>, ListError<Id>>, purrdf_lex::allocation::StorageError> {
+     let mut members = Vec::new();
+     for item in RdfListWalk::new(head, nil, first, rest) {
+         match item {
+-            Ok(member) => members.push(member),
++            Ok(member) => memory.push(&mut members, member)?,
+             Err(fault) => {
+                 members.truncate(fault.members);
+-                return Err(ListError {
++                return Ok(Err(ListError {
+                     kind: fault.kind,
+                     members,
+                     node: fault.node,
+-                });
++                }));
+             }
+         }
+     }
+-    Ok(members)
++    Ok(Ok(members))
+ }
+ 
+ /// Where a cycle of length `length` on the `rdf:rest` chain from `head`
+@@ -525,29 +543,45 @@
+ pub fn try_build_rdf_list<T, I, E>(
+     members: I,
+     vocab: &ListVocab<T>,
++    cell: impl FnMut(usize) -> Result<T, E>,
++    emit: impl FnMut(T, T, T) -> Result<(), E>,
++) -> Result<T, E>
++where T: Clone, I: IntoIterator<Item = T>,
++{
++    try_build_rdf_list_with_copy(members, vocab, cell, |value| Ok(value.clone()), emit)
++}
++
++/// Build through the original cell/emission order with a fallible owned copy.
++/// Native callers supply their retained payload factory for every copied cell,
++/// predicate and nil term; the resident wrapper supplies Clone.
++///
++/// # Errors
++/// Returns the first cell, copy or emission error.
++pub fn try_build_rdf_list_with_copy<T, I, E>(
++    members: I,
++    vocab: &ListVocab<T>,
+     mut cell: impl FnMut(usize) -> Result<T, E>,
++    mut copy: impl FnMut(&T) -> Result<T, E>,
+     mut emit: impl FnMut(T, T, T) -> Result<(), E>,
+ ) -> Result<T, E>
+-where
+-    T: Clone,
+-    I: IntoIterator<Item = T>,
++where I: IntoIterator<Item = T>,
+ {
+     let mut members = members.into_iter().peekable();
+     if members.peek().is_none() {
+-        return Ok(vocab.nil.clone());
++        return copy(&vocab.nil);
+     }
+     let head = cell(0)?;
+-    let mut current = head.clone();
++    let mut current = copy(&head)?;
+     let mut index = 0;
+     while let Some(member) = members.next() {
+-        emit(current.clone(), vocab.first.clone(), member)?;
++        emit(copy(&current)?, copy(&vocab.first)?, member)?;
+         let next = if members.peek().is_some() {
+             index += 1;
+             cell(index)?
+         } else {
+-            vocab.nil.clone()
++            copy(&vocab.nil)?
+         };
+-        emit(current, vocab.rest.clone(), next.clone())?;
++        emit(current, copy(&vocab.rest)?, copy(&next)?)?;
+         current = next;
+     }
+     Ok(head)
+@@ -1453,4 +1487,43 @@
+         let mut walk = RdfListWalk::new(0_u32, Some(3), first, rest);
+         assert_eq!(walk.next(), Some(Ok(100)));
+     }
++
++    #[test]
++    fn native_list_collection_reuses_strict_iterator_and_releases_original_buffer() {
++        struct Storage { live: usize }
++        impl purrdf_lex::allocation::Admission for Storage {
++            fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
++                self.live = live; Ok(())
++            }
++        }
++        let mut storage = Storage { live: 0 };
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++        let members = super::walk_rdf_list_with_memory(
++            0_u32, Some(128),
++            |cell| if cell < 128 { SoleObject::One(cell + 1000) } else { SoleObject::None },
++            |cell| if cell < 128 { SoleObject::One(cell + 1) } else { SoleObject::None },
++            &mut memory).unwrap().unwrap();
++        assert_eq!(members, (1000..1128).collect::<Vec<_>>());
++        assert!(memory.live_bytes() > 0);
++        memory.release_vec(members).unwrap();
++        assert_eq!(memory.live_bytes(), 0);
++        assert_eq!(storage.live, 0);
++    }
++
++    #[test]
++    fn native_list_collection_reports_physical_refusal_separately_from_malformed_input() {
++        struct Refuse;
++        impl purrdf_lex::allocation::Admission for Refuse {
++            fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
++                if live == 0 { Ok(()) } else { Err(purrdf_lex::allocation::StorageError::AdmissionFailed) }
++            }
++        }
++        let result = super::walk_rdf_list_with_memory(
++            0_u32, Some(2),
++            |cell| if cell < 2 { SoleObject::One(cell + 100) } else { SoleObject::None },
++            |cell| if cell < 2 { SoleObject::One(cell + 1) } else { SoleObject::None },
++            &mut purrdf_lex::allocation::Memory::new(&mut Refuse));
++        assert!(matches!(result, Err(purrdf_lex::allocation::StorageError::AdmissionFailed)));
++    }
++
+ }
+--- a/crates/lex/src/walk.rs
++++ b/crates/lex/src/walk.rs
+@@ -620,28 +620,55 @@
+ /// When the script is unbalanced: a field outside a struct, or a close with
+ /// nothing open.
+ pub fn write_debug<N, L: fmt::Debug, const K: usize>(
+-    f: &mut fmt::Formatter<'_>,
+-    root: N,
+-    script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>),
++    f: &mut fmt::Formatter<'_>, root: N,
++    mut script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>),
+ ) -> fmt::Result {
+-    let pretty = f.alternate();
+-    write_debug_with(f, root, script, |leaf, out| {
+-        if pretty {
+-            write!(out, "{leaf:#?}")
+-        } else {
+-            write!(out, "{leaf:?}")
+-        }
+-    })
++    write_debug_with(
++        f, root, |node, pending, _| { script(node, pending); Ok(()) },
++        render_debug_leaf,
++        &mut crate::allocation::Memory::new(&mut crate::allocation::Resident), false,
++    ).map_err(|_| fmt::Error)
++}
++fn render_debug_leaf<L: fmt::Debug>(leaf: L, out: &mut Pad<'_, '_>) -> fmt::Result {
++    if out.pretty { write!(out, "{leaf:#?}") } else { write!(out, "{leaf:?}") }
++}
++
++/// Failure in native Debug presentation, retaining physical refusal separately.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum DebugWriteError {
++    /// The output formatter failed.
++    Format(fmt::Error),
++    /// Original work-list storage could not be grown.
++    Storage(crate::allocation::StorageError),
++}
++crate::variant_from!(DebugWriteError {
++    Format(fmt::Error),
++    Storage(crate::allocation::StorageError),
++});
++
++/// Write the same derive-compatible bytes through original native storage.
++///
++/// # Errors
++/// Returns a formatter failure or the first physical work-list refusal.
++pub fn write_debug_with_memory<N, L: fmt::Debug, const K: usize, S: crate::allocation::Admission + ?Sized>(
++    f: &mut fmt::Formatter<'_>, root: N,
++    script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>, &mut crate::allocation::Memory<'_, S>)
++        -> Result<(), crate::allocation::StorageError>,
++    memory: &mut crate::allocation::Memory<'_, S>,
++) -> Result<(), DebugWriteError> {
++    write_debug_with(f, root, script, render_debug_leaf, memory, true)
+ }
+ 
+ /// The sole traversal and container writer; each entry supplies only its leaves,
+ /// written at the current position of the indenting writer.
+-fn write_debug_with<N, L, const K: usize>(
++fn write_debug_with<N, L, const K: usize, S: crate::allocation::Admission + ?Sized>(
+     f: &mut fmt::Formatter<'_>,
+     root: N,
+-    mut script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>),
++    mut script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>, &mut crate::allocation::Memory<'_, S>) -> Result<(), crate::allocation::StorageError>,
+     mut render_leaf: impl FnMut(L, &mut Pad<'_, '_>) -> fmt::Result,
+-) -> fmt::Result {
++    memory: &mut crate::allocation::Memory<'_, S>,
++    admitted_stack: bool,
++) -> Result<(), DebugWriteError> {
+     let pretty = f.alternate();
+     let mut out = Pad {
+         f,
+@@ -649,7 +676,9 @@
+         depth: 0,
+         line_start: false,
+     };
+-    let mut stack: WorkList<Tok<N, L>, K> = WorkList::with(Tok::Node(root));
++    let mut stack: WorkList<Tok<N, L>, K> = WorkList::new();
++    if admitted_stack { stack.try_push_admitted(Tok::Node(root), memory)?; }
++    else { stack.push(Tok::Node(root)); }
+     let mut open: WorkList<Open, 16> = WorkList::new();
+     while let Some(tok) = stack.pop() {
+         match tok {
+@@ -657,18 +686,17 @@
+                 // The node's script replaces its token, reversed so that its first
+                 // token is popped next.
+                 let before = stack.len();
+-                script(node, &mut stack);
++                script(node, &mut stack, memory)?;
+                 stack.reverse_top(stack.len() - before);
+             }
+-            Tok::Struct(name) => out.open(&mut open, name, OpenKind::Struct)?,
++            Tok::Struct(name) => out.open(&mut open, name, OpenKind::Struct, memory)?,
+             Tok::Tuple(name) => out.open(
+                 &mut open,
+                 name,
+                 OpenKind::Tuple {
+                     bare: name.is_empty(),
+-                },
+-            )?,
+-            Tok::List(_) => out.open(&mut open, "[", OpenKind::List)?,
++                }, memory)?,
++            Tok::List(_) => out.open(&mut open, "[", OpenKind::List, memory)?,
+             Tok::Field(name) => {
+                 let container = open
+                     .top_mut()
+@@ -702,6 +730,8 @@
+             }
+         }
+     }
++    if admitted_stack { stack.release_admitted(memory)?; } else { drop(stack); }
++    open.release_admitted(memory)?;
+     Ok(())
+ }
+ 
+@@ -764,15 +794,16 @@
+ impl Pad<'_, '_> {
+     /// A container starts as a value of the innermost open one: write what
+     /// separates it, then its opening (`name` for a struct or tuple, `[` for a list).
+-    fn open(
++    fn open<S: crate::allocation::Admission + ?Sized>(
+         &mut self,
+         open: &mut WorkList<Open, 16>,
+         opening: &str,
+         kind: OpenKind,
+-    ) -> fmt::Result {
++        memory: &mut crate::allocation::Memory<'_, S>,
++    ) -> Result<(), DebugWriteError> {
+         self.begin(open)?;
+         self.write_str(opening)?;
+-        open.push(Open { kind, entries: 0 });
++        open.try_push_admitted(Open { kind, entries: 0 }, memory)?;
+         Ok(())
+     }
+ 
+--- a/crates/rdf-core/src/ir/term_walk.rs
++++ b/crates/rdf-core/src/ir/term_walk.rs
+@@ -945,26 +945,44 @@
+ /// Append the script `#[derive(Debug)]` prints for `value` to `out`, a triple
+ /// term's components as [`Tok::Node`]s.
+ fn debug_script<'a>(value: &'a TermValue, out: &mut WorkList<ValueTok<'a>, 32>) {
++    let result: Result<(), core::convert::Infallible> =
++        debug_script_tokens(value, &mut |token| { out.push(token); Ok(()) });
++    match result { Ok(()) => {}, Err(error) => match error {} }
++}
++fn debug_script_with_memory<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
++    value: &'a TermValue, out: &mut WorkList<ValueTok<'a>, 32>,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<(), purrdf_lex::allocation::StorageError> {
++    debug_script_tokens(value, &mut |token| out.try_push_admitted(token, memory))
++}
++fn debug_script_tokens<'a, E>(
++    value: &'a TermValue, append: &mut impl FnMut(ValueTok<'a>) -> Result<(), E>,
++) -> Result<(), E> {
+     match value {
+-        TermValue::Iri(iri) => out.extend([
++        TermValue::Iri(iri) => {
++            for token in [
+             Tok::Tuple("Iri"),
+             Tok::Leaf(iri as &dyn fmt::Debug),
+             Tok::EndTuple,
+-        ]),
+-        TermValue::Blank { label, scope } => out.extend([
++        ] { append(token)?; }
++        },
++        TermValue::Blank { label, scope } => {
++            for token in [
+             Tok::Struct("Blank"),
+             Tok::Field("label"),
+             Tok::Leaf(label as &dyn fmt::Debug),
+             Tok::Field("scope"),
+             Tok::Leaf(scope),
+             Tok::EndStruct,
+-        ]),
++        ] { append(token)?; }
++        },
+         TermValue::Literal {
+             lexical_form,
+             datatype,
+             language,
+             direction,
+-        } => out.extend([
++        } => {
++            for token in [
+             Tok::Struct("Literal"),
+             Tok::Field("lexical_form"),
+             Tok::Leaf(lexical_form as &dyn fmt::Debug),
+@@ -975,8 +993,10 @@
+             Tok::Field("direction"),
+             Tok::Leaf(direction),
+             Tok::EndStruct,
+-        ]),
+-        TermValue::Triple { s, p, o } => out.extend([
++        ] { append(token)?; }
++        },
++        TermValue::Triple { s, p, o } => {
++            for token in [
+             Tok::Struct("Triple"),
+             Tok::Field("s"),
+             Tok::Node(&**s),
+@@ -985,7 +1005,22 @@
+             Tok::Field("o"),
+             Tok::Node(&**o),
+             Tok::EndStruct,
+-        ]),
++        ] { append(token)?; }
++        },
++    }
++    Ok(())
++}
++
++impl TermValue {
++    /// The same Debug script with original native work-list admission.
++    ///
++    /// # Errors
++    /// Returns output formatting or physical storage refusal.
++    pub fn write_debug_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++        &self, f: &mut fmt::Formatter<'_>,
++        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> Result<(), purrdf_lex::walk::DebugWriteError> {
++        purrdf_lex::walk::write_debug_with_memory(f, self, debug_script_with_memory, memory)
+     }
+ }
+ 
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -108,6 +108,91 @@
+     }
+ }
+ 
++/// A borrowed native term formatter. Each formatting pass keeps its actual
++/// token/container buffers admitted through destruction, without owning a copy
++/// of the term or replacing the first physical failure with a formatting error.
++pub(crate) struct WorkspaceDebug<'a> {
++    value: &'a purrdf_core::TermValue,
++    workspace: &'a WorkspaceCapability,
++    failure: std::cell::RefCell<Option<EvalError>>,
++}
++impl<'a> WorkspaceDebug<'a> {
++    pub(crate) const fn new(value: &'a purrdf_core::TermValue, workspace: &'a WorkspaceCapability) -> Self {
++        Self { value, workspace, failure: std::cell::RefCell::new(None) }
++    }
++    pub(crate) fn take_failure(&self) -> Option<EvalError> { self.failure.borrow_mut().take() }
++}
++impl core::fmt::Debug for WorkspaceDebug<'_> {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        let mut frame = LexicalFrame::new(self.workspace);
++        let result = self.value.write_debug_with_memory(
++            f, &mut purrdf_lex::allocation::Memory::new(&mut frame));
++        match result {
++            Ok(()) => Ok(()),
++            Err(purrdf_lex::walk::DebugWriteError::Format(error)) => Err(error),
++            Err(purrdf_lex::walk::DebugWriteError::Storage(error)) => {
++                let error = frame.storage_error(error, "native term Debug");
++                let mut failure = self.failure.borrow_mut();
++                if failure.is_none() { *failure = Some(error); }
++                Err(core::fmt::Error)
++            }
++        }
++    }
++}
++
++/// Constructed cell payloads die before their original per-term grants.
++/// Borrowing the tuple slice never detaches an engine-owned term or admission.
++#[derive(Debug, Default)]
++pub(crate) struct ConstructedCells {
++    values: Vec<(purrdf_core::TermValue, purrdf_core::TermValue, purrdf_core::TermValue)>,
++    grants: Vec<[WorkspaceAllocation; 3]>,
++    value_allocation: Option<WorkspaceAllocation>,
++    grant_allocation: Option<WorkspaceAllocation>,
++}
++impl std::ops::Deref for ConstructedCells {
++    type Target = [(purrdf_core::TermValue, purrdf_core::TermValue, purrdf_core::TermValue)];
++    fn deref(&self) -> &Self::Target { &self.values }
++}
++impl ConstructedCells {
++    fn reserve(&mut self, required: usize, workspace: &WorkspaceCapability) -> Result<(), EvalError> {
++        if required > self.values.capacity() || required > self.grants.capacity() {
++            let current = self.values.capacity().max(self.grants.capacity());
++            let capacity = current.checked_mul(2)
++                .ok_or(EvalError::WorkspaceBoundOverflow)?.max(required);
++            workspace.reserve_vec(&mut self.values, &mut self.value_allocation, capacity)?;
++            workspace.reserve_vec(&mut self.grants, &mut self.grant_allocation, capacity)?;
++        }
++        Ok(())
++    }
++    pub(crate) fn push_admitted(
++        &mut self, cell: (WorkspaceTerm, WorkspaceTerm, WorkspaceTerm),
++        workspace: &WorkspaceCapability,
++    ) -> Result<(), EvalError> {
++        let required = self.values.len().checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        self.reserve(required, workspace)?;
++        let (s, sa) = cell.0.into_parts();
++        let (p, pa) = cell.1.into_parts();
++        let (o, oa) = cell.2.into_parts();
++        self.values.push((s, p, o));
++        self.grants.push([sa, pa, oa]);
++        Ok(())
++    }
++    pub(crate) fn truncate(&mut self, len: usize) {
++        self.values.truncate(len);
++        self.grants.truncate(len);
++    }
++    pub(crate) fn append_admitted(
++        &mut self, other: &mut Self, workspace: &WorkspaceCapability,
++    ) -> Result<(), EvalError> {
++        let required = self.values.len().checked_add(other.values.len())
++            .ok_or(EvalError::WorkspaceBoundOverflow)?;
++        self.reserve(required, workspace)?;
++        self.values.append(&mut other.values);
++        self.grants.append(&mut other.grants);
++        Ok(())
++    }
++}
++
+ /// One original grant for native lexical buffers and controls. Native Memory
+ /// admits every replacement while old buffers remain alive; the frame stores
+ /// the first typed evaluator refusal independently of its static leaf marker.
+@@ -1185,6 +1270,29 @@
+             })?;
+         Ok(hasher.finish())
+     }
++    /// Copy one borrowed IRI through the actual single lexical term factory.
++    /// # Errors
++    /// Returns checked layout, before-copy admission or allocator refusal.
++    pub fn iri(&self, iri: &str) -> Result<WorkspaceTerm, EvalError> {
++        self.lexical_term(iri, "IRI lookup key", purrdf_core::TermValue::Iri)
++    }
++    /// Copy one borrowed blank spelling while preserving its RDF document scope.
++    /// # Errors
++    /// Returns checked layout, before-copy admission or allocator refusal.
++    pub fn blank(&self, label: &str, scope: purrdf_core::BlankScope) -> Result<WorkspaceTerm, EvalError> {
++        self.lexical_term(label, "blank spelling", |label| purrdf_core::TermValue::Blank { label, scope })
++    }
++    fn lexical_term(
++        &self, text: &str, construct: &'static str,
++        make: impl FnOnce(String) -> purrdf_core::TermValue,
++    ) -> Result<WorkspaceTerm, EvalError> {
++        let bytes = u64::try_from(text.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++        let allocation = self.charge(bytes)?;
++        let lexical = string(text, construct)?;
++        Ok(WorkspaceTerm::with_layout(make(lexical), allocation,
++            crate::retained::TermLayout { bytes, nodes: 1 }))
++    }
++
+     /// Whether allocations admitted by this capability retain an operational account.
+     #[must_use]
+     pub const fn is_bounded(&self) -> bool {
+@@ -3212,4 +3320,110 @@
+         drop(workspace);
+         assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+     }
++
++    #[test]
++    fn constructed_cells_keep_original_payloads_after_context_and_account() {
++        let input = native_grounding_input(12);
++        let (workspace, ledger, _) = account(1_000_000);
++        let capability = workspace.capability();
++        let mut cells = super::ConstructedCells::default();
++        let mut child = super::ConstructedCells::default();
++        cells.push_admitted((
++            capability.blank("cell-a", purrdf_core::BlankScope::DEFAULT).unwrap(),
++            capability.iri(purrdf_iri::vocab::rdf::FIRST).unwrap(),
++            capability.clone_term(&input).unwrap(),
++        ), &capability).unwrap();
++        child.push_admitted((
++            capability.blank("cell-b", purrdf_core::BlankScope::DEFAULT).unwrap(),
++            capability.iri(purrdf_iri::vocab::rdf::REST).unwrap(),
++            capability.iri(purrdf_iri::vocab::rdf::NIL).unwrap(),
++        ), &capability).unwrap();
++        cells.append_admitted(&mut child, &capability).unwrap();
++        assert!(child.is_empty());
++        assert_eq!(cells.len(), 2);
++        assert!(matches!(cells[0].2, purrdf_core::TermValue::Triple { .. }));
++        drop(child);
++        drop(capability);
++        drop(workspace);
++        assert!(ledger.live.load(Ordering::Relaxed) > 0,
++            "the retained cell payload and both metadata arrays own their original grant");
++        cells.truncate(1);
++        assert_eq!(cells.len(), 1);
++        assert!(ledger.live.load(Ordering::Relaxed) > 0);
++        drop(cells);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn constructed_metadata_refusal_publishes_no_cell_and_preserves_original_cause() {
++        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
++        let (workspace, ledger, _) = account(base + 15);
++        let capability = workspace.capability();
++        let terms = (
++            capability.iri("urn:s").unwrap(),
++            capability.iri("urn:p").unwrap(),
++            capability.iri("urn:o").unwrap(),
++        );
++        let mut cells = super::ConstructedCells::default();
++        assert!(cells.push_admitted(terms, &capability).is_err());
++        assert!(cells.is_empty());
++        assert_eq!(ledger.live.load(Ordering::Relaxed), base,
++            "refusal precedes metadata allocation and all input payloads are destroyed");
++        assert_eq!(workspace.take_failure().unwrap().identity, 7);
++        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++        drop(cells);
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn native_term_debug_matches_original_bytes_and_retains_diagnostic_on_clone() {
++        let input = native_grounding_input(48);
++        let expected = format!("{input:?}");
++        let (workspace, ledger, base) = account(1_000_000);
++        let capability = workspace.capability();
++        let debug = super::WorkspaceDebug::new(&input, &capability);
++        let diagnostic = crate::error::NativeDiagnostic::render(
++            crate::error::NativeDiagnosticKind::Data,
++            format_args!("{debug:?}"), &capability).unwrap();
++        assert!(debug.take_failure().is_none());
++        assert_eq!(diagnostic.message(), expected);
++        let retained = ledger.live.load(Ordering::Relaxed);
++        assert!(retained > base);
++        let clone = diagnostic.clone();
++        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
++        drop(debug);
++        drop(diagnostic);
++        drop(capability);
++        drop(workspace);
++        assert!(ledger.live.load(Ordering::Relaxed) > 0);
++        assert_eq!(clone.message(), expected);
++        drop(clone);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn native_term_debug_refuses_actual_worklist_growth_before_diagnostic_copy() {
++        let input = native_grounding_input(48);
++        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
++        let (workspace, ledger, _) = account(base + 1);
++        let capability = workspace.capability();
++        let debug = super::WorkspaceDebug::new(&input, &capability);
++        let diagnostic = crate::error::NativeDiagnostic::error(
++            crate::error::NativeDiagnosticKind::Data,
++            format_args!("{debug:?}"), &capability);
++        let refusal = debug.take_failure().expect("original native worklist refusal");
++        assert!(matches!(refusal, EvalError::WorkspaceStopped));
++        assert!(matches!(diagnostic, EvalError::UnstableNativeDiagnostic));
++        assert_eq!(workspace.take_failure().unwrap().identity, 7);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
++        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++        drop(debug);
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
+ }
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -564,7 +564,7 @@
+     /// [`crate::construct::eval_construct`] folds the reachable set into the CONSTRUCT
+     /// output, and the native `query` egress into `SparqlResult::Solutions::aux`. Empty
+     /// whenever no constructing builtin ran.
+-    pub(crate) constructed: Vec<(TermValue, TermValue, TermValue)>,
++    pub(crate) constructed: crate::workspace::ConstructedCells,
+     /// `true` while evaluating a per-outer-row correlated-`EXISTS` substituted
+     /// temporary pattern (see `expr::exists`'s correlated branch). That
+     /// temporary's `Expression`/`GraphPattern` nodes are heap-allocated fresh for
+@@ -1153,7 +1153,7 @@
+             xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
+             remote: None,
+             bgp_order_cache: None,
+-            constructed: Vec::new(),
++            constructed: crate::workspace::ConstructedCells::default(),
+             in_substituted_exists: false,
+             correlated_node_maps: crate::expr::CorrelatedMaps::default(),
+             deferred_exists: None,
+@@ -2607,7 +2607,7 @@
+             xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
+             remote: self.remote,
+             bgp_order_cache: self.bgp_order_cache,
+-            constructed: Vec::new(),
++            constructed: crate::workspace::ConstructedCells::default(),
+             // COPIED (a `bool`, not a shared/locked structure — copying it needs no
+             // more synchronization than resetting it would), and NOT reset to
+             // `false`: a `FILTER`/`BIND` worker forked from INSIDE a per-row
+@@ -2942,7 +2942,7 @@
+             xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
+             remote: self.remote,
+             bgp_order_cache: self.bgp_order_cache,
+-            constructed: Vec::new(),
++            constructed: crate::workspace::ConstructedCells::default(),
+             in_substituted_exists: false,
+             // SHARED, like `ledger`: the body's own nodes never resolve through it (their
+             // addresses are in neither the plan nor any live substitution window, so
+--- a/crates/sparql-eval/src/user_fn.rs
++++ b/crates/sparql-eval/src/user_fn.rs
+@@ -1584,7 +1584,7 @@
+     // listConcat remain reachable in the enclosing query's results.
+     ctx.bnode_counter = child.bnode_counter;
+     ctx.rng_state = child.rng_state;
+-    ctx.constructed.append(&mut child.constructed);
++    ctx.constructed.append_admitted(&mut child.constructed, &ctx.growth)?;
+     // And the body's relation attestations: a SHACL-AF function body is SPARQL like any
+     // other and may invoke a registered relation, so what that relation attested belongs
+     // on the CALLING query's receipt â there is no second receipt for a function body.
+--- a/crates/sparql-eval/src/convert.rs
++++ b/crates/sparql-eval/src/convert.rs
+@@ -31,15 +31,7 @@
+     node: &NamedNode,
+     workspace: &crate::WorkspaceCapability,
+ ) -> Result<crate::WorkspaceTerm, EvalError> {
+-    let bytes =
+-        u64::try_from(node.as_str().len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+-    let allocation = workspace.charge(bytes)?;
+-    let lexical = crate::workspace::string(node.as_str(), "IRI lookup key")?;
+-    Ok(crate::WorkspaceTerm::with_layout(
+-        TermValue::Iri(lexical),
+-        allocation,
+-        crate::retained::TermLayout { bytes, nodes: 1 },
+-    ))
++    workspace.iri(node.as_str())
+ }
+ 
+ /// The blank-node scope every `BLANK_NODE_LABEL` written inside a `cdt:List` /
+--- a/crates/sparql-eval/src/template.rs
++++ b/crates/sparql-eval/src/template.rs
+@@ -631,16 +631,7 @@
+     blank_value(label.as_str(), &ctx.growth).map(Some)
+ }
+ fn blank_value(label: &str, workspace: &WorkspaceCapability) -> Result<WorkspaceTerm, EvalError> {
+-    let bytes = u64::try_from(label.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+-    let allocation = workspace.charge(bytes)?;
+-    let label = crate::workspace::string(label, "template blank")?;
+-    Ok(WorkspaceTerm::new(
+-        TermValue::Blank {
+-            label,
+-            scope: BlankScope::DEFAULT,
+-        },
+-        allocation,
+-    ))
++    workspace.blank(label, BlankScope::DEFAULT)
+ }
+ 
+ /// The blank-minting core (independent of [`EvalCtx`]): first occurrence of
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -6833,16 +6833,7 @@
+     let Some(label) = ctx.try_mint_blank_text("bnode")? else {
+         return Ok(None);
+     };
+-    let allocation = ctx
+-        .growth
+-        .charge(u64::try_from(label.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+-    let value = crate::WorkspaceTerm::new(
+-        TermValue::Blank {
+-            label: crate::workspace::string(label.as_str(), "BNODE spelling")?,
+-            scope: BlankScope::DEFAULT,
+-        },
+-        allocation,
+-    );
++    let value = ctx.growth.blank(label.as_str(), BlankScope::DEFAULT)?;
+     ctx.intern_workspace_term(value)
+ }
+ 

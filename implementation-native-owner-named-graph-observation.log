@@ -1,0 +1,19 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 13.29s
+     Running tests/query_completion.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/9878b07c0c4f8576/out/query_completion-9878b07c0c4f8576)
+
+running 1 test
+thread 'named_graph_lookup_refusal_never_certifies_an_empty_scope' panicked at crates/sparql-eval/tests/query_completion.rs:466:5:
+assertion `left == right` failed: actual source outcome: Query { diagnostic: RetainedDiagnostic { payload: DiagnosticPayload { value: RdfDiagnostic { severity: Error, code: "native-sparql-source-read", message: "dataset read failed: source refused admission lookup", detail: None, location: None, presentation: None }, _allocation: WorkspaceAllocation { _owner: Some([WorkspaceCharge { bytes: 221, .. }]) } } }, evidence: Receipt { failed: false, yielded: 0, checkpoints: 4, reservations: 1, execution_attempts: 0, reporting_guards: 1, execution_guards: 0, reads: 1, growth_attempts: 74, owned_bytes: 3246 } }
+  left: None
+ right: Some(Lookup)
+test named_graph_lookup_refusal_never_certifies_an_empty_scope ... FAILED
+
+failures:
+
+failures:
+    named_graph_lookup_refusal_never_certifies_an_empty_scope
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p purrdf-sparql-eval --test query_completion`

@@ -1,0 +1,22 @@
+heaptrack output will be written to "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/prepared-baseline-plan.zst.zst"
+starting application, this might take some time...
+
+running 1 test
+test evaluating_an_admitted_plan_costs_a_pinned_constant_per_call ... NOTE: heaptrack detected DEBUGINFOD_URLS but will disable it to prevent 
+unintended network delays during recording
+If you really want to use DEBUGINFOD, export HEAPTRACK_ENABLE_DEBUGINFOD=1
+query_prepared: [48, 48, 48, 48, 48] allocations per call
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+heaptrack stats:
+	allocations:          	735
+	leaked allocations:   	5
+	temporary allocations:	115
+Heaptrack finished! Now run the following to investigate the data:
+
+  heaptrack --analyze "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/prepared-baseline-plan.zst.zst"
+
+heaptrack_gui detected, automatically opening the file...
+/usr/bin/heaptrack: line 288: 1953716 Aborted                    (core dumped) exit $EXIT_CODE

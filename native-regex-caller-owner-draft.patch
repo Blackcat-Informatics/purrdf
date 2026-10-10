@@ -1,0 +1,971 @@
+--- a/crates/rdf-core/src/small/shared.rs
++++ b/crates/rdf-core/src/small/shared.rs
+@@ -17,6 +17,19 @@
+     value: T,
+ }
+ 
++// Only the uninitialized allocation is owned. The initialized Header<T>
++// transfers directly to Shared; unwinding a factory cannot leak this block.
++struct UninitializedAllocation {
++    pointer: NonNull<u8>,
++    layout: Layout,
++}
++impl Drop for UninitializedAllocation {
++    fn drop(&mut self) {
++        // SAFETY: this guard owns fresh global-allocator storage for this layout.
++        unsafe { std::alloc::dealloc(self.pointer.as_ptr(), self.layout) };
++    }
++}
++
+ /// Allocation refusal while constructing an immutable shared owner.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ pub struct SharedAllocError;
+@@ -64,34 +77,41 @@
+     /// # Errors
+     /// Returns allocation refusal without constructing diagnostic text.
+     pub fn try_new(value: T) -> Result<Self, SharedAllocError> {
++        Self::try_new_with(|| value)
++    }
++
++    /// Allocate the actual control storage before invoking a payload factory.
++    /// The factory is never called on allocation refusal. Its final ownership
++    /// transfer must be infallible; a panic releases uninitialized storage.
++    ///
++    /// # Errors
++    /// Returns allocator refusal while captured original payloads remain owned
++    /// by the factory. No payload is removed before its destination exists.
++    pub fn try_new_with(factory: impl FnOnce() -> T) -> Result<Self, SharedAllocError> {
+         // SAFETY: alloc supplies null or global-allocator storage for this layout.
+-        unsafe { Self::try_new_with(value, |layout| std::alloc::alloc(layout)) }
+-    }
+-
+-    /// Internal allocation boundary, also exercised by the null-allocator test.
++        unsafe { Self::try_new_with_allocator(factory, |layout| std::alloc::alloc(layout)) }
++    }
++
++    /// Internal allocation boundary, also exercised by null-allocator tests.
+     ///
+     /// # Safety
+     /// The allocator returns null, or fresh global-allocator storage for exactly
+     /// the supplied nonzero layout. It must not return an alias or other storage.
+-    unsafe fn try_new_with(
+-        value: T,
++    unsafe fn try_new_with_allocator(
++        factory: impl FnOnce() -> T,
+         allocate: impl FnOnce(Layout) -> *mut u8,
+     ) -> Result<Self, SharedAllocError> {
+         let layout = Self::allocation_layout();
+-        // Header always includes AtomicUsize, even for a zero-sized T.
+         let pointer = NonNull::new(allocate(layout).cast::<Header<T>>()).ok_or(SharedAllocError)?;
++        // Keep the still-uninitialized destination under a deallocation guard
++        // while arbitrary caller code runs. No T drop can run on this storage.
++        let pending = UninitializedAllocation { pointer: pointer.cast(), layout };
++        let value = factory();
+         // SAFETY: the allocation contract provides aligned, fresh storage;
+         // no reference is exposed before this initialization.
+-        unsafe {
+-            pointer.as_ptr().write(Header {
+-                strong: AtomicUsize::new(1),
+-                value,
+-            })
+-        };
+-        Ok(Self {
+-            pointer,
+-            _owner: PhantomData,
+-        })
++        unsafe { pointer.as_ptr().write(Header { strong: AtomicUsize::new(1), value }) };
++        core::mem::forget(pending);
++        Ok(Self { pointer, _owner: PhantomData })
+     }
+ 
+     /// Retain the existing allocation without allocating or copying its value.
+@@ -153,10 +173,15 @@
+         }
+         // Synchronize with earlier Release decrements before destroying T.
+         fence(Ordering::Acquire);
+-        // SAFETY: this was the last owner. The initialized allocation came from
+-        // the global allocator with Layout::new::<Header<T>>. Box drops T and
+-        // deallocates it, including if T's destructor unwinds.
+-        unsafe { drop(Box::from_raw(self.pointer.as_ptr())) };
++        // SAFETY: this was the last owner. Move its unpinned T onto the stack
++        // before freeing the concrete control block. A payload-held workspace
++        // grant therefore remains live through the original header deallocation.
++        let value = unsafe { core::ptr::addr_of!((*self.pointer.as_ptr()).value).read() };
++        // SAFETY: this header came from the global allocator for this layout,
++        // and no live owner or payload remains in it. Deallocation precedes any
++        // T destructor, including one that releases admission or unwinds.
++        unsafe { std::alloc::dealloc(self.pointer.as_ptr().cast(), Self::allocation_layout()) };
++        drop(value);
+     }
+ }
+ 
+@@ -175,11 +200,33 @@
+     #[test]
+     fn null_allocator_refusal_drops_input_once() {
+         let drops = Arc::new(AtomicUsize::new(0));
++        let original = DropProbe(drops.clone());
+         // SAFETY: null satisfies the allocation boundary's refusal contract.
+         let result =
+-            unsafe { Shared::try_new_with(DropProbe(drops.clone()), |_| core::ptr::null_mut()) };
++            unsafe { Shared::try_new_with_allocator(|| original, |_| core::ptr::null_mut()) };
+         assert!(matches!(result, Err(SharedAllocError)));
+         assert_eq!(drops.load(Ordering::Relaxed), 1);
++    }
++
++    #[test]
++    fn allocation_refusal_never_invokes_payload_factory() {
++        let invoked = core::cell::Cell::new(false);
++        // SAFETY: null satisfies the exact allocation-refusal contract.
++        let result = unsafe { Shared::try_new_with_allocator(|| {
++            invoked.set(true);
++            7u8
++        }, |_| core::ptr::null_mut()) };
++        assert!(matches!(result, Err(SharedAllocError)));
++        assert!(!invoked.get());
++    }
++
++    #[test]
++    fn factory_constructs_once_and_shared_clones_do_not_repeat_it() {
++        let invoked = core::cell::Cell::new(0usize);
++        let value = Shared::try_new_with(|| { invoked.set(invoked.get() + 1); 7u8 }).unwrap();
++        let clone = value.clone();
++        assert_eq!(invoked.get(), 1);
++        assert!(core::ptr::eq(&*value, &*clone));
+     }
+ 
+     #[test]
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -143,11 +143,55 @@
+ }
+ 
+ impl<K: Eq + std::hash::Hash, V> AdmittedMap<K, V> {
+-    /// Borrow a value without constructing or copying an owned key.
+-    #[must_use]
+-    pub fn get(&self, key: &K) -> Option<&V> {
+-        self.entries.find(purrdf_hash::fixed::hash_one(key), |entry| entry.0 == *key)
+-            .map(|entry| &entry.1)
++    /// The live entry count; retained spare capacity remains admitted.
++    #[must_use]
++    pub fn len(&self) -> usize { self.entries.len() }
++
++    /// Whether there are no live entries.
++    #[must_use]
++    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
++
++    /// Borrow each existing key and value without an iterator allocation.
++    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
++        self.entries.iter().map(|entry| (&entry.0, &entry.1))
++    }
++
++    /// Borrow existing keys and mutable values without growing the table.
++    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&K, &mut V)> {
++        self.entries.iter_mut().map(|entry| (&entry.0, &mut entry.1))
++    }
++
++    /// Borrow a value using the same fixed hash and a borrowed key identity.
++    #[must_use]
++    pub fn get<Q: ?Sized + Eq + std::hash::Hash>(&self, key: &Q) -> Option<&V>
++    where K: std::borrow::Borrow<Q> {
++        self.get_key_value(key).map(|(_, value)| value)
++    }
++
++    /// Borrow the original key and value without copying either owner.
++    #[must_use]
++    pub fn get_key_value<Q: ?Sized + Eq + std::hash::Hash>(&self, key: &Q) -> Option<(&K, &V)>
++    where K: std::borrow::Borrow<Q> {
++        self.entries.find(purrdf_hash::fixed::hash_one(key),
++            |entry| <K as std::borrow::Borrow<Q>>::borrow(&entry.0) == key)
++            .map(|entry| (&entry.0, &entry.1))
++    }
++
++    /// Mutate a value while its original table and payload owners remain alive.
++    #[must_use]
++    pub fn get_mut<Q: ?Sized + Eq + std::hash::Hash>(&mut self, key: &Q) -> Option<&mut V>
++    where K: std::borrow::Borrow<Q> {
++        self.entries.find_mut(purrdf_hash::fixed::hash_one(key),
++            |entry| <K as std::borrow::Borrow<Q>>::borrow(&entry.0) == key)
++            .map(|entry| &mut entry.1)
++    }
++
++    /// Move a value out without allocating or releasing the live table buffer.
++    pub fn remove<Q: ?Sized + Eq + std::hash::Hash>(&mut self, key: &Q) -> Option<V>
++    where K: std::borrow::Borrow<Q> {
++        let entry = self.entries.find_entry(purrdf_hash::fixed::hash_one(key),
++            |entry| <K as std::borrow::Borrow<Q>>::borrow(&entry.0) == key).ok()?;
++        Some(entry.remove().0.1)
+     }
+ 
+     /// Insert or replace after admitting any concrete replacement table.
+--- a/crates/sparql-eval/src/plan_cache.rs
++++ b/crates/sparql-eval/src/plan_cache.rs
+@@ -4,11 +4,9 @@
+ //! Bounded deterministic LRU storage for prepared plans and join orders.
+ 
+ use std::borrow::Borrow;
+-use std::collections::BTreeMap;
+ use std::hash::Hash;
+ use std::sync::{Arc, Mutex};
+ 
+-use crate::DetHashMap;
+ 
+ /// Retention ceilings for a query-plan or join-order cache.
+ ///
+@@ -51,16 +49,19 @@
+ }
+ 
+ #[derive(Debug)]
+-struct Entry<V> {
++struct Entry<K, V> {
+     value: V,
+     bytes: usize,
+     stamp: u64,
++    previous: Option<K>,
++    next: Option<K>,
+ }
+ 
+ #[derive(Debug)]
+ pub(crate) struct BoundedCache<K, V> {
+-    entries: DetHashMap<K, Entry<V>>,
+-    recency: BTreeMap<u64, K>,
++    entries: crate::AdmittedMap<K, Entry<K, V>>,
++    oldest: Option<K>,
++    newest: Option<K>,
+     limits: CacheLimits,
+     stats: CacheStats,
+     clock: u64,
+@@ -75,42 +76,36 @@
+ }
+ 
+ impl<K: Clone + Eq + Hash, V: Clone> Default for BoundedCache<K, V> {
+-    fn default() -> Self {
+-        Self::new(CacheLimits::default())
+-    }
+-}
+-
++    fn default() -> Self { Self::new(CacheLimits::default()) }
++}
++
++// This private cache's actual key homes are u64, (u64, u64), and Arc<[u8]>.
++// Their clones never allocate. Recency uses those existing identities, and the
++// admitted table certificate includes both inline link slots in every entry.
+ impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
+     pub(crate) fn new(limits: CacheLimits) -> Self {
+         Self {
+-            entries: DetHashMap::default(),
+-            recency: BTreeMap::new(),
+-            limits,
+-            stats: CacheStats::default(),
+-            clock: 0,
+-        }
+-    }
+-
+-    pub(crate) fn stats(&self) -> CacheStats {
+-        self.stats
+-    }
++            entries: crate::AdmittedMap::default(), oldest: None, newest: None,
++            limits, stats: CacheStats::default(), clock: 0,
++        }
++    }
++
++    pub(crate) fn stats(&self) -> CacheStats { self.stats }
+ 
+     pub(crate) fn values(&self) -> impl Iterator<Item = &V> {
+-        self.entries.values().map(|entry| &entry.value)
++        self.entries.iter().map(|(_, entry)| &entry.value)
+     }
+ 
+     fn tick(&mut self) -> u64 {
+         if self.clock == u64::MAX {
+-            // Preserve LRU order at counter rollover; never introduce a timestamp
+-            // collision or a hash-iteration tie break.
+-            let old = std::mem::take(&mut self.recency);
++            // Only clock rollover walks the list. No temporary list/tree or
++            // hash-order tie break is introduced; links preserve exact LRU law.
+             self.clock = 0;
+-            for (_, key) in old {
+-                self.entries
+-                    .get_mut(&key)
+-                    .expect("recency entry exists")
+-                    .stamp = self.clock;
+-                self.recency.insert(self.clock, key);
++            let mut key = self.oldest.clone();
++            while let Some(current) = key {
++                let entry = self.entries.get_mut(&current).expect("recency entry exists");
++                entry.stamp = self.clock;
++                key = entry.next.clone();
+                 self.clock += 1;
+             }
+         }
+@@ -119,31 +114,44 @@
+         stamp
+     }
+ 
++    fn unlink(&mut self, key: &K) {
++        let entry = self.entries.get_mut(key).expect("recency entry exists");
++        let previous = entry.previous.take();
++        let next = entry.next.take();
++        if let Some(previous_key) = &previous {
++            self.entries.get_mut(previous_key).expect("previous recency entry exists").next = next.clone();
++        } else { self.oldest = next.clone(); }
++        if let Some(next_key) = &next {
++            self.entries.get_mut(next_key).expect("next recency entry exists").previous = previous.clone();
++        } else { self.newest = previous; }
++    }
++
++    fn append_newest(&mut self, key: &K, stamp: u64) {
++        if let Some(previous) = &self.newest {
++            self.entries.get_mut(previous).expect("newest recency entry exists").next = Some(key.clone());
++        } else { self.oldest = Some(key.clone()); }
++        let entry = self.entries.get_mut(key).expect("new entry exists");
++        entry.previous = self.newest.take();
++        entry.next = None;
++        entry.stamp = stamp;
++        self.newest = Some(key.clone());
++    }
++
+     pub(crate) fn get<Q: ?Sized + Eq + Hash>(&mut self, key: &Q) -> Option<V>
+-    where
+-        K: Borrow<Q>,
+-    {
++    where K: Borrow<Q> {
+         let Some((stored_key, entry)) = self.entries.get_key_value(key) else {
+             self.stats.misses = self.stats.misses.saturating_add(1);
+             return None;
+         };
+         self.stats.hits = self.stats.hits.saturating_add(1);
+-        // Repeated hits on the newest entry do not change LRU order. Avoid
+-        // rebuilding the recency tree and bumping its clock on this hot path.
+-        if self
+-            .recency
+-            .last_key_value()
+-            .is_some_and(|(&stamp, _)| stamp == entry.stamp)
+-        {
+-            return Some(entry.value.clone());
+-        }
++        debug_assert!(entry.stamp < self.clock, "live recency stamp precedes clock");
++        let value = entry.value.clone();
++        if entry.next.is_none() { return Some(value); }
+         let stored_key = stored_key.clone();
+         let stamp = self.tick();
+-        let entry = self.entries.get_mut(key).expect("checked cache entry");
+-        self.recency.remove(&entry.stamp);
+-        entry.stamp = stamp;
+-        self.recency.insert(stamp, stored_key);
+-        Some(entry.value.clone())
++        self.unlink(&stored_key);
++        self.append_newest(&stored_key, stamp);
++        Some(value)
+     }
+ 
+     pub(crate) fn insert(&mut self, key: K, value: V, bytes: usize) {
+@@ -151,47 +159,53 @@
+     }
+ 
+     pub(crate) fn insert_with_eviction(
+-        &mut self,
+-        key: K,
+-        value: V,
+-        bytes: usize,
++        &mut self, key: K, value: V, bytes: usize, evicted: impl FnMut(&V),
++    ) -> bool {
++        self.insert_with_eviction_admitted(key, value, bytes,
++            &crate::WorkspaceCapability::resident(), evicted)
++            .expect("resident cache destination allocation failed")
++    }
++
++    pub(crate) fn insert_admitted(
++        &mut self, key: K, value: V, bytes: usize, workspace: &crate::WorkspaceCapability,
++    ) -> Result<bool, crate::EvalError> {
++        self.insert_with_eviction_admitted(key, value, bytes, workspace, |_| {})
++    }
++
++    fn insert_with_eviction_admitted(
++        &mut self, key: K, value: V, bytes: usize, workspace: &crate::WorkspaceCapability,
+         mut evicted: impl FnMut(&V),
+-    ) -> bool {
+-        if self.limits.entries == 0
+-            || self.limits.bytes == 0
+-            || bytes == usize::MAX
+-            || bytes > self.limits.bytes
+-        {
++    ) -> Result<bool, crate::EvalError> {
++        if self.limits.entries == 0 || self.limits.bytes == 0
++            || bytes == usize::MAX || bytes > self.limits.bytes {
+             self.stats.unretained = self.stats.unretained.saturating_add(1);
+-            return false;
+-        }
+-        if let Some(previous) = self.entries.remove(&key) {
++            return Ok(false);
++        }
++        if self.entries.get(&key).is_some() {
++            self.unlink(&key);
++            let previous = self.entries.remove(&key).expect("checked cache entry");
+             evicted(&previous.value);
+-            self.recency.remove(&previous.stamp);
+             self.stats.bytes -= previous.bytes;
++            self.stats.entries = self.entries.len();
+         }
+         while self.entries.len() >= self.limits.entries
+-            || self.stats.bytes > self.limits.bytes - bytes
+-        {
+-            let (_, oldest) = self.recency.pop_first().expect("nonempty cache to evict");
++            || self.stats.bytes > self.limits.bytes - bytes {
++            let oldest = self.oldest.clone().expect("nonempty cache to evict");
++            self.unlink(&oldest);
+             let entry = self.entries.remove(&oldest).expect("recency entry exists");
+             evicted(&entry.value);
+             self.stats.bytes -= entry.bytes;
+             self.stats.evictions = self.stats.evictions.saturating_add(1);
++            self.stats.entries = self.entries.len();
+         }
+         let stamp = self.tick();
+-        self.recency.insert(stamp, key.clone());
+-        self.entries.insert(
+-            key,
+-            Entry {
+-                value,
+-                bytes,
+-                stamp,
+-            },
+-        );
++        self.entries.insert_admitted(key.clone(), Entry {
++            value, bytes, stamp, previous: None, next: None,
++        }, workspace)?;
++        self.append_newest(&key, stamp);
+         self.stats.bytes += bytes;
+         self.stats.entries = self.entries.len();
+-        true
++        Ok(true)
+     }
+ }
+ 
+--- a/crates/sparql-eval/src/xpath_regex.rs
++++ b/crates/sparql-eval/src/xpath_regex.rs
+@@ -1,16 +1,21 @@
+-// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+ //! Selected pattern laws at the SPARQL expression boundary.
+-
+ use std::borrow::Cow;
+ use std::hash::BuildHasher;
++use std::marker::PhantomData;
+ use std::sync::Arc;
+ 
+-use purrdf_core::DatasetView;
++use purrdf_core::small::Shared;
++use purrdf_core::{DatasetView, RdfTextDirection, TermValue};
+ use purrdf_core::xsd_regex::{self, xpath};
+-
+-use crate::EvalError;
++use purrdf_iri::vocab::rdf::{DIR_LANG_STRING, LANG_STRING};
++use purrdf_lex::allocation::{Admission, StorageError};
++use purrdf_xsd::datatype::XSD_STRING;
++
++use crate::{EvalError, WorkspaceAllocation, WorkspaceCapability, WorkspaceTerm};
++use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
+ use crate::eval::EvalCtx;
+ use crate::plan_cache::BoundedCache;
+ 
+@@ -25,7 +30,6 @@
+     pub(crate) const fn new(profile: xpath::Profile, limits: xpath::Limits) -> Self {
+         Self { profile, limits }
+     }
+-
+     pub(crate) const fn parts(selection: Option<Self>) -> Option<(xpath::Profile, xpath::Limits)> {
+         match selection {
+             Some(selection) => Some((selection.profile, selection.limits)),
+@@ -34,84 +38,244 @@
+     }
+ }
+ 
+-/// Bounded retention of successful programs. The hash is only a lookup hint:
+-/// every hit checks the complete profile, source and flags before reuse.
+-pub(crate) type Cache = BoundedCache<u64, Arc<xpath::CompiledPattern>>;
++// One erased capability, original grant and first typed native admission failure.
++// The native leaf owns this callback; it never owns a copied grant or bare payload.
++struct NativeAdmission {
++    workspace: WorkspaceCapability,
++    allocation: Option<WorkspaceAllocation>,
++    failure: Option<EvalError>,
++    live: usize,
++}
++
++impl NativeAdmission {
++    fn new(workspace: &WorkspaceCapability) -> Self {
++        Self { workspace: workspace.clone(), allocation: None, failure: None, live: 0 }
++    }
++    fn resize_eval(&mut self, live: usize) -> Result<(), EvalError> {
++        if let Some(error) = &self.failure { return Err(error.clone()); }
++        let bytes = u64::try_from(live).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++        match &mut self.allocation {
++            Some(allocation) => allocation.resize(bytes)?,
++            None if live != 0 => self.allocation = Some(self.workspace.charge(bytes)?),
++            None => {}
++        }
++        self.live = live;
++        Ok(())
++    }
++}
++impl std::fmt::Debug for NativeAdmission {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("NativeAdmission").field("live", &self.live).finish_non_exhaustive()
++    }
++}
++impl Admission for NativeAdmission {
++    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
++        match self.resize_eval(live) {
++            Ok(()) => Ok(()),
++            Err(error) => {
++                if self.failure.is_none() { self.failure = Some(error); }
++                Err(StorageError::AdmissionFailed)
++            }
++        }
++    }
++}
++
++trait FailureOwner {
++    fn take_failure(&mut self) -> Option<EvalError>;
++    fn workspace(&self) -> &WorkspaceCapability;
++}
++impl FailureOwner for NativeAdmission {
++    fn take_failure(&mut self) -> Option<EvalError> { self.failure.take() }
++    fn workspace(&self) -> &WorkspaceCapability { &self.workspace }
++}
++impl FailureOwner for (NativeAdmission, NativeAdmission) {
++    fn take_failure(&mut self) -> Option<EvalError> {
++        self.0.take_failure().or_else(|| self.1.take_failure())
++    }
++    fn workspace(&self) -> &WorkspaceCapability { &self.0.workspace }
++}
++
++// Operational errors have no owned text. Syntax text remains in the native
++// carrier and dies before its original account; it is only an expression error.
++struct ErrorPublication<T>(PhantomData<fn() -> T>);
++impl<T> ErrorPublication<T> {
++    const fn new() -> Self { Self(PhantomData) }
++}
++impl<T, S: FailureOwner> xpath::Publication<xpath::Error, S> for ErrorPublication<T> {
++    type Output = Option<T>;
++    type Error = EvalError;
++    fn publish(self, value: &mut Option<xpath::Error>, storage: &mut S) -> Result<Option<T>, EvalError> {
++        if let Some(error) = storage.take_failure() { return Err(error); }
++        match value.as_ref().expect("native error remains enclosed") {
++            xpath::Error::Resource(refusal) => Err(EvalError::XPathRegex(xpath::Error::Resource(refusal.clone()))),
++            xpath::Error::Allocation { resource, units } => Err(EvalError::XPathRegex(xpath::Error::Allocation {
++                resource: *resource, units: *units,
++            })),
++            xpath::Error::Storage(StorageError::SizeOverflow) => Err(EvalError::WorkspaceBoundOverflow),
++            xpath::Error::Storage(StorageError::AllocationFailed) => Err(EvalError::AllocationFailed { construct: "native XPath storage" }),
++            xpath::Error::Storage(StorageError::AdmissionFailed) => Err(EvalError::WorkspaceStopped),
++            xpath::Error::Storage(StorageError::FormattingFailed) => Err(EvalError::UnstableNativeDiagnostic),
++            xpath::Error::Flags { .. } | xpath::Error::Syntax { .. }
++                | xpath::Error::EmptyMatch | xpath::Error::Replacement(_) => Ok(None),
++            _ => Err(NativeDiagnostic::error(NativeDiagnosticKind::Internal,
++                "unclassified native XPath failure", storage.workspace())),
++        }
++    }
++}
++
++pub(crate) struct NativeProgram {
++    // The program dies before the original compiler/control grant.
++    pattern: xpath::CompiledPattern,
++    storage: NativeAdmission,
++}
++impl std::fmt::Debug for NativeProgram {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("NativeProgram").field("storage", &self.storage).finish_non_exhaustive()
++    }
++}
++struct ProgramPublication;
++impl xpath::Publication<xpath::CompiledPattern, NativeAdmission> for ProgramPublication {
++    type Output = Shared<NativeProgram>;
++    type Error = EvalError;
++    fn publish(self, value: &mut Option<xpath::CompiledPattern>, storage: &mut NativeAdmission) -> Result<Self::Output, EvalError> {
++        let control = Shared::<NativeProgram>::allocation_layout().size();
++        let total = storage.live.checked_add(control).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        storage.resize_eval(total)?;
++        let workspace = storage.workspace.clone();
++        // Allocate the final control BEFORE removing either original payload or
++        // original grant. Refusal does not invoke this infallible factory.
++        Shared::try_new_with(|| NativeProgram {
++            pattern: value.take().expect("native program remains enclosed"),
++            storage: std::mem::replace(storage, NativeAdmission::new(&workspace)),
++        }).map_err(|_| EvalError::AllocationFailed { construct: "native XPath shared program" })
++    }
++}
++
++fn compile_owned(
++    profile: xpath::Profile, pattern: &str, flags: &str, limits: xpath::Limits,
++    workspace: &WorkspaceCapability,
++) -> Result<Option<Shared<NativeProgram>>, EvalError> {
++    match xpath::compile_with_storage(profile, pattern, flags, limits, NativeAdmission::new(workspace)) {
++        Ok(compiled) => compiled.publish_with(ProgramPublication).map(Some),
++        Err(error) => error.publish_with(ErrorPublication::new()),
++    }
++}
++
++/// Bounded retention of successful programs; the complete identity is rechecked.
++pub(crate) type Cache = BoundedCache<u64, Shared<NativeProgram>>;
+ 
+ #[derive(Clone)]
+ pub(crate) enum Program {
+     Compatibility(Arc<xsd_regex::CompiledPattern>),
+-    Native(Arc<xpath::CompiledPattern>, xpath::Limits),
++    Native(Shared<NativeProgram>, xpath::Limits),
++}
++
++// Trusted one-step native String -> RDF literal publication. A borrowed Cow is
++// copied under its own exact output account before taking the native carrier.
++struct StringLiteralPublication<'a> {
++    language: Option<&'a str>,
++    direction: Option<RdfTextDirection>,
++}
++impl<'h> xpath::Publication<Cow<'h, str>, (NativeAdmission, NativeAdmission)> for StringLiteralPublication<'_> {
++    type Output = WorkspaceTerm;
++    type Error = EvalError;
++    fn publish(self, value: &mut Option<Cow<'h, str>>, storage: &mut (NativeAdmission, NativeAdmission)) -> Result<WorkspaceTerm, EvalError> {
++        if let Some(error) = storage.take_failure() { return Err(error); }
++        let original = value.as_ref().expect("native replacement remains enclosed");
++        let lexical_bytes = match original { Cow::Borrowed(text) => text.len(), Cow::Owned(text) => text.capacity() };
++        let direction = self.language.and(self.direction);
++        let datatype = match (self.language, direction) {
++            (Some(_), Some(_)) => DIR_LANG_STRING,
++            (Some(_), None) => LANG_STRING,
++            (None, _) => XSD_STRING,
++        };
++        let total = lexical_bytes.checked_add(datatype.len())
++            .and_then(|bytes| bytes.checked_add(self.language.map_or(0, str::len)))
++            .ok_or(EvalError::WorkspaceBoundOverflow)?;
++        // All fallible payload/grant operations happen with the original Cow
++        // and account intact. Existing Owned text is never copied or detached.
++        storage.1.resize_eval(total)?;
++        let datatype = crate::workspace::string(datatype, "native replacement datatype")?;
++        let language = self.language.map(|text| crate::workspace::string(text, "native replacement language")).transpose()?;
++        let borrowed = match original {
++            Cow::Borrowed(text) => Some(crate::workspace::string(text, "native replacement lexical text")?),
++            Cow::Owned(_) => None,
++        };
++        // The datatype makes total nonzero, so the account exists even for an
++        // empty replacement. Construction after both takes is infallible.
++        let allocation = storage.1.allocation.take().expect("literal payload pre-admitted");
++        let lexical_form = match value.take().expect("native replacement remains enclosed") {
++            Cow::Owned(text) => text,
++            Cow::Borrowed(_) => borrowed.expect("borrowed lexical copy already constructed"),
++        };
++        Ok(WorkspaceTerm::new(TermValue::Literal { lexical_form, datatype, language, direction }, allocation))
++    }
+ }
+ 
+ impl Program {
+     #[inline(never)]
+-    pub(crate) fn is_match(&self, text: &str) -> Result<Option<bool>, EvalError> {
++    pub(crate) fn is_match(&self, text: &str, workspace: &WorkspaceCapability) -> Result<Option<bool>, EvalError> {
+         match self {
+             Self::Compatibility(pattern) => Ok(Some(pattern.is_match(text))),
+-            Self::Native(pattern, limits) => expression_result(pattern.is_match(text, *limits)),
++            Self::Native(pattern, limits) => match pattern.pattern.is_match_with_storage(text, *limits, NativeAdmission::new(workspace)) {
++                Ok(result) => Ok(Some(*result.value())),
++                Err(error) => error.publish_with(ErrorPublication::new()),
++            },
+         }
+     }
+ 
+     #[inline(never)]
+-    pub(crate) fn replace_all<'h>(
+-        &self,
+-        text: &'h str,
+-        replacement: &str,
+-    ) -> Result<Option<Cow<'h, str>>, EvalError> {
++    pub(crate) fn replace_literal(
++        &self, text: &str, replacement: &str, language: Option<&str>, direction: Option<RdfTextDirection>,
++        workspace: &WorkspaceCapability,
++    ) -> Result<Option<WorkspaceTerm>, EvalError> {
++        let publication = StringLiteralPublication { language, direction };
+         match self {
+-            Self::Compatibility(pattern) => Ok(pattern.replace_all(text, replacement).ok()),
+-            Self::Native(pattern, limits) => {
+-                expression_result(pattern.replace_all(text, replacement, *limits))
++            Self::Native(pattern, limits) => match pattern.pattern.replace_all_with_storage(
++                text, replacement, *limits, NativeAdmission::new(workspace), NativeAdmission::new(workspace),
++            ) {
++                Ok(result) => result.publish_with(publication).map(Some),
++                Err(error) => error.publish_with(ErrorPublication::new()),
++            },
++            Self::Compatibility(pattern) => {
++                // Existing compatibility engine law is preserved in this native
++                // caller unit. Its producer is replaced by the separately staged
++                // same-program compatibility-law unit before #508 qualification.
++                let Ok(result) = pattern.replace_all(text, replacement) else { return Ok(None); };
++                let mut original = Some(Cow::Borrowed(result.as_ref()));
++                let mut storage = (NativeAdmission::new(workspace), NativeAdmission::new(workspace));
++                xpath::Publication::publish(publication, &mut original, &mut storage).map(Some)
+             }
+         }
+     }
+ }
+ 
+-/// A constant retains a successful native program for its exact law and source.
+-/// Each execution admits that program under its current limits. Native failures
+-/// are recomputed on evaluation and never become a cached request verdict.
++/// Linked request verdicts retain successful native programs and their accounts.
+ #[derive(Clone)]
+ pub(crate) struct LinkedPattern {
+     selection: Option<Selection>,
+     verdict: Result<Option<Program>, EvalError>,
+ }
+-
+ impl LinkedPattern {
+-    pub(crate) fn link<D: DatasetView + Sync>(
+-        ctx: &mut EvalCtx<'_, D>,
+-        pattern: &str,
+-        flags: &str,
+-    ) -> Self {
+-        Self {
+-            selection: ctx.xpath_regex,
+-            verdict: cached(ctx, pattern, flags),
+-        }
+-    }
+-}
+-
+-/// Resolve a linked or dynamic pattern under the current request's admission.
++    pub(crate) fn link<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, pattern: &str, flags: &str) -> Self {
++        Self { selection: ctx.xpath_regex, verdict: cached(ctx, pattern, flags) }
++    }
++}
++
+ #[inline(never)]
+ pub(crate) fn resolve<D: DatasetView + Sync>(
+-    ctx: &mut EvalCtx<'_, D>,
+-    pattern: &str,
+-    flags: &str,
+-    linked: Option<&LinkedPattern>,
++    ctx: &mut EvalCtx<'_, D>, pattern: &str, flags: &str, linked: Option<&LinkedPattern>,
+ ) -> Result<Option<Program>, EvalError> {
+     if let Some(selection) = ctx.xpath_regex {
+-        selection
+-            .limits
+-            .admit_pattern(pattern)
+-            .map_err(|refusal| EvalError::XPathRegex(refusal.into()))?;
++        selection.limits.admit_pattern(pattern).map_err(|refusal| EvalError::XPathRegex(refusal.into()))?;
+     }
+     if let Some(linked) = linked {
+         match (&linked.verdict, ctx.xpath_regex) {
+             (Ok(Some(Program::Native(compiled, _))), Some(Selection { profile, limits }))
+-                if compiled.matches_source(profile, pattern, flags) =>
+-            {
+-                compiled.admit(limits).map_err(EvalError::XPathRegex)?;
+-                return Ok(Some(Program::Native(Arc::clone(compiled), limits)));
+-            }
++                if compiled.pattern.matches_source(profile, pattern, flags) => {
++                    compiled.pattern.admit(limits).map_err(EvalError::XPathRegex)?;
++                    return Ok(Some(Program::Native(compiled.clone(), limits)));
++                }
+             (_, None) if linked.selection.is_none() => return linked.verdict.clone(),
+             _ => {}
+         }
+@@ -119,48 +283,23 @@
+     cached(ctx, pattern, flags)
+ }
+ 
+-fn cached<D: DatasetView + Sync>(
+-    ctx: &mut EvalCtx<'_, D>,
+-    pattern: &str,
+-    flags: &str,
+-) -> Result<Option<Program>, EvalError> {
++fn cached<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, pattern: &str, flags: &str) -> Result<Option<Program>, EvalError> {
+     let Some(Selection { profile, limits }) = ctx.xpath_regex else {
+         return Ok(crate::expr::cached_regex(ctx, pattern, flags).map(Program::Compatibility));
+     };
+-    // Admission comes before hashing, cache lookup, flags or syntax recognition.
+-    limits
+-        .admit_pattern(pattern)
+-        .map_err(|refusal| EvalError::XPathRegex(refusal.into()))?;
+-    // Do not hash unadmitted flag text. At most one flags variant is retained
+-    // per source; its exact flags are compared before reuse. Differing lengths
+-    // are rejected by str equality without scanning an arbitrarily long input.
++    limits.admit_pattern(pattern).map_err(|refusal| EvalError::XPathRegex(refusal.into()))?;
++    // Flags are not hashed before the native parser admits them. Each lookup is
++    // a hint only; mismatched profile/source/flags cannot select a program.
+     let key = purrdf_hash::fixed::FixedState::default().hash_one((profile, pattern));
+     if let Some(compiled) = ctx.xpath_regex_cache.get(&key)
+-        && compiled.matches_source(profile, pattern, flags)
+-    {
+-        compiled.admit(limits).map_err(EvalError::XPathRegex)?;
++        && compiled.pattern.matches_source(profile, pattern, flags) {
++        compiled.pattern.admit(limits).map_err(EvalError::XPathRegex)?;
+         return Ok(Some(Program::Native(compiled, limits)));
+     }
+-    let Some(compiled) = expression_result(xpath::compile(profile, pattern, flags, limits))? else {
+-        // No syntax memo: a later request with less construction storage or work
+-        // must get its own admission verdict, rather than a cached expression error.
+-        return Ok(None);
+-    };
+-    let compiled = Arc::new(compiled);
+-    ctx.xpath_regex_cache.insert(
+-        key,
+-        Arc::clone(&compiled),
+-        compiled.storage_bytes().saturating_add(size_of::<u64>()),
+-    );
++    let Some(compiled) = compile_owned(profile, pattern, flags, limits, &ctx.growth)? else { return Ok(None); };
++    let bytes = compiled.storage.live.checked_add(size_of::<u64>()).ok_or(EvalError::WorkspaceBoundOverflow)?;
++    ctx.xpath_regex_cache.insert_admitted(key, compiled.clone(), bytes, &ctx.growth)?;
+     Ok(Some(Program::Native(compiled, limits)))
+-}
+-
+-fn expression_result<T>(result: Result<T, xpath::Error>) -> Result<Option<T>, EvalError> {
+-    match result {
+-        Ok(value) => Ok(Some(value)),
+-        Err(error) if error.is_operational() => Err(EvalError::XPathRegex(error)),
+-        Err(_) => Ok(None),
+-    }
+ }
+ 
+ #[cfg(all(test, not(target_arch = "wasm32")))]
+@@ -183,7 +322,7 @@
+             resolve(&mut current, "^(a|b)$", "", Some(&linked))
+                 .unwrap()
+                 .unwrap()
+-                .is_match("a")
++                .is_match("a", &WorkspaceCapability::resident())
+                 .unwrap(),
+             Some(true)
+         );
+@@ -211,7 +350,7 @@
+             resolve(&mut current, "^(a|b)$", "", Some(&linked))
+                 .unwrap()
+                 .unwrap()
+-                .is_match("a")
++                .is_match("a", &WorkspaceCapability::resident())
+                 .unwrap_err()
+                 .code(),
+             Some(Resource::MatchSteps.code())
+@@ -235,7 +374,7 @@
+             resolve(&mut ctx, "a", "", Some(&linked))
+                 .unwrap()
+                 .unwrap()
+-                .is_match("a")
++                .is_match("a", &WorkspaceCapability::resident())
+                 .unwrap(),
+             Some(true)
+         );
+@@ -249,7 +388,7 @@
+             resolve(&mut ctx, "(a|ab)", "", None)
+                 .unwrap()
+                 .unwrap()
+-                .is_match("ab")
++                .is_match("ab", &WorkspaceCapability::resident())
+                 .unwrap(),
+             Some(true)
+         );
+@@ -271,7 +410,7 @@
+             resolve(&mut ctx, "(a|ab)", "", None)
+                 .unwrap()
+                 .unwrap()
+-                .is_match("ab")
++                .is_match("ab", &WorkspaceCapability::resident())
+                 .unwrap(),
+             Some(true)
+         );
+@@ -282,7 +421,7 @@
+         let error = resolve(&mut ctx, "(a|ab)", "", None)
+             .unwrap()
+             .unwrap()
+-            .is_match("ab")
++            .is_match("ab", &WorkspaceCapability::resident())
+             .unwrap_err();
+         assert_eq!(error.code(), Some(Resource::MatchSteps.code()));
+     }
+@@ -296,7 +435,7 @@
+             resolve(&mut ctx, "(?:a)", "", Some(&linked))
+                 .unwrap()
+                 .unwrap()
+-                .is_match("a")
++                .is_match("a", &WorkspaceCapability::resident())
+                 .unwrap(),
+             Some(true)
+         );
+@@ -323,7 +462,7 @@
+             resolve(&mut ctx, "a", "", Some(&refused))
+                 .unwrap()
+                 .unwrap()
+-                .is_match("a")
++                .is_match("a", &WorkspaceCapability::resident())
+                 .unwrap(),
+             Some(true)
+         );
+@@ -352,15 +491,15 @@
+     fn lookup_hash_collisions_cannot_select_another_pattern_or_law() {
+         let data = empty_dataset();
+         let mut ctx = EvalCtx::new(&*data).with_xpath_regex(Profile::Xpath31, Limits::new());
+-        let different = Arc::new(xpath::compile(Profile::Xpath20, "z", "", Limits::new()).unwrap());
++        let different = compile_owned(Profile::Xpath20, "z", "", Limits::new(), &ctx.growth).unwrap().unwrap();
+         let key = purrdf_hash::fixed::FixedState::default().hash_one((Profile::Xpath31, "a"));
+         ctx.xpath_regex_cache
+-            .insert(key, Arc::clone(&different), different.storage_bytes());
++            .insert_admitted(key, different.clone(), different.storage.live, &ctx.growth).unwrap();
+         assert_eq!(
+             resolve(&mut ctx, "a", "", None)
+                 .unwrap()
+                 .unwrap()
+-                .is_match("a")
++                .is_match("a", &WorkspaceCapability::resident())
+                 .unwrap(),
+             Some(true)
+         );
+@@ -368,7 +507,7 @@
+             resolve(&mut ctx, "a", "i", None)
+                 .unwrap()
+                 .unwrap()
+-                .is_match("A")
++                .is_match("A", &WorkspaceCapability::resident())
+                 .unwrap(),
+             Some(true)
+         );
+@@ -376,7 +515,7 @@
+             resolve(&mut ctx, "a", "", None)
+                 .unwrap()
+                 .unwrap()
+-                .is_match("A")
++                .is_match("A", &WorkspaceCapability::resident())
+                 .unwrap(),
+             Some(false)
+         );
+@@ -395,7 +534,7 @@
+             let error = resolve(&mut child, "a", "", None)
+                 .unwrap()
+                 .unwrap()
+-                .is_match("a")
++                .is_match("a", &WorkspaceCapability::resident())
+                 .unwrap_err();
+             assert_eq!(error.code(), Some(Resource::MatchSteps.code()));
+         }
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -5778,11 +5778,10 @@
+     // inside `replace_all`, so this call site cannot drop either. A malformed
+     // replacement is F&O [err:FORX0004], which SPARQL 1.1 §17.4.3.15 makes a
+     // type error: the expression is left unbound, never aborts the query.
+-    let Some(replaced) = compiled.replace_all(&s, replacement)? else {
++    let Some(replaced) = compiled.replace_literal(s, replacement, lang, dir, &ctx.growth)? else {
+         return Ok(None);
+     };
+-    let replaced = replaced.into_owned();
+-    make_string_dir(ctx, replaced, lang.map(str::to_owned), dir)
++    ctx.intern_workspace_term(replaced)
+ }
+ 
+ /// The compiled pattern for `(pattern, flags)`, from the per-query cache.
+--- a/crates/sparql-eval/src/vm/mod.rs
++++ b/crates/sparql-eval/src/vm/mod.rs
+@@ -725,7 +725,7 @@
+                             )?;
+                             match compiled {
+                                 Some(re) => re
+-                                    .is_match(text.parts().0)?
++                                    .is_match(text.parts().0, &ctx.growth)?
+                                     .map(|holds| helpers::intern_boolean(ctx, holds))
+                                     .transpose()?,
+                                 None => None,

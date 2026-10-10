@@ -1,0 +1,154 @@
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -2781,11 +2781,10 @@
+             &workspace,
+         );
+         let measured = measured.and_then(|explanation| {
+-            let bytes = explanation.retained_bytes().ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+-            let mut owner = workspace.clone();
+-            owner.set_base(u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?)?;
+-            let capability = owner.capability();
+-            Ok(crate::RetainedQueryExplanation::new(explanation, owner, &capability)?)
++            // Every surviving metadata buffer already carries its original owner.
++            // Publication adds only its concrete immutable shared control.
++            let capability = workspace.capability();
++            Ok(crate::RetainedQueryExplanation::new(explanation, workspace.clone(), &capability)?)
+         });
+         if let Some(error) = workspace.take_failure() {
+             return Err(fallible_admission_failure(dataset, bounded_workspace::AdmissionError::Operational(error)));
+@@ -2838,57 +2837,44 @@
+         sequencing: Sequencing,
+         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+     ) -> Result<QueryExplanation, EvaluationFailure> {
++
++        let capability = workspace.capability();
+         let relations = options.property_functions();
+         let aggregates = options.aggregates();
+-        let survey = self.survey_plan(dataset, &prepared.query, relations)?;
+-        // No substitutions are applied: the survey numbers the exact plan visited
+-        // by the evaluator, and its predictions share the ledger's node table.
+-        let ledger = Arc::new(ChargeLedger::for_plan(survey.shape(), &survey.estimates));
++        let survey = self.survey_plan_admitted(dataset, &prepared.query, relations, workspace)?;
++        // All immutable metadata and the terminal ledger destination exist before
++        // measuring. A sticky operational refusal requires no snapshot allocation.
++        let profile = crate::ProfileIdentity::current_admitted(&capability)?;
++        let registered = relations.describe_admitted(&capability)?;
++        let registered_aggregates = aggregates.describe_admitted(&capability)?;
++        let (ledger, publication) = ChargeLedger::for_plan_admitted(survey.shape(), &survey.estimates, &capability)?;
+         let governors = match stop {
+             Some(signal) => QueryGovernors::METERED.with_stop_signal(signal),
+             None => QueryGovernors::METERED,
+         };
+-        let state = Arc::new(GovernorState::new(&governors));
+-        let mut ctx = self
+-            .eval_ctx(dataset, workspace)?
+-            .with_governors(Arc::clone(&state))
+-            .with_charge_ledger(Arc::clone(&ledger))
++        let state = crate::workspace::SharedWorkspace::new_admitted(
++            GovernorState::with_workspace(&governors, capability.clone()), &capability,
++        )?;
++        let mut ctx = self.eval_ctx(dataset, workspace)?
++            .with_governor_owner(state.clone())
++            .with_charge_ledger(ledger)
+             .with_user_functions(options.functions)
+             .with_user_function_admission(options.user_function_admission)
+             .with_property_functions(relations)
+             .with_aggregates(aggregates)
+             .with_division_policy(options.division);
+         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+-        // A request's dated law replaces the engine's, as for evaluation.
+         ctx.xpath_regex = options.xpath_regex.or(ctx.xpath_regex);
+-        if let Some(source) = options.remote {
+-            ctx = ctx.with_remote(source);
+-        }
++        if let Some(source) = options.remote { ctx = ctx.with_remote(source); }
+         evaluate_query_evaluated_over(&prepared.query, Some(&prepared.plan), &mut ctx)
+             .map_err(EvaluationFailure::Evaluation)?;
+-        // Complete IRI-sorted descriptors distinguish the declarations that priced
+-        // this run, independently of their registration order.
+-        let registered = relations.describe().map_err(|error| {
+-            RdfDiagnostic::error(
+-                eval_diagnostic_code(&error, "native-sparql-property-function"),
+-                error.to_string(),
+-            )
+-        })?;
+-        let registered_aggregates = aggregates.describe().map_err(|error| {
+-            RdfDiagnostic::error(
+-                eval_diagnostic_code(&error, "native-sparql-aggregate-function"),
+-                error.to_string(),
+-            )
+-        })?;
+-        Ok(QueryExplanation::new(
+-            survey.orders,
+-            ledger.snapshot(),
+-            registered,
+-            registered_aggregates,
+-            state.evidence(),
++        Ok(QueryExplanation::from_admitted(
++            profile, survey.orders, publication.finish(),
++            registered, registered_aggregates, state.evidence(),
+         ))
+-    }
+ 
++}
++
+     /// Walk `query`'s plan against `dataset`'s statistics without evaluating it: the join
+     /// order the cost model chooses for every BGP, and the cardinality it predicts.
+     ///
+@@ -2905,30 +2891,36 @@
+         query: &Query,
+         relations: &crate::property_fn::PropertyFunctionRegistry,
+     ) -> Result<crate::bgp::PlanSurvey, RdfDiagnostic> {
++
+         let publication = crate::user_fn::RefusalPublication::default();
+         checked_query_read(dataset, &publication, || {
+-            let _ = self;
+-            let active_dataset = ActiveDataset::from_query_dataset(query.dataset(), dataset);
+-            let tree = crate::plan::Tree::build(query_pattern(query));
+-            let mut survey = crate::bgp::PlanSurvey::for_shape(tree.shape());
+-            crate::bgp::survey_pattern_plans(
+-                dataset,
+-                &active_dataset,
+-                GraphMatch::Default,
+-                query_pattern(query),
+-                relations,
+-                &mut survey,
+-            )
+-            .map_err(|e| {
+-                RdfDiagnostic::error(
+-                    eval_diagnostic_code(&e, "native-sparql-query-explain"),
+-                    e.to_string(),
+-                )
+-            })?;
+-            Ok::<_, RdfDiagnostic>(survey)
++            self.survey_plan_admitted(dataset, query, relations, &crate::workspace::QueryWorkspace::resident())
++                .map_err(EvaluationFailure::Evaluation)
+         })
+     }
+ 
++    fn survey_plan_admitted<D: DatasetView + Sync>(
++        &self,
++        dataset: &D,
++        query: &Query,
++        relations: &crate::property_fn::PropertyFunctionRegistry,
++        workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
++    ) -> Result<crate::bgp::PlanSurvey, crate::EvalError> {
++        let _ = self;
++        let capability = workspace.capability();
++        let active_dataset = ActiveDataset::from_query_dataset_admitted(
++            query.dataset(), dataset, &capability, |error| workspace.source_error(error),
++        )?;
++        let tree = crate::plan::Tree::build_admitted(query_pattern(query), &capability)?;
++        let mut survey = crate::bgp::PlanSurvey::for_shape_admitted(tree.shape(), &capability)?;
++        crate::bgp::survey_pattern_plans(
++            dataset, &active_dataset, GraphMatch::Default, query_pattern(query),
++            relations, &mut survey,
++        )?;
++        Ok(survey)
++
++}
++
+     /// Decide whether `query` may be evaluated at all under `state`'s ceilings, refusing it
+     /// when the cost planner already predicts a breach.
+     ///

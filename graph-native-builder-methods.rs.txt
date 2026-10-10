@@ -1,0 +1,99 @@
+    /// Intern borrowed values while retaining their original allocation grant.
+    ///
+    /// # Errors
+    /// Returns physical layout, admission or allocator refusal.
+    pub fn intern_value_with_memory<S: Admission + ?Sized>(
+        &mut self, value: &super::term::TermValue, memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, StorageError> {
+        crate::term_fixture::intern_value_with_memory(self, value, memory)
+    }
+
+    /// Native borrowed IRI ingress.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before any unadmitted allocation.
+    pub fn intern_iri_with_memory<S: Admission + ?Sized>(&mut self, iri: &str, memory: &mut Memory<'_, S>) -> Result<TermId, StorageError> {
+        self.interner.intern_with_memory(TermLookup::Iri(iri), memory)
+    }
+
+    /// Native already-bound blank ingress.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn intern_blank_with_memory<S: Admission + ?Sized>(&mut self, label: &str, scope: BlankScope, memory: &mut Memory<'_, S>) -> Result<TermId, StorageError> {
+        self.interner.intern_with_memory(TermLookup::Blank { label, scope }, memory)
+    }
+
+    /// Native triple ingress, sharing the original interning body.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn intern_triple_with_memory<S: Admission + ?Sized>(&mut self, s: TermId, p: TermId, o: TermId, memory: &mut Memory<'_, S>) -> Result<TermId, StorageError> {
+        self.interner.intern_with_memory(TermLookup::Triple { s, p, o }, memory)
+    }
+
+    /// Insert a native quad at the original store-once producer.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn push_quad_with_memory<S: Admission + ?Sized>(&mut self, s: TermId, p: TermId, o: TermId, g: Option<TermId>, memory: &mut Memory<'_, S>) -> Result<(), StorageError> {
+        store_once_with_memory(&mut self.quads, &mut self.quad_index, QuadRow { s, p, o, g }, memory)?;
+        Ok(())
+    }
+
+    /// Insert a native RDF 1.2 reifier binding.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn push_reifier_in_graph_with_memory<S: Admission + ?Sized>(&mut self, reifier: TermId, triple: TermId, graph: Option<TermId>, memory: &mut Memory<'_, S>) -> Result<(), StorageError> {
+        if self.reifies_predicate.is_none() {
+            self.reifies_predicate = Some(self.intern_iri_with_memory(purrdf_iri::vocab::rdf::REIFIES, memory)?);
+        }
+        store_once_with_memory(&mut self.reifiers, &mut self.reifier_index, (reifier, triple, graph), memory)?;
+        Ok(())
+    }
+
+    /// Insert a native RDF 1.2 annotation.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn push_annotation_in_graph_with_memory<S: Admission + ?Sized>(&mut self, reifier: TermId, predicate: TermId, object: TermId, graph: Option<TermId>, memory: &mut Memory<'_, S>) -> Result<(), StorageError> {
+        store_once_with_memory(&mut self.annotations, &mut self.annotation_index, (reifier, predicate, object, graph), memory)?;
+        Ok(())
+    }
+
+    /// Native literal identity and original arena allocation. Borrowed lexical
+    /// spelling remains verbatim; the shared language fold changes only its key.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before buffer growth.
+    pub fn intern_literal_parts_with_memory<S: Admission + ?Sized>(
+        &mut self, lexical: &str, datatype: Option<&str>, language: Option<&str>, direction: Option<RdfTextDirection>, memory: &mut Memory<'_, S>,
+    ) -> Result<TermId, StorageError> {
+        let datatype_iri = match (language, datatype) {
+            (Some(_), _) => RdfLiteral::language_datatype_iri(direction),
+            (None, Some(explicit)) => explicit,
+            (None, None) => super::term::XSD_STRING,
+        };
+        if self.interner.invalid_literal.is_none() {
+            self.interner.invalid_literal = RdfLiteral::diagnose_components(datatype_iri, language, direction).err();
+        }
+        let datatype_id = self.intern_iri_with_memory(datatype_iri, memory)?;
+        let blanks = crate::cdt_blank::cdt_embedded_blanks_with_memory(lexical, datatype_iri, memory)?;
+        for (label, scope) in &blanks {
+            self.intern_blank_with_memory(label, *scope, memory)?;
+        }
+        let bytes = blanks.iter().try_fold(0usize, |bytes, (label, _)| bytes.checked_add(label.capacity()).ok_or(StorageError::SizeOverflow))?;
+        memory.release_vec(blanks)?;
+        memory.release_bytes(bytes)?;
+        let language = language.map(|tag| super::term::interned_language_with_memory(tag, memory)).transpose()?;
+        let result = self.interner.intern_with_memory(TermLookup::Literal {
+            lexical, datatype: datatype_id, language: language.as_deref(), direction,
+        }, memory)?;
+        if let Some(std::borrow::Cow::Owned(language)) = language { memory.release_string(language)?; }
+        Ok(result)
+    }
+
+    // Resident wrappers resume only their own resident buffers. Operational
+    // callers supply Memory from birth and never certify an already-built tree.
+    pub(crate) fn interner_buffer_bytes(&self) -> Result<usize, StorageError> { self.interner.buffer_bytes() }

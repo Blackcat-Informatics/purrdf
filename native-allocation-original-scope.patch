@@ -1,0 +1,195 @@
+--- a/crates/lex/src/allocation.rs
++++ b/crates/lex/src/allocation.rs
+@@ -105,6 +105,26 @@
+     #[must_use]
+     pub const fn live_bytes(&self) -> usize {
+         self.live
++    }
++
++    /// Run a native child body under this same original admission. On physical
++    /// failure, the body's owned locals die before their original grant delta is
++    /// released. Successful returned payloads keep their original grant unchanged.
++    /// This never observes or adopts a resident factory's returned payload.
++    ///
++    /// # Errors
++    /// Returns the body's original storage refusal or a cleanup invariant failure.
++    pub fn scope<T>(
++        &mut self,
++        body: impl FnOnce(&mut Self) -> Result<T, StorageError>,
++    ) -> Result<T, StorageError> {
++        let baseline = self.live;
++        let result = body(self);
++        if result.is_err() {
++            let released = self.live.checked_sub(baseline).ok_or(StorageError::SizeOverflow)?;
++            self.release_bytes(released)?;
++        }
++        result
+     }
+ 
+     /// Borrow the original admission for a native payload factory above this leaf.
+--- a/crates/cdt/src/ops.rs
++++ b/crates/cdt/src/ops.rs
+@@ -391,7 +391,6 @@
+     } else {
+         purrdf_xsd::ops::value_cmp_admitted(a, b, &mut admit).map(|order| order.map(|order| order == Ordering::Less))
+     };
+-    drop(admit);
+     memory.release_bytes(memory.live_bytes() - baseline)?;
+     if let Some(error) = original_failure { return Err(error); }
+     answer.map_err(|error| match error {
+@@ -624,16 +623,6 @@
+ }
+ 
+ 
+-fn relation_scope<T>(memory: &mut Memory<'_>, body: impl FnOnce(&mut Memory<'_>) -> Result<T, StorageError>) -> Result<T, StorageError> {
+-    let baseline = memory.live_bytes();
+-    let result = body(memory);
+-    if result.is_err() {
+-        let released = memory.live_bytes().checked_sub(baseline).ok_or(StorageError::SizeOverflow)?;
+-        memory.release_bytes(released)?;
+-    }
+-    result
+-}
+-
+ // ── Equality ────────────────────────────────────────────────────────────────────
+ 
+ /// One side of an equality pair: an element of the input, borrowed, or an element the
+@@ -688,10 +677,11 @@
+                 CdtContents::List(items) => Kids::BorrowedList(items),
+                 CdtContents::Map(entries) => Kids::BorrowedMap(entries),
+             },
+-            Self::Owned(CdtTerm::Composite(value)) => {
+-                let parts = (*value).into_parts();
++            Self::Owned(CdtTerm::Composite(mut value)) => {
++                let inner = mem::replace(&mut *value, CdtValue::empty_list());
++                drop(value);
+                 memory.release_bytes(Layout::new::<CdtValue>().size())?;
+-                match parts { CdtParts::List(items) => Kids::OwnedList(items), CdtParts::Map(entries) => Kids::OwnedMap(entries) }
++                match inner.into_parts() { CdtParts::List(items) => Kids::OwnedList(items), CdtParts::Map(entries) => Kids::OwnedMap(entries) }
+             }
+             _ => unreachable!("children are taken of a composite"),
+         })
+@@ -807,7 +797,7 @@
+     term_equal_with_memory(a, b, &mut memory)
+ }
+ fn term_equal_with_memory(a: &CdtTerm, b: &CdtTerm, memory: &mut Memory<'_>) -> Result<Result<bool, CdtTypeError>, StorageError> {
+-    relation_scope(memory, |memory| term_equal_kernel(a, b, memory))
++    memory.scope(|memory| term_equal_kernel(a, b, memory))
+ }
+ fn term_equal_kernel(a: &CdtTerm, b: &CdtTerm, memory: &mut Memory<'_>) -> Result<Result<bool, CdtTypeError>, StorageError> {
+     let mut work = Vec::new();
+@@ -1094,7 +1084,12 @@
+             Self::Map(entries) => mem::replace(&mut entries[index].value, CdtTerm::Null),
+         };
+         match taken {
+-            CdtTerm::Composite(value) => { let value = *value; memory.release_bytes(Layout::new::<CdtValue>().size())?; Ok(Self::parsed(value)) },
++            CdtTerm::Composite(mut value) => {
++                let inner = mem::replace(&mut *value, CdtValue::empty_list());
++                drop(value);
++                memory.release_bytes(Layout::new::<CdtValue>().size())?;
++                Ok(Self::parsed(inner))
++            },
+             _ => unreachable!("the walk descends into a composite"),
+         }
+     }
+@@ -1171,7 +1166,7 @@
+ /// `||`, under which `error || true` is `true`, would give the wrong answer.
+ /// `list-greater-equal-28.rq` says the same for `>=`.
+ fn sequence_less_than(left: Owner<'_>, right: Owner<'_>, memory: &mut Memory<'_>) -> Result<Result<Verdict, CdtTypeError>, StorageError> {
+-    relation_scope(memory, |memory| sequence_less_than_kernel(left, right, memory))
++    memory.scope(|memory| sequence_less_than_kernel(left, right, memory))
+ }
+ fn sequence_less_than_kernel(left: Owner<'_>, right: Owner<'_>, memory: &mut Memory<'_>) -> Result<Result<Verdict, CdtTypeError>, StorageError> {
+     let mut stack = Vec::new();
+--- a/crates/cdt/src/render.rs
++++ b/crates/cdt/src/render.rs
+@@ -76,7 +76,7 @@
+ 
+ /// Where the canonical renderer puts its output.
+ ///
+-/// There are exactly two implementations — [`String`], which materialises the form,
++/// There are exactly two implementations — [`FixedText`], which materialises the form,
+ /// and [`Measure`], which keeps only its byte length — and **one** walker drives
+ /// both. Measuring is therefore guaranteed to agree with rendering, byte for byte,
+ /// with no second description of the form to fall out of step.
+@@ -93,17 +93,6 @@
+     ) -> Result<(), StorageError>;
+ }
+ 
+-impl Sink for String {
+-    fn composite<'a>(
+-        &mut self,
+-        jobs: &mut Vec<Job<'a>>,
+-        value: &'a CdtValue,
+-        memory: &mut Memory<'_>,
+-    ) -> Result<(), StorageError> {
+-        push_value(jobs, value, memory)
+-    }
+-}
+-
+ /// A [`Sink`] that materialises nothing and accumulates only the byte length.
+ ///
+ /// Saturating rather than wrapping: a length that overflows `usize` is astronomically
+@@ -177,16 +166,16 @@
+ /// Returns original admission, allocator or checked-layout refusal.
+ pub fn try_canonical_lexical(value: &CdtValue, storage: &mut impl Storage) -> Result<(String, usize), StorageError> {
+     let mut memory = Memory::new(storage);
+-    let expected = canonical_lexical_len(value);
+-    let mut out = FixedText { text: String::new(), failed: false };
+-    memory.reserve_string(&mut out.text, expected)?;
+-    let mut jobs = Vec::new();
+-    push_value(&mut jobs, value, &mut memory)?;
+-    run(&mut out, jobs, &mut memory)?;
+-    if out.failed || out.text.len() != expected {
+-        return Err(StorageError::FormattingFailed);
+-    }
+-    Ok((out.text, memory.live_bytes()))
++    memory.scope(|memory| {
++        let expected = canonical_lexical_len(value);
++        let mut out = FixedText { text: String::new(), failed: false };
++        memory.reserve_string(&mut out.text, expected)?;
++        let mut jobs = Vec::new();
++        push_value(&mut jobs, value, memory)?;
++        run(&mut out, jobs, memory)?;
++        if out.failed || out.text.len() != expected { return Err(StorageError::FormattingFailed); }
++        Ok((out.text, memory.live_bytes()))
++    })
+ }
+ 
+ /// The immutable value's exact canonical extent is admitted before rendering.
+@@ -244,23 +233,18 @@
+ /// diagnostic.
+ #[must_use]
+ pub fn canonical_key_lexical(key: &CdtKey) -> String {
+-    let mut out = String::new();
+-    write_key(&mut out, key);
+-    out
+-}
+-
+-pub(crate) fn try_canonical_key_lexical(
+-    key: &CdtKey,
+-    memory: &mut Memory<'_>,
+-) -> Result<String, StorageError> {
+-    let length = key_lexical_len(key);
+-    let mut output = String::new();
+-    memory.reserve_string(&mut output, length)?;
+-    write_key(&mut output, key);
+-    if output.len() != length {
+-        return Err(StorageError::SizeOverflow);
+-    }
+-    Ok(output)
++    try_canonical_key_lexical(key, &mut Memory::new(&mut Resident)).expect("resident canonical key storage")
++}
++
++pub(crate) fn try_canonical_key_lexical(key: &CdtKey, memory: &mut Memory<'_>) -> Result<String, StorageError> {
++    memory.scope(|memory| {
++        let length = key_lexical_len(key);
++        let mut output = FixedText { text: String::new(), failed: false };
++        memory.reserve_string(&mut output.text, length)?;
++        write_key(&mut output, key);
++        if output.failed || output.text.len() != length { return Err(StorageError::FormattingFailed); }
++        Ok(output.text)
++    })
+ }
+ 
+ /// The byte length one element occupies in a canonical form, without allocating it.

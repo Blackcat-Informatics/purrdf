@@ -1,0 +1,237 @@
+    fn native_grounding_input(depth: usize) -> purrdf_core::TermValue {
+        use purrdf_core::{BlankScope, TermBox, TermValue};
+        let mut term = TermValue::Blank {
+            label: "purrdfesc7_δ space".to_owned(), scope: BlankScope(41),
+        };
+        for _ in 0..depth {
+            term = TermValue::Triple {
+                s: TermBox::new(TermValue::iri("http://example.org/subject")),
+                p: TermBox::new(TermValue::iri("http://example.org/predicate")),
+                o: TermBox::new(term),
+            };
+        }
+        term
+    }
+
+    #[test]
+    fn ground_owner_keeps_original_boxes_and_lexical_leaves_after_workspace() {
+        let input = native_grounding_input(8);
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let grounded = crate::substitute::ground_term_from_value_admitted(&input, &capability)
+            .expect("all native ground shapes admitted");
+        assert!(grounded.allocation.as_ref().is_some_and(super::WorkspaceAllocation::is_bounded));
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert!(retained > base);
+        drop(input);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        assert!(matches!(&grounded.term, purrdf_sparql_algebra::GroundTerm::Triple(_)));
+        drop(grounded);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn ground_and_paired_clone_join_enclosing_original_memory_without_owner_array() {
+        use purrdf_lex::allocation::Memory;
+        use purrdf_sparql_algebra::GroundTriple;
+        let input = native_grounding_input(8);
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let mut frame = super::LexicalFrame::new(&capability);
+        let (text, ground, clone) = {
+            let mut memory = Memory::new(&mut frame);
+            let text = memory.string("original authored query payload").unwrap();
+            let initial = memory.live_bytes();
+            let ground = crate::substitute::ground_term_from_value_with_memory(&input, &mut memory).unwrap();
+            assert_eq!(memory.live_bytes(), initial + 8 * size_of::<GroundTriple>());
+            let clone = crate::substitute::clone_ground_with_memory(&ground, &mut memory).unwrap();
+            assert_eq!(memory.live_bytes(), initial + 16 * size_of::<GroundTriple>());
+            (text, ground, clone)
+        };
+        let original = (text, ground, clone, frame.into_allocation());
+        assert!(ledger.live.load(Ordering::Relaxed) > base);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        drop(original);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn grounding_refusal_destroys_partial_children_and_moves_first_cause_once() {
+        let input = native_grounding_input(128);
+        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        for extra in [0, 1, 128, 1024, 4096] {
+            let (workspace, ledger, _) = account(base + extra);
+            let capability = workspace.capability();
+            assert!(matches!(
+                crate::substitute::ground_term_from_value_admitted(&input, &capability),
+                Err(crate::substitute::GroundFailure::Operational(EvalError::WorkspaceStopped))
+            ));
+            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+            let cause = workspace.take_failure().expect("original admission cause");
+            assert_eq!(cause.identity, 7);
+            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+            assert!(workspace.take_failure().is_none());
+            drop(capability);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn native_text_publication_shares_original_buffer_and_survives_enclosing_frame() {
+        use purrdf_lex::allocation::Memory;
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let mut frame = super::LexicalFrame::new(&capability);
+        let text = {
+            let mut memory = Memory::new(&mut frame);
+            memory.string("the original native UTF-8 payload").unwrap()
+        };
+        let pointer = text.as_ptr();
+        let mut text = Some(text);
+        let published = frame.finish_text(&mut text).unwrap();
+        assert!(text.is_none());
+        assert_eq!(published.as_str().as_ptr(), pointer);
+        let kept = published.clone();
+        drop(published);
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert!(retained > base);
+        drop(frame);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        assert_eq!(kept.as_str(), "the original native UTF-8 payload");
+        drop(kept);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn grounding_first_predicate_refusal_precedes_unvisited_bad_object() {
+        use purrdf_core::{TermBox, TermValue};
+        let value = TermValue::Triple {
+            s: TermBox::new(native_grounding_input(8)),
+            p: TermBox::new(TermValue::simple_literal("not an IRI")),
+            o: TermBox::new(TermValue::iri("relative-object")),
+        };
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let failure = crate::substitute::ground_term_from_value_admitted(&value, &capability).unwrap_err();
+        let crate::substitute::GroundFailure::Diagnostic(diagnostic) = failure else {
+            panic!("an admitted non-IRI predicate remains a lexical diagnostic")
+        };
+        assert!(diagnostic.diagnostic().to_string().contains("a quoted-triple predicate must be an IRI"));
+        assert!(!workspace.has_failed());
+        drop(diagnostic);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_text_control_refusal_keeps_original_string_before_extraction() {
+        use purrdf_lex::allocation::Memory;
+        const TEXT: &str = "the original native UTF-8 payload";
+        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        let limit = base + u64::try_from(TEXT.len() + size_of::<super::WorkspaceCharge<Refusal>>()).unwrap();
+        let (workspace, ledger, _) = account(limit);
+        let capability = workspace.capability();
+        let mut frame = super::LexicalFrame::new(&capability);
+        let text = {
+            let mut memory = Memory::new(&mut frame);
+            memory.string(TEXT).expect("the actual string fits before its shared header")
+        };
+        let pointer = text.as_ptr();
+        let mut text = Some(text);
+        assert!(matches!(frame.finish_text(&mut text), Err(EvalError::WorkspaceStopped)));
+        assert_eq!(text.as_ref().unwrap().as_ptr(), pointer);
+        assert_eq!(text.as_deref(), Some(TEXT));
+        let cause = workspace.take_failure().expect("original header admission refusal");
+        assert_eq!(cause.identity, 7);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        drop(text);
+        drop(frame);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    /// Deliberately non-latching backing failure: the engine must retain the
+    /// original typed cause without cloning or formatting it.
+    struct GroundFaultView<'a> {
+        inner: &'a purrdf_core::RdfDataset,
+        failed_id: TermId,
+        clones: Arc<AtomicUsize>,
+    }
+
+    impl purrdf_core::DatasetView for GroundFaultView<'_> {
+        type Id = TermId;
+        type ReadError = Refusal;
+        type TermGuard<'a> = purrdf_core::TermRef<'a> where Self: 'a;
+        type ProbePlan = purrdf_core::QuadProbePlan;
+
+        fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+            purrdf_core::DatasetView::quads(self.inner)
+        }
+        fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Refusal> {
+            if id == self.failed_id {
+                Err(Refusal { identity: 41, clones: self.clones.clone() })
+            } else {
+                Ok(self.inner.resolve(id))
+            }
+        }
+        fn term_id_by_value(&self, value: &purrdf_core::TermValue) -> Result<Option<TermId>, Refusal> {
+            Ok(self.inner.term_id_by_value(value))
+        }
+        fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+            purrdf_core::DatasetView::capabilities(self.inner)
+        }
+        fn probe_plan(&self, s: bool, p: bool, o: bool, g: purrdf_core::GraphMatch) -> Self::ProbePlan {
+            purrdf_core::DatasetView::probe_plan(self.inner, s, p, o, g)
+        }
+        fn quads_for_pattern_with_plan(
+            &self, plan: &Self::ProbePlan, s: Option<TermId>, p: Option<TermId>,
+            o: Option<TermId>, g: purrdf_core::GraphMatch,
+        ) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+            purrdf_core::DatasetView::quads_for_pattern_with_plan(self.inner, plan, s, p, o, g)
+        }
+        fn term_count(&self) -> u64 { purrdf_core::DatasetView::term_count(self.inner) }
+    }
+
+    #[test]
+    fn borrowed_id_grounding_moves_exact_source_cause_and_releases_partial_triple() {
+        use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/s");
+        let predicate = builder.intern_iri("http://example.org/p");
+        let object = builder.intern_iri("http://example.org/o");
+        let completed_subject = builder.intern_triple(subject, predicate, object);
+        let datatype = builder.intern_iri(purrdf_xsd::datatype::XSD_STRING);
+        let literal = builder.intern_literal(RdfLiteral::simple("literal"));
+        let root = builder.intern_triple(completed_subject, predicate, literal);
+        builder.push_quad(subject, predicate, root, None);
+        let dataset = builder.freeze().expect("a valid shallow dataset");
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let view = GroundFaultView {
+            inner: dataset.as_ref(), failed_id: datatype, clones: ledger.clones.clone(),
+        };
+        let failure = crate::substitute::ground_term_from_id_admitted(
+            &view, root, &capability,
+            |cause| crate::substitute::GroundFailure::Operational(workspace.source_error(cause)),
+        );
+        assert!(matches!(failure, Err(crate::substitute::GroundFailure::Operational(EvalError::WorkspaceStopped))));
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        let cause = workspace.take_failure().expect("original source cause moves once");
+        assert_eq!(cause.identity, 41);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        assert!(workspace.take_failure().is_none());
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }

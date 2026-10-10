@@ -1,0 +1,54 @@
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -4412,6 +4412,27 @@
+ /// When there are no substitutions the cached parse is evaluated directly (the hot
+ /// path). Otherwise the cached parse is **cloned** and rewritten — the substitution
+ /// must never poison the shared, un-substituted plan-cache entry.
++/// The cloned query and its original native container grant are destroyed in
++/// that order on success, rewrite refusal and evaluator failure.
++struct RuntimeSubstitution {
++    query: Query,
++    _frame: crate::workspace::LexicalFrame,
++}
++
++fn runtime_substitution(
++    query: &Query, substitutions: Prebindings<'_>, workspace: &crate::WorkspaceCapability,
++) -> Result<RuntimeSubstitution, EvaluationFailure> {
++    let mut frame = crate::workspace::LexicalFrame::new(workspace);
++    let query = {
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
++        let query = query.clone_with_memory(&mut memory)
++            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "request substitution AST")))?;
++        crate::substitute::apply_shacl_prebinding_with_memory(query, substitutions, &mut memory)
++            .map_err(EvaluationFailure::from)?
++    };
++    Ok(RuntimeSubstitution { query, _frame: frame })
++}
++
+ fn evaluate_with_substitutions<D: DatasetView + Sync>(
+     prepared: &PreparedQuery,
+     substitutions: Prebindings<'_>,
+@@ -4422,9 +4443,8 @@
+             .map(|outcome| prepared.restore_layout(outcome))
+             .map_err(EvaluationFailure::Evaluation);
+     }
+-    let substituted =
+-        crate::substitute::apply_shacl_prebinding(prepared.query.clone(), substitutions)?;
+-    evaluate_query_over(&substituted, None, ctx)
++    let substituted = runtime_substitution(&prepared.query, substitutions, &ctx.workspace.capability())?;
++    evaluate_query_over(&substituted.query, None, ctx)
+         .map(|outcome| prepared.restore_layout(outcome))
+         .map_err(EvaluationFailure::Evaluation)
+ }
+@@ -4444,9 +4464,8 @@
+             .map(|outcome| prepared.restore_evaluated_layout(outcome))
+             .map_err(EvaluationFailure::Evaluation);
+     }
+-    let substituted =
+-        crate::substitute::apply_shacl_prebinding(prepared.query.clone(), substitutions)?;
+-    evaluate_query_evaluated(&substituted, ctx)
++    let substituted = runtime_substitution(&prepared.query, substitutions, &ctx.workspace.capability())?;
++    evaluate_query_evaluated(&substituted.query, ctx)
+         .map(|outcome| prepared.restore_evaluated_layout(outcome))
+         .map_err(EvaluationFailure::Evaluation)
+ }

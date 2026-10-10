@@ -1,0 +1,41 @@
+impl purrdf_lex::walk::Dismantle for crate::GroundTriple {
+    fn dismantle(node: Box<Self>) { purrdf_lex::walk::dismantle_tree(node); }
+}
+
+impl purrdf_lex::walk::DismantleTree for crate::GroundTriple {
+    fn next_child(&mut self) -> Option<&mut Child<Self>> {
+        if let crate::GroundTerm::Triple(child) = &mut self.subject
+            && !child.is_taken() { return Some(child); }
+        if let crate::GroundTerm::Triple(child) = &mut self.object
+            && !child.is_taken() { return Some(child); }
+        None
+    }
+    fn last_child(&mut self) -> Option<&mut Child<Self>> {
+        if let crate::GroundTerm::Triple(child) = &mut self.object
+            && child.is_taken() { return Some(child); }
+        if let crate::GroundTerm::Triple(child) = &mut self.subject
+            && child.is_taken() { return Some(child); }
+        None
+    }
+}
+
+impl purrdf_lex::walk::Dismantle for crate::TriplePattern {
+    fn dismantle(node: Box<Self>) { purrdf_lex::walk::dismantle_tree(node); }
+}
+
+impl purrdf_lex::walk::DismantleTree for crate::TriplePattern {
+    fn next_child(&mut self) -> Option<&mut Child<Self>> {
+        if let crate::TermPattern::Triple(child) = &mut self.subject
+            && !child.is_taken() { return Some(child); }
+        if let crate::TermPattern::Triple(child) = &mut self.object
+            && !child.is_taken() { return Some(child); }
+        None
+    }
+    fn last_child(&mut self) -> Option<&mut Child<Self>> {
+        if let crate::TermPattern::Triple(child) = &mut self.object
+            && child.is_taken() { return Some(child); }
+        if let crate::TermPattern::Triple(child) = &mut self.subject
+            && child.is_taken() { return Some(child); }
+        None
+    }
+}

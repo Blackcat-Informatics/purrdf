@@ -1,0 +1,55 @@
+/// Actual dispatch still reads its original native `[Option<TermValue>]` slice.
+/// This owner keeps every payload's original grant through that entire call,
+/// including a SPARQL-bodied suspension, without copying any argument values.
+pub(crate) struct Arguments {
+    values: crate::AdmittedVec<Option<TermValue>>,
+    // Declaration order drops all payloads before their original grants.
+    allocations: crate::AdmittedVec<Option<crate::WorkspaceAllocation>>,
+}
+
+impl std::fmt::Debug for Arguments {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Arguments").field("len", &self.values.len()).finish_non_exhaustive()
+    }
+}
+
+impl std::ops::Deref for Arguments {
+    type Target = [Option<TermValue>];
+    fn deref(&self) -> &Self::Target { &self.values }
+}
+
+impl Arguments {
+    fn new(workspace: &crate::WorkspaceCapability) -> Self {
+        Self { values: crate::AdmittedVec::new(workspace), allocations: crate::AdmittedVec::new(workspace) }
+    }
+
+    fn with_capacity(capacity: usize, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
+        Ok(Self {
+            values: crate::AdmittedVec::with_capacity(capacity, workspace)?,
+            allocations: crate::AdmittedVec::with_capacity(capacity, workspace)?,
+        })
+    }
+
+    fn clear(&mut self) {
+        self.values.clear();
+        self.allocations.clear();
+    }
+
+    fn push(&mut self, value: Option<crate::WorkspaceTerm>) -> Result<(), EvalError> {
+        // Admit both metadata slots BEFORE separating the original payload owner.
+        // A refused push still drops WorkspaceTerm's payload before its grant.
+        self.allocations.push(None)?;
+        self.values.push(None)?;
+        if let Some(value) = value {
+            let (value, allocation) = value.into_parts();
+            let index = self.values.len() - 1;
+            self.allocations.as_mut_slice()[index] = Some(allocation);
+            self.values.as_mut_slice()[index] = Some(value);
+        }
+        Ok(())
+    }
+
+    fn take(&mut self, workspace: &crate::WorkspaceCapability) -> Self {
+        std::mem::replace(self, Self::new(workspace))
+    }
+}

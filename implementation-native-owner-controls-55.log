@@ -1,0 +1,44 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+    Finished `test` profile [optimized] target(s) in 17.24s
+     Running tests/segmented.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-core/d273635ddb08c082/out/segmented-d273635ddb08c082)
+
+running 13 tests
+test cache_eviction_preserves_exact_non_cache_owner_conservation ... ok
+test exact_evidence_and_workspace_refuse_before_unbounded_growth ... ok
+test cancellation_retains_the_exact_failed_request_and_refuses_partial_drains ... ok
+test corruption_cannot_turn_an_omitted_fact_into_success ... ok
+test live_pins_are_charged_and_cannot_be_evicted ... ok
+test snapshot_qualified_handles_do_not_reinterpret_reused_compact_ids ... ok
+test pin_refusal_precedes_io_and_owned_pin_survives_session_drop ... ok
+test persisted_certification_reopens_only_with_retained_authority ... ok
+test rdf12_references_empty_graphs_and_streamed_lines_survive ... ok
+test composite_lexical_blank_references_keep_their_scoped_dictionary_closure ... ok
+test retained_v1_pack_reader_migrates_into_the_versioned_representation ... ok
+test indexed_reopen_preserves_high_ids_and_bidirectional_batches ... ok
+test charged_read_peak_covers_measured_allocations_including_streamed_output ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sparql_e2e.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-hnsw/bcc156d49c141ac1/out/sparql_e2e-bcc156d49c141ac1)
+
+running 7 tests
+test a_sparql_query_retrieves_neighbours_through_the_registered_predicate ... ok
+test the_rows_come_from_the_registration_and_from_nothing_else ... ok
+test a_limit_takes_a_prefix_of_the_same_offer ... ok
+test the_offer_is_ordered_nearest_first ... ok
+test bounded_native_workspace::cloned_and_extracted_native_answers_retain_without_copying_payloads ... ok
+test bounded_native_workspace::native_rank_membership_absence_and_post_rank_limit_are_bounded_on_host_routes ... ok
+test bounded_native_workspace::first_native_traversal_admission_refusal_is_typed_and_releases_scratch ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/analysis_allocations.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-text/2c2cd403aa59d1e8/out/analysis_allocations-2c2cd403aa59d1e8)
+
+running 2 tests
+test repeated_emoji_metadata_grows_linearly ... ok
+test incomplete_tag_runs_and_lexical_cleanup_use_linear_storage ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

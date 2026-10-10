@@ -1,0 +1,590 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error: function `init_contained` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:803:15
+    |
+803 | pub(crate) fn init_contained(
+    |               ^^^^^^^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: function `step_contained` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:820:15
+    |
+820 | pub(crate) fn step_contained(
+    |               ^^^^^^^^^^^^^^
+
+error: function `combine_contained` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:836:15
+    |
+836 | pub(crate) fn combine_contained(
+    |               ^^^^^^^^^^^^^^^^^
+
+error: function `finish_contained` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:889:15
+    |
+889 | pub(crate) fn finish_contained(
+    |               ^^^^^^^^^^^^^^^^
+
+error: function `arity_contained` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:913:15
+    |
+913 | pub(crate) fn arity_contained(agg: &dyn CustomAggregate, iri: &str) -> Result<Arity, EvalError> {
+    |               ^^^^^^^^^^^^^^^
+
+error: function `volatility_contained` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:922:15
+    |
+922 | pub(crate) fn volatility_contained(
+    |               ^^^^^^^^^^^^^^^^^^^^
+
+error: function `algebraic_class_contained` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:934:15
+    |
+934 | pub(crate) fn algebraic_class_contained(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `state_bound_contained` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:949:15
+    |
+949 | pub(crate) fn state_bound_contained(
+    |               ^^^^^^^^^^^^^^^^^^^^^
+
+error: function `exact_numeric_cost_contained` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:961:15
+    |
+961 | pub(crate) fn exact_numeric_cost_contained(
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `scalarvals_contained` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:980:15
+    |
+980 | pub(crate) fn scalarvals_contained(
+    |               ^^^^^^^^^^^^^^^^^^^^
+
+error: function `scalarvals_borrowed` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:987:4
+    |
+987 | fn scalarvals_borrowed<'a>(
+    |    ^^^^^^^^^^^^^^^^^^^
+
+error: function `slot_keys` is never used
+    --> crates/sparql-eval/src/bgp.rs:1695:15
+     |
+1695 | pub(crate) fn slot_keys(pattern: &TriplePattern) -> purrdf_core::SmallVec<[Variable; 4]> {
+     |               ^^^^^^^^^
+
+error: function `collect_triple_slot_keys` is never used
+    --> crates/sparql-eval/src/bgp.rs:1703:4
+     |
+1703 | fn collect_triple_slot_keys(pattern: &TriplePattern, keys: &mut impl Extend<Variable>) {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `visit_triple_slots` is never used
+    --> crates/sparql-eval/src/bgp.rs:1721:15
+     |
+1721 | pub(crate) fn visit_triple_slots<'a>(
+     |               ^^^^^^^^^^^^^^^^^^
+
+error: function `blank_var` is never used
+    --> crates/sparql-eval/src/bgp.rs:1831:15
+     |
+1831 | pub(crate) fn blank_var(label: &str) -> Variable {
+     |               ^^^^^^^^^
+
+error: function `visible_columns` is never used
+  --> crates/sparql-eval/src/blank_scope.rs:94:15
+   |
+94 | pub(crate) fn visible_columns(schema: &VarSchema) -> Option<Vec<usize>> {
+   |               ^^^^^^^^^^^^^^^
+
+error: function `query_with_pattern` is never used
+   --> crates/sparql-eval/src/blank_scope.rs:200:15
+    |
+200 | pub(crate) fn query_with_pattern(query: &Query, pattern: GraphPattern) -> Query {
+    |               ^^^^^^^^^^^^^^^^^^
+
+error: function `resident_owned_pattern` is never used
+    --> crates/sparql-eval/src/blank_scope.rs:1068:4
+     |
+1068 | fn resident_owned_pattern(
+     |    ^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `map_patterns` is never used
+    --> crates/sparql-eval/src/blank_scope.rs:1096:15
+     |
+1096 | pub(crate) fn map_patterns(
+     |               ^^^^^^^^^^^^
+
+error: field `frame` is never read
+   --> crates/sparql-eval/src/cdt_fn.rs:522:16
+    |
+520 | pub(crate) struct OwnedCdtTerm {
+    |                   ------------ field in this struct
+521 |     pub(crate) value: CdtTerm,
+522 |     pub(crate) frame: crate::workspace::LexicalFrame,
+    |                ^^^^^
+
+error: function `declaration_contained` is never used
+  --> crates/sparql-eval/src/contain.rs:48:15
+   |
+48 | pub(crate) fn declaration_contained<T>(
+   |               ^^^^^^^^^^^^^^^^^^^^^
+
+error: function `admit_algebra` is never used
+   --> crates/sparql-eval/src/engine.rs:679:4
+    |
+679 | fn admit_algebra(
+    |    ^^^^^^^^^^^^^
+
+error: method `survey_plan` is never used
+    --> crates/sparql-eval/src/engine.rs:3481:8
+     |
+1416 | impl NativeSparqlEngine {
+     | ----------------------- method in this implementation
+...
+3481 |     fn survey_plan<D: DatasetView + Sync>(
+     |        ^^^^^^^^^^^
+
+error: method `check` is never used
+    --> crates/sparql-eval/src/engine.rs:5644:8
+     |
+5559 | impl<'a> RequestParameters<'a> {
+     | ------------------------------ method in this implementation
+...
+5644 |     fn check(
+     |        ^^^^^
+
+error: associated function `requested` is never used
+    --> crates/sparql-eval/src/engine.rs:5684:8
+     |
+5667 | impl<'a> AdmittedSubstitutions<'a> {
+     | ---------------------------------- associated function in this implementation
+...
+5684 |     fn requested(values: &'a [(String, TermValue)], declared: &'a [&'a str]) -> Self {
+     |        ^^^^^^^^^
+
+error: associated function `relation_incomplete` is never used
+   --> crates/sparql-eval/src/error.rs:819:19
+    |
+567 | impl EvalError {
+    | -------------- associated function in this implementation
+...
+819 |     pub(crate) fn relation_incomplete(iri: impl AsRef<str>, reason: impl AsRef<str>) -> Self {
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+error: method `try_mint_blank_label` is never used
+    --> crates/sparql-eval/src/eval.rs:1005:19
+     |
+ 913 | impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+     | ---------------------------------------------- method in this implementation
+...
+1005 |     pub(crate) fn try_mint_blank_label(&mut self, stem: &str) -> Result<Option<String>, EvalError> {
+     |                   ^^^^^^^^^^^^^^^^^^^^
+
+error: function `xsd_of` is never used
+   --> crates/sparql-eval/src/expr.rs:679:15
+    |
+679 | pub(crate) fn xsd_of(value: &TermValue) -> Option<XsdValue> {
+    |               ^^^^^^
+
+error: function `expr_vars` is never used
+    --> crates/sparql-eval/src/expr.rs:1475:15
+     |
+1475 | pub(crate) fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
+     |               ^^^^^^^^^
+
+error: function `ground_term_from_term_value` is never used
+    --> crates/sparql-eval/src/expr.rs:4747:4
+     |
+4747 | fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebra::GroundTerm> {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `visit_classified_children` is never used
+   --> crates/sparql-eval/src/governor/soundness.rs:766:15
+    |
+766 | pub(crate) fn visit_classified_children<'a, F>(pattern: &'a GraphPattern, visit: &mut F) -> bool
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: associated function `over_plan` is never used
+    --> crates/sparql-eval/src/governor/soundness.rs:1235:19
+     |
+1231 | impl CapPushdown {
+     | ---------------- associated function in this implementation
+...
+1235 |     pub(crate) fn over_plan(
+     |                   ^^^^^^^^^
+
+error: function `plan_cap_pushdown` is never used
+    --> crates/sparql-eval/src/governor/soundness.rs:1356:15
+     |
+1356 | pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) -> CapPushdown {
+     |               ^^^^^^^^^^^^^^^^^
+
+error: function `analyze_pattern` is never used
+    --> crates/sparql-eval/src/governor/soundness.rs:1840:15
+     |
+1840 | pub(crate) fn analyze_pattern(
+     |               ^^^^^^^^^^^^^^^
+
+error: function `analyze_expr` is never used
+    --> crates/sparql-eval/src/governor/soundness.rs:1872:15
+     |
+1872 | pub(crate) fn analyze_expr(
+     |               ^^^^^^^^^^^^
+
+error: function `pattern_can_hard_error` is never used
+    --> crates/sparql-eval/src/governor/soundness.rs:2654:15
+     |
+2654 | pub(crate) fn pattern_can_hard_error(pattern: &GraphPattern) -> bool {
+     |               ^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `expr_can_hard_error` is never used
+    --> crates/sparql-eval/src/governor/soundness.rs:2669:15
+     |
+2669 | pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
+     |               ^^^^^^^^^^^^^^^^^^^
+
+error: function `probe_admissible` is never used
+    --> crates/sparql-eval/src/governor/soundness.rs:2786:15
+     |
+2786 | pub(crate) fn probe_admissible(
+     |               ^^^^^^^^^^^^^^^^
+
+error: function `exists_row_collision` is never used
+    --> crates/sparql-eval/src/governor/soundness.rs:3034:15
+     |
+3034 | pub(crate) fn exists_row_collision<'a>(
+     |               ^^^^^^^^^^^^^^^^^^^^
+
+error: function `sort_keys_numeric_cost` is never used
+   --> crates/sparql-eval/src/modifier.rs:620:15
+    |
+620 | pub(crate) fn sort_keys_numeric_cost(
+    |               ^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `compare_keys` is never used
+    --> crates/sparql-eval/src/modifier.rs:1282:15
+     |
+1282 | pub(crate) fn compare_keys(
+     |               ^^^^^^^^^^^^
+
+error: function `par_loop_try_map_init` is never used
+    --> crates/sparql-eval/src/parallel.rs:1259:15
+     |
+1259 | pub(crate) fn par_loop_try_map_init<T, S, R, H>(
+     |               ^^^^^^^^^^^^^^^^^^^^^
+
+error: function `par_blocks_try_map_init` is never used
+    --> crates/sparql-eval/src/parallel.rs:1296:15
+     |
+1296 | pub(crate) fn par_blocks_try_map_init<T, S, R, H>(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: method `insert_with_eviction` is never used
+   --> crates/sparql-eval/src/plan_cache.rs:194:19
+    |
+ 86 | impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
+    | ------------------------------------------------------- method in this implementation
+...
+194 |     pub(crate) fn insert_with_eviction(
+    |                   ^^^^^^^^^^^^^^^^^^^^
+
+error: function `push_canonical_field` is never used
+    --> crates/sparql-eval/src/property_fn.rs:1772:15
+     |
+1772 | pub(crate) fn push_canonical_field(out: &mut String, value: &str) {
+     |               ^^^^^^^^^^^^^^^^^^^^
+
+error: function `unbound_slot_internal` is never used
+    --> crates/sparql-eval/src/property_fn_eval.rs:1180:4
+     |
+1180 | fn unbound_slot_internal(iri: &str) -> EvalError {
+     |    ^^^^^^^^^^^^^^^^^^^^^
+
+error: function `pattern_reaches_property_function` is never used
+    --> crates/sparql-eval/src/property_fn_eval.rs:3705:15
+     |
+3705 | pub(crate) fn pattern_reaches_property_function(pattern: &GraphPattern) -> bool {
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `expression_reaches_property_function` is never used
+    --> crates/sparql-eval/src/property_fn_eval.rs:3710:15
+     |
+3710 | pub(crate) fn expression_reaches_property_function(expr: &Expression) -> bool {
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `pattern_reaches_custom_aggregate` is never used
+    --> crates/sparql-eval/src/property_fn_eval.rs:3732:15
+     |
+3732 | pub(crate) fn pattern_reaches_custom_aggregate(pattern: &GraphPattern) -> bool {
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `expression_reaches_custom_aggregate` is never used
+    --> crates/sparql-eval/src/property_fn_eval.rs:3745:15
+     |
+3745 | pub(crate) fn expression_reaches_custom_aggregate(expr: &Expression) -> bool {
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `pattern_needs_admission` is never used
+    --> crates/sparql-eval/src/property_fn_eval.rs:3750:15
+     |
+3750 | pub(crate) fn pattern_needs_admission(pattern: &GraphPattern) -> bool {
+     |               ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `reaches` is never used
+    --> crates/sparql-eval/src/property_fn_eval.rs:3817:4
+     |
+3817 | fn reaches(root: ReachNode<'_>, kind: ReachKind) -> bool {
+     |    ^^^^^^^
+
+error: function `recheck_query` is never used
+   --> crates/sparql-eval/src/property_fn_plan.rs:288:15
+    |
+288 | pub(crate) fn recheck_query(
+    |               ^^^^^^^^^^^^^
+
+error: function `invocation_mode` is never used
+   --> crates/sparql-eval/src/property_fn_plan.rs:994:15
+    |
+994 | pub(crate) fn invocation_mode(
+    |               ^^^^^^^^^^^^^^^
+
+error: function `narrowed_to` is never used
+    --> crates/sparql-eval/src/property_fn_plan.rs:3199:4
+     |
+3199 | fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHashSet<Variable> {
+     |    ^^^^^^^^^^^
+
+error: function `mentions_variable_endpoint` is never used
+   --> crates/sparql-eval/src/service_endpoints.rs:526:15
+    |
+526 | pub(crate) fn mentions_variable_endpoint(pattern: &GraphPattern) -> bool {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: method `append` is never used
+   --> crates/sparql-eval/src/solution.rs:420:19
+    |
+188 | impl VarSchema {
+    | -------------- method in this implementation
+...
+420 |     pub(crate) fn append(&mut self, other: &Self) {
+    |                   ^^^^^^
+
+error: function `walk` is never used
+   --> crates/sparql-eval/src/stack.rs:119:15
+    |
+119 | pub(crate) fn walk<T>(body: impl FnOnce() -> T) -> Result<T, EvalError> {
+    |               ^^^^
+
+error: function `walk_is_low` is never used
+   --> crates/sparql-eval/src/stack.rs:130:15
+    |
+130 | pub(crate) fn walk_is_low(construct: &'static str) -> bool {
+    |               ^^^^^^^^^^^
+
+error: function `admit` is never used
+   --> crates/sparql-eval/src/stack/height.rs:149:4
+    |
+149 | fn admit<'a>(roots: impl IntoIterator<Item = NodeRef<'a>>) -> Result<(), EvalError> {
+    |    ^^^^^
+
+error: function `admit_pattern` is never used
+   --> crates/sparql-eval/src/stack/height.rs:203:15
+    |
+203 | pub(crate) fn admit_pattern(pattern: &GraphPattern) -> Result<(), EvalError> {
+    |               ^^^^^^^^^^^^^
+
+error: function `build_probes_into` is never used
+   --> crates/sparql-eval/src/substitute.rs:393:15
+    |
+393 | pub(crate) fn build_probes_into(
+    |               ^^^^^^^^^^^^^^^^^
+
+error: function `apply_probes` is never used
+   --> crates/sparql-eval/src/substitute.rs:415:15
+    |
+415 | pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+    |               ^^^^^^^^^^^^
+
+error: function `bind_call_arguments` is never used
+   --> crates/sparql-eval/src/substitute.rs:830:15
+    |
+830 | pub(crate) fn bind_call_arguments(
+    |               ^^^^^^^^^^^^^^^^^^^
+
+error: associated items `from_resident` and `try_into_resident` are never used
+    --> crates/sparql-eval/src/substitute.rs:1924:8
+     |
+1919 | impl PreparedProbes {
+     | ------------------- associated items in this implementation
+...
+1924 |     fn from_resident(entries: Vec<(Variable, GroundTerm)>) -> RewriteResult<Self> {
+     |        ^^^^^^^^^^^^^
+...
+1939 |     fn try_into_resident(mut self) -> Result<Vec<(Variable, GroundTerm)>, Self> {
+     |        ^^^^^^^^^^^^^^^^^
+
+error: function `ground_term_from_value` is never used
+    --> crates/sparql-eval/src/substitute.rs:4472:4
+     |
+4472 | fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic> {
+     |    ^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `ground_term_from_value_admitted` is never used
+    --> crates/sparql-eval/src/substitute.rs:4597:15
+     |
+4597 | pub(crate) fn ground_term_from_value_admitted(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `join_assignments_with_prebinding` is never used
+    --> crates/sparql-eval/src/substitute.rs:7656:15
+     |
+7656 | pub(crate) fn join_assignments_with_prebinding(query: &mut Query, names: &[&str]) {
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `resolve_term` is never used
+   --> crates/sparql-eval/src/template.rs:214:15
+    |
+214 | pub(crate) fn resolve_term(term: &TermPattern, schema: &VarSchema) -> TermOrdinal {
+    |               ^^^^^^^^^^^^
+
+error: function `term_pattern_has_blank_node` is never used
+   --> crates/sparql-eval/src/template.rs:722:15
+    |
+722 | pub(crate) fn term_pattern_has_blank_node(term: &TermPattern) -> bool {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: associated function `from_resident` is never used
+   --> crates/sparql-eval/src/workspace.rs:714:19
+    |
+595 | impl<T> AdmittedVec<T> {
+    | ---------------------- associated function in this implementation
+...
+714 |     pub(crate) fn from_resident(values: Vec<T>) -> Self {
+    |                   ^^^^^^^^^^^^^
+
+error: type does not implement `Debug`; consider adding `#[derive(Debug)]` or a manual implementation
+   --> crates/sparql-eval/src/agg_fn.rs:617:1
+    |
+617 | / pub struct WorkspaceAccumulator {
+618 | |     value: Box<dyn AggregateAccumulator>,
+619 | |     allocation: crate::WorkspaceAllocation,
+620 | | }
+    | |_^
+    |
+    = note: `-D missing-debug-implementations` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(missing_debug_implementations)]`
+
+error: unused `ControlFlow` that must be used
+    --> crates/sparql-eval/src/scratch.rs:1387:5
+     |
+1387 |     visited.map_err(|error| frame.storage_error(error, "blank identity discovery"))?;
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-must-use` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+     |
+1387 |     let _ = visited.map_err(|error| frame.storage_error(error, "blank identity discovery"))?;
+     |     +++++++
+
+error: type does not implement `Debug`; consider adding `#[derive(Debug)]` or a manual implementation
+   --> crates/sparql-eval/src/witness.rs:448:1
+    |
+448 | pub struct WitnessSetIter<'a, T>(core::slice::Iter<'a, purrdf_lex::allocation::SharedOwned<T>>);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 74 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: function `volatility_contained` is never used
+   --> crates/sparql-eval/src/agg_fn.rs:922:15
+    |
+922 | pub(crate) fn volatility_contained(
+    |               ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: function `leaf_labels` is never used
+   --> crates/sparql-eval/src/blank_scope.rs:400:4
+    |
+400 | fn leaf_labels<'a>(leaf: &'a GraphPattern, out: &mut Vec<&'a str>) {
+    |    ^^^^^^^^^^^
+
+error: function `leaf_has_raw_blank` is never used
+   --> crates/sparql-eval/src/blank_scope.rs:411:4
+    |
+411 | fn leaf_has_raw_blank(leaf: &GraphPattern) -> bool {
+    |    ^^^^^^^^^^^^^^^^^^
+
+error: function `placeholder` is never used
+   --> crates/sparql-eval/src/deferred_exists.rs:483:15
+    |
+483 | pub(crate) fn placeholder() -> Box<GraphPattern> {
+    |               ^^^^^^^^^^^
+
+error: function `lateral_placeholder` is never used
+   --> crates/sparql-eval/src/deferred_exists.rs:512:15
+    |
+512 | pub(crate) fn lateral_placeholder(schema: &[Variable]) -> Box<GraphPattern> {
+    |               ^^^^^^^^^^^^^^^^^^^
+
+error: function `map_clone` is never used
+   --> crates/sparql-eval/src/enf.rs:457:15
+    |
+457 | pub(crate) fn map_clone(
+    |               ^^^^^^^^^
+
+error: function `substitute_pattern_deferring` is never used
+    --> crates/sparql-eval/src/expr.rs:3204:15
+     |
+3204 | pub(crate) fn substitute_pattern_deferring<const PRESERVE: bool>(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `substitute_pattern_tracked` is never used
+    --> crates/sparql-eval/src/expr.rs:3625:15
+     |
+3625 | pub(crate) fn substitute_pattern_tracked<const PRESERVE: bool>(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: associated function `descent` is never used
+   --> crates/sparql-eval/src/property_fn_plan.rs:524:8
+    |
+521 | impl<'a> Promise<'a> {
+    | -------------------- associated function in this implementation
+...
+524 |     fn descent(parameters: &'a DetHashSet<Variable>) -> Self {
+    |        ^^^^^^^
+
+error: struct `ChainOrder` is never constructed
+   --> crates/sparql-eval/src/property_fn_plan.rs:848:8
+    |
+848 | struct ChainOrder<'a> {
+    |        ^^^^^^^^^^
+
+error: function `order_chain` is never used
+   --> crates/sparql-eval/src/property_fn_plan.rs:889:4
+    |
+889 | fn order_chain<'a>(
+    |    ^^^^^^^^^^^
+
+error: function `scalarval_value_matches_kind` is never used
+    --> crates/sparql-eval/src/property_fn_plan.rs:2479:4
+     |
+2479 | fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `probe_positions` is never used
+   --> crates/sparql-eval/src/substitute.rs:891:4
+    |
+891 | fn probe_positions<'a>(
+    |    ^^^^^^^^^^^^^^^
+
+error: function `for_each_expression` is never used
+    --> crates/sparql-eval/src/substitute.rs:1622:4
+     |
+1622 | fn for_each_expression<'e>(
+     |    ^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 49 previous errors

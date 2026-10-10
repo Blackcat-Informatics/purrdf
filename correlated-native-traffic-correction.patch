@@ -1,0 +1,141 @@
+--- a/crates/sparql-eval/src/binop.rs
++++ b/crates/sparql-eval/src/binop.rs
+@@ -106,6 +106,25 @@
+         });
+     }
+     let mut lift = Lift::at_admitted(node, &ctx.growth)?;
++    // Values Insertion retains the authored leaf on the left and a singleton
++    // restriction on the right. Drive that pure relation with its restriction,
++    // rather than reading its entire unbound bag once per correlated outer row.
++    // The source child roles and column order still belong to the authored join.
++    if ctx.in_substituted_exists
++        && matches!(right, GraphPattern::Values { bindings, .. } if bindings.len() == 1)
++    {
++        let driver_schema = crate::eval::syntactic_schema_admitted(right, &ctx.growth)?;
++        if crate::bgp::PositivePlan::seed_eligible_admitted(left, &driver_schema, &ctx.growth)? {
++            let output = crate::eval::syntactic_schema_admitted(node, &ctx.growth)?;
++            let Some(driver) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
++                return Ok(lift.withheld());
++            };
++            if lift.is_truncated() {
++                return Ok(lift.finish(SolutionSeq::empty(output)));
++            }
++            return finish_seeded_join(lift, driver, left, 0, Some(&output), ctx);
++        }
++    }
+     // A join is commutative, so a variable-endpoint `SERVICE` in the LEFT operand whose
+     // endpoint the right operand binds (`{ SERVICE ?e { … } ?s ex:endpoint ?e }`) is
+     // answered over the endpoints the right rows bind, exactly as the mirrored shape is:
+@@ -228,31 +247,7 @@
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+     if crate::bgp::PositivePlan::seed_eligible_admitted(right, &l.schema, &ctx.growth)? {
+-        let seed = crate::bgp::SeedEstimate::from_rows_admitted(&l, &ctx.growth)?;
+-        let plan = crate::bgp::PositivePlan::build_seeded_admitted(
+-            ctx.dataset,
+-            &ctx.active_dataset,
+-            ctx.active_graph,
+-            right,
+-            &seed,
+-            &ctx.workspace,
+-        )?
+-        .expect("the right relation was certified seed eligible");
+-        let out = l.schema.union_admitted(plan.root_schema(), &ctx.growth)?;
+-        let Some(joined) = lift.absorb(
+-            1,
+-            crate::eval::eval_positive_evaluated(
+-                right,
+-                Some(crate::eval::PositiveInput::owned(l)),
+-                &plan,
+-                ctx,
+-            )?,
+-        ) else {
+-            return Ok(lift.withheld());
+-        };
+-        // The seeded relation already contains each driver occurrence. Joining
+-        // it back to the driver would square duplicate multiplicities.
+-        return Ok(lift.finish(joined.reorder_like(&out)));
++        return finish_seeded_join(lift, l, right, 1, None, ctx);
+     }
+     // A variable-endpoint `SERVICE` in the right operand is answered over the endpoints
+     // the left rows bind — see `crate::service_endpoints`.
+@@ -266,6 +261,49 @@
+         return Ok(lift.withheld());
+     };
+     Ok(lift.finish(hash_join(&l, &r, ctx)?))
++}
++
++/// Execute the ordinary seeded join after one actual child has produced its
++/// driver. A copied correlation supplies the original logical schema; other
++/// joins retain their existing driver-first union schema.
++fn finish_seeded_join<D: DatasetView + Sync>(
++    mut lift: Lift<'_>,
++    driver: SolutionSeq<D::Id>,
++    driven: &GraphPattern,
++    driven_position: usize,
++    output: Option<&VarSchema>,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<Evaluated<D::Id>, EvalError> {
++    let seed = crate::bgp::SeedEstimate::from_rows_admitted(&driver, &ctx.growth)?;
++    let plan = crate::bgp::PositivePlan::build_seeded_admitted(
++        ctx.dataset,
++        &ctx.active_dataset,
++        ctx.active_graph,
++        driven,
++        &seed,
++        &ctx.workspace,
++    )?
++    .expect("the driven relation was certified seed eligible");
++    let out = match output {
++        Some(output) => output.clone(),
++        None => driver
++            .schema
++            .union_admitted(plan.root_schema(), &ctx.growth)?,
++    };
++    let Some(joined) = lift.absorb(
++        driven_position,
++        crate::eval::eval_positive_evaluated(
++            driven,
++            Some(crate::eval::PositiveInput::owned(driver)),
++            &plan,
++            ctx,
++        )?,
++    ) else {
++        return Ok(lift.withheld());
++    };
++    // The seeded relation already includes its driver occurrence; joining it
++    // back would square multiplicities. Reorder through the same admitted home.
++    Ok(lift.finish(joined.reorder_like_admitted(&out, &ctx.growth)?))
+ }
+ 
+ /// Execute one physical positive join. Disjoint unit-driven children keep the
+--- a/crates/sparql-eval/tests/correlated_owned_admission.rs
++++ b/crates/sparql-eval/tests/correlated_owned_admission.rs
+@@ -187,7 +187,7 @@
+         r#"SELECT ?e ?x WHERE { VALUES ?e {<https://example.org/service> <https://example.org/service>} LATERAL { SERVICE ?e {VALUES ?x {"same" "same"}} } }"#,
+         r#"SELECT ?e ?x WHERE { VALUES ?e {<https://example.org/service>} { SELECT ?e ?x WHERE { SERVICE ?e {VALUES ?x {"same" "same"}} } } }"#,
+         r#"SELECT ?e WHERE { VALUES ?e {"not an IRI"} SERVICE SILENT ?e {VALUES ?x {"unused"}} }"#,
+-        r#"SELECT ?e ?x WHERE { VALUES ?e {<https://example.org/service>} LATERAL { VALUES ?x {"same" "same"} FILTER EXISTS { SERVICE ?e {VALUES ?x {"same"}} } } }"#,
++        r#"SELECT ?e ?x WHERE { VALUES ?e {<https://example.org/service>} LATERAL { VALUES ?x {"same" "same"} FILTER EXISTS { SERVICE ?e {VALUES ?y {"same"} FILTER(?x=?y)} } } }"#,
+         r#"ASK WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?x {1}} }"#,
+         r#"CONSTRUCT {<https://example.org/target> <https://example.org/copied> ?x} WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?x {"same" "same"}} }"#,
+         r#"DESCRIBE ?s WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?s {<https://example.org/target>}} }"#,
+@@ -338,11 +338,11 @@
+             QueryOptions::EMPTY.with_remote(Some(&remote)),
+         )
+         .expect_err("physical layout refusal is never an invocation failure SILENT can swallow");
+-    assert_eq!(
+-        error
+-            .diagnostic()
+-            .unwrap_or_else(|| panic!("typed physical refusal returned {error:?}"))
+-            .code,
+-        "native-sparql-workspace-bound-overflow"
+-    );
++    assert!(matches!(
++        error,
++        purrdf_sparql_eval::FallibleSparqlError::ControlFailure {
++            failure: purrdf_sparql_eval::QueryControlFailure::LayoutOverflow,
++            ..
++        }
++    ));
+ }

@@ -1,0 +1,2332 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 0d48e4c8b..119eabce8 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -24,6 +24,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+ 
+ ### Breaking Changes
+ 
++- **Unrestricted exact BM25F ranking:** the ranking identity is now
++  `purrdf-bm25f-fixed-v2`, revision 2. Query terms, ranking fields, corpus
++  populations, field lengths/frequencies and nonnegative weights no longer have
++  selected admission ceilings. Overflowing intermediates use the existing exact
++  Integer/BigInt at the original rounding boundaries; previously admitted score
++  lexicals remain byte-identical. Profile/index fingerprints change because the
++  admission and bound laws changed. The fixed maximum/width exports are removed;
++  `PreparedQuery::score` now returns `BoundedScore { value, bound }`, native
++  `Scored` carries `score_bound`, and matched-term counts use usize. The bound is
++  derived from the actual prepared query/corpus, with no reserved host tie bits.
++
++
+ - **Developer-schema output for ontologies without anonymous expressions:**
+   correctness fixes change what an IRI-only ontology emits. Each change:
+   - Every schema cache key (`SchemaCompilation.key`) changes, for every input,
+diff --git a/Makefile b/Makefile
+index 36ab81768..dd210d8dd 100644
+--- a/Makefile
++++ b/Makefile
+@@ -751,6 +751,10 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface
+ 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+ 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-text --test wasm_determinism -- --exact \
+ 				the_sentence_boundaries_are_reproduced_on_this_target \
++				declared_large_corpora_are_exact \
++				five_thousand_term_index \
++				promoted_field_arithmetic_is_exact \
++				thirty_two_index_fields_are_exact \
+ 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+ 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-mime --test lossless -- --exact \
+ 				production_rdf_round_trip_is_deterministic_for_original_and_broken_messages \
+diff --git a/crates/text/RANKING.md b/crates/text/RANKING.md
+index 1fbbd4eb9..da4acc596 100644
+--- a/crates/text/RANKING.md
++++ b/crates/text/RANKING.md
+@@ -3,12 +3,16 @@
+ 
+ # BM25F ranking profile and vocabulary-search ownership
+ 
+-`purrdf-bm25f-fixed-v1`, revision 1, is the complete scoring law. A concrete
++`purrdf-bm25f-fixed-v2`, revision 2, is the complete scoring law. A concrete
+ profile's BLAKE3 identity includes that name and revision, the index corpus
+ construction law `purrdf-text-corpus-graph-language-v1`, the integer logarithm
+-algorithm, operation order and rounding, scale, `k1`, all bounds, field names
+-and order, weights, length coefficients, sorted predicate mappings, and the
+-explicit unclassified destination and population mode. A semantic change changes this identity. The default dense mode preserves the published revision-1 canonical bytes; the explicit carrier mode binds `relative=length*field_documents/total` instead of `relative=length*N/total`.
++algorithm, operation order and rounding, scale, `k1`, the exact-intermediate and
++query-bound laws, field names and order, weights, length coefficients, sorted
++predicate mappings, and the explicit unclassified destination and population
++mode. It contains no chosen input ceiling. Dense mode binds
++`relative=length*N/total`; carrier mode binds
++`relative=length*field_documents/total`. The revision changes profile and index
++identities while preserving every previously admitted score lexical.
+ 
+ There is one scoring implementation. Single-field BM25F is its one-field case.
+ The previous classic BM25 expression was algebraically equivalent over real
+@@ -41,7 +45,7 @@ For each distinct analyzed query term, in ascending term order:
+ `k1` is exactly 1.2. An absent term's field contributes zero after every input
+ has been validated; an unused field with total zero therefore has an exact,
+ well-defined zero contribution. A zero weight also leaves all input checks
+-active. A query has at most 1024 distinct terms; duplicates do not add weight.
++active. A query has no chosen term-count ceiling; duplicates do not add weight.
+ The index's existing partition order and canonical document tie order remain
+ the ranked relation's total order. Heap ceilings and explanations use the same
+ prepared scorer as full ranking.
+@@ -63,7 +67,7 @@ in field order. `PreparedCorpus::new` keeps dense normalization. Each constructo
+ refuses the other mode rather than score under an incorrect fingerprint.
+ 
+ A population may not exceed the corpus size, and its total may not exceed
+-`population * FIELD_LENGTH_MAX`. A nonzero total therefore requires a nonzero
++`population * u64::MAX`. A nonzero total therefore requires a nonzero
+ population. Both zero populations with zero totals and nonzero populations with
+ zero totals are admitted. Corpus-wide `N` still determines IDF; carrier counts
+ only change length normalization. If every document carries every field, both
+@@ -77,62 +81,59 @@ field's carriers. Positive-length field inputs must leave enough carriers to
+ hold the remaining token total. These checks remain active for zero-frequency
+ and zero-weight contributions.
+ 
+-## Bounds and proof
++## Input-derived capacity and score proof
+ 
+-The profile admits:
++Fields and distinct query terms are addressable vectors, not fixed-size
++admission domains. Corpus populations, field lengths and term frequencies use
++u64; exact totals use u128. A field total cannot exceed its population times
++`u64::MAX`, and a scored document must leave enough remaining carriers to hold
++that total. These are consistency consequences of the supplied representation,
++not selected ranking ceilings. All nonnegative weights representable by `Fixed`
++are accepted. Length coefficients remain in the specified interval `[0,1]`.
+ 
+-| Input | Inclusive maximum |
+-|---|---:|
+-| Fields | 16 |
+-| Distinct query terms | 1024 |
+-| Documents in a corpus | `2^40` |
+-| Field length per document | `2^24` |
+-| Term frequency per field | `2^24` and the field's length |
+-| Field weight | `2^24` |
+-| Field normalization coefficient | 1 |
+-| Raw score | `65_536 * 10^12` |
++Corpus preparation validates field counts, populations and exact totals. Query
++preparation requires explicit nonempty keys in strictly sorted, distinct order,
++valid document frequencies and a frequency sum no greater than all corpus tokens.
++The token-total sum across unrestricted fields uses exact integers too.
++Document scoring validates every field before considering zero contributions,
++and checks consistent lengths and the distinct-term frequency sum. An empty
++corpus contains no document to score. A positive field whose specified
++normalization rounds to zero still has an undefined division and raises a typed
++Domain error; no clamp or alternate rounding is used.
+ 
+-Weights and coefficients cannot be negative. Exact field totals use u128
+-because the maximum total is `2^40 * 2^24 = 2^64`. Corpus preparation verifies
+-that total against its selected population, field count, population and document frequencies. Query preparation
+-requires explicit nonempty term keys in strictly sorted, distinct order. The
+-arithmetic API accepts already-analyzed keys; the index uses its declared
+-analyzer to produce them. Document scoring
+-verifies every field and its consistency with the corpus before considering
+-zero contributions. Whole-document scoring also checks consistent lengths and
+-that distinct query term frequencies sum to no more than each field length.
+-An empty corpus contains no document to score, even for an empty query. Prepared inputs own their IDF cache; callers cannot supply
+-an IDF from a different corpus or profile.
++The original fixed-point operation boundaries are unchanged. Healthy small
++operations use checked i128 arithmetic and the existing wide product/quotient.
++An intermediate whose rounded result exceeds i128 promotes through
++`purrdf_xsd::exact::Integer`, which uses the workspace's one BigInt. Each
++multiply/divide still truncates at its original scale boundary; there is no
++second scorer and no final-only rational rounding. The count ratio uses the
++same wide kernel on `length*population*S/total`, with `length*population` fitting
++u128. Intermediate promotion does not alter lexical scores.
+ 
+-The positive shifted IDF argument is at most `2*N+2`, even allowing `df=0`.
+-For `N <= 2^40`, `ln(2*N+2) <= ln(2^41+2) < 29`. The implemented logarithm
+-underestimates this mathematical logarithm on arguments at least one: every
+-series term is positive, each truncation rounds down, the omitted tail is
+-positive, and the nonnegative exponent multiplies a downward-rounded `ln(2)`.
++`PreparedQuery::score_bound()` returns a private-construction certificate with
++maximum `sum_i floor(idf_i*(k1+1))`, its significant raw-score bit width, and the
++complete profile fingerprint. Every pseudo-frequency is nonnegative. Its
++saturation is at most `k1+1 = 2.2`: truncating its product downward cannot
++increase `pseudo*2.2/(pseudo+1.2)`, and division truncates downward again.
++Multiplication by each prepared nonnegative IDF is monotone. Summing the
++individual ceilings therefore bounds the complete actual query, including all
++rounding. The validator checks its exact inclusive interval, not just its width.
++`PreparedQuery::score` returns `BoundedScore { value, bound }`, and each native
++`Scored` result carries `score_bound`. A host can choose its own key width
++without PurRDF reserving tie bits or refusing the input. Point scoring retains
++the same value-and-bound carrier until the existing six-cell RDF row is emitted;
++the RDF relation's row positions and score lexical stay unchanged.
+ 
+-Every pseudo-frequency is nonnegative. Its saturation is at most 2.2: rounding
+-the product downward cannot increase `pseudo*2.2/(pseudo+1.2)`, and division
+-rounds downward again. Therefore the exact raw score is bounded above by
+-`1024 * 29 * 2.2 * 10^12 = 65_331_200_000_000_000`, strictly below
+-`SCORE_MAX = 65_536_000_000_000_000`. This proof includes the actual
+-intermediate rounding; it does not infer a bound from sampled scores.
+-
+-`SCORE_BITS` is derived as the bit length of `SCORE_MAX`, yielding 56. The
+-public validator checks the exact interval `[0,SCORE_MAX]`, not just the width.
+-A host may use the remaining 72 bits of a u128 for its own tie key. PurRDF
+-exports no packed comparator and makes no host-specific tie-key truncation
+-decision.
+-
+-All intermediates also fit the public representation under these bounds.
+-The smallest positive field-relative ratio is at least `1/2^24`, so its raw
+-value is at least 59604. For raw coefficient `0 <= b <= S`, normalization is
+-`S-b + floor(b*relative/S)`, at least `min(S,relative)`, including rounding.
+-Thus its raw value is also at least 59604. The maximum weighted field
+-pseudo-frequency is bounded by `2^48 * 10^24 / 59604` raw units. Summing
+-sixteen fields and multiplying by 2.2 stays below `1.7 * 10^35`, below i128's
+-maximum by three orders of magnitude. The count ratio's intermediate is at
+-most `2^64 * 10^12`, also representable. Checked arithmetic remains active
+-throughout; these inequalities are asserted alongside the score bound.
++The public score representation still fits i128 on every supported 32/64-bit
++target. For any u64 population the shifted IDF argument is at most `2N+2`, at
++most `2^65`. The actual logarithm uses exact range reduction to a mantissa below
++`2*10^18`, positive finite atanh terms truncated downward and a downward-rounded
++`ln(2)` constant. Its computed result is below 46 at public scale, not merely an
++unverified real-log approximation. Every raw term addend is thus below
++`46*2.2*10^12`. Multiplying this by even `u64::MAX` addressable query terms is
++below `1.9*10^33`, below i128's maximum. The prepared certificate and score sums
++remain checked. Field weighting and pseudo-frequency intermediates can be much
++larger, which is why their unbounded promotion is necessary.
+ 
+ ## Conformance and retained facts
+ 
+@@ -140,8 +141,8 @@ throughout; these inequalities are asserted alongside the score bound.
+ It uses unbounded integers and reproduces each specified truncation. The
+ committed TSV corpus includes heterogeneous field weights, fractional
+ coefficients, absent terms, unused fields, sparse and maximum-size corpora,
+-the smallest normalization, a maximum-size query, and an ubiquitous term whose
+-IDF rounds to zero at the largest corpus size. Matching is independent of
++the former boundary normalizations/query size, and an ubiquitous term whose
++IDF rounds to zero at a large corpus size. Matching is independent of
+ score: zero-weight fields and rounded zero IDFs preserve matching rows and
+ their canonical tie order. `python
+ tests/reference/bm25f.py --check` checks the committed values; Rust compares
+@@ -162,9 +163,9 @@ index's statistics. The pure scorer does not construct or discover a corpus:
+ external stores supply already-partitioned counts and bind their source and
+ partition selection in their own host identity.
+ 
+-The pure scorer admits `2^40` documents for external stores; the in-memory
+-index still has a u32 document-address space. The scorer's wider corpus bound
+-does not claim the in-memory index can allocate or address that many rows.
++The pure scorer accepts the full u64 population representation for external
++stores. The in-memory index retains its explicit u32 document/position address
++space; wider pure corpus statistics do not claim it can allocate that many rows.
+ 
+ ## Vocabulary substring search decision
+ 
+diff --git a/crates/text/benches/search.rs b/crates/text/benches/search.rs
+index 817f51931..734d96d09 100644
+--- a/crates/text/benches/search.rs
++++ b/crates/text/benches/search.rs
+@@ -394,8 +394,11 @@ fn fielded_arithmetic(criterion: &mut Bench) {
+             .expect("sparse corpus");
+     let sparse_query = sparse.prepare_query(&terms).expect("query");
+     assert_eq!(
+-        query.score(&document).expect("dense score"),
+-        sparse_query.score(&document).expect("same field means")
++        query.score(&document).expect("dense score").value,
++        sparse_query
++            .score(&document)
++            .expect("same field means")
++            .value
+     );
+     group.bench_function("prepare_eight_idfs_sparse_fields", |bencher| {
+         bencher.iter(|| sparse.prepare_query(black_box(&terms)).expect("prepare"));
+diff --git a/crates/text/src/fixed.rs b/crates/text/src/fixed.rs
+index 56544019a..68ffdb9bb 100644
+--- a/crates/text/src/fixed.rs
++++ b/crates/text/src/fixed.rs
+@@ -34,11 +34,13 @@
+ //!
+ //! # Overflow
+ //!
+-//! An intermediate that does not fit is a [`TextError::Overflow`], never a
+-//! wrapped or saturated value. A wrapped score is a wrong ranking presented as a
+-//! right one, which is precisely the failure this crate exists to rule out.
++//! Public [`Fixed`] operations report [`TextError::Overflow`] only when their
++//! result does not fit; products use the shared wide-integer home. Ranking
++//! intermediates additionally promote through the existing exact [`Integer`]
++//! home and return to [`Fixed`] under their prepared query's score certificate.
++//! Neither path wraps or saturates a score.
+ 
+-use purrdf_xsd::wide::mul_div;
++use purrdf_xsd::{exact::Integer, wide::mul_div};
+ 
+ use crate::error::TextError;
+ 
+@@ -52,7 +54,7 @@ pub const SCALE_DIGITS: u32 = 12;
+ 
+ /// `10^SCALE_DIGITS` — the divisor relating a [`Fixed`]'s raw integer to its
+ /// value.
+-const SCALE: i128 = 10_i128.pow(SCALE_DIGITS);
++pub(crate) const SCALE: i128 = 10_i128.pow(SCALE_DIGITS);
+ 
+ /// `SCALE` as an unsigned value, for the magnitude arithmetic below.
+ const SCALE_U: u128 = SCALE as u128;
+@@ -169,9 +171,8 @@ impl Fixed {
+     /// a helper that falls back to a 256-bit intermediate rather than reporting
+     /// an overflow the answer does not have.
+     pub fn checked_mul(self, other: Self) -> Result<Self, TextError> {
+-        let magnitude = mul_div(self.0.unsigned_abs(), other.0.unsigned_abs(), SCALE_U)
+-            .ok_or_else(|| TextError::overflow("multiplication left the fixed-point range"))?;
+-        signed(magnitude, (self.0 < 0) != (other.0 < 0))
++        product_ratio(self.0, other.0, SCALE)
++            .ok_or_else(|| TextError::overflow("multiplication left the fixed-point range"))
+     }
+ 
+     /// `self ÷ other`, truncated toward zero.
+@@ -186,9 +187,8 @@ impl Fixed {
+         if other.0 == 0 {
+             return Err(TextError::domain("division by zero"));
+         }
+-        let magnitude = mul_div(self.0.unsigned_abs(), SCALE_U, other.0.unsigned_abs())
+-            .ok_or_else(|| TextError::overflow("division left the fixed-point range"))?;
+-        signed(magnitude, (self.0 < 0) != (other.0 < 0))
++        product_ratio(self.0, SCALE, other.0)
++            .ok_or_else(|| TextError::overflow("division left the fixed-point range"))
+     }
+ 
+     /// The natural logarithm of `self`, exact to the last representable digit
+@@ -294,7 +294,7 @@ const INTERNAL_TO_SCALE_U: u128 = INTERNAL_TO_SCALE as u128;
+ /// inline so the asymmetry is visible at the one place it matters.
+ const NEGATIVE_LIMIT_MAGNITUDE: u128 = i128::MIN.unsigned_abs();
+ 
+-/// Reassemble a magnitude and a sign into a [`Fixed`], or report the overflow.
++/// Reassemble a magnitude and sign in the public raw representation.
+ ///
+ /// The `negative` branch is not symmetric with the positive one, and cannot be.
+ /// `i128` spans `-2^127 ..= 2^127 - 1`, so the magnitude `2^127` is
+@@ -306,13 +306,79 @@ const NEGATIVE_LIMIT_MAGNITUDE: u128 = i128::MIN.unsigned_abs();
+ /// rather than a rounding detail — the arithmetic's usable range depended on the
+ /// sign of the operands rather than on the answer — so the negative extreme is
+ /// admitted here explicitly.
+-fn signed(magnitude: u128, negative: bool) -> Result<Fixed, TextError> {
++fn signed_value(magnitude: u128, negative: bool) -> Option<i128> {
+     if negative && magnitude == NEGATIVE_LIMIT_MAGNITUDE {
+-        return Ok(Fixed::from_raw(i128::MIN));
++        return Some(i128::MIN);
++    }
++    let raw = i128::try_from(magnitude).ok()?;
++    Some(if negative { -raw } else { raw })
++}
++
++/// One scaled-product kernel, including signed truncation toward zero.
++fn product_ratio(left: i128, right: i128, divisor: i128) -> Option<Fixed> {
++    let magnitude = mul_div(
++        left.unsigned_abs(),
++        right.unsigned_abs(),
++        divisor.unsigned_abs(),
++    )?;
++    signed_value(magnitude, (left < 0) ^ (right < 0) ^ (divisor < 0)).map(Fixed::from_raw)
++}
++
++/// Ranking intermediates at the same scale as Fixed. The existing exact
++/// Integer owns the canonical i128/BigInt representation; this adapter supplies
++/// only the original scaling and rounding boundaries, not an integer engine.
++pub(crate) struct Scaled(Integer);
++
++impl Scaled {
++    pub(crate) const ZERO: Self = Self(Integer::ZERO);
++
++    pub(crate) const fn from_fixed(value: Fixed) -> Self {
++        Self(Integer::from_i128(value.into_raw()))
++    }
++
++    pub(crate) fn add(&self, other: &Self) -> Self {
++        Self(&self.0 + &other.0)
++    }
++
++    pub(crate) fn mul(&self, other: &Self) -> Self {
++        Self(Self::quotient_product(
++            &self.0,
++            &other.0,
++            &Integer::from_i128(SCALE),
++        ))
++    }
++
++    pub(crate) fn div(&self, other: &Self) -> Result<Self, TextError> {
++        if other.0.is_zero() {
++            return Err(TextError::domain("division by zero"));
++        }
++        Ok(Self(Self::quotient_product(
++            &self.0,
++            &Integer::from_i128(SCALE),
++            &other.0,
++        )))
++    }
++
++    pub(crate) fn into_fixed(self) -> Result<Fixed, TextError> {
++        self.0
++            .as_i128()
++            .map(Fixed::from_raw)
++            .ok_or_else(|| TextError::overflow("result left the fixed-point range"))
++    }
++
++    /// Stay on the existing wide kernel when the rounded result fits, even if
++    /// the unscaled product exceeds i128; otherwise use exact Integer once.
++    fn quotient_product(left: &Integer, right: &Integer, divisor: &Integer) -> Integer {
++        if let (Some(a), Some(b), Some(c)) = (left.as_i128(), right.as_i128(), divisor.as_i128())
++            && let Some(value) = product_ratio(a, b, c)
++        {
++            return Integer::from_i128(value.into_raw());
++        }
++        (left * right)
++            .div_rem(divisor)
++            .expect("the caller verified a nonzero divisor")
++            .0
+     }
+-    let raw = i128::try_from(magnitude)
+-        .map_err(|_| TextError::overflow("result left the fixed-point range"))?;
+-    Ok(Fixed::from_raw(if negative { -raw } else { raw }))
+ }
+ 
+ /// `floor(log2(raw / 10^SCALE_DIGITS))` for a strictly positive `raw`.
+diff --git a/crates/text/src/index.rs b/crates/text/src/index.rs
+index d08a8f636..8e45c60e9 100644
+--- a/crates/text/src/index.rs
++++ b/crates/text/src/index.rs
+@@ -81,7 +81,7 @@ use purrdf_core::{DatasetView, FastMap, RdfTextDirection, TermValue};
+ use crate::analysis::{Analyzer, UnicodeVersions, unicode_versions};
+ use crate::error::TextError;
+ use crate::fixed::Fixed;
+-use crate::ranking::{FIELD_LENGTH_MAX, FieldInput, MAX_FIELDS, PreparedCorpus, RankingProfile};
++use crate::ranking::{FieldInput, FieldInputs, PreparedCorpus, RankingProfile};
+ use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
+ 
+ /// Domain-separation prefix for [`TextIndex::fingerprint`].
+@@ -738,12 +738,8 @@ impl TextIndex {
+             .map(|doc| doc.predicate_lengths.as_slice())
+     }
+ 
+-    /// Fill a stack-allocated field input buffer for one document and term.
+-    pub(crate) fn field_inputs(
+-        &self,
+-        document: u32,
+-        term: &str,
+-    ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
++    /// Fill an inline field buffer, spilling for the profile's actual field count.
++    pub(crate) fn field_inputs(&self, document: u32, term: &str) -> Result<FieldInputs, TextError> {
+         if self.document(document).is_none() {
+             return Err(TextError::data("field input names an absent document"));
+         }
+@@ -774,17 +770,24 @@ impl TextIndex {
+         &self,
+         document: u32,
+         frequencies: &[(u32, u64)],
+-    ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
++    ) -> Result<FieldInputs, TextError> {
+         let lengths = self
+             .field_lengths
+             .get(document as usize)
+             .ok_or_else(|| TextError::data("field input names an absent document"))?;
+-        let mut fields = [FieldInput::default(); MAX_FIELDS];
+-        for (input, &length) in fields.iter_mut().zip(lengths) {
+-            input.length = length;
+-        }
++        let mut fields: FieldInputs = lengths
++            .iter()
++            .map(|&length| FieldInput {
++                term_frequency: 0,
++                length,
++            })
++            .collect();
+         for &(predicate, frequency) in frequencies {
+-            fields[self.predicate_fields[predicate as usize]].term_frequency += frequency;
++            let input = &mut fields[self.predicate_fields[predicate as usize]];
++            input.term_frequency = input
++                .term_frequency
++                .checked_add(frequency)
++                .ok_or_else(|| TextError::overflow("merged field term frequency exceeds u64"))?;
+         }
+         Ok(fields)
+     }
+@@ -823,9 +826,6 @@ impl TextIndex {
+                 lengths[field] = lengths[field]
+                     .checked_add(length)
+                     .ok_or_else(|| TextError::overflow("merged field length exceeds u64"))?;
+-                if lengths[field] > FIELD_LENGTH_MAX {
+-                    return Err(TextError::data("merged field length exceeds 2^24"));
+-                }
+             }
+             for ((total, population), &length) in self.field_totals[document.partition as usize]
+                 .iter_mut()
+@@ -1625,7 +1625,7 @@ fn analyze_rows(
+                 .predicates
+                 .binary_search(&row.predicate)
+                 .expect("walk selected configured predicates") as u32;
+-            let analysis = analyzer.projections(&row.lexical_form)?;
++            let mut analysis = analyzer.projections(&row.lexical_form)?;
+             let character;
+             let projections = match config.projection {
+                 IndexProjection::Lexical => &analysis.lexical,
+@@ -1647,25 +1647,23 @@ fn analyze_rows(
+                     }
+                 };
+                 tokens.push((ordinal, position, predicate));
+-                let length = match predicate_lengths.last_mut() {
++                match predicate_lengths.last_mut() {
+                     Some((prior, length)) if *prior == predicate => {
+                         *length += 1;
+-                        *length
+                     }
+                     _ => {
+                         predicate_lengths.push((predicate, 1));
+-                        1
+                     }
+-                };
+-                if length > FIELD_LENGTH_MAX {
+-                    return Err(TextError::data(
+-                        "a predicate holds more than 2^24 analyzed tokens in one document",
+-                    ));
+                 }
+                 position = position.checked_add(1).ok_or_else(|| {
+                     TextError::data("document exceeds the u32 token position space")
+                 })?;
+             }
++            // The native token walk has consumed the lexical view. Han replay
++            // reads normalized text, while SurfaceIndex consumes surface/spans
++            // and their original source alignment. Release this actual scratch
++            // buffer, including capacity, before retaining the remaining views.
++            drop(core::mem::take(&mut analysis.lexical));
+             analyses.push((digest_rows(std::slice::from_ref(row)), analysis));
+         }
+         // Retain auxiliary-only documents without admitting them into the
+@@ -1746,11 +1744,8 @@ fn build_partitions(documents: &[AnalyzedDocument]) -> Result<Partitioning, Text
+ 
+ /// `total / count`, exactly, in fixed point.
+ fn exact_average(total: u64, count: u64) -> Result<Fixed, TextError> {
+-    let widen = |value: u64| {
+-        i64::try_from(value)
+-            .map_err(|_| TextError::overflow(format!("{value} does not fit a fixed-point integer")))
+-    };
+-    Fixed::from_integer(widen(total)?)?.checked_div(Fixed::from_integer(widen(count)?)?)
++    Fixed::from_raw(i128::from(total) * crate::fixed::SCALE)
++        .checked_div(Fixed::from_raw(i128::from(count) * crate::fixed::SCALE))
+ }
+ 
+ /// Sort the dictionary, remap the token ordinals onto it, and build the postings.
+diff --git a/crates/text/src/lib.rs b/crates/text/src/lib.rs
+index a4e24df69..b1aeed353 100644
+--- a/crates/text/src/lib.rs
++++ b/crates/text/src/lib.rs
+@@ -109,8 +109,6 @@ pub use term_bytes::{FINGERPRINT_BYTES, fingerprint_terms};
+ pub const ANALYZER_PROFILE_ID: &str = "purrdf-profiled-text-v4";
+ 
+ pub use ranking::{
+-    DOCUMENTS_MAX, FIELD_LENGTH_MAX, FIELD_WEIGHT_MAX, FieldInput, INDEX_CORPUS_PROFILE_ID,
+-    MAX_FIELDS, PreparedCorpus, PreparedQuery, QUERY_TERMS_MAX, RANKING_PROFILE_ID,
+-    RANKING_PROFILE_VERSION, RankingField, RankingProfile, SCORE_BITS, SCORE_MAX,
+-    TERM_FREQUENCY_MAX,
++    BoundedScore, FieldInput, INDEX_CORPUS_PROFILE_ID, PreparedCorpus, PreparedQuery,
++    RANKING_PROFILE_ID, RANKING_PROFILE_VERSION, RankingField, RankingProfile, ScoreBound,
+ };
+diff --git a/crates/text/src/ranking.rs b/crates/text/src/ranking.rs
+index e2738449c..afa0260f4 100644
+--- a/crates/text/src/ranking.rs
++++ b/crates/text/src/ranking.rs
+@@ -8,37 +8,76 @@
+ //! single-field profile uses exactly the same operations. See `RANKING.md` for
+ //! the arithmetic, bound proof, and independent conformance reference.
+ 
+-use purrdf_core::TermValue;
++use purrdf_core::{FastSet, SmallVec, TermValue};
+ use purrdf_hash::frame::frame_le;
++use purrdf_xsd::{bigint::BigInt, exact::Integer, wide::mul_div};
+ 
++use crate::fixed::{SCALE, Scaled};
+ use crate::{B, FINGERPRINT_BYTES, Fixed, K1, SCALE_DIGITS, TextError};
+ 
+ /// The arithmetic and query aggregation contract, independent of field choices.
+-pub const RANKING_PROFILE_ID: &str = "purrdf-bm25f-fixed-v1";
++pub const RANKING_PROFILE_ID: &str = "purrdf-bm25f-fixed-v2";
+ /// Revision of the complete ranking law, including intermediate rounding.
+-pub const RANKING_PROFILE_VERSION: u32 = 1;
++pub const RANKING_PROFILE_VERSION: u32 = 2;
+ /// Corpus construction used by the in-memory index: documents are
+ /// `(graph, subject, language)`, partitions are `(graph, language)`, direction
+ /// is merged, and zero-token documents are excluded. External stores provide
+ /// their own already-partitioned counts to the pure prepared scorer.
+ pub const INDEX_CORPUS_PROFILE_ID: &str = "purrdf-text-corpus-graph-language-v1";
+ 
+-/// Maximum number of fields in a ranking profile.
+-pub const MAX_FIELDS: usize = 16;
+-/// Maximum number of distinct analyzed query terms.
+-pub const QUERY_TERMS_MAX: usize = 1024;
+-/// Maximum corpus size accepted by the pure scorer.
+-pub const DOCUMENTS_MAX: u64 = 1 << 40;
+-/// Maximum length of any field in a document.
+-pub const FIELD_LENGTH_MAX: u64 = 1 << 24;
+-/// Maximum frequency of one term in one field.
+-pub const TERM_FREQUENCY_MAX: u64 = 1 << 24;
+-/// Maximum field weight; keeps every intermediate representable.
+-pub const FIELD_WEIGHT_MAX: Fixed = Fixed::from_raw((1_i128 << 24) * 1_000_000_000_000);
+-/// Inclusive maximum score, in the public fixed-point representation.
+-pub const SCORE_MAX: Fixed = Fixed::from_raw(65_536 * 1_000_000_000_000);
+-/// Bits needed for every admitted nonnegative raw score, derived from the bound.
+-pub const SCORE_BITS: u32 = 128 - SCORE_MAX.into_raw().unsigned_abs().leading_zeros();
++/// Inline capacity is an allocation choice, never a field-count limit.
++pub(crate) type FieldInputs = SmallVec<[FieldInput; 16]>;
++
++/// A certified inclusive raw-score bound for one prepared query and corpus.
++///
++/// Constructed from the actual prepared IDFs and the saturation law, including
++/// every truncation. It has no global score ceiling or reserved host tie bits.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct ScoreBound {
++    maximum: Fixed,
++    profile: [u8; FINGERPRINT_BYTES],
++}
++
++impl ScoreBound {
++    /// Every score under this prepared query is in `[0, maximum]`.
++    pub const fn maximum(self) -> Fixed {
++        self.maximum
++    }
++
++    /// Significant bits of the certified maximum's nonnegative raw integer.
++    pub const fn bits(self) -> u32 {
++        128 - self.maximum.into_raw().unsigned_abs().leading_zeros()
++    }
++
++    /// The complete ranking law and caller field choices this bound certifies.
++    pub const fn profile_fingerprint(self) -> [u8; FINGERPRINT_BYTES] {
++        self.profile
++    }
++
++    /// Check the exact interval, rather than admitting every value of its width.
++    ///
++    /// # Errors
++    /// Returns [`TextError::Domain`] for a negative or uncertified score.
++    pub fn validate(self, score: Fixed) -> Result<Fixed, TextError> {
++        if !(Fixed::ZERO..=self.maximum).contains(&score) {
++            return Err(TextError::domain(format!(
++                "score {} is outside the prepared interval [0, {}]",
++                score.to_decimal_lexical(),
++                self.maximum.to_decimal_lexical()
++            )));
++        }
++        Ok(score)
++    }
++}
++
++/// A pure scorer's value and its original query/corpus certificate.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub struct BoundedScore {
++    /// Exact twelve-fractional-digit value.
++    pub value: Fixed,
++    /// Inclusive certified bound, suitable for a caller's key-width decision.
++    pub bound: ScoreBound,
++}
+ 
+ /// One field's named, immutable scoring parameters.
+ #[derive(Clone, Debug, PartialEq, Eq)]
+@@ -52,15 +91,15 @@ pub struct RankingField {
+ }
+ 
+ impl RankingField {
+-    /// Validate a nonempty name, nonnegative bounded weight, and `0 <= b <= 1`.
++    /// Validate a nonempty name, nonnegative weight, and `0 <= b <= 1`.
+     ///
+     /// # Errors
+     /// Returns [`TextError::Config`] for invalid parameters.
+     pub fn new(name: impl Into<String>, weight: Fixed, b: Fixed) -> Result<Self, TextError> {
+         let name = name.into();
+-        if name.is_empty() || weight < Fixed::ZERO || weight > FIELD_WEIGHT_MAX {
++        if name.is_empty() || weight < Fixed::ZERO {
+             return Err(TextError::config(
+-                "a field needs a name and a weight in [0, 2^24]",
++                "a field needs a name and a nonnegative weight",
+             ));
+         }
+         if !(Fixed::ZERO..=Fixed::ONE).contains(&b) {
+@@ -105,20 +144,21 @@ impl RankingProfile {
+     /// Construct a complete profile from explicit fields and predicate routing.
+     ///
+     /// # Errors
+-    /// Refuses zero or more than sixteen fields, repeated field names or
++    /// Refuses zero fields, repeated field names or
+     /// predicates, non-IRI predicates, and references to absent fields.
+     pub fn new(
+         fields: Vec<RankingField>,
+         mut mappings: Vec<(TermValue, usize)>,
+         unclassified: Option<usize>,
+     ) -> Result<Self, TextError> {
+-        if fields.is_empty() || fields.len() > MAX_FIELDS {
++        if fields.is_empty() {
+             return Err(TextError::config(
+-                "a ranking profile needs between 1 and 16 fields",
++                "a ranking profile needs at least one field",
+             ));
+         }
+-        for (at, field) in fields.iter().enumerate() {
+-            if fields[..at].iter().any(|prior| prior.name == field.name) {
++        let mut names = FastSet::default();
++        for field in &fields {
++            if !names.insert(field.name.as_str()) {
+                 return Err(TextError::config(format!(
+                     "repeated field name {:?}",
+                     field.name
+@@ -217,22 +257,6 @@ impl RankingProfile {
+             })
+     }
+ 
+-    /// Refuse scores outside the exact inclusive bound, including negative
+-    /// scores and values that fit [`SCORE_BITS`] but exceed [`SCORE_MAX`].
+-    ///
+-    /// # Errors
+-    /// Returns [`TextError::Domain`] for a score outside the profile.
+-    pub fn validate_score(&self, score: Fixed) -> Result<Fixed, TextError> {
+-        if !(Fixed::ZERO..=SCORE_MAX).contains(&score) {
+-            return Err(TextError::domain(format!(
+-                "score {} is outside [0, {}]",
+-                score.to_decimal_lexical(),
+-                SCORE_MAX.to_decimal_lexical()
+-            )));
+-        }
+-        Ok(score)
+-    }
+-
+     /// Canonical, length-framed bytes used to identify the profile.
+     pub fn canonical_description(&self) -> Vec<u8> {
+         let mut bytes = Vec::new();
+@@ -240,22 +264,14 @@ impl RankingProfile {
+         text(RANKING_PROFILE_ID);
+         text(INDEX_CORPUS_PROFILE_ID);
+         text(if self.field_populations {
+-            "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*field_documents/total;distinct-query-terms-sorted;field-sum-then-saturate"
++            "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*field_documents/total;distinct-query-terms-sorted;field-sum-then-saturate;exact-integer-intermediates;bound=sum(floor(idf*(k1+1)))"
+         } else {
+-            "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*N/total;distinct-query-terms-sorted;field-sum-then-saturate"
++            "integer-ln-18-digits-20-terms;truncate-each-operation;relative=length*N/total;distinct-query-terms-sorted;field-sum-then-saturate;exact-integer-intermediates;bound=sum(floor(idf*(k1+1)))"
+         });
+         for number in [
+             i128::from(RANKING_PROFILE_VERSION),
+             i128::from(SCALE_DIGITS),
+             K1.into_raw(),
+-            MAX_FIELDS as i128,
+-            QUERY_TERMS_MAX as i128,
+-            i128::from(DOCUMENTS_MAX),
+-            i128::from(FIELD_LENGTH_MAX),
+-            i128::from(TERM_FREQUENCY_MAX),
+-            FIELD_WEIGHT_MAX.into_raw(),
+-            SCORE_MAX.into_raw(),
+-            i128::from(SCORE_BITS),
+             self.fields.len() as i128,
+         ] {
+             bytes.extend_from_slice(&number.to_le_bytes());
+@@ -295,8 +311,8 @@ pub struct FieldInput {
+ 
+ /// Validated corpus statistics and their ranking profile.
+ ///
+-/// Totals use `u128`: the declared corpus and length bounds permit exactly
+-/// `2^64` tokens in a field. Exact totals avoid rounding a sparse field's
++/// Totals use `u128`: a u64 population times a u64 field length fits exactly.
++/// Exact totals avoid rounding a sparse field's
+ /// average to zero. No caller-supplied cached IDF can enter this type.
+ #[derive(Debug)]
+ pub struct PreparedCorpus<'p> {
+@@ -314,8 +330,8 @@ impl<'p> PreparedCorpus<'p> {
+     /// Validate population and exact field totals once per corpus.
+     ///
+     /// # Errors
+-    /// Refuses an oversized corpus, mismatching field count, or a field total
+-    /// exceeding `documents * FIELD_LENGTH_MAX`, including nonzero empty-corpus totals.
++    /// Refuses a mismatching field count or a field total exceeding the
++    /// representable `documents * u64::MAX`, including nonzero empty-corpus totals.
+     pub fn new(
+         profile: &'p RankingProfile,
+         documents: u64,
+@@ -338,7 +354,7 @@ impl<'p> PreparedCorpus<'p> {
+     ///
+     /// # Errors
+     /// Refuses a dense profile, mismatching field counts, oversized populations,
+-    /// or a total exceeding `field_documents * FIELD_LENGTH_MAX`.
++    /// or a total exceeding the representable `field_documents * u64::MAX`.
+     pub fn with_field_populations(
+         profile: &'p RankingProfile,
+         documents: u64,
+@@ -360,16 +376,14 @@ impl<'p> PreparedCorpus<'p> {
+         totals: &[u128],
+         populations: &[u64],
+     ) -> Result<Self, TextError> {
+-        if documents > DOCUMENTS_MAX || totals.len() != profile.fields.len() {
++        if totals.len() != profile.fields.len() {
+             return Err(TextError::data(
+-                "corpus population or field count exceeds the ranking profile",
++                "corpus field count disagrees with the ranking profile",
+             ));
+         }
+         for (at, &total) in totals.iter().enumerate() {
+             let population = populations.get(at).copied().unwrap_or(documents);
+-            if population > documents
+-                || total > u128::from(population) * u128::from(FIELD_LENGTH_MAX)
+-            {
++            if population > documents || total > u128::from(population) * u128::from(u64::MAX) {
+                 return Err(TextError::data(
+                     "a field population or token total exceeds its corpus bound",
+                 ));
+@@ -388,21 +402,20 @@ impl<'p> PreparedCorpus<'p> {
+     /// the caller; this arithmetic API does not select an analyzer.
+     ///
+     /// # Errors
+-    /// Refuses too many terms and every document frequency outside the corpus,
++    /// Refuses every document frequency outside the corpus,
+     /// even when no document will subsequently be scored.
+     pub fn prepare_query(
+         &self,
+         frequencies: &[(&str, u64)],
+     ) -> Result<PreparedQuery<'_, 'p>, TextError> {
+-        if frequencies.len() > QUERY_TERMS_MAX {
+-            return Err(TextError::data(
+-                "query exceeds 1024 distinct analyzed terms",
+-            ));
+-        }
+         let mut terms = Vec::with_capacity(frequencies.len());
+-        let total: u128 = self.totals.iter().sum();
++        let total = self.totals.iter().fold(Integer::ZERO, |sum, &total| {
++            sum + Integer::from_bigint(BigInt::from_u128(total))
++        });
+         let mut prior: Option<&str> = None;
+-        let mut frequency_sum = 0_u128;
++        let mut frequency_sum = Integer::ZERO;
++        let mut maximum = Fixed::ZERO;
++        let saturation_ceiling = K1.checked_add(Fixed::ONE)?;
+         for &(term, frequency) in frequencies {
+             if term.is_empty() || prior.is_some_and(|prior| prior >= term) {
+                 return Err(TextError::data(
+@@ -410,21 +423,23 @@ impl<'p> PreparedCorpus<'p> {
+                 ));
+             }
+             prior = Some(term);
+-            frequency_sum += u128::from(frequency);
++            frequency_sum = frequency_sum + Integer::from_i128(i128::from(frequency));
+             if frequency_sum > total {
+                 return Err(TextError::data(
+                     "distinct query document frequencies exceed all tokens in their corpus",
+                 ));
+             }
+-            terms.push((
+-                term.to_owned(),
+-                frequency,
+-                inverse_document_frequency(self.documents, frequency)?,
+-            ));
++            let idf = inverse_document_frequency(self.documents, frequency)?;
++            maximum = maximum.checked_add(idf.checked_mul(saturation_ceiling)?)?;
++            terms.push((term.to_owned(), frequency, idf));
+         }
+         Ok(PreparedQuery {
+             corpus: self,
+             terms,
++            bound: ScoreBound {
++                maximum,
++                profile: self.profile.fingerprint(),
++            },
+         })
+     }
+ }
+@@ -437,9 +452,16 @@ pub struct PreparedQuery<'c, 'p> {
+     corpus: &'c PreparedCorpus<'p>,
+     /// `(term key, document_frequency, IDF)` in verified canonical term order.
+     terms: Vec<(String, u64, Fixed)>,
++    /// Certified for these exact IDFs, corpus and immutable profile.
++    bound: ScoreBound,
+ }
+ 
+ impl PreparedQuery<'_, '_> {
++    /// The actual prepared query's certified maximum and key width.
++    pub const fn score_bound(&self) -> ScoreBound {
++        self.bound
++    }
++
+     /// Validated document frequency and computed IDF for a query term.
+     pub fn term_statistics(&self, ordinal: usize) -> Option<(u64, Fixed)> {
+         self.terms
+@@ -466,7 +488,7 @@ impl PreparedQuery<'_, '_> {
+                 "document field count disagrees with its ranking profile",
+             ));
+         }
+-        let mut pseudo = Fixed::ZERO;
++        let mut pseudo = Scaled::ZERO;
+         for (at, ((input, field), &total)) in fields
+             .iter()
+             .zip(&self.corpus.profile.fields)
+@@ -488,9 +510,13 @@ impl PreparedQuery<'_, '_> {
+             }
+             // Positive tf implies positive length and total. Form this ratio
+             // from exact counts so an average below one raw unit stays usable.
+-            let numerator = u128::from(input.length) * u128::from(documents) * 1_000_000_000_000;
++            let count_product = u128::from(input.length) * u128::from(documents);
+             let relative = Fixed::from_raw(
+-                i128::try_from(numerator / total).expect("bounded counts fit i128"),
++                i128::try_from(
++                    mul_div(count_product, SCALE as u128, total)
++                        .expect("length <= total bounds the ratio by a u64 population at scale"),
++                )
++                .expect("a u64 population at scale fits i128"),
+             );
+             let normalization = Fixed::ONE
+                 .checked_sub(field.b)?
+@@ -500,19 +526,18 @@ impl PreparedQuery<'_, '_> {
+                     "field normalization rounds to zero under this profile",
+                 ));
+             }
+-            let frequency = from_count(input.term_frequency)?;
+-            pseudo = pseudo.checked_add(
+-                frequency
+-                    .checked_div(normalization)?
+-                    .checked_mul(field.weight)?,
+-            )?;
++            let frequency = Scaled::from_fixed(from_count(input.term_frequency));
++            pseudo = pseudo.add(
++                &frequency
++                    .div(&Scaled::from_fixed(normalization))?
++                    .mul(&Scaled::from_fixed(field.weight)),
++            );
+         }
+         let saturation = pseudo
+-            .checked_mul(K1.checked_add(Fixed::ONE)?)?
+-            .checked_div(pseudo.checked_add(K1)?)?;
+-        self.corpus
+-            .profile
+-            .validate_score(idf.checked_mul(saturation)?)
++            .mul(&Scaled::from_fixed(K1.checked_add(Fixed::ONE)?))
++            .div(&pseudo.add(&Scaled::from_fixed(K1)))?
++            .into_fixed()?;
++        self.bound.validate(idf.checked_mul(saturation)?)
+     }
+ 
+     /// Score one document against all prepared terms, in their canonical order.
+@@ -522,7 +547,7 @@ impl PreparedQuery<'_, '_> {
+     /// # Errors
+     /// Refuses a term count mismatch, invalid field input, or a score outside
+     /// the exact profile bound.
+-    pub fn score(&self, terms: &[Vec<FieldInput>]) -> Result<Fixed, TextError> {
++    pub fn score(&self, terms: &[Vec<FieldInput>]) -> Result<BoundedScore, TextError> {
+         if self.corpus.documents == 0 {
+             return Err(TextError::data(
+                 "an empty corpus contains no document to score",
+@@ -534,7 +559,8 @@ impl PreparedQuery<'_, '_> {
+             ));
+         }
+         let mut score = Fixed::ZERO;
+-        let mut frequencies = [0_u64; MAX_FIELDS];
++        let mut frequencies = SmallVec::<[u64; 16]>::new();
++        frequencies.resize(self.corpus.profile.fields.len(), 0);
+         for (ordinal, fields) in terms.iter().enumerate() {
+             if fields
+                 .iter()
+@@ -547,7 +573,11 @@ impl PreparedQuery<'_, '_> {
+             }
+             let contribution = self.contribution(ordinal, fields)?;
+             for (sum, field) in frequencies.iter_mut().zip(fields) {
+-                *sum += field.term_frequency;
++                *sum = sum.checked_add(field.term_frequency).ok_or_else(|| {
++                    TextError::data(
++                        "distinct query term frequencies exceed the document field length",
++                    )
++                })?;
+                 if *sum > field.length {
+                     return Err(TextError::data(
+                         "distinct query term frequencies exceed the document field length",
+@@ -556,7 +586,10 @@ impl PreparedQuery<'_, '_> {
+             }
+             score = score.checked_add(contribution)?;
+         }
+-        self.corpus.profile.validate_score(score)
++        Ok(BoundedScore {
++            value: self.bound.validate(score)?,
++            bound: self.bound,
++        })
+     }
+ }
+ 
+@@ -568,17 +601,12 @@ fn validate_field(
+     remaining: u64,
+     df: u64,
+ ) -> Result<(), TextError> {
+-    if input.length > FIELD_LENGTH_MAX || input.term_frequency > TERM_FREQUENCY_MAX {
+-        return Err(TextError::data(
+-            "document field length or term frequency exceeds 2^24",
+-        ));
+-    }
+     if input.term_frequency > input.length || u128::from(input.length) > total {
+         return Err(TextError::data(
+             "field frequency, length, and corpus total are inconsistent",
+         ));
+     }
+-    if total - u128::from(input.length) > u128::from(remaining) * u128::from(FIELD_LENGTH_MAX) {
++    if total - u128::from(input.length) > u128::from(remaining) * u128::from(u64::MAX) {
+         return Err(TextError::data(
+             "the remaining corpus cannot hold the declared field total",
+         ));
+@@ -600,16 +628,16 @@ fn inverse_document_frequency(documents: u64, frequency: u64) -> Result<Fixed, T
+         ));
+     }
+     let half = Fixed::from_raw(500_000_000_000);
+-    let numerator = from_count(documents - frequency)?.checked_add(half)?;
+-    let denominator = from_count(frequency)?.checked_add(half)?;
++    let numerator = from_count(documents - frequency).checked_add(half)?;
++    let denominator = from_count(frequency).checked_add(half)?;
+     Fixed::ONE
+         .checked_add(numerator.checked_div(denominator)?)?
+         .ln()
+ }
+ 
+-/// A bounded corpus count, exactly at the public scale.
+-fn from_count(value: u64) -> Result<Fixed, TextError> {
+-    Fixed::from_integer(i64::try_from(value).map_err(|_| TextError::overflow("count exceeds i64"))?)
++/// Every u64 corpus count fits exactly in i128 at the public scale.
++fn from_count(value: u64) -> Fixed {
++    Fixed::from_raw(i128::from(value) * SCALE)
+ }
+ 
+ /// Require an absolute, lexically valid RDF predicate IRI.
+diff --git a/crates/text/src/relation.rs b/crates/text/src/relation.rs
+index ccde976ac..a7b5c7b37 100644
+--- a/crates/text/src/relation.rs
++++ b/crates/text/src/relation.rs
+@@ -712,19 +712,22 @@ struct Hit {
+     /// The index document id.
+     document: u32,
+     /// The exact score.
+-    score: crate::fixed::Fixed,
++    score: crate::ranking::BoundedScore,
+     /// The per-partition rank, or `None` where `?rank` is unobserved and so was
+     /// never computed.
+     rank: Option<u32>,
+     /// How many distinct needle terms the document holds.
+-    matched: u32,
++    matched: usize,
+ }
+ 
+ impl From<Scored> for Hit {
+     fn from(scored: Scored) -> Self {
+         Self {
+             document: scored.document,
+-            score: scored.score,
++            score: crate::ranking::BoundedScore {
++                value: scored.score,
++                bound: scored.score_bound,
++            },
+             rank: Some(scored.partition_rank),
+             matched: scored.matched,
+         }
+@@ -1368,7 +1371,7 @@ impl PropertyFunction for TextSearchRelation {
+             // basis for, and `open`'s documentation for the two ways a present
+             // document is then answered.
+             Some(subject) => {
+-                let terms = distinct_terms(&analyzed)?;
++                let terms = distinct_terms(&analyzed);
+                 let holdings = self.holdings(subject, &terms, &filter);
+                 if holdings.is_empty() {
+                     Vec::new()
+@@ -1453,14 +1456,14 @@ impl SearchCursor {
+         Ok(vec![
+             document.subject().clone(),
+             self.needle.clone(),
+-            TermValue::typed_literal(hit.score.to_decimal_lexical(), XSD_DECIMAL),
++            TermValue::typed_literal(hit.score.value.to_decimal_lexical(), XSD_DECIMAL),
+             // An uncomputed rank sits only at an unobserved position, whose value
+             // the engine discards unread. Zero is outside the 1-based rank domain,
+             // so it could never be mistaken for a rank even by a reader that
+             // ignored that contract.
+             TermValue::integer(hit.rank.unwrap_or(0)),
+             language_term(document.language()),
+-            TermValue::integer(hit.matched),
++            TermValue::integer(hit.matched as i128),
+         ])
+     }
+ }
+diff --git a/crates/text/src/score.rs b/crates/text/src/score.rs
+index a2dd385a3..09e435f1e 100644
+--- a/crates/text/src/score.rs
++++ b/crates/text/src/score.rs
+@@ -7,7 +7,7 @@
+ //! # One fielded arithmetic path
+ //!
+ //! The immutable [`crate::RankingProfile`] identifies field weights, length
+-//! normalization, predicate routing, bounds, rounding and query aggregation.
++//! normalization, predicate routing, the query-bound law, rounding and query aggregation.
+ //! [`K1`] stays fixed at 1.2; [`B`] is the single-field profile's default 0.75.
+ //! Every profile, including that single field, runs the same prepared BM25F
+ //! scorer. Field frequencies are normalized and weighted before saturation;
+@@ -106,7 +106,7 @@ use purrdf_core::TermValue;
+ use crate::error::TextError;
+ use crate::fixed::{Fixed, SCALE_DIGITS};
+ use crate::index::{PartitionKey, TextIndex};
+-use crate::ranking::{PreparedCorpus, PreparedQuery, QUERY_TERMS_MAX};
++use crate::ranking::{BoundedScore, PreparedCorpus, PreparedQuery, ScoreBound};
+ 
+ /// The raw constants below are written at [`SCALE_DIGITS`] fractional digits, so
+ /// the scale and the literals cannot drift apart unnoticed.
+@@ -136,6 +136,8 @@ pub struct Scored {
+     pub document: u32,
+     /// The exact BM25 score, computed against this document's own partition.
+     pub score: Fixed,
++    /// The actual query/corpus bound, including rounding, for host key sizing.
++    pub score_bound: ScoreBound,
+     /// The 1-based position of this document **within its own partition**.
+     ///
+     /// Never a global position, and named so that it cannot be read as one. A
+@@ -155,7 +157,7 @@ pub struct Scored {
+     /// language a caller already has — a three-term needle restricted to
+     /// documents holding all three is `FILTER(?matched = 3)` — rather than by
+     /// PurRDF minting a boolean query dialect of its own.
+-    pub matched: u32,
++    pub matched: usize,
+ }
+ 
+ /// One needle term's share of one document's score.
+@@ -338,7 +340,7 @@ pub fn rank_partition(
+     needle: &[String],
+     limit: Option<u64>,
+ ) -> Result<Vec<Scored>, TextError> {
+-    let terms = distinct_terms(needle)?;
++    let terms = distinct_terms(needle);
+     if terms.is_empty() {
+         return Ok(Vec::new());
+     }
+@@ -387,7 +389,7 @@ pub(crate) fn select_counted(
+     partition_rank: Option<u32>,
+     work: &mut ScoringWork,
+ ) -> Result<Vec<Scored>, TextError> {
+-    let terms = distinct_terms(needle)?;
++    let terms = distinct_terms(needle);
+     if terms.is_empty() {
+         return Ok(Vec::new());
+     }
+@@ -431,7 +433,7 @@ pub fn explain(
+     document: u32,
+     needle: &[String],
+ ) -> Result<Vec<TermContribution>, TextError> {
+-    let terms = distinct_terms(needle)?;
++    let terms = distinct_terms(needle);
+     let Some(partition) = index.partition_key_of(document) else {
+         return Err(TextError::data(format!(
+             "document {document} is not in this index, so there is nothing to explain"
+@@ -468,8 +470,10 @@ struct Candidate {
+     document: u32,
+     /// The exact score.
+     score: Fixed,
++    /// Original prepared-query certificate carried through selection and sorting.
++    score_bound: ScoreBound,
+     /// How many distinct needle terms the document holds.
+-    matched: u32,
++    matched: usize,
+ }
+ 
+ /// A [`Candidate`] ordered so that **greater means ranks later**.
+@@ -509,17 +513,11 @@ impl PartialOrd for ByRank {
+ /// Sorted by the same byte order the index's dictionary is sorted by, so "visit
+ /// the query's terms in order" and "visit the dictionary in order" are the same
+ /// traversal.
+-pub(crate) fn distinct_terms(needle: &[String]) -> Result<Vec<&str>, TextError> {
++pub(crate) fn distinct_terms(needle: &[String]) -> Vec<&str> {
+     let mut terms: Vec<&str> = needle.iter().map(String::as_str).collect();
+     terms.sort_unstable();
+     terms.dedup();
+-    if terms.len() > QUERY_TERMS_MAX {
+-        return Err(TextError::data(format!(
+-            "the needle holds {} distinct terms, which exceeds the profile bound of 1024",
+-            terms.len()
+-        )));
+-    }
+-    Ok(terms)
++    terms
+ }
+ 
+ /// Rank one partition against already-distinct, already-sorted `terms`.
+@@ -545,6 +543,7 @@ fn rank_terms(
+         rows.push(Scored {
+             document: candidate.document,
+             score: candidate.score,
++            score_bound: candidate.score_bound,
+             partition_rank,
+             matched: candidate.matched,
+         });
+@@ -558,7 +557,7 @@ struct CandidateOccurrence<'a> {
+     /// Canonical document identifier.
+     document: u32,
+     /// Ordinal of the sorted distinct query term.
+-    ordinal: u32,
++    ordinal: usize,
+     /// Borrowed predicate frequencies, avoiding per-candidate lookup or copying.
+     counts: &'a [(u32, u64)],
+ }
+@@ -588,7 +587,7 @@ fn candidates(
+         for (document, counts) in index.field_postings(partition, term) {
+             occurrences.push(CandidateOccurrence {
+                 document,
+-                ordinal: ordinal as u32,
++                ordinal,
+                 counts,
+             });
+         }
+@@ -609,7 +608,7 @@ fn candidates(
+             .count();
+         let held = occurrences[at..at + run]
+             .iter()
+-            .map(|entry| (entry.ordinal as usize, entry.counts));
++            .map(|entry| (entry.ordinal, entry.counts));
+         out.push(score_document(index, &query, document, held, work)?);
+         at += run;
+     }
+@@ -652,7 +651,7 @@ fn score_document<'a>(
+ ) -> Result<Candidate, TextError> {
+     let field_count = index.ranking_profile().fields().len();
+     let mut score = Fixed::ZERO;
+-    let mut matched: u32 = 0;
++    let mut matched = 0;
+     for (ordinal, counts) in held {
+         let fields = index.field_inputs_from_counts(document, counts)?;
+         score = score.checked_add(query.contribution(ordinal, &fields[..field_count])?)?;
+@@ -661,7 +660,8 @@ fn score_document<'a>(
+     work.documents_scored += 1;
+     Ok(Candidate {
+         document,
+-        score: index.ranking_profile().validate_score(score)?,
++        score: query.score_bound().validate(score)?,
++        score_bound: query.score_bound(),
+         matched,
+     })
+ }
+@@ -707,7 +707,7 @@ pub(crate) fn score_located(
+     terms: &[&str],
+     located: &[(usize, &[(u32, u64)])],
+     work: &mut ScoringWork,
+-) -> Result<(Fixed, u32), TextError> {
++) -> Result<(BoundedScore, usize), TextError> {
+     let partition = index.partition_key_of(document).ok_or_else(|| {
+         TextError::data(format!(
+             "document {document} is not in this index, so there is nothing to score"
+@@ -716,7 +716,13 @@ pub(crate) fn score_located(
+     let corpus = index.prepared_corpus(partition)?;
+     let query = prepare_terms(index, partition, &corpus, terms)?;
+     let scored = score_document(index, &query, document, located.iter().copied(), work)?;
+-    Ok((scored.score, scored.matched))
++    Ok((
++        BoundedScore {
++            value: scored.score,
++            bound: scored.score_bound,
++        },
++        scored.matched,
++    ))
+ }
+ 
+ /// Every candidate, in rank order.
+@@ -772,10 +778,7 @@ mod tests {
+     #[test]
+     fn the_needle_is_reduced_to_sorted_distinct_terms() {
+         let needle = ["gamma", "alpha", "gamma", "beta"].map(str::to_owned);
+-        assert_eq!(
+-            distinct_terms(&needle).expect("a short needle"),
+-            vec!["alpha", "beta", "gamma"]
+-        );
++        assert_eq!(distinct_terms(&needle), vec!["alpha", "beta", "gamma"]);
+     }
+ 
+     /// An absent dimension is not the same as a present empty one, in either
+diff --git a/crates/text/tests/bm25f.rs b/crates/text/tests/bm25f.rs
+index 704ba5306..666d018f0 100644
+--- a/crates/text/tests/bm25f.rs
++++ b/crates/text/tests/bm25f.rs
+@@ -5,9 +5,8 @@
+ 
+ use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
+ use purrdf_text::{
+-    B, DOCUMENTS_MAX, FIELD_LENGTH_MAX, FIELD_WEIGHT_MAX, FieldInput, Fixed, GraphSelector, K1,
+-    MAX_FIELDS, PartitionKey, PreparedCorpus, QUERY_TERMS_MAX, RankingField, RankingProfile,
+-    SCORE_BITS, SCORE_MAX, TextIndex, TextIndexConfig, explain, rank_partition,
++    B, FieldInput, Fixed, GraphSelector, PartitionKey, PreparedCorpus, RankingField,
++    RankingProfile, TextIndex, TextIndexConfig, explain, rank_partition,
+ };
+ 
+ fn field(name: &str, weight: Fixed, b: Fixed) -> RankingField {
+@@ -26,59 +25,36 @@ fn independent_integer_reference_corpus_matches_every_raw_unit() {
+ #[test]
+ fn score_bound_is_exact_and_width_is_derived() {
+     let profile = RankingProfile::single_field();
+-    assert_eq!(SCORE_BITS, 56);
++    let corpus = PreparedCorpus::new(&profile, 1, &[2]).expect("corpus");
++    let query = corpus.prepare_query(&[("a", 1), ("b", 1)]).expect("query");
++    let bound = query.score_bound();
++    // Independent integer reference: two IDFs ln(4/3), each saturated below
++    // 2.2. The raw ceiling is 2 * floor(287682072451 * 2.2).
++    assert_eq!(bound.maximum().into_raw(), 1_265_801_118_784);
++    assert_eq!(bound.bits(), 41);
++    assert_eq!(bound.profile_fingerprint(), profile.fingerprint());
+     assert_eq!(
+-        profile.validate_score(SCORE_MAX).expect("inclusive"),
+-        SCORE_MAX
++        bound.validate(bound.maximum()).expect("inclusive"),
++        bound.maximum()
++    );
++    let too_large = Fixed::from_raw(bound.maximum().into_raw() + 1);
++    assert!(too_large.into_raw().unsigned_abs() < (1_u128 << bound.bits()));
++    assert!(bound.validate(too_large).is_err());
++    assert!(bound.validate(Fixed::from_raw(-1)).is_err());
++    let empty = corpus.prepare_query(&[]).expect("empty query");
++    assert_eq!(empty.score_bound().maximum(), Fixed::ZERO);
++    assert_eq!(empty.score_bound().bits(), 0);
++    assert_eq!(
++        empty.score(&[]).expect("empty sum").bound,
++        empty.score_bound()
+     );
+-    let too_large = Fixed::from_raw(SCORE_MAX.into_raw() + 1);
+-    assert!(too_large.into_raw().unsigned_abs() < (1_u128 << SCORE_BITS));
+-    assert!(profile.validate_score(too_large).is_err());
+-    assert!(profile.validate_score(Fixed::from_raw(-1)).is_err());
+-    // For N <= 2^40, IDF's argument is <= 2N+2. Its integer ln is a
+-    // lower approximation, and ln(2^41+2) < 29. Saturation is <= 2.2,
+-    // including each truncation. This coarse bound has no rounding ambiguity.
+-    let conservative = Fixed::from_integer(QUERY_TERMS_MAX as i64)
+-        .expect("count")
+-        .checked_mul(Fixed::from_integer(29).expect("integer"))
+-        .expect("product")
+-        .checked_mul(K1.checked_add(Fixed::ONE).expect("sum"))
+-        .expect("product");
+-    assert!(conservative < SCORE_MAX);
+-    let actual_idf_ceiling = Fixed::from_integer(2 * DOCUMENTS_MAX as i64 + 2)
+-        .expect("argument")
+-        .ln()
+-        .expect("ln");
+-    assert!(actual_idf_ceiling < Fixed::from_integer(29).expect("integer"));
+-    let scale = 1_000_000_000_000_i128;
+-    let minimum_normalization = scale / i128::from(FIELD_LENGTH_MAX);
+-    let pseudo_ceiling = i128::from(FIELD_LENGTH_MAX) * scale * scale / minimum_normalization;
+-    let weighted_ceiling = Fixed::from_raw(pseudo_ceiling)
+-        .checked_mul(FIELD_WEIGHT_MAX)
+-        .expect("bounded field pseudo-frequency");
+-    let sum_ceiling = weighted_ceiling
+-        .checked_mul(Fixed::from_integer(MAX_FIELDS as i64).expect("count"))
+-        .expect("bounded field sum");
+-    let numerator_ceiling = sum_ceiling
+-        .checked_mul(K1.checked_add(Fixed::ONE).expect("sum"))
+-        .expect("bounded saturation numerator");
+-    assert!(numerator_ceiling.into_raw() < i128::MAX);
+ }
+ 
+ #[test]
+ fn profiles_refuse_bad_fields_and_incomplete_or_ambiguous_mapping() {
+     assert!(RankingField::new("", Fixed::ONE, B).is_err());
+     assert!(RankingField::new("x", Fixed::from_raw(-1), B).is_err());
+-    assert!(
+-        RankingField::new(
+-            "x",
+-            FIELD_WEIGHT_MAX
+-                .checked_add(Fixed::from_raw(1))
+-                .expect("sum"),
+-            B
+-        )
+-        .is_err()
+-    );
++    assert!(RankingField::new("x", Fixed::from_raw(i128::MAX), B).is_ok());
+     assert!(RankingField::new("x", Fixed::ONE, Fixed::from_raw(-1)).is_err());
+     assert!(
+         RankingField::new(
+@@ -91,13 +67,13 @@ fn profiles_refuse_bad_fields_and_incomplete_or_ambiguous_mapping() {
+     assert!(RankingProfile::new(Vec::new(), Vec::new(), None).is_err());
+     assert!(
+         RankingProfile::new(
+-            (0..=MAX_FIELDS)
++            (0..32)
+                 .map(|i| field(&i.to_string(), Fixed::ONE, B))
+                 .collect(),
+             Vec::new(),
+             None
+         )
+-        .is_err()
++        .is_ok()
+     );
+     assert!(
+         RankingProfile::new(
+@@ -137,17 +113,13 @@ fn profiles_refuse_bad_fields_and_incomplete_or_ambiguous_mapping() {
+ #[test]
+ fn invalid_inputs_fail_before_zero_contribution_shortcuts() {
+     let profile = RankingProfile::single_field();
+-    assert!(PreparedCorpus::new(&profile, DOCUMENTS_MAX + 1, &[0]).is_err());
++    assert!(PreparedCorpus::new(&profile, u64::MAX, &[0]).is_ok());
+     assert!(PreparedCorpus::new(&profile, 0, &[1]).is_err());
+     assert!(PreparedCorpus::new(&profile, 1, &[]).is_err());
+-    assert!(PreparedCorpus::new(&profile, 1, &[u128::from(FIELD_LENGTH_MAX) + 1]).is_err());
++    assert!(PreparedCorpus::new(&profile, 1, &[u128::from(u64::MAX) + 1]).is_err());
+     let corpus = PreparedCorpus::new(&profile, 2, &[10]).expect("corpus");
+     assert!(corpus.prepare_query(&[("a", 3)]).is_err());
+-    assert!(
+-        corpus
+-            .prepare_query(&vec![("a", 0); QUERY_TERMS_MAX + 1])
+-            .is_err()
+-    );
++    assert!(corpus.prepare_query(&[("a", 0), ("a", 0)]).is_err());
+     assert!(corpus.prepare_query(&[("a", 1), ("a", 1)]).is_err());
+     assert!(corpus.prepare_query(&[("b", 1), ("a", 1)]).is_err());
+     assert!(corpus.prepare_query(&[("", 1)]).is_err());
+@@ -158,7 +130,7 @@ fn invalid_inputs_fail_before_zero_contribution_shortcuts() {
+                 0,
+                 &[FieldInput {
+                     term_frequency: 0,
+-                    length: FIELD_LENGTH_MAX + 1
++                    length: u64::MAX
+                 }]
+             )
+             .is_err()
+@@ -379,7 +351,7 @@ fn the_ranking_profile_fingerprint_is_frozen() {
+     let hex = |profile: &RankingProfile| purrdf_hash::hex::encode(&profile.fingerprint());
+     assert_eq!(
+         hex(&RankingProfile::single_field()),
+-        "bf2c2c0e1388e3b350b61fa16dab981f11623792465600964da3351aa6303b75"
++        "0640f4572eb75938bfdb202ce627ba796de5308581c9ab09ebbe536096cbf7a8"
+     );
+     let routed = RankingProfile::new(
+         vec![field("title", Fixed::ONE, B), field("body", Fixed::ONE, B)],
+@@ -392,6 +364,6 @@ fn the_ranking_profile_fingerprint_is_frozen() {
+     .expect("a routed profile");
+     assert_eq!(
+         hex(&routed),
+-        "ea96772c8390ba67068b726dc8cc269ff5ec46bc728976b78b0c356564eb15cf"
++        "ade45c9a911230438d4cd179d2d7cbef09d67a88ec045611a8845b125f97c674"
+     );
+ }
+diff --git a/crates/text/tests/field_populations.rs b/crates/text/tests/field_populations.rs
+index 08d6eb5cc..ab35225f4 100644
+--- a/crates/text/tests/field_populations.rs
++++ b/crates/text/tests/field_populations.rs
+@@ -3,46 +3,16 @@
+ 
+ //! Carrier populations: exact independent arithmetic and validation boundaries.
+ 
+-use purrdf_testkit::exact::Natural;
+-use purrdf_text::{
+-    B, DOCUMENTS_MAX, FIELD_LENGTH_MAX, FIELD_WEIGHT_MAX, FieldInput, Fixed, PreparedCorpus,
+-    RankingField, RankingProfile,
+-};
++use purrdf_text::{B, FieldInput, Fixed, PreparedCorpus, RankingField, RankingProfile};
+ 
+-const SCALE: u128 = 1_000_000_000_000;
++#[path = "support/ranking_oracle.rs"]
++mod ranking_oracle;
+ 
+-/// Schoolbook unbounded arithmetic from testkit, independent of Fixed/wide.
+-fn product_quotient(left: u128, right: u128, divisor: u128) -> u128 {
+-    Natural::from_u128(left)
+-        .mul(&Natural::from_u128(right))
+-        .div_rem(&Natural::from_u128(divisor))
+-        .0
+-        .to_u128()
+-        .expect("the specified rounded value fits u128")
+-}
+-
+-/// The published integer series, without calling the production logarithm.
+-fn reference_log(mut raw: u128) -> u128 {
+-    let mut exponent = 0;
+-    while raw >= (2 * SCALE) << exponent {
+-        // Reduce without rounding until after the exponent is known.
+-        exponent += 1;
+-    }
+-    raw = product_quotient(raw, 1_000_000, 1 << exponent);
+-    let z = product_quotient(
+-        raw - 1_000_000_000_000_000_000,
+-        1_000_000_000_000_000_000,
+-        raw + 1_000_000_000_000_000_000,
+-    );
+-    let square = product_quotient(z, z, 1_000_000_000_000_000_000);
+-    let mut power = z;
+-    let mut series = 0;
+-    for denominator in (1..40).step_by(2) {
+-        series += power / denominator;
+-        power = product_quotient(power, square, 1_000_000_000_000_000_000);
+-    }
+-    (exponent * 693_147_180_559_945_309 + 2 * series) / 1_000_000
+-}
++// These values retain the published old boundary vectors; they are test data,
++// never admission limits of the new profile.
++const FROZEN_DOCUMENTS: u64 = 1 << 40;
++const FROZEN_LENGTH: u64 = 1 << 24;
++const FROZEN_WEIGHT: Fixed = Fixed::from_raw((1_i128 << 24) * 1_000_000_000_000);
+ 
+ fn reference_score(
+     documents: u64,
+@@ -52,51 +22,26 @@ fn reference_score(
+     profile: &RankingProfile,
+     inputs: &[FieldInput],
+ ) -> i128 {
+-    let idf = reference_log(
+-        SCALE
+-            + product_quotient(
+-                u128::from(2 * (documents - frequency) + 1),
+-                SCALE,
+-                u128::from(2 * frequency + 1),
+-            ),
+-    );
+-    let mut pseudo = 0;
+-    for (((input, field), &population), &total) in inputs
++    let parameters: Vec<_> = profile
++        .fields()
+         .iter()
+-        .zip(profile.fields())
+-        .zip(populations)
+-        .zip(totals)
+-    {
+-        if input.term_frequency != 0 {
+-            let relative = product_quotient(
+-                u128::from(input.length) * u128::from(population),
+-                SCALE,
+-                total,
+-            );
+-            let b = field.b().into_raw().unsigned_abs();
+-            let normalization = SCALE - b + product_quotient(b, relative, SCALE);
+-            let normalized = product_quotient(
+-                u128::from(input.term_frequency) * SCALE,
+-                SCALE,
+-                normalization,
+-            );
+-            pseudo += product_quotient(normalized, field.weight().into_raw().unsigned_abs(), SCALE);
+-        }
+-    }
+-    let k1 = 12 * SCALE / 10;
+-    let saturated = product_quotient(
+-        product_quotient(pseudo, k1 + SCALE, SCALE),
+-        SCALE,
+-        pseudo + k1,
+-    );
+-    i128::try_from(product_quotient(idf, saturated, SCALE)).expect("bounded score")
++        .map(|field| (field.weight().into_raw(), field.b().into_raw()))
++        .collect();
++    ranking_oracle::contribution(
++        documents,
++        frequency,
++        populations,
++        totals,
++        &parameters,
++        inputs,
++    )
+ }
+ 
+ fn profile() -> RankingProfile {
+     RankingProfile::new(
+         vec![
+             RankingField::new("title", Fixed::from_raw(333_333_333_333), B).expect("field"),
+-            RankingField::new("body", FIELD_WEIGHT_MAX, Fixed::ONE).expect("field"),
++            RankingField::new("body", FROZEN_WEIGHT, Fixed::ONE).expect("field"),
+             RankingField::new("unused", Fixed::ZERO, B).expect("field"),
+         ],
+         Vec::new(),
+@@ -143,12 +88,12 @@ fn dense_populations_preserve_every_raw_score_and_legacy_identity() {
+ #[test]
+ fn sparse_field_means_match_the_unbounded_reference() {
+     let profile = profile().with_field_populations();
+-    for documents in [3, 7, 23, DOCUMENTS_MAX] {
++    for documents in [3, 7, 23, FROZEN_DOCUMENTS] {
+         for population in [1, 2, documents] {
+             let populations = [population, documents, 0];
+             let totals = [
+                 u128::from(population) * 7,
+-                u128::from(documents) * u128::from(FIELD_LENGTH_MAX),
++                u128::from(documents) * u128::from(FROZEN_LENGTH),
+                 0,
+             ];
+             let corpus =
+@@ -162,8 +107,8 @@ fn sparse_field_means_match_the_unbounded_reference() {
+                         length: 7,
+                     },
+                     FieldInput {
+-                        term_frequency: FIELD_LENGTH_MAX,
+-                        length: FIELD_LENGTH_MAX,
++                        term_frequency: FROZEN_LENGTH,
++                        length: FROZEN_LENGTH,
+                     },
+                     FieldInput::default(),
+                 ];
+@@ -180,14 +125,9 @@ fn sparse_field_means_match_the_unbounded_reference() {
+ fn populations_and_totals_are_checked_before_scoring() {
+     let profile = profile().with_field_populations();
+     for (documents, totals, populations) in [
+-        (DOCUMENTS_MAX + 1, vec![0; 3], vec![0; 3]),
+         (2, vec![1, 0, 0], vec![0; 3]),
+         (2, vec![0; 3], vec![3, 0, 0]),
+-        (
+-            2,
+-            vec![u128::from(FIELD_LENGTH_MAX) + 1, 0, 0],
+-            vec![1, 0, 0],
+-        ),
++        (2, vec![u128::from(u64::MAX) + 1, 0, 0], vec![1, 0, 0]),
+         (0, vec![1, 0, 0], vec![0; 3]),
+         (2, vec![0; 3], vec![0; 2]),
+         (2, vec![0; 2], vec![0; 3]),
+@@ -204,13 +144,14 @@ fn populations_and_totals_are_checked_before_scoring() {
+             .prepare_query(&[])
+             .expect("empty query")
+             .score(&[])
+-            .expect("zero score"),
++            .expect("zero score")
++            .value,
+         Fixed::ZERO
+     );
+     let corpus = PreparedCorpus::with_field_populations(
+         &profile,
+         2,
+-        &[u128::from(FIELD_LENGTH_MAX), 0, 0],
++        &[u128::from(FROZEN_LENGTH), 0, 0],
+         &[1, 0, 0],
+     )
+     .expect("one carrier");
+@@ -241,7 +182,7 @@ fn populations_and_totals_are_checked_before_scoring() {
+     let all_carriers = PreparedCorpus::with_field_populations(
+         &profile,
+         2,
+-        &[2 * u128::from(FIELD_LENGTH_MAX), 0, 0],
++        &[2 * u128::from(u64::MAX), 0, 0],
+         &[2, 0, 0],
+     )
+     .expect("every document carries the first field");
+@@ -258,17 +199,16 @@ fn populations_and_totals_are_checked_before_scoring() {
+ #[test]
+ fn sparse_shortest_normalization_and_bounds_match_the_reference() {
+     let profile = RankingProfile::new(
+-        vec![RankingField::new("text", FIELD_WEIGHT_MAX, Fixed::ONE).expect("field")],
++        vec![RankingField::new("text", FROZEN_WEIGHT, Fixed::ONE).expect("field")],
+         Vec::new(),
+         Some(0),
+     )
+     .expect("profile")
+     .with_field_populations();
+-    let population = DOCUMENTS_MAX - 1;
+-    let total =
+-        u128::from(population) * u128::from(FIELD_LENGTH_MAX) - u128::from(FIELD_LENGTH_MAX - 1);
++    let population = FROZEN_DOCUMENTS - 1;
++    let total = u128::from(population) * u128::from(FROZEN_LENGTH) - u128::from(FROZEN_LENGTH - 1);
+     let corpus =
+-        PreparedCorpus::with_field_populations(&profile, DOCUMENTS_MAX, &[total], &[population])
++        PreparedCorpus::with_field_populations(&profile, FROZEN_DOCUMENTS, &[total], &[population])
+             .expect("bounded");
+     let query = corpus.prepare_query(&[("cat", 1)]).expect("query");
+     let input = [FieldInput {
+@@ -277,7 +217,14 @@ fn sparse_shortest_normalization_and_bounds_match_the_reference() {
+     }];
+     assert_eq!(
+         query.contribution(0, &input).expect("score").into_raw(),
+-        reference_score(DOCUMENTS_MAX, 1, &[population], &[total], &profile, &input)
++        reference_score(
++            FROZEN_DOCUMENTS,
++            1,
++            &[population],
++            &[total],
++            &profile,
++            &input
++        )
+     );
+     assert!(
+         query
+@@ -296,12 +243,16 @@ fn sparse_shortest_normalization_and_bounds_match_the_reference() {
+                 0,
+                 &[FieldInput {
+                     term_frequency: 0,
+-                    length: FIELD_LENGTH_MAX + 1
++                    length: u64::MAX
+                 }]
+             )
+             .is_err()
+     );
+-    assert!(corpus.prepare_query(&[("cat", DOCUMENTS_MAX + 1)]).is_err());
++    assert!(
++        corpus
++            .prepare_query(&[("cat", FROZEN_DOCUMENTS + 1)])
++            .is_err()
++    );
+     let empty =
+         PreparedCorpus::with_field_populations(&profile, 0, &[0], &[0]).expect("empty corpus");
+     assert!(empty.prepare_query(&[]).expect("query").score(&[]).is_err());
+diff --git a/crates/text/tests/scoring.rs b/crates/text/tests/scoring.rs
+index e78ced538..a32125be8 100644
+--- a/crates/text/tests/scoring.rs
++++ b/crates/text/tests/scoring.rs
+@@ -834,10 +834,29 @@ fn matched_counts_distinct_needle_terms_present() {
+         vec![2, 2],
+         "the repeat counts once and the absent term counts not at all"
+     );
++    let scored_identity = |rows: &[Scored]| {
++        rows.iter()
++            .map(|row| (row.document, row.score, row.partition_rank, row.matched))
++            .collect::<Vec<_>>()
++    };
+     assert_eq!(
+-        padded, plain_rows,
++        scored_identity(&padded),
++        scored_identity(&plain_rows),
+         "a repeated term and a term nobody holds change neither score nor rank"
+     );
++    // The actual needle's reported bound also includes its absent term's IDF.
++    // Independent hand values: ln2=0.693147180559, ln10=2.302585092994;
++    // floor(2.2*ln2) twice, plus floor(2.2*ln10) for df=0 in N=4.
++    for row in &plain_rows {
++        assert_eq!(row.score_bound.maximum().into_raw(), 3_049_847_594_458);
++    }
++    for row in &padded {
++        assert_eq!(row.score_bound.maximum().into_raw(), 8_115_534_799_044);
++        assert_eq!(
++            row.score_bound.profile_fingerprint(),
++            index.ranking_profile().fingerprint()
++        );
++    }
+ 
+     // A needle only one of the two documents holds.
+     let single = rank_partition(
+@@ -929,7 +948,7 @@ fn score_is_a_pure_function_of_index_and_needle() {
+         .terms("alpha beta gamma")
+         .expect("valid text analysis");
+     let first = select(&index, &query, &everything(), None, None).expect("scores");
+-    let rendered: Vec<(u32, u32, u32, String)> = first
++    let rendered: Vec<(u32, u32, usize, String)> = first
+         .iter()
+         .map(|row| {
+             (
+@@ -944,7 +963,7 @@ fn score_is_a_pure_function_of_index_and_needle() {
+     for _ in 0..100 {
+         let again = select(&index, &query, &everything(), None, None).expect("scores");
+         assert_eq!(again, first);
+-        let again_rendered: Vec<(u32, u32, u32, String)> = again
++        let again_rendered: Vec<(u32, u32, usize, String)> = again
+             .iter()
+             .map(|row| {
+                 (
+@@ -999,16 +1018,17 @@ fn two_independently_built_indexes_rank_identically() {
+ /// fingerprint. Each is recorded by callers, so a moved value is a changed identity.
+ /// The explicit empty-lexicon profile now binds scoped accents, projection bounds,
+ /// control and emoji laws, and auxiliary retrieval parameters. Versioned
+-/// control protection changes the analyzer and index identities even when the
+-/// source contains no malformed controls. The RDF source and term-sequence
+-/// identities remain frozen.
++/// control protection is part of analyzer identity. Ranking v2 changes the index
++/// identity because its canonical profile binds exact promotion and the actual
++/// query-bound law. The RDF source, analyzer, term-sequence and score lexical
++/// identities remain frozen across that ranking migration.
+ #[test]
+ fn the_published_text_identities_are_frozen() {
+     let hex = |digest: [u8; 32]| purrdf_hash::hex::Lower(&digest).to_string();
+     let index = golden_index();
+     assert_eq!(
+         hex(index.fingerprint()),
+-        "05dd33b590fa769238926e237aadb69554c1522817da053ec497bc03bec44735",
++        "106fef6680a6be9aac5508747e74af3e28699ca24326095fd444d05f8ae8adcd",
+         "the index fingerprint"
+     );
+     assert_eq!(
+diff --git a/crates/text/tests/support/bm25f_reference.rs b/crates/text/tests/support/bm25f_reference.rs
+index 0efe62ba3..c21d1e77e 100644
+--- a/crates/text/tests/support/bm25f_reference.rs
++++ b/crates/text/tests/support/bm25f_reference.rs
+@@ -86,7 +86,7 @@ pub(super) fn verify_reference_corpus_with_population_mode(field_populations: bo
+             })
+             .collect();
+         assert_eq!(
+-            query.score(&inputs).expect(columns[0]).into_raw(),
++            query.score(&inputs).expect(columns[0]).value.into_raw(),
+             columns[6].parse::<i128>().expect("raw score"),
+             "{}",
+             columns[0]
+diff --git a/crates/text/tests/support/ranking_oracle.rs b/crates/text/tests/support/ranking_oracle.rs
+new file mode 100644
+index 000000000..7697d9149
+--- /dev/null
++++ b/crates/text/tests/support/ranking_oracle.rs
+@@ -0,0 +1,101 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Independent unbounded arithmetic for the published per-operation law.
++//!
++//! Testkit's schoolbook natural numbers share no production Integer/Fixed/wide
++//! kernel. Parameters are raw input values, never computed production scores.
++
++use purrdf_testkit::exact::Natural;
++use purrdf_text::FieldInput;
++
++const SCALE: u128 = 1_000_000_000_000;
++const INTERNAL: u128 = 1_000_000_000_000_000_000;
++
++fn natural(value: u128) -> Natural {
++    Natural::from_u128(value)
++}
++
++fn quotient_product(left: &Natural, right: &Natural, divisor: &Natural) -> Natural {
++    left.mul(right).div_rem(divisor).0
++}
++
++fn logarithm(raw: &Natural) -> Natural {
++    let mut exponent = 0;
++    while *raw >= natural(2 * SCALE).shl(exponent) {
++        exponent += 1;
++    }
++    let mantissa = quotient_product(raw, &natural(INTERNAL / SCALE), &natural(1).shl(exponent));
++    let z = quotient_product(
++        &mantissa.sub(&natural(INTERNAL)),
++        &natural(INTERNAL),
++        &mantissa.add(&natural(INTERNAL)),
++    );
++    let square = quotient_product(&z, &z, &natural(INTERNAL));
++    let mut power = z;
++    let mut series = Natural::default();
++    for denominator in (1..40).step_by(2) {
++        series = series.add(&power.div_rem(&natural(denominator)).0);
++        power = quotient_product(&power, &square, &natural(INTERNAL));
++    }
++    natural(u128::from(exponent) * 693_147_180_559_945_309)
++        .add(&series.mul_small(2))
++        .div_rem(&natural(INTERNAL / SCALE))
++        .0
++}
++
++/// One term's exact raw contribution, with all intermediate integers unbounded.
++pub(crate) fn contribution(
++    documents: u64,
++    frequency: u64,
++    populations: &[u64],
++    totals: &[u128],
++    parameters: &[(i128, i128)],
++    inputs: &[FieldInput],
++) -> i128 {
++    assert_eq!(populations.len(), totals.len());
++    assert_eq!(parameters.len(), totals.len());
++    assert_eq!(inputs.len(), totals.len());
++    let scale = natural(SCALE);
++    let idf = logarithm(&scale.add(&quotient_product(
++        &natural(u128::from(documents - frequency) * 2 + 1),
++        &scale,
++        &natural(u128::from(frequency) * 2 + 1),
++    )));
++    let mut pseudo = Natural::default();
++    for (((input, &(weight, b)), &population), &total) in
++        inputs.iter().zip(parameters).zip(populations).zip(totals)
++    {
++        if input.term_frequency != 0 {
++            let relative = quotient_product(
++                &natural(u128::from(input.length) * u128::from(population)),
++                &scale,
++                &natural(total),
++            );
++            let coefficient = natural(u128::try_from(b).expect("nonnegative coefficient"));
++            let normalization =
++                scale
++                    .sub(&coefficient)
++                    .add(&quotient_product(&coefficient, &relative, &scale));
++            let normalized = quotient_product(
++                &natural(u128::from(input.term_frequency) * SCALE),
++                &scale,
++                &normalization,
++            );
++            pseudo = pseudo.add(&quotient_product(
++                &normalized,
++                &natural(u128::try_from(weight).expect("nonnegative weight")),
++                &scale,
++            ));
++        }
++    }
++    let k1 = natural(12 * SCALE / 10);
++    let numerator = quotient_product(&pseudo, &k1.add(&scale), &scale);
++    let saturation = quotient_product(&numerator, &scale, &pseudo.add(&k1));
++    i128::try_from(
++        quotient_product(&idf, &saturation, &scale)
++            .to_u128()
++            .expect("the output score fits its certified public representation"),
++    )
++    .expect("nonnegative score fits i128")
++}
+diff --git a/crates/text/tests/support/unrestricted_ranking_cases.rs b/crates/text/tests/support/unrestricted_ranking_cases.rs
+new file mode 100644
+index 000000000..6a258315d
+--- /dev/null
++++ b/crates/text/tests/support/unrestricted_ranking_cases.rs
+@@ -0,0 +1,256 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Complete oversized ranking behaviors shared by native and portable callers.
++
++use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
++use purrdf_text::{
++    Analyzer, B, FieldInput, Fixed, GraphSelector, PartitionKey, PreparedCorpus, RankingField,
++    RankingProfile, TextIndex, TextIndexConfig, explain, rank_partition,
++};
++use std::sync::Arc;
++
++#[path = "ranking_oracle.rs"]
++pub(super) mod ranking_oracle;
++
++pub(super) const NOTE: &str = "https://example.org/note";
++
++fn names() -> Vec<String> {
++    (0..5_000).map(|at| format!("q{at:04}")).collect()
++}
++
++pub(super) fn configuration(predicates: Vec<TermValue>) -> TextIndexConfig {
++    TextIndexConfig::new(predicates, GraphSelector::Any, Analyzer::empty_lexicon())
++        .expect("configuration")
++}
++
++pub(super) fn input(frequency: u64, length: u64) -> FieldInput {
++    FieldInput {
++        term_frequency: frequency,
++        length,
++    }
++}
++
++/// The full needle reaches the actual index, ranking, heap and explanation laws.
++/// Return the same original dataset/index for the public property-function test.
++pub(super) fn five_thousand_term_index() -> (Arc<RdfDataset>, Arc<TextIndex>, String, Vec<i128>) {
++    let names = names();
++    let needle = names.join(" ");
++    let mut builder = RdfDatasetBuilder::new();
++    let predicate = builder.intern_iri(NOTE);
++    for (subject, text) in [("a", needle.clone()), ("b", names[..2_500].join(" "))] {
++        let subject = builder.intern_iri(&format!("https://example.org/{subject}"));
++        let object = builder.intern_literal(RdfLiteral::simple(&text));
++        builder.push_quad(subject, predicate, object, None);
++    }
++    let dataset = builder.freeze().expect("dataset");
++    let index = Arc::new(
++        TextIndex::from_dataset(&*dataset, &configuration(vec![TermValue::iri(NOTE)]))
++            .expect("index"),
++    );
++    let terms = index.analyzer().terms(&needle).expect("analyzed needle");
++    assert_eq!(terms.len(), 5_000);
++    let parameters = [(Fixed::ONE.into_raw(), B.into_raw())];
++    let contribution = |frequency, length| {
++        ranking_oracle::contribution(
++            2,
++            frequency,
++            &[2],
++            &[7_500],
++            &parameters,
++            &[input(1, length)],
++        )
++    };
++    let expected = vec![
++        2_500 * (contribution(2, 5_000) + contribution(1, 5_000)),
++        2_500 * contribution(2, 2_500),
++    ];
++    // Frozen by the unchanged Python reference's unbounded score function.
++    assert_eq!(expected, [1_926_031_222_170_000, 527_772_927_557_500]);
++    let partition = PartitionKey::new(None, None);
++    let rows = rank_partition(&index, &partition, &terms, None).expect("complete needle ranks");
++    assert_eq!(rows.len(), 2);
++    assert_eq!(
++        rows.iter()
++            .map(|row| (row.document, row.score.into_raw(), row.matched))
++            .collect::<Vec<_>>(),
++        vec![(0, expected[0], 5_000), (1, expected[1], 2_500)]
++    );
++    for row in &rows {
++        assert_eq!(
++            row.score_bound.profile_fingerprint(),
++            index.ranking_profile().fingerprint()
++        );
++        assert!(row.score <= row.score_bound.maximum());
++    }
++    assert_eq!(
++        rank_partition(&index, &partition, &terms, Some(1)).expect("heap"),
++        rows[..1]
++    );
++    let explained = explain(&index, 0, &terms).expect("all terms explained");
++    assert_eq!(explained.len(), 5_000);
++    assert_eq!(
++        explained
++            .iter()
++            .map(|term| term.contribution.into_raw())
++            .sum::<i128>(),
++        expected[0]
++    );
++    (dataset, index, needle, expected)
++}
++
++/// The actual query's score and certificate both exceed the former global cap.
++pub(super) fn declared_large_corpora_are_exact() {
++    let profile = RankingProfile::single_field();
++    let names = names();
++    let terms: Vec<_> = names.iter().map(|name| (name.as_str(), 1)).collect();
++    for documents in [1_u64 << 41, u64::MAX] {
++        let total = u128::from(documents) * 5_000;
++        let corpus =
++            PreparedCorpus::new(&profile, documents, &[total]).expect("full u64 population");
++        let query = corpus.prepare_query(&terms).expect("all prepared terms");
++        let inputs = vec![vec![input(1, 5_000)]; names.len()];
++        let expected = 5_000
++            * ranking_oracle::contribution(
++                documents,
++                1,
++                &[documents],
++                &[total],
++                &[(Fixed::ONE.into_raw(), B.into_raw())],
++                &[input(1, 5_000)],
++            );
++        let result = query.score(&inputs).expect("large declared corpus scores");
++        assert_eq!(result.value.into_raw(), expected);
++        assert_eq!(
++            expected,
++            if documents == 1 << 41 {
++                140_067_846_474_250_000
++            } else {
++                219_779_772_238_640_000
++            }
++        );
++        assert_eq!(result.bound, query.score_bound());
++        assert!(result.value.into_raw() > 65_536 * Fixed::ONE.into_raw());
++        assert!(result.bound.bits() > 56);
++        assert!(result.value <= result.bound.maximum());
++    }
++}
++
++/// Unrestricted fields and weights exercise the existing heap-backed Integer,
++/// while exact corpus totals summed across fields also exceed u128.
++pub(super) fn promoted_field_arithmetic_is_exact() {
++    let fields = (0..32)
++        .map(|at| {
++            RankingField::new(
++                format!("field-{at}"),
++                Fixed::from_raw(i128::MAX),
++                Fixed::ONE,
++            )
++            .expect("nonnegative representable weight")
++        })
++        .collect();
++    let profile = RankingProfile::new(fields, Vec::new(), Some(0)).expect("unrestricted fields");
++    let documents = u64::MAX;
++    let total = u128::from(documents) * u128::from(u64::MAX);
++    let totals = vec![total; profile.fields().len()];
++    let corpus = PreparedCorpus::new(&profile, documents, &totals)
++        .expect("exact totals past aggregate u128");
++    let query = corpus.prepare_query(&[("needle", 1)]).expect("query");
++    let inputs = vec![input(u64::MAX, u64::MAX); profile.fields().len()];
++    let expected = ranking_oracle::contribution(
++        documents,
++        1,
++        &vec![documents; totals.len()],
++        &totals,
++        &vec![(i128::MAX, Fixed::ONE.into_raw()); totals.len()],
++        &inputs,
++    );
++    let result = query
++        .score(&[inputs])
++        .expect("promoted products and saturation");
++    assert_eq!(result.value.into_raw(), expected);
++    assert_eq!(expected, 96_703_099_784_957, "unchanged Python reference");
++    assert!(result.value <= result.bound.maximum());
++
++    // A genuinely undefined zero normalization is still a typed domain error:
++    // one tiny carrier plus one maximum-length carrier is consistent data.
++    let profile = RankingProfile::new(
++        vec![RankingField::new("zero-normalization", Fixed::ONE, Fixed::ONE).expect("field")],
++        Vec::new(),
++        Some(0),
++    )
++    .expect("profile");
++    let corpus =
++        PreparedCorpus::new(&profile, 2, &[u128::from(u64::MAX) + 1]).expect("consistent corpus");
++    let query = corpus.prepare_query(&[("needle", 1)]).expect("query");
++    assert!(matches!(
++        query.contribution(0, &[input(1, 1)]),
++        Err(purrdf_text::TextError::Domain(_))
++    ));
++
++    // The first term fits the field; the second makes the distinct-term sum
++    // impossible. It must fail as Data rather than wrap a u64 frequency.
++    let profile = RankingProfile::single_field();
++    let corpus = PreparedCorpus::new(&profile, 2, &[2 * u128::from(u64::MAX)]).expect("corpus");
++    let query = corpus
++        .prepare_query(&[("a", 1), ("b", 1)])
++        .expect("distinct terms");
++    assert!(matches!(
++        query.score(&[
++            vec![input(u64::MAX, u64::MAX)],
++            vec![input(u64::MAX, u64::MAX)]
++        ]),
++        Err(purrdf_text::TextError::Data(_))
++    ));
++}
++
++/// Routing and retained field buffers have no sixteen-field ceiling.
++pub(super) fn thirty_two_index_fields_are_exact() {
++    let mut builder = RdfDatasetBuilder::new();
++    let subject = builder.intern_iri("https://example.org/document");
++    let object = builder.intern_literal(RdfLiteral::simple("needle needle"));
++    let mut predicates = Vec::new();
++    let mut fields = Vec::new();
++    for at in 0..32 {
++        let iri = format!("https://example.org/field-{at:02}");
++        let predicate = builder.intern_iri(&iri);
++        builder.push_quad(subject, predicate, object, None);
++        predicates.push(TermValue::iri(&iri));
++        fields.push(
++            RankingField::new(
++                format!("field-{at}"),
++                Fixed::from_raw(i128::from(at + 1) * Fixed::ONE.into_raw()),
++                B,
++            )
++            .expect("field"),
++        );
++    }
++    let mappings = predicates
++        .iter()
++        .cloned()
++        .enumerate()
++        .map(|(at, predicate)| (predicate, at))
++        .collect();
++    let profile = RankingProfile::new(fields, mappings, None).expect("all routed fields");
++    let dataset = builder.freeze().expect("dataset");
++    let index =
++        TextIndex::from_dataset_with_ranking(&*dataset, &configuration(predicates), profile)
++            .expect("wide field index");
++    let partition = PartitionKey::new(None, None);
++    assert_eq!(index.field_lengths(0), Some([2; 32].as_slice()));
++    let parameters: Vec<_> = index
++        .ranking_profile()
++        .fields()
++        .iter()
++        .map(|field| (field.weight().into_raw(), field.b().into_raw()))
++        .collect();
++    let expected =
++        ranking_oracle::contribution(1, 1, &[1; 32], &[2; 32], &parameters, &[input(2, 2); 32]);
++    let rows = rank_partition(&index, &partition, &["needle".to_owned()], None).expect("rank");
++    assert_eq!(rows.len(), 1);
++    assert_eq!(rows[0].score.into_raw(), expected);
++    assert_eq!(
++        explain(&index, 0, &["needle".to_owned()]).expect("explain")[0].contribution,
++        rows[0].score
++    );
++}
+diff --git a/crates/text/tests/unrestricted_ranking.rs b/crates/text/tests/unrestricted_ranking.rs
+new file mode 100644
+index 000000000..f56d10ba6
+--- /dev/null
++++ b/crates/text/tests/unrestricted_ranking.rs
+@@ -0,0 +1,145 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Actual oversized inputs, independent arithmetic and public retrieval callers.
++
++#[path = "support/unrestricted_ranking_cases.rs"]
++mod cases;
++
++#[cfg(not(target_arch = "wasm32"))]
++use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
++use purrdf_core::{SparqlRequest, SparqlResult, TermValue};
++use purrdf_sparql_eval::{
++    ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
++};
++#[cfg(not(target_arch = "wasm32"))]
++use purrdf_text::{B, PartitionKey, TextIndex, explain, rank_partition};
++use purrdf_text::{Fixed, TextSearchRelation};
++#[cfg(not(target_arch = "wasm32"))]
++use std::fmt::Write as _;
++use std::sync::Arc;
++
++#[test]
++fn a_complete_five_thousand_term_needle_reaches_the_public_relation() {
++    let (dataset, index, needle, expected) = cases::five_thousand_term_index();
++    let mut registry = PropertyFunctionRegistry::new();
++    registry.register(
++        "https://example.org/search".to_owned(),
++        Arc::new(TextSearchRelation::new(index)),
++    );
++    let environment = ExtensionEnv::over_relations(registry).expect("registry");
++    let query = format!(
++        "SELECT ?doc ?score ?rank ?matched WHERE {{ ?doc <https://example.org/search> (\"{needle}\" ?score ?rank ?lang ?matched) }} ORDER BY ?rank"
++    );
++    let result = NativeSparqlEngine::new()
++        .query_with_options_view(
++            &*dataset,
++            SparqlRequest {
++                query: &query,
++                base_iri: None,
++                substitutions: &[],
++            },
++            QueryOptions::new().with_env(&environment),
++        )
++        .expect("actual public query");
++    let SparqlResult::Solutions { rows, .. } = result else {
++        panic!("SELECT result");
++    };
++    assert_eq!(rows.len(), 2);
++    for (at, row) in rows.iter().enumerate() {
++        assert_eq!(
++            row[0],
++            Some(TermValue::iri(format!(
++                "https://example.org/{}",
++                if at == 0 { "a" } else { "b" }
++            )))
++        );
++        assert_eq!(
++            row[1],
++            Some(TermValue::typed_literal(
++                Fixed::from_raw(expected[at]).to_decimal_lexical(),
++                purrdf_core::datatype::XSD_DECIMAL
++            ))
++        );
++        assert_eq!(row[2], Some(TermValue::integer((at + 1) as i128)));
++        assert_eq!(
++            row[3],
++            Some(TermValue::integer(if at == 0 { 5_000 } else { 2_500 }))
++        );
++    }
++}
++
++#[test]
++fn full_u64_populations_and_large_query_scores_match_independent_arithmetic() {
++    cases::declared_large_corpora_are_exact();
++}
++
++#[test]
++fn promoted_products_and_unrestricted_fields_keep_exact_rounding() {
++    cases::promoted_field_arithmetic_is_exact();
++    cases::thirty_two_index_fields_are_exact();
++}
++
++/// A physical native index over exactly 2^25 tokens in one merged field.
++#[cfg(not(target_arch = "wasm32"))]
++#[test]
++fn actual_two_to_the_twenty_fifth_token_field_builds_and_scores() {
++    let tokens_per_literal = 1_usize << 20;
++    let mut builder = RdfDatasetBuilder::new();
++    let subject = builder.intern_iri("https://example.org/large-document");
++    let predicate = builder.intern_iri(cases::NOTE);
++    for at in 0..32 {
++        // One unique final term makes all source literals distinct RDF rows.
++        // The normal analyzer sees 2^20 terms and one punctuation-bearing span.
++        let mut lexical = "a,".repeat(tokens_per_literal - 1);
++        write!(lexical, "chunk{at:02}").expect("write to String");
++        let object = builder.intern_literal(RdfLiteral::simple(&lexical));
++        builder.push_quad(subject, predicate, object, None);
++    }
++    let dataset = builder.freeze().expect("actual dataset");
++    let index = TextIndex::from_dataset(
++        &*dataset,
++        &cases::configuration(vec![TermValue::iri(cases::NOTE)]),
++    )
++    .expect("actual 2^25-token field builds");
++    let length = 1_u64 << 25;
++    let frequency = length - 32;
++    assert_eq!(index.field_lengths(0), Some([length].as_slice()));
++    assert_eq!(index.term_frequency(0, "a"), frequency);
++    assert_eq!(index.document(0).expect("document").length(), length);
++    let partition = PartitionKey::new(None, None);
++    assert_eq!(
++        index.field_totals(&partition),
++        Some([u128::from(length)].as_slice())
++    );
++    let rows =
++        rank_partition(&index, &partition, &["a".to_owned()], None).expect("large field ranks");
++    assert_eq!(rows.len(), 1);
++    let expected = cases::ranking_oracle::contribution(
++        1,
++        1,
++        &[1],
++        &[u128::from(length)],
++        &[(Fixed::ONE.into_raw(), B.into_raw())],
++        &[cases::input(frequency, length)],
++    );
++    assert_eq!(expected, 632_900_536_757, "unchanged Python reference");
++    assert_eq!(rows[0].score.into_raw(), expected);
++    let detail = explain(&index, 0, &["a".to_owned()]).expect("actual explanation");
++    assert_eq!(
++        (detail[0].term_frequency, detail[0].contribution),
++        (frequency, rows[0].score)
++    );
++    assert!(
++        index
++            .surface_index()
++            .words()
++            .iter()
++            .any(|term| term.text() == "a")
++    );
++    assert_eq!(
++        index.surface_index().spans().len(),
++        1,
++        "the bounded span spelling is shared without suppressing the surface projection"
++    );
++}
+diff --git a/crates/text/tests/wasm_determinism.rs b/crates/text/tests/wasm_determinism.rs
+index d63d04092..19594d3bb 100644
+--- a/crates/text/tests/wasm_determinism.rs
++++ b/crates/text/tests/wasm_determinism.rs
+@@ -189,6 +189,13 @@ fn the_integer_logarithm_agrees_with_its_hand_values_on_this_target() {
+ #[path = "support/bm25f_reference.rs"]
+ mod bm25f_reference;
+ 
++#[path = "support/unrestricted_ranking_cases.rs"]
++mod unrestricted_ranking;
++use unrestricted_ranking::{
++    declared_large_corpora_are_exact, five_thousand_term_index, promoted_field_arithmetic_is_exact,
++    thirty_two_index_fields_are_exact,
++};
++
+ /// All fielded scoring vectors, including maximum bounds, agree on this target.
+ fn the_independent_fielded_reference_is_reproduced_on_this_target() {
+     bm25f_reference::verify_reference_corpus();
+@@ -199,4 +206,8 @@ purrdf_testkit::harness_main!(
+     the_integer_logarithm_agrees_with_its_hand_values_on_this_target,
+     the_pinned_ranking_is_reproduced_on_this_target,
+     the_sentence_boundaries_are_reproduced_on_this_target,
++    declared_large_corpora_are_exact,
++    five_thousand_term_index,
++    promoted_field_arithmetic_is_exact,
++    thirty_two_index_fields_are_exact,
+ );
+diff --git a/docs/WASM_TESTING.md b/docs/WASM_TESTING.md
+index 4c9de3fab..1f49e1289 100644
+--- a/docs/WASM_TESTING.md
++++ b/docs/WASM_TESTING.md
+@@ -9,8 +9,8 @@ conformance. `make check` executes their complete registered targets through
+ crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
+ package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
+ 
+-`make wasm-test` selects 30 named cases in 14 integration targets,
+-with 35 executions across 18 scalar/SIMD target invocations. Every selection
++`make wasm-test` selects 34 named cases in 14 integration targets,
++with 39 executions across 18 scalar/SIMD target invocations. Every selection
+ exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
+ interface, except the numeric, sentence and MIME byte-identity targets. WebAssembly has 32- and
+ 64-bit integers only, so every `i128` step of the arbitrary-precision numeric
+@@ -80,6 +80,10 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
+ | `purrdf-deflate` / `deflate_conformance` | SIMD | `match_length_kernels_match_portable` | Calls the simd128 match-length kernel against the portable kernel over vector widths and mismatch positions. |
+ | `purrdf-deflate` / `deflate_conformance` | SIMD | `hash_kernels_match_portable` | Calls the simd128 window-hash kernel against the scalar reference over lengths and offsets. |
+ | `purrdf-text` / `wasm_determinism` | scalar | `the_sentence_boundaries_are_reproduced_on_this_target` | Reproduces pinned borrowed UTF-8 sentence bytes and offsets from the same versioned Sentence_Break tables, including the alphanumeric filter and empty input. |
++| `purrdf-text` / `wasm_determinism` | scalar | `five_thousand_term_index` | Indexes and ranks all 5,000 needle terms, compares full ranking, a bounded heap and every explanation against independent unbounded arithmetic, and carries the prepared score certificate. |
++| `purrdf-text` / `wasm_determinism` | scalar | `declared_large_corpora_are_exact` | Scores declared 2^41 and full-u64 populations against independent exact expectations; query-derived bounds and scores exceed the former global score width. |
++| `purrdf-text` / `wasm_determinism` | scalar | `promoted_field_arithmetic_is_exact` | Preserves every truncation while maximal nonnegative weights and thirty-two fields promote intermediates through the existing exact integer home; genuine invalid data still refuses. |
++| `purrdf-text` / `wasm_determinism` | scalar | `thirty_two_index_fields_are_exact` | Builds and routes thirty-two actual fields through native indexing, ranking and explanation, retaining the exact independent score. |
+ | `purrdf-mime` / `lossless` | scalar | `production_rdf_round_trip_is_deterministic_for_original_and_broken_messages` | Reproduces the frozen native transcript of message and RDF bytes across all three serializers; reconstructs repeated, nested, multipart and malformed originals through the production RDF parser and byte-cover decoder. |
+ 
+ The hash benchmark targets remain native benchmarks. No benchmark smoke target
+diff --git a/docs/design/purrdf-text-scoring.md b/docs/design/purrdf-text-scoring.md
+index 47457e00d..5e3834316 100644
+--- a/docs/design/purrdf-text-scoring.md
++++ b/docs/design/purrdf-text-scoring.md
+@@ -19,9 +19,10 @@ predicate a query calls this crate by is caller-supplied configuration.
+ ## 1. The arithmetic is exact, and that is a correctness requirement
+ 
+ Every score is computed in base-10 fixed point: a signed integer scaled by a
+-fixed number of fractional digits, with each step checked so that an
+-intermediate which does not fit is an overflow error rather than a wrapped or
+-saturated number. No floating-point value enters the crate at all — the crate
++fixed number of fractional digits, truncating at every specified operation.
++Ranking intermediates promote from checked i128 to the workspace's exact
++Integer/BigInt when needed, preserving the same law without a chosen input
++ceiling. A final value is never wrapped or saturated. No floating-point value enters the crate at all — the crate
+ root denies `clippy::float_arithmetic`, so none can.
+ 
+ This is not a stylistic preference for integers. BM25 needs a natural logarithm,
+@@ -44,6 +45,14 @@ Because the arithmetic is exact rather than approximate, a document's per-term
+ contributions **sum exactly** to its score. The explanation surface reports an
+ equality, not a tolerance.
+ 
++The revision-2 ranking identity binds this unrestricted arithmetic and the
++original rounding law. Each prepared query certifies its score interval from
++its actual corpus/IDFs; the pure result and each native ranked result carry that
++bound and its bit width. Hosts decide their own key representation. Neither the
++number of query terms nor field length, corpus size, weight or field count is
++refused to reserve space for a host tie key. See [the complete ranking
++law](../../crates/text/RANKING.md) for the physical representations and proof.
++
+ ## 2. The BM25 constants are constants
+ 
+ `K1` (1.2) and `B` (0.75) are crate constants. There is no parameter struct, no

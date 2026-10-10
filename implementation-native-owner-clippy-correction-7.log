@@ -1,0 +1,162 @@
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/entail)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/conformance-kit)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/geo)
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/sparql-eval/benches/../tests/support/mod.rs:207:33
+    |
+207 |     fn solutions_view(&self) -> Option<(&[String], &[Vec<Option<TermValue>>])>;
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+    = note: `-D clippy::type-complexity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/benches/../tests/support/mod.rs:264:26
+    |
+264 | pub fn solutions(result: impl ResultView) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
+    |                          ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+264 | pub fn solutions(result: &impl ResultView) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
+    |                          +
+
+error: could not compile `purrdf-sparql-eval` (bench "governor_allocations") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (bench "governed_eval") due to 2 previous errors
+error: very complex type used. Consider factoring parts into `type` definitions
+   --> crates/sparql-eval/tests/support/mod.rs:207:33
+    |
+207 |     fn solutions_view(&self) -> Option<(&[String], &[Vec<Option<TermValue>>])>;
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#type_complexity
+    = note: `-D clippy::type-complexity` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::type_complexity)]`
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-eval/tests/support/mod.rs:264:26
+    |
+264 | pub fn solutions(result: impl ResultView) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
+    |                          ^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+264 | pub fn solutions(result: &impl ResultView) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
+    |                          +
+
+error: could not compile `purrdf-sparql-eval` (test "aggregate_function_e2e") due to 2 previous errors
+error: empty line after doc comment
+   --> crates/text/src/score.rs:824:1
+    |
+824 | / /// document frequency, and one field-input assembly per held term.
+825 | |
+    | |_^
+826 |   pub(crate) fn score_located_owned(
+    |   --------------------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = note: `-D clippy::empty-line-after-doc-comments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_doc_comments)]`
+    = help: if the empty line is unintentional, remove it
+
+error: field assignment outside of initializer for an instance created with Default::default()
+   --> crates/text/src/analysis.rs:309:9
+    |
+309 |         scratch.workspace = workspace.clone();
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+note: consider initializing the variable with `NormalizationScratch::<()> { workspace: workspace.clone(), ..Default::default() }` and removing relevant reassignments
+   --> crates/text/src/analysis.rs:308:9
+    |
+308 |         let mut scratch = NormalizationScratch::default();
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#field_reassign_with_default
+    = note: `-D clippy::field-reassign-with-default` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::field_reassign_with_default)]`
+
+error: this function has too many arguments (9/7)
+    --> crates/text/src/analysis.rs:1039:1
+     |
+1039 | / fn normalize_run_owned<M: Copy>(
+1040 | |     scalars: &mut Vec<TaggedScalar<M>>,
+1041 | |     scratch: &mut Vec<TaggedScalar<M>>,
+1042 | |     order: &mut Vec<usize>,
+...    |
+1048 | |     merge: impl FnMut(&mut M, M),
+1049 | | ) -> Result<(), TextError> {
+     | |__________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+     = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: this argument is passed by value, but not consumed in the function body
+  --> crates/text/src/query_workspace.rs:29:30
+   |
+29 |     fn from_workspace(error: EvalError) -> Self {
+   |                              ^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+   = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+   |
+29 |     fn from_workspace(error: &EvalError) -> Self {
+   |                              +
+
+error: this `if` statement can be collapsed
+   --> crates/text/src/relation.rs:351:9
+    |
+351 | /         if let Some(want) = want {
+352 | |             if !workspace.terms_equal(want, have)? {
+353 | |                 return Ok(false);
+354 | |             }
+355 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+351 ~         if let Some(want) = want
+352 ~             && !workspace.terms_equal(want, have)? {
+353 |                 return Ok(false);
+354 ~             }
+    |
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/text/src/relation.rs:1281:36
+     |
+1281 |                     for holding in holdings.iter() {
+     |                                    ^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&holdings`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+     = note: `-D clippy::explicit-iter-loop` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::explicit_iter_loop)]`
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/text/src/score.rs:691:18
+    |
+691 |     for entry in occurrences.iter() {
+    |                  ^^^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&occurrences`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: could not compile `purrdf-text` (lib) due to 7 previous errors

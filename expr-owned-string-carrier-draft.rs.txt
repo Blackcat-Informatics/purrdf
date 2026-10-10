@@ -1,0 +1,91 @@
+/// A runtime string operand borrowing all text from its original admitted term.
+/// Program constants continue to use `StringArg` in the authored program pool.
+pub(crate) struct OwnedStringArg {
+    value: crate::WorkspaceTerm,
+    projection: StringProjection,
+}
+
+#[derive(Clone, Copy)]
+enum StringProjection { String, Str, Lang }
+
+impl std::fmt::Debug for OwnedStringArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnedStringArg").finish_non_exhaustive()
+    }
+}
+
+impl OwnedStringArg {
+    fn read<D: DatasetView + Sync>(
+        ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::Id>, projection: StringProjection,
+    ) -> Result<Option<Self>, EvalError> {
+        // Preserve the original fast paths' type refusal BEFORE any payload copy
+        // or nested traversal. STR(blank/triple) and LANG(nonliteral) read no
+        // component strings and cannot turn a type error into extra I/O.
+        let valid = match term {
+            SolutionTerm::Existing(id) => ctx.dataset.with_term(id, |value| match (projection, value) {
+                (StringProjection::String, TermRef::Literal { datatype, .. }) =>
+                    ctx.dataset.with_term(datatype, |datatype| match datatype {
+                        TermRef::Iri(iri) => is_string_datatype(iri),
+                        _ => false,
+                    }),
+                (StringProjection::Str, TermRef::Iri(_) | TermRef::Literal { .. })
+                | (StringProjection::Lang, TermRef::Literal { .. }) => Ok(true),
+                _ => Ok(false),
+            }).map_err(|error| ctx.workspace.source_error(error))?
+                .map_err(|error| ctx.workspace.source_error(error))?,
+            SolutionTerm::Computed(id) => match (projection, ctx.scratch.computed_value(id)) {
+                (StringProjection::String, TermValue::Literal { datatype, .. }) => is_string_datatype(datatype),
+                (StringProjection::Str, TermValue::Iri(_) | TermValue::Literal { .. })
+                | (StringProjection::Lang, TermValue::Literal { .. }) => true,
+                _ => false,
+            },
+        };
+        if !valid { return Ok(None); }
+        Ok(Some(Self { value: owned_value_of(ctx, term)?, projection }))
+    }
+
+    /// Every slice remains borrowed from this immutable owner. STR and LANG
+    /// intentionally return the same plain-string facets as their old fast path.
+    pub(crate) fn parts(&self) -> (&str, Option<&str>, Option<RdfTextDirection>) {
+        match (self.projection, &*self.value) {
+            (StringProjection::String, TermValue::Literal { lexical_form, language, direction, .. }) =>
+                (lexical_form, language.as_deref(), *direction),
+            (StringProjection::Str, TermValue::Iri(iri)) => (iri, None, None),
+            (StringProjection::Str, TermValue::Literal { lexical_form, .. }) => (lexical_form, None, None),
+            (StringProjection::Lang, TermValue::Literal { language, .. }) =>
+                (language.as_deref().unwrap_or_default(), None, None),
+            _ => unreachable!("a runtime string carrier is classified before publication"),
+        }
+    }
+}
+
+fn is_string_datatype(datatype: &str) -> bool {
+    datatype == XSD_STRING || datatype == RDF_LANG_STRING || datatype == RDF_DIR_LANG_STRING
+}
+
+/// Materialize a transient term through the one native fallible fold/clone home.
+pub(crate) fn owned_value_of<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::Id>,
+) -> Result<crate::WorkspaceTerm, EvalError> {
+    ctx.scratch.try_owned_value_of(ctx.dataset, term, &ctx.growth,
+        |error| ctx.workspace.source_error(error))
+}
+
+#[inline(never)]
+pub(crate) fn string_arg_of_term<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::Id>,
+) -> Result<Option<OwnedStringArg>, EvalError> {
+    OwnedStringArg::read(ctx, term, StringProjection::String)
+}
+
+pub(crate) fn str_lexical_term<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::Id>,
+) -> Result<Option<OwnedStringArg>, EvalError> {
+    OwnedStringArg::read(ctx, term, StringProjection::Str)
+}
+
+pub(crate) fn lang_lexical_term<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::Id>,
+) -> Result<Option<OwnedStringArg>, EvalError> {
+    OwnedStringArg::read(ctx, term, StringProjection::Lang)
+}

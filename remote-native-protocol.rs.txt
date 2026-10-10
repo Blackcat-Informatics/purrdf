@@ -1,0 +1,168 @@
+/// A host's certified maximum live bytes during one resolution, including its
+/// returned bindings or dynamic error. The grant is acquired before dispatch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServiceWorkspaceCertificate {
+    /// Concrete peak requested layouts, including transport and decoded output.
+    pub peak_bytes: u64,
+}
+
+#[derive(Debug)]
+enum ServiceStorage {
+    Native(crate::workspace::LexicalFrame),
+    Certified(crate::WorkspaceAllocation),
+}
+impl ServiceStorage {
+    fn is_bounded(&self) -> bool {
+        match self { Self::Native(frame) => frame.workspace().is_bounded(), Self::Certified(grant) => grant.is_bounded() }
+    }
+}
+
+/// Immutable remote bindings retaining their original producer allocation owner.
+/// Borrowed payload access permits caller-owned copies; the engine provides no
+/// deep Clone or detached bounded extraction.
+#[derive(Debug)]
+pub struct AdmittedResolvedBindings {
+    bindings: ResolvedBindings,
+    storage: ServiceStorage,
+}
+impl AdmittedResolvedBindings {
+    /// Borrow columns and rows while their original grant remains live.
+    #[must_use]
+    pub const fn bindings(&self) -> &ResolvedBindings { &self.bindings }
+    /// Build a response through the original native Memory. Every fresh buffer,
+    /// leaf and diagnostic must use this memory or its own admitted owner.
+    /// Caller-owned immutable variables may be shallow-cloned.
+    /// # Errors
+    /// Preserves the first operational refusal or the original invocation error.
+    pub fn try_build(
+        workspace: &crate::WorkspaceCapability,
+        build: impl FnOnce(&mut purrdf_lex::allocation::Memory<'_, dyn purrdf_lex::allocation::Admission>) -> Result<ResolvedBindings, ServiceBuildError>,
+    ) -> Result<Self, ServiceResolutionError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let result = {
+            let admission: &mut dyn purrdf_lex::allocation::Admission = &mut frame;
+            build(&mut purrdf_lex::allocation::Memory::new(admission))
+        };
+        if let Some(error) = frame.take_failure() { return Err(ServiceResolutionError::Operational(error)); }
+        match result {
+            Ok(bindings) => Ok(Self { bindings, storage: ServiceStorage::Native(frame) }),
+            Err(ServiceBuildError::Remote(error)) => Err(ServiceResolutionError::Invocation(AdmittedRemoteError::native(error, frame)?)),
+            Err(ServiceBuildError::Operational(error)) => Err(ServiceResolutionError::Operational(error)),
+            Err(ServiceBuildError::Storage(error)) => Err(ServiceResolutionError::Operational(frame.storage_error(error, "remote response producer"))),
+        }
+    }
+    /// Only resident producers may move a bare response out of this owner.
+    /// # Errors
+    /// Returns the intact owner when any original grant is bounded.
+    pub fn try_into_resident(self) -> Result<ResolvedBindings, Self> {
+        if self.storage.is_bounded() { Err(self) } else { Ok(self.bindings) }
+    }
+}
+
+/// Native producer failures distinguish the language/transport error from
+/// operational allocation refusal before immutable error publication.
+#[derive(Debug)]
+pub enum ServiceBuildError {
+    /// Original invocation failure, whose payload was built under Memory.
+    Remote(RemoteError),
+    /// Already-owned evaluator operational failure.
+    Operational(EvalError),
+    /// Original native checked-layout, admission or allocator marker.
+    Storage(purrdf_lex::allocation::StorageError),
+}
+impl From<purrdf_lex::allocation::StorageError> for ServiceBuildError { fn from(error: purrdf_lex::allocation::StorageError) -> Self { Self::Storage(error) } }
+impl From<EvalError> for ServiceBuildError { fn from(error: EvalError) -> Self { Self::Operational(error) } }
+
+#[derive(Debug)]
+struct RemoteErrorPayload { error: RemoteError, storage: ServiceStorage, _control: crate::WorkspaceAllocation }
+/// Original invocation failure and its immutable, shallow-cloned physical owner.
+#[derive(Clone, Debug)]
+pub struct AdmittedRemoteError { payload: purrdf_core::small::Shared<RemoteErrorPayload> }
+impl AdmittedRemoteError {
+    fn new(error: RemoteError, storage: ServiceStorage, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
+        let bytes = purrdf_core::small::Shared::<RemoteErrorPayload>::allocation_layout().size();
+        let control = workspace.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let payload = purrdf_core::small::Shared::try_new(RemoteErrorPayload { error, storage, _control: control }).map_err(|_| EvalError::AllocationFailed { construct: "remote error shared control" })?;
+        Ok(Self { payload })
+    }
+    fn native(error: RemoteError, frame: crate::workspace::LexicalFrame) -> Result<Self, EvalError> {
+        let workspace = frame.workspace().clone(); Self::new(error, ServiceStorage::Native(frame), &workspace)
+    }
+    /// Borrow the original classified error under its original lease.
+    #[must_use]
+    pub fn error(&self) -> &RemoteError { &self.payload.error }
+    /// A native message factory, with no unpriced formatting fallback.
+    /// # Errors
+    /// Returns original admission or allocator refusal.
+    pub fn message(kind: purrdf_core::SilencedKind, message: impl fmt::Display, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let text = purrdf_lex::allocation::Memory::new(&mut frame).format(&message).map_err(|error| frame.storage_error(error, "remote error text"))?;
+        let error = match kind { purrdf_core::SilencedKind::Decode => RemoteError::Decode(text), purrdf_core::SilencedKind::Unconfigured => RemoteError::Unconfigured(text), _ => RemoteError::Transport(text) };
+        Self::native(error, frame)
+    }
+    fn into_resident(self) -> Result<RemoteError, Self> {
+        if self.payload.storage.is_bounded() || self.payload._control.is_bounded() { return Err(self); }
+        // The resident error is a caller-owned copy; bounded errors cannot enter
+        // this compatibility route or lose their original lease.
+        Ok(self.error().clone())
+    }
+}
+impl PartialEq for AdmittedRemoteError { fn eq(&self, rhs: &Self) -> bool { self.error() == rhs.error() } }
+impl Eq for AdmittedRemoteError {}
+impl fmt::Display for AdmittedRemoteError { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { self.error().fmt(f) } }
+impl std::error::Error for AdmittedRemoteError {}
+
+/// Physical failures remain a separate, unsilenceable channel.
+#[derive(Debug)]
+pub enum ServiceResolutionError {
+    /// Original native invocation error, retaining its allocation owner.
+    Invocation(AdmittedRemoteError),
+    /// Typed evaluator failure; operational variants are never silenced.
+    Operational(EvalError),
+}
+impl From<EvalError> for ServiceResolutionError { fn from(error: EvalError) -> Self { Self::Operational(error) } }
+impl fmt::Display for ServiceResolutionError { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { match self { Self::Invocation(error) => error.fmt(f), Self::Operational(error) => error.fmt(f) } } }
+impl std::error::Error for ServiceResolutionError {}
+
+/// Retained federation error preserves the original code, denial classification
+/// and English presentation across nested in-process resolvers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetainedServiceFailure {
+    endpoint: purrdf_lex::allocation::SharedText,
+    error: AdmittedRemoteError,
+}
+impl RetainedServiceFailure {
+    pub(crate) fn new(endpoint: &str, error: AdmittedRemoteError, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
+        Ok(Self { endpoint: workspace.authored_text(&endpoint)?, error })
+    }
+    /// Borrow the original invocation error without detaching its owner.
+    #[must_use]
+    pub const fn remote_error(&self) -> &AdmittedRemoteError { &self.error }
+    /// Stable federation diagnostic classification.
+    #[must_use]
+    pub fn failure_code(&self) -> crate::protocol::FailureCode { crate::protocol::FailureCode::from(self.error.error()) }
+    /// Stable code, including the existing operational source-error identity.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self.error.error() { RemoteError::SourceRead(_) | RemoteError::WorkspaceStopped => "native-sparql-source-read", _ => self.failure_code().code() }
+    }
+    fn silenced_kind(&self) -> purrdf_core::SilencedKind {
+        match self.error.error() { RemoteError::Decode(_) => purrdf_core::SilencedKind::Decode, RemoteError::Disabled => purrdf_core::SilencedKind::Disabled,
+            RemoteError::Unconfigured(_) => purrdf_core::SilencedKind::Unconfigured, RemoteError::Denied(_) => purrdf_core::SilencedKind::Denied,
+            RemoteError::HostDenied { .. } => purrdf_core::SilencedKind::HostDenied, RemoteError::HostFault { .. } => purrdf_core::SilencedKind::Fault,
+            _ => purrdf_core::SilencedKind::Transport }
+    }
+}
+impl fmt::Display for RetainedServiceFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.error.error() {
+            RemoteError::Denied(denial) => write!(f, "SERVICE federation denied: {denial}"),
+            RemoteError::HostDenied { endpoint, message } => write!(f, "SERVICE <{endpoint}>: the host denied the request: {message}"),
+            RemoteError::HostFault { endpoint, message } => write!(f, "SERVICE <{endpoint}>: the host faulted answering the request: {message}"),
+            RemoteError::Unconfigured(message) => write!(f, "SERVICE federation error: SERVICE <{}>: {message}", self.endpoint.as_str()),
+            RemoteError::SourceRead(message) => write!(f, "dataset read failed: {message}"),
+            other => write!(f, "SERVICE federation error: SERVICE <{}>: {other}", self.endpoint.as_str()),
+        }
+    }
+}
+impl std::error::Error for RetainedServiceFailure {}

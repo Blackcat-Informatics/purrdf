@@ -1,0 +1,123 @@
+65:    memory.push(&mut pending, NodeRef::Expr(expression))?;
+78:                    if let Err(error) = memory.push(&mut pending, child) { failure = Some(error); }
+130:        let operand = Child::new(operand);
+191:            _ => (Child::new(left), Child::new(right)),
+196:            Self::NotEqual => Expression::Not(Child::new(Expression::Equal(l, r))),
+448:            g: GraphPattern::Bgp { patterns: vec![] },
+582:                args.push(val.expr().0);
+584:                    self.machine.ctl.push(Ctl::Args(kind, args));
+595:                items.push(val.expr().0);
+597:                    self.machine.ctl.push(Ctl::InList {
+608:                parts.push(val.expr().0);
+610:                    self.machine.ctl.push(Ctl::TripleTerm(parts));
+631:                    scalarvals.push(("separator".to_owned(), Literal::new_simple(sep)));
+634:                    AggregateExpression::new(func, vec![inner], scalarvals, Vec::new(), distinct)
+644:                args.push(val.expr().0);
+646:                    self.machine.ctl.push(Ctl::CustomAggregate {
+671:                let exists = Expression::Exists(Child::new(body));
+674:                        Expression::Not(Child::new(exists))
+707:            self.machine.sinks.push(Vec::new());
+709:        self.machine.ctl.push(Ctl::Act(Activation { reach, sink }));
+732:                self.machine.ctl.push(Ctl::Prefix(prefix));
+744:                self.machine.ctl.push(Ctl::Bracket);
+821:                self.machine.ctl.push(Ctl::Infix(op, left));
+826:            self.machine.ctl.push(Ctl::Infix(op, left));
+910:        self.machine.ctl.push(Ctl::InList {
+920:        let expr = Expression::In(Child::new(left), items.into());
+923:                Expression::Not(Child::new(expr))
+1010:        self.machine.ctl.push(Ctl::Args(kind, Vec::new()));
+1036:                    Child::new(it.next().expect("three arguments")),
+1037:                    Child::new(it.next().expect("three arguments")),
+1038:                    Child::new(it.next().expect("three arguments")),
+1046:                    Child::new(it.next().expect("two arguments")),
+1047:                    Child::new(it.next().expect("two arguments")),
+1096:            .push(Ctl::TripleTerm(Vec::with_capacity(3)));
+1192:            self.machine.ctl.push(Ctl::Fold(Box::new(Fold {
+1200:            self.machine.ctl.push(Ctl::Aggregate {
+1224:                fold.args.push(expr);
+1227:                    self.machine.ctl.push(Ctl::Fold(fold));
+1233:                fold.args.push(expr);
+1238:                fold.order_by.push(OrderExpression::Asc(expr));
+1243:                fold.order_by.push(OrderExpression::Desc(expr));
+1247:                fold.order_by.push(OrderExpression::Asc(expr));
+1294:        self.machine.ctl.push(Ctl::Fold(fold));
+1336:        self.machine.ctl.push(Ctl::CustomAggregate {
+1354:            .push((synth.clone(), agg));
+1364:        self.machine.ctl.push(Ctl::Exists { at, negated });
+1420:            let mut local_scope = self.exists_scope().to_vec();
+1427:                local_scope.extend(self.projection_seen_targets.iter().cloned());
+1431:                .push(PendingExistsScopeCheck {
+1465:            self.machine.ctl.push(Ctl::Constraint);
+1488:            self.machine.ctl.push(Ctl::SubSelectGroup);
+1491:        self.machine.groups.push(GroupState::new());
+1567:                    vec![
+1580:                        inner: Child::new(g),
+1615:                self.machine.groups.push(group);
+1616:                self.machine.ctl.push(Ctl::Element(Element::Filter));
+1620:                self.machine.groups.push(group);
+1621:                self.machine.ctl.push(Ctl::Element(Element::Bind));
+1628:                self.machine.groups.push(group);
+1629:                self.machine.ctl.push(Ctl::Element(Element::Unfold));
+1665:            self.machine.groups.push(group);
+1666:            self.machine.ctl.push(Ctl::Element(element));
+1702:                    self.machine.groups.push(group);
+1703:                    self.machine.ctl.push(Ctl::Element(Element::Union));
+1718:                    left: Child::new(group.g),
+1719:                    right: Child::new(right),
+1758:                    left: Child::new(group.g),
+1759:                    right: Child::new(right.pattern),
+1770:                    left: Child::new(group.g),
+1771:                    right: Child::new(right.pattern),
+1783:                    inner: Child::new(inner.pattern),
+1798:                    inner: Child::new(inner.pattern),
+1807:                        left: Child::new(group.g),
+1808:                        right: Child::new(service),
+1815:            Element::Filter => group.filters.push(val.expr().0),
+1850:                    inner: Child::new(group.g),
+1906:                    inner: Child::new(group.g),
+1915:        self.machine.groups.push(group);
+1980:        self.machine.selects.push(state);
+2003:                self.top_select().projected.push(v);
+2006:                self.machine.ctl.push(Ctl::Select(SelectStage::Projection));
+2054:        self.machine.ctl.push(Ctl::Select(SelectStage::Where));
+2063:                self.top_select().aggregates.extend(lifted);
+2070:                self.projection_seen_targets.push(var.clone());
+2072:                state.projected.push(var.clone());
+2075:                state.select_exprs.push((var, expr));
+2095:                self.machine.ctl.push(Ctl::Select(SelectStage::Modifiers));
+2396:                    aggregates.push((
+2400:                            vec![Expression::Variable(name.clone())],
+2407:                    sampled_projections.push((name.clone(), Expression::Variable(sampled)));
+2418:                inner: Child::new(p),
+2425:                inner: Child::new(p),
+2432:                inner: Child::new(p),
+2440:                inner: Child::new(p),
+2445:                inner: Child::new(p),
+2452:                inner: Child::new(p),
+2470:            inner: Child::new(p),
+2476:                    inner: Child::new(p),
+2481:                    inner: Child::new(p),
+2488:                inner: Child::new(p),
+2511:            Box::new(Query::Select {
+2535:                aggregates.push((
+2539:                        vec![Expression::Variable(name.clone())],
+2555:        self.machine.modifiers.push(ModState {
+2589:                self.top_modifiers().m.group_by.push(v);
+2597:                    .push(Ctl::Modifiers(ModStage::GroupBracketed));
+2602:                self.machine.ctl.push(Ctl::Modifiers(ModStage::GroupBare));
+2632:                .push(Ctl::Modifiers(ModStage::HavingBracketed));
+2635:            self.machine.ctl.push(Ctl::Modifiers(ModStage::HavingBare));
+2690:        self.machine.ctl.push(Ctl::Modifiers(stage));
+2740:                    self.top_modifiers().m.group_by.push(v);
+2750:                m.group_extends.push((var.clone(), expr));
+2751:                m.group_by.push(var);
+2757:                m.group_extends.push((var.clone(), expr));
+2758:                m.group_by.push(var);
+2762:                self.top_modifiers().aggregates.extend(lifted);
+2764:                self.top_modifiers().m.having.push(expr);
+2769:                state.aggregates.extend(lifted);
+2770:                state.m.having.push(expr);
+2774:                self.top_modifiers().aggregates.extend(lifted);
+2781:                self.top_modifiers().m.order_by.push(key);
+2786:                state.aggregates.extend(lifted);
+2787:                state.m.order_by.push(OrderExpression::Asc(expr));

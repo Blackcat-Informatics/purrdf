@@ -1,0 +1,879 @@
+diff --git a/crates/xsd/src/numeric.rs b/crates/xsd/src/numeric.rs
+--- a/crates/xsd/src/numeric.rs
++++ b/crates/xsd/src/numeric.rs
+@@ -786,6 +786,64 @@
+         |output| std::fmt::write(output, format_args!("{value:e}")))
+ }
+ 
++fn xpath_ieee_text(
++    value: f64, plain: impl FnOnce(&mut CanonicalFloatText) -> std::fmt::Result,
++    canonical: impl FnOnce() -> CanonicalFloatText,
++) -> CanonicalFloatText {
++    use std::fmt::Write;
++    let special = if value.is_nan() { Some("NaN") } else if value.is_infinite() {
++        Some(if value > 0.0 { "INF" } else { "-INF" })
++    } else if value == 0.0 { Some(if value.is_sign_negative() { "-0" } else { "0" }) } else { None };
++    if let Some(text) = special {
++        let mut output = CanonicalFloatText::empty();
++        output.write_str(text).expect("XPath IEEE special fits inline");
++        return output;
++    }
++    let magnitude = value.abs();
++    // The double written 1e-6 lies just below one millionth: retain the
++    // existing F&O test rather than changing the lower-bound rounding law.
++    if magnitude > 1e-6 && magnitude < 1e6 {
++        let mut output = CanonicalFloatText::empty();
++        plain(&mut output).expect("XPath plain IEEE text fits inline");
++        output
++    } else { canonical() }
++}
++
++/// XPath's double-to-string text, distinct from canonical RDF literal text.
++#[must_use]
++pub fn xpath_double_text(value: f64) -> CanonicalFloatText {
++    xpath_ieee_text(value, |output| std::fmt::write(output, format_args!("{value}")),
++        || canonical_double_text(value))
++}
++
++/// XPath's float-to-string text at the original single precision.
++#[must_use]
++pub fn xpath_float_text(value: f32) -> CanonicalFloatText {
++    xpath_ieee_text(f64::from(value), |output| std::fmt::write(output, format_args!("{value}")),
++        || canonical_float_text(value))
++}
++
++/// Prepare the numeric/boolean XPath cast-to-string law under the same native
++/// exact renderer admission. Boolean and IEEE text stay inline.
++/// # Errors
++/// Returns physical native render/admission refusal before final allocation.
++pub fn prepare_xpath_text(
++    value: &XsdValue,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Option<PreparedNumericText>, crate::bigint::LimbScratchError> {
++    match value {
++        XsdValue::Boolean(value) => {
++            use std::fmt::Write;
++            let mut text = CanonicalFloatText::empty();
++            text.write_str(if *value { "true" } else { "false" }).expect("Boolean lexical fits inline");
++            Ok(Some(PreparedNumericText::Ieee(text)))
++        }
++        XsdValue::Float(value) => Ok(Some(PreparedNumericText::Ieee(xpath_float_text(*value)))),
++        XsdValue::Double(value) => Ok(Some(PreparedNumericText::Ieee(xpath_double_text(*value)))),
++        other => prepare_numeric_text(other, admit),
++    }
++}
++
+ /// XSD canonical double as a resident owned String.
+ #[must_use]
+ pub fn canonical_double(value: f64) -> String {
+@@ -1306,6 +1364,165 @@
+     }
+ }
+ 
++/// The fixed unary operations whose native destinations must be admitted first.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum NumericUnaryOperator {
++    /// Numeric identity; evaluator carriers can share their existing payload.
++    Plus,
++    /// Negation, including the value-space duration extension.
++    Minus,
++    /// Absolute value.
++    Abs,
++    /// Ceiling, keeping the numeric family.
++    Ceil,
++    /// Floor, keeping the numeric family.
++    Floor,
++    /// XPath round with ties toward positive infinity.
++    Round,
++}
++
++/// Unary arithmetic using existing kernels with physical admission before copies.
++/// # Errors
++/// Numerical/type failures are distinct from native destination refusal.
++pub fn numeric_unary_admitted(
++    value: &XsdValue, op: NumericUnaryOperator,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<XsdValue, NumericOperationError> {
++    use crate::exact::{Integer, Rounding, cost::NumericOperationLayout};
++    let copied = |bytes: u64| -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
++        let bytes = usize::try_from(bytes).map_err(|_| crate::bigint::LimbScratchError::SizeOverflow)?;
++        NumericOperationLayout::bytes(bytes, bytes)
++    };
++    match value {
++        XsdValue::BigInteger { value, datatype } => {
++            admit(copied(value.heap_bytes())?)?;
++            let result = match op {
++                NumericUnaryOperator::Minus => value.try_neg()?,
++                NumericUnaryOperator::Abs => value.try_abs()?,
++                _ => value.try_copy()?,
++            };
++            Ok(XsdValue::from_exact_integer(result, if op == NumericUnaryOperator::Plus { *datatype } else { XsdDatatype::Integer }))
++        }
++        XsdValue::BigDecimal(value) => {
++            let result = match op {
++                NumericUnaryOperator::Ceil => value.try_round_admitted(0, Rounding::Ceiling, admit)?,
++                NumericUnaryOperator::Floor => value.try_round_admitted(0, Rounding::Floor, admit)?,
++                NumericUnaryOperator::Round => value.try_round_admitted(0, Rounding::HalfCeiling, admit)?,
++                _ => {
++                    admit(copied(value.unscaled().heap_bytes())?)?;
++                    match op {
++                        NumericUnaryOperator::Minus => value.try_neg()?,
++                        NumericUnaryOperator::Abs => value.try_abs()?,
++                        _ => value.try_copy()?,
++                    }
++                }
++            };
++            Ok(XsdValue::from_exact_decimal(result))
++        }
++        XsdValue::Integer { value, .. }
++            if *value == i128::MIN && matches!(op, NumericUnaryOperator::Minus | NumericUnaryOperator::Abs) => {
++            let value = Integer::from_i128(*value);
++            admit(copied(value.heap_bytes())?)?;
++            let result = if op == NumericUnaryOperator::Minus { value.try_neg()? } else { value.try_abs()? };
++            Ok(XsdValue::from_exact_integer(result, XsdDatatype::Integer))
++        }
++        XsdValue::Decimal(value)
++            if value.mantissa() == i128::MIN && matches!(op, NumericUnaryOperator::Minus | NumericUnaryOperator::Abs) => {
++            let value = crate::exact::Decimal::from_bounded(value);
++            admit(copied(value.unscaled().heap_bytes())?)?;
++            let result = if op == NumericUnaryOperator::Minus { value.try_neg()? } else { value.try_abs()? };
++            Ok(XsdValue::from_exact_decimal(result))
++        }
++        _ => match op {
++            NumericUnaryOperator::Plus => numeric_unary_plus(value),
++            NumericUnaryOperator::Minus => crate::ops::value_unary_minus(value),
++            NumericUnaryOperator::Abs => numeric_abs_bounded(value),
++            NumericUnaryOperator::Ceil => numeric_ceil_bounded(value),
++            NumericUnaryOperator::Floor => numeric_floor_bounded(value),
++            NumericUnaryOperator::Round => numeric_round_bounded(value),
++        }.map_err(NumericOperationError::Value),
++    }
++}
++
++/// The numeric/boolean cast law using the existing exact native conversion bodies.
++/// # Errors
++/// Physical admission/refusal is separate from an out-of-domain cast (None).
++pub fn numeric_cast_admitted(
++    source: &XsdValue, target: XsdDatatype,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Option<XsdValue>, crate::bigint::LimbScratchError> {
++    use crate::exact::{Decimal as ExactDecimal, Integer, ExactOperationError, cost::NumericOperationLayout};
++    let copy_integer = |value: &Integer, admit: &mut dyn FnMut(NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>| {
++        let bytes = usize::try_from(value.heap_bytes()).map_err(|_| crate::bigint::LimbScratchError::SizeOverflow)?;
++        admit(NumericOperationLayout::bytes(bytes, bytes)?)?;
++        value.try_copy()
++    };
++    let exact_binary = |value: f64, admit: &mut dyn FnMut(NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>| -> Result<Option<XsdValue>, crate::bigint::LimbScratchError> {
++        if target == XsdDatatype::Decimal {
++            return match ExactDecimal::try_from_f64_admitted(value, &mut |layout| admit(layout)) {
++                Ok(value) => Ok(Some(XsdValue::from_exact_decimal(value))),
++                Err(ExactOperationError::Value(_)) => Ok(None),
++                Err(ExactOperationError::Storage(error)) => Err(error),
++            };
++        }
++        match Integer::try_from_f64_truncated_admitted(value, &mut |layout| admit(layout)) {
++            Ok(value) => Ok(target.admits_integer(&value).then(|| XsdValue::from_exact_integer(value, target))),
++            Err(ExactOperationError::Value(_)) => Ok(None),
++            Err(ExactOperationError::Storage(error)) => Err(error),
++        }
++    };
++    Ok(match target {
++        XsdDatatype::Double => {
++            let number = match source {
++                XsdValue::Boolean(value) => Some(f64::from(u8::from(*value))),
++                other => numeric_to_f64_admitted(other, admit)?,
++            };
++            number.map(XsdValue::Double)
++        }
++        XsdDatatype::Float => {
++            let number = match source {
++                XsdValue::Boolean(value) => Some(f32::from(u8::from(*value))),
++                other => numeric_to_f32_admitted(other, admit)?,
++            };
++            number.map(XsdValue::Float)
++        }
++        XsdDatatype::Boolean => match source {
++            XsdValue::Boolean(value) => Some(XsdValue::Boolean(*value)),
++            other if other.is_numeric() => crate::effective_boolean_value(other).map(XsdValue::Boolean),
++            _ => None,
++        },
++        XsdDatatype::Decimal => match source {
++            XsdValue::Integer { value, .. } => Some(XsdValue::Decimal(Decimal::from_integer(*value))),
++            XsdValue::Decimal(value) => Some(XsdValue::Decimal(*value)),
++            XsdValue::Boolean(value) => Some(XsdValue::Decimal(Decimal::from_integer(i128::from(*value)))),
++            XsdValue::BigInteger { value, .. } =>
++                Some(XsdValue::from_exact_decimal(ExactDecimal::from_integer(copy_integer(value, admit)?))),
++            XsdValue::BigDecimal(value) => {
++                let bytes = usize::try_from(value.unscaled().heap_bytes()).map_err(|_| crate::bigint::LimbScratchError::SizeOverflow)?;
++                admit(NumericOperationLayout::bytes(bytes, bytes)?)?;
++                Some(XsdValue::from_exact_decimal(value.try_copy()?))
++            }
++            XsdValue::Float(value) => return exact_binary(f64::from(*value), admit),
++            XsdValue::Double(value) => return exact_binary(*value, admit),
++            _ => None,
++        },
++        target if target.is_integer_family() => {
++            let value = match source {
++                XsdValue::Integer { value, .. } => Integer::from_i128(*value),
++                XsdValue::Decimal(value) => Integer::from_i128(value.whole_part()),
++                XsdValue::Boolean(value) => Integer::from_i128(i128::from(*value)),
++                XsdValue::BigInteger { value, .. } => copy_integer(value, admit)?,
++                XsdValue::BigDecimal(value) => value.try_to_integer_truncated_admitted(admit)?,
++                XsdValue::Float(value) => return exact_binary(f64::from(*value), admit),
++                XsdValue::Double(value) => return exact_binary(*value, admit),
++                _ => return Ok(None),
++            };
++            target.admits_integer(&value).then(|| XsdValue::from_exact_integer(value, target))
++        }
++        _ => None,
++    })
++}
++
+ // ── Numeric arithmetic (SPARQL §17.4 / XPath op:numeric-*) ──────────────────
+ 
+ /// Promote both operands to the least common type in the numeric tower, perform
+diff --git a/crates/xsd/src/simple.rs b/crates/xsd/src/simple.rs
+--- a/crates/xsd/src/simple.rs
++++ b/crates/xsd/src/simple.rs
+@@ -95,37 +95,46 @@
+ /// verbatim (it is not part of the XSD `whiteSpace` facet).
+ #[must_use]
+ pub fn normalize_whitespace_collapse(s: &str) -> String {
+-    // Chunked precheck: a value with no tab, line feed or carriage return, no
+-    // leading or trailing space and no two adjacent spaces is already collapsed,
+-    // and is returned unchanged — the common case, and one copy with no per-byte
+-    // loop.
+-    if is_collapsed(s.as_bytes()) {
+-        return s.to_owned();
+-    }
+-    // Byte scan copying each non-whitespace run with one `push_str`: the four
+-    // XSD whitespace bytes are ASCII (never inside a multi-byte sequence), so run
+-    // boundaries are char boundaries and the output matches the per-char loop.
+-    let mut out = String::with_capacity(s.len());
++    if is_collapsed(s.as_bytes()) { return s.to_owned(); }
++    let mut output = String::with_capacity(s.len());
++    write_collapsed(s, &mut output).expect("resident String formatting");
++    output
++}
++
++
++fn write_collapsed(s: &str, out: &mut impl core::fmt::Write) -> core::fmt::Result {
++    if is_collapsed(s.as_bytes()) { return out.write_str(s); }
+     let mut pending_space = false;
+     let mut run_start: Option<usize> = None;
++    let mut written = false;
+     for (i, b) in s.bytes().enumerate() {
+         if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
+             if let Some(start) = run_start.take() {
+-                out.push_str(&s[start..i]);
++                out.write_str(&s[start..i])?;
++                written = true;
+             }
+-            pending_space = !out.is_empty();
++            pending_space = written;
+         } else if run_start.is_none() {
+             if pending_space {
+-                out.push(' ');
++                out.write_str(" ")?;
+                 pending_space = false;
+             }
+             run_start = Some(i);
+         }
+     }
+-    if let Some(start) = run_start {
+-        out.push_str(&s[start..]);
++    if let Some(start) = run_start { out.write_str(&s[start..])?; }
++    Ok(())
++}
++
++/// Borrowed whiteSpace=collapse formatting through the same native normalizer.
++/// It supports measuring an exact destination before any owned copy.
++#[derive(Debug, Clone, Copy)]
++pub struct CollapsedWhitespace<'a>(pub &'a str);
++
++impl core::fmt::Display for CollapsedWhitespace<'_> {
++    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        write_collapsed(self.0, formatter)
+     }
+-    out
+ }
+ 
+ /// Bytes per precheck chunk: one 128-bit vector of bytes.
+diff --git a/crates/sparql-eval/src/native_numeric.rs b/crates/sparql-eval/src/native_numeric.rs
+--- a/crates/sparql-eval/src/native_numeric.rs
++++ b/crates/sparql-eval/src/native_numeric.rs
+@@ -110,4 +110,14 @@
+         }
+     }
+ 
++    pub(crate) fn finish_cast(
++        self, result: Result<Option<purrdf_xsd::XsdValue>, LimbScratchError>,
++    ) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
++        match result {
++            Ok(None) => self.finish_scalar(Ok(())).map(|()| None),
++            Ok(Some(value)) => self.finish_value(Ok(value)).map(Result::ok),
++            Err(error) => self.finish_scalar::<()>(Err(error)).map(|()| None),
++        }
++    }
++
+ }
+diff --git a/crates/sparql-eval/src/vm/mod.rs b/crates/sparql-eval/src/vm/mod.rs
+--- a/crates/sparql-eval/src/vm/mod.rs
++++ b/crates/sparql-eval/src/vm/mod.rs
+@@ -526,7 +526,7 @@
+                     stack.push(Val::Term(helpers::unary_numeric_term(
+                         ctx,
+                         operand,
+-                        purrdf_xsd::numeric_unary_plus,
++                        purrdf_xsd::numeric::NumericUnaryOperator::Plus,
+                     )?));
+                 }
+                 Op::UnaryMinus => {
+@@ -534,7 +534,7 @@
+                     stack.push(Val::Term(helpers::unary_numeric_term(
+                         ctx,
+                         operand,
+-                        purrdf_xsd::value_unary_minus,
++                        purrdf_xsd::numeric::NumericUnaryOperator::Minus,
+                     )?));
+                 }
+                 Op::Exists(site) => {
+diff --git a/crates/sparql-eval/src/vm/tests.rs b/crates/sparql-eval/src/vm/tests.rs
+--- a/crates/sparql-eval/src/vm/tests.rs
++++ b/crates/sparql-eval/src/vm/tests.rs
+@@ -185,11 +185,11 @@
+             }
+             Expression::UnaryPlus(a) => {
+                 let ta = self.term(a, row, schema, ctx)?;
+-                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::numeric_unary_plus).unwrap())
++                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::numeric::NumericUnaryOperator::Plus).unwrap())
+             }
+             Expression::UnaryMinus(a) => {
+                 let ta = self.term(a, row, schema, ctx)?;
+-                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::value_unary_minus).unwrap())
++                Ok(helpers::unary_numeric_term(ctx, ta, purrdf_xsd::numeric::NumericUnaryOperator::Minus).unwrap())
+             }
+             Expression::FunctionCall(function, args) => {
+                 self.function(function, args, row, schema, ctx)
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -47,7 +47,6 @@
+     numeric::{
+         CostOp, numeric_cost, numeric_render_cost, numeric_to_float_cost, numeric_unary_cost,
+     },
+-    numeric_abs, numeric_ceil, numeric_floor, numeric_round,
+     parse_by_iri, parse_xsd10, value_cmp, value_equal,
+ };
+ use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trait
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -4420,10 +4420,10 @@
+ 
+         // ---- numeric math functions (ABS/CEIL/FLOOR/ROUND) ----------------
+         // All four are strict in one numeric argument; type errors → Ok(None).
+-        Function::Abs => unary_numeric_fn(ctx, vals, numeric_abs),
+-        Function::Ceil => unary_numeric_fn(ctx, vals, numeric_ceil),
+-        Function::Floor => unary_numeric_fn(ctx, vals, numeric_floor),
+-        Function::Round => unary_numeric_fn(ctx, vals, numeric_round),
++        Function::Abs => unary_numeric_fn(ctx, vals, purrdf_xsd::numeric::NumericUnaryOperator::Abs),
++        Function::Ceil => unary_numeric_fn(ctx, vals, purrdf_xsd::numeric::NumericUnaryOperator::Ceil),
++        Function::Floor => unary_numeric_fn(ctx, vals, purrdf_xsd::numeric::NumericUnaryOperator::Floor),
++        Function::Round => unary_numeric_fn(ctx, vals, purrdf_xsd::numeric::NumericUnaryOperator::Round),
+ 
+         // ---- ENCODE_FOR_URI -----------------------------------------------
+         Function::EncodeForUri => match string_arg(vals, 0) {
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -4760,8 +4760,8 @@
+ ///
+ /// A source with a numeric or `xsd:boolean` VALUE (a well-typed literal of a numeric
+ /// datatype or of `xsd:boolean`) is cast BY VALUE when the target is numeric,
+-/// `xsd:boolean` or `xsd:string` ([`cast_numeric_value`],
+-/// [`numeric_or_bool_to_xpath_string`]): `xsd:double("0.1"^^xsd:float)` is the double
++/// `xsd:boolean` or `xsd:string` ([`purrdf_xsd::numeric::numeric_cast_admitted`],
++/// [`purrdf_xsd::numeric::prepare_xpath_text`]): `xsd:double("0.1"^^xsd:float)` is the double
+ /// value of the float `0.1`, which is `0.100000001490116119384765625`, NOT the double
+ /// nearest the digits `0.1`; `xsd:integer("16777217"^^xsd:float)` is `16777216`; and
+ /// `xsd:decimal("5.355e1"^^xsd:double)` is the decimal nearest the double's value,
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -4800,16 +4800,17 @@
+         }
+         _ => return Ok(None),
+     };
+-    if let Some(value) = xsd_of(source).filter(is_numeric_or_boolean) {
++    let parsed_source = match source_datatype {
++        Some(datatype) => crate::parsed_value::ParsedValue::parse(lexical, datatype, false, &ctx.growth)?,
++        None => None,
++    };
++    if let Some(value) = parsed_source.filter(|value| is_numeric_or_boolean(value)) {
+         if target == XsdDatatype::String {
+             // The string is the value's canonical rendering, priced first.
+             if !numeric_step_admitted(ctx, numeric_render_cost(&value)) {
+                 return Ok(None);
+             }
+-            let Some(text) = numeric_or_bool_to_xpath_string(&value) else {
+-                return Ok(None);
+-            };
+-            return Ok(Some(string_term(ctx, &text)?));
++            return xpath_value_to_term(ctx, &value);
+         }
+         if target.is_numeric() || target == XsdDatatype::Boolean {
+             // A conversion to a binary format, or a truncation or copy on the tower,
+@@ -4823,12 +4824,12 @@
+                 return Ok(None);
+             }
+             // A failed cast is an expression error; failed interning is operational.
+-            return match cast_numeric_value(&value, target) {
++            let capability = ctx.growth.clone();
++            let mut frame = crate::native_numeric::NumericFrame::new(&capability);
++            let cast = purrdf_xsd::numeric::numeric_cast_admitted(&value, target, &mut |layout| frame.admit(layout));
++            return match frame.finish_cast(cast)? {
+                 Some(cast) => governed_xsd_to_term(ctx, &cast),
+-                None => {
+-                    ctx.record_expression_error(Some(cast_error_code(&value)));
+-                    Ok(None)
+-                }
++                None => { ctx.record_expression_error(Some(cast_error_code(&value))); Ok(None) }
+             };
+         }
+     }
+@@ -4837,13 +4838,8 @@
+     if target.is_calendar() {
+         match calendar_cast_source(lexical, datatype_iri, source_datatype) {
+             CalendarSource::Value(source_datatype) => {
+-                let Some(value) = parse_xsd10(lexical, source_datatype)
+-                    .ok()
+-                    .and_then(|value| {
+-                        purrdf_xsd::temporal::cast_calendar(&value, target)
+-                            .ok()
+-                            .flatten()
+-                    })
++                let Some(value) = crate::parsed_value::ParsedValue::parse(lexical, source_datatype, true, &ctx.growth)?
++                    .and_then(|value| purrdf_xsd::temporal::cast_calendar(&value, target).ok().flatten())
+                 else {
+                     return Ok(None);
+                 };
+@@ -4863,20 +4859,20 @@
+     // `whiteSpace` facet (XPath F&O 3.1 §19.2): `collapse` for every non-string
+     // target here, so `xsd:integer(" 12 ")` is 12. A non-string source's lexical
+     // form is its own and is read as written.
++    let mut _collapsed_owner = None;
+     let collapsed;
+     let lexical = if target != XsdDatatype::String && is_string_row(datatype_iri) {
+-        collapsed = collapse_whitespace(lexical);
++        let view = purrdf_xsd::simple::CollapsedWhitespace(lexical);
++        let length = crate::workspace::display_len(&view)?;
++        _collapsed_owner = Some(ctx.growth.charge(u64::try_from(length).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?);
++        collapsed = crate::workspace::format_exact(&view, length, "XSD cast whitespace destination")?;
+         collapsed.as_str()
+-    } else {
+-        lexical.as_str()
+-    };
+-    // The operand-mapping rules pin XSD 1.0, excluding +INF for float/double.
+-    match parse_xsd10(lexical, target) {
++    } else { lexical.as_str() };
++    // One native parser; malformed lexical and physical refusal stay separate.
++    match crate::parsed_value::ParsedValue::parse_coded(lexical, target, true, &ctx.growth)? {
+         Ok(value) => governed_xsd_to_term(ctx, &value),
+-        Err(error) => {
+-            if target.is_numeric() {
+-                ctx.record_expression_error(error.code());
+-            }
++        Err(code) => {
++            if target.is_numeric() { ctx.record_expression_error(code); }
+             Ok(None)
+         }
+     }
+@@ -4885,7 +4881,7 @@
+ /// The XPath F&O error a refused by-value numeric cast of `source` is:
+ /// `err:FOCA0002` for `NaN` or an infinity, which has no exact value, and
+ /// `err:FORG0001` for a value outside the target's value space (`xsd:byte` of
+-/// `300`) — the only two ways [`cast_numeric_value`] refuses a numeric source.
++/// `300`) — the only two ways [`purrdf_xsd::numeric::numeric_cast_admitted`] refuses a numeric source.
+ fn cast_error_code(source: &XsdValue) -> purrdf_xsd::ErrorCode {
+     let not_finite = match source {
+         XsdValue::Float(value) => !value.is_finite(),
+@@ -4899,7 +4895,7 @@
+     }
+ }
+ 
+-/// Whether `value` lies in the domain [`cast_numeric_value`] casts by value: a number
++/// Whether `value` lies in the domain [`purrdf_xsd::numeric::numeric_cast_admitted`] casts by value: a number
+ /// of any numeric datatype, or a boolean.
+ const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
+     matches!(
+@@ -4923,16 +4919,6 @@
+             .is_some_and(|local| matches!(xsd_builtin_cast_row(local), Some(CastRow::Str)))
+ }
+ 
+-/// XML Schema's `whiteSpace="collapse"`: each run of space, tab, carriage return and
+-/// line feed becomes one space, and leading and trailing runs are removed.
+-fn collapse_whitespace(lexical: &str) -> String {
+-    lexical
+-        .split([' ', '\t', '\r', '\n'])
+-        .filter(|part| !part.is_empty())
+-        .collect::<Vec<_>>()
+-        .join(" ")
+-}
+-
+ /// How a literal of datatype `datatype` casts to a calendar target (XPath F&O 3.1
+ /// §19.1, the `dT`/`d`/`t`/`g*` columns).
+ enum CalendarSource {
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -5212,225 +5212,6 @@
++#[cfg(test)]
+ fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
+-    if matches!(
+-        source,
+-        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_)
+-    ) {
+-        return cast_big_numeric(source, target);
+-    }
+-    match target {
+-        XsdDatatype::Double => Some(XsdValue::Double(match source {
+-            // Rust's integer-to-float conversion rounds to nearest, ties to even.
+-            XsdValue::Integer { value, .. } => *value as f64,
+-            XsdValue::Decimal(d) => d.to_f64(),
+-            XsdValue::Float(f) => f64::from(*f),
+-            XsdValue::Double(d) => *d,
+-            XsdValue::Boolean(b) => f64::from(u8::from(*b)),
+-            _ => return None,
+-        })),
+-        // An exact source is rounded ONCE, straight to single precision: going
+-        // through `f64` first would round twice.
+-        XsdDatatype::Float => Some(XsdValue::Float(match source {
+-            XsdValue::Integer { value, .. } => *value as f32,
+-            XsdValue::Decimal(d) => d.to_f32(),
+-            XsdValue::Float(f) => *f,
+-            XsdValue::Double(d) => *d as f32,
+-            XsdValue::Boolean(b) => f32::from(u8::from(*b)),
+-            _ => return None,
+-        })),
+-        XsdDatatype::Boolean => Some(XsdValue::Boolean(match source {
+-            XsdValue::Integer { value, .. } => *value != 0,
+-            XsdValue::Decimal(d) => !d.is_zero(),
+-            XsdValue::Float(f) => *f != 0.0 && !f.is_nan(),
+-            XsdValue::Double(d) => *d != 0.0 && !d.is_nan(),
+-            XsdValue::Boolean(b) => *b,
+-            _ => return None,
+-        })),
+-        XsdDatatype::Decimal => Some(XsdValue::Decimal(match source {
+-            XsdValue::Integer { value, .. } => purrdf_xsd::Decimal::from_integer(*value),
+-            XsdValue::Decimal(d) => *d,
+-            XsdValue::Float(f) => return cast_binary_exact(f64::from(*f), target),
+-            XsdValue::Double(d) => return cast_binary_exact(*d, target),
+-            XsdValue::Boolean(b) => purrdf_xsd::Decimal::from_integer(i128::from(*b)),
+-            _ => return None,
+-        })),
+-        target if target.is_integer_family() => {
+-            let value = match source {
+-                XsdValue::Integer { value, .. } => *value,
+-                // Exact truncation: through `f64` a decimal's integer part would
+-                // round past 2^53 (`12345678901234567.5` would become `…568`).
+-                XsdValue::Decimal(d) => d.whole_part(),
+-                XsdValue::Float(f) => match truncate_to_i128(f64::from(*f)) {
+-                    Some(value) => value,
+-                    None => return cast_binary_exact(f64::from(*f), target),
+-                },
+-                XsdValue::Double(d) => match truncate_to_i128(*d) {
+-                    Some(value) => value,
+-                    None => return cast_binary_exact(*d, target),
+-                },
+-                XsdValue::Boolean(b) => i128::from(*b),
+-                _ => return None,
+-            };
+-            if let Some((min, max)) = target.integer_range()
+-                && !(min..=max).contains(&value)
+-            {
+-                return None;
+-            }
+-            Some(XsdValue::Integer {
+-                value,
+-                datatype: target,
+-            })
+-        }
+-        _ => None,
+-    }
+-}
+-
+-/// [`cast_numeric_value`] of an `xsd:integer` or `xsd:decimal` value past the bounded
+-/// variants. Out of line and cold: the expression evaluator recurses through
+-/// `cast_numeric_value`, and the tower's temporaries must not enlarge its frame.
+-#[cold]
+-#[inline(never)]
+-fn cast_big_numeric(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
+-    match target {
+-        XsdDatatype::Double => Some(XsdValue::Double(match source {
+-            XsdValue::BigInteger { value, .. } => value.to_f64(),
+-            XsdValue::BigDecimal(d) => d.to_f64(),
+-            _ => return None,
+-        })),
+-        XsdDatatype::Float => Some(XsdValue::Float(match source {
+-            XsdValue::BigInteger { value, .. } => value.to_f32(),
+-            XsdValue::BigDecimal(d) => d.to_f32(),
+-            _ => return None,
+-        })),
+-        // A value past the bounded variants is never zero.
+-        XsdDatatype::Boolean => Some(XsdValue::Boolean(true)),
+-        XsdDatatype::Decimal => source.to_exact_decimal().map(XsdValue::from_exact_decimal),
+-        target if target.is_integer_family() => {
+-            let value = match source {
+-                XsdValue::BigInteger { value, .. } => value.clone(),
+-                XsdValue::BigDecimal(d) => d.to_integer_truncated(),
+-                _ => return None,
+-            };
+-            target
+-                .admits_integer(&value)
+-                .then(|| XsdValue::from_exact_integer(value, target))
+-        }
+-        _ => None,
+-    }
+-}
+-
+-/// [`cast_numeric_value`] of an `xsd:float`/`xsd:double` to `xsd:decimal`, or of one
+-/// of magnitude `2^127` or more (always an integer) to an integer type: its exact
+-/// value — every finite binary value is a finite decimal, at most 1,074 fractional
+-/// digits, so the closest representable decimal F&O 3.1 §19.1.2.3 asks for is the
+-/// value itself — and `None` for `NaN`, the infinities (`err:FOCA0002`) and a value
+-/// outside the target's value space. Out of line and cold, as [`cast_big_numeric`]
+-/// is.
+-#[cold]
+-#[inline(never)]
+-fn cast_binary_exact(value: f64, target: XsdDatatype) -> Option<XsdValue> {
+-    if target == XsdDatatype::Decimal {
+-        return purrdf_xsd::exact::Decimal::from_f64(value)
+-            .ok()
+-            .map(XsdValue::from_exact_decimal);
+-    }
+-    let value = purrdf_xsd::exact::Integer::from_f64_truncated(value).ok()?;
+-    target
+-        .admits_integer(&value)
+-        .then(|| XsdValue::from_exact_integer(value, target))
+-}
+-
+-/// `value` with its fractional part discarded, or `None` for `NaN`, an infinity, or a
+-/// result outside `i128` (`err:FOCA0002`/`err:FOCA0003`). The bounds are exact powers
+-/// of two, so the comparison is exact and the final conversion never saturates.
+-fn truncate_to_i128(value: f64) -> Option<i128> {
+-    const LIMIT: f64 = 170_141_183_460_469_231_731_687_303_715_884_105_728.0; // 2^127
+-    let truncated = value.trunc();
+-    // `NaN` fails both comparisons; `-2^127` is `i128::MIN` itself.
+-    if (-LIMIT..LIMIT).contains(&truncated) {
+-        Some(truncated as i128)
+-    } else {
+-        None
+-    }
+-}
+-
+-/// The XPath F&O 3.1 §19.1.1 "Casting to `xs:string`" form of a boolean or numeric
+-/// value — DISTINCT from the value's XSD canonical **literal** lexical mapping (which
+-/// [`XsdValue::canonical_lexical`] provides for writing an actual `xsd:double`/
+-/// `xsd:float` term). Returns `None` for a non-numeric, non-boolean value.
+-///
+-/// - `xsd:boolean` → `"true"`/`"false"`.
+-/// - `xsd:integer` (and derived) → the plain decimal digits (no decimal point ever).
+-/// - `xsd:decimal` → its XSD 1.1 canonical lexical form: an integer-valued decimal has
+-///   no decimal point there (`1.0` → `"1"`), as the cast-to-string rule requires.
+-/// - `xsd:float`/`xsd:double` → [`xpath_float_to_string`]/[`xpath_double_to_string`].
+-fn numeric_or_bool_to_xpath_string(value: &XsdValue) -> Option<String> {
+-    match value {
+-        XsdValue::Boolean(b) => Some(if *b { "true" } else { "false" }.to_owned()),
+-        XsdValue::Integer { value, .. } => Some(value.to_string()),
+-        XsdValue::Decimal(d) => Some(d.canonical_lexical()),
+-        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => Some(value.canonical_lexical()),
+-        XsdValue::Float(f) => Some(xpath_float_to_string(*f)),
+-        XsdValue::Double(d) => Some(xpath_double_to_string(*d)),
+-        _ => None,
+-    }
+-}
+-
+-/// The cast-to-string special values (XPath F&O 3.1 §19.1.1): `"NaN"`, `"INF"`,
+-/// `"-INF"`, and `"0"`/`"-0"` for the signed zeros.
+-fn xpath_special_string(value: f64) -> Option<&'static str> {
+-    if value.is_nan() {
+-        Some("NaN")
+-    } else if value.is_infinite() {
+-        Some(if value > 0.0 { "INF" } else { "-INF" })
+-    } else if value == 0.0 {
+-        Some(if value.is_sign_negative() { "-0" } else { "0" })
+-    } else {
+-        None
+-    }
+-}
+-
+-/// Whether a finite, non-zero value's magnitude lies in `[0.000001, 1000000)`, the
+-/// range XPath writes in plain decimal notation. The double written `1e-6` is a
+-/// little BELOW one millionth (`9.99999999999999954748e-7`), so the lower bound is
+-/// "greater than that double": no float or double lies strictly between it and one
+-/// millionth.
+-fn in_plain_notation_range(value: f64) -> bool {
+-    let magnitude = value.abs();
+-    magnitude > 1e-6 && magnitude < 1e6
+-}
+-
+-/// XPath's `xs:double` → `xs:string` cast (F&O 3.1 §19.1.1): the special values as
+-/// [`xpath_special_string`]; a magnitude in `[0.000001, 1000000)` in plain decimal
+-/// notation, with no decimal point for an integral value (`"0.1"`, `"123456.5"`,
+-/// `"100"`); every other value in scientific notation whose mantissa has exactly one
+-/// non-zero digit before its point and at least one after it (`"1.0E7"`,
+-/// `"1.25E-7"`). Both forms carry the shortest digit string that reads back as the
+-/// same double.
+-fn xpath_double_to_string(value: f64) -> String {
+-    if let Some(special) = xpath_special_string(value) {
+-        return special.to_owned();
+-    }
+-    if in_plain_notation_range(value) {
+-        // `Display` writes the shortest round-tripping digits, never an exponent.
+-        value.to_string()
+-    } else {
+-        purrdf_xsd::numeric::canonical_double(value)
+-    }
+-}
+-
+-/// XPath's `xs:float` → `xs:string` cast: [`xpath_double_to_string`]'s rule at SINGLE
+-/// precision — the shortest digit string that reads back as the same float, so the
+-/// float `0.1` is `"0.1"`, not the `"0.10000000149011612"` its widened double would
+-/// give.
+-fn xpath_float_to_string(value: f32) -> String {
+-    let wide = f64::from(value);
+-    if let Some(special) = xpath_special_string(wide) {
+-        return special.to_owned();
+-    }
+-    if in_plain_notation_range(wide) {
+-        value.to_string()
+-    } else {
+-        purrdf_xsd::numeric::canonical_float(value)
+-    }
++    purrdf_xsd::numeric::numeric_cast_admitted(source, target, &mut |_| Ok(())).ok().flatten()
+ }
+ 
+ /// `heldIn(reifier, standpoint) -> xsd:boolean` — DIRECT, non-transitive
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -6362,26 +6362,39 @@
+     let Some(text) = frame.finish_text(prepared)? else {
+         return typed_term(ctx, &v.canonical_lexical(), v.datatype().iri());
+     };
+-    let datatype = v.datatype().iri();
++    numeric_text_to_term(ctx, text, v.datatype().iri())?.ok_or(EvalError::WorkspaceBoundOverflow)
++}
++
++
++/// Final lexical output consumes its original producer grant on interning.
++fn numeric_text_to_term<D: DatasetView + Sync>(
++    ctx: &mut EvalCtx<'_, D>, text: crate::native_numeric::NumericText, datatype: &str,
++) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+     let bytes = text.len().checked_add(datatype.len()).ok_or(EvalError::WorkspaceBoundOverflow)?;
+-    // Final lexical/datatype allocation is separate from the still-live groups.
+-    let admission = ctx.admit_computed(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++    let admission = ctx.growth.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+     let mut lexical = String::new();
+     lexical.try_reserve_exact(text.len()).map_err(|_| EvalError::AllocationFailed { construct: "numeric lexical destination" })?;
+     text.write_to(&mut lexical)?;
+     drop(text);
+-    let before = ctx.scratch.owned_value_count();
+     let value = TermValue::Literal {
+         lexical_form: lexical,
+         datatype: crate::workspace::string(datatype, "numeric literal datatype")?,
+         language: None,
+         direction: None,
+     };
+-    let term = ctx.scratch.try_intern_admitted(ctx.dataset, value, &ctx.growth)?;
+-    if ctx.scratch.owned_value_count() > before { ctx.keep_computed(admission); }
+-    Ok(term)
++    ctx.intern_workspace_term(crate::WorkspaceTerm::new(value, admission))
+ }
+ 
++fn xpath_value_to_term<D: DatasetView + Sync>(
++    ctx: &mut EvalCtx<'_, D>, value: &XsdValue,
++) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
++    let capability = ctx.growth.clone();
++    let mut frame = crate::native_numeric::NumericFrame::new(&capability);
++    let prepared = purrdf_xsd::numeric::prepare_xpath_text(value, &mut |layout| frame.admit(layout));
++    let Some(text) = frame.finish_text(prepared)? else { return Ok(None); };
++    numeric_text_to_term(ctx, text, XSD_STRING)
++}
++
+ /// [`xsd_to_term`]'s value-only half: the canonical typed-literal [`TermValue`] for a
+ /// computed [`XsdValue`], with no interning. Shared with `crate::modifier`'s built-in
+ /// aggregate accumulators, whose [`crate::agg_fn::AggregateAccumulator::finish`] produces
+@@ -6500,24 +6513,11 @@
+ pub(crate) fn unary_numeric_term<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>,
+     operand: Option<SolutionTerm<D::Id>>,
+-    op: impl Fn(&XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
++    op: purrdf_xsd::numeric::NumericUnaryOperator,
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let Some(operand) = operand else {
+-        return Ok(None);
+-    };
+-    let Some(xa) = xsd_of_term(ctx, operand)? else {
+-        return Ok(None);
+-    };
+-    if !numeric_step_admitted(ctx, numeric_unary_cost(&xa)) {
+-        return Ok(None);
+-    }
+-    match op(&xa) {
+-        Ok(result) => governed_xsd_to_term(ctx, &result),
+-        Err(error) => {
+-            ctx.record_expression_error(error.code());
+-            Ok(None)
+-        }
+-    }
++    let Some(operand) = operand else { return Ok(None); };
++    let Some(value) = xsd_of_term(ctx, operand)? else { return Ok(None); };
++    apply_unary_numeric(ctx, value, op)
+ }
+ 
+ /// Apply a unary numeric function from the `vals` pre-evaluated argument list.
+@@ -6525,20 +6525,31 @@
+ fn unary_numeric_fn<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>,
+     vals: &[Option<TermValue>],
+-    op: impl Fn(&XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
++    op: purrdf_xsd::numeric::NumericUnaryOperator,
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let Some(xa) = arg(vals, 0).and_then(xsd_of) else {
++    let Some(TermValue::Literal { lexical_form, datatype, .. }) = arg(vals, 0) else {
+         return Ok(None);
+     };
+-    if !numeric_step_admitted(ctx, numeric_unary_cost(&xa)) {
+-        return Ok(None);
++    let Some(value) = parse_owned_xsd(lexical_form, datatype, &ctx.growth)? else { return Ok(None); };
++    apply_unary_numeric(ctx, value, op)
++}
++
++
++fn apply_unary_numeric<D: DatasetView + Sync>(
++    ctx: &mut EvalCtx<'_, D>, value: crate::parsed_value::ParsedValue,
++    op: purrdf_xsd::numeric::NumericUnaryOperator,
++) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
++    if !numeric_step_admitted(ctx, numeric_unary_cost(&value)) { return Ok(None); }
++    // Identity keeps the same immutable parsed allocation, including its subtype.
++    if op == purrdf_xsd::numeric::NumericUnaryOperator::Plus && value.is_numeric() {
++        return governed_xsd_to_term(ctx, &value);
+     }
+-    match op(&xa) {
+-        Ok(result) => governed_xsd_to_term(ctx, &result),
+-        Err(error) => {
+-            ctx.record_expression_error(error.code());
+-            Ok(None)
+-        }
++    let capability = ctx.growth.clone();
++    let mut frame = crate::native_numeric::NumericFrame::new(&capability);
++    let computed = purrdf_xsd::numeric::numeric_unary_admitted(&value, op, &mut |layout| frame.admit(layout));
++    match frame.finish_value(computed)? {
++        Ok(value) => governed_xsd_to_term(ctx, &value),
++        Err(code) => { ctx.record_expression_error(code); Ok(None) }
+     }
+ }
+ 
+

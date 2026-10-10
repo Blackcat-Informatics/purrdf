@@ -1,0 +1,368 @@
+--- a/crates/sparql-algebra/src/error.rs
++++ b/crates/sparql-algebra/src/error.rs
+@@ -187,7 +187,7 @@
+                 if let Some(detail) = detail {
+                     return presentation
+                         .try_with_detail_with_memory(detail, memory)
+-                        .map_err(presentation_storage);
++                        .map_err(|error| presentation_storage(&error));
+                 }
+             }
+         }
+@@ -196,16 +196,16 @@
+ 
+     /// The parse condition's own presentation, without secondary detail: what
+     /// `Display` renders.
++    fn own_presentation(&self) -> DiagnosticPresentation {
++        let mut resident = purrdf_lex::allocation::Resident;
++        self.own_presentation_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
++            .expect("resident parse presentation allocation")
++    }
++
+     #[expect(
+         clippy::literal_string_with_formatting_args,
+         reason = "these templates are validated and rendered by DiagnosticPresentation"
+     )]
+-    fn own_presentation(&self) -> DiagnosticPresentation {
+-        let mut resident = purrdf_lex::allocation::Resident;
+-        self.own_presentation_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
+-            .expect("resident parse presentation allocation")
+-    }
+-
+     fn own_presentation_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+         &self,
+         memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+@@ -334,7 +334,7 @@
+         // arm, and `presentation_is_independent_of_field_values` feeds each one
+         // template-like text, so a drifted arm fails the test suite, not a caller.
+         DiagnosticPresentation::try_new_with_memory(identity, template, parameters, memory)
+-            .map_err(presentation_storage)
++            .map_err(|error| presentation_storage(&error))
+     }
+ 
+     /// Capacity of the original raw error text; intrinsic leaf owners are separate.
+@@ -489,6 +489,15 @@
+ /// Convenience alias for fallible SPARQL parse operations.
+ pub type Result<T> = core::result::Result<T, ParseError>;
+ 
++fn presentation_storage(
++    error: &purrdf_lex::diagnostic::DiagnosticPresentationError,
++) -> purrdf_lex::allocation::StorageError {
++    match error {
++        purrdf_lex::diagnostic::DiagnosticPresentationError::Storage(error) => *error,
++        _ => panic!("fixed diagnostic templates and typed arguments disagree"),
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -732,12 +741,3 @@
+         assert!(ParseError::unsupported("SERVICE").locate(src).is_none());
+     }
+ }
+-
+-fn presentation_storage(
+-    error: purrdf_lex::diagnostic::DiagnosticPresentationError,
+-) -> purrdf_lex::allocation::StorageError {
+-    match error {
+-        purrdf_lex::diagnostic::DiagnosticPresentationError::Storage(error) => error,
+-        _ => panic!("fixed diagnostic templates and typed arguments disagree"),
+-    }
+-}
+--- a/crates/sparql-algebra/src/lexer.rs
++++ b/crates/sparql-algebra/src/lexer.rs
+@@ -143,7 +143,7 @@
+     pub end: usize,
+ }
+ 
+-impl<'a> Spanned<'a> {
++impl Spanned<'_> {
+     pub(crate) fn clone_with_memory<S: Admission + ?Sized>(
+         &self,
+         memory: &mut Memory<'_, S>,
+--- a/crates/sparql-algebra/src/parser/machine.rs
++++ b/crates/sparql-algebra/src/parser/machine.rs
+@@ -75,10 +75,10 @@
+         if !matches!(node, NodeRef::Expr(Expression::Exists(_))) {
+             let mut failure = None;
+             node.for_each_child(|child| {
+-                if failure.is_none() {
+-                    if let Err(error) = memory.push(&mut pending, child) {
+-                        failure = Some(error);
+-                    }
++                if failure.is_none()
++                    && let Err(error) = memory.push(&mut pending, child)
++                {
++                    failure = Some(error);
+                 }
+             });
+             if let Some(failure) = failure {
+@@ -392,6 +392,10 @@
+ }
+ 
+ /// What a finished production hands to the one it was nested in.
++#[expect(
++    clippy::large_enum_variant,
++    reason = "production values stay inline; native buffers admit the exact Val layout before growth without allocating a separate box per value"
++)]
+ enum Val {
+     /// An expression, with the aggregates it lifted (empty unless its sink lifts).
+     Expr(Expression, Vec<Lifted>),
+@@ -421,6 +425,10 @@
+ }
+ 
+ /// What the machine does next.
++#[expect(
++    clippy::large_enum_variant,
++    reason = "the next machine step is an inline value; boxing Return would add a separate allocation outside the native frame-buffer layout"
++)]
+ enum Step {
+     /// Read an operand of the innermost expression.
+     Operand,
+@@ -2514,6 +2522,10 @@
+             if !self.pending_exists_scope_checks.is_empty() {
+                 let mut pending_checks = std::mem::take(&mut self.pending_exists_scope_checks);
+                 let mut agg_arg_scope: Option<VarScope> = None;
++                #[expect(
++                    clippy::iter_with_drain,
++                    reason = "draining moves each payload while retaining its original admitted Vec buffer until release_vec destroys that buffer before refund"
++                )]
+                 for pending in pending_checks.drain(..) {
+                     let root = match pending.basis {
+                         ExistsScopeBasis::Projection => &in_scope,
+@@ -2715,7 +2727,7 @@
+                     |visit, node, _| {
+                         if visit == crate::walk::Visit::Enter {
+                             node.for_each_variable(|name| {
+-                                order_has_aggregates |= lifted.contains(name)
++                                order_has_aggregates |= lifted.contains(name);
+                             });
+                         }
+                         Ok::<_, ParseError>(crate::walk::Flow::Descend)
+--- a/crates/sparql-algebra/src/parser/triples.rs
++++ b/crates/sparql-algebra/src/parser/triples.rs
+@@ -76,7 +76,7 @@
+                 }
+             }
+             PropertyPathExpression::Reverse(inner) => {
+-                pending.try_push_admitted((inner, !inverse), memory)?
++                pending.try_push_admitted((inner, !inverse), memory)?;
+             }
+             PropertyPathExpression::Sequence(elements) => {
+                 let queued = pending.len();
+@@ -118,6 +118,10 @@
+ }
+ 
+ /// One step of the certified predicate path's relational translation.
++#[expect(
++    clippy::large_enum_variant,
++    reason = "path endpoints stay inline in the native worklist, whose full PathTranslation layout is admitted before spill growth; boxing would add a second owner"
++)]
+ enum PathTranslation<'a> {
+     Path(&'a PropertyPathExpression, bool, TermPattern, TermPattern),
+     Sequence(usize),
+@@ -133,6 +137,10 @@
+ 
+ /// A triples construct waiting for the node, or the predicate-object list, it handed
+ /// over to.
++#[expect(
++    clippy::large_enum_variant,
++    reason = "triples frames stay inline in the native stack, whose exact TFrame array layout is admitted before growth; annotation boxes would add separate allocation owners"
++)]
+ pub(super) enum TFrame {
+     /// A predicate-object list, waiting for the object of its current verb.
+     Object(PolState),
+--- a/crates/sparql-algebra/src/parser.rs
++++ b/crates/sparql-algebra/src/parser.rs
+@@ -605,19 +605,19 @@
+             // scratch owner has died; this only releases that original excess.
+             memory.release_bytes(transient)?;
+         }
+-        if let Err(error) = &outcome {
+-            if !matches!(error, ParseError::Storage(_)) {
+-                // The closure has destroyed the parser and every partial AST.
+-                // Only this original raw error payload survives; no new grant is
+-                // inferred or acquired from its census.
+-                let retained = error.owned_text_bytes().ok_or(StorageError::SizeOverflow)?;
+-                let scratch = memory
+-                    .live_bytes()
+-                    .checked_sub(original_live)
+-                    .and_then(|bytes| bytes.checked_sub(retained))
+-                    .ok_or(StorageError::SizeOverflow)?;
+-                memory.release_bytes(scratch)?;
+-            }
++        if let Err(error) = &outcome
++            && !matches!(error, ParseError::Storage(_))
++        {
++            // The closure has destroyed the parser and every partial AST.
++            // Only this original raw error payload survives; no new grant is
++            // inferred or acquired from its census.
++            let retained = error.owned_text_bytes().ok_or(StorageError::SizeOverflow)?;
++            let scratch = memory
++                .live_bytes()
++                .checked_sub(original_live)
++                .and_then(|bytes| bytes.checked_sub(retained))
++                .ok_or(StorageError::SizeOverflow)?;
++            memory.release_bytes(scratch)?;
+         }
+         outcome
+     }
+@@ -656,6 +656,10 @@
+             tokenize_with_memory(text, crate::lexer::LexerOptions::default(), memory)?;
+         let mut tokens = Vec::new();
+         memory.reserve(&mut tokens, lexemes.len())?;
++        #[expect(
++            clippy::iter_with_drain,
++            reason = "token payloads move while the original admitted lexeme Vec buffer remains live until release_vec destroys it before refund"
++        )]
+         tokens.extend(lexemes.drain(..).map(Some));
+         memory.release_vec(lexemes)?;
+         let anon_prefix = anon_label_prefix_with_memory(&tokens, memory)?;
+@@ -888,7 +892,7 @@
+     prebound: Vec<Variable>,
+ }
+ 
+-impl<'a, 'o, 'm, 's, const RDFLIB: bool> Parser<'a, 'o, 'm, 's, RDFLIB> {
++impl<'a, 'o, 's, const RDFLIB: bool> Parser<'a, 'o, '_, 's, RDFLIB> {
+     fn boxed<T>(&mut self, value: T) -> Result<Box<T>> {
+         self.memory
+             .add_bytes(core::alloc::Layout::new::<T>().size())?;
+@@ -909,7 +913,7 @@
+                 | Token::PrefixedName(_, std::borrow::Cow::Owned(text))
+                 | Token::StringLit(std::borrow::Cow::Owned(text))
+                 | Token::LongStringLit(std::borrow::Cow::Owned(text)) => {
+-                    self.memory.release_string(text)?
++                    self.memory.release_string(text)?;
+                 }
+                 _ => (),
+             }
+@@ -991,7 +995,7 @@
+         for (offset, slot) in self.tokens[self.pos..].iter().enumerate() {
+             match slot.as_ref().map(|s| &s.token) {
+                 Some(Token::LBrace) => {
+-                    depth = depth.checked_add(1).ok_or(StorageError::SizeOverflow)?
++                    depth = depth.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+                 }
+                 Some(Token::RBrace) => {
+                     depth = depth.checked_sub(1).ok_or(StorageError::SizeOverflow)?;
+@@ -3591,7 +3595,7 @@
+                     }
+                 }
+                 GraphPattern::Join { left, right } => {
+-                    memory.extend(&mut patterns, [&mut **left, &mut **right])?
++                    memory.extend(&mut patterns, [&mut **left, &mut **right])?;
+                 }
+                 GraphPattern::Union { arms } => memory.extend(&mut patterns, arms.iter_mut())?,
+                 _ => unreachable!("a translated path contains only BGP, Join and Union"),
+@@ -9659,14 +9663,14 @@
+             Err(StorageError::AdmissionFailed)
+         );
+         assert!(scopes.top().is_empty(), "refusal publishes no new binding");
+-        assert_eq!(scopes.trail, [a.clone()]);
++        assert_eq!(scopes.trail.as_slice(), core::slice::from_ref(&a));
+         assert_eq!(scopes.previous, [None]);
+         assert_eq!(scopes.positions.get(&a), Some(&0));
+         assert_eq!(scopes.positions.get(&b), None);
+         scopes.pop();
+         assert_eq!(
+             scopes.top(),
+-            [a.clone()],
++            core::slice::from_ref(&a),
+             "the enclosing frame still sees its original identity"
+         );
+         let before_duplicate = memory.live_bytes();
+--- a/crates/sparql-algebra/src/serialize.rs
++++ b/crates/sparql-algebra/src/serialize.rs
+@@ -100,10 +100,10 @@
+         }
+     }
+     fn cleanup(&self, body: impl FnOnce(&mut Memory<'a, S>) -> Result<(), StorageError>) {
+-        if let Err(error) = body(&mut self.memory.borrow_mut()) {
+-            if self.failure.get().is_none() {
+-                self.failure.set(Some(error));
+-            }
++        if let Err(error) = body(&mut self.memory.borrow_mut())
++            && self.failure.get().is_none()
++        {
++            self.failure.set(Some(error));
+         }
+     }
+     fn check(&self) -> Result<(), StorageError> {
+@@ -638,11 +638,11 @@
+         }
+         let prefix = fresh_prefix_with_memory(
+             "__purrdf_hidden_",
+-            &ordinary.iter().map(|(name, _)| name.as_str()),
++            &ordinary.iter().map(|(name, ())| name.as_str()),
+             memory,
+         )?;
+         let mut names = Self::default();
+-        let mut ordered = memory.collect(hidden.iter().map(|(variable, _)| variable.clone()))?;
++        let mut ordered = memory.collect(hidden.iter().map(|(variable, ())| variable.clone()))?;
+         ordered.sort_unstable();
+         for (index, variable) in ordered.iter().enumerate() {
+             let text = memory.format(&format_args!("{prefix}{index}"))?;
+@@ -659,7 +659,7 @@
+             scopes.release(memory)?;
+         }
+         memory.release_string(prefix)?;
+-        let string_bytes = ordinary.iter().try_fold(0usize, |total, (name, _)| {
++        let string_bytes = ordinary.iter().try_fold(0usize, |total, (name, ())| {
+             total
+                 .checked_add(name.capacity())
+                 .ok_or(StorageError::SizeOverflow)
+@@ -694,7 +694,7 @@
+             }
+         }
+         let mut groups = memory.collect(scopes.groups.iter())?;
+-        groups.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
++        groups.sort_unstable_by_key(|(key, _)| *key);
+         let mut next_variable = self.variables.iter().count();
+         let mut next_blank = 0usize;
+         let mut last_owner = None;
+--- a/crates/sparql-algebra/src/traits.rs
++++ b/crates/sparql-algebra/src/traits.rs
+@@ -611,10 +611,10 @@
+         let mut failure = None;
+         Script {
+             out: &mut |token| {
+-                if failure.is_none() {
+-                    if let Err(error) = stack.try_push_admitted(token, memory) {
+-                        failure = Some(error);
+-                    }
++                if failure.is_none()
++                    && let Err(error) = stack.try_push_admitted(token, memory)
++                {
++                    failure = Some(error);
+                 }
+             },
+         }
+--- a/crates/sparql-algebra/src/validate.rs
++++ b/crates/sparql-algebra/src/validate.rs
+@@ -133,7 +133,7 @@
+         while let Some(term) = pending.pop() {
+             match term {
+                 Self::Variable(variable) => {
+-                    visit(variable, memory).map_err(MutationError::Visitor)?
++                    visit(variable, memory).map_err(MutationError::Visitor)?;
+                 }
+                 Self::Triple(triple) => {
+                     if let NamedNodePattern::Variable(variable) = &triple.predicate {
+--- a/crates/sparql-algebra/src/walk.rs
++++ b/crates/sparql-algebra/src/walk.rs
+@@ -616,10 +616,10 @@
+                 stack.try_push_admitted(Step::Exit(node, 0), memory)?;
+                 let mut failure = None;
+                 node.for_each_child(|child| {
+-                    if failure.is_none() {
+-                        if let Err(error) = stack.try_push_admitted(Step::Enter(child), memory) {
+-                            failure = Some(error);
+-                        }
++                    if failure.is_none()
++                        && let Err(error) = stack.try_push_admitted(Step::Enter(child), memory)
++                    {
++                        failure = Some(error);
+                     }
+                 });
+                 if let Some(error) = failure {

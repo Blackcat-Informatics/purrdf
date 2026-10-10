@@ -1,0 +1,3152 @@
+--- a/crates/text/src/query_workspace.rs
++++ b/crates/text/src/query_workspace.rs
+@@ -0,0 +1,135 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Concrete query owners; all vector/string growth stays in the evaluator home.
++
++use purrdf_sparql_eval::{EvalError, WorkspaceAllocation, WorkspaceCapability};
++
++use crate::TextError;
++
++/// The workspace capability's allocation-free stop classes, preserved by TEXT.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub enum CapacityFailure {
++    Stopped,
++    LayoutOverflow,
++    Allocator { construct: &'static str },
++    UnstableDiagnostic,
++}
++
++impl CapacityFailure {
++    /// `charge`, `resize`, and native reserve helpers return only these classes.
++    /// Adding another workspace failure requires extending this explicit mapping.
++    fn from_workspace(error: EvalError) -> Self {
++        match error {
++            EvalError::WorkspaceStopped => Self::Stopped,
++            EvalError::WorkspaceBoundOverflow => Self::LayoutOverflow,
++            EvalError::AllocationFailed { construct } => Self::Allocator { construct },
++            EvalError::UnstableNativeDiagnostic => Self::UnstableDiagnostic,
++            _ => unreachable!("native workspace helpers changed their failure contract"),
++        }
++    }
++
++    pub(crate) fn into_eval(self) -> EvalError {
++        match self {
++            Self::Stopped => EvalError::WorkspaceStopped,
++            Self::LayoutOverflow => EvalError::WorkspaceBoundOverflow,
++            Self::Allocator { construct } => EvalError::AllocationFailed { construct },
++            Self::UnstableDiagnostic => EvalError::UnstableNativeDiagnostic,
++        }
++    }
++}
++
++impl core::fmt::Display for CapacityFailure {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        core::fmt::Display::fmt(&self.into_eval(), f)
++    }
++}
++
++pub(crate) fn admitted<T>(value: Result<T, EvalError>) -> Result<T, TextError> {
++    value.map_err(|error| TextError::Capacity(CapacityFailure::from_workspace(error)))
++}
++
++pub(crate) fn overflow() -> TextError {
++    TextError::Capacity(CapacityFailure::LayoutOverflow)
++}
++
++/// One fresh token or generated lexical string, without a lease-dropping clone.
++pub(crate) struct QueryString {
++    text: String,
++    allocation: Option<WorkspaceAllocation>,
++}
++
++impl QueryString {
++    pub(crate) fn from_parts(text: String, allocation: Option<WorkspaceAllocation>) -> Self {
++        Self { text, allocation }
++    }
++    pub(crate) fn copy(text: &str, workspace: &WorkspaceCapability) -> Result<Self, TextError> {
++        let mut result = Self { text: String::new(), allocation: None };
++        admitted(workspace.reserve_string(&mut result.text, &mut result.allocation, text.len()))?;
++        result.text.push_str(text);
++        Ok(result)
++    }
++
++    pub(crate) fn chars(
++        chars: impl Iterator<Item = char> + Clone, workspace: &WorkspaceCapability,
++    ) -> Result<Self, TextError> {
++        let bytes = chars.clone().try_fold(0usize, |bytes, c| bytes.checked_add(c.len_utf8()))
++            .ok_or_else(overflow)?;
++        let mut result = Self { text: String::new(), allocation: None };
++        admitted(workspace.reserve_string(&mut result.text, &mut result.allocation, bytes))?;
++        result.text.extend(chars);
++        Ok(result)
++    }
++
++    pub(crate) fn as_str(&self) -> &str { &self.text }
++}
++
++impl core::ops::Deref for QueryString {
++    type Target = str;
++    fn deref(&self) -> &str { &self.text }
++}
++
++impl core::fmt::Debug for QueryString {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        core::fmt::Debug::fmt(&self.text, f)
++    }
++}
++
++pub(crate) fn query_error(
++    workspace: &WorkspaceCapability,
++    kind: purrdf_sparql_eval::NativeDiagnosticKind,
++    message: impl core::fmt::Display,
++) -> Result<TextError, TextError> {
++    if !workspace.is_bounded() {
++        return Ok(match kind {
++            purrdf_sparql_eval::NativeDiagnosticKind::Data => TextError::data(message.to_string()),
++            purrdf_sparql_eval::NativeDiagnosticKind::Config => TextError::config(message.to_string()),
++            _ => TextError::Diagnostic(admitted(purrdf_sparql_eval::NativeDiagnostic::render(kind, message, workspace))?),
++        });
++    }
++    Ok(TextError::Diagnostic(admitted(purrdf_sparql_eval::NativeDiagnostic::render(
++        kind, message, workspace,
++    ))?))
++}
++
++pub(crate) fn data_error(
++    message: impl core::fmt::Display, workspace: Option<&WorkspaceCapability>,
++) -> TextError {
++    match workspace {
++        Some(workspace) => query_error(workspace, purrdf_sparql_eval::NativeDiagnosticKind::Data, message)
++            .unwrap_or_else(|failure| failure),
++        None => TextError::data(message.to_string()),
++    }
++}
++
++pub(crate) fn arithmetic_error(
++    domain: bool, message: impl core::fmt::Display, workspace: Option<&WorkspaceCapability>,
++) -> TextError {
++    let Some(workspace) = workspace else {
++        return if domain { TextError::domain(message.to_string()) } else { TextError::overflow(message.to_string()) };
++    };
++    let label = if domain { "fixed-point domain error" } else { "fixed-point overflow" };
++    query_error(workspace, purrdf_sparql_eval::NativeDiagnosticKind::Function,
++        format_args!("{label}: {message}")).unwrap_or_else(|failure| failure)
++}
++
+--- a/crates/text/src/error.rs
++++ b/crates/text/src/error.rs
+@@ -19,6 +19,10 @@
+ #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+ #[non_exhaustive]
+ pub enum TextError {
++    /// Native query workspace refusal, without allocating a diagnostic.
++    Capacity(crate::query_workspace::CapacityFailure),
++    /// Immutable native query diagnostic retaining its allocation admission.
++    Diagnostic(purrdf_sparql_eval::NativeDiagnostic),
+     /// Exact substring admission or resource refusal, with generation and counters.
+     Substring(crate::surface::SubstringRefusal),
+     /// Explicit phonetic-domain or pronunciation refusal.
+@@ -84,6 +88,8 @@
+ impl core::fmt::Display for TextError {
+     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+         match self {
++            Self::Capacity(failure) => core::fmt::Display::fmt(failure, f),
++            Self::Diagnostic(diagnostic) => core::fmt::Display::fmt(diagnostic, f),
+             Self::Substring(refusal) => core::fmt::Display::fmt(refusal, f),
+             Self::Phonetic(refusal) => core::fmt::Display::fmt(refusal, f),
+             Self::Html(diagnostics) => write!(f, "HTML reference errors: {diagnostics:?}"),
+@@ -123,6 +129,8 @@
+     ///   dataset, so neither borrows those labels.
+     fn from(err: TextError) -> Self {
+         match err {
++            TextError::Capacity(failure) => failure.into_eval(),
++            TextError::Diagnostic(diagnostic) => Self::NativeDiagnostic(diagnostic),
+             TextError::Substring(refusal) => Self::data(refusal.to_string()),
+             TextError::Phonetic(refusal) => Self::data(refusal.to_string()),
+             TextError::Html(diagnostics) => {
+--- a/crates/text/src/lib.rs
++++ b/crates/text/src/lib.rs
+@@ -63,6 +63,8 @@
+ pub mod character;
+ pub use character::{HanCharacterIndex, HanMatchEvidence};
+ mod error;
++mod query_workspace;
++pub use query_workspace::CapacityFailure;
+ mod fixed;
+ mod index;
+ pub mod phonetic;
+--- a/crates/text/src/score.rs
++++ b/crates/text/src/score.rs
+@@ -98,6 +98,8 @@
+ //! predicate IRI is a [`TextError::Config`], and a needle asking about a document
+ //! that does not exist is a [`TextError::Data`].
+ 
++use purrdf_sparql_eval::{AdmittedVec, WorkspaceAllocation, WorkspaceCapability, NativeDiagnosticKind};
++use crate::query_workspace::{admitted, overflow, query_error};
+ use std::cmp::Ordering;
+ use std::collections::BinaryHeap;
+ 
+@@ -387,31 +389,42 @@
+     partition_rank: Option<u32>,
+     work: &mut ScoringWork,
+ ) -> Result<Vec<Scored>, TextError> {
+-    let terms = distinct_terms(needle)?;
+-    if terms.is_empty() {
+-        return Ok(Vec::new());
+-    }
+-
+-    // A bound rank needs the heap deep enough to know that rank; otherwise the
+-    // ceiling is the only thing bounding it.
++    let rows = select_counted_owned(
++        index, needle.iter().map(String::as_str), |key| filter.matches(key),
++        ceiling, partition_rank, work, &WorkspaceCapability::default(),
++    )?;
++    // This API creates only resident owners; moving through their iterator cannot
++    // shed an operational grant. Bounded callers use the carrier below directly.
++    Ok(rows.into_iter().collect())
++}
++
++pub(crate) fn select_counted_owned<'a>(
++    index: &TextIndex,
++    needle: impl ExactSizeIterator<Item = &'a str>,
++    matches: impl Fn(&PartitionKey) -> bool,
++    ceiling: Option<u64>,
++    partition_rank: Option<u32>,
++    work: &mut ScoringWork,
++    workspace: &WorkspaceCapability,
++) -> Result<AdmittedVec<Scored>, TextError> {
++    let terms = distinct_terms_owned(needle, workspace)?;
+     let limit = partition_rank.map_or(ceiling, |wanted| Some(u64::from(wanted)));
+     let emitted = ceiling.map_or(usize::MAX, |k| usize::try_from(k).unwrap_or(usize::MAX));
+-
+-    let mut rows: Vec<Scored> = Vec::new();
++    let mut rows = AdmittedVec::new(workspace);
++    if terms.is_empty() { return Ok(rows); }
+     for (key, _) in index.partitions() {
+-        if rows.len() >= emitted {
+-            break;
++        if rows.len() >= emitted { break; }
++        if !matches(key) { continue; }
++        let partition_rows = rank_terms_owned(index, key, &terms, limit, work, workspace)?;
++        // Rank the entire required working population first. Move only the prefix
++        // this output can emit; no oversized append/truncate allocation remains.
++        for row in partition_rows {
++            if partition_rank.is_none_or(|wanted| row.partition_rank == wanted) {
++                if rows.len() == emitted { break; }
++                admitted(rows.push(row))?;
++            }
+         }
+-        if !filter.matches(key) {
+-            continue;
+-        }
+-        let mut partition_rows = rank_terms(index, key, &terms, limit, work)?;
+-        if let Some(wanted) = partition_rank {
+-            partition_rows.retain(|row| row.partition_rank == wanted);
+-        }
+-        rows.append(&mut partition_rows);
+-    }
+-    rows.truncate(emitted);
++    }
+     Ok(rows)
+ }
+ 
+@@ -510,44 +523,58 @@
+ /// the query's terms in order" and "visit the dictionary in order" are the same
+ /// traversal.
+ pub(crate) fn distinct_terms(needle: &[String]) -> Result<Vec<&str>, TextError> {
+-    let mut terms: Vec<&str> = needle.iter().map(String::as_str).collect();
+-    terms.sort_unstable();
+-    terms.dedup();
++    Ok(distinct_terms_owned(needle.iter().map(String::as_str), &WorkspaceCapability::default())?
++        .into_iter().collect())
++}
++
++pub(crate) fn distinct_terms_owned<'a>(
++    needle: impl ExactSizeIterator<Item = &'a str>, workspace: &WorkspaceCapability,
++) -> Result<AdmittedVec<&'a str>, TextError> {
++    let mut terms = admitted(AdmittedVec::with_capacity(needle.len(), workspace))?;
++    for term in needle { admitted(terms.push(term))?; }
++    terms.as_mut_slice().sort_unstable();
++    let mut distinct = 0;
++    for at in 0..terms.len() {
++        if distinct == 0 || terms[at] != terms[distinct - 1] {
++            terms.as_mut_slice()[distinct] = terms[at];
++            distinct += 1;
++        }
++    }
++    terms.truncate(distinct);
+     if terms.len() > QUERY_TERMS_MAX {
+-        return Err(TextError::data(format!(
+-            "the needle holds {} distinct terms, which exceeds the profile bound of 1024",
+-            terms.len()
+-        )));
++        return Err(query_error(workspace, NativeDiagnosticKind::Data, format_args!(
++            "the needle holds {} distinct terms, which exceeds the profile bound of 1024", terms.len()))?);
+     }
+     Ok(terms)
+ }
+ 
+ /// Rank one partition against already-distinct, already-sorted `terms`.
+ fn rank_terms(
+-    index: &TextIndex,
+-    partition: &PartitionKey,
+-    terms: &[&str],
+-    limit: Option<u64>,
+-    work: &mut ScoringWork,
++    index: &TextIndex, partition: &PartitionKey, terms: &[&str],
++    limit: Option<u64>, work: &mut ScoringWork,
+ ) -> Result<Vec<Scored>, TextError> {
+-    let candidates = candidates(index, partition, terms, work)?;
+-    let limit = limit.map(|value| usize::try_from(value).unwrap_or(usize::MAX));
+-    let ordered = match limit {
+-        Some(keep) => bounded(candidates, keep),
+-        None => sorted(candidates),
+-    };
+-
+-    let mut rows = Vec::with_capacity(ordered.len());
++    Ok(rank_terms_owned(index, partition, terms, limit, work, &WorkspaceCapability::default())?
++        .into_iter().collect())
++}
++
++fn rank_terms_owned(
++    index: &TextIndex, partition: &PartitionKey, terms: &[&str],
++    limit: Option<u64>, work: &mut ScoringWork, workspace: &WorkspaceCapability,
++) -> Result<AdmittedVec<Scored>, TextError> {
++    let candidates = candidates_owned(index, partition, terms, work, workspace)?;
++    let keep = limit.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
++    let ordered = order_owned(candidates, keep, workspace)?;
++    let mut rows = admitted(AdmittedVec::with_capacity(ordered.len(), workspace))?;
+     for (position, ByRank(candidate)) in ordered.into_iter().enumerate() {
+-        let partition_rank = u32::try_from(position + 1).map_err(|_| {
+-            TextError::overflow("a partition holds more ranked rows than a u32 can number")
++        let rank = position.checked_add(1).ok_or_else(overflow)?;
++        let partition_rank = u32::try_from(rank).map_err(|_| {
++            query_error(workspace, NativeDiagnosticKind::Function,
++                    format_args!("fixed-point overflow: a partition holds more ranked rows than a u32 can number")).unwrap_or_else(|failure| failure)
+         })?;
+-        rows.push(Scored {
+-            document: candidate.document,
+-            score: candidate.score,
+-            partition_rank,
++        admitted(rows.push(Scored {
++            document: candidate.document, score: candidate.score, partition_rank,
+             matched: candidate.matched,
+-        });
++        }))?;
+     }
+     Ok(rows)
+ }
+@@ -568,49 +595,43 @@
+ /// A document holding none of them is not a candidate. Candidate membership is
+ /// independent of field weights: a matching document can legitimately score
+ /// zero, and still participates in the canonical tie order.
+-fn candidates(
+-    index: &TextIndex,
+-    partition: &PartitionKey,
+-    terms: &[&str],
+-    work: &mut ScoringWork,
+-) -> Result<Vec<Candidate>, TextError> {
+-    if index.partition_stats(partition).is_none() {
+-        // Not a partition this index holds, so it holds no documents there. That
+-        // is the true answer rather than a failure.
+-        return Ok(Vec::new());
+-    }
+-
+-    // `(document, term ordinal, predicate frequencies)`. Sorting this groups the whole
+-    // working set by document while leaving each document's terms in the sorted
+-    // term order the sum is defined to run in.
+-    let mut occurrences: Vec<CandidateOccurrence<'_>> = Vec::new();
++fn candidates_owned(
++    index: &TextIndex, partition: &PartitionKey, terms: &[&str],
++    work: &mut ScoringWork, workspace: &WorkspaceCapability,
++) -> Result<AdmittedVec<Candidate>, TextError> {
++    if index.partition_stats(partition).is_none() { return Ok(AdmittedVec::new(workspace)); }
++    let occurrences_count = terms.iter().try_fold(0usize, |count, term| {
++        let run = usize::try_from(index.document_frequency(partition, term))
++            .map_err(|_| overflow())?;
++        count.checked_add(run).ok_or_else(overflow)
++    })?;
++    let mut occurrences = admitted(AdmittedVec::with_capacity(occurrences_count, workspace))?;
+     for (ordinal, term) in terms.iter().enumerate() {
++        let ordinal = u32::try_from(ordinal).map_err(|_| overflow())?;
+         for (document, counts) in index.field_postings(partition, term) {
+-            occurrences.push(CandidateOccurrence {
+-                document,
+-                ordinal: ordinal as u32,
+-                counts,
+-            });
++            admitted(occurrences.push(CandidateOccurrence { document, ordinal, counts }))?;
+         }
+     }
+-    work.posting_lists += terms.len() as u64;
+-    work.postings += occurrences.len() as u64;
+-    occurrences.sort_unstable_by_key(|entry| (entry.document, entry.ordinal));
+-    let corpus = index.prepared_corpus(partition)?;
+-    let query = prepare_terms(index, partition, &corpus, terms)?;
+-
+-    let mut out: Vec<Candidate> = Vec::new();
++    work.posting_lists = work.posting_lists.checked_add(u64::try_from(terms.len()).map_err(|_| overflow())?)
++        .ok_or_else(overflow)?;
++    work.postings = work.postings.checked_add(u64::try_from(occurrences.len()).map_err(|_| overflow())?)
++        .ok_or_else(overflow)?;
++    occurrences.as_mut_slice().sort_unstable_by_key(|entry| (entry.document, entry.ordinal));
++    let mut count = 0usize;
++    let mut prior = None;
++    for entry in occurrences.iter() {
++        if prior != Some(entry.document) { count = count.checked_add(1).ok_or_else(overflow)?; }
++        prior = Some(entry.document);
++    }
++    let corpus = index.prepared_corpus_owned(partition, workspace)?;
++    let query = prepare_terms_owned(index, partition, &corpus, terms, workspace)?;
++    let mut out = admitted(AdmittedVec::with_capacity(count, workspace))?;
+     let mut at = 0;
+     while at < occurrences.len() {
+         let document = occurrences[at].document;
+-        let run = occurrences[at..]
+-            .iter()
+-            .take_while(|entry| entry.document == document)
+-            .count();
+-        let held = occurrences[at..at + run]
+-            .iter()
+-            .map(|entry| (entry.ordinal as usize, entry.counts));
+-        out.push(score_document(index, &query, document, held, work)?);
++        let run = occurrences[at..].iter().take_while(|entry| entry.document == document).count();
++        let held = occurrences[at..at + run].iter().map(|entry| (entry.ordinal as usize, entry.counts));
++        admitted(out.push(score_document(index, &query, document, held, work, workspace)?))?;
+         at += run;
+     }
+     Ok(out)
+@@ -622,16 +643,20 @@
+ /// partition, which [`TextIndex::document_frequency`] reads off the dictionary
+ /// in two binary searches without visiting a single posting.
+ fn prepare_terms<'c, 'p>(
+-    index: &TextIndex,
+-    partition: &PartitionKey,
+-    corpus: &'c PreparedCorpus<'p>,
+-    terms: &[&str],
++    index: &TextIndex, partition: &PartitionKey, corpus: &'c PreparedCorpus<'p>, terms: &[&str],
+ ) -> Result<PreparedQuery<'c, 'p>, TextError> {
+-    let frequencies: Vec<(&str, u64)> = terms
+-        .iter()
+-        .map(|term| (*term, index.document_frequency(partition, term)))
+-        .collect();
+-    corpus.prepare_query(&frequencies)
++    prepare_terms_owned(index, partition, corpus, terms, &WorkspaceCapability::default())
++}
++
++fn prepare_terms_owned<'c, 'p>(
++    index: &TextIndex, partition: &PartitionKey, corpus: &'c PreparedCorpus<'p>, terms: &[&str],
++    workspace: &WorkspaceCapability,
++) -> Result<PreparedQuery<'c, 'p>, TextError> {
++    let mut frequencies = admitted(AdmittedVec::with_capacity(terms.len(), workspace))?;
++    for &term in terms {
++        admitted(frequencies.push((term, index.document_frequency(partition, term))))?;
++    }
++    corpus.prepare_query_owned(&frequencies, workspace)
+ }
+ 
+ /// One document's exact score: the **one** summation every score in this crate is
+@@ -649,19 +674,20 @@
+     document: u32,
+     held: impl Iterator<Item = (usize, &'a [(u32, u64)])>,
+     work: &mut ScoringWork,
++    workspace: &WorkspaceCapability,
+ ) -> Result<Candidate, TextError> {
+     let field_count = index.ranking_profile().fields().len();
+     let mut score = Fixed::ZERO;
+     let mut matched: u32 = 0;
+     for (ordinal, counts) in held {
+-        let fields = index.field_inputs_from_counts(document, counts)?;
+-        score = score.checked_add(query.contribution(ordinal, &fields[..field_count])?)?;
++        let fields = index.field_inputs_from_counts_owned(document, counts, workspace)?;
++        score = score.checked_add_with(query.contribution(ordinal, &fields[..field_count])?, workspace.is_bounded().then_some(workspace))?;
+         matched += 1;
+     }
+-    work.documents_scored += 1;
++    work.documents_scored = work.documents_scored.checked_add(1).ok_or_else(overflow)?;
+     Ok(Candidate {
+         document,
+-        score: index.ranking_profile().validate_score(score)?,
++        score: index.ranking_profile().validate_score_owned(score, workspace)?,
+         matched,
+     })
+ }
+@@ -702,31 +728,76 @@
+ /// Work is independent of the corpus: one binary search per needle term for its
+ /// document frequency, and one field-input assembly per held term.
+ pub(crate) fn score_located(
+-    index: &TextIndex,
+-    document: u32,
+-    terms: &[&str],
+-    located: &[(usize, &[(u32, u64)])],
+-    work: &mut ScoringWork,
++    index: &TextIndex, document: u32, terms: &[&str], located: &[(usize, &[(u32, u64)])], work: &mut ScoringWork,
+ ) -> Result<(Fixed, u32), TextError> {
+-    let partition = index.partition_key_of(document).ok_or_else(|| {
+-        TextError::data(format!(
+-            "document {document} is not in this index, so there is nothing to score"
+-        ))
+-    })?;
+-    let corpus = index.prepared_corpus(partition)?;
+-    let query = prepare_terms(index, partition, &corpus, terms)?;
+-    let scored = score_document(index, &query, document, located.iter().copied(), work)?;
++    score_located_owned(index, document, terms, located, work, &WorkspaceCapability::default())
++}
++
++pub(crate) fn score_located_owned(
++    index: &TextIndex, document: u32, terms: &[&str], located: &[(usize, &[(u32, u64)])], work: &mut ScoringWork,
++    workspace: &WorkspaceCapability,
++) -> Result<(Fixed, u32), TextError> {
++    let Some(partition) = index.partition_key_of(document) else {
++        return Err(query_error(workspace, NativeDiagnosticKind::Data,
++            format_args!("document {document} is not in this index, so there is nothing to score"))?);
++    };
++    let corpus = index.prepared_corpus_owned(partition, workspace)?;
++    let query = prepare_terms_owned(index, partition, &corpus, terms, workspace)?;
++    let scored = score_document(index, &query, document, located.iter().copied(), work, workspace)?;
+     Ok((scored.score, scored.matched))
+ }
+ 
+ /// Every candidate, in rank order.
+-fn sorted(candidates: Vec<Candidate>) -> Vec<ByRank> {
+-    let mut ordered: Vec<ByRank> = candidates.into_iter().map(ByRank).collect();
+-    // Unstable is safe and canonical here: the order is strict and total, so
+-    // there is no pair whose relative order a stable sort would preserve and an
+-    // unstable one would not.
++struct OwnedOrder {
++    values: Vec<ByRank>,
++    allocation: Option<WorkspaceAllocation>,
++}
++struct OwnedOrderIter {
++    values: std::vec::IntoIter<ByRank>,
++    _allocation: Option<WorkspaceAllocation>,
++}
++impl IntoIterator for OwnedOrder {
++    type Item = ByRank;
++    type IntoIter = OwnedOrderIter;
++    fn into_iter(self) -> Self::IntoIter {
++        OwnedOrderIter { values: self.values.into_iter(), _allocation: self.allocation }
++    }
++}
++impl Iterator for OwnedOrderIter {
++    type Item = ByRank;
++    fn next(&mut self) -> Option<ByRank> { self.values.next() }
++}
++impl core::ops::Deref for OwnedOrder {
++    type Target = [ByRank];
++    fn deref(&self) -> &[ByRank] { &self.values }
++}
++
++/// The existing native BinaryHeap and strict ByRank law, with its actual Vec
++/// backing pre-admitted. `from`/`into_vec` move that backing without copying it.
++fn order_owned(
++    candidates: AdmittedVec<Candidate>, keep: Option<usize>, workspace: &WorkspaceCapability,
++) -> Result<OwnedOrder, TextError> {
++    let wanted = keep.map_or(candidates.len(), |keep| keep.min(candidates.len()));
++    let capacity = if keep.is_some_and(|keep| keep < candidates.len()) {
++        wanted.checked_add(1).ok_or_else(overflow)?
++    } else { wanted };
++    let mut allocation = None;
++    let mut values = Vec::new();
++    admitted(workspace.reserve_vec(&mut values, &mut allocation, capacity))?;
++    if wanted == 0 { return Ok(OwnedOrder { values, allocation }); }
++    let mut ordered = if keep.is_some() {
++        let mut heap = BinaryHeap::from(values);
++        for candidate in candidates {
++            heap.push(ByRank(candidate));
++            if heap.len() > wanted { heap.pop(); }
++        }
++        heap.into_vec()
++    } else {
++        for candidate in candidates { values.push(ByRank(candidate)); }
++        values
++    };
+     ordered.sort_unstable();
+-    ordered
++    Ok(OwnedOrder { values: ordered, allocation })
+ }
+ 
+ /// The best `keep` candidates, in rank order, through a heap of that size.
+@@ -735,22 +806,7 @@
+ /// of a million documents for a ten-row answer touches eleven of them at a time
+ /// and sorts ten at the end — real work reduction, rather than a full sort that
+ /// stops reading its own output early.
+-fn bounded(candidates: Vec<Candidate>, keep: usize) -> Vec<ByRank> {
+-    if keep == 0 {
+-        return Vec::new();
+-    }
+-    let mut heap: BinaryHeap<ByRank> = BinaryHeap::with_capacity(keep.min(candidates.len()) + 1);
+-    for candidate in candidates {
+-        heap.push(ByRank(candidate));
+-        if heap.len() > keep {
+-            // The maximum under `ByRank` is the worst-ranked entry held.
+-            heap.pop();
+-        }
+-    }
+-    let mut ordered = heap.into_vec();
+-    ordered.sort_unstable();
+-    ordered
+-}
++
+ 
+ #[cfg(test)]
+ mod tests {
+--- a/crates/text/src/ranking.rs
++++ b/crates/text/src/ranking.rs
+@@ -8,6 +8,8 @@
+ //! single-field profile uses exactly the same operations. See `RANKING.md` for
+ //! the arithmetic, bound proof, and independent conformance reference.
+ 
++use purrdf_sparql_eval::{AdmittedVec, WorkspaceCapability, NativeDiagnosticKind};
++use crate::query_workspace::{QueryString, admitted, query_error, data_error, arithmetic_error};
+ use purrdf_core::TermValue;
+ use purrdf_hash::frame::frame_le;
+ 
+@@ -223,12 +225,26 @@
+     /// # Errors
+     /// Returns [`TextError::Domain`] for a score outside the profile.
+     pub fn validate_score(&self, score: Fixed) -> Result<Fixed, TextError> {
++        self.validate_score_with(score, None)
++    }
++
++    pub(crate) fn validate_score_owned(
++        &self, score: Fixed, workspace: &WorkspaceCapability,
++    ) -> Result<Fixed, TextError> {
++        self.validate_score_with(score, workspace.is_bounded().then_some(workspace))
++    }
++
++    fn validate_score_with(
++        &self, score: Fixed, workspace: Option<&WorkspaceCapability>,
++    ) -> Result<Fixed, TextError> {
+         if !(Fixed::ZERO..=SCORE_MAX).contains(&score) {
+-            return Err(TextError::domain(format!(
+-                "score {} is outside [0, {}]",
+-                score.to_decimal_lexical(),
+-                SCORE_MAX.to_decimal_lexical()
+-            )));
++            return Err(match workspace {
++                Some(workspace) => query_error(workspace, NativeDiagnosticKind::Function,
++                    format_args!("fixed-point domain error: score {} is outside [0, {}]",
++                        score.decimal_display(), SCORE_MAX.decimal_display()))?,
++                None => TextError::domain(format!("score {} is outside [0, {}]",
++                    score.decimal_display(), SCORE_MAX.decimal_display())),
++            });
+         }
+         Ok(score)
+     }
+@@ -305,9 +321,9 @@
+     /// Corpus population.
+     documents: u64,
+     /// Field token totals, in profile order.
+-    totals: Vec<u128>,
++    totals: AdmittedVec<u128>,
+     /// Explicit carrier counts in field order; empty under the dense law.
+-    populations: Vec<u64>,
++    populations: AdmittedVec<u64>,
+ }
+ 
+ impl<'p> PreparedCorpus<'p> {
+@@ -355,32 +371,46 @@
+ 
+     /// Shared corpus admission before either constructor publishes statistics.
+     fn validate(
+-        profile: &'p RankingProfile,
+-        documents: u64,
+-        totals: &[u128],
+-        populations: &[u64],
++        profile: &'p RankingProfile, documents: u64, totals: &[u128], populations: &[u64],
++    ) -> Result<Self, TextError> {
++        Self::validate_owned(profile, documents, totals, populations, &WorkspaceCapability::default())
++    }
++
++    pub(crate) fn from_index_owned(
++        profile: &'p RankingProfile, documents: u64, totals: &[u128], populations: &[u64],
++        workspace: &WorkspaceCapability,
++    ) -> Result<Self, TextError> {
++        if profile.uses_field_populations() {
++            if populations.len() != profile.fields.len() {
++                return Err(query_error(workspace, NativeDiagnosticKind::Data,
++                    format_args!("field populations require their ranking mode and one count per field"))?);
++            }
++            Self::validate_owned(profile, documents, totals, populations, workspace)
++        } else {
++            Self::validate_owned(profile, documents, totals, &[], workspace)
++        }
++    }
++
++    fn validate_owned(
++        profile: &'p RankingProfile, documents: u64, totals: &[u128], populations: &[u64],
++        workspace: &WorkspaceCapability,
+     ) -> Result<Self, TextError> {
+         if documents > DOCUMENTS_MAX || totals.len() != profile.fields.len() {
+-            return Err(TextError::data(
+-                "corpus population or field count exceeds the ranking profile",
+-            ));
++            return Err(query_error(workspace, NativeDiagnosticKind::Data,
++                format_args!("corpus population or field count exceeds the ranking profile"))?);
+         }
+         for (at, &total) in totals.iter().enumerate() {
+             let population = populations.get(at).copied().unwrap_or(documents);
+-            if population > documents
+-                || total > u128::from(population) * u128::from(FIELD_LENGTH_MAX)
+-            {
+-                return Err(TextError::data(
+-                    "a field population or token total exceeds its corpus bound",
+-                ));
+-            }
+-        }
+-        Ok(Self {
+-            profile,
+-            documents,
+-            totals: totals.to_vec(),
+-            populations: populations.to_vec(),
+-        })
++            if population > documents || total > u128::from(population) * u128::from(FIELD_LENGTH_MAX) {
++                return Err(query_error(workspace, NativeDiagnosticKind::Data,
++                    format_args!("a field population or token total exceeds its corpus bound"))?);
++            }
++        }
++        let mut owned_totals = admitted(AdmittedVec::with_capacity(totals.len(), workspace))?;
++        for &total in totals { admitted(owned_totals.push(total))?; }
++        let mut owned_populations = admitted(AdmittedVec::with_capacity(populations.len(), workspace))?;
++        for &population in populations { admitted(owned_populations.push(population))?; }
++        Ok(Self { profile, documents, totals: owned_totals, populations: owned_populations })
+     }
+ 
+     /// Prepare IDFs for explicitly named, distinct query terms in strictly
+@@ -391,41 +421,37 @@
+     /// Refuses too many terms and every document frequency outside the corpus,
+     /// even when no document will subsequently be scored.
+     pub fn prepare_query(
+-        &self,
+-        frequencies: &[(&str, u64)],
++        &self, frequencies: &[(&str, u64)],
++    ) -> Result<PreparedQuery<'_, 'p>, TextError> {
++        self.prepare_query_owned(frequencies, &WorkspaceCapability::default())
++    }
++
++    pub(crate) fn prepare_query_owned(
++        &self, frequencies: &[(&str, u64)], workspace: &WorkspaceCapability,
+     ) -> Result<PreparedQuery<'_, 'p>, TextError> {
+         if frequencies.len() > QUERY_TERMS_MAX {
+-            return Err(TextError::data(
+-                "query exceeds 1024 distinct analyzed terms",
+-            ));
+-        }
+-        let mut terms = Vec::with_capacity(frequencies.len());
++            return Err(query_error(workspace, NativeDiagnosticKind::Data,
++                format_args!("query exceeds 1024 distinct analyzed terms"))?);
++        }
++        let mut terms = admitted(AdmittedVec::with_capacity(frequencies.len(), workspace))?;
+         let total: u128 = self.totals.iter().sum();
+         let mut prior: Option<&str> = None;
+         let mut frequency_sum = 0_u128;
+         for &(term, frequency) in frequencies {
+             if term.is_empty() || prior.is_some_and(|prior| prior >= term) {
+-                return Err(TextError::data(
+-                    "prepared query terms must be nonempty, distinct and strictly sorted",
+-                ));
++                return Err(query_error(workspace, NativeDiagnosticKind::Data,
++                    format_args!("prepared query terms must be nonempty, distinct and strictly sorted"))?);
+             }
+             prior = Some(term);
+             frequency_sum += u128::from(frequency);
+             if frequency_sum > total {
+-                return Err(TextError::data(
+-                    "distinct query document frequencies exceed all tokens in their corpus",
+-                ));
+-            }
+-            terms.push((
+-                term.to_owned(),
+-                frequency,
+-                inverse_document_frequency(self.documents, frequency)?,
+-            ));
+-        }
+-        Ok(PreparedQuery {
+-            corpus: self,
+-            terms,
+-        })
++                return Err(query_error(workspace, NativeDiagnosticKind::Data,
++                    format_args!("distinct query document frequencies exceed all tokens in their corpus"))?);
++            }
++            admitted(terms.push((QueryString::copy(term, workspace)?, frequency,
++                inverse_document_frequency(self.documents, frequency, workspace.is_bounded().then_some(workspace))?)))?;
++        }
++        Ok(PreparedQuery { corpus: self, terms, workspace: workspace.clone() })
+     }
+ }
+ 
+@@ -436,7 +462,8 @@
+     /// Corpus and profile that give the cached IDFs their meaning.
+     corpus: &'c PreparedCorpus<'p>,
+     /// `(term key, document_frequency, IDF)` in verified canonical term order.
+-    terms: Vec<(String, u64, Fixed)>,
++    terms: AdmittedVec<(QueryString, u64, Fixed)>,
++    workspace: WorkspaceCapability,
+ }
+ 
+ impl PreparedQuery<'_, '_> {
+@@ -453,24 +480,21 @@
+     /// Refuses a missing term, field count mismatch, impossible or out-of-bound
+     /// document facts, undefined normalization, or an out-of-bound score.
+     pub fn contribution(&self, ordinal: usize, fields: &[FieldInput]) -> Result<Fixed, TextError> {
++        let workspace = self.workspace.is_bounded().then_some(&self.workspace);
+         if self.corpus.documents == 0 {
+-            return Err(TextError::data(
+-                "an empty corpus contains no document to score",
+-            ));
++            return Err(data_error("an empty corpus contains no document to score", workspace));
+         }
+         let (df, idf) = self
+             .term_statistics(ordinal)
+-            .ok_or_else(|| TextError::data("query term ordinal is absent"))?;
++            .ok_or_else(|| data_error("query term ordinal is absent", workspace))?;
+         if fields.len() != self.corpus.profile.fields.len() {
+-            return Err(TextError::data(
+-                "document field count disagrees with its ranking profile",
+-            ));
++            return Err(data_error("document field count disagrees with its ranking profile", workspace));
+         }
+         let mut pseudo = Fixed::ZERO;
+         for (at, ((input, field), &total)) in fields
+             .iter()
+             .zip(&self.corpus.profile.fields)
+-            .zip(&self.corpus.totals)
++            .zip(self.corpus.totals.iter())
+             .enumerate()
+         {
+             let population = self.corpus.populations.get(at).copied();
+@@ -482,7 +506,7 @@
+             } else {
+                 documents.saturating_sub(1)
+             };
+-            validate_field(*input, total, documents, remaining, df)?;
++            validate_field(*input, total, documents, remaining, df, workspace)?;
+             if input.term_frequency == 0 {
+                 continue;
+             }
+@@ -493,26 +517,23 @@
+                 i128::try_from(numerator / total).expect("bounded counts fit i128"),
+             );
+             let normalization = Fixed::ONE
+-                .checked_sub(field.b)?
+-                .checked_add(field.b.checked_mul(relative)?)?;
++                .checked_sub_with(field.b, workspace)?
++                .checked_add_with(field.b.checked_mul_with(relative, workspace)?, workspace)?;
+             if normalization <= Fixed::ZERO {
+-                return Err(TextError::domain(
+-                    "field normalization rounds to zero under this profile",
+-                ));
+-            }
+-            let frequency = from_count(input.term_frequency)?;
+-            pseudo = pseudo.checked_add(
++                return Err(arithmetic_error(true, "field normalization rounds to zero under this profile", workspace));
++            }
++            let frequency = from_count(input.term_frequency, workspace)?;
++            pseudo = pseudo.checked_add_with(
+                 frequency
+-                    .checked_div(normalization)?
+-                    .checked_mul(field.weight)?,
+-            )?;
++                    .checked_div_with(normalization, workspace)?
++                    .checked_mul_with(field.weight, workspace)?, workspace)?;
+         }
+         let saturation = pseudo
+-            .checked_mul(K1.checked_add(Fixed::ONE)?)?
+-            .checked_div(pseudo.checked_add(K1)?)?;
++            .checked_mul_with(K1.checked_add_with(Fixed::ONE, workspace)?, workspace)?
++            .checked_div_with(pseudo.checked_add_with(K1, workspace)?, workspace)?;
+         self.corpus
+             .profile
+-            .validate_score(idf.checked_mul(saturation)?)
++            .validate_score_with(idf.checked_mul_with(saturation, workspace)?, workspace)
+     }
+ 
+     /// Score one document against all prepared terms, in their canonical order.
+@@ -567,49 +588,39 @@
+     documents: u64,
+     remaining: u64,
+     df: u64,
+-) -> Result<(), TextError> {
++    workspace: Option<&WorkspaceCapability>) -> Result<(), TextError> {
+     if input.length > FIELD_LENGTH_MAX || input.term_frequency > TERM_FREQUENCY_MAX {
+-        return Err(TextError::data(
+-            "document field length or term frequency exceeds 2^24",
+-        ));
++        return Err(data_error("document field length or term frequency exceeds 2^24", workspace));
+     }
+     if input.term_frequency > input.length || u128::from(input.length) > total {
+-        return Err(TextError::data(
+-            "field frequency, length, and corpus total are inconsistent",
+-        ));
++        return Err(data_error("field frequency, length, and corpus total are inconsistent", workspace));
+     }
+     if total - u128::from(input.length) > u128::from(remaining) * u128::from(FIELD_LENGTH_MAX) {
+-        return Err(TextError::data(
+-            "the remaining corpus cannot hold the declared field total",
+-        ));
++        return Err(data_error("the remaining corpus cannot hold the declared field total", workspace));
+     }
+     if (documents == 0 && input.length != 0) || (df == 0 && input.term_frequency != 0) {
+-        return Err(TextError::data(
+-            "a nonempty document or term cannot belong to an empty corpus or posting list",
+-        ));
++        return Err(data_error("a nonempty document or term cannot belong to an empty corpus or posting list", workspace));
+     }
+     Ok(())
+ }
+ 
+ /// Shifted IDF, checked before any zero-contribution shortcuts.
+ /// At large corpus sizes a positive real value may round to exact zero.
+-fn inverse_document_frequency(documents: u64, frequency: u64) -> Result<Fixed, TextError> {
++fn inverse_document_frequency(documents: u64, frequency: u64, workspace: Option<&WorkspaceCapability>) -> Result<Fixed, TextError> {
+     if frequency > documents {
+-        return Err(TextError::data(
+-            "document frequency exceeds its corpus population",
+-        ));
++        return Err(data_error("document frequency exceeds its corpus population", workspace));
+     }
+     let half = Fixed::from_raw(500_000_000_000);
+-    let numerator = from_count(documents - frequency)?.checked_add(half)?;
+-    let denominator = from_count(frequency)?.checked_add(half)?;
++    let numerator = from_count(documents - frequency, workspace)?.checked_add_with(half, workspace)?;
++    let denominator = from_count(frequency, workspace)?.checked_add_with(half, workspace)?;
+     Fixed::ONE
+-        .checked_add(numerator.checked_div(denominator)?)?
+-        .ln()
++        .checked_add_with(numerator.checked_div_with(denominator, workspace)?, workspace)?
++        .ln_with(workspace)
+ }
+ 
+ /// A bounded corpus count, exactly at the public scale.
+-fn from_count(value: u64) -> Result<Fixed, TextError> {
+-    Fixed::from_integer(i64::try_from(value).map_err(|_| TextError::overflow("count exceeds i64"))?)
++fn from_count(value: u64, workspace: Option<&WorkspaceCapability>) -> Result<Fixed, TextError> {
++    Fixed::from_integer_with(i64::try_from(value).map_err(|_| arithmetic_error(false, "count exceeds i64", workspace))?, workspace)
+ }
+ 
+ /// Require an absolute, lexically valid RDF predicate IRI.
+--- a/crates/text/src/fixed.rs
++++ b/crates/text/src/fixed.rs
+@@ -38,6 +38,8 @@
+ //! wrapped or saturated value. A wrapped score is a wrong ranking presented as a
+ //! right one, which is precisely the failure this crate exists to rule out.
+ 
++use purrdf_sparql_eval::WorkspaceCapability;
++use crate::query_workspace::arithmetic_error;
+ use purrdf_xsd::wide::mul_div;
+ 
+ use crate::error::TextError;
+@@ -123,12 +125,14 @@
+     /// An `i64` scaled by `10^12` is at most about `9.2 × 10^30`, so this never
+     /// actually overflows an `i128`; the [`Result`] is kept so that widening the
+     /// input type later cannot silently become a wrapping conversion.
+-    pub fn from_integer(value: i64) -> Result<Self, TextError> {
++    pub fn from_integer(value: i64) -> Result<Self, TextError> { Self::from_integer_with(value, None) }
++
++    pub(crate) fn from_integer_with(value: i64, workspace: Option<&WorkspaceCapability>) -> Result<Self, TextError> {
+         i128::from(value)
+             .checked_mul(SCALE)
+             .map(Self)
+             .ok_or_else(|| {
+-                TextError::overflow(format!("{value} does not fit the fixed-point range"))
++                arithmetic_error(false, format_args!("{value} does not fit the fixed-point range"), workspace)
+             })
+     }
+ 
+@@ -145,20 +149,24 @@
+     }
+ 
+     /// `self + other`, or [`TextError::Overflow`] if the sum does not fit.
+-    pub fn checked_add(self, other: Self) -> Result<Self, TextError> {
++    pub fn checked_add(self, other: Self) -> Result<Self, TextError> { self.checked_add_with(other, None) }
++
++    pub(crate) fn checked_add_with(self, other: Self, workspace: Option<&WorkspaceCapability>) -> Result<Self, TextError> {
+         self.0
+             .checked_add(other.0)
+             .map(Self)
+-            .ok_or_else(|| TextError::overflow("addition left the fixed-point range"))
++            .ok_or_else(|| arithmetic_error(false, "addition left the fixed-point range", workspace))
+     }
+ 
+     /// `self - other`, or [`TextError::Overflow`] if the difference does not
+     /// fit.
+-    pub fn checked_sub(self, other: Self) -> Result<Self, TextError> {
++    pub fn checked_sub(self, other: Self) -> Result<Self, TextError> { self.checked_sub_with(other, None) }
++
++    pub(crate) fn checked_sub_with(self, other: Self, workspace: Option<&WorkspaceCapability>) -> Result<Self, TextError> {
+         self.0
+             .checked_sub(other.0)
+             .map(Self)
+-            .ok_or_else(|| TextError::overflow("subtraction left the fixed-point range"))
++            .ok_or_else(|| arithmetic_error(false, "subtraction left the fixed-point range", workspace))
+     }
+ 
+     /// `self × other`, truncated toward zero.
+@@ -168,10 +176,12 @@
+     /// values near `10^13` already overflow it. It is therefore computed through
+     /// a helper that falls back to a 256-bit intermediate rather than reporting
+     /// an overflow the answer does not have.
+-    pub fn checked_mul(self, other: Self) -> Result<Self, TextError> {
++    pub fn checked_mul(self, other: Self) -> Result<Self, TextError> { self.checked_mul_with(other, None) }
++
++    pub(crate) fn checked_mul_with(self, other: Self, workspace: Option<&WorkspaceCapability>) -> Result<Self, TextError> {
+         let magnitude = mul_div(self.0.unsigned_abs(), other.0.unsigned_abs(), SCALE_U)
+-            .ok_or_else(|| TextError::overflow("multiplication left the fixed-point range"))?;
+-        signed(magnitude, (self.0 < 0) != (other.0 < 0))
++            .ok_or_else(|| arithmetic_error(false, "multiplication left the fixed-point range", workspace))?;
++        signed(magnitude, (self.0 < 0) != (other.0 < 0), workspace)
+     }
+ 
+     /// `self ÷ other`, truncated toward zero.
+@@ -182,13 +192,15 @@
+     ///
+     /// Division by zero is a [`TextError::Domain`]: there is no value to return,
+     /// so none is invented.
+-    pub fn checked_div(self, other: Self) -> Result<Self, TextError> {
++    pub fn checked_div(self, other: Self) -> Result<Self, TextError> { self.checked_div_with(other, None) }
++
++    pub(crate) fn checked_div_with(self, other: Self, workspace: Option<&WorkspaceCapability>) -> Result<Self, TextError> {
+         if other.0 == 0 {
+-            return Err(TextError::domain("division by zero"));
++            return Err(arithmetic_error(true, "division by zero", workspace));
+         }
+         let magnitude = mul_div(self.0.unsigned_abs(), SCALE_U, other.0.unsigned_abs())
+-            .ok_or_else(|| TextError::overflow("division left the fixed-point range"))?;
+-        signed(magnitude, (self.0 < 0) != (other.0 < 0))
++            .ok_or_else(|| arithmetic_error(false, "division left the fixed-point range", workspace))?;
++        signed(magnitude, (self.0 < 0) != (other.0 < 0), workspace)
+     }
+ 
+     /// The natural logarithm of `self`, exact to the last representable digit
+@@ -214,12 +226,12 @@
+     /// `self <= 0` is a [`TextError::Domain`]: the natural logarithm is not
+     /// defined there, and returning a sentinel would let a caller rank against a
+     /// number that means nothing.
+-    pub fn ln(self) -> Result<Self, TextError> {
++    pub fn ln(self) -> Result<Self, TextError> { self.ln_with(None) }
++
++    pub(crate) fn ln_with(self, workspace: Option<&WorkspaceCapability>) -> Result<Self, TextError> {
+         if self.0 <= 0 {
+-            return Err(TextError::domain(format!(
+-                "ln is undefined at {}, which is not positive",
+-                self.to_decimal_lexical()
+-            )));
++            return Err(arithmetic_error(true, format_args!(
++                "ln is undefined at {}, which is not positive", self.decimal_display()), workspace));
+         }
+ 
+         let raw = self.0.unsigned_abs();
+@@ -235,9 +247,9 @@
+             (INTERNAL_TO_SCALE_U << exponent.unsigned_abs(), 1_u128)
+         };
+         let mantissa_magnitude = mul_div(raw, numerator, denominator)
+-            .ok_or_else(|| TextError::overflow("range reduction left the fixed-point range"))?;
++            .ok_or_else(|| arithmetic_error(false, "range reduction left the fixed-point range", workspace))?;
+         let mantissa = i128::try_from(mantissa_magnitude)
+-            .map_err(|_| TextError::overflow("range reduction left the fixed-point range"))?;
++            .map_err(|_| arithmetic_error(false, "range reduction left the fixed-point range", workspace))?;
+ 
+         // z = (m - 1) / (m + 1) at INTERNAL_SCALE. `mantissa` is in
+         // [10^18, 2·10^18), so the numerator is at most 10^18 and the product
+@@ -257,7 +269,7 @@
+         let total = i128::from(exponent)
+             .checked_mul(LN2_INTERNAL)
+             .and_then(|scaled| scaled.checked_add(ln_mantissa))
+-            .ok_or_else(|| TextError::overflow("logarithm left the fixed-point range"))?;
++            .ok_or_else(|| arithmetic_error(false, "logarithm left the fixed-point range", workspace))?;
+ 
+         // The one and only rounding.
+         Ok(Self(total / INTERNAL_TO_SCALE))
+@@ -306,12 +318,12 @@
+ /// rather than a rounding detail — the arithmetic's usable range depended on the
+ /// sign of the operands rather than on the answer — so the negative extreme is
+ /// admitted here explicitly.
+-fn signed(magnitude: u128, negative: bool) -> Result<Fixed, TextError> {
++fn signed(magnitude: u128, negative: bool, workspace: Option<&WorkspaceCapability>) -> Result<Fixed, TextError> {
+     if negative && magnitude == NEGATIVE_LIMIT_MAGNITUDE {
+         return Ok(Fixed::from_raw(i128::MIN));
+     }
+     let raw = i128::try_from(magnitude)
+-        .map_err(|_| TextError::overflow("result left the fixed-point range"))?;
++        .map_err(|_| arithmetic_error(false, "result left the fixed-point range", workspace))?;
+     Ok(Fixed::from_raw(if negative { -raw } else { raw }))
+ }
+ 
+@@ -485,3 +497,20 @@
+         ));
+     }
+ }
++
++
++/// Formatting the native fixed value borrows it and allocates no private buffer.
++pub(crate) struct DecimalDisplay(Fixed);
++impl core::fmt::Display for DecimalDisplay {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        let magnitude = self.0.0.unsigned_abs();
++        let integer = magnitude / SCALE_U;
++        let fraction = magnitude % SCALE_U;
++        let sign = if self.0.0 < 0 { "-" } else { "" };
++        let width = SCALE_DIGITS as usize;
++        write!(f, "{sign}{integer}.{fraction:0width$}")
++    }
++}
++impl Fixed {
++    pub(crate) const fn decimal_display(self) -> DecimalDisplay { DecimalDisplay(self) }
++}
+--- a/crates/text/src/index.rs
++++ b/crates/text/src/index.rs
+@@ -70,6 +70,8 @@
+ //! their labels. The crate's test suite pins this with an adversarial test
+ //! rather than leaving it implied.
+ 
++use crate::query_workspace::{data_error, query_error};
++use purrdf_sparql_eval::NativeDiagnosticKind;
+ use purrdf_hash::Domain;
+ use purrdf_hash::frame::frame_le;
+ use std::cmp::Ordering;
+@@ -679,6 +681,15 @@
+         }
+     }
+ 
++    pub(crate) fn query_terms_owned(
++        &self, input: &str, workspace: &purrdf_sparql_eval::WorkspaceCapability,
++    ) -> Result<purrdf_sparql_eval::AdmittedVec<crate::query_workspace::QueryString>, TextError> {
++        match self.config.projection {
++            IndexProjection::Lexical => self.analyzer().terms_owned(input, workspace),
++            IndexProjection::Han => crate::character::query_terms_owned(self.analyzer(), input, workspace),
++        }
++    }
++
+     /// The exact analyzer every query relation uses.
+     pub const fn analyzer(&self) -> &Analyzer {
+         self.config.analyzer()
+@@ -725,6 +736,14 @@
+         }
+     }
+ 
++    pub(crate) fn prepared_corpus_owned(
++        &self, partition: &PartitionKey, workspace: &purrdf_sparql_eval::WorkspaceCapability,
++    ) -> Result<PreparedCorpus<'_>, TextError> {
++        let at = self.partition_index(partition).ok_or_else(|| query_error(workspace, NativeDiagnosticKind::Data, "ranking partition is absent").unwrap_or_else(|failure| failure))? as usize;
++        PreparedCorpus::from_index_owned(&self.ranking, self.partitions[at].1.document_count,
++            &self.field_totals[at], &self.field_populations[at], workspace)
++    }
++
+     /// A document's field lengths, in ranking field order.
+     pub fn field_lengths(&self, document: u32) -> Option<&[u64]> {
+         self.field_lengths.get(document as usize).map(Vec::as_slice)
+@@ -771,14 +790,27 @@
+     /// Assemble field inputs from a posting already located by the query walk.
+     /// This avoids a dictionary lookup per candidate and query term.
+     pub(crate) fn field_inputs_from_counts(
++        &self, document: u32, frequencies: &[(u32, u64)],
++    ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
++        self.field_inputs_from_counts_with(document, frequencies, None)
++    }
++
++    pub(crate) fn field_inputs_from_counts_owned(
++        &self, document: u32, frequencies: &[(u32, u64)], workspace: &purrdf_sparql_eval::WorkspaceCapability,
++    ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
++        self.field_inputs_from_counts_with(document, frequencies, workspace.is_bounded().then_some(workspace))
++    }
++
++    pub(crate) fn field_inputs_from_counts_with(
+         &self,
+         document: u32,
+         frequencies: &[(u32, u64)],
++        workspace: Option<&purrdf_sparql_eval::WorkspaceCapability>,
+     ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
+         let lengths = self
+             .field_lengths
+             .get(document as usize)
+-            .ok_or_else(|| TextError::data("field input names an absent document"))?;
++            .ok_or_else(|| data_error("field input names an absent document", workspace))?;
+         let mut fields = [FieldInput::default(); MAX_FIELDS];
+         for (input, &length) in fields.iter_mut().zip(lengths) {
+             input.length = length;
+@@ -927,6 +959,40 @@
+         self.subject_order
+             .get(start..end)
+             .expect("partition_point yields in-range, ordered offsets")
++    }
++
++    /// The existing two subject-side binary searches with admitted native term
++    /// ordering. After a comparator failure the partition result is discarded;
++    /// the first typed failure is returned before any caller can use the slice.
++    pub(crate) fn documents_with_subject_owned(
++        &self, subject: &TermValue, workspace: &purrdf_sparql_eval::WorkspaceCapability,
++    ) -> Result<&[u32], purrdf_sparql_eval::EvalError> {
++        fn partition(
++            index: &TextIndex, subject: &TermValue, workspace: &purrdf_sparql_eval::WorkspaceCapability,
++            upper: bool,
++        ) -> Result<usize, purrdf_sparql_eval::EvalError> {
++            let mut failure = None;
++            let result = index.subject_order.partition_point(|id| {
++                if failure.is_some() { return false; }
++                match workspace.terms_cmp(&index.documents[*id as usize].subject, subject) {
++                    Ok(order) => if upper { order != Ordering::Greater } else { order == Ordering::Less },
++                    Err(error) => { failure = Some(error); false }
++                }
++            });
++            match failure { Some(error) => Err(error), None => Ok(result) }
++        }
++        let start = partition(self, subject, workspace, false)?;
++        let end = partition(self, subject, workspace, true)?;
++        Ok(&self.subject_order[start..end])
++    }
++
++    /// Borrow one immutable positional posting without copying the caller's index.
++    pub(crate) fn posting_at(
++        &self, partition: usize, term: &str, ordinal: usize,
++    ) -> Option<(u32, &[u32])> {
++        let key = &self.partitions.get(partition)?.0;
++        let posting = self.partition_postings(key, term).get(ordinal)?;
++        Some((posting.document, &posting.positions))
+     }
+ 
+     /// The partitions holding a document whose subject is `subject`, ascending
+--- a/crates/text/src/relation.rs
++++ b/crates/text/src/relation.rs
+@@ -39,6 +39,10 @@
+ //! dataset are the same data, and that the configuration found that data rather
+ //! than a misspelling of it — see [`verify_binding`].
+ 
++use std::mem::size_of;
++use purrdf_sparql_eval::{AdmittedVec, AdmittedPfRow, WorkspaceTerm, WorkspaceAllocation, WorkspaceCapability, NativeDiagnostic, NativeDiagnosticKind};
++use crate::query_workspace::{QueryString, admitted};
++use crate::score::{distinct_terms_owned, score_located_owned, select_counted_owned};
+ use std::sync::Arc;
+ use std::sync::atomic::{AtomicU64, Ordering};
+ 
+@@ -53,7 +57,7 @@
+ use crate::error::TextError;
+ use crate::index::{PartitionKey, TextIndex, TextIndexConfig, source_digest};
+ use crate::score::{
+-    Constraint, PartitionFilter, Scored, ScoringWork, distinct_terms, score_located, select_counted,
++    Constraint, Scored, ScoringWork,
+ };
+ 
+ // `?score` is emitted as `xsd:decimal`; `?rank`, `?matched` and `?position` as
+@@ -128,7 +132,7 @@
+ }
+ 
+ /// The lexical form of a needle bound at `position`.
+-fn needle_text(value: &TermValue, position: usize) -> Result<&str, EvalError> {
++fn needle_text_owned<'a>(value: &'a TermValue, position: usize, workspace: &WorkspaceCapability) -> Result<&'a str, EvalError> {
+     match value {
+         TermValue::Literal {
+             lexical_form,
+@@ -141,15 +145,15 @@
+         {
+             Ok(lexical_form)
+         }
+-        TermValue::Literal { datatype, .. } => Err(EvalError::function(format!(
++        TermValue::Literal { datatype, .. } => Err(NativeDiagnostic::error(NativeDiagnosticKind::Function, format_args!(
+             "the needle at position {position} is a literal of datatype <{datatype}>; a text \
+              search reads a string, so the needle must be an xsd:string, rdf:langString or \
+              rdf:dirLangString"
+-        ))),
+-        other => Err(EvalError::function(format!(
++        ), workspace)),
++        other => Err(NativeDiagnostic::error(NativeDiagnosticKind::Function, format_args!(
+             "the needle at position {position} is {other:?}; only a literal carries text, so an \
+              IRI, a blank node or a triple term names nothing this relation can search for"
+-        ))),
++        ), workspace)),
+     }
+ }
+ 
+@@ -159,10 +163,10 @@
+ /// [`Constraint::Absent`] rather than [`Constraint::Exactly`] of an empty tag:
+ /// the two are distinct partitions, and collapsing them would make a query for
+ /// untagged text answer with text tagged by an empty string, or the reverse.
+-fn language_constraint(
+-    value: &TermValue,
++fn language_constraint_owned<'a>(
++    value: &'a TermValue,
+     position: usize,
+-) -> Result<Constraint<String>, EvalError> {
++    workspace: &WorkspaceCapability) -> Result<Constraint<&'a str>, EvalError> {
+     match value {
+         TermValue::Literal {
+             lexical_form,
+@@ -171,13 +175,13 @@
+         } if datatype == XSD_STRING => Ok(if lexical_form.is_empty() {
+             Constraint::Absent
+         } else {
+-            Constraint::Exactly(lexical_form.clone())
++            Constraint::Exactly(lexical_form.as_str())
+         }),
+-        other => Err(EvalError::function(format!(
++        other => Err(NativeDiagnostic::error(NativeDiagnosticKind::Function, format_args!(
+             "the language at position {position} is {other:?}; this relation emits an xsd:string \
+              there — the tag itself, or the empty string for an untagged document — so nothing \
+              else can name a language"
+-        ))),
++        ), workspace)),
+     }
+ }
+ 
+@@ -226,37 +230,37 @@
+ /// A negative rank stays a refusal at every magnitude. It is not a row the index
+ /// might have and does not: 1-based positions have no negative region, so the
+ /// request is outside the domain rather than empty within it.
+-fn rank_bound(value: &TermValue) -> Result<RankBound, EvalError> {
++fn rank_bound_owned(value: &TermValue, workspace: &WorkspaceCapability) -> Result<RankBound, EvalError> {
+     let TermValue::Literal {
+         lexical_form,
+         datatype,
+         ..
+     } = value
+     else {
+-        return Err(EvalError::function(format!(
++        return Err(NativeDiagnostic::error(NativeDiagnosticKind::Function, format_args!(
+             "the rank at position {SEARCH_RANK} is {value:?}; a rank is a 1-based position, which \
+              only an xsd:integer literal can name"
+-        )));
++        ), workspace));
+     };
+     if datatype != XSD_INTEGER {
+-        return Err(EvalError::function(format!(
++        return Err(NativeDiagnostic::error(NativeDiagnosticKind::Function, format_args!(
+             "the rank at position {SEARCH_RANK} is a literal of datatype <{datatype}>; this \
+              relation emits an xsd:integer there, so only an xsd:integer can name a rank"
+-        )));
++        ), workspace));
+     }
+     let Some((negative, digits)) = xsd_integer_parts(lexical_form) else {
+-        return Err(EvalError::function(format!(
++        return Err(NativeDiagnostic::error(NativeDiagnosticKind::Function, format_args!(
+             "the rank at position {SEARCH_RANK} has lexical form {lexical_form:?}, which is not in \
+              the lexical space of xsd:integer (an optional sign followed by one or more digits)"
+-        )));
++        ), workspace));
+     };
+     // `digits` has had its leading zeros stripped, so it is empty exactly when
+     // the value is zero — whatever sign was written in front of it.
+     if digits.is_empty() || negative {
+-        return Err(EvalError::function(format!(
++        return Err(NativeDiagnostic::error(NativeDiagnosticKind::Function, format_args!(
+             "the rank at position {SEARCH_RANK} is {lexical_form}; ranks are 1-based, so zero and \
+              every negative value are outside the domain rather than an empty answer within it"
+-        )));
++        ), workspace));
+     }
+     // Strictly positive from here, so the only question left is whether it names
+     // a position an index can number. One that does not is a question the index
+@@ -267,36 +271,56 @@
+ }
+ 
+ /// Whether `row` agrees with every bound position of the invocation.
+-fn agrees(bound: &[Option<TermValue>], row: &[TermValue]) -> bool {
+-    bound
+-        .iter()
+-        .zip(row)
+-        .all(|(want, have)| want.as_ref().is_none_or(|want| want == have))
+-}
++
+ 
+ /// The invocation's bound values by flattened position, cloned out of the
+ /// borrow `args` lends for the duration of `open`.
+-fn bound_values(args: &PfArgs<'_>) -> Vec<Option<TermValue>> {
+-    args.flattened().map(<Option<&TermValue>>::cloned).collect()
+-}
++
+ 
+ /// A `?lang` cell: the tag itself, or the empty string for an untagged document.
+-fn language_term(language: Option<&str>) -> TermValue {
+-    TermValue::simple_literal(language.unwrap_or(""))
+-}
++
+ 
+ /// Refuse an invocation whose argument vectors do not match `declared`.
+ ///
+ /// `open_contained` already checked this for every engine-driven call; a direct
+ /// caller gets the same answer rather than an out-of-range read.
+-fn check_arity(args: &PfArgs<'_>, declared: PfArity, what: &str) -> Result<(), EvalError> {
++fn check_arity_owned(args: &PfArgs<'_>, declared: PfArity, what: &str, workspace: &WorkspaceCapability) -> Result<(), EvalError> {
+     let supplied = args.arity();
+     if supplied == declared {
+         return Ok(());
+     }
+-    Err(EvalError::function(format!(
++    Err(NativeDiagnostic::error(NativeDiagnosticKind::Function, format_args!(
+         "the {what} relation expects {declared} argument(s), got {supplied}"
+-    )))
++    ), workspace))
++}
++
++fn bound_terms(
++    args: &PfArgs<'_>, workspace: &WorkspaceCapability,
++) -> Result<AdmittedVec<Option<WorkspaceTerm>>, EvalError> {
++    let mut bound = AdmittedVec::with_capacity(args.arity().total(), workspace)?;
++    for value in args.flattened() {
++        bound.push(value.map(|value| workspace.clone_term(value)).transpose()?)?;
++    }
++    Ok(bound)
++}
++
++fn agrees_owned(
++    bound: &[Option<WorkspaceTerm>], row: &[TermValue], workspace: &WorkspaceCapability,
++) -> Result<bool, EvalError> {
++    for (want, have) in bound.iter().zip(row) {
++        if let Some(want) = want {
++            if !workspace.terms_equal(want, have)? { return Ok(false); }
++        }
++    }
++    Ok(true)
++}
++
++fn language_matches(language: &Constraint<&str>, key: &PartitionKey) -> bool {
++    match language {
++        Constraint::Any => true,
++        Constraint::Absent => key.language().is_none(),
++        Constraint::Exactly(language) => key.language() == Some(*language),
++    }
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -700,10 +724,10 @@
+     /// The document id.
+     document: u32,
+     /// Its partition.
+-    key: PartitionKey,
++    key: &'i PartitionKey,
+     /// `(term ordinal, predicate frequencies)` for each distinct needle term the
+     /// document holds, in ascending ordinal order — what the point scorer reads.
+-    located: Vec<(usize, &'i [(u32, u64)])>,
++    located: AdmittedVec<(usize, &'i [(u32, u64)])>,
+ }
+ 
+ /// One row a [`SearchCursor`] will emit, before it is rendered.
+@@ -1055,48 +1079,107 @@
+     /// which is where a needle wider than the ranking profile admits is refused —
+     /// the ranker's own check, called rather than restated, so a needle too wide
+     /// to rank is too wide to look up rather than quietly answering empty.
+-    fn holdings(
+-        &self,
+-        subject: &TermValue,
+-        terms: &[&str],
+-        filter: &PartitionFilter,
+-    ) -> Vec<Holding<'_>> {
+-        let mut held: Vec<Holding<'_>> = Vec::new();
+-        for &document in self.index.documents_with_subject(subject) {
+-            let Some(key) = self.index.partition_key_of(document) else {
+-                continue;
+-            };
+-            if !filter.matches(key) {
+-                continue;
+-            }
+-            // Every term is asked, rather than stopping at the first hit, so the
+-            // cost of a lookup is a function of the request and not of which
+-            // term happened to match first — one lookup per `(document, term)`
+-            // pair, always, which is the number `SearchObservations` reports and
+-            // a test can assert as a literal.
+-            let mut located = Vec::new();
++    fn holdings_owned(
++        &self, subject: &TermValue, terms: &[&str], language: &Constraint<&str>,
++        workspace: &WorkspaceCapability,
++    ) -> Result<AdmittedVec<Holding<'_>>, TextError> {
++        let documents = admitted(self.index.documents_with_subject_owned(subject, workspace))?;
++        let mut held = admitted(AdmittedVec::with_capacity(documents.len(), workspace))?;
++        for &document in documents {
++            let Some(key) = self.index.partition_key_of(document) else { continue; };
++            if !language_matches(language, key) { continue; }
++            let mut located = admitted(AdmittedVec::with_capacity(terms.len(), workspace))?;
+             for (ordinal, term) in terms.iter().enumerate() {
+-                self.observations
+-                    .membership_lookups
+-                    .fetch_add(1, Ordering::Relaxed);
++                self.observations.membership_lookups.fetch_add(1, Ordering::Relaxed);
+                 if let Some(counts) = self.index.posted_frequencies(document, term) {
+-                    located.push((ordinal, counts));
++                    admitted(located.push((ordinal, counts)))?;
+                 }
+             }
+-            if !located.is_empty() {
+-                held.push(Holding {
+-                    document,
+-                    key: key.clone(),
+-                    located,
+-                });
++            if !located.is_empty() { admitted(held.push(Holding { document, key, located }))?; }
++        }
++        Ok(held)
++    }
++
++    fn scored_in_place_owned(
++        &self, terms: &[&str], holdings: &[Holding<'_>], workspace: &WorkspaceCapability,
++    ) -> Result<AdmittedVec<Hit>, TextError> {
++        self.observations.point_scorings.fetch_add(1, Ordering::Relaxed);
++        let mut work = ScoringWork::default();
++        let result = (|| {
++            let mut hits = admitted(AdmittedVec::with_capacity(holdings.len(), workspace))?;
++            for holding in holdings {
++                let (score, matched) = score_located_owned(&self.index, holding.document, terms, &holding.located, &mut work, workspace)?;
++                admitted(hits.push(Hit { document: holding.document, score, matched, rank: None }))?;
+             }
+-        }
+-        // Already in emission order, `(partition key ASC, rank ASC)`, with nothing
+-        // to sort: a subject holds at most one document per partition, the ids
+-        // come back ascending, and the index assigns ids in `(graph, subject,
+-        // language)` order — so among one subject's documents ascending id is
+-        // ascending `(graph, language)`, which is exactly `PartitionKey`'s order.
+-        held
++            Ok(hits)
++        })();
++        self.observations.record(work);
++        result
++    }
++
++    fn ranked_owned(
++        &self, needle: &[QueryString], matches: impl Fn(&PartitionKey) -> bool,
++        ceiling: Option<u64>, partition_rank: Option<u32>, workspace: &WorkspaceCapability,
++    ) -> Result<AdmittedVec<Scored>, TextError> {
++        self.observations.rankings.fetch_add(1, Ordering::Relaxed);
++        let mut work = ScoringWork::default();
++        let result = select_counted_owned(&self.index, needle.iter().map(QueryString::as_str), matches,
++            ceiling, partition_rank, &mut work, workspace);
++        self.observations.record(work);
++        result
++    }
++
++    fn open_owned(
++        &self, args: &PfArgs<'_>, ceiling: Option<u64>, workspace: WorkspaceCapability,
++    ) -> Result<Box<dyn PfCursor>, EvalError> {
++        check_arity_owned(args, self.arity(), "text search", &workspace)?;
++        let needle = args.get(SEARCH_NEEDLE).ok_or_else(|| NativeDiagnostic::error(NativeDiagnosticKind::Function,
++            format_args!("the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
++                for a needle and cannot enumerate needles for a document, which is why both of \
++                its declared modes — `{SEARCH_MODE}` and `{SEARCH_CANDIDATE_MODE}` — demand it"), &workspace))?;
++        let text = needle_text_owned(needle, SEARCH_NEEDLE, &workspace)?;
++        let rank = args.get(SEARCH_RANK).map(|value| rank_bound_owned(value, &workspace)).transpose()?.unwrap_or(RankBound::Unbound);
++        let language = args.get(SEARCH_LANG).map(|value| language_constraint_owned(value, SEARCH_LANG, &workspace))
++            .transpose()?.unwrap_or(Constraint::Any);
++        let post_rank_filtered = args.get(SEARCH_DOC).is_some() || args.get(SEARCH_SCORE).is_some() || args.get(SEARCH_MATCHED).is_some();
++        let select_ceiling = if post_rank_filtered { None } else { ceiling };
++        let analyzed = self.index.query_terms_owned(text, &workspace)?;
++        let rank_at = match rank { RankBound::At(at) => Some(at), _ => None };
++        let mut rows = AdmittedVec::new(&workspace);
++        match args.get(SEARCH_DOC) {
++            _ if rank == RankBound::BeyondTheIndex => {}
++            None => {
++                let scored = self.ranked_owned(&analyzed, |key| language_matches(&language, key), select_ceiling, rank_at, &workspace)?;
++                rows = AdmittedVec::with_capacity(scored.len(), &workspace)?;
++                for row in scored { rows.push(Hit::from(row))?; }
++            }
++            Some(subject) => {
++                let terms = distinct_terms_owned(analyzed.iter().map(QueryString::as_str), &workspace)?;
++                let holdings = self.holdings_owned(subject, &terms, &language, &workspace)?;
++                if args.is_unobserved(SEARCH_RANK) {
++                    if !holdings.is_empty() { rows = self.scored_in_place_owned(&terms, &holdings, &workspace)?; }
++                } else if !holdings.is_empty() {
++                    let mut documents = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
++                    let mut keys = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
++                    for holding in holdings.iter() { documents.push(holding.document)?; keys.push(holding.key)?; }
++                    drop(holdings);
++                    let scored = self.ranked_owned(&analyzed,
++                        |key| language_matches(&language, key) && keys.iter().any(|held| *held == key),
++                        select_ceiling, rank_at, &workspace)?;
++                    rows = AdmittedVec::with_capacity(documents.len().min(scored.len()), &workspace)?;
++                    for row in scored {
++                        if documents.contains(&row.document) { rows.push(Hit::from(row))?; }
++                    }
++                }
++            }
++        }
++        let bound = bound_terms(args, &workspace)?;
++        let control = workspace.charge(u64::try_from(size_of::<SearchCursor>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++        let cursor = SearchCursor { index: Arc::clone(&self.index), generation: Arc::clone(&self.generation),
++            rows, at: 0, bound, remaining: ceiling, workspace, _control: control };
++        let cursor = purrdf_core::small::try_boxed_one(cursor)
++            .map_err(|_| EvalError::AllocationFailed { construct: "text search cursor" })?;
++        Ok(cursor)
+     }
+ 
+     /// Score each holding document in place, without ranking anything.
+@@ -1106,36 +1189,7 @@
+     /// would give it, exactly: [`score_located`] sums through the one summation
+     /// the ranker uses, over the same stored corpus statistics. What is not
+     /// computed is the rank, because nothing will read it.
+-    fn scored_in_place(
+-        &self,
+-        terms: &[&str],
+-        holdings: &[Holding<'_>],
+-    ) -> Result<Vec<Hit>, TextError> {
+-        self.observations
+-            .point_scorings
+-            .fetch_add(1, Ordering::Relaxed);
+-        let mut work = ScoringWork::default();
+-        let hits = holdings
+-            .iter()
+-            .map(|holding| {
+-                score_located(
+-                    &self.index,
+-                    holding.document,
+-                    terms,
+-                    &holding.located,
+-                    &mut work,
+-                )
+-                .map(|(score, matched)| Hit {
+-                    document: holding.document,
+-                    score,
+-                    rank: None,
+-                    matched,
+-                })
+-            })
+-            .collect::<Result<Vec<Hit>, TextError>>();
+-        self.observations.record(work);
+-        hits
+-    }
++
+ 
+     /// Enter the partition ranker, counting the entry and the work it did.
+     ///
+@@ -1143,26 +1197,7 @@
+     /// what makes [`SearchObservations::rankings`] a measurement rather than an
+     /// estimate: an invocation that did not come through here did not rank
+     /// anything, because there is no other way for it to have done so.
+-    fn ranked(
+-        &self,
+-        needle: &[String],
+-        filter: &PartitionFilter,
+-        ceiling: Option<u64>,
+-        partition_rank: Option<u32>,
+-    ) -> Result<Vec<Scored>, TextError> {
+-        self.observations.rankings.fetch_add(1, Ordering::Relaxed);
+-        let mut work = ScoringWork::default();
+-        let rows = select_counted(
+-            &self.index,
+-            needle,
+-            filter,
+-            ceiling,
+-            partition_rank,
+-            &mut work,
+-        );
+-        self.observations.record(work);
+-        rows
+-    }
++
+ }
+ 
+ impl PropertyFunction for TextSearchRelation {
+@@ -1298,107 +1333,12 @@
+     /// branch of its own anywhere. `select` iterates the index's partitions and an
+     /// empty index has none, so nothing is ranked and no corpus statistic is
+     /// computed.
+-    fn open(
+-        &self,
+-        args: &PfArgs<'_>,
+-        ceiling: Option<u64>,
+-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+-        check_arity(args, self.arity(), "text search")?;
+-
+-        let Some(needle) = args.get(SEARCH_NEEDLE) else {
+-            return Err(EvalError::function(format!(
+-                "the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
+-                 for a needle and cannot enumerate needles for a document, which is why both of \
+-                 its declared modes — `{SEARCH_MODE}` and `{SEARCH_CANDIDATE_MODE}` — demand it"
+-            )));
+-        };
+-        let text = needle_text(needle, SEARCH_NEEDLE)?;
+-
+-        let rank = match args.get(SEARCH_RANK) {
+-            Some(value) => rank_bound(value)?,
+-            None => RankBound::Unbound,
+-        };
+-        let language = match args.get(SEARCH_LANG) {
+-            Some(value) => language_constraint(value, SEARCH_LANG)?,
+-            None => Constraint::Any,
+-        };
+-        let filter = PartitionFilter::unconstrained().with_language(language);
+-
+-        // The ceiling handling, and why it is not simply passed through.
+-        //
+-        // `args_are_admission_transparent` treats a CONSTANT at any position as
+-        // transparent, so the engine offers a ceiling even for a call written
+-        // `ex:a <search> ( "cat" ?s ?r ?l ?m )`. Positions 0, 2 and 5 are
+-        // filtered *after* ranking, so handing that ceiling to `select` would
+-        // truncate the ranking first and let the cursor filter a prefix — it
+-        // could then emit fewer than `k` rows and report exhaustion while
+-        // matching rows sat beyond the truncation, which the engine reads as a
+-        // complete answer. So on any of those the ranking is computed in full
+-        // and the cursor does the cutting.
+-        //
+-        // A bound `?lang` (4) is different: it is pushed into the partition
+-        // filter *before* ranking, which is sound because ranks are
+-        // per-partition — dropping whole partitions cannot change a surviving
+-        // row's rank. A bound `?rank` (3) is likewise handed to `select`, which
+-        // applies it before its own truncation. Neither can drop a row the
+-        // cursor would have emitted, so the ceiling stays valid on those paths.
+-        let post_rank_filtered = args.get(SEARCH_DOC).is_some()
+-            || args.get(SEARCH_SCORE).is_some()
+-            || args.get(SEARCH_MATCHED).is_some();
+-        let select_ceiling = if post_rank_filtered { None } else { ceiling };
+-
+-        let analyzed = self.index.query_terms(text)?;
+-        let at = match rank {
+-            RankBound::At(at) => Some(at),
+-            // `BeyondTheIndex` is answered empty below; `Unbound` bounds nothing.
+-            RankBound::Unbound | RankBound::BeyondTheIndex => None,
+-        };
+-
+-        let rows: Vec<Hit> = match args.get(SEARCH_DOC) {
+-            // A `?rank` past the end of every partition names no row, whatever
+-            // else is bound, and is answered without entering the ranker.
+-            _ if rank == RankBound::BeyondTheIndex => Vec::new(),
+-            None => self
+-                .ranked(&analyzed, &filter, select_ceiling, at)?
+-                .into_iter()
+-                .map(Hit::from)
+-                .collect(),
+-            // A bound `?doc` is answered membership-first: see `holdings` for why
+-            // that is the whole of the exclusion lookup this relation declares a
+-            // basis for, and `open`'s documentation for the two ways a present
+-            // document is then answered.
+-            Some(subject) => {
+-                let terms = distinct_terms(&analyzed)?;
+-                let holdings = self.holdings(subject, &terms, &filter);
+-                if holdings.is_empty() {
+-                    Vec::new()
+-                } else if args.is_unobserved(SEARCH_RANK) {
+-                    self.scored_in_place(&terms, &holdings)?
+-                } else {
+-                    let documents: Vec<u32> =
+-                        holdings.iter().map(|holding| holding.document).collect();
+-                    let keys = holdings.into_iter().map(|holding| holding.key).collect();
+-                    // The subject's own rows and nothing else reach the cursor:
+-                    // every other candidate was needed to rank these, and is not
+-                    // a row this invocation can emit.
+-                    self.ranked(&analyzed, &filter.restricted_to(keys), select_ceiling, at)?
+-                        .into_iter()
+-                        .filter(|row| documents.contains(&row.document))
+-                        .map(Hit::from)
+-                        .collect()
+-                }
+-            }
+-        };
+-
+-        Ok(Box::new(SearchCursor {
+-            index: Arc::clone(&self.index),
+-            generation: Arc::clone(&self.generation),
+-            needle: needle.clone(),
+-            rows,
+-            at: 0,
+-            bound: bound_values(args),
+-            remaining: ceiling,
+-        }))
++    fn open(&self, args: &PfArgs<'_>, ceiling: Option<u64>) -> Result<Box<dyn PfCursor>, EvalError> {
++        self.open_owned(args, ceiling, WorkspaceCapability::default())
++    }
++
++    fn open_admitted(&self, args: &PfArgs<'_>, ceiling: Option<u64>, workspace: WorkspaceCapability) -> Result<Box<dyn PfCursor>, EvalError> {
++        self.open_owned(args, ceiling, workspace)
+     }
+ }
+ 
+@@ -1424,76 +1364,53 @@
+ /// admission-transparent and so still offers a ceiling for.
+ #[derive(Debug)]
+ struct SearchCursor {
+-    /// The index the rows' subjects and languages are read from.
+     index: Arc<TextIndex>,
+-    /// The generation of that index, pinned here because `open` is where the
+-    /// snapshot this cursor answers from is pinned.
+     generation: Arc<str>,
+-    /// The needle, echoed verbatim into position 1 of every row.
+-    needle: TermValue,
+-    /// The rows to emit, in `(partition ASC, rank ASC)` order.
+-    rows: Vec<Hit>,
+-    /// How far into `rows` the cursor has read.
++    rows: AdmittedVec<Hit>,
+     at: usize,
+-    /// The invocation's bound values by flattened position (`None` = free).
+-    bound: Vec<Option<TermValue>>,
+-    /// The rows this invocation may still emit under the engine's licence.
++    bound: AdmittedVec<Option<WorkspaceTerm>>,
+     remaining: Option<u64>,
++    workspace: WorkspaceCapability,
++    _control: WorkspaceAllocation,
+ }
+ 
+ impl SearchCursor {
+-    /// The full row for one ranked document.
+-    fn build(&self, hit: &Hit) -> Result<PfRow, EvalError> {
+-        let document = self.index.document(hit.document).ok_or_else(|| {
+-            EvalError::data(format!(
+-                "the ranker named document {}, which the index does not hold",
+-                hit.document
+-            ))
+-        })?;
+-        Ok(vec![
+-            document.subject().clone(),
+-            self.needle.clone(),
+-            TermValue::typed_literal(hit.score.to_decimal_lexical(), XSD_DECIMAL),
+-            // An uncomputed rank sits only at an unobserved position, whose value
+-            // the engine discards unread. Zero is outside the 1-based rank domain,
+-            // so it could never be mistaken for a rank even by a reader that
+-            // ignored that contract.
+-            TermValue::integer(hit.rank.unwrap_or(0)),
+-            language_term(document.language()),
+-            TermValue::integer(hit.matched),
+-        ])
+-    }
+-}
+-
+-impl PfCursor for SearchCursor {
+-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+-        if self.remaining == Some(0) {
+-            return Ok(None);
+-        }
+-        while let Some(scored) = self.rows.get(self.at) {
++    fn build(&self, hit: &Hit) -> Result<AdmittedPfRow, EvalError> {
++        let document = self.index.document(hit.document).ok_or_else(|| NativeDiagnostic::error(
++            NativeDiagnosticKind::Data,
++            format_args!("a scored row named document {}, which the index does not hold", hit.document), &self.workspace))?;
++        let needle = self.bound[SEARCH_NEEDLE].as_ref().expect("validated required needle");
++        let terms = [
++            self.workspace.clone_term(document.subject())?,
++            self.workspace.clone_term(needle)?,
++            self.workspace.literal(hit.score.decimal_display(), XSD_DECIMAL)?,
++            self.workspace.literal(hit.rank.unwrap_or(0), XSD_INTEGER)?,
++            self.workspace.literal(document.language().unwrap_or(""), XSD_STRING)?,
++            self.workspace.literal(hit.matched, XSD_INTEGER)?,
++        ];
++        AdmittedPfRow::from_terms(terms.into_iter(), &self.workspace)
++    }
++
++    fn next_owned(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
++        if self.remaining == Some(0) { return Ok(None); }
++        while let Some(hit) = self.rows.get(self.at) {
+             self.at += 1;
+-            let row = self.build(scored)?;
+-            if agrees(&self.bound, &row) {
+-                if let Some(remaining) = self.remaining.as_mut() {
+-                    *remaining = remaining.saturating_sub(1);
+-                }
++            let row = self.build(hit)?;
++            if agrees_owned(&self.bound, row.cells(), &self.workspace)? {
++                if let Some(remaining) = self.remaining.as_mut() { *remaining -= 1; }
+                 return Ok(Some(row));
+             }
+         }
+         Ok(None)
+     }
+-
+-    /// The index generation these rows came out of — the digest
+-    /// [`index_generation`] renders, verbatim.
+-    ///
+-    /// The `Arc<str>` was cloned in `open`, so the reading is of the snapshot
+-    /// this cursor was built against and cannot drift if the host swaps its
+-    /// relation for one over a rebuilt index mid-drain. Attesting clones the
+-    /// pointer again rather than the 64 hex characters behind it: the engine
+-    /// asks this once per invocation, and an invocation is once per driving row.
+-    fn generation(&self) -> IndexGeneration {
+-        IndexGeneration::Declared(Arc::clone(&self.generation))
+-    }
++}
++
++impl PfCursor for [SearchCursor; 1] {
++    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
++        self[0].next_owned()?.map(|row| row.try_into_resident().map_err(|_| EvalError::WorkspaceStopped)).transpose()
++    }
++    fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> { self[0].next_owned() }
++    fn generation(&self) -> IndexGeneration { IndexGeneration::Declared(Arc::clone(&self[0].generation)) }
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -1690,6 +1607,45 @@
+         }
+     }
+ 
++    fn open_owned(
++        &self, args: &PfArgs<'_>, ceiling: Option<u64>, workspace: WorkspaceCapability,
++    ) -> Result<Box<dyn PfCursor>, EvalError> {
++        check_arity_owned(args, self.arity(), "term occurrence", &workspace)?;
++        let needle = args.get(OCCURRENCE_TERM).ok_or_else(|| NativeDiagnostic::error(
++            NativeDiagnosticKind::Function,
++            format_args!("the term at position {OCCURRENCE_TERM} is free; this relation enumerates the \
++                occurrences of a term and cannot enumerate terms, which is why its only declared \
++                mode is `{OCCURRENCE_MODE}`"), &workspace))?;
++        let text = needle_text_owned(needle, OCCURRENCE_TERM, &workspace)?;
++        let language = args.get(OCCURRENCE_LANG).map(|value| language_constraint_owned(value, OCCURRENCE_LANG, &workspace))
++            .transpose()?.unwrap_or(Constraint::Any);
++        let documents = args.get(OCCURRENCE_DOC).map(|subject| self.index.documents_with_subject_owned(subject, &workspace)).transpose()?;
++        let analyzed = self.index.query_terms_owned(text, &workspace)?;
++        if analyzed.len() > 1 {
++            return Err(NativeDiagnostic::error(NativeDiagnosticKind::Function,
++                format_args!("the term at position {OCCURRENCE_TERM} is {text:?}, which analyzes to \
++                    {count} terms ({analyzed_terms:?}); this relation matches ONE term per invocation by \
++                    contract, so a multi-term needle is written as one call per term joined on the \
++                    document position", count = analyzed.len(), analyzed_terms = &*analyzed), &workspace));
++        }
++        let mut partitions = AdmittedVec::new(&workspace);
++        if analyzed.first().is_some_and(|term| !term.is_empty()) {
++            for (ordinal, (key, _)) in self.index.partitions().enumerate() {
++                if language_matches(&language, key) && documents.is_none_or(|documents| {
++                    documents.iter().any(|&document| self.index.partition_key_of(document) == Some(key))
++                }) { partitions.push(ordinal)?; }
++            }
++        }
++        let bound = bound_terms(args, &workspace)?;
++        let control = workspace.charge(u64::try_from(size_of::<OccurrenceCursor>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++        let cursor = OccurrenceCursor { index: Arc::clone(&self.index), generation: Arc::clone(&self.generation),
++            analyzed, partitions, partition_at: 0, posting_at: 0, position_at: 0, bound,
++            remaining: ceiling, workspace, _control: control };
++        let cursor = purrdf_core::small::try_boxed_one(cursor)
++            .map_err(|_| EvalError::AllocationFailed { construct: "term occurrence cursor" })?;
++        Ok(cursor)
++    }
++
+     /// The index this relation answers from.
+     #[must_use]
+     pub fn index(&self) -> &TextIndex {
+@@ -1760,79 +1716,12 @@
+     /// therefore filters on every bound position and spends the licence only on
+     /// rows it emits, and the prefix it produces is the prefix of the unbounded
+     /// answer whatever is bound.
+-    fn open(
+-        &self,
+-        args: &PfArgs<'_>,
+-        ceiling: Option<u64>,
+-    ) -> Result<Box<dyn PfCursor>, EvalError> {
+-        check_arity(args, self.arity(), "term occurrence")?;
+-
+-        let Some(needle) = args.get(OCCURRENCE_TERM) else {
+-            return Err(EvalError::function(format!(
+-                "the term at position {OCCURRENCE_TERM} is free; this relation enumerates the \
+-                 occurrences of a term and cannot enumerate terms, which is why its only declared \
+-                 mode is `{OCCURRENCE_MODE}`"
+-            )));
+-        };
+-        let text = needle_text(needle, OCCURRENCE_TERM)?;
+-
+-        let language = match args.get(OCCURRENCE_LANG) {
+-            Some(value) => language_constraint(value, OCCURRENCE_LANG)?,
+-            None => Constraint::Any,
+-        };
+-        let mut filter = PartitionFilter::unconstrained().with_language(language);
+-
+-        // A bound `?doc` is narrowed to the partitions that subject occupies.
+-        // This cursor is already lazy per partition, so without it a bound
+-        // `?doc` walks each partition's posting list for the term and discards
+-        // every row but that subject's. Naming the subject's own partitions
+-        // skips those lists rather than reading them.
+-        //
+-        // The search relation beside it goes one step further and decides
+-        // membership per document before ranking anything, which this relation
+-        // cannot: a membership answer says whether the term occurs, and this
+-        // relation's rows are the occurrences themselves, so there is nothing it
+-        // could answer without reading the posting it would have emitted.
+-        if let Some(subject) = args.get(OCCURRENCE_DOC) {
+-            filter = filter.restricted_to(self.index.partitions_holding_subject(subject));
+-        }
+-
+-        let mut analyzed = self.index.query_terms(text)?;
+-        if analyzed.len() > 1 {
+-            return Err(EvalError::function(format!(
+-                "the term at position {OCCURRENCE_TERM} is {text:?}, which analyzes to \
+-                 {count} terms ({analyzed:?}); this relation matches ONE term per invocation by \
+-                 contract, so a multi-term needle is written as one call per term joined on the \
+-                 document position",
+-                count = analyzed.len()
+-            )));
+-        }
+-        // A needle of pure punctuation names no term, which matches nothing.
+-        // That is the same answer the index side gives, and the two ends must
+-        // agree about what "no text" means.
+-        let term = analyzed.pop().unwrap_or_default();
+-        let partitions = if term.is_empty() {
+-            Vec::new()
+-        } else {
+-            partition_keys(&self.index)
+-                .into_iter()
+-                .filter(|key| filter.matches(key))
+-                .collect()
+-        };
+-
+-        Ok(Box::new(OccurrenceCursor {
+-            index: Arc::clone(&self.index),
+-            generation: Arc::clone(&self.generation),
+-            term,
+-            needle: needle.clone(),
+-            partitions,
+-            partition_at: 0,
+-            postings: Vec::new(),
+-            posting_at: 0,
+-            position_at: 0,
+-            bound: bound_values(args),
+-            remaining: ceiling,
+-        }))
++    fn open(&self, args: &PfArgs<'_>, ceiling: Option<u64>) -> Result<Box<dyn PfCursor>, EvalError> {
++        self.open_owned(args, ceiling, WorkspaceCapability::default())
++    }
++
++    fn open_admitted(&self, args: &PfArgs<'_>, ceiling: Option<u64>, workspace: WorkspaceCapability) -> Result<Box<dyn PfCursor>, EvalError> {
++        self.open_owned(args, ceiling, workspace)
+     }
+ }
+ 
+@@ -1848,103 +1737,59 @@
+ /// licence is decremented **only** on emitted rows.
+ #[derive(Debug)]
+ struct OccurrenceCursor {
+-    /// The index the postings are read from.
+     index: Arc<TextIndex>,
+-    /// The generation of that index, pinned here because `open` is where the
+-    /// snapshot this cursor answers from is pinned.
+     generation: Arc<str>,
+-    /// The analyzed term, empty when the needle named none.
+-    term: String,
+-    /// The needle, echoed verbatim into position 1 of every row.
+-    needle: TermValue,
+-    /// The admitted partitions, ascending.
+-    partitions: Vec<PartitionKey>,
+-    /// How far into `partitions` the cursor has read.
++    analyzed: AdmittedVec<QueryString>,
++    partitions: AdmittedVec<usize>,
+     partition_at: usize,
+-    /// The current partition's postings: `(document, positions)`.
+-    postings: Vec<(u32, Vec<u32>)>,
+-    /// How far into `postings` the cursor has read.
+     posting_at: usize,
+-    /// How far into the current posting's positions the cursor has read.
+     position_at: usize,
+-    /// The invocation's bound values by flattened position (`None` = free).
+-    bound: Vec<Option<TermValue>>,
+-    /// The rows this invocation may still emit under the engine's licence.
++    bound: AdmittedVec<Option<WorkspaceTerm>>,
+     remaining: Option<u64>,
++    workspace: WorkspaceCapability,
++    _control: WorkspaceAllocation,
+ }
+ 
+ impl OccurrenceCursor {
+-    /// The full row for one occurrence.
+-    fn build(&self, document: u32, position: u32) -> Result<PfRow, EvalError> {
+-        let held = self.index.document(document).ok_or_else(|| {
+-            EvalError::data(format!(
+-                "a posting named document {document}, which the index does not hold"
+-            ))
+-        })?;
+-        Ok(vec![
+-            held.subject().clone(),
+-            self.needle.clone(),
+-            language_term(held.language()),
+-            TermValue::integer(position),
+-        ])
+-    }
+-
+-    /// Read the next partition's postings into `postings`, or report that there
+-    /// is no next partition.
+-    fn load_next_partition(&mut self) -> bool {
+-        let Some(key) = self.partitions.get(self.partition_at).cloned() else {
+-            return false;
+-        };
+-        self.partition_at += 1;
+-        let loaded: Vec<(u32, Vec<u32>)> = self
+-            .index
+-            .postings(&key, &self.term)
+-            .map(|(document, positions)| (document, positions.to_vec()))
+-            .collect();
+-        self.postings = loaded;
+-        self.posting_at = 0;
+-        self.position_at = 0;
+-        true
+-    }
+-}
+-
+-impl PfCursor for OccurrenceCursor {
+-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
++    fn build(&self, document: u32, position: u32) -> Result<AdmittedPfRow, EvalError> {
++        let held = self.index.document(document).ok_or_else(|| NativeDiagnostic::error(
++            NativeDiagnosticKind::Data,
++            format_args!("a posting named document {document}, which the index does not hold"), &self.workspace))?;
++        let needle = self.bound[OCCURRENCE_TERM].as_ref().expect("validated required occurrence term");
++        let terms = [self.workspace.clone_term(held.subject())?, self.workspace.clone_term(needle)?,
++            self.workspace.literal(held.language().unwrap_or(""), XSD_STRING)?, self.workspace.literal(position, XSD_INTEGER)?];
++        AdmittedPfRow::from_terms(terms.into_iter(), &self.workspace)
++    }
++
++    fn next_owned(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
++        let Some(term) = self.analyzed.first() else { return Ok(None); };
+         loop {
+-            if self.remaining == Some(0) {
+-                return Ok(None);
+-            }
+-            let Some((document, positions)) = self.postings.get(self.posting_at) else {
+-                if self.load_next_partition() {
+-                    continue;
+-                }
+-                return Ok(None);
++            if self.remaining == Some(0) { return Ok(None); }
++            let Some(&partition) = self.partitions.get(self.partition_at) else { return Ok(None); };
++            let Some((document, positions)) = self.index.posting_at(partition, term, self.posting_at) else {
++                self.partition_at += 1; self.posting_at = 0; self.position_at = 0; continue;
+             };
+             let Some(&position) = positions.get(self.position_at) else {
+-                self.posting_at += 1;
+-                self.position_at = 0;
+-                continue;
++                self.posting_at += 1; self.position_at = 0; continue;
+             };
+-            let document = *document;
+             self.position_at += 1;
+-
+             let row = self.build(document, position)?;
+-            if agrees(&self.bound, &row) {
+-                if let Some(remaining) = self.remaining.as_mut() {
+-                    *remaining = remaining.saturating_sub(1);
+-                }
++            if agrees_owned(&self.bound, row.cells(), &self.workspace)? {
++                if let Some(remaining) = self.remaining.as_mut() { *remaining -= 1; }
+                 return Ok(Some(row));
+             }
+         }
+     }
+-
+-    /// The index generation these occurrences came out of — the same digest the
+-    /// ranked relation beside it declares, because it is the same index and the
+-    /// same question, and attested the same way: by cloning the shared pointer.
+-    fn generation(&self) -> IndexGeneration {
+-        IndexGeneration::Declared(Arc::clone(&self.generation))
+-    }
+-}
++}
++
++impl PfCursor for [OccurrenceCursor; 1] {
++    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
++        self[0].next_owned()?.map(|row| row.try_into_resident().map_err(|_| EvalError::WorkspaceStopped)).transpose()
++    }
++    fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> { self[0].next_owned() }
++    fn generation(&self) -> IndexGeneration { IndexGeneration::Declared(Arc::clone(&self[0].generation)) }
++}
++
+ 
+ // ---------------------------------------------------------------------------
+ // Index-versus-dataset binding
+--- a/crates/text/src/analysis.rs
++++ b/crates/text/src/analysis.rs
+@@ -2,11 +2,13 @@
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+ //! One fallible, source-aligned analysis law for documents and queries.
++use purrdf_sparql_eval::{AdmittedVec, WorkspaceAllocation, WorkspaceCapability, NativeDiagnosticKind};
++use crate::query_workspace::{QueryString, admitted, overflow, query_error};
+ use crate::segment::{Dictionary, SegmentationScratch};
+ use crate::{AccentFold, AnalyzerProfile, InputMode, Segmentation, Stemming, TextError, unicode};
+ use purrdf_hash::{Domain, frame::frame_le};
+ const ANALYZER_DOMAIN: Domain = Domain::new(b"purrdf-text/resolved-analyzer/v4\0");
+-use purrdf_lex::unicode::{TaggedScalar, compose_tagged, decompose_tagged};
++use purrdf_lex::unicode::{TaggedScalar, compose_tagged};
+ use std::{borrow::Cow, collections::BTreeMap, fmt, ops::Range, sync::Arc};
+ 
+ /// A lexical token and its consecutive ordinal.
+@@ -148,6 +150,8 @@
+     ranges: Vec<Range<usize>>,
+     segmentation: SegmentationScratch,
+     word: String,
++    ranges_allocation: Option<WorkspaceAllocation>,
++    word_allocation: Option<WorkspaceAllocation>,
+ }
+ /// Immutable resolved analysis law. No filesystem, network or hidden data access.
+ #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+@@ -279,6 +283,29 @@
+         })?;
+         Ok(terms)
+     }
++
++    pub(crate) fn terms_owned(
++        &self, input: &str, workspace: &WorkspaceCapability,
++    ) -> Result<AdmittedVec<QueryString>, TextError> {
++        let mut scratch = AnalyzerScratch::default();
++        scratch.normalization.workspace = workspace.clone();
++        let mut terms = AdmittedVec::new(workspace);
++        self.analyze_into(input, &mut scratch, &mut |token| {
++            admitted(terms.push(QueryString::copy(&token.text, workspace)?))
++        })?;
++        Ok(terms)
++    }
++
++    pub(crate) fn analysis_form_owned(
++        &self, input: &str, workspace: &WorkspaceCapability,
++    ) -> Result<QueryString, TextError> {
++        let mut scratch = NormalizationScratch::default();
++        scratch.workspace = workspace.clone();
++        normalize_into(input, self.profile.input_mode(), self.profile.accent_fold(), &mut scratch, &mut Unaligned)?;
++        // Move the exact existing output and grant; copying it would add another
++        // string owner. The other scratch buffers die here.
++        Ok(QueryString::from_parts(scratch.output, scratch.owners.output))
++    }
+     /// Consume lexical tokens after a complete successful analysis.
+     /// # Errors
+     /// Propagates analysis refusal before invoking the sink.
+@@ -290,7 +317,7 @@
+     ) -> Result<(), TextError> {
+         let mut buffers = AnalyzerScratch::default();
+         std::mem::swap(scratch, &mut buffers.normalization.output);
+-        let result = self.analyze_into(input, &mut buffers, &mut sink);
++        let result = self.analyze_into(input, &mut buffers, &mut |token| { sink(token); Ok(()) });
+         std::mem::swap(scratch, &mut buffers.normalization.output);
+         result
+     }
+@@ -303,13 +330,13 @@
+         scratch: &mut AnalyzerScratch,
+         mut sink: impl FnMut(Token<'_>),
+     ) -> Result<(), TextError> {
+-        self.analyze_into(input, scratch, &mut sink)
++        self.analyze_into(input, scratch, &mut |token| { sink(token); Ok(()) })
+     }
+     fn analyze_into(
+         &self,
+         input: &str,
+         scratch: &mut AnalyzerScratch,
+-        sink: &mut impl FnMut(Token<'_>),
++        sink: &mut impl FnMut(Token<'_>) -> Result<(), TextError>,
+     ) -> Result<(), TextError> {
+         normalize_into(
+             input,
+@@ -319,6 +346,11 @@
+             &mut Unaligned,
+         )?;
+         let normalized = &scratch.normalization.output;
++        admitted(scratch.normalization.workspace.reserve_vec(&mut scratch.ranges,
++            &mut scratch.ranges_allocation, normalized.chars().count()))?;
++        if self.dictionary.is_some() {
++            scratch.segmentation.reserve_for_query(normalized, &scratch.normalization.workspace)?;
++        }
+         self.fill_word_ranges(
+             normalized,
+             true,
+@@ -326,7 +358,7 @@
+             &mut scratch.segmentation,
+         );
+         if scratch.ranges.len() > u32::MAX as usize {
+-            return Err(TextError::data("token positions exceed u32"));
++            return Err(query_error(&scratch.normalization.workspace, NativeDiagnosticKind::Data, "token positions exceed u32")?);
+         }
+         for (position, range) in scratch.ranges.iter().cloned().enumerate() {
+             let word = &normalized[range];
+@@ -338,6 +370,8 @@
+                     });
+             let text = if changed {
+                 scratch.word.clear();
++                admitted(scratch.normalization.workspace.reserve_string(&mut scratch.word,
++                    &mut scratch.word_allocation, word.len()))?;
+                 scratch.word.extend(
+                     unicode::emoji_scalars(word)
+                         .filter(|&(_, c, protected)| {
+@@ -346,7 +380,7 @@
+                         .map(|(_, c, _)| c),
+                 );
+                 if self.profile.stemming() == Stemming::English && !emoji {
+-                    crate::stem::english_in_place(&mut scratch.word);
++                    crate::stem::english_in_place_owned(&mut scratch.word, &scratch.normalization.workspace)?;
+                 }
+                 self.bounded(&scratch.word)
+             } else {
+@@ -355,7 +389,7 @@
+             sink(Token {
+                 text: Cow::Borrowed(text),
+                 position: position as u32,
+-            });
++            })?;
+         }
+         Ok(())
+     }
+@@ -618,12 +652,60 @@
+ 
+ /// One reusable pipeline, specialized only by the metadata it carries.
+ #[derive(Debug, Default)]
++struct NormalizationOwners {
++    output: Option<WorkspaceAllocation>,
++    cleaned: Option<WorkspaceAllocation>,
++    scalars: Option<WorkspaceAllocation>,
++    pending: Option<WorkspaceAllocation>,
++    working: Option<WorkspaceAllocation>,
++    order: Option<WorkspaceAllocation>,
++}
++
++#[derive(Debug, Default)]
+ struct NormalizationScratch<M> {
+     output: String,
+     cleaned: String,
+     scalars: Vec<TaggedScalar<M>>,
+     pending: Vec<TaggedScalar<M>>,
+     working: Vec<TaggedScalar<M>>,
++    order: Vec<usize>,
++    // Keep all payload buffers before the capabilities that admit them.
++    owners: NormalizationOwners,
++    workspace: WorkspaceCapability,
++}
++
++struct DecodedOwner<'a> {
++    resolution: purrdf_lex::html::Resolution<'a>,
++    _text: Option<WorkspaceAllocation>,
++    _sources: Option<WorkspaceAllocation>,
++    _diagnostics: Option<WorkspaceAllocation>,
++}
++
++fn decode_owned<'a>(
++    input: &'a str, mode: purrdf_lex::html::Mode, workspace: &WorkspaceCapability,
++) -> Result<DecodedOwner<'a>, TextError> {
++    // The reader/counter are shared at the HTML home; this does not decode once
++    // unpriced just to discover what the subsequent allocation would require.
++    let layout = purrdf_lex::html::resolution_layout(input, mode).map_err(|_| overflow())?;
++    let (mut text_owner, mut source_owner, mut diagnostic_owner) = (None, None, None);
++    let mut text = String::new();
++    let mut sources = Vec::new();
++    let mut diagnostics = Vec::new();
++    admitted(workspace.reserve_string(&mut text, &mut text_owner, layout.text_bytes))?;
++    admitted(workspace.reserve_vec(&mut sources, &mut source_owner, layout.sources))?;
++    admitted(workspace.reserve_vec(&mut diagnostics, &mut diagnostic_owner, layout.diagnostics))?;
++    let resolution = purrdf_lex::html::resolve_preallocated(input, mode, layout, text, sources, diagnostics)
++        .map_err(|_| TextError::Capacity(crate::CapacityFailure::UnstableDiagnostic))?;
++    let owner = DecodedOwner {
++        resolution, _text: text_owner, _sources: source_owner, _diagnostics: diagnostic_owner,
++    };
++    if !owner.resolution.diagnostics.is_empty() {
++        // The diagnostic vector and every decoded buffer remain live and covered
++        // through rendering. Once this immutable message exists they can die.
++        return Err(query_error(workspace, NativeDiagnosticKind::Data,
++            format_args!("HTML reference errors: {:?}", owner.resolution.diagnostics))?);
++    }
++    Ok(owner)
+ }
+ 
+ /// Source tracking is orthogonal to every normalization decision. Streaming
+@@ -646,128 +728,120 @@
+ }
+ 
+ fn normalize_into<A: Alignment>(
+-    input: &str,
+-    mode: InputMode,
+-    accent: AccentFold,
+-    scratch: &mut NormalizationScratch<A::Metadata>,
+-    alignment: &mut A,
++    input: &str, mode: InputMode, accent: AccentFold,
++    scratch: &mut NormalizationScratch<A::Metadata>, alignment: &mut A,
+ ) -> Result<(), TextError> {
+-    admit_source_size(input.len(), "analysis input")?;
++    admit_source_size_owned(input.len(), "analysis input", &scratch.workspace)?;
+     scratch.output.clear();
+     let mode = match mode {
+         InputMode::Plain => purrdf_lex::html::Mode::Plain,
+         InputMode::HtmlText => purrdf_lex::html::Mode::Text,
+         InputMode::HtmlAttribute => purrdf_lex::html::Mode::Attribute,
+     };
+-    let decoded = purrdf_lex::html::resolve_strict(input, mode).map_err(TextError::Html)?;
+-    admit_source_size(decoded.text.len(), "decoded input")?;
++    let decoded_owner;
++    let resident_decoded;
++    let decoded = if scratch.workspace.is_bounded() {
++        decoded_owner = decode_owned(input, mode, &scratch.workspace)?;
++        &decoded_owner.resolution.decoded
++    } else {
++        resident_decoded = purrdf_lex::html::resolve_strict(input, mode).map_err(TextError::Html)?;
++        &resident_decoded
++    };
++    admit_source_size_owned(decoded.text.len(), "decoded input", &scratch.workspace)?;
+     let mut cleanup = CleanupCursor::new(&decoded.text);
+     let no_cleanup = if decoded.text.is_ascii() {
+-        !decoded
+-            .text
+-            .char_indices()
+-            .any(|(at, c)| !cleanup.survives(at, c, false))
++        !decoded.text.char_indices().any(|(at, c)| !cleanup.survives(at, c, false))
+     } else {
+         !unicode::grapheme_bounds(&decoded.text).any(|(at, cluster)| {
+-            unicode::emoji_scalars(cluster)
+-                .any(|(relative, c, protected)| !cleanup.survives(at + relative, c, protected))
++            unicode::emoji_scalars(cluster).any(|(relative, c, protected)| !cleanup.survives(at + relative, c, protected))
+         })
+     };
+     if decoded.sources.is_empty() && no_cleanup {
+-        // These paths preserve byte positions exactly, so neither projection
+-        // needs per-scalar source records. Both still apply the same admission.
+         if decoded.text.is_ascii() {
+-            scratch.output.extend(
+-                decoded
+-                    .text
+-                    .bytes()
+-                    .map(|byte| char::from(byte.to_ascii_lowercase())),
+-            );
++            admitted(scratch.workspace.reserve_string(&mut scratch.output, &mut scratch.owners.output, decoded.text.len()))?;
++            scratch.output.extend(decoded.text.bytes().map(|byte| char::from(byte.to_ascii_lowercase())));
+             return Ok(());
+         }
+-        let scripts = accent.scripts();
+-        let accent_safe = scripts.is_empty()
+-            || !decoded.text.chars().any(|c| {
+-                unicode::is_nonspacing_mark(c)
+-                    || !c.is_ascii() && scripts.iter().any(|script| script.contains(c))
++        // The resident streaming compare has private Unicode stage storage.
++        // Bounded execution follows this same normalizer's admitted tagged path.
++        if !scratch.workspace.is_bounded() {
++            let scripts = accent.scripts();
++            let accent_safe = scripts.is_empty() || !decoded.text.chars().any(|c| {
++                unicode::is_nonspacing_mark(c) || !c.is_ascii() && scripts.iter().any(|script| script.contains(c))
+             });
+-        if accent_safe {
+-            let mut compare = unicode::Compare::new(&decoded.text);
+-            unicode::analysis_form(&decoded.text, &mut compare);
+-            if compare.finish() {
+-                scratch.output.push_str(&decoded.text);
+-                return Ok(());
+-            }
+-        }
+-    }
+-    scratch.scalars.clear();
+-    scratch.cleaned.clear();
+-    if no_cleanup {
+-        scratch.cleaned.reserve(decoded.text.len());
+-    }
++            if accent_safe {
++                let mut compare = unicode::Compare::new(&decoded.text);
++                unicode::analysis_form(&decoded.text, &mut compare);
++                if compare.finish() {
++                    admitted(scratch.workspace.reserve_string(&mut scratch.output, &mut scratch.owners.output, decoded.text.len()))?;
++                    scratch.output.push_str(&decoded.text);
++                    return Ok(());
++                }
++            }
++        }
++    }
++    scratch.scalars.clear(); scratch.cleaned.clear();
++    let scalar_count = decoded.text.chars().count();
++    admitted(scratch.workspace.reserve_vec(&mut scratch.scalars, &mut scratch.owners.scalars, scalar_count))?;
++    admitted(scratch.workspace.reserve_string(&mut scratch.cleaned, &mut scratch.owners.cleaned, decoded.text.len()))?;
+     let mut ordinal = 0;
+     let mut cleanup = CleanupCursor::new(&decoded.text);
+     for (at, cluster) in unicode::grapheme_bounds(&decoded.text) {
+         for (relative, c, protected) in unicode::emoji_scalars(cluster) {
+             let offset = at + relative;
+-            let source = decoded
+-                .sources
+-                .get(ordinal)
+-                .cloned()
+-                .unwrap_or_else(|| offset..offset + c.len_utf8());
++            let source = decoded.sources.get(ordinal).cloned().unwrap_or_else(|| offset..offset + c.len_utf8());
+             ordinal += 1;
+-            if !cleanup.survives(offset, c, protected) {
+-                continue;
+-            }
++            if !cleanup.survives(offset, c, protected) { continue; }
+             let metadata = alignment.source(source);
+             scratch.scalars.push(TaggedScalar { value: c, metadata });
+             scratch.cleaned.push(c);
+         }
+     }
+-    scratch.output.reserve(scratch.cleaned.len());
+-    // Re-segment after cleanup: deleted controls can reveal new emoji joins or
+-    // permit canonical composition across their former positions.
+     scratch.pending.clear();
+     let mut offset = 0;
++    // Normalization mutates other scratch fields. Borrow this owner's cleaned
++    // text/scalars separately so no clone of either query-sized buffer is needed.
+     for (_, cluster) in unicode::grapheme_bounds(&scratch.cleaned) {
+         let count = cluster.chars().count();
+         let slice = &scratch.scalars[offset..offset + count];
+         offset += count;
+         if unicode::is_emoji_grapheme(cluster) {
+-            normalize_run(
+-                &mut scratch.pending,
+-                &mut scratch.working,
+-                accent,
+-                |left, right| alignment.merge(left, right),
+-            );
+-            emit_scalars(&mut scratch.output, scratch.pending.drain(..), alignment);
+-            emit_scalars(&mut scratch.output, slice.iter().cloned(), alignment);
++            normalize_run_owned(&mut scratch.pending, &mut scratch.working, &mut scratch.order,
++                &mut scratch.owners.pending, &mut scratch.owners.working, &mut scratch.owners.order,
++                accent, &scratch.workspace, |left, right| alignment.merge(left, right))?;
++            emit_scalars_owned(&mut scratch.output, &scratch.pending, alignment, &scratch.workspace, &mut scratch.owners.output)?;
++            scratch.pending.clear();
++            emit_scalars_owned(&mut scratch.output, slice, alignment, &scratch.workspace, &mut scratch.owners.output)?;
+         } else {
++            let needed = scratch.pending.len().checked_add(slice.len()).ok_or_else(overflow)?;
++            admitted(scratch.workspace.reserve_vec(&mut scratch.pending, &mut scratch.owners.pending, needed))?;
+             scratch.pending.extend_from_slice(slice);
+         }
+     }
+-    normalize_run(
+-        &mut scratch.pending,
+-        &mut scratch.working,
+-        accent,
+-        |left, right| alignment.merge(left, right),
+-    );
+-    emit_scalars(&mut scratch.output, scratch.pending.drain(..), alignment);
++    normalize_run_owned(&mut scratch.pending, &mut scratch.working, &mut scratch.order,
++        &mut scratch.owners.pending, &mut scratch.owners.working, &mut scratch.owners.order,
++        accent, &scratch.workspace, |left, right| alignment.merge(left, right))?;
++    emit_scalars_owned(&mut scratch.output, &scratch.pending, alignment, &scratch.workspace, &mut scratch.owners.output)?;
++    scratch.pending.clear();
+     Ok(())
+ }
+ 
+-fn emit_scalars<A: Alignment>(
+-    output: &mut String,
+-    scalars: impl IntoIterator<Item = TaggedScalar<A::Metadata>>,
+-    alignment: &mut A,
+-) {
+-    let scalars = scalars.into_iter();
+-    alignment.reserve_output(scalars.size_hint().0);
++fn emit_scalars_owned<A: Alignment>(
++    output: &mut String, scalars: &[TaggedScalar<A::Metadata>], alignment: &mut A,
++    workspace: &WorkspaceCapability, allocation: &mut Option<WorkspaceAllocation>,
++) -> Result<(), TextError> {
++    let added = scalars.iter().try_fold(0usize, |bytes, scalar| bytes.checked_add(scalar.value.len_utf8())).ok_or_else(overflow)?;
++    let needed = output.len().checked_add(added).ok_or_else(overflow)?;
++    admitted(workspace.reserve_string(output, allocation, needed))?;
++    alignment.reserve_output(scalars.len());
+     for scalar in scalars {
+         alignment.emit(output.len(), scalar.metadata);
+         output.push(scalar.value);
+     }
+-}
++    Ok(())
++}
++
++
+ 
+ #[derive(Default)]
+ struct SourceStore {
+@@ -823,17 +897,60 @@
+     }
+     ranges.truncate(count);
+ }
+-fn normalize_run<M: Copy>(
+-    scalars: &mut Vec<TaggedScalar<M>>,
+-    scratch: &mut Vec<TaggedScalar<M>>,
+-    accent: AccentFold,
+-    merge: impl FnMut(&mut M, M),
+-) {
+-    decompose_tagged::<false, _>(scalars, scratch);
+-    fold_tagged(scalars, scratch);
+-    decompose_tagged::<true, _>(scalars, scratch);
+-    fold_tagged(scalars, scratch);
+-    decompose_tagged::<true, _>(scalars, scratch);
++fn normalize_run_owned<M: Copy>(
++    scalars: &mut Vec<TaggedScalar<M>>, scratch: &mut Vec<TaggedScalar<M>>, order: &mut Vec<usize>,
++    scalar_owner: &mut Option<WorkspaceAllocation>, scratch_owner: &mut Option<WorkspaceAllocation>,
++    order_owner: &mut Option<WorkspaceAllocation>, accent: AccentFold,
++    workspace: &WorkspaceCapability, merge: impl FnMut(&mut M, M),
++) -> Result<(), TextError> {
++    fn decompose<const COMPAT: bool, M: Copy>(
++        scalars: &mut Vec<TaggedScalar<M>>, scratch: &mut Vec<TaggedScalar<M>>, order: &mut Vec<usize>,
++        scalar_owner: &mut Option<WorkspaceAllocation>, scratch_owner: &mut Option<WorkspaceAllocation>,
++        order_owner: &mut Option<WorkspaceAllocation>, workspace: &WorkspaceCapability,
++    ) -> Result<(), TextError> {
++        let count = purrdf_lex::unicode::decomposed_len::<COMPAT, _>(scalars).ok_or_else(overflow)?;
++        admitted(workspace.reserve_vec(scratch, scratch_owner, count))?;
++        admitted(workspace.reserve_vec(order, order_owner, count))?;
++        purrdf_lex::unicode::decompose_tagged_preallocated::<COMPAT, _>(scalars, scratch, order);
++        std::mem::swap(scalar_owner, scratch_owner);
++        Ok(())
++    }
++    fn fold<M: Copy>(
++        scalars: &mut Vec<TaggedScalar<M>>, scratch: &mut Vec<TaggedScalar<M>>,
++        scalar_owner: &mut Option<WorkspaceAllocation>, scratch_owner: &mut Option<WorkspaceAllocation>,
++        workspace: &WorkspaceCapability,
++    ) -> Result<(), TextError> {
++        let mut count = Some(0usize);
++        for scalar in scalars.iter() {
++            unicode::fold_scalar(scalar.value, |_| { count = count.and_then(|n| n.checked_add(1)); });
++        }
++        admitted(workspace.reserve_vec(scratch, scratch_owner, count.ok_or_else(overflow)?))?;
++        fold_tagged(scalars, scratch);
++        std::mem::swap(scalar_owner, scratch_owner);
++        Ok(())
++    }
++    decompose::<false, _>(scalars, scratch, order, scalar_owner, scratch_owner, order_owner, workspace)?;
++    fold(scalars, scratch, scalar_owner, scratch_owner, workspace)?;
++    decompose::<true, _>(scalars, scratch, order, scalar_owner, scratch_owner, order_owner, workspace)?;
++    fold(scalars, scratch, scalar_owner, scratch_owner, workspace)?;
++    decompose::<true, _>(scalars, scratch, order, scalar_owner, scratch_owner, order_owner, workspace)?;
++    retain_accents(scalars, accent);
++    // Composition only removes scalars; reserve the real source length first.
++    admitted(workspace.reserve_vec(scratch, scratch_owner, scalars.len()))?;
++    compose_tagged(scalars, scratch, merge);
++    std::mem::swap(scalar_owner, scratch_owner);
++    Ok(())
++}
++
++fn admit_source_size_owned(bytes: usize, kind: &str, workspace: &WorkspaceCapability) -> Result<(), TextError> {
++    if bytes > u32::MAX as usize {
++        return Err(query_error(workspace, NativeDiagnosticKind::Data,
++            format_args!("{kind} exceeds source record space"))?);
++    }
++    Ok(())
++}
++
++fn retain_accents<M>(scalars: &mut Vec<TaggedScalar<M>>, accent: AccentFold) {
+     let scripts = accent.scripts();
+     if !scripts.is_empty() {
+         let mut base = None;
+@@ -849,7 +966,6 @@
+             }
+         });
+     }
+-    compose_tagged(scalars, scratch, merge);
+ }
+ fn fold_tagged<M: Copy>(scalars: &mut Vec<TaggedScalar<M>>, scratch: &mut Vec<TaggedScalar<M>>) {
+     scratch.clear();
+@@ -863,14 +979,7 @@
+     }
+     std::mem::swap(scalars, scratch);
+ }
+-fn admit_source_size(bytes: usize, kind: &str) -> Result<(), TextError> {
+-    if bytes > u32::MAX as usize {
+-        return Err(TextError::data(format!(
+-            "{kind} exceeds source record space"
+-        )));
+-    }
+-    Ok(())
+-}
++
+ /// Two monotonic scalar walks supply nearest significant neighbors. Each
+ /// scalar is visited at most once for context, even across long control runs.
+ struct CleanupCursor<'a> {
+--- a/crates/text/src/segment.rs
++++ b/crates/text/src/segment.rs
+@@ -14,6 +14,8 @@
+ //! lookup storage. Artifact identity hashes canonical CBOR bytes; loading and
+ //! analysis perform no filesystem or network access.
+ 
++use purrdf_sparql_eval::{WorkspaceAllocation, WorkspaceCapability};
++use crate::query_workspace::{admitted, overflow};
+ use crate::TextError;
+ use crate::unicode::{self, SegmentationScript};
+ use purrdf_hash::Domain;
+@@ -311,6 +313,7 @@
+     fallbacks: Vec<Fallback>,
+     barriers: Vec<usize>,
+     paths: Vec<Path>,
++    owners: SegmentationOwners,
+ }
+ #[derive(Clone, Copy, Debug, Default)]
+ struct Fallback {
+@@ -344,7 +347,35 @@
+         )
+     }
+ }
++#[derive(Debug, Default)]
++struct SegmentationOwners {
++    boundaries: Option<WorkspaceAllocation>,
++    clean_offsets: Option<WorkspaceAllocation>,
++    clean: Option<WorkspaceAllocation>,
++    fallbacks: Option<WorkspaceAllocation>,
++    barriers: Option<WorkspaceAllocation>,
++    paths: Option<WorkspaceAllocation>,
++}
++
+ impl SegmentationScratch {
++    /// Reserve a complete analyzer-call lattice before the unchanged dictionary
++    /// body fills any chunk. Each chunk has at most this many input scalars;
++    /// `chars().count()` is a certified bound on graphemes, not a guessed factor.
++    pub(crate) fn reserve_for_query(
++        &mut self, input: &str, workspace: &WorkspaceCapability,
++    ) -> Result<(), TextError> {
++        let units = input.chars().count();
++        let endpoints = units.checked_add(1).ok_or_else(overflow)?;
++        let clean_bytes = input.chars().filter(|&c| !unicode::is_word_internal_control(c))
++            .try_fold(0usize, |bytes, c| bytes.checked_add(c.len_utf8())).ok_or_else(overflow)?;
++        admitted(workspace.reserve_vec(&mut self.boundaries, &mut self.owners.boundaries, endpoints))?;
++        admitted(workspace.reserve_vec(&mut self.clean_offsets, &mut self.owners.clean_offsets, endpoints))?;
++        admitted(workspace.reserve_string(&mut self.clean, &mut self.owners.clean, clean_bytes))?;
++        admitted(workspace.reserve_vec(&mut self.fallbacks, &mut self.owners.fallbacks, units))?;
++        admitted(workspace.reserve_vec(&mut self.barriers, &mut self.owners.barriers, units))?;
++        admitted(workspace.reserve_vec(&mut self.paths, &mut self.owners.paths, endpoints))?;
++        Ok(())
++    }
+     fn prepare(&mut self, chunk: &str, tailor: bool) {
+         self.boundaries.clear();
+         self.clean_offsets.clear();
+--- a/crates/text/src/character.rs
++++ b/crates/text/src/character.rs
+@@ -13,6 +13,8 @@
+ //! Callers combine its ranked relation with lexical retrieval using the existing
+ //! retrieval composition API and explicit caller-selected weights.
+ 
++use purrdf_sparql_eval::{AdmittedVec, WorkspaceCapability};
++use crate::query_workspace::{QueryString, admitted};
+ use std::ops::Range;
+ use std::sync::Arc;
+ 
+@@ -124,34 +126,43 @@
+ 
+ /// Visit Han runs without joining across a different script or punctuation.
+ fn runs(text: &str, mut sink: impl FnMut(&[Unit])) {
+-    let mut run = Vec::new();
++    runs_owned(text, &WorkspaceCapability::default(), |run| { sink(run); Ok(()) })
++        .expect("resident Han run allocation");
++}
++
++fn runs_owned(
++    text: &str, workspace: &WorkspaceCapability, mut sink: impl FnMut(&[Unit]) -> Result<(), TextError>,
++) -> Result<(), TextError> {
++    let mut run = AdmittedVec::new(workspace);
+     for (start, grapheme) in unicode::grapheme_bounds(text) {
+-        if unicode::is_emoji_grapheme(grapheme) {
+-            sink(&run);
+-            run.clear();
+-            continue;
++        if unicode::is_emoji_grapheme(grapheme) { sink(&run)?; run.clear(); continue; }
++        for (offset, scalar) in grapheme.char_indices() {
++            if unicode::is_word_internal_control(scalar) || unicode::is_combining_mark(scalar) { continue; }
++            if unicode::segmentation_script(scalar) == Some(SegmentationScript::Han) {
++                admitted(run.push(Unit { scalar, range: start + offset..start + offset + scalar.len_utf8(),
++                    grapheme: start..start + grapheme.len() }))?;
++            } else { sink(&run)?; run.clear(); }
+         }
+-        // An EGC may begin with Prepend characters before its Han base. Walk
+-        // every scalar while retaining that EGC as the enclosing highlight.
+-        for (offset, scalar) in grapheme.char_indices() {
+-            // Script=Han includes Mc reading marks U+16FF0/U+16FF1. Marks are
+-            // transparent attachments, never character retrieval keys.
+-            if unicode::is_word_internal_control(scalar) || unicode::is_combining_mark(scalar) {
+-                continue;
+-            }
+-            if unicode::segmentation_script(scalar) == Some(SegmentationScript::Han) {
+-                run.push(Unit {
+-                    scalar,
+-                    range: start + offset..start + offset + scalar.len_utf8(),
+-                    grapheme: start..start + grapheme.len(),
+-                });
+-            } else {
+-                sink(&run);
+-                run.clear();
++    }
++    sink(&run)
++}
++
++pub(crate) fn query_terms_owned(
++    analyzer: &Analyzer, input: &str, workspace: &WorkspaceCapability,
++) -> Result<AdmittedVec<QueryString>, TextError> {
++    let analysis = analyzer.analysis_form_owned(input, workspace)?;
++    let mut out = AdmittedVec::new(workspace);
++    runs_owned(&analysis, workspace, |run| {
++        if run.len() == 1 {
++            admitted(out.push(QueryString::chars([run[0].scalar].into_iter(), workspace)?))?;
++        } else {
++            for pair in run.windows(2) {
++                admitted(out.push(QueryString::chars([pair[0].scalar, pair[1].scalar].into_iter(), workspace)?))?;
+             }
+         }
+-    }
+-    sink(&run);
++        Ok(())
++    })?;
++    Ok(out)
+ }
+ 
+ fn projection(analysis: &Analysis, units: &[Unit]) -> Projection {
+@@ -190,17 +201,6 @@
+ }
+ 
+ pub(crate) fn query_terms(analyzer: &Analyzer, input: &str) -> Result<Vec<String>, TextError> {
+-    let analysis = analyzer.projections(input)?;
+-    let mut out = Vec::new();
+-    runs(&analysis.normalized.text, |run| {
+-        if run.len() == 1 {
+-            out.push(run[0].scalar.to_string());
+-        } else {
+-            out.extend(
+-                run.windows(2)
+-                    .map(|pair| [pair[0].scalar, pair[1].scalar].into_iter().collect()),
+-            );
+-        }
+-    });
+-    Ok(out)
+-}
++    Ok(query_terms_owned(analyzer, input, &WorkspaceCapability::default())?
++        .into_iter().map(|term| term.as_str().to_owned()).collect())
++}
+--- a/crates/text/src/stem.rs
++++ b/crates/text/src/stem.rs
+@@ -28,23 +28,28 @@
+ /// The suffix law never increases the original byte length. Working storage
+ /// holds scalar values and their vowel classifications, with no recursion.
+ pub fn english_in_place(word: &mut String) {
++    let result: Result<(), std::convert::Infallible> = english_with(word, |input| Ok(Stem::new(input)));
++    match result { Ok(()) => {}, Err(never) => match never {} }
++}
++
++fn english_with<E>(word: &mut String, create: impl FnOnce(&str) -> Result<Stem, E>) -> Result<(), E> {
+     let mut latin = false;
+     for letter in word.chars() {
+         if is_latin_letter(letter) {
+             latin = true;
+         } else if is_letter(letter) {
+-            return;
++            return Ok(());
+         }
+     }
+     if !latin || word.chars().take(3).count() < 3 {
+-        return;
++        return Ok(());
+     }
+     if let Some(exception) = exception(word) {
+         word.replace_range(.., exception);
+-        return;
++        return Ok(());
+     }
+     let input = word.strip_prefix('\'').unwrap_or(word);
+-    let mut state = Stem::new(input);
++    let mut state = create(input)?;
+     state.possessive();
+     state.plural();
+     state.participle();
+@@ -55,6 +60,21 @@
+     state.final_letter();
+     word.clear();
+     word.extend(state.letters.iter().map(|letter| letter.value));
++    Ok(())
++}
++
++/// Admit the native stem's selected Letter capacity before its existing body.
++/// Native suffix replacements never exceed the original scalar count; the
++/// existing byte-length Letter capacity is therefore a certified upper bound.
++pub(crate) fn english_in_place_owned(
++    word: &mut String, workspace: &purrdf_sparql_eval::WorkspaceCapability,
++) -> Result<(), crate::TextError> {
++    let mut owner = None;
++    english_with(word, |input| {
++        let mut letters = Vec::new();
++        crate::query_workspace::admitted(workspace.reserve_vec(&mut letters, &mut owner, input.len()))?;
++        Ok(Stem::from_letters(input, letters))
++    })
+ }
+ 
+ fn exception(word: &str) -> Option<&'static str> {
+@@ -93,8 +113,9 @@
+ }
+ 
+ impl Stem {
+-    fn new(input: &str) -> Self {
+-        let mut letters: Vec<Letter> = Vec::with_capacity(input.len());
++    fn new(input: &str) -> Self { Self::from_letters(input, Vec::with_capacity(input.len())) }
++
++    fn from_letters(input: &str, mut letters: Vec<Letter>) -> Self {
+         for value in input.chars() {
+             let vowel = simple_vowel(value)
+                 && (value != 'y' || letters.last().is_some_and(|previous| !previous.vowel));
+--- a/crates/lex/src/html.rs
++++ b/crates/lex/src/html.rs
+@@ -181,7 +181,7 @@
+     let mut copied = 0;
+     while let Some(relative) = crate::scan::find_byte(&input.as_bytes()[cursor..], b'&') {
+         let start = cursor + relative;
+-        let (end, replacement) = reference(input, start, mode, &mut result.diagnostics);
++        let (end, replacement) = reference(input, start, mode, &mut |diagnostic| result.diagnostics.push(diagnostic));
+         if let Some((first, second)) = replacement {
+             if matches!(result.decoded.text, Cow::Borrowed(_)) {
+                 result.decoded.text = Cow::Owned(String::with_capacity(input.len()));
+@@ -217,6 +217,103 @@
+     }
+ }
+ 
++/// Exact counts produced by the existing reference reader, without allocation.
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct ResolutionLayout {
++    pub text_bytes: usize,
++    pub sources: usize,
++    pub diagnostics: usize,
++    pub replaced: bool,
++}
++
++/// A caller destination was too small or a checked count overflowed.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum ResolveIntoError { Capacity, LayoutOverflow }
++
++fn visit_resolution(
++    input: &str,
++    mode: Mode,
++    mut scalar: impl FnMut(char, Range<usize>),
++    mut diagnostic: impl FnMut(Diagnostic),
++) -> bool {
++    if mode == Mode::Plain {
++        for (at, c) in input.char_indices() { scalar(c, at..at + c.len_utf8()); }
++        return false;
++    }
++    let mut cursor = 0;
++    let mut copied = 0;
++    let mut replaced = false;
++    while let Some(relative) = crate::scan::find_byte(&input.as_bytes()[cursor..], b'&') {
++        let start = cursor + relative;
++        let (end, replacement) = reference(input, start, mode, &mut diagnostic);
++        if let Some((first, second)) = replacement {
++            for (relative, c) in input[copied..start].char_indices() {
++                let at = copied + relative;
++                scalar(c, at..at + c.len_utf8());
++            }
++            scalar(first, start..end);
++            if second != '\0' { scalar(second, start..end); }
++            copied = end;
++            replaced = true;
++        }
++        cursor = end;
++    }
++    for (relative, c) in input[copied..].char_indices() {
++        let at = copied + relative;
++        scalar(c, at..at + c.len_utf8());
++    }
++    replaced
++}
++
++/// Inspect actual decoded bytes, scalar ranges and diagnostics at the native home.
++pub fn resolution_layout(input: &str, mode: Mode) -> Result<ResolutionLayout, ResolveIntoError> {
++    let mut text_bytes = Some(0usize);
++    let mut sources = Some(0usize);
++    let mut diagnostics = Some(0usize);
++    let replaced = visit_resolution(input, mode, |c, _| {
++        text_bytes = text_bytes.and_then(|n| n.checked_add(c.len_utf8()));
++        sources = sources.and_then(|n| n.checked_add(1));
++    }, |_| { diagnostics = diagnostics.and_then(|n| n.checked_add(1)); });
++    Ok(ResolutionLayout {
++        text_bytes: if replaced { text_bytes.ok_or(ResolveIntoError::LayoutOverflow)? } else { 0 },
++        sources: if replaced { sources.ok_or(ResolveIntoError::LayoutOverflow)? } else { 0 },
++        diagnostics: diagnostics.ok_or(ResolveIntoError::LayoutOverflow)?,
++        replaced,
++    })
++}
++
++/// Fill caller-preallocated storage through the same reference reader.
++/// The result moves those buffers, so their caller keeps the acquired grants.
++pub fn resolve_preallocated<'a>(
++    input: &'a str,
++    mode: Mode,
++    layout: ResolutionLayout,
++    mut text: String,
++    mut sources: Vec<Range<usize>>,
++    mut diagnostics: Vec<Diagnostic>,
++) -> Result<Resolution<'a>, ResolveIntoError> {
++    if text.capacity() < layout.text_bytes || sources.capacity() < layout.sources
++        || diagnostics.capacity() < layout.diagnostics { return Err(ResolveIntoError::Capacity); }
++    text.clear(); sources.clear(); diagnostics.clear();
++    let failed = core::cell::Cell::new(false);
++    let replaced = visit_resolution(input, mode, |c, source| {
++        if !layout.replaced { return; }
++        if text.len().checked_add(c.len_utf8()).is_none_or(|n| n > layout.text_bytes)
++            || sources.len() == layout.sources { failed.set(true); return; }
++        text.push(c); sources.push(source);
++    }, |diagnostic| {
++        if diagnostics.len() == layout.diagnostics { failed.set(true); return; }
++        diagnostics.push(diagnostic);
++    });
++    if failed.get() || replaced != layout.replaced || text.len() != layout.text_bytes
++        || sources.len() != layout.sources || diagnostics.len() != layout.diagnostics {
++        return Err(ResolveIntoError::Capacity);
++    }
++    Ok(Resolution { decoded: Decoded {
++        text: if replaced { Cow::Owned(text) } else { Cow::Borrowed(input) }, sources,
++    }, diagnostics })
++}
++
+ fn append_original(decoded: &mut Decoded<'_>, input: &str, range: Range<usize>) {
+     let original = &input[range.clone()];
+     decoded.text.to_mut().push_str(original);
+@@ -232,7 +329,7 @@
+     input: &str,
+     start: usize,
+     mode: Mode,
+-    diagnostics: &mut Vec<Diagnostic>,
++    diagnostics: &mut impl FnMut(Diagnostic),
+ ) -> (usize, Option<(char, char)>) {
+     let bytes = input.as_bytes();
+     let after = start + 1;
+@@ -252,7 +349,7 @@
+             {
+                 return (end, None);
+             }
+-            diagnostics.push(Diagnostic {
++            diagnostics(Diagnostic {
+                 kind: ErrorKind::MissingSemicolonAfterCharacterReference,
+                 source: start..end,
+             });
+@@ -265,7 +362,7 @@
+     }
+     if bytes.get(end) == Some(&b';') {
+         end += 1;
+-        diagnostics.push(Diagnostic {
++        diagnostics(Diagnostic {
+             kind: ErrorKind::UnknownNamedCharacterReference,
+             source: start..end,
+         });
+@@ -297,7 +394,7 @@
+ fn numeric(
+     bytes: &[u8],
+     start: usize,
+-    diagnostics: &mut Vec<Diagnostic>,
++    diagnostics: &mut impl FnMut(Diagnostic),
+ ) -> (usize, Option<(char, char)>) {
+     let mut end = start + 2;
+     let hexadecimal = matches!(bytes.get(end), Some(b'x' | b'X'));
+@@ -318,7 +415,7 @@
+         end += 1;
+     }
+     if end == first_digit {
+-        diagnostics.push(Diagnostic {
++        diagnostics(Diagnostic {
+             kind: ErrorKind::AbsenceOfDigitsInNumericCharacterReference,
+             source: start..end,
+         });
+@@ -327,7 +424,7 @@
+     if bytes.get(end) == Some(&b';') {
+         end += 1;
+     } else {
+-        diagnostics.push(Diagnostic {
++        diagnostics(Diagnostic {
+             kind: ErrorKind::MissingSemicolonAfterCharacterReference,
+             source: start..end,
+         });
+@@ -342,7 +439,7 @@
+         _ => None,
+     };
+     if let Some(kind) = kind {
+-        diagnostics.push(Diagnostic {
++        diagnostics(Diagnostic {
+             kind,
+             source: start..end,
+         });
+--- a/crates/lex/src/unicode.rs
++++ b/crates/lex/src/unicode.rs
+@@ -55,7 +55,7 @@
+ use crate::unicode_tables as tables;
+ 
+ mod aligned;
+-pub use aligned::{TaggedScalar, compose_tagged, decompose_tagged};
++pub use aligned::{TaggedScalar, compose_tagged, decompose_tagged, decomposed_len, decompose_tagged_preallocated};
+ 
+ /// The Unicode version every generated Unicode table in the workspace comes
+ /// from. The tables of `purrdf-iri`, `purrdf-text` and `purrdf-jsonschema`
+@@ -466,6 +466,40 @@
+         while j > 0 && class(&run[j - 1]) > class(&run[j]) {
+             run.swap(j - 1, j);
+             j -= 1;
++        }
++    }
++}
++
++/// Stable canonical ordering through a caller-preallocated index permutation.
++/// Sorting `(class, original ordinal)` is stable in meaning while its unstable
++/// in-place sort allocates nothing. A permutation cycle moves metadata too.
++fn canonical_order_by_index<T>(
++    run: &mut [T], indices: &mut Vec<usize>, class: impl Fn(&T) -> u8,
++) {
++    assert!(indices.capacity() >= run.len(), "canonical-order caller must preallocate indices");
++    indices.clear();
++    indices.extend(0..run.len());
++    indices.sort_unstable_by_key(|&at| (class(&run[at]), at));
++    // Invert destination->source in place. The admitted usize array layout puts
++    // ordinals below isize::MAX, so bitwise-negated visited entries are distinct.
++    for start in 0..indices.len() {
++        if indices[start] >= indices.len() { continue; }
++        let mut previous = start;
++        let mut at = indices[start];
++        while at != start {
++            let next = indices[at];
++            indices[at] = !previous;
++            previous = at;
++            at = next;
++        }
++        indices[start] = !previous;
++    }
++    for index in indices.iter_mut() { *index = !*index; }
++    for start in 0..run.len() {
++        while indices[start] != start {
++            let next = indices[start];
++            run.swap(start, next);
++            indices.swap(start, next);
+         }
+     }
+ }
+--- a/crates/lex/src/unicode/aligned.rs
++++ b/crates/lex/src/unicode/aligned.rs
+@@ -18,27 +18,45 @@
+ 
+ /// Replace `scalars` by its NFD/NFKD form, preserving each contributor through
+ /// decomposition and stable canonical ordering. `scratch` is reusable storage.
++/// Exact native decomposition count, including pinned compatibility expansions.
++pub fn decomposed_len<const COMPAT: bool, M>(scalars: &[TaggedScalar<M>]) -> Option<usize> {
++    let mut count = Some(0usize);
++    for scalar in scalars {
++        decompose_scalar::<COMPAT>(scalar.value, |_| { count = count.and_then(|n| n.checked_add(1)); });
++    }
++    count
++}
++
+ pub fn decompose_tagged<const COMPAT: bool, M: Clone>(
+-    scalars: &mut Vec<TaggedScalar<M>>,
+-    scratch: &mut Vec<TaggedScalar<M>>,
++    scalars: &mut Vec<TaggedScalar<M>>, scratch: &mut Vec<TaggedScalar<M>>,
++) {
++    decompose_tagged_with::<COMPAT, M>(scalars, scratch, |run| canonical_order(run, |scalar| ccc(scalar.value)));
++}
++
++/// The same decomposition law with already-admitted destination and sort work.
++pub fn decompose_tagged_preallocated<const COMPAT: bool, M: Clone>(
++    scalars: &mut Vec<TaggedScalar<M>>, scratch: &mut Vec<TaggedScalar<M>>, order: &mut Vec<usize>,
++) {
++    assert!(scratch.capacity() >= decomposed_len::<COMPAT, _>(scalars).expect("admitted decomposition count"));
++    decompose_tagged_with::<COMPAT, M>(scalars, scratch,
++        |run| super::canonical_order_by_index(run, order, |scalar| ccc(scalar.value)));
++}
++
++fn decompose_tagged_with<const COMPAT: bool, M: Clone>(
++    scalars: &mut Vec<TaggedScalar<M>>, scratch: &mut Vec<TaggedScalar<M>>,
++    mut order: impl FnMut(&mut [TaggedScalar<M>]),
+ ) {
+     scratch.clear();
+     for scalar in scalars.iter() {
+         decompose_scalar::<COMPAT>(scalar.value, |value| {
+-            scratch.push(TaggedScalar {
+-                value,
+-                metadata: scalar.metadata.clone(),
+-            });
++            scratch.push(TaggedScalar { value, metadata: scalar.metadata.clone() });
+         });
+     }
+     let mut start = 0;
+     for at in 0..scratch.len() {
+-        if ccc(scratch[at].value) == 0 {
+-            canonical_order(&mut scratch[start..at], |scalar| ccc(scalar.value));
+-            start = at + 1;
+-        }
++        if ccc(scratch[at].value) == 0 { order(&mut scratch[start..at]); start = at + 1; }
+     }
+-    canonical_order(&mut scratch[start..], |scalar| ccc(scalar.value));
++    order(&mut scratch[start..]);
+     std::mem::swap(scalars, scratch);
+ }
+ 
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -176,6 +176,23 @@
+ }
+ 
+ impl WorkspaceCapability {
++    /// Whether allocations admitted by this capability retain an operational account.
++    #[must_use]
++    pub const fn is_bounded(&self) -> bool { self.owner.is_some() }
++
++    /// Construct a literal from stable borrowed formatting under one payload grant.
++    /// This calls the existing term constructor with owned strings, avoiding
++    /// a rendered temporary followed by a second lexical copy.
++    pub fn literal(
++        &self, lexical: impl core::fmt::Display, datatype: &str,
++    ) -> Result<WorkspaceTerm, EvalError> {
++        let length = display_len(&lexical)?;
++        let bytes = length.checked_add(datatype.len()).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        let allocation = self.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++        let lexical = format_exact(&lexical, length, "native literal lexical text")?;
++        let datatype = string(datatype, "native literal datatype")?;
++        Ok(WorkspaceTerm::new(purrdf_core::TermValue::typed_literal(lexical, datatype), allocation))
++    }
+     /// An allocation-free capability for resident execution.
+     #[must_use]
+     pub const fn resident() -> Self { Self { owner: None } }

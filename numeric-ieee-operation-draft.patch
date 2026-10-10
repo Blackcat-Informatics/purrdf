@@ -1,0 +1,390 @@
+diff --git a/crates/xsd/src/exact/cost.rs b/crates/xsd/src/exact/cost.rs
+--- a/crates/xsd/src/exact/cost.rs
++++ b/crates/xsd/src/exact/cost.rs
+@@ -268,6 +268,18 @@
+     NumericOperationLayout::bytes(peak, bytes)
+ }
+ 
++/// Checked old/new destination overlap of the native word-chunk 10^digits body.
++pub(crate) fn power_of_ten_layout(
++    digits: u32,
++) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    if digits == 0 { return Ok(NumericOperationLayout::INLINE); }
++    let limbs = limbs_for_digits(u64::from(digits));
++    let capacity = limbs.checked_add(1).ok_or(SizeOverflow)?;
++    let heap = if limbs <= 3 { 0 } else { capacity };
++    NumericOperationLayout::words(heap.checked_mul(2).ok_or(SizeOverflow)?, heap)
++}
++
+ /// Native power-of-ten creation and borrowed-coefficient product. The caller
+ /// adds every still-live temporary outside this kernel before admitting it.
+ pub(crate) fn scale_up_layout(
+diff --git a/crates/xsd/src/exact/binary.rs b/crates/xsd/src/exact/binary.rs
+--- a/crates/xsd/src/exact/binary.rs
++++ b/crates/xsd/src/exact/binary.rs
+@@ -60,12 +60,24 @@
+ /// A zero `n` is `+0`; a nonzero value that rounds to zero keeps its sign; a value
+ /// at or beyond the overflow threshold is the signed infinity.
+ pub(crate) fn round_ratio(negative: bool, n: &BigInt, d: &BigInt, format: &Format) -> u64 {
++    round_ratio_admitted_using(negative, n, d, format, &crate::bigint::scratch::Unbounded, &mut |_| Ok(()))
++        .expect("unbounded integer storage")
++}
++
++/// The same one-rounding body borrowing source limbs and allocating through
++/// the selected native destination provider. Admission covers fresh live
++/// destinations; source ownership is retained by the calling frame.
++pub(crate) fn round_ratio_admitted_using(
++    negative: bool, n: &BigInt, d: &BigInt, format: &Format,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(super::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<u64, crate::bigint::LimbScratchError> {
+     let precision = format.precision;
+     let fraction_bits = precision - 1;
+     let exponent_bits: u32 = if precision == 53 { 11 } else { 8 };
+     let sign = u64::from(negative) << (fraction_bits + exponent_bits);
+     if n.is_zero() {
+-        return 0;
++        return Ok(0);
+     }
+     let infinity = sign | (((1_u64 << exponent_bits) - 1) << fraction_bits);
+     // n ∈ [2^(bn−1), 2^bn) and d ∈ [2^(bd−1), 2^bd), so
+@@ -83,23 +95,28 @@
+     let high = clamp(delta + 1);
+     // value ≥ 2^low: beyond the largest binade, it overflows.
+     if low > format.max_exponent + 1 {
+-        return infinity;
++        return Ok(infinity);
+     }
+     // value < 2^high ≤ half the smallest subnormal: it rounds to a signed zero.
+     let min_quantum = format.min_exponent - i64::from(fraction_bits);
+     if high < min_quantum {
+-        return sign;
++        return Ok(sign);
+     }
+     // q = ⌊value · 2^k⌋ < 2^126, and ≥ 2^(126 − (high − low)) ≥ 2^124.
+     let k = 126 - high;
+-    let (numerator, denominator) = if k >= 0 {
+-        (n.mul_pow2(u32::try_from(k).unwrap_or(u32::MAX)), d.clone())
+-    } else {
+-        (n.clone(), d.mul_pow2(u32::try_from(-k).unwrap_or(u32::MAX)))
+-    };
+-    let (quotient, remainder) = numerator
+-        .div_rem(&denominator)
++    let shift = u32::try_from(k.unsigned_abs()).map_err(|_| crate::bigint::LimbScratchError::SizeOverflow)?;
++    let selected = if k >= 0 { n } else { d };
++    admit(super::cost::binary_shift_layout(selected.bit_len(), shift, 0)?)?;
++    let shifted = selected.shl_using(shift, storage)?;
++    let (numerator, denominator) = if k >= 0 { (&shifted, d) } else { (n, &shifted) };
++    admit(super::cost::integer_division_layout(
++        numerator.limb_len() as u64, denominator.limb_len() as u64,
++    )?.with_live(shifted.allocated_bytes())?)?;
++    let (quotient, remainder) = numerator.div_rem_using(denominator, storage)?
+         .expect("the denominator is nonzero");
++    // Only magnitudes enter this algorithm. Taking an owned positive sign
++    // permits negative borrowed sources without an absolute-magnitude copy.
++    let quotient = quotient.with_sign(false);
+     let sticky = !remainder.is_zero();
+     let q = u128::try_from(quotient.to_i128().expect("q < 2^126 fits i128"))
+         .expect("q is non-negative");
+@@ -136,10 +153,10 @@
+         exponent += 1;
+     }
+     if significand == 0 {
+-        return sign;
++        return Ok(sign);
+     }
+     if exponent + i64::from(fraction_bits) > format.max_exponent {
+-        return infinity;
++        return Ok(infinity);
+     }
+     let bits = if significand < 1_u64 << fraction_bits {
+         // Subnormal: the exponent field is zero and the quantum is the minimum.
+@@ -150,7 +167,7 @@
+             .expect("a normal exponent is positive");
+         (biased << fraction_bits) | (significand & ((1_u64 << fraction_bits) - 1))
+     };
+-    sign | bits
++    Ok(sign | bits)
+ }
+ 
+ /// The exact value of a finite `f64` as `(negative, significand, exponent)`
+diff --git a/crates/xsd/src/exact/integer.rs b/crates/xsd/src/exact/integer.rs
+--- a/crates/xsd/src/exact/integer.rs
++++ b/crates/xsd/src/exact/integer.rs
+@@ -394,6 +394,47 @@
+         Ok(Self::from_bigint(magnitude.with_sign(negative)))
+     }
+ 
++    /// Round to binary64 through the same native kernel with admitted storage.
++    /// # Errors
++    /// Returns admission/allocation refusal before any native destination.
++    pub fn try_to_f64_admitted(
++        &self,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<f64, crate::bigint::LimbScratchError> {
++        match &self.0 {
++            Repr::Small(value) => Ok(*value as f64),
++            Repr::Big(value) => value.try_to_f64_admitted(admit),
++        }
++    }
++
++    /// Round directly to binary32 through the existing native kernel.
++    /// # Errors
++    /// Returns admission/allocation refusal without a binary64 intermediate.
++    pub fn try_to_f32_admitted(
++        &self,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<f32, crate::bigint::LimbScratchError> {
++        match &self.0 {
++            Repr::Small(value) => Ok(*value as f32),
++            Repr::Big(value) => value.try_to_f32_admitted(admit),
++        }
++    }
++
++    /// Truncate an IEEE value with checked admission before the native shift.
++    /// # Errors
++    /// Keeps non-finite F&O failure separate from admission/allocation refusal.
++    pub fn try_from_f64_truncated_admitted(
++        value: f64,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
++        let (_, significand, exponent) = decompose_f64(value).ok_or(ExactError::NotFinite)?;
++        if significand != 0 && exponent >= 0 {
++            let bits = u64::from(significand.ilog2()) + 1;
++            admit(cost::binary_shift_layout(bits, exponent.unsigned_abs(), 0)?)?;
++        }
++        Self::from_f64_truncated_using(value, &crate::bigint::scratch::Fallible)
++    }
++
+     // ----- resource governance ---------------------------------------------
+ 
+     /// The size of the magnitude in binary `u64` limbs — the unit every cost
+diff --git a/crates/xsd/src/exact/decimal.rs b/crates/xsd/src/exact/decimal.rs
+--- a/crates/xsd/src/exact/decimal.rs
++++ b/crates/xsd/src/exact/decimal.rs
+@@ -9,7 +9,7 @@
+ use std::ops::{Add, Neg, Sub};
+ use std::str::FromStr;
+ 
+-use super::binary::{BINARY32, BINARY64, decompose_f32, decompose_f64, round_ratio};
++use super::binary::{BINARY32, BINARY64, decompose_f32, decompose_f64};
+ use super::cost::{self, Cost};
+ use super::error::{BoundedTarget, ExactError, ExactKind};
+ use super::integer::{Integer, forward_by_value};
+@@ -374,17 +374,54 @@
+     }
+ 
+     fn from_binary(
+-        (negative, significand, exponent): (bool, u64, i32),
++        value: (bool, u64, i32),
+     ) -> Result<Self, ExactError> {
+-        let signed = if negative {
+-            -i128::from(significand)
+-        } else {
+-            i128::from(significand)
+-        };
+-        let (unscaled, scale) = BigInt::from_binary(signed, exponent);
+-        Ok(Self::new(Integer::from_bigint(unscaled), scale))
++        Self::from_binary_admitted_using(value, &crate::bigint::scratch::Unbounded, &mut |_| Ok(()))
++            .map_err(|error| error.into_value_error().expect("unbounded integer storage"))
+     }
+ 
++    /// The exact decimal of a finite binary64 with staged native admission.
++    /// # Errors
++    /// Keeps non-finite value failure separate from admission/allocation refusal.
++    pub fn try_from_f64_admitted(
++        value: f64,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
++        Self::from_binary_admitted_using(
++            decompose_f64(value).ok_or(ExactError::NotFinite)?, &crate::bigint::scratch::Fallible, admit,
++        )
++    }
++
++    /// The exact decimal of a finite binary32, without decimal-text promotion.
++    /// # Errors
++    /// Keeps non-finite value failure separate from admission/allocation refusal.
++    pub fn try_from_f32_admitted(
++        value: f32,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
++        Self::from_binary_admitted_using(
++            decompose_f32(value).ok_or(ExactError::NotFinite)?, &crate::bigint::scratch::Fallible, admit,
++        )
++    }
++
++    fn from_binary_admitted_using(
++        (negative, significand, exponent): (bool, u64, i32),
++        storage: &impl crate::bigint::scratch::Allocate,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
++        if significand == 0 { return Ok(Self::ZERO); }
++        let bits = u64::from(significand.ilog2()) + 1;
++        let layout = if exponent >= 0 {
++            cost::binary_shift_layout(bits, exponent.unsigned_abs(), 0)?
++        } else { cost::pow5_layout(bits, exponent.unsigned_abs(), 0)? };
++        admit(layout)?;
++        let signed = if negative { -i128::from(significand) } else { i128::from(significand) };
++        let (unscaled, scale) = BigInt::from_binary_using(signed, exponent, storage)?;
++        let unscaled = Integer::from_bigint(unscaled);
++        admit(cost::normalize_layout(&unscaled, scale)?)?;
++        Ok(Self::new_using(unscaled, scale, storage)?)
++    }
++
+     /// The correctly rounded `f64` (to nearest, ties to even, subnormals
+     /// included; `±∞` past the largest finite value) — the `xs:decimal` to
+     /// `xs:double` cast, rounded once at any scale. A negative value that rounds
+@@ -461,14 +498,68 @@
+     }
+ 
+     fn ratio_bits(&self, format: &super::binary::Format) -> u64 {
+-        round_ratio(
+-            self.is_negative(),
+-            &self.unscaled.abs().to_bigint(),
+-            &BigInt::pow10(self.scale),
+-            format,
+-        )
++        self.ratio_bits_admitted_using(format, &crate::bigint::scratch::Unbounded, &mut |_| Ok(()))
++            .expect("unbounded integer storage")
+     }
+ 
++    /// Round directly to binary64 with admission before native conversion.
++    /// # Errors
++    /// Returns physical admission/allocation refusal without changing IEEE results.
++    pub fn try_to_f64_admitted(
++        &self,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<f64, crate::bigint::LimbScratchError> {
++        if let Some(value) = self.unscaled.as_i128() && self.scale <= MAX_I128_POW10 {
++            return Ok(crate::decimal_float::decimal_to_f64(
++                value, u8::try_from(self.scale).expect("at most 38"),
++            ));
++        }
++        match self.beyond(cost::F64_DECIMAL_EXPONENTS) {
++            Some(Ordering::Greater) => return Ok(self.signed(f64::INFINITY)),
++            Some(_) => return Ok(self.signed(0.0)),
++            None => {}
++        }
++        self.ratio_bits_admitted_using(&BINARY64, &crate::bigint::scratch::Fallible, admit)
++            .map(f64::from_bits)
++    }
++
++    /// Round directly to binary32 with admission before native conversion.
++    /// # Errors
++    /// Returns physical admission/allocation refusal without double rounding.
++    pub fn try_to_f32_admitted(
++        &self,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<f32, crate::bigint::LimbScratchError> {
++        if let Some(value) = self.unscaled.as_i128() && self.scale <= MAX_I128_POW10 {
++            return Ok(crate::decimal_float::decimal_to_f32(
++                value, u8::try_from(self.scale).expect("at most 38"),
++            ));
++        }
++        match self.beyond(cost::F32_DECIMAL_EXPONENTS) {
++            Some(Ordering::Greater) => return Ok(self.signed(f32::INFINITY)),
++            Some(_) => return Ok(self.signed(0.0)),
++            None => {}
++        }
++        self.ratio_bits_admitted_using(&BINARY32, &crate::bigint::scratch::Fallible, admit)
++            .map(|bits| f32::from_bits(u32::try_from(bits).expect("binary32 bits")))
++    }
++
++    fn ratio_bits_admitted_using(
++        &self, format: &super::binary::Format,
++        storage: &impl crate::bigint::scratch::Allocate,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<u64, crate::bigint::LimbScratchError> {
++        admit(cost::power_of_ten_layout(self.scale)?)?;
++        let denominator = BigInt::pow10_using(self.scale, storage)?;
++        let live = denominator.allocated_bytes();
++        self.unscaled.with_bigint(|numerator| {
++            super::binary::round_ratio_admitted_using(
++                self.is_negative(), numerator, &denominator, format, storage,
++                &mut |layout| admit(layout.with_live(live)?),
++            )
++        })
++    }
++
+     /// The exact value of a bounded [`crate::numeric::Decimal`].
+     #[must_use]
+     pub fn from_bounded(value: &BoundedDecimal) -> Self {
+diff --git a/crates/xsd/src/bigint/compat.rs b/crates/xsd/src/bigint/compat.rs
+--- a/crates/xsd/src/bigint/compat.rs
++++ b/crates/xsd/src/bigint/compat.rs
+@@ -123,36 +123,54 @@
+     #[must_use]
+     pub fn to_f64(&self) -> f64 {
+         if self.bit_len() >= 1025 {
+-            return if self.is_negative() {
+-                f64::NEG_INFINITY
+-            } else {
+-                f64::INFINITY
+-            };
++            return if self.is_negative() { f64::NEG_INFINITY } else { f64::INFINITY };
+         }
+         f64::from_bits(crate::exact::binary::round_ratio(
+-            self.is_negative(),
+-            &self.abs(),
+-            &Self::one(),
+-            &crate::exact::binary::BINARY64,
++            self.is_negative(), self, &Self::one(), &crate::exact::binary::BINARY64,
+         ))
+     }
+ 
++    /// Correctly rounded binary64 with admission before native destinations.
++    /// # Errors
++    /// Returns physical admission/allocation refusal, never a numeric fallback.
++    pub fn try_to_f64_admitted(
++        &self,
++        admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), super::LimbScratchError>,
++    ) -> Result<f64, super::LimbScratchError> {
++        if self.bit_len() >= 1025 {
++            return Ok(if self.is_negative() { f64::NEG_INFINITY } else { f64::INFINITY });
++        }
++        crate::exact::binary::round_ratio_admitted_using(
++            self.is_negative(), self, &Self::one(), &crate::exact::binary::BINARY64,
++            &super::scratch::Fallible, admit,
++        ).map(f64::from_bits)
++    }
++
++    /// Correctly rounded binary32 with admission before native destinations.
++    /// # Errors
++    /// Returns physical admission/allocation refusal without double rounding.
++    pub fn try_to_f32_admitted(
++        &self,
++        admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), super::LimbScratchError>,
++    ) -> Result<f32, super::LimbScratchError> {
++        if self.bit_len() >= 129 {
++            return Ok(if self.is_negative() { f32::NEG_INFINITY } else { f32::INFINITY });
++        }
++        crate::exact::binary::round_ratio_admitted_using(
++            self.is_negative(), self, &Self::one(), &crate::exact::binary::BINARY32,
++            &super::scratch::Fallible, admit,
++        ).map(|bits| f32::from_bits(u32::try_from(bits).expect("binary32 bits")))
++    }
++
+     /// Correctly rounded binary32 without a binary64 intermediate.
+     #[must_use]
+     pub fn to_f32(&self) -> f32 {
+         if self.bit_len() >= 129 {
+-            return if self.is_negative() {
+-                f32::NEG_INFINITY
+-            } else {
+-                f32::INFINITY
+-            };
++            return if self.is_negative() { f32::NEG_INFINITY } else { f32::INFINITY };
+         }
+-        f32::from_bits(crate::exact::binary::round_ratio(
+-            self.is_negative(),
+-            &self.abs(),
+-            &Self::one(),
+-            &crate::exact::binary::BINARY32,
+-        ) as u32)
++        f32::from_bits(u32::try_from(crate::exact::binary::round_ratio(
++            self.is_negative(), self, &Self::one(), &crate::exact::binary::BINARY32,
++        )).expect("binary32 bits"))
+     }
+ 
+     /// Exact remainder with the dividend's sign.

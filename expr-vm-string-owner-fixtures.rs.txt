@@ -1,0 +1,94 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Proposed real-entry owner fixtures. This Stage proposal is uncompiled/unrun.
+
+mod support;
+
+use purrdf_core::{SparqlEngine, SparqlRequest, TermValue};
+use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions, RetainedSparqlResult};
+use support::segmented::{CEILING, fixture, open};
+
+fn literal(value: &Option<TermValue>, lexical: &str, language: Option<&str>, direction: Option<purrdf_core::RdfTextDirection>) {
+    let Some(TermValue::Literal { lexical_form, language: actual_language, direction: actual_direction, .. }) = value else {
+        panic!("expected literal fixture cell");
+    };
+    assert_eq!(lexical_form, lexical);
+    assert_eq!(actual_language.as_deref(), language);
+    assert_eq!(*actual_direction, direction);
+}
+
+fn bounded_matrix(query: &str, mut check: impl FnMut(&RetainedSparqlResult)) {
+    let (image, _) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine.prepare_query(query, None).unwrap();
+    let request = || SparqlRequest { query, base_iri: None, substitutions: &[] };
+    for entry in 0..4 {
+        let source = open(&image, CEILING);
+        let result = match entry {
+            0 => engine.query_fallible_view(&source, request(), QueryOptions::EMPTY).unwrap().result,
+            1 => engine.query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY).unwrap().result,
+            2 => engine.query_governed_fallible_view(&source, request(), QueryOptions::EMPTY, &QueryGovernors::METERED).unwrap().result,
+            _ => engine.query_prepared_governed_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY,
+                &QueryGovernors::METERED).unwrap().result,
+        };
+        check(&result);
+    }
+}
+
+#[test]
+fn string_views_preserve_plain_tagged_directional_type_errors_and_duplicate_bags() {
+    let query = r#"SELECT ?id (STR(?v) AS ?s) (LANG(?v) AS ?l)
+        (CONTAINS(STR(?v), "é") AS ?str_contains) (CONTAINS(?v, "é") AS ?contains)
+        (CONCAT(?v, ?v) AS ?joined) (SUBSTR(?v, 2, 1) AS ?part)
+        (LANGMATCHES(LANG(?v), "fr") AS ?matched)
+        WHERE { VALUES (?id ?v) {
+          (0 "aé"@fr--rtl) (1 "aé"@fr--rtl) (1 "aé"@fr--rtl) (2 "xy") (3 12)
+        } } ORDER BY ?id"#;
+    bounded_matrix(query, |result| {
+        let (_, rows) = result.solutions().unwrap();
+        assert_eq!(rows.len(), 5);
+        let rtl = Some(purrdf_core::RdfTextDirection::Rtl);
+        for (row, id) in rows[..3].iter().zip(["0", "1", "1"]) {
+            literal(&row[0], id, None, None);
+            literal(&row[1], "aé", None, None);
+            literal(&row[2], "fr", None, None);
+            literal(&row[3], "true", None, None);
+            literal(&row[4], "true", None, None);
+            literal(&row[5], "aéaé", Some("fr"), rtl);
+            literal(&row[6], "é", Some("fr"), rtl);
+            literal(&row[7], "true", None, None);
+        }
+        literal(&rows[3][0], "2", None, None);
+        literal(&rows[3][1], "xy", None, None);
+        literal(&rows[3][2], "", None, None);
+        literal(&rows[3][3], "false", None, None);
+        literal(&rows[3][4], "false", None, None);
+        literal(&rows[3][5], "xyxy", None, None);
+        literal(&rows[3][6], "y", None, None);
+        literal(&rows[3][7], "false", None, None);
+        literal(&rows[4][0], "3", None, None);
+        literal(&rows[4][1], "12", None, None);
+        literal(&rows[4][2], "", None, None);
+        literal(&rows[4][3], "false", None, None);
+        assert!(rows[4][4].is_none());
+        assert!(rows[4][5].is_none());
+        assert!(rows[4][6].is_none());
+        literal(&rows[4][7], "false", None, None);
+    });
+}
+
+#[test]
+fn nested_constructor_value_owners_survive_until_component_interning() {
+    let query = r#"SELECT (STR(SUBJECT(OBJECT(?v))) AS ?inner_subject)
+        (STR(PREDICATE(?v)) AS ?outer_predicate) (STR(OBJECT(OBJECT(?v))) AS ?text)
+        WHERE { BIND(TRIPLE(<http://example.org/outer>, <http://example.org/p>,
+          TRIPLE(<http://example.org/inner>, <http://example.org/q>, "é")) AS ?v) }"#;
+    bounded_matrix(query, |result| {
+        let (_, rows) = result.solutions().unwrap();
+        assert_eq!(rows.len(), 1);
+        literal(&rows[0][0], "http://example.org/inner", None, None);
+        literal(&rows[0][1], "http://example.org/p", None, None);
+        literal(&rows[0][2], "é", None, None);
+    });
+}

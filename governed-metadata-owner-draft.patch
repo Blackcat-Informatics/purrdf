@@ -1,0 +1,252 @@
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -2006,7 +2006,7 @@
+                 &state,
+                 Sequencing::Free,
+                 &workspace,
+-            )
++            ).map(AdmittedGovernedOutcome::into_caller)
+         })
+     }
+ 
+@@ -2055,7 +2055,7 @@
+                 &state,
+                 Sequencing::Free,
+                 &workspace,
+-            )
++            ).map(AdmittedGovernedOutcome::into_caller)
+         })
+     }
+ 
+@@ -2221,7 +2221,7 @@
+                 &crate::workspace::SharedWorkspace::from(state.clone()),
+                 sequencing,
+                 &workspace,
+-            )
++            ).map(AdmittedGovernedOutcome::into_caller)
+         })
+     }
+ 
+@@ -2239,23 +2239,23 @@
+         state: &crate::workspace::SharedWorkspace<GovernorState>,
+         sequencing: Sequencing,
+         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+-    ) -> Result<GovernedOutcome, EvaluationFailure> {
++    ) -> Result<AdmittedGovernedOutcome, EvaluationFailure> {
+         substitutions
+             .parameters
+             .check_admitted(prepared, options, &workspace.capability())?;
+         // `prepared.relations` is the registry fingerprint computed once at prepare and
+         // just validated against `options.property_functions()` above — reused rather than
+         // re-derived, so this receipt's identity and the plan cache's key never disagree.
+-        let identity = relation_identity(prepared, options.property_functions())?;
++        let mut identity_owner = relation_identity(prepared, options.property_functions(), &workspace.capability())?;
+         if let Some(refused) = self.admit_refusal(
+             dataset,
+             &prepared.query,
+             options.property_functions(),
+             state,
+-            &identity,
++            &mut identity_owner.value,
+             workspace,
+         ) {
+-            return refused.map(GovernedOutcome::BudgetExhausted);
++            return refused.map(|exhausted| AdmittedGovernedOutcome { outcome: GovernedOutcome::BudgetExhausted(exhausted), _identity: identity_owner._frame });
+         }
+         let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
+         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+@@ -2264,7 +2264,7 @@
+             Prebindings::Owned(substitutions.values),
+             &mut ctx,
+         )?;
+-        materialize_governed(evaluated, &mut ctx, state, identity)
++        materialize_governed(evaluated, &mut ctx, state, core::mem::replace(&mut identity_owner.value, RelationIdentity::EMPTY)).map(|outcome| AdmittedGovernedOutcome { outcome, _identity: identity_owner._frame })
+     }
+ 
+     /// [`Self::query_governed`] with a
+@@ -2402,7 +2402,7 @@
+                 &crate::workspace::SharedWorkspace::from(state.clone()),
+                 Sequencing::Free,
+                 &workspace,
+-            )
++            ).map(AdmittedGovernedOutcome::into_caller)
+         })
+     }
+ 
+@@ -3556,7 +3556,7 @@
+         query: &Query,
+         relations: &crate::property_fn::PropertyFunctionRegistry,
+         state: &GovernorState,
+-        identity: &RelationIdentity,
++        identity: &mut RelationIdentity,
+         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+     ) -> Option<Result<BudgetExhausted, EvaluationFailure>> {
+         let dimension = purrdf_core::ResourceDimension::IntermediateCells;
+@@ -3582,7 +3582,7 @@
+         Some(Ok(BudgetExhausted {
+             tripped,
+             evidence: state.evidence(),
+-            relations: identity.clone(),
++            relations: core::mem::replace(identity, RelationIdentity::EMPTY),
+             // For SELECT and graph forms this is a certified lower bound over nothing:
+             // every item here is an answer, and there are none. ASK has no public witness
+             // set, however; its `false` value would read as a settled answer, so the helper
+@@ -4128,13 +4128,13 @@
+                     &workspace.capability(),
+                 )?;
+                 let prepared = Arc::clone(&execution.prepared);
+-                let identity = relation_identity(&prepared, options.property_functions())?;
++                let mut identity_owner = relation_identity(&prepared, options.property_functions(), &workspace.capability())?;
+                 if let Some(refused) = self.admit_refusal(
+                     dataset,
+                     &prepared.query,
+                     options.property_functions(),
+                     state,
+-                    &identity,
++                    &mut identity_owner.value,
+                     &workspace,
+                 ) {
+                     return refused
+@@ -4159,7 +4159,7 @@
+                 let answer = evaluated.and_then(|evaluated| {
+                     let evaluated = prepared.restore_evaluated_layout(evaluated);
+                     Ok(
+-                        match resolve_governed(evaluated, &mut ctx, state, identity)? {
++                        match resolve_governed(evaluated, &mut ctx, state, core::mem::replace(&mut identity_owner.value, RelationIdentity::EMPTY))? {
+                             GovernedResolution::Complete {
+                                 outcome,
+                                 evidence,
+@@ -4299,13 +4299,13 @@
+                 &workspace.capability(),
+             )?;
+             admitted.check_admitted(&prepared, options, &workspace.capability())?;
+-            let identity = relation_identity(&prepared, options.property_functions())?;
++            let mut identity_owner = relation_identity(&prepared, options.property_functions(), &workspace.capability())?;
+             if let Some(refused) = self.admit_refusal(
+                 dataset,
+                 &prepared.query,
+                 options.property_functions(),
+                 state,
+-                &identity,
++                &mut identity_owner.value,
+                 &workspace,
+             ) {
+                 return refused
+@@ -4318,7 +4318,7 @@
+                 &mut ctx,
+             )?;
+             Ok(
+-                match resolve_governed(evaluated, &mut ctx, state, identity)? {
++                match resolve_governed(evaluated, &mut ctx, state, core::mem::replace(&mut identity_owner.value, RelationIdentity::EMPTY))? {
+                     GovernedResolution::Complete {
+                         outcome,
+                         evidence,
+@@ -4782,7 +4782,7 @@
+ fn finish_governed_fallible_query<D>(
+     dataset: &D,
+     state: &GovernorState,
+-    evaluation: Result<GovernedOutcome, EvaluationFailure>,
++    evaluation: Result<AdmittedGovernedOutcome, EvaluationFailure>,
+     workspace: Option<&crate::workspace::QueryWorkspace<D::ReadError>>,
+ ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>>
+ where
+@@ -4806,7 +4806,9 @@
+                 // The governor evidence inside the complete outcome is the same snapshot
+                 // as the one paired above, so it is read from one place rather than
+                 // carried twice.
+-                Ok(GovernedOutcome::Complete { result, .. }) => {
++                Ok(AdmittedGovernedOutcome { outcome: GovernedOutcome::Complete { result, relations, .. }, _identity }) => {
++                    drop(relations);
++                    drop(_identity);
+                     let (result, owner) =
+                         retain_query_result(dataset, result, workspace).map_err(|error| {
+                             error
+@@ -4828,7 +4830,11 @@
+                         )),
+                     })
+                 }
+-                Ok(GovernedOutcome::BudgetExhausted(exhausted)) => {
++                Ok(AdmittedGovernedOutcome { outcome: GovernedOutcome::BudgetExhausted(exhausted), _identity }) => {
++                    let BudgetExhausted { tripped, evidence, relations, partial } = exhausted;
++                    drop(relations);
++                    drop(_identity);
++                    let exhausted = BudgetExhausted { tripped, evidence, relations: RelationIdentity::EMPTY, partial };
+                     let retain = |partial: PartialSparqlResult| {
+                         let positional = partial.is_positional_prefix();
+                         retain_query_result(dataset, partial.into_result(), workspace)
+@@ -5960,35 +5966,49 @@
+ ///
+ /// The host's execution diagnostic if a registered relation's declaration
+ /// methods panic.
++/// A private governed outcome keeps original registry buffers admitted until
++/// the fallible publication boundary destroys them. Legacy owned APIs transfer
++/// their already-built payload to caller storage explicitly.
++struct AdmittedGovernedOutcome {
++    outcome: GovernedOutcome,
++    _identity: crate::workspace::LexicalFrame,
++}
++
++impl AdmittedGovernedOutcome {
++    fn into_caller(self) -> GovernedOutcome { self.outcome }
++}
++
++struct AdmittedRelationIdentity {
++    value: RelationIdentity,
++    _frame: crate::workspace::LexicalFrame,
++}
++
+ fn relation_identity(
+     prepared: &PreparedQuery,
+     relations: &crate::property_fn::PropertyFunctionRegistry,
+-) -> Result<RelationIdentity, RdfDiagnostic> {
+-    let iris = if relations.is_empty() {
+-        Vec::new()
+-    } else {
+-        relations
+-            .describe()
+-            .map_err(|e| {
+-                RdfDiagnostic::error(
+-                    eval_diagnostic_code(&e, "native-sparql-property-function"),
+-                    e.to_string(),
+-                )
+-            })?
+-            .into_iter()
+-            .map(|descriptor| descriptor.iri)
+-            .collect()
+-    };
+-    Ok(RelationIdentity {
+-        fingerprint: prepared.relations.clone(),
+-        iris,
+-        // EMPTY here by construction: this is computed BEFORE evaluation (once, so the
+-        // refusal, complete and truncated arms all carry the same identity), and nothing
+-        // has attested yet. `resolve_governed` fills it from the context on the arms
+-        // that actually ran — once, for both governed egresses; the admission-refusal
+-        // arm keeps it empty, which is the true statement that no relation was invoked.
+-        witness: crate::witness::RelationWitness::default(),
+-    })
++    workspace: &crate::WorkspaceCapability,
++) -> Result<AdmittedRelationIdentity, EvaluationFailure> {
++    let mut frame = crate::workspace::LexicalFrame::new(workspace);
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
++    // Read the same live declarations as the original producer. Each
++    // descriptor retains its original admission while its IRI is copied.
++    let described = relations.describe_admitted(workspace)?;
++    let mut iris = Vec::new();
++    memory.reserve(&mut iris, described.len())
++        .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "governed registry IRI array")))?;
++    for descriptor in described.iter() {
++        let iri = memory.string(&descriptor.iri)
++            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "governed registry IRI")))?;
++        memory.push(&mut iris, iri)
++            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "governed registry IRI array")))?;
++    }
++    drop(described);
++    let fingerprint = memory.string(&prepared.relations)
++        .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "governed registry fingerprint")))?;
++    drop(memory);
++    Ok(AdmittedRelationIdentity { value: RelationIdentity {
++        fingerprint, iris, witness: crate::witness::RelationWitness::default(),
++    }, _frame: frame })
+ }
+ 
+ /// Apply the [`QueryOptions`] pieces to a freshly built evaluation context: the

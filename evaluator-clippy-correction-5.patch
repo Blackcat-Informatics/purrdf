@@ -1,0 +1,1707 @@
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -233,7 +233,7 @@
+             .lock()
+             .unwrap_or_else(std::sync::PoisonError::into_inner);
+         if let Some(bucket) = entries.get(&hash) {
+-            for entry in bucket.iter() {
++            for entry in bucket {
+                 if workspace.terms_equal(&entry.value, value)? {
+                     return Ok(entry.id);
+                 }
+@@ -253,6 +253,7 @@
+             bucket.push(entry)?;
+             entries.insert_admitted(hash, bucket, workspace)?;
+         }
++        drop(entries);
+         Ok(id)
+     }
+ }
+@@ -1429,7 +1430,7 @@
+         if !purrdf_core::blank_label::is_valid_blank_node_label_prefix(prefix) {
+             return Err(crate::error::NativeDiagnostic::error(
+                 crate::error::NativeDiagnosticKind::Config,
+-                &format_args!(
++                format_args!(
+                     "blank-node mint prefix {prefix:?} is not a legal BLANK_NODE_LABEL prefix"
+                 ),
+                 &self.growth,
+@@ -1605,7 +1606,7 @@
+         if self
+             .governors
+             .as_ref()
+-            .is_none_or(|previous| !std::ptr::eq(&**previous, &*governors))
++            .is_none_or(|previous| !std::ptr::eq(&raw const **previous, &raw const *governors))
+         {
+             self.scratch.reset_charged_growth();
+         }
+@@ -2645,7 +2646,6 @@
+     ///
+     /// Called by `expr::eval_filter` and `binop::left_outer_join_filtered` to give
+     /// each FILTER-predicate worker its own child context.
+-    #[must_use]
+     pub(crate) fn fork_for_worker(&self) -> Result<Self, EvalError> {
+         self.fork_with_scratch(self.scratch.clone())
+     }
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -1207,7 +1207,8 @@
+ ) -> Result<Option<bool>, EvalError> {
+     let mut frame = crate::workspace::LexicalFrame::new(workspace);
+     let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+-    let mut pending: purrdf_lex::walk::WorkList<(&TermValue, &TermValue), 8> = Default::default();
++    let mut pending: purrdf_lex::walk::WorkList<(&TermValue, &TermValue), 8> =
++        purrdf_lex::walk::WorkList::new();
+     pending
+         .try_push_admitted((a, b), &mut memory)
+         .map_err(|error| {
+@@ -1344,7 +1345,7 @@
+ ) -> Result<bool, EvalError> {
+     let mut frame = crate::workspace::LexicalFrame::new(workspace);
+     let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+-    let mut pending: purrdf_lex::walk::WorkList<&TermValue, 8> = Default::default();
++    let mut pending: purrdf_lex::walk::WorkList<&TermValue, 8> = purrdf_lex::walk::WorkList::new();
+     pending
+         .try_push_admitted(value, &mut memory)
+         .map_err(|error| memory.admission_mut().storage_error(error, "NaN term walk"))?;
+@@ -1366,14 +1367,11 @@
+             } if matches!(
+                 XsdDatatype::from_iri(datatype),
+                 Some(XsdDatatype::Float | XsdDatatype::Double)
+-            ) =>
++            ) && parse_owned_xsd(lexical_form, datatype, workspace)?
++                .as_deref()
++                .is_some_and(is_xsd_nan) =>
+             {
+-                if parse_owned_xsd(lexical_form, datatype, workspace)?
+-                    .as_deref()
+-                    .is_some_and(is_xsd_nan)
+-                {
+-                    return Ok(true);
+-                }
++                return Ok(true);
+             }
+             _ => {}
+         }
+@@ -2795,6 +2793,107 @@
+     )
+ }
+ 
++/// The original lexical account used by correlated AST construction.
++pub(crate) type CorrelatedMemory<'a> =
++    purrdf_lex::allocation::Memory<'a, crate::workspace::LexicalFrame>;
++
++pub(crate) fn correlated_storage_error(
++    memory: &mut CorrelatedMemory<'_>,
++    error: purrdf_lex::allocation::StorageError,
++) -> EvalError {
++    memory
++        .admission_mut()
++        .storage_error(error, "correlated native algebra")
++}
++
++pub(crate) fn correlated_box<T>(
++    value: T,
++    memory: &mut CorrelatedMemory<'_>,
++) -> Result<Box<T>, EvalError> {
++    memory
++        .add_bytes(std::alloc::Layout::new::<T>().size())
++        .map_err(|error| correlated_storage_error(memory, error))?;
++    purrdf_lex::allocation::try_boxed(value).map_err(|_| EvalError::AllocationFailed {
++        construct: "correlated native child",
++    })
++}
++
++/// A copied tree and its ORIGINAL native allocation owner, in destruction order.
++/// The root box is permanent before source addresses or analyses are recorded.
++pub(crate) struct CorrelatedPattern {
++    body: Box<GraphPattern>,
++    frame: crate::workspace::LexicalFrame,
++}
++
++impl std::ops::Deref for CorrelatedPattern {
++    type Target = GraphPattern;
++    fn deref(&self) -> &GraphPattern {
++        &self.body
++    }
++}
++impl AsRef<GraphPattern> for CorrelatedPattern {
++    fn as_ref(&self) -> &GraphPattern {
++        &self.body
++    }
++}
++
++impl CorrelatedPattern {
++    pub(crate) fn build(
++        workspace: &crate::WorkspaceCapability,
++        build: impl FnOnce(&mut CorrelatedMemory<'_>) -> Result<Box<GraphPattern>, EvalError>,
++    ) -> Result<Self, EvalError> {
++        let mut frame = crate::workspace::LexicalFrame::new(workspace);
++        let body = build(&mut purrdf_lex::allocation::Memory::new(&mut frame))?;
++        Ok(Self { body, frame })
++    }
++
++    pub(crate) fn copy(
++        pattern: &GraphPattern,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Self, EvalError> {
++        Self::build(workspace, |memory| {
++            let copy = pattern
++                .clone_with_memory(memory)
++                .map_err(|error| correlated_storage_error(memory, error))?;
++            correlated_box(copy, memory)
++        })
++    }
++
++    /// Move the existing root beneath one admitted wrapper; no deep copy occurs.
++    pub(crate) fn first(self) -> Result<Self, EvalError> {
++        let Self { body, mut frame } = self;
++        // On any failure the body is destroyed before its original frame.
++        let result = {
++            let live = frame.live_bytes();
++            let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, live);
++            correlated_box(
++                GraphPattern::Slice {
++                    inner: body.into(),
++                    start: 0,
++                    length: Some(1),
++                },
++                &mut memory,
++            )
++        };
++        result.map(|body| Self { body, frame })
++    }
++
++    /// Resident-only compatibility door. A bounded lease can never be detached.
++    #[cfg(test)]
++    fn into_resident(self) -> Box<GraphPattern> {
++        assert!(!self.frame.workspace().is_bounded());
++        self.body
++    }
++}
++
++/// The immutable per-row arrays and the original child-box grant.
++/// Lexical leaves have their own intrinsic SharedText ownership.
++pub(crate) struct SubstitutionPayload {
++    pub(crate) expr: Vec<(Variable, Expression)>,
++    pub(crate) term: Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>,
++    _frame: Option<crate::workspace::LexicalFrame>,
++}
++
+ /// The per-row μ used by pattern substitution — SEP-0007's `Replace` mechanism,
+ /// PurRDF's evaluation-side construction of it (see [`substitute_pattern`]).
+ ///
+@@ -2837,107 +2936,6 @@
+ /// leaf/wrapper clone of a bound quoted-triple term pays one small,
+ /// fixed-size `Box` allocation — not a `String`, and not one that grows with
+ /// leaf/wrapper count times term length.
+-
+-pub(crate) type CorrelatedMemory<'a> =
+-    purrdf_lex::allocation::Memory<'a, crate::workspace::LexicalFrame>;
+-
+-pub(crate) fn correlated_storage_error(
+-    memory: &mut CorrelatedMemory<'_>,
+-    error: purrdf_lex::allocation::StorageError,
+-) -> EvalError {
+-    memory
+-        .admission_mut()
+-        .storage_error(error, "correlated native algebra")
+-}
+-
+-pub(crate) fn correlated_box<T>(
+-    value: T,
+-    memory: &mut CorrelatedMemory<'_>,
+-) -> Result<Box<T>, EvalError> {
+-    memory
+-        .add_bytes(std::alloc::Layout::new::<T>().size())
+-        .map_err(|error| correlated_storage_error(memory, error))?;
+-    purrdf_lex::allocation::try_boxed(value).map_err(|_| EvalError::AllocationFailed {
+-        construct: "correlated native child",
+-    })
+-}
+-
+-/// A copied tree and its ORIGINAL native allocation owner, in destruction order.
+-/// The root box is permanent before source addresses or analyses are recorded.
+-pub(crate) struct CorrelatedPattern {
+-    body: Box<GraphPattern>,
+-    frame: crate::workspace::LexicalFrame,
+-}
+-
+-impl std::ops::Deref for CorrelatedPattern {
+-    type Target = GraphPattern;
+-    fn deref(&self) -> &GraphPattern {
+-        &self.body
+-    }
+-}
+-impl AsRef<GraphPattern> for CorrelatedPattern {
+-    fn as_ref(&self) -> &GraphPattern {
+-        &self.body
+-    }
+-}
+-
+-impl CorrelatedPattern {
+-    pub(crate) fn build(
+-        workspace: &crate::WorkspaceCapability,
+-        build: impl FnOnce(&mut CorrelatedMemory<'_>) -> Result<Box<GraphPattern>, EvalError>,
+-    ) -> Result<Self, EvalError> {
+-        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+-        let body = build(&mut purrdf_lex::allocation::Memory::new(&mut frame))?;
+-        Ok(Self { body, frame })
+-    }
+-
+-    pub(crate) fn copy(
+-        pattern: &GraphPattern,
+-        workspace: &crate::WorkspaceCapability,
+-    ) -> Result<Self, EvalError> {
+-        Self::build(workspace, |memory| {
+-            let copy = pattern
+-                .clone_with_memory(memory)
+-                .map_err(|error| correlated_storage_error(memory, error))?;
+-            correlated_box(copy, memory)
+-        })
+-    }
+-
+-    /// Move the existing root beneath one admitted wrapper; no deep copy occurs.
+-    pub(crate) fn first(self) -> Result<Self, EvalError> {
+-        let Self { body, mut frame } = self;
+-        // On any failure the body is destroyed before its original frame.
+-        let result = {
+-            let live = frame.live_bytes();
+-            let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, live);
+-            correlated_box(
+-                GraphPattern::Slice {
+-                    inner: body.into(),
+-                    start: 0,
+-                    length: Some(1),
+-                },
+-                &mut memory,
+-            )
+-        };
+-        result.map(|body| Self { body, frame })
+-    }
+-
+-    /// Resident-only compatibility door. A bounded lease can never be detached.
+-    #[cfg(test)]
+-    fn into_resident(self) -> Box<GraphPattern> {
+-        assert!(!self.frame.workspace().is_bounded());
+-        self.body
+-    }
+-}
+-
+-/// The immutable per-row arrays and the original child-box grant.
+-/// Lexical leaves have their own intrinsic SharedText ownership.
+-pub(crate) struct SubstitutionPayload {
+-    pub(crate) expr: Vec<(Variable, Expression)>,
+-    pub(crate) term: Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>,
+-    _frame: Option<crate::workspace::LexicalFrame>,
+-}
+-
+ #[derive(Clone, Default)]
+ pub(crate) struct SubstitutionRow {
+     contents: Option<crate::workspace::SharedWorkspace<SubstitutionPayload>>,
+@@ -3384,7 +3382,7 @@
+             match node {
+                 Node::Body(body) => self.expr_vars_of_body(body, out, &workspace)?,
+                 Node::Expression(Expression::Exists(body)) => {
+-                    self.expr_vars_of_body(body, out, &workspace)?
++                    self.expr_vars_of_body(body, out, &workspace)?;
+                 }
+                 Node::Expression(
+                     atom @ (Expression::Variable(_)
+@@ -4625,7 +4623,7 @@
+ pub(crate) fn outer_bindings_for_substitution<D: DatasetView + Sync>(
+     outer_row: &[Option<SolutionTerm<D::Id>>],
+     outer_schema: &VarSchema,
+-    ctx: &mut EvalCtx<'_, D>,
++    ctx: &EvalCtx<'_, D>,
+ ) -> Result<SubstitutionRow, EvalError> {
+     let workspace = ctx.growth.clone();
+     SubstitutionRow::build(&workspace, |expr, term, memory| {
+@@ -4758,7 +4756,7 @@
+                     lexical_form,
+                     datatype,
+                     ..
+-                }) if XsdDatatype::from_iri(datatype).is_some_and(|kind| kind.is_numeric()) => {
++                }) if XsdDatatype::from_iri(datatype).is_some_and(XsdDatatype::is_numeric) => {
+                     parse_owned_xsd(lexical_form, datatype, &ctx.growth)?.is_some()
+                 }
+                 _ => false,
+@@ -5069,19 +5067,19 @@
+             .map(AdjustTimezone::into_seconds);
+             match (value, timezone) {
+                 (Some(XsdValue::DateTime(dt)), Some(tz)) => {
+-                    match purrdf_xsd::temporal::adjust_datetime_to_timezone(&dt, tz) {
++                    match purrdf_xsd::temporal::adjust_datetime_to_timezone(dt, tz) {
+                         Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::DateTime(result))?)),
+                         Err(_) => Ok(None),
+                     }
+                 }
+                 (Some(XsdValue::Date(d)), Some(tz)) => {
+-                    match purrdf_xsd::temporal::adjust_date_to_timezone(&d, tz) {
++                    match purrdf_xsd::temporal::adjust_date_to_timezone(d, tz) {
+                         Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::Date(result))?)),
+                         Err(_) => Ok(None),
+                     }
+                 }
+                 (Some(XsdValue::Time(t)), Some(tz)) => {
+-                    match purrdf_xsd::temporal::adjust_time_to_timezone(&t, tz) {
++                    match purrdf_xsd::temporal::adjust_time_to_timezone(t, tz) {
+                         Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::Time(result))?)),
+                         Err(_) => Ok(None),
+                     }
+@@ -5413,31 +5411,35 @@
+     // `whiteSpace` facet (XPath F&O 3.1 §19.2): `collapse` for every non-string
+     // target here, so `xsd:integer(" 12 ")` is 12. A non-string source's lexical
+     // form is its own and is read as written.
+-    let mut _collapsed_owner = None;
+-    let collapsed;
+-    let lexical = if target != XsdDatatype::String && is_string_row(datatype_iri) {
++    let collapsed = if target != XsdDatatype::String && is_string_row(datatype_iri) {
+         let view = purrdf_xsd::simple::CollapsedWhitespace(lexical);
+         let length = crate::workspace::display_len(&view)?;
+-        _collapsed_owner = Some(
+-            ctx.growth
+-                .charge(u64::try_from(length).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?,
+-        );
+-        collapsed =
++        let allocation = ctx
++            .growth
++            .charge(u64::try_from(length).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++        let text =
+             crate::workspace::format_exact(&view, length, "XSD cast whitespace destination")?;
+-        collapsed.as_str()
++        // Tuple fields destroy the text before releasing its original grant.
++        Some((text, allocation))
+     } else {
+-        lexical.as_str()
++        None
+     };
++    let lexical = collapsed
++        .as_ref()
++        .map_or(lexical.as_str(), |(text, _)| text.as_str());
+     // One native parser; malformed lexical and physical refusal stay separate.
+-    match crate::parsed_value::ParsedValue::parse_coded(lexical, target, true, &ctx.growth)? {
+-        Ok(value) => governed_xsd_to_term(ctx, &value),
+-        Err(code) => {
+-            if target.is_numeric() {
+-                ctx.record_expression_error(code);
+-            }
+-            Ok(None)
+-        }
+-    }
++    let result =
++        match crate::parsed_value::ParsedValue::parse_coded(lexical, target, true, &ctx.growth)? {
++            Ok(value) => governed_xsd_to_term(ctx, &value),
++            Err(code) => {
++                if target.is_numeric() {
++                    ctx.record_expression_error(code);
++                }
++                Ok(None)
++            }
++        };
++    drop(collapsed);
++    result
+ }
+ 
+ /// The XPath F&O error a refused by-value numeric cast of `source` is:
+@@ -5564,7 +5566,6 @@
+ ///   only its own component (months, or seconds).
+ /// * `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes.
+ /// * A value casts to its own datatype unchanged; every other pair is refused.
+-
+ #[inline(never)]
+ fn cast_duration_or_binary<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>,
+@@ -6522,7 +6523,7 @@
+     if lang.is_empty() {
+         return Ok(None); // an empty language tag is not a valid rdf:langString
+     }
+-    if !well_formed_langtag(&lang) {
++    if !well_formed_langtag(lang) {
+         return Ok(None); // not a language tag at all — see `well_formed_langtag`
+     }
+     language_term(ctx, lex, lang, None)
+@@ -6553,12 +6554,12 @@
+     if lang.is_empty() {
+         return Ok(None); // a directional language string needs a language
+     }
+-    if !well_formed_langtag(&lang) {
++    if !well_formed_langtag(lang) {
+         return Ok(None); // not a language tag at all — see `well_formed_langtag`
+     }
+     // The base direction must be exactly `ltr`/`rtl` (case-sensitive); anything
+     // else, including an empty string, is a type error (unbound).
+-    let Some(direction) = RdfTextDirection::from_str_token(&dir) else {
++    let Some(direction) = RdfTextDirection::from_str_token(dir) else {
+         return Ok(None);
+     };
+     language_term(ctx, lex, lang, Some(direction))
+@@ -6615,7 +6616,7 @@
+     if RdfLiteral::validate_components(dt, None, None).is_err() {
+         return Ok(None);
+     }
+-    Ok(Some(typed_term(ctx, &lex, dt)?))
++    Ok(Some(typed_term(ctx, lex, dt)?))
+ }
+ 
+ /// `TRIPLE(s, p, o)` — RDF 1.2 triple-term constructor.
+@@ -6921,7 +6922,7 @@
+     let Some(value) = xsd_of_term(ctx, operand)? else {
+         return Ok(None);
+     };
+-    apply_unary_numeric(ctx, value, op)
++    apply_unary_numeric(ctx, &value, op)
+ }
+ 
+ /// Apply a unary numeric function from the `vals` pre-evaluated argument list.
+@@ -6942,25 +6943,25 @@
+     let Some(value) = parse_owned_xsd(lexical_form, datatype, &ctx.growth)? else {
+         return Ok(None);
+     };
+-    apply_unary_numeric(ctx, value, op)
++    apply_unary_numeric(ctx, &value, op)
+ }
+ 
+ fn apply_unary_numeric<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>,
+-    value: crate::parsed_value::ParsedValue,
++    value: &crate::parsed_value::ParsedValue,
+     op: purrdf_xsd::numeric::NumericUnaryOperator,
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    if !numeric_step_admitted(ctx, numeric_unary_cost(&value)) {
++    if !numeric_step_admitted(ctx, numeric_unary_cost(value)) {
+         return Ok(None);
+     }
+     // Identity keeps the same immutable parsed allocation, including its subtype.
+     if op == purrdf_xsd::numeric::NumericUnaryOperator::Plus && value.is_numeric() {
+-        return governed_xsd_to_term(ctx, &value);
++        return governed_xsd_to_term(ctx, value);
+     }
+     let capability = ctx.growth.clone();
+     let mut frame = crate::native_numeric::NumericFrame::new(&capability);
+     let computed =
+-        purrdf_xsd::numeric::numeric_unary_admitted(&value, op, &mut |layout| frame.admit(layout));
++        purrdf_xsd::numeric::numeric_unary_admitted(value, op, &mut |layout| frame.admit(layout));
+     match frame.finish_value(computed)? {
+         Ok(value) => governed_xsd_to_term(ctx, &value),
+         Err(code) => {
+@@ -13595,7 +13596,7 @@
+             eager.reference_expr_vars(&expr, &mut expected);
+             assert!(ours.sites.is_empty() && expected.sites.is_empty());
+             assert_eq!(
+-                sorted(ours.direct.iter().map(|(variable, _)| variable)),
++                sorted(ours.direct.iter().map(|(variable, ())| variable)),
+                 sorted(expected.direct.iter()),
+                 "seed {seed}: {expr:?}"
+             );
+@@ -13625,7 +13626,7 @@
+                 "seed {seed}: {expr:?}"
+             );
+             assert_eq!(
+-                sorted(ours.direct.iter().map(|(variable, _)| variable)),
++                sorted(ours.direct.iter().map(|(variable, ())| variable)),
+                 sorted(expected.direct.iter()),
+                 "seed {seed}: {expr:?}"
+             );
+@@ -13686,11 +13687,11 @@
+             (
+                 (
+                     deferred.sites.len(),
+-                    sorted(deferred.direct.iter().map(|(variable, _)| variable)),
++                    sorted(deferred.direct.iter().map(|(variable, ())| variable)),
+                 ),
+                 (
+                     direct.sites.len(),
+-                    sorted(direct.direct.iter().map(|(variable, _)| variable)),
++                    sorted(direct.direct.iter().map(|(variable, ())| variable)),
+                     sorted(vars.iter()),
+                 ),
+             )
+@@ -14189,7 +14190,7 @@
+         &mut self,
+     ) -> Option<crate::workspace::SharedWorkspace<SubstitutionSourceMap>> {
+         let layer = self.0.take()?;
+-        self.0 = layer.parent.0.clone();
++        self.0.clone_from(&layer.parent.0);
+         Some(layer.map.clone())
+     }
+     pub(crate) fn last(&self) -> Option<&crate::workspace::SharedWorkspace<SubstitutionSourceMap>> {
+--- a/crates/sparql-eval/src/binop.rs
++++ b/crates/sparql-eval/src/binop.rs
+@@ -538,7 +538,7 @@
+         // scaffolding straight to the real plan address, and to arbitrate `counts_rows` so
+         // nesting never mints more than one counting node per real ordinal — see
+         // `crate::expr::SubstitutionSource`'s doc.
+-        let enclosing = ctx.correlated_node_maps.last().map(|map| map.as_ref());
++        let enclosing = ctx.correlated_node_maps.last().map(AsRef::as_ref);
+         let mut map = crate::expr::SubstitutionSourceMap::default();
+         let substituted = crate::expr::substitute_pattern_tracked_admitted::<DECLARED>(
+             pattern,
+@@ -901,7 +901,7 @@
+                     )?)?;
+                 }
+                 let rows = SolutionSeq {
+-                    schema: out.clone(),
++                    schema: out,
+                     rows: output.finish()?,
+                 };
+                 delivery.deliver(&rows, ctx)?;
+@@ -1217,7 +1217,7 @@
+     let out_len = out.len();
+     let cell_ceiling = ctx.cell_row_ceiling(out_len);
+     let mut rows = RowsBuilder::new(&ctx.growth);
+-    'left: for (mu, r) in per_row.iter() {
++    'left: for (mu, r) in &per_row {
+         let right_to_out = right_to_out_map(&r.schema, &out, &ctx.growth)?;
+         for nu in &r.rows {
+             // Test compatibility before allocating the joined row. The cell ceiling is
+@@ -1566,7 +1566,7 @@
+         arms.push(arm)?;
+     }
+     let mut out = VarSchema::default();
+-    for arm in arms.iter() {
++    for arm in &arms {
+         for v in arm.schema.vars() {
+             out.push_admitted(v.clone(), &ctx.growth)?;
+         }
+@@ -1843,7 +1843,7 @@
+                             )?)?;
+                         }
+                     }
+-                    for &idx in wild.iter() {
++                    for &idx in &wild {
+                         if compatible(lrow, &r.rows[idx], &shared) {
+                             if rows.len() >= cell_ceiling {
+                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+@@ -1905,7 +1905,7 @@
+                                 )?);
+                             }
+                         }
+-                        for &idx in wild.iter() {
++                        for &idx in &wild {
+                             if compatible(lrow, &r.rows[idx], &shared) {
+                                 reserve_join_rows(acc, 1, usize::MAX)?;
+                                 acc.push(merge_admitted(
+@@ -2441,7 +2441,7 @@
+         return Ok(Evaluated::Truncated(Truncation::barred_at(
+             node,
+             tripped,
+-            joined.schema.clone(),
++            joined.schema,
+         )));
+     }
+     Ok(lift.finish(joined))
+@@ -2757,7 +2757,7 @@
+                             )?)?;
+                         }
+                     }
+-                    for &idx in wild.iter() {
++                    for &idx in &wild {
+                         if compatible(lrow, &r.rows[idx], &shared) {
+                             if rows.len() >= cell_ceiling {
+                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
+@@ -2827,7 +2827,7 @@
+                                 )?);
+                             }
+                         }
+-                        for &idx in wild.iter() {
++                        for &idx in &wild {
+                             if compatible(lrow, &r.rows[idx], &shared) {
+                                 reserve_join_rows(acc, 1, usize::MAX)?;
+                                 acc.push(merge_admitted(
+@@ -2926,13 +2926,13 @@
+         for _ in 0..l.rows.len() {
+             removed.push(false)?;
+         }
+-        for partition in partitions.iter() {
++        for partition in &partitions {
+             let evaluated = crate::service_endpoints::eval_minus_partition(partition, right, ctx)?;
+             let Some(r) = lift.absorb(1, evaluated) else {
+                 return Ok(lift.withheld());
+             };
+             let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
+-            for &position in partition.rows.iter() {
++            for &position in &partition.rows {
+                 let lrow = &l.rows[position];
+                 removed.as_mut_slice()[position] = r.rows.iter().any(|rrow| {
+                     compatible(lrow, rrow, &shared)
+--- a/crates/sparql-eval/src/deferred_exists.rs
++++ b/crates/sparql-eval/src/deferred_exists.rs
+@@ -542,6 +542,7 @@
+                     sites
+                 }
+             };
++            drop(table);
+             SitesRef::Owned(kept)
+         }
+         SiteSlot::Transient => SitesRef::Owned(SharedWorkspace::new_admitted(
+@@ -720,10 +721,9 @@
+                 crate::blank_scope::for_each_child_mut(node, &mut |child| {
+                     if failure.is_none()
+                         && let crate::blank_scope::ChildMut::Pattern(child) = child
++                        && let Err(error) = pending.push(child)
+                     {
+-                        if let Err(error) = pending.push(child) {
+-                            failure = Some(error);
+-                        }
++                        failure = Some(error);
+                     }
+                 });
+                 if let Some(error) = failure {
+@@ -766,7 +766,9 @@
+         let copy = operand
+             .clone_with_memory(&mut memory)
+             .map_err(|e| crate::expr::correlated_storage_error(&mut memory, e))?;
+-        crate::expr::correlated_box(copy, &mut memory)?
++        let copy = crate::expr::correlated_box(copy, &mut memory)?;
++        drop(frame);
++        copy
+     };
+     #[cfg(test)]
+     crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(operand));
+@@ -805,6 +807,7 @@
+             },
+             &mut memory,
+         )?;
++        drop(frame);
+         pieces.push(Piece { body, parent })?;
+     }
+     let mut children_of = AdmittedVec::with_capacity(pieces.len(), workspace)?;
+@@ -824,7 +827,7 @@
+     while let Some(Piece { mut body, .. }) = pieces.pop() {
+         let index = pieces.len();
+         let mut children: AdmittedMap<usize, SharedWorkspace<LateralSite>> = AdmittedMap::default();
+-        for &(placeholder, child) in children_of[index].iter() {
++        for &(placeholder, child) in &children_of[index] {
+             let site = built.as_mut_slice()[child]
+                 .take()
+                 .expect("children assembled before parents");
+@@ -856,6 +859,7 @@
+                 },
+                 &mut memory,
+             )?;
++            drop(frame);
+         }
+         let schema = (*crate::eval::syntactic_schema_admitted(&body, workspace)?).clone();
+         let mut vars = crate::solution::SchemaBuilder::new(workspace);
+@@ -1002,16 +1006,13 @@
+                 _ => {
+                     let mut failure = None;
+                     crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+-                        if remember_failure(
++                        remember_failure(
+                             pending.push(match part {
+                                 PatternPart::Child(child, _) => Node::Pattern(child, scope),
+                                 PatternPart::Expression(expr) => Node::Expression(expr, scope),
+                             }),
+                             &mut failure,
+-                        ) {
+-                            return true;
+-                        };
+-                        false
++                        )
+                     });
+                     if let Some(error) = failure {
+                         return Err(error);
+--- a/crates/sparql-eval/src/enf.rs
++++ b/crates/sparql-eval/src/enf.rs
+@@ -260,6 +260,10 @@
+ /// The outcome of normalizing one `EXISTS`/`NOT EXISTS` inner pattern to Existential
+ /// Normal Form (see the [module docs](self)).
+ #[derive(Debug, Clone, PartialEq, Eq)]
++#[expect(
++    clippy::large_enum_variant,
++    reason = "normalization returns the original admitted tree inline; adding a box would introduce a separate allocation and change its owner layout"
++)]
+ pub(crate) enum Enf {
+     /// The normalized pattern: `exists(pattern, μ)` and `exists(original, μ)` agree
+     /// for every μ (this module's laws are emptiness-preserving), so evaluating THIS
+@@ -416,7 +420,7 @@
+                 right,
+                 expression,
+             } if left_join_erasable_admitted(right, expression.as_ref(), workspace)? => {
+-                original = left
++                original = left;
+             }
+             GraphPattern::OrderBy { inner, expression }
+                 if order_by_erasable_admitted(expression, workspace)? =>
+--- a/crates/sparql-eval/src/substitute.rs
++++ b/crates/sparql-eval/src/substitute.rs
+@@ -155,7 +155,6 @@
+     /// unbound — which
+     /// [`NativeSparqlEngine::execute`](crate::NativeSparqlEngine::execute) refuses
+     /// before it reaches this.
+-
+     fn ground_with_memory(
+         self,
+         index: usize,
+@@ -182,7 +181,6 @@
+     /// IRI or the same typed literal, and a typed literal's datatype IRI when only the
+     /// datatype is the same. An IRI already validated and wrapped is shared rather than
+     /// validated and copied again; the term is equal to the one [`Self::ground_with_memory`] builds.
+-
+     fn ground_reusing_with_memory(
+         self,
+         index: usize,
+@@ -380,7 +378,9 @@
+ /// to the projected variable list.
+ #[cfg(test)]
+ pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+-    resident_rewrite(|memory| apply_probes_with_memory(query, &probes, memory))
++    let rewritten = resident_rewrite(|memory| apply_probes_with_memory(query, &probes, memory));
++    drop(probes);
++    rewritten
+ }
+ 
+ /// Whether any variable is pre-bound twice, which is the one shape the combined
+@@ -414,7 +414,7 @@
+ /// are back in it.
+ #[cfg(test)]
+ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at_core_root: bool) {
+-    resident_rewrite(|memory| push_probes_with_memory(pattern, probes, at_core_root, memory))
++    resident_rewrite(|memory| push_probes_with_memory(pattern, probes, at_core_root, memory));
+ }
+ 
+ /// The pre-binding list a [`push_probes_with_memory`] node is rewritten with: the whole list, or
+@@ -492,12 +492,6 @@
+ 
+ /// The operand `pattern` hands to `push_probes`' walk, and its probe list.
+ type PushDescent<'p> = (GraphPattern, ProbeList<'p>, bool);
+-
+-/// Enter `node`: rewrite it in place when it is a leaf, or take its first operand out
+-/// and hold the node open until the operand comes back.
+-
+-/// Put the rewritten `operand` back into `frame`'s node, and go on: enter the node's
+-/// next operand, or finish the node.
+ 
+ /// Whether the pushdown enters a `GROUP BY` whose keys are `keys` for the pre-bound
+ /// `variable` — which it does exactly when `variable` IS one of the keys.
+@@ -687,14 +681,14 @@
+ /// A stand-alone call, driven: `Lateral(seed, call)`.
+ #[cfg(test)]
+ fn plant_stand_alone_driver(call: &mut GraphPattern, seed: GraphPattern) {
+-    resident_rewrite(|memory| plant_stand_alone_driver_with_memory(call, seed, memory))
++    resident_rewrite(|memory| plant_stand_alone_driver_with_memory(call, seed, memory));
+ }
+ 
+ /// A `Lateral`'s left operand, carrying the driver of the call on its right:
+ /// `Join(seed, left)` — the shape [`drives`] recognizes.
+ #[cfg(test)]
+ fn plant_left_driver(left: &mut GraphPattern, seed: GraphPattern) {
+-    resident_rewrite(|memory| plant_left_driver_with_memory(left, seed, memory))
++    resident_rewrite(|memory| plant_left_driver_with_memory(left, seed, memory));
+ }
+ 
+ /// Where the SHACL walk ([`substitute_in_graph_pattern_with_memory`]) is: above the `VALUES` seed,
+@@ -761,7 +755,7 @@
+ /// call binds for the rest of the body, and what it correlates with, is unchanged.
+ #[cfg(test)]
+ fn plant_scoped_driver(call: &mut GraphPattern, seed: GraphPattern, kept: Vec<Variable>) {
+-    resident_rewrite(|memory| plant_scoped_driver_with_memory(call, seed, kept, memory))
++    resident_rewrite(|memory| plant_scoped_driver_with_memory(call, seed, kept, memory));
+ }
+ 
+ /// Every variable `call` names in an argument — a predicate variable inside a
+@@ -816,7 +810,7 @@
+ ) {
+     resident_rewrite(|memory| {
+         restore_probed_bindings_with_memory(leaf, probed, probes, at_core_root, memory)
+-    })
++    });
+ }
+ 
+ /// Replace one term position with its pre-bound constant, entering a quoted triple's
+@@ -835,7 +829,7 @@
+         let result = memory.add_bytes(bytes);
+         native_storage(memory, result)?;
+         probe_term_pattern_with_memory(term, probes, probed, memory)
+-    })
++    });
+ }
+ 
+ /// A matched position, including predicates nested inside quoted triples.
+@@ -931,7 +925,7 @@
+     probes: &[(Variable, GroundTerm)],
+     scope: WalkScope,
+ ) {
+-    resident_rewrite(|memory| complete_shacl_leaf_with_memory(leaf, probes, scope, memory))
++    resident_rewrite(|memory| complete_shacl_leaf_with_memory(leaf, probes, scope, memory));
+ }
+ 
+ /// Restore SHACL-local bindings, hiding their names from EXISTS row correlation.
+@@ -944,7 +938,7 @@
+ ) {
+     resident_rewrite(|memory| {
+         restore_shacl_bindings_with_memory(leaf, bound, probes, scope, memory)
+-    })
++    });
+ }
+ 
+ /// What a grounded pre-binding may be USED for — decided once, in one place.
+@@ -1181,13 +1175,19 @@
+ /// [`crate::prebind_memo`] has to be able to run EXACTLY this rewrite — not a second
+ /// spelling of it — to check a memo against it.
+ pub(crate) fn apply_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+-    resident_rewrite(|memory| apply_shacl_probes_with_memory(query, &probes, memory))
++    let rewritten =
++        resident_rewrite(|memory| apply_shacl_probes_with_memory(query, &probes, memory));
++    drop(probes);
++    rewritten
+ }
+ 
+ /// [`apply_shacl_probes`] without its seed-only fast path: the seed, then the
+ /// expression walk that writes each value where the seed does not reach.
+ pub(crate) fn walk_shacl_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+-    resident_rewrite(|memory| walk_shacl_probes_with_memory(query, &probes, memory))
++    let rewritten =
++        resident_rewrite(|memory| walk_shacl_probes_with_memory(query, &probes, memory));
++    drop(probes);
++    rewritten
+ }
+ 
+ /// The slot [`Query::map_core_pattern_mut`]'s descent from `pattern` ends at.
+@@ -1350,8 +1350,6 @@
+     stage: SubstituteStage,
+     /// What the node's inner pattern carries, once it is back.
+     operand: SeedColumns,
+-    /// A `GROUP BY`'s aggregates, taken apart while their expressions are substituted.
+-
+     /// The `EXISTS` bodies of the node's own expressions still to substitute, last
+     /// first.
+     pending_bodies: crate::AdmittedVec<GraphPattern>,
+@@ -1415,22 +1413,8 @@
+         replace_exists_bodies_with_memory(roots, bodies, memory)
+     }
+ }
+-/// The expressions `node` itself evaluates, in the order the substitution walk reads
+-/// them: its `FILTER`, `BIND` or `UNFOLD` expression, its `OPTIONAL` condition, its
+-/// sort keys, or — for a `GROUP BY`, whose aggregates are held apart in `aggregates`
+-/// while the walk is inside them — each aggregate's arguments and then its own `FOLD`
+-/// sort keys, aggregate by aggregate.
+-
+ /// The operand `pattern` hands to the substitution walk, and the scope it is in.
+ type SubstituteDescent = (GraphPattern, WalkScope);
+-
+-/// Enter `node`: substitute in it when it is a leaf, or take its first operand out and
+-/// hold the node open until the operand comes back.
+-
+-/// Take `frame`'s inner pattern out and enter it in the node's own scope.
+-
+-/// Put the substituted `operand` back into `frame`'s node, and go on: enter the node's
+-/// next operand, or finish the node and report what it carries.
+ 
+ /// Carry every pre-bound value a `GROUP BY` does not keep as a key past it, as one
+ /// single-row `VALUES` joined onto the group's output, and report the columns the
+@@ -1555,14 +1539,10 @@
+ /// and the body's own expressions were already driven by the walk.
+ #[cfg(test)]
+ fn rename_reads(expr: &mut Expression, renames: &[(Variable, Variable)]) {
+-    resident_rewrite(|memory| rename_reads_with_memory(expr, renames, memory))
++    resident_rewrite(|memory| rename_reads_with_memory(expr, renames, memory));
+ }
+ 
+ pub(crate) use purrdf_sparql_algebra::walk::for_each_expression_mut;
+-
+-/// Push the expressions `expr` holds onto `pending`, last first, so the work list pops
+-/// them in source order. Wildcard-free: an expression variant added later must say
+-/// here what it holds.
+ 
+ /// Every expression `node` itself evaluates — its `FILTER`, `BIND` or `UNFOLD`
+ /// expression, its `OPTIONAL` condition, its sort keys, or its aggregates' arguments and
+@@ -1655,7 +1635,7 @@
+ /// it names a predicate, which only an IRI can, and neither rule writes there.
+ #[cfg(test)]
+ fn substitute_in_term_pattern(term: &mut TermPattern, values: &[(Variable, GroundTerm)]) {
+-    resident_rewrite(|memory| substitute_in_term_pattern_with_memory(term, values, memory))
++    resident_rewrite(|memory| substitute_in_term_pattern_with_memory(term, values, memory));
+ }
+ 
+ /// Replace a pre-bound variable in a `GRAPH`/`SERVICE` name with its IRI constant.
+@@ -1722,7 +1702,7 @@
+ /// The SPARQL `true` boolean literal (`"true"^^xsd:boolean`).
+ #[cfg(test)]
+ fn true_literal() -> Expression {
+-    resident_rewrite(|memory| true_literal_with_memory(memory))
++    resident_rewrite(true_literal_with_memory)
+ }
+ 
+ type RewriteMemory<'a> = purrdf_lex::allocation::Memory<'a, crate::workspace::LexicalFrame>;
+@@ -1982,6 +1962,11 @@
+     }
+ }
+ 
++/// The expressions `node` itself evaluates, in the order the substitution walk reads
++/// them: its `FILTER`, `BIND` or `UNFOLD` expression, its `OPTIONAL` condition, its
++/// sort keys, or — for a `GROUP BY`, whose aggregates are held apart in `aggregates`
++/// while the walk is inside them — each aggregate's arguments and then its own `FOLD`
++/// sort keys, aggregate by aggregate.
+ fn own_expressions_with_memory<'n>(
+     node: &'n mut GraphPattern,
+     memory: &mut RewriteMemory<'_>,
+@@ -2706,7 +2691,7 @@
+         )?)
+     };
+     let mut renames = crate::AdmittedVec::new(&workspace);
+-    for &index in reads.plain.iter() {
++    for &index in &reads.plain {
+         let variable = &expr_subs.entries()[index].0;
+         renames.push((
+             variable.clone(),
+@@ -2735,7 +2720,7 @@
+             memory,
+         )?));
+     }
+-    for &index in reads.in_exists.iter() {
++    for &index in &reads.in_exists {
+         variables.push(expr_subs.entries()[index].0.clone());
+         row.push(Some(clone_ground_with_memory(
+             &expr_subs.entries()[index].1,
+@@ -2935,7 +2920,11 @@
+         }
+         Ok(())
+     })?;
+-    debug_assert!(bodies.next().is_none(), "every taken body goes back");
++    debug_assert_eq!(
++        bodies.size_hint(),
++        (0, Some(0)),
++        "every taken body goes back"
++    );
+     Ok(())
+ }
+ 
+@@ -3108,7 +3097,7 @@
+                             *slot = done.next().expect("every taken pattern child returns");
+                         },
+                     );
+-                    debug_assert!(done.next().is_none());
++                    debug_assert_eq!(done.size_hint(), (0, Some(0)));
+                 }
+             }
+             finished = frame.node;
+@@ -3263,7 +3252,7 @@
+                 return Ok((child_flags, 0));
+             }
+             let mut condition = None;
+-            for (name, to) in moved.iter() {
++            for (name, to) in &moved {
+                 let right = compatible_with_binding_with_memory(name.clone(), to.clone(), memory)?;
+                 condition = Some(match condition {
+                     None => right,
+@@ -3625,6 +3614,8 @@
+     }
+ }
+ 
++/// Enter `node`: rewrite it in place when it is a leaf, or take its first operand out
++/// and hold the node open until the operand comes back.
+ fn enter_push_with_memory<'p>(
+     mut node: GraphPattern,
+     probes: ProbeList<'p>,
+@@ -3795,6 +3786,8 @@
+     })
+ }
+ 
++/// Put the rewritten `operand` back into `frame`'s node, and go on: enter the node's
++/// next operand, or finish the node.
+ fn resume_push_with_memory<'p>(
+     mut frame: PushFrame<'p>,
+     operand: GraphPattern,
+@@ -3919,6 +3912,8 @@
+     }
+ }
+ 
++/// Enter `node`: substitute in it when it is a leaf, or take its first operand out and
++/// hold the node open until the operand comes back.
+ fn enter_substitution_with_memory(
+     mut node: GraphPattern,
+     scope: WalkScope,
+@@ -3965,7 +3960,7 @@
+                 open.push(frame)?;
+                 return Ok(Step::Descend((body, WalkScope::ExistsBody)));
+             }
+-            return Ok(descend_into_inner_with_memory(frame, open, memory)?);
++            return descend_into_inner_with_memory(frame, open, memory);
+         }
+         GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
+             substitute_in_named_node_pattern(name, expr_subs);
+@@ -4018,6 +4013,7 @@
+     Ok(Step::Descend((child, child_scope)))
+ }
+ 
++/// Take `frame`'s inner pattern out and enter it in the node's own scope.
+ fn descend_into_inner_with_memory(
+     mut frame: SubstituteFrame,
+     open: &mut crate::AdmittedVec<SubstituteFrame>,
+@@ -4041,6 +4037,8 @@
+     Ok(Step::Descend((child, scope)))
+ }
+ 
++/// Put the substituted `operand` back into `frame`'s node, and go on: enter the node's
++/// next operand, or finish the node and report what it carries.
+ fn resume_substitution_with_memory(
+     mut frame: SubstituteFrame,
+     operand: (GraphPattern, SeedColumns),
+@@ -4053,6 +4051,10 @@
+     let beneath = scope.beneath();
+     let core = SeedColumns::at_core(scope, expr_subs.entries().len());
+     /// What a node does once an operand is back.
++    #[expect(
++        clippy::large_enum_variant,
++        reason = "the next substitution step moves the original admitted tree inline; boxing it would add a separate allocation to the native rewrite"
++    )]
+     enum Then {
+         /// Enter another operand.
+         Descend(GraphPattern, SubstituteStage, WalkScope),
+@@ -4213,7 +4215,7 @@
+                 None => {
+                     frame.replace_own_bodies_with_memory(memory)?;
+                     if matches!(frame.node, GraphPattern::Filter { .. }) {
+-                        return Ok(descend_into_inner_with_memory(frame, open, memory)?);
++                        return descend_into_inner_with_memory(frame, open, memory);
+                     }
+                     Then::Finish(finish_own_expressions_with_memory(
+                         &mut frame, expr_subs, memory,
+@@ -4426,6 +4428,10 @@
+ 
+ impl AdmittedGroundTerm {
+     /// A resident caller may take a term only when no external child lease exists.
++    #[expect(
++        clippy::result_large_err,
++        reason = "refused extraction returns the intact original term and its child-box grant; no allocation may be introduced after refusal"
++    )]
+     fn try_into_resident(self) -> Result<GroundTerm, Self> {
+         if self
+             .allocation
+--- a/crates/sparql-eval/src/remote.rs
++++ b/crates/sparql-eval/src/remote.rs
+@@ -438,6 +438,10 @@
+     /// Only resident producers may move a bare response out of this owner.
+     /// # Errors
+     /// Returns the intact owner when any original grant is bounded.
++    #[expect(
++        clippy::result_large_err,
++        reason = "refusal returns the intact original bindings and grants without allocating a new error carrier or detaching bounded storage"
++    )]
+     pub fn try_into_resident(self) -> Result<ResolvedBindings, Self> {
+         if self.storage.is_bounded()
+             || self
+@@ -478,7 +482,7 @@
+ struct RemoteErrorPayload {
+     error: RemoteError,
+     storage: ServiceStorage,
+-    _control: crate::WorkspaceAllocation,
++    control: crate::WorkspaceAllocation,
+ }
+ /// Original invocation failure and its immutable, shallow-cloned physical owner.
+ #[derive(Clone, Debug)]
+@@ -497,7 +501,7 @@
+         let payload = purrdf_core::small::Shared::try_new(RemoteErrorPayload {
+             error,
+             storage,
+-            _control: control,
++            control: control,
+         })
+         .map_err(|_| EvalError::AllocationFailed {
+             construct: "remote error shared control",
+@@ -543,7 +547,7 @@
+         Self::native(error, frame)
+     }
+     pub(crate) fn into_resident(self) -> Result<RemoteError, Self> {
+-        if self.payload.storage.is_bounded() || self.payload._control.is_bounded() {
++        if self.payload.storage.is_bounded() || self.payload.control.is_bounded() {
+             return Err(self);
+         }
+         // The resident error is a caller-owned copy; bounded errors cannot enter
+@@ -606,7 +610,7 @@
+         })
+     }
+     fn into_eval_error(self) -> EvalError {
+-        if self.error.payload.storage.is_bounded() || self.error.payload._control.is_bounded() {
++        if self.error.payload.storage.is_bounded() || self.error.payload.control.is_bounded() {
+             return EvalError::RetainedServiceFailure(self);
+         }
+         let endpoint = self.endpoint.as_str();
+@@ -1028,7 +1032,7 @@
+     let rebuilt = match node {
+         // Leaves with no child pattern and no `Values` cells to inspect.
+         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
+-            patterns: clone_service_slice(patterns, memory, |v, m| v.clone_with_memory(m))?,
++            patterns: clone_service_slice(patterns, memory, TriplePattern::clone_with_memory)?,
+         },
+         GraphPattern::Path {
+             subject,
+@@ -1140,7 +1144,11 @@
+         },
+         GraphPattern::OrderBy { expression, .. } => GraphPattern::OrderBy {
+             inner: service_child(next(), memory)?,
+-            expression: clone_service_slice(expression, memory, |v, m| v.clone_with_memory(m))?,
++            expression: clone_service_slice(
++                expression,
++                memory,
++                purrdf_sparql_algebra::OrderExpression::clone_with_memory,
++            )?,
+         },
+         GraphPattern::Project { variables, .. } => GraphPattern::Project {
+             inner: service_child(next(), memory)?,
+@@ -1208,6 +1216,9 @@
+     Ok(found)
+ }
+ 
++/// The original ordered column and row buffers of a forwarded VALUES block.
++type ForwardedValues = (Vec<Variable>, Vec<Vec<Option<GroundTerm>>>);
++
+ /// Remove every column of a `Values` block whose cell, in ANY row, is a blank node or a
+ /// ground triple transitively containing one — [`sanitize_forwarded_body_with_memory`]'s core rewrite.
+ /// Preserves the order of the surviving columns and the row count exactly (an `UNDEF`
+@@ -1222,16 +1233,16 @@
+     variables: &[Variable],
+     bindings: &[Vec<Option<GroundTerm>>],
+     memory: &mut crate::expr::CorrelatedMemory<'_>,
+-) -> Result<(Vec<Variable>, Vec<Vec<Option<GroundTerm>>>), EvalError> {
++) -> Result<ForwardedValues, EvalError> {
+     let mut keep = Vec::new();
+     for column in 0..variables.len() {
+         let mut keep_column = true;
+         for row in bindings {
+-            if let Some(Some(term)) = row.get(column) {
+-                if ground_term_has_blank_node_with_memory(term, memory)? {
+-                    keep_column = false;
+-                    break;
+-                }
++            if let Some(Some(term)) = row.get(column)
++                && ground_term_has_blank_node_with_memory(term, memory)?
++            {
++                keep_column = false;
++                break;
+             }
+         }
+         memory
+@@ -1729,7 +1740,7 @@
+                     Truncation::bag_only_origin(SolutionSeq::empty(schema), tripped),
+                 )));
+             }
+-            let (seq, tripped) = ingest_admitted(response, ctx)?;
++            let (seq, tripped) = ingest_admitted(&response, ctx)?;
+             return Ok(Invocation::Answered(match tripped {
+                 None => Evaluated::Complete(seq),
+                 Some(tripped) => Evaluated::Truncated(Truncation::origin(seq, tripped)),
+@@ -1756,14 +1767,10 @@
+             )));
+         }
+         RemoteError::StackExhausted(construct) => {
+-            return Err(EvalError::StackExhausted {
+-                construct: *construct,
+-            });
++            return Err(EvalError::StackExhausted { construct });
+         }
+         RemoteError::HostStackExhausted(construct) => {
+-            return Err(EvalError::HostStackExhausted {
+-                construct: *construct,
+-            });
++            return Err(EvalError::HostStackExhausted { construct });
+         }
+         RemoteError::WorkspaceStopped => return Err(EvalError::WorkspaceStopped),
+         RemoteError::ExchangeIdExhausted => return Err(EvalError::ExchangeIdExhausted),
+@@ -2072,7 +2079,7 @@
+ }
+ 
+ fn ingest_admitted<D: DatasetView + Sync>(
+-    resolved: AdmittedResolvedBindings,
++    resolved: &AdmittedResolvedBindings,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
+     let response = resolved.bindings();
+@@ -2144,7 +2151,7 @@
+         term_owners: crate::AdmittedVec::new(&ctx.growth),
+         storage: ServiceStorage::Native(crate::workspace::LexicalFrame::new(&ctx.growth)),
+     };
+-    ingest_admitted(response, ctx)
++    ingest_admitted(&response, ctx)
+ }
+ 
+ /// The same native parser, blank-scope and normalization producers, sharing the
+@@ -2231,7 +2238,7 @@
+                         })?;
+                 }
+                 let mut rows = Vec::new();
+-                for row in seq.rows.iter() {
++                for row in &seq.rows {
+                     let mut cells = Vec::new();
+                     memory
+                         .reserve(&mut cells, variables.len())
+--- a/crates/sparql-eval/src/remote_http.rs
++++ b/crates/sparql-eval/src/remote_http.rs
+@@ -154,7 +154,7 @@
+         match self.post(request) {
+             Ok(body) => Ok(AdmittedHttpBody {
+                 body,
+-                _storage: match grant {
++                storage: match grant {
+                     Some(grant) => HttpStorage::Certified(grant),
+                     None => HttpStorage::Native(crate::workspace::LexicalFrame::new(&workspace)),
+                 },
+@@ -180,7 +180,7 @@
+ #[derive(Debug)]
+ pub struct AdmittedHttpBody {
+     body: Vec<u8>,
+-    _storage: HttpStorage,
++    storage: HttpStorage,
+ }
+ impl AdmittedHttpBody {
+     /// Borrow the original bytes while their grant remains live.
+@@ -191,8 +191,12 @@
+     /// Move a resident body out while refusing to detach any bounded grant.
+     /// # Errors
+     /// Returns the intact original carrier when its producer is bounded.
++    #[expect(
++        clippy::result_large_err,
++        reason = "bounded refusal returns the original bytes and their original grant inline, with no allocation after the extraction was refused"
++    )]
+     pub fn try_into_resident(self) -> Result<Vec<u8>, Self> {
+-        let bounded = match &self._storage {
++        let bounded = match &self.storage {
+             HttpStorage::Native(frame) => frame.workspace().is_bounded(),
+             HttpStorage::Certified(grant) => grant.is_bounded(),
+         };
+@@ -220,7 +224,7 @@
+         match result {
+             Ok(body) => Ok(Self {
+                 body,
+-                _storage: HttpStorage::Native(frame),
++                storage: HttpStorage::Native(frame),
+             }),
+             Err(error) => Err(crate::remote::build_error(error, frame)),
+         }
+@@ -231,7 +235,7 @@
+     fn resolve_native(
+         &self,
+         request: ServiceRequest<'_>,
+-        workspace: crate::WorkspaceCapability,
++        workspace: &crate::WorkspaceCapability,
+     ) -> Result<crate::remote::AdmittedResolvedBindings, crate::remote::ServiceResolutionError>
+     {
+         use crate::remote::{
+@@ -239,7 +243,7 @@
+         };
+         use purrdf_lex::allocation::Memory;
+         if let Some(trip) = request.stop_trip() {
+-            return Err(crate::remote::invocation_error(trip, &workspace)?);
++            return Err(crate::remote::invocation_error(trip, workspace)?);
+         }
+         let ServiceRequest {
+             endpoint,
+@@ -252,7 +256,7 @@
+             values: Vec<(String, String)>,
+             _frame: crate::workspace::LexicalFrame,
+         }
+-        let mut frame = crate::workspace::LexicalFrame::new(&workspace);
++        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+         let profile = {
+             let mut memory = Memory::new(&mut frame);
+             match &self.catalog {
+@@ -313,12 +317,12 @@
+         if let Some(cause) = stop.and_then(|signal| signal.poll()) {
+             return Err(crate::remote::invocation_error(
+                 RemoteError::GovernedAfterCompletion(TrippedGovernor::Stopped { cause }),
+-                &workspace,
++                workspace,
+             )?);
+         }
+         // Decode under its ORIGINAL producer frame, holding the original HTTP
+         // body and request headers until every decoder-owned value has settled.
+-        let mut frame = crate::workspace::LexicalFrame::new(&workspace);
++        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+         let parsed = {
+             let mut memory = Memory::new(&mut frame);
+             purrdf_sparql_results::from_json_with_memory(
+@@ -392,7 +396,7 @@
+             }
+         };
+         Ok(AdmittedResolvedBindings::from_native(
+-            bindings, frame, &workspace,
++            bindings, frame, workspace,
+         ))
+     }
+ }
+@@ -490,7 +494,7 @@
+         workspace: crate::WorkspaceCapability,
+     ) -> Result<crate::remote::AdmittedResolvedBindings, crate::remote::ServiceResolutionError>
+     {
+-        self.resolve_native(request, workspace)
++        self.resolve_native(request, &workspace)
+     }
+ }
+ 
+--- a/crates/sparql-eval/src/service_endpoints.rs
++++ b/crates/sparql-eval/src/service_endpoints.rs
+@@ -507,7 +507,7 @@
+                 GraphPattern::Graph { inner, .. }
+                 | GraphPattern::Distinct { inner }
+                 | GraphPattern::Reduced { inner } => {
+-                    pending.push(ClassifyStep::Pattern(inner, direct))?
++                    pending.push(ClassifyStep::Pattern(inner, direct))?;
+                 }
+                 GraphPattern::OrderBy { inner, expression } => {
+                     pending.try_extend(
+@@ -690,15 +690,15 @@
+                         ExpressionPart::Exists(body) => Some(ScanNode::Pattern(body)),
+                         ExpressionPart::Call(_) => None,
+                     };
+-                    if let Some(child) = child {
+-                        if let Err(error) = pending.try_push_admitted(child, &mut memory) {
+-                            failure = Some(
+-                                memory
+-                                    .admission_mut()
+-                                    .storage_error(error, "SERVICE presence scan"),
+-                            );
+-                            return true;
+-                        }
++                    if let Some(child) = child
++                        && let Err(error) = pending.try_push_admitted(child, &mut memory)
++                    {
++                        failure = Some(
++                            memory
++                                .admission_mut()
++                                .storage_error(error, "SERVICE presence scan"),
++                        );
++                        return true;
+                     }
+                     false
+                 });
+@@ -842,7 +842,7 @@
+         ids: &crate::plan::AddressIndex<'_>,
+     ) {
+         self.note_admitted(operand, summary, ids)
+-            .expect("resident endpoint oracle note")
++            .expect("resident endpoint oracle note");
+     }
+ 
+     fn note_admitted(
+@@ -910,16 +910,15 @@
+                     let first = frames.len();
+                     let mut failure = None;
+                     summary_parts(node, &mut |part| {
+-                        if failure.is_none() {
+-                            if let Err(error) =
++                        if failure.is_none()
++                            && let Err(error) =
+                                 frames.try_push_admitted(SummaryFrame::Enter(part), &mut memory)
+-                            {
+-                                failure = Some(
+-                                    memory
+-                                        .admission_mut()
+-                                        .storage_error(error, "SERVICE summary frames"),
+-                                );
+-                            }
++                        {
++                            failure = Some(
++                                memory
++                                    .admission_mut()
++                                    .storage_error(error, "SERVICE summary frames"),
++                            );
+                         }
+                     });
+                     if let Some(error) = failure {
+@@ -1375,7 +1374,7 @@
+     for (position, row) in left.rows.iter().enumerate() {
+         let mut hash = purrdf_hash::fixed::FixedHasher::default();
+         columns.len().hash(&mut hash);
+-        for (_, column) in columns.iter() {
++        for (_, column) in &columns {
+             row[*column]
+                 .expect("partition columns are bound in every left row")
+                 .hash(&mut hash);
+@@ -1395,7 +1394,7 @@
+             None => {
+                 partitions.reserve_next()?;
+                 let mut endpoints = AdmittedVec::with_capacity(columns.len(), &ctx.growth)?;
+-                for (variable, column) in columns.iter() {
++                for (variable, column) in &columns {
+                     endpoints.push_reserved((
+                         variable.clone(),
+                         row[*column].expect("partition columns are bound in every left row"),
+@@ -1434,7 +1433,7 @@
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+     let depth = ctx.endpoint_frames.len();
+     let evaluated = (|| {
+-        for (variable, endpoint) in partition.endpoints.iter() {
++        for (variable, endpoint) in &partition.endpoints {
+             let mut endpoints = AdmittedVec::with_capacity(1, &ctx.growth)?;
+             endpoints.push_reserved(*endpoint);
+             let endpoints = SharedWorkspace::new_admitted(endpoints, &ctx.growth)?;
+@@ -1542,7 +1541,7 @@
+     for (variable, silent) in uses {
+         let column = left.schema.index_of(&variable);
+         let mut unbound = 0_usize;
+-        for row in left.rows.iter() {
++        for row in &left.rows {
+             match column.and_then(|c| row[c]) {
+                 None => unbound += 1,
+                 Some(term) if !silent => {
+@@ -1679,7 +1678,7 @@
+     let depth = ctx.endpoint_frames.len();
+     let evaluated = (|| {
+         let mut hidden = AdmittedVec::new(&ctx.growth);
+-        for frame in ctx.endpoint_frames[..depth].iter() {
++        for frame in &ctx.endpoint_frames[..depth] {
+             if !variables.contains(&frame.variable) {
+                 hidden.push(frame.variable.clone())?;
+             }
+@@ -1822,8 +1821,6 @@
+         workspace,
+     )
+ }
+-
+-/// A short description of a non-IRI term, for the error naming it.
+ 
+ /// `value` written out as the endpoint of a silenced-invocation record: an IRI as
+ /// itself, any other term in the RDF 1.2 term syntax ([`purrdf_core::write_term_value`]) — a
+@@ -1991,7 +1988,7 @@
+             else {
+                 return Err(crate::NativeDiagnostic::error(
+                     crate::NativeDiagnosticKind::Internal,
+-                    &"substituting an IRI endpoint into a variable-endpoint SERVICE did not \
++                    "substituting an IRI endpoint into a variable-endpoint SERVICE did not \
+                      resolve its endpoint",
+                     &ctx.growth,
+                 ));
+@@ -2034,7 +2031,7 @@
+ 
+     let mut schema = crate::solution::SchemaBuilder::new(&ctx.growth);
+     let _ = schema.push(variable.clone())?;
+-    for (_, block) in blocks.iter() {
++    for (_, block) in &blocks {
+         if let Block::Rows(block) = block {
+             schema.try_extend(block.schema.vars().iter().cloned())?;
+         }
+@@ -2042,7 +2039,7 @@
+     let schema = schema.finish()?.shared_admitted(&ctx.growth)?;
+     let width = schema.len();
+     let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
+-    for (endpoint, block) in blocks.iter() {
++    for (endpoint, block) in &blocks {
+         let block = match block {
+             Block::Rows(block) => block,
+             Block::Identity => {
+@@ -2055,7 +2052,7 @@
+             to_out.push(schema.index_of(variable).ok_or_else(|| {
+                 crate::NativeDiagnostic::error(
+                     crate::NativeDiagnosticKind::Internal,
+-                    &"SERVICE block column is absent from its union schema",
++                    "SERVICE block column is absent from its union schema",
+                     &ctx.growth,
+                 )
+             })?)?;
+--- a/crates/sparql-eval/src/xpath_regex.rs
++++ b/crates/sparql-eval/src/xpath_regex.rs
+@@ -47,13 +47,13 @@
+ }
+ impl FailureOwner for LexicalFrame {
+     fn take_failure(&mut self) -> Option<EvalError> {
+-        LexicalFrame::take_failure(self)
++        Self::take_failure(self)
+     }
+     fn workspace(&self) -> &WorkspaceCapability {
+-        LexicalFrame::workspace(self)
++        Self::workspace(self)
+     }
+     fn storage_error(&mut self, error: StorageError) -> EvalError {
+-        LexicalFrame::storage_error(self, error, "native XPath storage")
++        Self::storage_error(self, error, "native XPath storage")
+     }
+ }
+ impl FailureOwner for (LexicalFrame, LexicalFrame) {
+@@ -136,6 +136,10 @@
+             Self::Compatibility(value) => value.admit(limits),
+         }
+     }
++    #[expect(
++        clippy::result_large_err,
++        reason = "the original native error and allocation frame return inline; boxing after physical refusal would require another allocation"
++    )]
+     fn is_match_with_storage(
+         &self,
+         input: &str,
+@@ -148,6 +152,10 @@
+             Self::Compatibility(value) => value.is_match_with_storage(input, limits, storage),
+         }
+     }
++    #[expect(
++        clippy::result_large_err,
++        reason = "matcher and output frames retain their original grants on error; boxing a refusal would allocate after admission has already failed"
++    )]
+     fn replace_all_with_storage<'h>(
+         &self,
+         input: &'h str,
+@@ -760,7 +768,7 @@
+         .unwrap();
+         let loaded = source.evidence().live_bytes();
+         let cloned = first.clone();
+-        assert!(std::ptr::eq(&*first, &*cloned));
++        assert!(std::ptr::eq(&raw const *first, &raw const *cloned));
+         assert_eq!(source.evidence().live_bytes(), loaded);
+         drop(first);
+         drop(capability);
+@@ -940,7 +948,7 @@
+         .unwrap();
+         let loaded = source.evidence().live_bytes();
+         let cloned = program.clone();
+-        assert!(std::ptr::eq(&*program, &*cloned));
++        assert!(std::ptr::eq(&raw const *program, &raw const *cloned));
+         assert_eq!(source.evidence().live_bytes(), loaded);
+         drop(program);
+         drop(capability);
+--- a/crates/sparql-eval/src/parallel.rs
++++ b/crates/sparql-eval/src/parallel.rs
+@@ -3111,7 +3111,7 @@
+                                 .storage_error(error, "correlated fork-safety worklist"),
+                         );
+                         return true;
+-                    };
++                    }
+                     // `false` keeps the visit going; every part is collected.
+                     false
+                 });
+@@ -3154,7 +3154,7 @@
+                                 .storage_error(error, "correlated fork-safety worklist"),
+                         );
+                         return true;
+-                    };
++                    }
+                     false
+                 });
+                 if let Some(error) = failure {
+--- a/crates/sparql-eval/src/scratch.rs
++++ b/crates/sparql-eval/src/scratch.rs
+@@ -203,6 +203,14 @@
+         Ok(true)
+     }
+ }
++/// Identity and original-payload policies for the one store-once body.
++struct InternValueHooks<H, Q, R, B> {
++    hash_value: H,
++    equal: Q,
++    storage_error: R,
++    track_value: B,
++}
++
+ /// A per-query interner for terms computed during evaluation.
+ ///
+ /// Interns by [`TermValue`] (dataset-independent), de-duplicating equal computed
+@@ -480,7 +488,6 @@
+ 
+     /// Preserve concrete input identities when a user function starts a fresh
+     /// computed-term table. Its counter is shared with the calling evaluation.
+-
+     pub(crate) fn fresh_for_user_function_admitted(
+         &mut self,
+         workspace: &crate::WorkspaceCapability,
+@@ -667,12 +674,16 @@
+                     .map_err(crate::EvalError::source_read)
+             },
+             |arena| arena.admit_storage_growth(workspace),
+-            |value| workspace.term_hash(value),
+-            |left, right| workspace.terms_equal(left, right),
+-            |_| crate::EvalError::AllocationFailed {
+-                construct: "computed term identity traversal",
++            InternValueHooks {
++                hash_value: |value: &TermValue| workspace.term_hash(value),
++                equal: |left: &TermValue, right: &TermValue| workspace.terms_equal(left, right),
++                storage_error: |_| crate::EvalError::AllocationFailed {
++                    construct: "computed term identity traversal",
++                },
++                track_value: |value: &TermValue, labels: &mut BlankLabels, bytes: &mut u64| {
++                    reserve_value_blanks_admitted(value, labels, bytes, workspace)
++                },
+             },
+-            |value, labels, bytes| reserve_value_blanks_admitted(value, labels, bytes, workspace),
+         )
+     }
+ 
+@@ -710,12 +721,16 @@
+             value,
+             |_, value| lookup(value),
+             |arena| arena.admit_storage_growth(workspace),
+-            |value| workspace.term_hash(value),
+-            |left, right| workspace.terms_equal(left, right),
+-            |_| crate::EvalError::AllocationFailed {
+-                construct: "computed term identity traversal",
++            InternValueHooks {
++                hash_value: |value: &TermValue| workspace.term_hash(value),
++                equal: |left: &TermValue, right: &TermValue| workspace.terms_equal(left, right),
++                storage_error: |_| crate::EvalError::AllocationFailed {
++                    construct: "computed term identity traversal",
++                },
++                track_value: |value: &TermValue, labels: &mut BlankLabels, bytes: &mut u64| {
++                    reserve_value_blanks_admitted(value, labels, bytes, workspace)
++                },
+             },
+-            |value, labels, bytes| reserve_value_blanks_admitted(value, labels, bytes, workspace),
+         )
+         .map(Some)
+     }
+@@ -922,29 +937,43 @@
+         self.intern_value_with(
+             dataset,
+             value,
+-            |dataset, value| dataset.term_id_by_value(value),
++            D::term_id_by_value,
+             |_| Ok(()),
+-            |value| Ok(purrdf_hash::fixed::hash_one(value)),
+-            |left, right| Ok(left == right),
+-            |error| panic!("resident scratch proxy traversal allocation: {error}"),
+-            |value, labels, bytes| {
+-                reserve_value_blanks(value, labels, bytes);
+-                Ok(())
++            InternValueHooks {
++                hash_value: |value: &TermValue| Ok(purrdf_hash::fixed::hash_one(value)),
++                equal: |left: &TermValue, right: &TermValue| Ok(left == right),
++                storage_error: |error| {
++                    panic!("resident scratch proxy traversal allocation: {error}")
++                },
++                track_value: |value: &TermValue, labels: &mut BlankLabels, bytes: &mut u64| {
++                    reserve_value_blanks(value, labels, bytes);
++                    Ok(())
++                },
+             },
+         )
+     }
+ 
+-    fn intern_value_with<D: DatasetView, E>(
++    fn intern_value_with<D, E, H, Q, R, B>(
+         &mut self,
+         dataset: &D,
+         value: TermValue,
+         lookup: impl FnOnce(&D, &TermValue) -> Result<Option<D::Id>, E>,
+         admit: impl FnOnce(&mut Self) -> Result<(), E>,
+-        hash_value: impl FnOnce(&TermValue) -> Result<u64, E>,
+-        mut equal: impl FnMut(&TermValue, &TermValue) -> Result<bool, E>,
+-        storage_error: impl FnOnce(std::collections::TryReserveError) -> E,
+-        track_value: impl FnOnce(&TermValue, &mut BlankLabels, &mut u64) -> Result<(), E>,
+-    ) -> Result<SolutionTerm<D::Id>, E> {
++        hooks: InternValueHooks<H, Q, R, B>,
++    ) -> Result<SolutionTerm<D::Id>, E>
++    where
++        D: DatasetView,
++        H: FnOnce(&TermValue) -> Result<u64, E>,
++        Q: FnMut(&TermValue, &TermValue) -> Result<bool, E>,
++        R: FnOnce(std::collections::TryReserveError) -> E,
++        B: FnOnce(&TermValue, &mut BlankLabels, &mut u64) -> Result<(), E>,
++    {
++        let InternValueHooks {
++            hash_value,
++            mut equal,
++            storage_error,
++            track_value,
++        } = hooks;
+         // A computed identity already passed promotion in this execution.
+         // Reusing it must not repeat the source lookup or retain a duplicate.
+         let hash = hash_value(&value)?;
+@@ -1059,7 +1088,7 @@
+                         if workspace.is_bounded() {
+                             crate::NativeDiagnostic::error(
+                                 crate::NativeDiagnosticKind::Internal,
+-                                &"foreign dataset term id",
++                                "foreign dataset term id",
+                                 workspace,
+                             )
+                         } else {

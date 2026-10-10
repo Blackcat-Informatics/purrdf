@@ -1,0 +1,576 @@
+--- a/crates/lex/src/allocation.rs
++++ b/crates/lex/src/allocation.rs
+@@ -17,6 +17,8 @@
+     AllocationFailed,
+     /// The caller's admission callback refused; it retains its original typed error.
+     AdmissionFailed,
++    /// A native Display implementation failed without a physical storage refusal.
++    FormattingFailed,
+ }
+ 
+ impl fmt::Display for StorageError {
+@@ -25,10 +27,13 @@
+             Self::SizeOverflow => "native allocation layout overflow",
+             Self::AllocationFailed => "native destination allocation failed",
+             Self::AdmissionFailed => "native workspace admission refused",
++            Self::FormattingFailed => "native diagnostic formatting failed",
+         })
+     }
+ }
+ 
++impl std::error::Error for StorageError {}
++
+ /// A borrowed caller's live-capacity admission for one native computation.
+ pub trait Admission {
+     /// Admit the next exact total before allocation; shrink only after destruction.
+@@ -183,6 +188,22 @@
+         Ok(())
+     }
+ 
++    /// Render borrowed native fields once, admitting each actual UTF-8 growth
++    /// before allocation. The Display implementation must itself allocate no
++    /// payload storage; this sink owns the rendered destination.
++    ///
++    /// # Errors
++    /// Preserves physical failures and distinguishes a formatter's own failure.
++    pub fn format(&mut self, value: &(impl fmt::Display + ?Sized)) -> Result<String, StorageError> {
++        use core::fmt::Write;
++        let mut text = String::new();
++        let mut sink = FormatSink { memory: self, text: &mut text, failure: None };
++        match write!(&mut sink, "{value}") {
++            Ok(()) => Ok(text),
++            Err(_) => Err(sink.failure.unwrap_or(StorageError::FormattingFailed)),
++        }
++    }
++
+     /// Copy borrowed text into an admitted, fallibly allocated UTF-8 destination.
+     ///
+     /// # Errors
+@@ -205,3 +226,28 @@
+         f.debug_struct("Memory").field("live_bytes", &self.live).finish_non_exhaustive()
+     }
+ }
++
++struct FormatSink<'m, 'a, S: Admission + ?Sized> {
++    memory: &'m mut Memory<'a, S>,
++    text: &'m mut String,
++    failure: Option<StorageError>,
++}
++
++impl<S: Admission + ?Sized> fmt::Write for FormatSink<'_, '_, S> {
++    fn write_str(&mut self, text: &str) -> fmt::Result {
++        let result = (|| {
++            let required = self.text.len().checked_add(text.len()).ok_or(StorageError::SizeOverflow)?;
++            if required > self.text.capacity() {
++                let capacity = self.text.capacity().checked_mul(2)
++                    .ok_or(StorageError::SizeOverflow)?.max(required);
++                self.memory.reserve_string(self.text, capacity)?;
++            }
++            self.text.push_str(text);
++            Ok(())
++        })();
++        result.map_err(|failure| {
++            self.failure = Some(failure);
++            fmt::Error
++        })
++    }
++}
+--- a/crates/rdf-core/src/xsd_regex/error.rs
++++ b/crates/rdf-core/src/xsd_regex/error.rs
+@@ -15,6 +15,8 @@
+ /// source string, or its `flags` string.
+ #[derive(Debug, Clone, PartialEq)]
+ pub enum XsdRegexError {
++    /// A bounded native scanner's concrete allocation or admission failure.
++    Storage(purrdf_lex::allocation::StorageError),
+     /// A character in the `flags` argument is not one of `i s m x q`.
+     UnsupportedFlag(char),
+     /// A construct the XSD/XPath `regExp` grammar does not define at all
+@@ -163,6 +165,7 @@
+ impl fmt::Display for XsdRegexError {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         match self {
++            Self::Storage(error) => error.fmt(f),
+             Self::UnsupportedFlag(c) => write!(
+                 f,
+                 "unsupported regex flag character {c:?} (supported: i, s, m, x, q)"
+@@ -285,6 +288,7 @@
+     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+         match self {
+             Self::Compile(err) => Some(err),
++            Self::Storage(error) => Some(error),
+             Self::UnsupportedFlag(_)
+             | Self::UnsupportedConstruct(_)
+             | Self::Backreference(_)
+--- a/crates/rdf-core/src/xsd_regex/scan.rs
++++ b/crates/rdf-core/src/xsd_regex/scan.rs
+@@ -368,7 +368,7 @@
+         if self.peek(0) == Some('\\') && self.peek(1).is_some_and(|ch| matches!(ch, '1'..='9')) {
+             budget.charge(Resource::CompileSteps, self.groups.open_stack.len() as u64)?;
+         }
+-        Ok(self.scan_next())
++        Ok(self.scan_next_with_budget(Some(budget)))
+     }
+ 
+     /// Source byte span, also used to retain original offsets after x removal.
+@@ -464,6 +464,12 @@
+     }
+ 
+     fn scan_next(&mut self) -> Option<Result<Token<'a>, XsdRegexError>> {
++        self.scan_next_with_budget(None)
++    }
++
++    fn scan_next_with_budget(
++        &mut self, budget: Option<&mut super::xpath::Budget<'_>>,
++    ) -> Option<Result<Token<'a>, XsdRegexError>> {
+         if self.pos >= self.chars.len() {
+             self.span = 0..0;
+             self.span_chars = 0..0;
+@@ -474,7 +480,7 @@
+             return None;
+         }
+         let start = self.pos;
+-        let result = self.scan_one();
++        let result = self.scan_one(budget);
+         // Record class content for the frame the token was scanned into. A
+         // `]` reads this to tell a legitimate close from the literal-first-
+         // member Rust-ism; a `ClassOpen` is not content and pushes its own
+@@ -495,7 +501,7 @@
+         Some(result)
+     }
+ 
+-    fn scan_one(&mut self) -> Result<Token<'a>, XsdRegexError> {
++    fn scan_one(&mut self, budget: Option<&mut super::xpath::Budget<'_>>) -> Result<Token<'a>, XsdRegexError> {
+         self.negated_wrap_close = false;
+         // A `-[…]` subtraction operand is the LAST element of its charGroup
+         // (`charGroup ::= (posCharGroup | negCharGroup) ('-' charClassExpr)?`),
+@@ -515,7 +521,7 @@
+             return Err(XsdRegexError::ContentAfterClassSubtraction { found });
+         }
+         match self.chars[self.pos] {
+-            '\\' => self.scan_escape(),
++            '\\' => self.scan_escape(budget),
+             '[' => {
+                 // A `[` legitimately appears inside an open class in exactly
+                 // one place: as the operand `charClassExpr` of a `-[`
+@@ -645,11 +651,11 @@
+                         self.pos += 3;
+                         Ok(Token::GroupOpen { capturing: false })
+                     } else {
+-                        let found: String = match self.peek(2) {
+-                            Some(c) => format!("(?{c}"),
+-                            None => "(?".to_owned(),
+-                        };
+-                        self.pos += if self.peek(2).is_some() { 3 } else { 2 };
++                        let end = self.pos + if self.peek(2).is_some() { 3 } else { 2 };
++                        let found = diagnostic_text(
++                            &self.pattern[self.offsets[self.pos]..self.offsets[end]], budget,
++                        )?;
++                        self.pos = end;
+                         Err(XsdRegexError::UnsupportedGroupConstruct { found })
+                     }
+                 } else {
+@@ -670,7 +676,7 @@
+         }
+     }
+ 
+-    fn scan_escape(&mut self) -> Result<Token<'a>, XsdRegexError> {
++    fn scan_escape(&mut self, budget: Option<&mut super::xpath::Budget<'_>>) -> Result<Token<'a>, XsdRegexError> {
+         let Some(esc) = self.peek(1) else {
+             self.pos += 1;
+             return Err(XsdRegexError::DanglingBackslash);
+@@ -703,7 +709,7 @@
+             // `regex-syntax`, exactly XSD's definition, so no rewrite is
+             // needed.
+             'd' | 'D' => Ok(Token::Escape(esc)),
+-            '1'..='9' => return self.scan_backreference(esc),
++            '1'..='9' => return self.scan_backreference(esc, budget),
+             // `\0` is NOT a back-reference: XPath F&O 3.1 §5.6.1.4's production
+             // is `backReference ::= "\" [1-9][0-9]*`, which starts at 1. Nor is
+             // it a `SingleCharEsc` — XML Schema Part 2 Appendix G enumerates
+@@ -771,7 +777,7 @@
+     /// only while the resulting number still names a capturing group whose `(`
+     /// precedes this point. NOT a greedy digit run — after one group, `\12` is
+     /// `\1` then a literal `2`.
+-    fn scan_backreference(&mut self, first: char) -> Result<Token<'a>, XsdRegexError> {
++    fn scan_backreference(&mut self, first: char, budget: Option<&mut super::xpath::Budget<'_>>) -> Result<Token<'a>, XsdRegexError> {
+         let start_digit = self.pos + 1;
+         let mut number = usize::try_from(first.to_digit(10).expect("matched 1..=9"))
+             .expect("ASCII digit fits usize");
+@@ -795,9 +801,9 @@
+             // unsupported construct, because "this implementation cannot run
+             // it" would be a misleading excuse for a pattern nothing can run.
+             return Err(XsdRegexError::BadBackreference {
+-                reference: std::iter::once('\\')
+-                    .chain(self.chars[start_digit..j].iter().copied())
+-                    .collect(),
++                reference: diagnostic_text(
++                    &self.pattern[self.offsets[start_digit - 1]..self.offsets[j]], budget,
++                )?,
+                 // The existing closed public diagnostic retains its u32
+                 // field. Only that summary is capped; recognition above uses
+                 // the complete source-size-bounded capture number.
+@@ -808,6 +814,20 @@
+     }
+ }
+ 
++/// Every scanner-owned diagnostic spelling is copied through this one boundary.
++fn diagnostic_text(text: &str, budget: Option<&mut super::xpath::Budget<'_>>) -> Result<String, XsdRegexError> {
++    match budget {
++        Some(budget) => budget.string(text).map_err(|error| match error {
++            super::xpath::Error::Storage(error) => XsdRegexError::Storage(error),
++            super::xpath::Error::Allocation { .. } => XsdRegexError::Storage(
++                purrdf_lex::allocation::StorageError::AllocationFailed,
++            ),
++            _ => unreachable!("copying a diagnostic spelling has only physical failures"),
++        }),
++        None => Ok(text.to_owned()),
++    }
++}
++
+ impl<'a> Iterator for Scanner<'a> {
+     type Item = Result<Token<'a>, XsdRegexError>;
+ 
+--- a/crates/rdf-core/src/xsd_regex/xpath/compile.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/compile.rs
+@@ -386,7 +386,20 @@
+     let verdict = compile_budget(profile, pattern, flags, Budget::with_storage(limits, &mut storage));
+     match verdict {
+         Ok(pattern) => Ok(super::OwnedPatternValue::new(pattern, storage)),
+-        Err(error) => Err(super::OwnedPatternValue::new(error, storage)),
++        Err(error @ Error::Storage(_)) =>
++            Err(super::OwnedPatternValue::new(error, storage)),
++        Err(error) => {
++            // All compiler scratch has died. Retain only the actual grammar
++            // diagnostic buffer, never a guessed input-size allowance.
++            let bytes = match &error { Error::Syntax { message, .. } => message.capacity(), _ => 0 };
++            match storage.resize(bytes) {
++                Ok(()) => Err(super::OwnedPatternValue::new(error, storage)),
++                Err(refusal) => {
++                    drop(error);
++                    Err(super::OwnedPatternValue::new(Error::Storage(refusal), storage))
++                }
++            }
++        },
+     }
+ }
+ 
+@@ -524,12 +537,6 @@
+     }
+ }
+ 
+-pub(super) fn syntax(offset: usize, message: &str) -> Error {
+-    Error::Syntax {
+-        offset,
+-        message: message.to_owned(),
+-    }
+-}
+ 
+ pub(super) fn owned(text: &str, budget: &mut Budget<'_>) -> Result<String, Error> {
+     budget.charge_wide(Resource::CompileSlots, text.len() as u128)?;
+@@ -620,6 +627,13 @@
+ }
+ 
+ impl<'a> Parser<'a, '_> {
++    fn syntax(&mut self, offset: usize, message: &(impl core::fmt::Display + ?Sized)) -> Error {
++        match self.budget.format(message) {
++            Ok(message) => Error::Syntax { offset, message },
++            Err(error) => error,
++        }
++    }
++
+     fn offset(&self, offset: usize) -> usize {
+         self.offsets.map_or(offset, |map| map[offset])
+     }
+@@ -629,8 +643,23 @@
+             && let Some(token) = self.scanner.next_bounded(&mut self.budget)?
+         {
+             let span = self.scanner.source_span();
+-            let token =
+-                token.map_err(|error| syntax(self.offset(span.start), &error.to_string()))?;
++            let token = match token {
++                Ok(token) => token,
++                Err(super::super::XsdRegexError::Storage(error)) => return Err(Error::Storage(error)),
++                Err(error) => {
++                    let verdict = self.syntax(self.offset(span.start), &error);
++                    // The scanner spelling remains admitted while Display reads
++                    // it, and dies before its original physical grant shrinks.
++                    match error {
++                        super::super::XsdRegexError::UnsupportedGroupConstruct { found } =>
++                            self.budget.release_string(found)?,
++                        super::super::XsdRegexError::BadBackreference { reference, .. } =>
++                            self.budget.release_string(reference)?,
++                        _ => {}
++                    }
++                    return Err(verdict);
++                }
++            };
+             self.pending = Some(Spanned { token, span });
+         }
+         Ok(self.pending.clone())
+@@ -947,7 +976,7 @@
+             match spanned.token {
+                 Token::GroupOpen { capturing } => {
+                     if !capturing && self.profile == Profile::Xpath20 {
+-                        return Err(syntax(offset, "non-capturing groups require XPath 3.1"));
++                        return Err(self.syntax(offset, "non-capturing groups require XPath 3.1"));
+                     }
+                     let capture = if capturing {
+                         self.captures += 1;
+@@ -959,7 +988,7 @@
+                 }
+                 Token::GroupClose => {
+                     if self.frames.len() == 1 {
+-                        return Err(syntax(offset, "unmatched closing parenthesis"));
++                        return Err(self.syntax(offset, "unmatched closing parenthesis"));
+                     }
+                     let body = self.branch()?;
+                     let frame = self.frames.pop().expect("non-root group present");
+@@ -978,7 +1007,7 @@
+                     self.quantifier(quantifier, offset)?;
+                 }
+                 Token::Literal('}') => {
+-                    return Err(syntax(offset, "a closing brace must end a quantity"));
++                    return Err(self.syntax(offset, "a closing brace must end a quantity"));
+                 }
+                 Token::Literal('^') => {
+                     let node = self.node(Node::Start)?;
+@@ -998,7 +1027,7 @@
+                     self.append(node)?;
+                 }
+                 Token::ClassClose | Token::Subtract | Token::ClassMember(_) => {
+-                    return Err(syntax(offset, "character-class syntax outside a class"));
++                    return Err(self.syntax(offset, "character-class syntax outside a class"));
+                 }
+                 token => {
+                     let set = self.member(token, offset)?;
+@@ -1008,7 +1037,7 @@
+             }
+         }
+         if self.frames.len() != 1 {
+-            return Err(syntax(
++            return Err(self.syntax(
+                 self.frames.last().expect("open group").opening,
+                 "unclosed group",
+             ));
+@@ -1022,10 +1051,10 @@
+             .last_mut()
+             .expect("an expression frame is present");
+         if frame.quantified {
+-            return Err(syntax(offset, "an atom has only one quantifier"));
++            return Err(self.syntax(offset, "an atom has only one quantifier"));
+         }
+         let Some(body) = frame.atom.take() else {
+-            return Err(syntax(offset, "quantifier has no preceding atom"));
++            return Err(self.syntax(offset, "quantifier has no preceding atom"));
+         };
+         let (min, max, span) = match quantifier {
+             '?' => (Count::Finite(0), Some(Count::Finite(1)), 1),
+@@ -1074,7 +1103,7 @@
+             self.take()?;
+         }
+         if start == end {
+-            return Err(syntax(
++            return Err(self.syntax(
+                 offset,
+                 "a quantity requires one or more ASCII digits",
+             ));
+@@ -1086,7 +1115,7 @@
+     fn quantity(&mut self, offset: usize) -> Result<(Count, Option<Count>, u64), Error> {
+         let min = self.decimal(offset)?;
+         let Some(next) = self.take()? else {
+-            return Err(syntax(offset, "unclosed quantity"));
++            return Err(self.syntax(offset, "unclosed quantity"));
+         };
+         match next.token {
+             Token::Literal('}') => {
+@@ -1106,13 +1135,13 @@
+                     min.len() as u128 + max.len() as u128,
+                 )?;
+                 if min.len().cmp(&max.len()).then_with(|| min.cmp(max)) == Ordering::Greater {
+-                    return Err(syntax(offset, "quantity minimum exceeds its maximum"));
++                    return Err(self.syntax(offset, "quantity minimum exceeds its maximum"));
+                 }
+                 if !self
+                     .take()?
+                     .is_some_and(|spanned| spanned.token == Token::Literal('}'))
+                 {
+-                    return Err(syntax(offset, "a quantity must end with its closing brace"));
++                    return Err(self.syntax(offset, "a quantity must end with its closing brace"));
+                 }
+                 Ok((
+                     Count::from_decimal(min),
+@@ -1120,7 +1149,7 @@
+                     span(min, max),
+                 ))
+             }
+-            _ => Err(syntax(offset, "quantity must be n, n, or n,m")),
++            _ => Err(self.syntax(offset, "quantity must be n, n, or n,m")),
+         }
+     }
+ 
+@@ -1144,7 +1173,7 @@
+                 .map(|index| unicode_tables::CATEGORIES[index].1)
+         };
+         let Some(ranges) = found else {
+-            return Err(syntax(
++            return Err(self.syntax(
+                 offset,
+                 "unknown Unicode category or Is-prefixed block",
+             ));
+@@ -1160,7 +1189,7 @@
+             Token::Escape('t') => return self.range('\t', '\t'),
+             Token::Escape('d' | 'D') => (self.property("Nd", offset)?, token == Token::Escape('D')),
+             Token::Escape('&' | '~') => {
+-                return Err(syntax(offset, "escape is outside XPath SingleCharEsc"));
++                return Err(self.syntax(offset, "escape is outside XPath SingleCharEsc"));
+             }
+             Token::Escape(ch) => return self.range(ch, ch),
+             Token::NameEscape { negated, chars } => {
+@@ -1175,7 +1204,7 @@
+             Token::WordEscape { negated } => (self.set(Set::Word)?, negated),
+             Token::UnicodeProperty { negated, name } => (self.property(name, offset)?, negated),
+             Token::Dot => return self.set(Set::Dot),
+-            _ => return Err(syntax(offset, "construct is not a character-class member")),
++            _ => return Err(self.syntax(offset, "construct is not a character-class member")),
+         };
+         if negated {
+             self.set(Set::Complement(set))
+@@ -1210,7 +1239,7 @@
+         self.class_frame(&mut frames, negated)?;
+         loop {
+             let Some(spanned) = self.take()? else {
+-                return Err(syntax(
++                return Err(self.syntax(
+                     self.offset(self.text.len()),
+                     "unclosed character class",
+                 ));
+@@ -1240,7 +1269,7 @@
+                     let base = frame
+                         .union
+                         .take()
+-                        .ok_or_else(|| syntax(offset, "subtraction has no left character group"))?;
++                        .ok_or_else(|| self.syntax(offset, "subtraction has no left character group"))?;
+                     frame.difference = Some(if frame.negated {
+                         self.set(Set::Complement(base))?
+                     } else {
+@@ -1254,7 +1283,7 @@
+                             matches!(next.token, Token::ClassClose | Token::Subtract)
+                         });
+                         if frame.union.is_some() && !at_end {
+-                            return Err(syntax(
++                            return Err(self.syntax(
+                                 offset,
+                                 "an unescaped hyphen is only a group endpoint or range operator",
+                             ));
+@@ -1279,10 +1308,10 @@
+ 
+     fn finish_class(&mut self, frame: ClassFrame, offset: usize) -> Result<usize, Error> {
+         let Some(set) = frame.union else {
+-            return Err(syntax(offset, "character group is empty"));
++            return Err(self.syntax(offset, "character group is empty"));
+         };
+         if frame.difference.is_some() {
+-            return Err(syntax(offset, "subtraction operand is missing"));
++            return Err(self.syntax(offset, "subtraction operand is missing"));
+         }
+         if frame.negated {
+             self.set(Set::Complement(set))
+@@ -1300,7 +1329,7 @@
+         {
+             self.take()?;
+             let Some(next) = self.peek()? else {
+-                return Err(syntax(offset, "unclosed character range"));
++                return Err(self.syntax(offset, "unclosed character range"));
+             };
+             if matches!(next.token, Token::ClassClose | Token::Subtract) {
+                 let lo = self.range(lo, lo)?;
+@@ -1310,14 +1339,14 @@
+             let hi = Self::scalar(&next.token)
+                 .filter(|_| next.token != Token::Literal('-'))
+                 .ok_or_else(|| {
+-                    syntax(
++                    self.syntax(
+                         self.offset(next.span.start),
+                         "range endpoint must be one character",
+                     )
+                 })?;
+             self.take()?;
+             if lo > hi {
+-                return Err(syntax(offset, "character range is reversed"));
++                return Err(self.syntax(offset, "character range is reversed"));
+             }
+             return self.range(lo, hi);
+         }
+--- a/crates/rdf-core/src/xsd_regex/xpath/mod.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/mod.rs
+@@ -433,6 +433,22 @@
+         Ok(())
+     }
+ 
++    /// The one rendered diagnostic destination, with every physical growth admitted.
++    pub(super) fn format(&mut self, value: &(impl fmt::Display + ?Sized)) -> Result<String, Error> {
++        match &mut self.memory {
++            Some(memory) => memory.format(value).map_err(Error::Storage),
++            None => Ok(value.to_string()),
++        }
++    }
++
++    /// The scanner's original error spelling, admitted before its owned copy.
++    pub(super) fn string(&mut self, input: &str) -> Result<String, Error> {
++        let mut text = String::new();
++        self.reserve_string(&mut text, input.len())?;
++        text.push_str(input);
++        Ok(text)
++    }
++
+     pub(super) fn reserve_string(&mut self, value: &mut String, required: usize) -> Result<(), Error> {
+         if let Some(memory) = &mut self.memory {
+             return memory.reserve_string(value, required).map_err(Error::Storage);
+--- a/crates/rdf-core/tests/native_regex_storage.rs
++++ b/crates/rdf-core/tests/native_regex_storage.rs
+@@ -201,3 +201,44 @@
+         assert_eq!(measured.retained_bytes, 0, "refused output is never published");
+     }
+ }
++
++#[test]
++fn grammar_diagnostics_keep_original_spelling_and_exact_retained_admission() {
++    for source in ["(?é)", r"(a\1)", "[a-[b]c]", "a{2,1}", "("] {
++        let expected = xpath::compile(Profile::Xpath31, source, "", Limits::new()).unwrap_err();
++        let window = CurrentThreadWindow::open();
++        let failure = xpath::compile_with_storage(
++            Profile::Xpath31, source, "", Limits::new(), Account::new(2_000_000),
++        ).unwrap_err();
++        let measured = window.close();
++        assert_eq!(failure.value(), &expected, "{source}: original diagnostics must be preserved");
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= failure.storage().peak,
++            "{source}: scanner spelling and rendered diagnostic must be admitted together");
++        let xpath::Error::Syntax { message, .. } = failure.value() else {
++            panic!("{source}: expected the native grammar diagnostic");
++        };
++        assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), message.capacity());
++        assert_eq!(failure.storage().live, message.capacity(),
++            "all parser/scanner/construction scratch died before diagnostic publication");
++    }
++}
++
++#[test]
++fn diagnostic_capacity_refusal_precedes_allocating_or_publishing_partial_text() {
++    let source = "(?é)";
++    let baseline = xpath::compile_with_storage(
++        Profile::Xpath31, source, "", Limits::new(), Account::new(2_000_000),
++    ).unwrap_err();
++    let peak = baseline.storage().peak;
++    for limit in [0, peak / 2, peak - 1] {
++        let window = CurrentThreadWindow::open();
++        let failure = xpath::compile_with_storage(
++            Profile::Xpath31, source, "", Limits::new(), Account::new(limit),
++        ).unwrap_err();
++        let measured = window.close();
++        assert!(matches!(failure.value(), xpath::Error::Storage(StorageError::AdmissionFailed)));
++        assert!(failure.storage().refused.unwrap() > limit);
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= failure.storage().peak);
++        assert_eq!(measured.retained_bytes, 0, "partial diagnostic text is destroyed on refusal");
++    }
++}

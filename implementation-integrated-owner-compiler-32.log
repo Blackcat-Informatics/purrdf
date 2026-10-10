@@ -1,0 +1,118 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema)
+error[E0369]: binary operation `==` cannot be applied to type `XsdValue`
+   --> crates/xsd/tests/exact_governance.rs:100:9
+    |
+100 |         assert_eq!(value, expected);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         |
+    |         XsdValue
+    |         XsdValue
+    |
+note: `XsdValue` does not implement `PartialEq`
+   --> crates/xsd/src/value.rs:28:1
+    |
+ 28 | pub enum XsdValue {
+    | ^^^^^^^^^^^^^^^^^ `XsdValue` is defined in another crate
+
+For more information about this error, try `rustc --explain E0369`.
+error: could not compile `purrdf-xsd` (test "exact_governance") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: unnecessary qualification
+   --> crates/cdt/src/render.rs:198:6
+    |
+198 | impl core::fmt::Write for FixedText {
+    |      ^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+198 - impl core::fmt::Write for FixedText {
+198 + impl fmt::Write for FixedText {
+    |
+
+error: unnecessary qualification
+   --> crates/cdt/src/render.rs:199:44
+    |
+199 |     fn write_str(&mut self, text: &str) -> core::fmt::Result {
+    |                                            ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+199 -     fn write_str(&mut self, text: &str) -> core::fmt::Result {
+199 +     fn write_str(&mut self, text: &str) -> fmt::Result {
+    |
+
+error: unnecessary qualification
+   --> crates/cdt/src/render.rs:202:24
+    |
+202 |             return Err(core::fmt::Error);
+    |                        ^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+202 -             return Err(core::fmt::Error);
+202 +             return Err(fmt::Error);
+    |
+
+error: unnecessary qualification
+   --> crates/cdt/src/render.rs:210:17
+    |
+210 |         let _ = core::fmt::Write::write_str(self, text);
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+210 -         let _ = core::fmt::Write::write_str(self, text);
+210 +         let _ = fmt::Write::write_str(self, text);
+    |
+
+error: function `term_elements` is never used
+   --> crates/cdt/src/limits.rs:140:15
+    |
+140 | pub(crate) fn term_elements(term: &CdtTerm) -> usize {
+    |               ^^^^^^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: function `list_extent` is never used
+   --> crates/cdt/src/limits.rs:169:15
+    |
+169 | pub(crate) fn list_extent<'a>(items: impl IntoIterator<Item = &'a CdtTerm>) -> Extent {
+    |               ^^^^^^^^^^^
+
+error: function `map_extent` is never used
+   --> crates/cdt/src/limits.rs:196:15
+    |
+196 | pub(crate) fn map_extent<'a>(pairs: impl IntoIterator<Item = (&'a CdtKey, &'a CdtTerm)>) -> Extent {
+    |               ^^^^^^^^^^
+
+error: function `check_term` is never used
+   --> crates/cdt/src/limits.rs:259:15
+    |
+259 | pub(crate) fn check_term(term: &CdtTerm) -> Result<(), CdtError> {
+    |               ^^^^^^^^^^
+
+error: function `term_lexical_len` is never used
+   --> crates/cdt/src/render.rs:284:15
+    |
+284 | pub(crate) fn term_lexical_len(term: &CdtTerm) -> usize {
+    |               ^^^^^^^^^^^^^^^^
+
+error: method `release_with_memory` is never used
+   --> crates/cdt/src/term.rs:428:19
+    |
+326 | impl CdtLiteral {
+    | --------------- method in this implementation
+...
+428 |     pub(crate) fn release_with_memory(self, memory: &mut Memory<'_>) -> Result<(), StorageError> {
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-cdt` (lib) due to 10 previous errors
+error: could not compile `purrdf-cdt` (lib test) due to 8 previous errors

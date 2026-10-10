@@ -1,0 +1,422 @@
+--- a/crates/lex/src/allocation/shared.rs
++++ b/crates/lex/src/allocation/shared.rs
+@@ -360,8 +360,17 @@
+ 
+ /// Immutable shared text retaining its original allocation owner.
+ #[derive(Clone)]
+-pub struct SharedText(SharedOwned<String>);
++pub struct SharedText(TextStorage);
++#[derive(Clone)]
++enum TextStorage {
++    Owned(SharedOwned<String>),
++    Static(&'static str),
++}
+ impl SharedText {
++    /// Borrow immutable metadata known before an invocation, without allocating.
++    #[must_use]
++    pub const fn from_static(text: &'static str) -> Self { Self(TextStorage::Static(text)) }
++
+     /// Exact single allocation in addition to the String capacity.
+     #[must_use]
+     pub const fn allocation_layout<O>() -> Layout {
+@@ -375,19 +384,19 @@
+         text: String,
+         owner: O,
+     ) -> Result<Self, SharedAllocError> {
+-        SharedOwned::try_from_admitted(text, owner).map(Self)
++        SharedOwned::try_from_admitted(text, owner).map(|value| Self(TextStorage::Owned(value)))
+     }
+     /// Borrow the spelling under this owner's lifetime.
+     #[must_use]
+     pub fn as_str(&self) -> &str {
+-        self.0.as_str()
++        match &self.0 { TextStorage::Owned(text) => text.as_str(), TextStorage::Static(text) => text }
+     }
+     /// Clone the original shared owner without allocating.
+     ///
+     /// # Errors
+     /// Returns checked strong-reference overflow.
+     pub fn try_clone(&self) -> Result<Self, SharedCloneError> {
+-        self.0.try_clone().map(Self)
++        match &self.0 { TextStorage::Owned(text) => text.try_clone().map(|text| Self(TextStorage::Owned(text))), TextStorage::Static(text) => Ok(Self::from_static(text)) }
+     }
+ }
+ impl Deref for SharedText {
+@@ -418,6 +427,13 @@
+     }
+ }
+ impl Eq for SharedText {}
++impl PartialOrd for SharedText {
++    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> { Some(self.cmp(other)) }
++}
++impl Ord for SharedText {
++    fn cmp(&self, other: &Self) -> core::cmp::Ordering { self.as_str().cmp(other.as_str()) }
++}
++
+ impl core::hash::Hash for SharedText {
+     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+         core::hash::Hash::hash(self.as_str(), state);
+--- a/crates/sparql-eval/src/property_fn.rs
++++ b/crates/sparql-eval/src/property_fn.rs
+@@ -364,8 +364,31 @@
+         /// The relation's own description of what was missing — a shard name, a
+         /// rebuild phase, a replica lag. Recorded verbatim and never parsed, for the
+         /// same reason [`IndexGeneration::Declared`]'s string is.
+-        reason: String,
++        reason: purrdf_lex::allocation::SharedText,
+     },
++}
++
++impl ServiceLevel {
++    /// Register caller-owned service metadata before opening a cursor.
++    #[must_use]
++    pub fn incomplete(reason: impl AsRef<str>) -> Self {
++        Self::incomplete_admitted(reason.as_ref(), &crate::WorkspaceCapability::resident())
++            .expect("resident service metadata allocation failed")
++    }
++
++    /// Immutable pre-existing metadata needs no new allocation per invocation.
++    #[must_use]
++    pub const fn incomplete_static(reason: &'static str) -> Self {
++        Self::Incomplete { reason: purrdf_lex::allocation::SharedText::from_static(reason) }
++    }
++
++    /// Author a newly discovered service reason under the invocation's original grant.
++    /// Clones of this attestation retain the exact original text owner.
++    /// # Errors
++    /// Returns original admission, layout or allocator refusal before publication.
++    pub fn incomplete_admitted(reason: &str, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
++        Ok(Self::Incomplete { reason: workspace.authored_text(reason)? })
++    }
+ }
+ 
+ /// The pair of facts one invocation attests about the index behind it: which version
+@@ -534,6 +557,15 @@
+     /// [`ServiceLevel`] for why no such certificate is askable at this seam at all.
+     fn service_level(&self) -> ServiceLevel {
+         ServiceLevel::Undeclared
++    }
++
++    /// Read immutable metadata by sharing its original owner. A provider that
++    /// discovers and authors a new reason during this call overrides this method
++    /// and uses `ServiceLevel::incomplete_admitted` before creating its text.
++    /// # Errors
++    /// Returns the provider's original typed failure or native storage refusal.
++    fn service_level_with_workspace(&self, _workspace: &crate::WorkspaceCapability) -> Result<ServiceLevel, EvalError> {
++        Ok(self.service_level())
+     }
+ }
+ 
+@@ -2014,6 +2046,9 @@
+     fn service_level(&self) -> ServiceLevel {
+         self.cursor.service_level()
+     }
++    fn service_level_with_workspace(&self, workspace: &crate::WorkspaceCapability) -> Result<ServiceLevel, EvalError> {
++        self.cursor.service_level_with_workspace(workspace)
++    }
+ }
+ 
+ pub(crate) enum PfRowOwner {
+@@ -2209,7 +2244,7 @@
+     iri: &str,
+     workspace: &crate::WorkspaceCapability,
+ ) -> Result<ServiceLevel, EvalError> {
+-    declaration_contained_admitted(iri, "service level", || cursor.service_level(), workspace)
++    declaration_contained_admitted(iri, "service level", || cursor.service_level_with_workspace(workspace), workspace)?
+ }
+ 
+ /// Read one of a relation's DECLARATIONS — `arity`, `modes`, `volatility`, or
+--- a/crates/sparql-eval/src/witness.rs
++++ b/crates/sparql-eval/src/witness.rs
+@@ -121,7 +121,7 @@
+     /// seam deliberately cannot carry (see [`ServiceLevel`]). Holding the reason strings
+     /// rather than a bare flag is what makes the record actionable: "shard 3 is
+     /// rebuilding" tells an operator what to do, a `true` does not.
+-    pub incompleteness: WitnessSet<String>,
++    pub incompleteness: WitnessSet<purrdf_lex::allocation::SharedText>,
+ }
+ 
+ /// What every relation this query invoked attested, keyed by the relation's registered
+@@ -480,7 +480,7 @@
+             .insert_admitted(generation, workspace, |value, _| Ok(value.clone()))?;
+         if let ServiceLevel::Incomplete { reason } = service {
+             self.incompleteness
+-                .insert_admitted(reason, workspace, |reason, memory| memory.string(reason))?;
++                .insert_admitted(reason, workspace, |reason, _| Ok(reason.clone()))?;
+         }
+         self.invocations = self.invocations.saturating_add(1);
+         Ok(())
+@@ -572,9 +572,7 @@
+     use super::*;
+ 
+     fn incomplete(reason: &str) -> ServiceLevel {
+-        ServiceLevel::Incomplete {
+-            reason: reason.to_owned(),
+-        }
++        ServiceLevel::incomplete(reason)
+     }
+ 
+     fn declared(value: &str) -> IndexGeneration {
+@@ -606,7 +604,7 @@
+         );
+         assert_eq!(
+             entry.incompleteness,
+-            BTreeSet::from(["shard 3 rebuilding".to_owned()])
++            BTreeSet::from([purrdf_lex::allocation::SharedText::from_static("shard 3 rebuilding")])
+         );
+     }
+ 
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -2005,9 +2005,7 @@
+     fn witness_clone_retains_original_arrays_and_shared_mutation_preserves_receipt() {
+         use crate::property_fn::{IndexGeneration, ServiceLevel};
+         let generation = IndexGeneration::Declared(Arc::from("generation-seven"));
+-        let service = ServiceLevel::Incomplete {
+-            reason: "shard three is rebuilding".to_owned(),
+-        };
++        let service = ServiceLevel::incomplete_static("shard three is rebuilding");
+         let (workspace, ledger, base) = account(65_536);
+         let capability = workspace.capability();
+         let mut witness = crate::RelationWitness::default();
+@@ -3426,4 +3424,27 @@
+         assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+     }
+ 
+-}
++    #[test]
++    fn service_metadata_retains_original_grant_through_shallow_attestation_clone() {
++        use crate::property_fn::{PfCursor, PfRow, ServiceLevel};
++        struct LateReason;
++        impl PfCursor for LateReason {
++            fn next(&mut self) -> Result<Option<PfRow>, EvalError> { Ok(None) }
++            fn service_level_with_workspace(&self, workspace: &WorkspaceCapability) -> Result<ServiceLevel, EvalError> {
++                ServiceLevel::incomplete_admitted("shard three is rebuilding", workspace)
++            }
++        }
++        let (workspace, ledger, base) = account(65_536);
++        let capability = workspace.capability();
++        let service = crate::property_fn::service_level_contained_admitted(&LateReason, "http://example.org/pf", &capability).unwrap();
++        let clone = service.clone();
++        let original = ledger.live.load(Ordering::Relaxed);
++        drop(service);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), original);
++        let ServiceLevel::Incomplete { reason } = &clone else { panic!("incomplete attestation"); };
++        assert_eq!(reason.as_str(), "shard three is rebuilding");
++        drop(clone);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
++    }
++
++}
+--- a/crates/sparql-eval/tests/relation_witness.rs
++++ b/crates/sparql-eval/tests/relation_witness.rs
+@@ -155,9 +155,7 @@
+     fn service_level(&self) -> ServiceLevel {
+         match self.declares {
+             Declares::GenerationThenIncomplete(_, reason)
+-            | Declares::UndeclaredThenIncomplete(reason) => ServiceLevel::Incomplete {
+-                reason: reason.to_owned(),
+-            },
++            | Declares::UndeclaredThenIncomplete(reason) => ServiceLevel::incomplete_static(reason),
+             Declares::PanicOnServiceLevel => panic!("the-service-level-panic-payload"),
+             Declares::Nothing | Declares::Generation(_) | Declares::PanicOnGeneration => {
+                 ServiceLevel::Undeclared
+--- a/crates/shapes/tests/function_body_relation.rs
++++ b/crates/shapes/tests/function_body_relation.rs
+@@ -757,9 +757,7 @@
+                 GENERATION,
+                 Arc::clone(&opens),
+             )
+-            .with_service_level(ServiceLevel::Incomplete {
+-                reason: "shard-3 offline".to_owned(),
+-            }),
++            .with_service_level(ServiceLevel::incomplete_static("shard-3 offline")),
+         ),
+     );
+ 
+--- a/crates/shapes/tests/relation_incompleteness.rs
++++ b/crates/shapes/tests/relation_incompleteness.rs
+@@ -58,9 +58,7 @@
+ 
+     fn service_level(&self) -> ServiceLevel {
+         match self.incomplete {
+-            Some(reason) => ServiceLevel::Incomplete {
+-                reason: reason.to_owned(),
+-            },
++            Some(reason) => ServiceLevel::incomplete_static(reason),
+             None => ServiceLevel::Undeclared,
+         }
+     }
+--- a/crates/retrieval/src/execute.rs
++++ b/crates/retrieval/src/execute.rs
+@@ -2989,9 +2989,7 @@
+     }
+ 
+     fn incomplete(reason: &str) -> ServiceLevel {
+-        ServiceLevel::Incomplete {
+-            reason: reason.to_owned(),
+-        }
++        ServiceLevel::incomplete(reason)
+     }
+ 
+     /// A witness built the way the evaluator builds one: by recording
+--- a/crates/retrieval/tests/exclusion_lookup.rs
++++ b/crates/retrieval/tests/exclusion_lookup.rs
+@@ -401,9 +401,7 @@
+     fn attesting_short(mut self) -> Self {
+         self.attested = PfAttestation {
+             generation: IndexGeneration::Undeclared,
+-            service: ServiceLevel::Incomplete {
+-                reason: "fixture shard offline".to_owned(),
+-            },
++            service: ServiceLevel::incomplete_static("fixture shard offline"),
+         };
+         self
+     }
+--- a/crates/retrieval/tests/execute_dataset.rs
++++ b/crates/retrieval/tests/execute_dataset.rs
+@@ -208,9 +208,7 @@
+     fn service_level(&self) -> ServiceLevel {
+         match self.attests {
+             Attests::Nothing | Attests::Generation(_) | Attests::Moving => ServiceLevel::Undeclared,
+-            Attests::Incomplete(_, reason) => ServiceLevel::Incomplete {
+-                reason: reason.to_owned(),
+-            },
++            Attests::Incomplete(_, reason) => ServiceLevel::incomplete_static(reason),
+         }
+     }
+ }
+@@ -980,9 +978,7 @@
+     let execution = run(&registry, &stats);
+     assert_eq!(
+         attested(&execution, &alpha).service,
+-        ServiceLevel::Incomplete {
+-            reason: "rebuilding".to_owned(),
+-        },
++        ServiceLevel::incomplete_static("rebuilding"),
+         "the relation's own words, verbatim: that is what tells an operator \
+          which index to rebuild"
+     );
+@@ -1002,9 +998,7 @@
+     );
+     assert_eq!(
+         result.trailer.attestations[&alpha].service,
+-        ServiceLevel::Incomplete {
+-            reason: "rebuilding".to_owned(),
+-        }
++        ServiceLevel::incomplete_static("rebuilding")
+     );
+     assert_eq!(
+         result.trailer.exactness,
+@@ -1074,9 +1068,7 @@
+     let attestation = attested(&execution, &alpha);
+     assert_eq!(
+         attestation.service,
+-        ServiceLevel::Incomplete {
+-            reason: "rebuilding".to_owned(),
+-        },
++        ServiceLevel::incomplete_static("rebuilding"),
+         "and the hole beneath that emptiness survives having no row to ride on"
+     );
+     assert_eq!(
+--- a/crates/retrieval/tests/fusion.rs
++++ b/crates/retrieval/tests/fusion.rs
+@@ -5055,9 +5055,7 @@
+ fn attests_short(generation: &str, reason: &str) -> PfAttestation {
+     PfAttestation {
+         generation: IndexGeneration::declared(generation),
+-        service: ServiceLevel::Incomplete {
+-            reason: reason.to_owned(),
+-        },
++        service: ServiceLevel::incomplete(reason),
+     }
+ }
+ 
+@@ -5249,9 +5247,7 @@
+             .attestations
+             .get(&stratum("text"))
+             .map(|attestation| &attestation.service),
+-        Some(&ServiceLevel::Incomplete {
+-            reason: "replica is 2 segments behind".to_owned()
+-        }),
++        Some(&ServiceLevel::incomplete_static("replica is 2 segments behind")),
+         "and the short index it served from survives the stop that overwrote nothing \
+          else about it"
+     );
+@@ -5334,9 +5330,7 @@
+             .attestations
+             .get(&stratum("vector"))
+             .map(|attestation| &attestation.service),
+-        Some(&ServiceLevel::Incomplete {
+-            reason: "segment rebuilding".to_owned()
+-        })
++        Some(&ServiceLevel::incomplete_static("segment rebuilding"))
+     );
+ }
+ 
+--- a/crates/retrieval/tests/multimodal_read_bound.rs
++++ b/crates/retrieval/tests/multimodal_read_bound.rs
+@@ -586,9 +586,7 @@
+             }
+         });
+         reason.map_or(ServiceLevel::Undeclared, |reason| {
+-            ServiceLevel::Incomplete {
+-                reason: reason.to_owned(),
+-            }
++            ServiceLevel::incomplete_static(reason)
+         })
+     }
+ }
+--- a/crates/retrieval/tests/on_demand_receipt.rs
++++ b/crates/retrieval/tests/on_demand_receipt.rs
+@@ -180,13 +180,9 @@
+ 
+     fn service_level(&self) -> ServiceLevel {
+         match self.index {
+-            Index::ShortFromTheStart => ServiceLevel::Incomplete {
+-                reason: SHORT_REASON.to_owned(),
+-            },
++            Index::ShortFromTheStart => ServiceLevel::incomplete_static(SHORT_REASON),
+             Index::FoundShortUnderTheRead if self.emitted >= MOVES_AFTER => {
+-                ServiceLevel::Incomplete {
+-                    reason: SHORT_REASON.to_owned(),
+-                }
++                ServiceLevel::incomplete_static(SHORT_REASON)
+             }
+             _ => ServiceLevel::Undeclared,
+         }
+@@ -647,9 +643,7 @@
+         announced.trailer.attestations[&strata()[0]],
+         PfAttestation {
+             generation: IndexGeneration::declared(OPENED_ON),
+-            service: ServiceLevel::Incomplete {
+-                reason: SHORT_REASON.to_owned(),
+-            },
++            service: ServiceLevel::incomplete_static(SHORT_REASON),
+         },
+         "the shortfall is carried, not dropped"
+     );
+--- a/crates/retrieval/tests/wasm_determinism.rs
++++ b/crates/retrieval/tests/wasm_determinism.rs
+@@ -512,9 +512,7 @@
+     let mut two = scripted(["beta", "gamma", "alpha"]);
+     two.attestation = PfAttestation {
+         generation: IndexGeneration::declared("gen-8"),
+-        service: ServiceLevel::Incomplete {
+-            reason: REASON.to_owned(),
+-        },
++        service: ServiceLevel::incomplete_static(REASON),
+     };
+ 
+     let result = ready(fuse::<ScriptedStream, Term>(
+@@ -537,9 +535,7 @@
+         result.trailer.attestations[&iri(STRATUM_TWO)],
+         PfAttestation {
+             generation: IndexGeneration::declared("gen-8"),
+-            service: ServiceLevel::Incomplete {
+-                reason: REASON.to_owned(),
+-            },
++            service: ServiceLevel::incomplete_static(REASON),
+         }
+     );
+ 

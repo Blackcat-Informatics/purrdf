@@ -1,0 +1,73 @@
+/// A reusable key buffer retains its original array's admission. Replacement
+/// uses the current invocation's capability while the old array remains alive.
+#[derive(Debug, Default)]
+struct PlanKeyScratch {
+    bytes: Vec<u8>,
+    allocation: Option<crate::WorkspaceAllocation>,
+}
+
+impl PlanKeyScratch {
+    fn reserve(&mut self, capacity: usize, workspace: &crate::WorkspaceCapability) -> Result<(), crate::EvalError> {
+        workspace.reserve_vec(&mut self.bytes, &mut self.allocation, capacity)
+    }
+}
+
+/// Immutable cache identities use the existing native shared owner and original
+/// admitted byte array. Recency clones only this shared identity.
+#[derive(Debug, Clone)]
+struct PreparedCacheKey(crate::workspace::SharedWorkspace<crate::workspace::AdmittedVec<u8>>);
+
+impl PreparedCacheKey {
+    fn copy_from(bytes: &[u8], workspace: &crate::WorkspaceCapability) -> Result<Self, crate::EvalError> {
+        let mut owned = crate::workspace::AdmittedVec::with_capacity(bytes.len(), workspace)?;
+        for byte in bytes { owned.push(*byte)?; }
+        Ok(Self(crate::workspace::SharedWorkspace::new_admitted(owned, workspace)?))
+    }
+
+    fn len(&self) -> usize { self.0.len() }
+
+    fn retained_size_bytes(&self) -> usize {
+        self.len().saturating_add(crate::workspace::SharedWorkspace::<crate::workspace::AdmittedVec<u8>>::control_bytes())
+    }
+}
+
+impl std::borrow::Borrow<[u8]> for PreparedCacheKey {
+    fn borrow(&self) -> &[u8] { &self.0 }
+}
+
+impl PartialEq for PreparedCacheKey {
+    fn eq(&self, other: &Self) -> bool { self.0[..] == other.0[..] }
+}
+impl Eq for PreparedCacheKey {}
+impl std::hash::Hash for PreparedCacheKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.0[..], state);
+    }
+}
+
+/// A native parse publishes its original containers and grant as one consuming
+/// carrier. Lexical SharedText leaves retain their independent original owners.
+#[derive(Debug)]
+pub(crate) struct AdmittedQuery {
+    query: Query,
+    allocation: crate::WorkspaceAllocation,
+    live_bytes: usize,
+}
+
+impl AdmittedQuery {
+    pub(crate) fn into_parts(self) -> (Query, crate::WorkspaceAllocation, usize) {
+        (self.query, self.allocation, self.live_bytes)
+    }
+}
+
+type PreparedHandle = crate::workspace::SharedWorkspace<PreparedQuery>;
+
+/// Every failure destroys partial payloads before their original native frame.
+struct PreparingQuery {
+    query: Query,
+    source: Option<Box<Query>>,
+    source_schema: Option<purrdf_core::small::Shared<crate::solution::VarSchema>>,
+    relations: String,
+    aggregates: String,
+    frame: crate::workspace::LexicalFrame,
+}

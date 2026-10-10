@@ -1,0 +1,302 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+type RewriteMemory<'a, 's> =
+    purrdf_lex::allocation::Memory<'a, crate::workspace::LexicalFrame>;
+type RewriteResult<T> = Result<T, GroundFailure>;
+
+impl ParameterValue {
+    pub(crate) fn from_id_admitted<D: DatasetView>(
+        dataset: &D, id: D::Id, workspace: &crate::WorkspaceCapability,
+        source_error: impl FnMut(D::ReadError) -> GroundFailure,
+    ) -> RewriteResult<Self> {
+        let ground = ground_term_from_id_admitted(dataset, id, workspace, source_error)?;
+        Ok(Self::AdmittedGround(crate::workspace::SharedWorkspace::new_admitted(ground, workspace)?))
+    }
+}
+
+fn native_storage<T>(
+    memory: &mut RewriteMemory<'_, '_>,
+    result: Result<T, purrdf_lex::allocation::StorageError>,
+) -> RewriteResult<T> {
+    result.map_err(|error| {
+        memory.admission_mut().storage_error(error, "prebinding rewrite").into()
+    })
+}
+
+fn rewrite_workspace(memory: &mut RewriteMemory<'_, '_>) -> crate::WorkspaceCapability {
+    memory.admission_mut().workspace().clone()
+}
+
+fn rewrite_vec<T>(
+    values: impl IntoIterator<Item = T>,
+    memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<Vec<T>> {
+    let mut out = Vec::new();
+    for value in values {
+        let result = memory.push(&mut out, value);
+        native_storage(memory, result)?;
+    }
+    Ok(out)
+}
+
+fn rewrite_scratch<T>(
+    values: impl IntoIterator<Item = T>,
+    memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<crate::AdmittedVec<T>> {
+    let mut out = crate::AdmittedVec::new(&rewrite_workspace(memory));
+    for value in values { out.push(value)?; }
+    Ok(out)
+}
+
+fn rewrite_child<T: purrdf_sparql_algebra::Subtree>(
+    value: T,
+    memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<Child<T>> {
+    let result = memory.add_bytes(std::alloc::Layout::new::<T>().size());
+    native_storage(memory, result)?;
+    let boxed = purrdf_core::small::try_boxed(value).map_err(|_| {
+        crate::EvalError::AllocationFailed { construct: "prebinding algebra child" }
+    })?;
+    Ok(Child::from(boxed))
+}
+
+fn rewrite_join(
+    left: GraphPattern,
+    right: GraphPattern,
+    memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<GraphPattern> {
+    Ok(GraphPattern::Join {
+        left: rewrite_child(left, memory)?,
+        right: rewrite_child(right, memory)?,
+    })
+}
+
+fn rewrite_variable(
+    text: &impl std::fmt::Display,
+    memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<Variable> {
+    let workspace = rewrite_workspace(memory);
+    Ok(Variable::from_admitted(workspace.authored_text(text)?))
+}
+
+fn resident_rewrite<T>(
+    f: impl FnOnce(&mut RewriteMemory<'_, '_>) -> RewriteResult<T>,
+) -> T {
+    let mut frame = crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    f(&mut memory).expect("resident prebinding allocation failed")
+}
+
+/// Retained prepared cells destroy their ground payload before its original child
+/// grant. The two backing arrays likewise die before their own metadata grants.
+#[derive(Debug, Default)]
+pub(crate) struct PreparedProbes {
+    entries: Vec<(Variable, GroundTerm)>,
+    children: Vec<Option<crate::WorkspaceAllocation>>,
+    entries_allocation: Option<crate::WorkspaceAllocation>,
+    children_allocation: Option<crate::WorkspaceAllocation>,
+}
+
+impl Drop for PreparedProbes {
+    fn drop(&mut self) {
+        // Release ground children first, then their original per-cell grants.
+        // Automatic field drop subsequently frees both empty metadata arrays
+        // before their two original array admission guards.
+        self.entries.clear();
+        self.children.clear();
+    }
+}
+
+impl PreparedProbes {
+    pub(crate) fn entries(&self) -> &[(Variable, GroundTerm)] { &self.entries }
+
+    fn from_resident(entries: Vec<(Variable, GroundTerm)>) -> RewriteResult<Self> {
+        let workspace = crate::WorkspaceCapability::resident();
+        let mut out = Self {
+            entries, children: Vec::new(), entries_allocation: None, children_allocation: None,
+        };
+        out.reserve(out.entries.len(), &workspace)?;
+        for _ in 0..out.entries.len() { out.children.push(None); }
+        Ok(out)
+    }
+
+    fn try_into_resident(mut self) -> Result<Vec<(Variable, GroundTerm)>, Self> {
+        let bounded = self.entries_allocation.as_ref().is_some_and(crate::WorkspaceAllocation::is_bounded)
+            || self.children_allocation.as_ref().is_some_and(crate::WorkspaceAllocation::is_bounded)
+            || self.children.iter().flatten().any(crate::WorkspaceAllocation::is_bounded);
+        if bounded { return Err(self); }
+        Ok(std::mem::take(&mut self.entries))
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.children.clear();
+    }
+
+    /// Select the run's original failure before invoking this cleanup. A bounded
+    /// carrier cannot retain working payloads or backing arrays for a later run,
+    /// even when the caller now supplies a resident capability.
+    pub(crate) fn reset_after_failure(&mut self, workspace: &crate::WorkspaceCapability) {
+        let bounded = workspace.is_bounded()
+            || self.entries_allocation.as_ref().is_some_and(crate::WorkspaceAllocation::is_bounded)
+            || self.children_allocation.as_ref().is_some_and(crate::WorkspaceAllocation::is_bounded)
+            || self.children.iter().flatten().any(crate::WorkspaceAllocation::is_bounded);
+        if bounded {
+            *self = Self::default();
+        } else {
+            self.clear();
+        }
+    }
+
+    fn reserve(&mut self, count: usize, workspace: &crate::WorkspaceCapability) -> RewriteResult<()> {
+        workspace.reserve_vec(&mut self.entries, &mut self.entries_allocation, count)?;
+        workspace.reserve_vec(&mut self.children, &mut self.children_allocation, count)?;
+        Ok(())
+    }
+
+    fn put(&mut self, index: usize, variable: Variable, ground: AdmittedGroundTerm) {
+        let AdmittedGroundTerm { term, allocation } = ground;
+        if let Some(entry) = self.entries.get_mut(index) {
+            // The old payload dies while both its old and its replacement grant
+            // are live; only then may its original child grant be released.
+            *entry = (variable, term);
+            self.children[index] = allocation;
+        } else {
+            assert!(self.entries.len() < self.entries.capacity());
+            assert!(self.children.len() < self.children.capacity());
+            self.entries.push((variable, term));
+            self.children.push(allocation);
+        }
+    }
+
+    fn copy_entries(
+        entries: impl Iterator<Item = &'_ (Variable, GroundTerm)> + Clone,
+        workspace: &crate::WorkspaceCapability,
+    ) -> RewriteResult<Self> {
+        let mut out = Self::default();
+        out.reserve(entries.clone().count(), workspace)?;
+        for (index, (variable, ground)) in entries.enumerate() {
+            let mut frame = crate::workspace::LexicalFrame::new(workspace);
+            let term = {
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+                clone_ground_with_memory(ground, &mut memory)?
+            };
+            out.put(index, variable.clone(), AdmittedGroundTerm {
+                term, allocation: frame.into_allocation(),
+            });
+        }
+        Ok(out)
+    }
+}
+
+pub(crate) fn build_prepared_probes(
+    probes: &mut PreparedProbes,
+    substitutions: Prebindings<'_>,
+    workspace: &crate::WorkspaceCapability,
+) -> RewriteResult<()> {
+    let result = (|| {
+        probes.reserve(substitutions.len(), workspace)?;
+        for index in 0..substitutions.len() {
+            let mut frame = crate::workspace::LexicalFrame::new(workspace);
+            let term = {
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+                substitutions.ground_reusing_with_memory(
+                    index, probes.entries.get(index).map(|(_, ground)| ground), &mut memory,
+                )?
+            };
+            let variable = match substitutions {
+                Prebindings::Paired(names, _) => names[index].clone(),
+                _ => Variable::from_admitted(workspace.authored_text(&substitutions.name(index))?),
+            };
+            probes.put(index, variable, AdmittedGroundTerm {
+                term, allocation: frame.into_allocation(),
+            });
+        }
+        // Truncate payload first, then the grants protecting its old children.
+        probes.entries.truncate(substitutions.len());
+        probes.children.truncate(substitutions.len());
+        Ok(())
+    })();
+    if result.is_err() {
+        // The original failure has already been selected in `result`; cleanup
+        // cannot replace it or create another admission attempt.
+        probes.reset_after_failure(workspace);
+    }
+    result
+}
+
+fn for_each_expression_mut_with_memory<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    memory: &mut RewriteMemory<'_, '_>,
+    visit: impl FnMut(&mut Expression, &mut RewriteMemory<'_, '_>) -> RewriteResult<()>,
+) -> RewriteResult<()> {
+    match purrdf_sparql_algebra::walk::for_each_expression_mut_with_memory(roots, memory, visit) {
+        Ok(()) => Ok(()),
+        Err(purrdf_sparql_algebra::walk::MutationError::Visitor(error)) => Err(error),
+        Err(purrdf_sparql_algebra::walk::MutationError::Storage(error)) => {
+            Err(memory.admission_mut().storage_error(error, "prebinding expression walk").into())
+        }
+    }
+}
+
+fn own_expressions_with_memory<'n>(
+    node: &'n mut GraphPattern,
+    memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<crate::AdmittedVec<&'n mut Expression>> {
+    let mut out = crate::AdmittedVec::new(&rewrite_workspace(memory));
+    match node {
+        GraphPattern::Extend { expression, .. }
+        | GraphPattern::Unfold { expression, .. }
+        | GraphPattern::Filter { expr: expression, .. }
+        | GraphPattern::LeftJoin { expression: Some(expression), .. } => out.push(expression)?,
+        GraphPattern::OrderBy { expression, .. } => {
+            for order in expression { out.push(order.expression_mut())?; }
+        }
+        GraphPattern::Group { aggregates, .. } => {
+            for (_, aggregate) in aggregates {
+                for expression in aggregate.expressions_mut() { out.push(expression)?; }
+            }
+        }
+        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. }
+        | GraphPattern::Join { .. } | GraphPattern::Minus { .. } | GraphPattern::Union { .. }
+        | GraphPattern::Lateral { .. } | GraphPattern::Apply { .. }
+        | GraphPattern::LeftJoin { expression: None, .. } | GraphPattern::Graph { .. }
+        | GraphPattern::Service { .. } | GraphPattern::Project { .. }
+        | GraphPattern::Distinct { .. } | GraphPattern::Reduced { .. }
+        | GraphPattern::Slice { .. } | GraphPattern::PropertyFunction(_) => {}
+    }
+    Ok(out)
+}
+
+fn for_each_node_expression_mut_with_memory(
+    node: &mut GraphPattern,
+    memory: &mut RewriteMemory<'_, '_>,
+    mut visit: impl FnMut(&mut Expression, &mut RewriteMemory<'_, '_>) -> RewriteResult<()>,
+) -> RewriteResult<()> {
+    for expression in own_expressions_with_memory(node, memory)? { visit(expression, memory)?; }
+    Ok(())
+}
+
+fn push_child_patterns_with_memory<'p, T>(
+    node: &'p mut GraphPattern,
+    pending: &mut crate::AdmittedVec<T>,
+    mut item: impl FnMut(&'p mut GraphPattern) -> T,
+) -> RewriteResult<()> {
+    // Reserve the exact added population before borrowing the child positions.
+    let count = match &*node {
+        GraphPattern::Join { .. } | GraphPattern::LeftJoin { .. }
+        | GraphPattern::Lateral { .. } | GraphPattern::Apply { .. }
+        | GraphPattern::Minus { .. } => 2,
+        GraphPattern::Union { arms } => arms.len(),
+        GraphPattern::Filter { .. } | GraphPattern::Graph { .. } | GraphPattern::Service { .. }
+        | GraphPattern::Extend { .. } | GraphPattern::Unfold { .. } | GraphPattern::OrderBy { .. }
+        | GraphPattern::Project { .. } | GraphPattern::Distinct { .. }
+        | GraphPattern::Reduced { .. } | GraphPattern::Slice { .. } | GraphPattern::Group { .. } => 1,
+        GraphPattern::Bgp { .. } | GraphPattern::Path { .. }
+        | GraphPattern::Values { .. } | GraphPattern::PropertyFunction(_) => 0,
+    };
+    pending.reserve_additional(count)?;
+    for_each_child_pattern_mut(node, &mut |child| pending.push_reserved(item(child)));
+    Ok(())
+}

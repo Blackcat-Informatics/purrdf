@@ -1,0 +1,400 @@
+diff --git a/crates/sparql-eval/src/workspace.rs b/crates/sparql-eval/src/workspace.rs
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -36,1 +36,14 @@
+ impl<T> AdmittedVec<T> {
++    /// A known array layout, admitted before its fallible allocation.
++    pub(crate) fn with_capacity(capacity: usize, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
++        let layout = std::alloc::Layout::array::<T>(capacity).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++        let allocation = if layout.size() == 0 { None } else {
++            Some(workspace.charge(u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?)
++        };
++        let values = vector::<T>(capacity, "admitted vector")?;
++        Ok(Self { values, allocation, workspace: workspace.clone() })
++    }
++
++    /// Mutating existing elements cannot grow or detach the covered buffer.
++    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] { &mut self.values }
++
+diff --git a/crates/sparql-eval/src/modifier/owners.rs b/crates/sparql-eval/src/modifier/owners.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/sparql-eval/src/modifier/owners.rs
+@@ -0,0 +1,99 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Allocation owners for duplicate tracking and stable row permutations.
++
++use std::cmp::Ordering;
++use std::hash::BuildHasher as _;
++use hashbrown::HashTable;
++use purrdf_core::ViewTermId;
++use crate::solution::RetainedRow;
++use crate::workspace::AdmittedVec;
++use crate::{DetHasher, EvalError, WorkspaceAllocation, WorkspaceCapability};
++
++/// Hash/equality are exact SolutionTerm cell identity. RetainedRow clones share
++/// the original cell allocation and lease, including wide spilled rows.
++pub(super) struct DedupState<I: ViewTermId, const ADJACENT: bool> {
++    table: HashTable<RetainedRow<I>>,
++    previous: Option<RetainedRow<I>>,
++    allocation: Option<WorkspaceAllocation>,
++    workspace: WorkspaceCapability,
++}
++
++impl<I: ViewTermId, const ADJACENT: bool> DedupState<I, ADJACENT> {
++    pub(super) fn new(workspace: &WorkspaceCapability) -> Self {
++        Self { table: HashTable::new(), previous: None, allocation: None, workspace: workspace.clone() }
++    }
++
++    pub(super) fn keep(&mut self, row: &RetainedRow<I>) -> Result<bool, EvalError> {
++        if ADJACENT {
++            let keep = self.previous.as_ref() != Some(row);
++            self.previous = Some(row.clone_admitted(&self.workspace)?);
++            return Ok(keep);
++        }
++        let hash = row_hash(row);
++        if self.table.find(hash, |seen| seen == row).is_some() { return Ok(false); }
++        let needed = self.table.len().checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        if needed > self.table.capacity() { self.grow(needed)?; }
++        self.table.insert_unique(hash, row.clone_admitted(&self.workspace)?, row_hash::<I>);
++        Ok(true)
++    }
++
++    /// Old bucket/control bytes and all cell leases remain covered until the
++    /// replacement is allocated and populated. Failure preserves the old table.
++    fn grow(&mut self, needed: usize) -> Result<(), EvalError> {
++        let capacity = self.table.capacity().checked_mul(2).ok_or(EvalError::WorkspaceBoundOverflow)?.max(needed);
++        let bytes = purrdf_core::hash::hash_table_allocation_bound::<RetainedRow<I>>(capacity)
++            .ok_or(EvalError::WorkspaceBoundOverflow)?;
++        let allocation = self.workspace.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++        let mut next = HashTable::new();
++        next.try_reserve(capacity, row_hash::<I>)
++            .map_err(|_| EvalError::AllocationFailed { construct: "distinct row keys" })?;
++        let old = std::mem::take(&mut self.table);
++        for row in old { next.insert_unique(row_hash(&row), row, row_hash::<I>); }
++        self.table = next;
++        // The old IntoIter freed its allocation before this releases its grant.
++        self.allocation = Some(allocation);
++        Ok(())
++    }
++}
++
++fn row_hash<I: ViewTermId>(row: &RetainedRow<I>) -> u64 { DetHasher::default().hash_one(row) }
++
++/// Stable bottom-up merge of input ordinals. The two real usize arrays are
++/// admitted before allocation; no merge or comparator dispatch grows either.
++/// Left wins ties, and the existing ceil(log2 n) moving-side cost law applies.
++pub(super) fn order_permutation(
++    length: usize, workspace: &WorkspaceCapability,
++    mut compare: impl FnMut(usize, usize) -> Result<Ordering, EvalError>,
++) -> Result<AdmittedVec<usize>, EvalError> {
++    let mut order = AdmittedVec::with_capacity(length, workspace)?;
++    for ordinal in 0..length { order.push(ordinal)?; }
++    if length < 2 { return Ok(order); }
++    let mut scratch = AdmittedVec::with_capacity(length, workspace)?;
++    for _ in 0..length { scratch.push(0)?; }
++    let mut run = 1usize;
++    while run < length {
++        let step = run.checked_mul(2).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        let mut begin = 0usize;
++        while begin < length {
++            let middle = begin.checked_add(run).ok_or(EvalError::WorkspaceBoundOverflow)?.min(length);
++            let end = begin.checked_add(step).ok_or(EvalError::WorkspaceBoundOverflow)?.min(length);
++            let (mut left, mut right, mut output) = (begin, middle, begin);
++            while left < middle && right < end {
++                if compare(order[left], order[right])? != Ordering::Greater {
++                    scratch.as_mut_slice()[output] = order[left]; left += 1;
++                } else {
++                    scratch.as_mut_slice()[output] = order[right]; right += 1;
++                }
++                output += 1;
++            }
++            while left < middle { scratch.as_mut_slice()[output] = order[left]; left += 1; output += 1; }
++            while right < end { scratch.as_mut_slice()[output] = order[right]; right += 1; output += 1; }
++            begin = end;
++        }
++        std::mem::swap(&mut order, &mut scratch);
++        run = step;
++    }
++    Ok(order)
++}
+diff --git a/crates/sparql-eval/src/modifier.rs b/crates/sparql-eval/src/modifier.rs
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -102,1 +102,6 @@
++mod owners;
++use owners::{DedupState, order_permutation};
++use crate::solution::RowsBuilder;
++use crate::workspace::AdmittedVec;
++
+ use std::cmp::Ordering;
+@@ -309,3 +314,2 @@
+-    Ok(lift.finish(dedup::<_, ADJACENT>(
+-        crate::blank_scope::without_joined_blanks(seq),
+-    )))
++    let seq = crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?;
++    Ok(lift.finish(dedup::<_, ADJACENT>(seq, &ctx.growth)?))
+@@ -348,19 +352,9 @@
+-    let mut seen = DetHashSet::default();
+-    let mut previous = None;
++    let mut state = DedupState::<D::Id, ADJACENT>::new(&ctx.growth);
+     crate::eval::yield_transform(
+         node,
+         inner,
+         delivery,
+-        |seq, _ctx| {
+-            let mut seq = crate::blank_scope::without_joined_blanks(seq);
+-            seq.rows.retain(|row| {
+-                if ADJACENT {
+-                    let keep = previous.as_ref() != Some(row);
+-                    previous = Some(row.clone());
+-                    keep
+-                } else {
+-                    seen.insert(row.clone())
+-                }
+-            });
+-            Ok(Evaluated::Complete(seq))
++        |seq, ctx| {
++            let seq = crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?;
++            Ok(Evaluated::Complete(dedup_with_state(seq, &mut state, &ctx.growth)?))
+         },
+@@ -373,21 +367,14 @@
+-fn dedup<I: ViewTermId, const ADJACENT: bool>(mut seq: SolutionSeq<I>) -> SolutionSeq<I> {
+-    if ADJACENT {
+-        seq.rows.dedup();
+-        return seq;
+-    }
+-    let mut unique = DetHashMap::with_capacity_and_hasher(seq.rows.len(), DetHasher::default());
+-    for (ordinal, row) in seq.rows.into_iter().enumerate() {
+-        if let Entry::Vacant(entry) = unique.entry(row) {
+-            entry.insert(ordinal);
+-        }
+-    }
+-    let mut rows: Vec<_> = unique
+-        .into_iter()
+-        .map(|(row, ordinal)| (ordinal, row))
+-        .collect();
+-    rows.sort_unstable_by_key(|(ordinal, _)| *ordinal);
+-    SolutionSeq {
+-        schema: seq.schema,
+-        rows: rows.into_iter().map(|(_, row)| row).collect(),
+-    }
++fn dedup<I: ViewTermId, const ADJACENT: bool>(
++    seq: SolutionSeq<I>, workspace: &crate::WorkspaceCapability,
++) -> Result<SolutionSeq<I>, EvalError> {
++    let mut state = DedupState::<I, ADJACENT>::new(workspace);
++    dedup_with_state(seq, &mut state, workspace)
++}
++
++fn dedup_with_state<I: ViewTermId, const ADJACENT: bool>(
++    seq: SolutionSeq<I>, state: &mut DedupState<I, ADJACENT>, workspace: &crate::WorkspaceCapability,
++) -> Result<SolutionSeq<I>, EvalError> {
++    let mut rows = RowsBuilder::new(workspace);
++    for row in seq.rows { if state.keep(&row)? { rows.push_row(row)?; } }
++    Ok(SolutionSeq { schema: seq.schema, rows: rows.finish()? })
+ }
+@@ -507,19 +494,21 @@
+     let width = exprs.len();
+-    let mut linked = Vec::with_capacity(width);
++    let cells = seq.rows.len().checked_mul(width).ok_or(EvalError::WorkspaceBoundOverflow)?;
++    let mut linked = AdmittedVec::with_capacity(width, &ctx.growth)?;
+     for oe in exprs {
+         let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = oe;
+         let program = crate::vm::program_at(ctx, node, e);
+-        linked.push(crate::vm::Linked::link(program, e, &schema, ctx));
++        linked.push(crate::vm::Linked::link_admitted(program, e, &schema, ctx)?)?;
+     }
+-    let mut values: Vec<Option<TermValue>> = Vec::with_capacity(seq.rows.len() * width);
++    let mut values = AdmittedVec::with_capacity(cells, &ctx.growth)?;
+     for row in &seq.rows {
+-        for key in &mut linked {
++        for key in linked.as_mut_slice() {
+             let term = key.term(row, &schema, ctx)?;
+             values.push(
+-                term.map(|t| ctx.scratch.try_value_of(ctx.dataset, t))
++                term.map(|t| ctx.scratch.try_value_of_admitted(ctx.dataset, t, &ctx.growth))
+                     .transpose()
+-                    .map_err(EvalError::source_read)?,
+-            );
++                    ?,
++            )?;
+         }
+     }
+-    let keys: Vec<SortKey<'_>> = values.iter().map(|v| project(v.as_ref())).collect();
++    let mut keys = AdmittedVec::with_capacity(cells, &ctx.growth)?;
++    for value in values.iter() { keys.push(project_admitted(value.as_ref(), &ctx.growth)?)?; }
+@@ -528,1 +517,2 @@
+-    if !crate::expr::numeric_step_admitted(ctx, sort_keys_numeric_cost(&keys, width)) {
++    let cost = sort_keys_numeric_cost_admitted(keys.iter().map(|key| &key.key), keys.len(), width, &ctx.growth)?;
++    if !crate::expr::numeric_step_admitted(ctx, cost) {
+@@ -539,7 +529,4 @@
+-    let mut order: Vec<usize> = (0..seq.rows.len()).collect();
+-    order.sort_by(|a, b| compare_keys(&keys[a * width..], &keys[b * width..], exprs));
+-    let mut source = seq.rows;
+-    let rows = order
+-        .into_iter()
+-        .map(|i| std::mem::take(&mut source[i]))
+-        .collect();
++    let order = order_permutation(seq.rows.len(), &ctx.growth, |left, right| {
++        compare_keys_admitted(&keys[left * width..], &keys[right * width..], exprs, &ctx.growth)
++    })?;
++    let rows = seq.rows.ordered_admitted(order, &ctx.growth)?;
+@@ -562,5 +549,13 @@
+ pub(crate) fn sort_keys_numeric_cost(
+     keys: &[SortKey<'_>],
+     width: usize,
+ ) -> purrdf_xsd::exact::Cost {
++    sort_keys_numeric_cost_admitted(keys.iter(), keys.len(), width, &crate::WorkspaceCapability::default())
++        .expect("resident numeric sort cost")
++}
++
++fn sort_keys_numeric_cost_admitted<'key, 'value: 'key>(
++    keys: impl Iterator<Item = &'key SortKey<'value>> + Clone, count: usize, width: usize,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<purrdf_xsd::exact::Cost, EvalError> {
+     let mut total = purrdf_xsd::exact::Cost::ZERO;
+@@ -569,1 +564,1 @@
+-    let any_big = keys.iter().any(|key| {
++    let any_big = keys.clone().any(|key| {
+@@ -578,20 +573,18 @@
+     if width == 0 || !any_big {
+-        return total;
++        return Ok(total);
+     }
+-    let rounds = purrdf_xsd::exact::cost::sort_rounds(keys.len() / width);
++    let rows = count / width;
++    let rounds = purrdf_xsd::exact::cost::sort_rounds(rows);
+     for column in 0..width {
+-        let shapes: Vec<purrdf_xsd::exact::cost::Shape> = keys
+-            .iter()
+-            .skip(column)
+-            .step_by(width)
+-            .filter_map(|key| match key {
+-                SortKey::Literal(LiteralKey {
+-                    value: Some(value), ..
+-                }) => purrdf_xsd::exact::cost::Shape::of_value(value),
+-                _ => None,
+-            })
+-            .collect();
+-        total = total.then(purrdf_xsd::exact::cost::compare_chain(&shapes, rounds));
++        let mut shapes = AdmittedVec::with_capacity(rows, workspace)?;
++        for key in keys.clone().skip(column).step_by(width) {
++            if let SortKey::Literal(LiteralKey { value: Some(value), .. }) = key
++                && let Some(shape) = purrdf_xsd::exact::cost::Shape::of_value(value)
++            { shapes.push(shape)?; }
++        }
++        let mut keyed = AdmittedVec::with_capacity(shapes.len(), workspace)?;
++        for key in purrdf_xsd::exact::cost::comparison_keys(&shapes) { keyed.push(key)?; }
++        total = total.then(purrdf_xsd::exact::cost::compare_keyed(keyed.as_mut_slice(), rounds));
+     }
+-    total
++    Ok(total)
+ }
+@@ -1150,2 +1143,21 @@
+-/// Compare two rows' projected sort keys, applying each key's `ASC`/`DESC`.
++/// Native project_admitted returns a key together with its parse/box owner.
++/// The source TermValue array outlives these borrowed parsed keys.
++pub(crate) struct OwnedSortKey<'a> {
++    key: SortKey<'a>,
++    _allocation: crate::WorkspaceAllocation,
++}
++
++fn compare_keys_admitted(
++    left: &[OwnedSortKey<'_>], right: &[OwnedSortKey<'_>], exprs: &[OrderExpression],
++    workspace: &crate::WorkspaceCapability,
++) -> Result<Ordering, EvalError> {
++    for ((left, right), expression) in left.iter().zip(right).zip(exprs) {
++        let mut order = total_order_admitted(&left.key, &right.key, workspace)?;
++        if matches!(expression, OrderExpression::Desc(_)) { order = order.reverse(); }
++        if order != Ordering::Equal { return Ok(order); }
++    }
++    Ok(Ordering::Equal)
++}
++
++/// Compare two rows' projected sort keys, applying each key's `ASC`/`DESC`.
+ pub(crate) fn compare_keys(
+diff --git a/crates/xsd/src/exact/cost.rs b/crates/xsd/src/exact/cost.rs
+--- a/crates/xsd/src/exact/cost.rs
++++ b/crates/xsd/src/exact/cost.rs
+@@ -884,9 +884,18 @@
+ pub fn compare_chain(values: &[Shape], rounds: u64) -> Cost {
+-    let mut keyed: Vec<(i32, i64, i64, Shape)> = values
+-        .iter()
+-        .map(|shape| {
+-            let (lower, upper) = shape.comparison_exponents();
+-            (shape.sign, lower, upper, *shape)
+-        })
+-        .collect();
++    let mut keyed: Vec<_> = comparison_keys(values).collect();
++    compare_keyed(&mut keyed, rounds)
++}
++
++/// Native comparison-domain tuples, without allocation. Operational callers
++/// collect these into a buffer whose actual layout has already been admitted.
++pub fn comparison_keys(values: &[Shape]) -> impl Iterator<Item = (i32, i64, i64, Shape)> + '_ {
++    values.iter().map(|shape| {
++        let (lower, upper) = shape.comparison_exponents();
++        (shape.sign, lower, upper, *shape)
++    })
++}
++
++/// The same comparison-chain kernel on caller-owned tuples. Sorting cannot grow
++/// or retain the supplied array and allocates no additional scratch.
++pub fn compare_keyed(keyed: &mut [(i32, i64, i64, Shape)], rounds: u64) -> Cost {
+     keyed.sort_unstable_by_key(|&(sign, lower, _, _)| (sign, lower));
+diff --git a/crates/sparql-eval/src/solution.rs b/crates/sparql-eval/src/solution.rs
+--- a/crates/sparql-eval/src/solution.rs
++++ b/crates/sparql-eval/src/solution.rs
+@@ -322,1 +322,10 @@
+ impl<I: ViewTermId> RetainedRow<I> {
++    /// Share an admitted cell owner, or admit a fresh exact cell copy before
++    /// cloning a resident row. Internal clones must preserve this distinction.
++    pub(crate) fn clone_admitted(&self, workspace: &crate::WorkspaceCapability) -> Result<Self, crate::EvalError> {
++        match &self.storage {
++            RowStorage::Shared(_) => Ok(self.clone()),
++            RowStorage::Resident(cells) => Self::from_cells(cells.len(), cells.iter().copied(), workspace),
++        }
++    }
++
+@@ -396,1 +405,39 @@
++impl<I: ViewTermId> RowBag<I> {
++    /// Consume the internally generated destination-to-source permutation.
++    /// A resident vector is moved in place without cloning its cell spills.
++    /// Operational output keeps the immutable row/cell owners in its builder.
++    pub(crate) fn ordered_admitted(
++        self, mut order: crate::workspace::AdmittedVec<usize>, workspace: &crate::WorkspaceCapability,
++    ) -> Result<Self, crate::EvalError> {
++        assert_eq!(order.len(), self.len(), "the sorting permutation covers its input");
++        match self.storage {
++            BagStorage::Resident(mut rows) if !workspace.is_bounded() => {
++                // The ordinal merge produced each index exactly once. Marking
++                // visited slots in its existing array needs no new work list.
++                for root in 0..rows.len() {
++                    if order[root] == root { continue; }
++                    let empty = || RetainedRow { storage: RowStorage::Resident(Solution::new()) };
++                    let saved = std::mem::replace(&mut rows[root], empty());
++                    let mut slot = root;
++                    loop {
++                        let source = order[slot];
++                        order.as_mut_slice()[slot] = slot;
++                        if source == root { rows[slot] = saved; break; }
++                        let moved = std::mem::replace(&mut rows[source], empty());
++                        rows[slot] = moved;
++                        slot = source;
++                    }
++                }
++                Ok(Self { storage: BagStorage::Resident(rows) })
++            }
++            storage => {
++                let source = Self { storage };
++                let mut rows = RowsBuilder::new(workspace);
++                for &ordinal in order.iter() { rows.push_row(source[ordinal].clone_admitted(workspace)?)?; }
++                rows.finish()
++            }
++        }
++    }
++}
++
+ impl<I: ViewTermId> From<Vec<Solution<I>>> for RowBag<I> {

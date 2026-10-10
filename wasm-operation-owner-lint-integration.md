@@ -1,0 +1,3 @@
+The only source change is a fulfilled, enum-local large_enum_variant expectation on JobOutcome. GovernedUpdateOutcome remains inline, preserving its original typed outcome and retained owners. Boxing at this terminal transfer could require a fresh allocation after admission refusal; no payload extraction, deep clone, new allocator path, or changed outcome law is introduced. The writer retains the original production constructors and consumers unchanged.
+
+Qualification: Stage postimage formatting/syntax and ordinary patch applicability only; no compiler, test, or full gate was run by this helper. The strict workspace check is owned by the sole shipping writer.

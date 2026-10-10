@@ -1,0 +1,403 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+// Stage implementation proposal: selected existing parser homes only.
+// Apply the ordinary patch; do not overwrite a shipping file with this fragment.
+
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+use super::table::ScopeTable;
+
+/// First-appearance scope with logarithmic lexical membership.
+///
+/// The declaration order is separate from the balanced lookup arena. Both
+/// backing arrays are admitted at their concrete native layouts before growth;
+/// immutable variable spellings retain their original leaf owners.
+#[derive(Default)]
+struct VarScope {
+    order: Vec<Variable>,
+    seen: ScopeTable<Variable, ()>,
+}
+
+impl VarScope {
+    /// Record one visible variable; repeated mentions preserve the first order.
+    /// All destinations are reserved before changing logical scope membership.
+    fn note<S: Admission + ?Sized>(
+        &mut self, variable: &Variable, memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<bool, StorageError> {
+        if variable.is_hidden() || self.seen.get(variable).is_some() {
+            return Ok(false);
+        }
+        let required = self.order.len().checked_add(1).ok_or(StorageError::SizeOverflow)?;
+        if required > self.order.capacity() {
+            let capacity = self.order.capacity().checked_mul(2)
+                .ok_or(StorageError::SizeOverflow)?.max(required);
+            memory.reserve(&mut self.order, capacity)?;
+        }
+        self.seen.insert(variable.clone(), (), memory)?;
+        self.order.push(variable.clone());
+        Ok(true)
+    }
+
+    fn contains(&self, variable: &Variable) -> bool {
+        self.seen.get(variable).is_some()
+    }
+
+    fn as_slice(&self) -> &[Variable] { &self.order }
+
+    /// Publish the already-admitted projection array; the lookup arena dies first.
+    fn into_vec<S: Admission + ?Sized>(
+        self, memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<Vec<Variable>, StorageError> {
+        self.seen.release(memory)?;
+        Ok(self.order)
+    }
+
+    fn release<S: Admission + ?Sized>(
+        self, memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), StorageError> {
+        memory.release_vec(self.order)?;
+        self.seen.release(memory)
+    }
+}
+
+/// Every open EXISTS in-scope-set frame, sharing one variable trail.
+///
+/// A boundary sees only its own trail tail; an isolated frame sees the enclosing
+/// tail without copying it. For each trail entry, previous links to the earlier
+/// occurrence of the same lexical identity. The lookup arena stores only its
+/// latest position. Popping restores those links without allocating or copying
+/// enclosing sets; all nested frames together occupy linear storage.
+#[derive(Default)]
+struct ExistsScopes {
+    trail: Vec<Variable>,
+    previous: Vec<Option<usize>>,
+    positions: ScopeTable<Variable, usize>,
+    frames: Vec<ExistsFrame>,
+}
+
+#[derive(Clone, Copy)]
+struct ExistsFrame {
+    start: usize,
+    mark: usize,
+}
+
+impl ExistsScopes {
+    fn is_open(&self) -> bool { !self.frames.is_empty() }
+
+    fn top(&self) -> &[Variable] {
+        self.frames.last().map_or(&[], |frame| &self.trail[frame.start..])
+    }
+
+    fn push_boundary<S: Admission + ?Sized>(
+        &mut self, memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), StorageError> {
+        let len = self.trail.len();
+        memory.push(&mut self.frames, ExistsFrame { start: len, mark: len })
+    }
+
+    fn push_isolated<S: Admission + ?Sized>(
+        &mut self, memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), StorageError> {
+        let len = self.trail.len();
+        let start = self.frames.last().map_or(len, |frame| frame.start);
+        memory.push(&mut self.frames, ExistsFrame { start, mark: len })
+    }
+
+    /// Restore the latest-position index while discarding only this frame's tail.
+    /// Vector/arena capacities stay admitted and are reused by later frames.
+    fn pop(&mut self) {
+        let Some(frame) = self.frames.pop() else { return; };
+        while self.trail.len() > frame.mark {
+            let variable = self.trail.pop().expect("checked nonempty scope trail");
+            let previous = self.previous.pop().expect("scope trails have equal lengths");
+            if let Some(previous) = previous {
+                *self.positions.get_mut(&variable)
+                    .expect("every live trail identity has a latest position") = previous;
+            } else {
+                assert!(self.positions.remove(&variable).is_some(),
+                    "every first trail occurrence has a latest position");
+            }
+        }
+        debug_assert!(!self.frames.is_empty()
+            || (self.trail.is_empty() && self.previous.is_empty() && self.positions.is_empty()));
+    }
+
+    fn note<S: Admission + ?Sized>(
+        &mut self, variable: &Variable, memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), StorageError> {
+        let Some(frame) = self.frames.last() else { return Ok(()); };
+        let previous = self.positions.get(variable).copied();
+        if previous.is_some_and(|previous| previous >= frame.start) { return Ok(()); }
+
+        let required = self.trail.len().checked_add(1).ok_or(StorageError::SizeOverflow)?;
+        if required > self.trail.capacity() {
+            let capacity = self.trail.capacity().checked_mul(2)
+                .ok_or(StorageError::SizeOverflow)?.max(required);
+            memory.reserve(&mut self.trail, capacity)?;
+        }
+        if required > self.previous.capacity() {
+            let capacity = self.previous.capacity().checked_mul(2)
+                .ok_or(StorageError::SizeOverflow)?.max(required);
+            memory.reserve(&mut self.previous, capacity)?;
+        }
+        // The lookup insertion is the last fallible step. Updating all parallel
+        // destinations afterward cannot allocate or lose the preceding frame.
+        self.positions.insert(variable.clone(), self.trail.len(), memory)?;
+        self.trail.push(variable.clone());
+        self.previous.push(previous);
+        Ok(())
+    }
+
+    fn release<S: Admission + ?Sized>(
+        self, memory: &mut Memory<'_, S>,
+    ) -> std::result::Result<(), StorageError> {
+        memory.release_vec(self.trail)?;
+        memory.release_vec(self.previous)?;
+        self.positions.release(memory)?;
+        memory.release_vec(self.frames)
+    }
+}
+
+/// Collect the in-scope variables in first-appearance order. The resident API
+/// and bounded parser call this same visibility body.
+#[must_use]
+pub fn visible_variables(pattern: &GraphPattern) -> Vec<Variable> {
+    let mut resident = Resident;
+    visible_variables_with_memory(pattern, &mut Memory::new(&mut resident))
+        .expect("resident visible-variable storage allocation failed")
+}
+
+/// The native visibility census, retaining the output's original array admission.
+///
+/// # Errors
+/// Returns the original admission/allocator failure before storage growth.
+pub fn visible_variables_with_memory<S: Admission + ?Sized>(
+    pattern: &GraphPattern, memory: &mut Memory<'_, S>,
+) -> std::result::Result<Vec<Variable>, StorageError> {
+    let mut scope = VarScope::default();
+    collect_vars(pattern, &mut scope, memory)?;
+    scope.into_vec(memory)
+}
+
+fn contextual_visible_variables<S: Admission + ?Sized>(
+    pattern: &GraphPattern, memory: &mut Memory<'_, S>,
+) -> std::result::Result<Vec<Variable>, StorageError> {
+    let mut scope = VarScope::default();
+    let mut pending = Vec::new();
+    memory.push(&mut pending, VarStep::Pattern(pattern))?;
+    note_vars::<true, S>(&mut pending, &mut scope, memory)?;
+    memory.release_vec(pending)?;
+    scope.into_vec(memory)
+}
+
+enum VarStep<'a> {
+    Pattern(&'a GraphPattern),
+    Term(&'a TermPattern),
+    Note(&'a Variable),
+}
+
+fn push_triple_vars<'a, S: Admission + ?Sized>(
+    triple: &'a TriplePattern, pending: &mut Vec<VarStep<'a>>,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), StorageError> {
+    memory.push(pending, VarStep::Term(&triple.object))?;
+    if let NamedNodePattern::Variable(variable) = &triple.predicate {
+        memory.push(pending, VarStep::Note(variable))?;
+    }
+    memory.push(pending, VarStep::Term(&triple.subject))
+}
+
+fn collect_vars<S: Admission + ?Sized>(
+    pattern: &GraphPattern, out: &mut VarScope, memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), StorageError> {
+    let mut pending = Vec::new();
+    memory.push(&mut pending, VarStep::Pattern(pattern))?;
+    note_vars::<false, S>(&mut pending, out, memory)?;
+    memory.release_vec(pending)
+}
+
+/// Drain in written order, pushing subsequent work in reverse. Visibility,
+/// projection/grouping boundaries and contextual MINUS treatment are unchanged.
+fn note_vars<const RDFLIB: bool, S: Admission + ?Sized>(
+    pending: &mut Vec<VarStep<'_>>, out: &mut VarScope, memory: &mut Memory<'_, S>,
+) -> std::result::Result<(), StorageError> {
+    while let Some(step) = pending.pop() {
+        let pattern = match step {
+            VarStep::Note(variable) => { out.note(variable, memory)?; continue; }
+            VarStep::Term(term) => {
+                match term {
+                    TermPattern::Variable(variable) => { out.note(variable, memory)?; }
+                    TermPattern::Triple(triple) => push_triple_vars(triple, pending, memory)?,
+                    _ => {}
+                }
+                continue;
+            }
+            VarStep::Pattern(pattern) => pattern,
+        };
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                for triple in patterns.iter().rev() {
+                    push_triple_vars(triple, pending, memory)?;
+                }
+            }
+            GraphPattern::Path { subject, object, .. } => {
+                memory.push(pending, VarStep::Term(object))?;
+                memory.push(pending, VarStep::Term(subject))?;
+            }
+            GraphPattern::PropertyFunction(call) => {
+                for term in call.subject_args.iter().chain(&call.object_args).rev() {
+                    memory.push(pending, VarStep::Term(term))?;
+                }
+            }
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Apply { left, right, .. }
+            | GraphPattern::LeftJoin { left, right, .. } => {
+                memory.push(pending, VarStep::Pattern(right))?;
+                memory.push(pending, VarStep::Pattern(left))?;
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms.iter().rev() { memory.push(pending, VarStep::Pattern(arm))?; }
+            }
+            GraphPattern::Minus { left, right } => {
+                if RDFLIB { memory.push(pending, VarStep::Pattern(right))?; }
+                memory.push(pending, VarStep::Pattern(left))?;
+            }
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => memory.push(pending, VarStep::Pattern(inner))?,
+            GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
+                memory.push(pending, VarStep::Pattern(inner))?;
+                if let NamedNodePattern::Variable(variable) = name {
+                    memory.push(pending, VarStep::Note(variable))?;
+                }
+            }
+            GraphPattern::Extend { inner, variable, .. } => {
+                memory.push(pending, VarStep::Note(variable))?;
+                memory.push(pending, VarStep::Pattern(inner))?;
+            }
+            GraphPattern::Unfold { inner, element, companion, .. } => {
+                if let Some(companion) = companion {
+                    memory.push(pending, VarStep::Note(companion))?;
+                }
+                memory.push(pending, VarStep::Note(element))?;
+                memory.push(pending, VarStep::Pattern(inner))?;
+            }
+            GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
+                for variable in variables { out.note(variable, memory)?; }
+            }
+            GraphPattern::Group { variables, aggregates, .. } => {
+                for variable in variables { out.note(variable, memory)?; }
+                for (variable, _) in aggregates { out.note(variable, memory)?; }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn find_scope_conflict<'a, S: Admission + ?Sized>(
+    outer: &[Variable], pattern: &'a GraphPattern, memory: &mut Memory<'_, S>,
+) -> std::result::Result<Option<(&'a Variable, ScopeIntro)>, StorageError> {
+    if outer.is_empty() { return Ok(None); }
+    let mut root = VarScope::default();
+    for variable in outer { root.note(variable, memory)?; }
+    let mut scopes = Vec::new();
+    memory.push(&mut scopes, root)?;
+    let mut pending = Vec::new();
+    memory.push(&mut pending, (pattern, 0))?;
+    let found = (|| -> std::result::Result<Option<(&'a Variable, ScopeIntro)>, StorageError> {
+        while let Some((pattern, at)) = pending.pop() {
+            let scope = &scopes[at];
+            match pattern {
+                GraphPattern::Bgp { .. }
+                | GraphPattern::Path { .. }
+                | GraphPattern::PropertyFunction(_) => {}
+                GraphPattern::Join { left, right }
+                | GraphPattern::Lateral { left, right }
+                | GraphPattern::Apply { left, right, .. }
+                | GraphPattern::LeftJoin { left, right, .. } => {
+                    memory.push(&mut pending, (&**right, at))?;
+                    memory.push(&mut pending, (&**left, at))?;
+                }
+                GraphPattern::Union { arms } => {
+                    for arm in arms.iter().rev() { memory.push(&mut pending, (arm, at))?; }
+                }
+                // MINUS-right bindings are never observable in the enclosing scope.
+                GraphPattern::Minus { left, .. } => memory.push(&mut pending, (&**left, at))?,
+                GraphPattern::Filter { inner, .. }
+                | GraphPattern::Graph { inner, .. }
+                | GraphPattern::Service { inner, .. }
+                | GraphPattern::OrderBy { inner, .. }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner }
+                | GraphPattern::Slice { inner, .. } => memory.push(&mut pending, (&**inner, at))?,
+                GraphPattern::Extend { inner, variable, .. } => {
+                    if scope.contains(variable) { return Ok(Some((variable, ScopeIntro::Bind))); }
+                    memory.push(&mut pending, (&**inner, at))?;
+                }
+                GraphPattern::Unfold { inner, element, companion, .. } => {
+                    for variable in std::iter::once(element).chain(companion.as_ref()) {
+                        if scope.contains(variable) { return Ok(Some((variable, ScopeIntro::Unfold))); }
+                    }
+                    memory.push(&mut pending, (&**inner, at))?;
+                }
+                GraphPattern::Values { variables, .. } => {
+                    if let Some(variable) = variables.iter().find(|variable| scope.contains(variable)) {
+                        return Ok(Some((variable, ScopeIntro::Values)));
+                    }
+                }
+                GraphPattern::Project { inner, variables } => {
+                    // Build each projection's lookup once, preserving the enclosing
+                    // scope's written order in the narrowed scope.
+                    let mut projected = VarScope::default();
+                    for variable in variables { projected.note(variable, memory)?; }
+                    let mut narrowed = VarScope::default();
+                    for variable in scope.as_slice() {
+                        if projected.contains(variable) { narrowed.note(variable, memory)?; }
+                    }
+                    projected.release(memory)?;
+                    if narrowed.as_slice().is_empty() {
+                        narrowed.release(memory)?;
+                    } else {
+                        let at = scopes.len();
+                        memory.push(&mut scopes, narrowed)?;
+                        memory.push(&mut pending, (&**inner, at))?;
+                    }
+                }
+                GraphPattern::Group { inner, variables, aggregates } => {
+                    if let Some((variable, _)) = aggregates.iter().find(|(variable, _)| scope.contains(variable)) {
+                        return Ok(Some((variable, ScopeIntro::Bind)));
+                    }
+                    if let Some(conflict) = find_group_extend_conflict(inner, variables, scope, memory)? {
+                        return Ok(Some(conflict));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    })()?;
+    memory.release_vec(pending)?;
+    while let Some(scope) = scopes.pop() { scope.release(memory)?; }
+    memory.release_vec(scopes)?;
+    Ok(found)
+}
+
+fn find_group_extend_conflict<'a, S: Admission + ?Sized>(
+    mut inner: &'a GraphPattern, variables: &[Variable], lhs_scope: &VarScope,
+    memory: &mut Memory<'_, S>,
+) -> std::result::Result<Option<(&'a Variable, ScopeIntro)>, StorageError> {
+    let mut grouped = VarScope::default();
+    for variable in variables { grouped.note(variable, memory)?; }
+    let mut chain = Vec::new();
+    while let GraphPattern::Extend { inner: next, variable, .. } = inner {
+        if !grouped.contains(variable) { break; }
+        memory.push(&mut chain, variable)?;
+        inner = next;
+    }
+    let found = chain.iter().rev().copied().find(|variable| lhs_scope.contains(variable))
+        .map(|variable| (variable, ScopeIntro::Bind));
+    memory.release_vec(chain)?;
+    grouped.release(memory)?;
+    Ok(found)
+}

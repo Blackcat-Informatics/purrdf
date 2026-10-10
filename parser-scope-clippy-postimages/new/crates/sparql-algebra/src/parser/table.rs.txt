@@ -1,0 +1,551 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Parser lookup storage with an exact, fallible native array allocation.
+//!
+//! Keys order lookup only; consumers keep declaration/output order separately.
+//! AVL links are array indices, so widening a query never allocates tree nodes
+//! through an opaque collection. Vacant slots are reused after removal.
+
+use core::{cmp::Ordering, mem};
+use purrdf_lex::allocation::{Admission, Memory, StorageError};
+
+#[derive(Clone)]
+struct Entry<K, V> {
+    key: K,
+    value: V,
+    parent: Option<usize>,
+    left: Option<usize>,
+    right: Option<usize>,
+    height: usize,
+}
+
+#[derive(Clone)]
+enum Slot<K, V> {
+    Live(Entry<K, V>),
+    Free(Option<usize>),
+}
+
+/// One balanced lookup tree in a caller-admitted reusable slot arena.
+///
+/// Both empty construction and every lookup are allocation-free. The memory
+/// supplied to growth/release must be the original memory of this arena.
+pub(crate) struct ScopeTable<K, V> {
+    slots: Vec<Slot<K, V>>,
+    root: Option<usize>,
+    free: Option<usize>,
+    len: usize,
+}
+
+impl<K, V> Default for ScopeTable<K, V> {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            root: None,
+            free: None,
+            len: 0,
+        }
+    }
+}
+
+impl<K, V> ScopeTable<K, V> {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn entry(&self, index: usize) -> &Entry<K, V> {
+        match &self.slots[index] {
+            Slot::Live(entry) => entry,
+            Slot::Free(_) => unreachable!("scope tree link points at a vacant slot"),
+        }
+    }
+
+    fn entry_mut(&mut self, index: usize) -> &mut Entry<K, V> {
+        match &mut self.slots[index] {
+            Slot::Live(entry) => entry,
+            Slot::Free(_) => unreachable!("scope tree link points at a vacant slot"),
+        }
+    }
+
+    fn find(&self, mut compare: impl FnMut(&K) -> Ordering) -> Option<usize> {
+        let mut at = self.root;
+        while let Some(index) = at {
+            let entry = self.entry(index);
+            at = match compare(&entry.key) {
+                Ordering::Less => entry.left,
+                Ordering::Greater => entry.right,
+                Ordering::Equal => return Some(index),
+            };
+        }
+        None
+    }
+
+    /// Lookup a borrowed spelling without manufacturing an owned key.
+    /// The comparator returns query-versus-stored-key ordering.
+    pub(crate) fn get_by(&self, compare: impl FnMut(&K) -> Ordering) -> Option<&V> {
+        self.find(compare).map(|index| &self.entry(index).value)
+    }
+
+    /// Iterate live slots without a traversal allocation. This is arena order,
+    /// not key order; output/declaration order remains the consumer's own law.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&K, &V)> + Clone {
+        self.slots.iter().filter_map(|slot| match slot {
+            Slot::Live(entry) => Some((&entry.key, &entry.value)),
+            Slot::Free(_) => None,
+        })
+    }
+
+    /// Drop all keys/values, retaining the already-admitted backing capacity.
+    pub(crate) fn clear(&mut self) {
+        self.slots.clear();
+        self.root = None;
+        self.free = None;
+        self.len = 0;
+    }
+
+    /// Exact original arena capacity, for a containing owner's destruction.
+    pub(crate) fn storage_bytes(&self) -> Result<usize, StorageError> {
+        core::alloc::Layout::array::<Slot<K, V>>(self.slots.capacity())
+            .map(|layout| layout.size())
+            .map_err(|_| StorageError::SizeOverflow)
+    }
+
+    /// Destroy this arena before releasing its original physical array layout.
+    pub(crate) fn release<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        memory.release_vec(self.slots)
+    }
+
+    /// Copy only slot metadata and shallow immutable native key/value owners.
+    /// K/V clones used by the parser must themselves allocate no payload.
+    pub(crate) fn try_clone<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError>
+    where
+        K: Clone,
+        V: Clone,
+    {
+        let mut slots = Vec::new();
+        memory.reserve(&mut slots, self.slots.len())?;
+        slots.extend(self.slots.iter().cloned());
+        Ok(Self {
+            slots,
+            root: self.root,
+            free: self.free,
+            len: self.len,
+        })
+    }
+
+    fn height(&self, index: Option<usize>) -> usize {
+        index.map_or(0, |index| self.entry(index).height)
+    }
+
+    fn update_height(&mut self, index: usize) {
+        let entry = self.entry(index);
+        let height = self.height(entry.left).max(self.height(entry.right)) + 1;
+        self.entry_mut(index).height = height;
+    }
+
+    /// Replace one parent link (or the root), then install the same parent
+    /// on the replacement. Every structural operation goes through this home.
+    fn link(&mut self, parent: Option<usize>, old: usize, next: Option<usize>) {
+        if let Some(parent) = parent {
+            let entry = self.entry_mut(parent);
+            if entry.left == Some(old) {
+                entry.left = next;
+            } else {
+                assert_eq!(entry.right, Some(old), "scope tree parent link drifted");
+                entry.right = next;
+            }
+        } else {
+            assert_eq!(self.root, Some(old), "scope tree root link drifted");
+            self.root = next;
+        }
+        if let Some(next) = next {
+            self.entry_mut(next).parent = parent;
+        }
+    }
+
+    fn rotate_left(&mut self, index: usize) -> usize {
+        let pivot = self
+            .entry(index)
+            .right
+            .expect("a left rotation has a right child");
+        let middle = self.entry(pivot).left;
+        let parent = self.entry(index).parent;
+        self.link(parent, index, Some(pivot));
+        self.entry_mut(index).right = middle;
+        if let Some(middle) = middle {
+            self.entry_mut(middle).parent = Some(index);
+        }
+        self.entry_mut(pivot).left = Some(index);
+        self.entry_mut(index).parent = Some(pivot);
+        self.update_height(index);
+        self.update_height(pivot);
+        pivot
+    }
+
+    fn rotate_right(&mut self, index: usize) -> usize {
+        let pivot = self
+            .entry(index)
+            .left
+            .expect("a right rotation has a left child");
+        let middle = self.entry(pivot).right;
+        let parent = self.entry(index).parent;
+        self.link(parent, index, Some(pivot));
+        self.entry_mut(index).left = middle;
+        if let Some(middle) = middle {
+            self.entry_mut(middle).parent = Some(index);
+        }
+        self.entry_mut(pivot).right = Some(index);
+        self.entry_mut(index).parent = Some(pivot);
+        self.update_height(index);
+        self.update_height(pivot);
+        pivot
+    }
+
+    fn rebalance(&mut self, mut at: Option<usize>) {
+        while let Some(index) = at {
+            self.update_height(index);
+            let entry = self.entry(index);
+            let left = self.height(entry.left);
+            let right = self.height(entry.right);
+            let root = if left > right && left - right > 1 {
+                let child = entry.left.expect("the taller side is nonempty");
+                let child_entry = self.entry(child);
+                if self.height(child_entry.right) > self.height(child_entry.left) {
+                    self.rotate_left(child);
+                }
+                self.rotate_right(index)
+            } else if right > left && right - left > 1 {
+                let child = entry.right.expect("the taller side is nonempty");
+                let child_entry = self.entry(child);
+                if self.height(child_entry.left) > self.height(child_entry.right) {
+                    self.rotate_right(child);
+                }
+                self.rotate_left(index)
+            } else {
+                index
+            };
+            at = self.entry(root).parent;
+        }
+    }
+
+    fn swap_payloads(&mut self, first: usize, second: usize) {
+        let (first, second) = if first < second {
+            let (before, after) = self.slots.split_at_mut(second);
+            (&mut before[first], &mut after[0])
+        } else {
+            let (before, after) = self.slots.split_at_mut(first);
+            (&mut after[0], &mut before[second])
+        };
+        let (Slot::Live(first), Slot::Live(second)) = (first, second) else {
+            unreachable!("scope tree payload swap names a vacant slot");
+        };
+        mem::swap(&mut first.key, &mut second.key);
+        mem::swap(&mut first.value, &mut second.value);
+    }
+}
+
+impl<K: Ord, V> ScopeTable<K, V> {
+    pub(crate) fn get(&self, key: &K) -> Option<&V> {
+        self.get_by(|candidate| key.cmp(candidate))
+    }
+
+    pub(crate) fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        let index = self.find(|candidate| key.cmp(candidate))?;
+        Some(&mut self.entry_mut(index).value)
+    }
+
+    /// Reserve the actual next array layout without modifying any key/value.
+    /// Consumers may reserve their parallel output destination before insertion.
+    pub(crate) fn reserve_insert<S: Admission + ?Sized>(
+        &mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        if self.free.is_none() {
+            let required = self
+                .slots
+                .len()
+                .checked_add(1)
+                .ok_or(StorageError::SizeOverflow)?;
+            if required > self.slots.capacity() {
+                let capacity = self
+                    .slots
+                    .capacity()
+                    .checked_mul(2)
+                    .ok_or(StorageError::SizeOverflow)?
+                    .max(required);
+                memory.reserve(&mut self.slots, capacity)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Replace the value in place, or admit storage before adding a new key.
+    /// Refusal leaves every existing association unchanged.
+    pub(crate) fn insert<S: Admission + ?Sized>(
+        &mut self,
+        key: K,
+        value: V,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Option<V>, StorageError> {
+        let mut at = self.root;
+        let mut parent = None;
+        let mut left = false;
+        while let Some(index) = at {
+            let entry = self.entry(index);
+            parent = Some(index);
+            at = match key.cmp(&entry.key) {
+                Ordering::Less => {
+                    left = true;
+                    entry.left
+                }
+                Ordering::Greater => {
+                    left = false;
+                    entry.right
+                }
+                Ordering::Equal => {
+                    return Ok(Some(mem::replace(&mut self.entry_mut(index).value, value)));
+                }
+            };
+        }
+        let len = self.len.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+        self.reserve_insert(memory)?;
+        let entry = Entry {
+            key,
+            value,
+            parent,
+            left: None,
+            right: None,
+            height: 1,
+        };
+        let index = if let Some(index) = self.free {
+            let Slot::Free(next) = &self.slots[index] else {
+                unreachable!("scope free list points at a live slot");
+            };
+            self.free = *next;
+            self.slots[index] = Slot::Live(entry);
+            index
+        } else {
+            let index = self.slots.len();
+            self.slots.push(Slot::Live(entry));
+            index
+        };
+        if let Some(parent) = parent {
+            if left {
+                self.entry_mut(parent).left = Some(index);
+            } else {
+                self.entry_mut(parent).right = Some(index);
+            }
+        } else {
+            self.root = Some(index);
+        }
+        self.len = len;
+        self.rebalance(parent);
+        Ok(None)
+    }
+
+    /// Remove an association without allocation; reuse its original slot later.
+    pub(crate) fn remove(&mut self, key: &K) -> Option<V> {
+        let mut index = self.find(|candidate| key.cmp(candidate))?;
+        let entry = self.entry(index);
+        if let (Some(_), Some(mut successor)) = (entry.left, entry.right) {
+            while let Some(left) = self.entry(successor).left {
+                successor = left;
+            }
+            self.swap_payloads(index, successor);
+            index = successor;
+        }
+        let entry = self.entry(index);
+        let parent = entry.parent;
+        let child = entry.left.or(entry.right);
+        self.link(parent, index, child);
+        let Slot::Live(entry) = mem::replace(&mut self.slots[index], Slot::Free(self.free)) else {
+            unreachable!("scope removal names a vacant slot");
+        };
+        self.free = Some(index);
+        self.len -= 1;
+        self.rebalance(parent);
+        Some(entry.value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScopeTable;
+    use core::{cell::Cell, cmp::Ordering};
+    use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+    use std::collections::BTreeMap;
+
+    struct Limit {
+        live: usize,
+        maximum: usize,
+        refusals: usize,
+    }
+
+    impl Admission for Limit {
+        fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+            if live > self.maximum {
+                self.refusals += 1;
+                return Err(StorageError::AdmissionFailed);
+            }
+            self.live = live;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn associations_survive_rotations_deletions_and_vacant_slot_reuse() {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut native = ScopeTable::default();
+        let mut oracle = BTreeMap::new();
+        // Ascending, descending, and interior deletions exercise both directions,
+        // two-child removal, root replacement, and recycled slots.
+        for key in 0..512 {
+            assert_eq!(
+                native.insert(key, key * 7, &mut memory).unwrap(),
+                oracle.insert(key, key * 7)
+            );
+        }
+        for key in (0..512).step_by(3).rev() {
+            assert_eq!(native.remove(&key), oracle.remove(&key));
+        }
+        for key in (0..768).rev() {
+            assert_eq!(
+                native.insert(key, key * 11, &mut memory).unwrap(),
+                oracle.insert(key, key * 11)
+            );
+        }
+        for key in 0..900 {
+            assert_eq!(native.get(&key), oracle.get(&key));
+        }
+        for key in (0..768).step_by(2) {
+            assert_eq!(native.remove(&key), oracle.remove(&key));
+        }
+        for key in (0..768).rev() {
+            assert_eq!(native.remove(&key), oracle.remove(&key));
+        }
+        assert!(native.is_empty());
+        assert_eq!(native.get(&0), None);
+        native.release(&mut memory).unwrap();
+        assert_eq!(memory.live_bytes(), 0);
+    }
+
+    #[test]
+    fn refused_growth_changes_no_live_association_and_release_destroys_first() {
+        let mut limit = Limit {
+            live: 0,
+            maximum: usize::MAX,
+            refusals: 0,
+        };
+        let mut memory = Memory::new(&mut limit);
+        let mut native = ScopeTable::default();
+        native.insert(10, 20, &mut memory).unwrap();
+        let admitted = memory.live_bytes();
+        memory.admission_mut().maximum = admitted;
+        assert_eq!(
+            native.insert(11, 21, &mut memory),
+            Err(StorageError::AdmissionFailed)
+        );
+        assert_eq!(native.get(&10), Some(&20));
+        assert_eq!(native.get(&11), None);
+        assert_eq!(memory.live_bytes(), admitted);
+        assert_eq!(memory.admission_mut().refusals, 1);
+        // Replacement, deletion, and reuse fit the original arena; a zero-growth
+        // operation must stay healthy even after the table's separate refusal.
+        assert_eq!(native.insert(10, 22, &mut memory).unwrap(), Some(20));
+        assert_eq!(native.remove(&10), Some(22));
+        assert_eq!(native.insert(11, 23, &mut memory).unwrap(), None);
+        native.release(&mut memory).unwrap();
+        assert_eq!(memory.admission_mut().live, 0);
+    }
+
+    struct Counted<'a> {
+        key: usize,
+        comparisons: &'a Cell<usize>,
+    }
+    impl PartialEq for Counted<'_> {
+        fn eq(&self, other: &Self) -> bool {
+            self.key == other.key
+        }
+    }
+    impl Eq for Counted<'_> {}
+    impl PartialOrd for Counted<'_> {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for Counted<'_> {
+        fn cmp(&self, other: &Self) -> Ordering {
+            self.comparisons.set(self.comparisons.get() + 1);
+            self.key.cmp(&other.key)
+        }
+    }
+
+    fn wide_comparisons(width: usize) -> usize {
+        let comparisons = Cell::new(0);
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut native = ScopeTable::default();
+        // Sorted lexical identities are the degenerate input for an unbalanced
+        // tree, independently of the parser's whole-pattern consultation count.
+        for key in 0..width {
+            native
+                .insert(
+                    Counted {
+                        key,
+                        comparisons: &comparisons,
+                    },
+                    key,
+                    &mut memory,
+                )
+                .unwrap();
+        }
+        for key in 0..width {
+            assert_eq!(
+                native.get(&Counted {
+                    key,
+                    comparisons: &comparisons
+                }),
+                Some(&key)
+            );
+        }
+        native.release(&mut memory).unwrap();
+        comparisons.get()
+    }
+
+    #[test]
+    fn wide_sorted_lookup_does_not_degrade_to_quadratic_work() {
+        let narrow = wide_comparisons(1024);
+        let wide = wide_comparisons(8192);
+        // Eight times the width: quadratic lookup would require ~64x work.
+        // Logarithmic balanced lookup has room for its increased path height.
+        assert!(wide < narrow * 20, "comparison work: {narrow} -> {wide}");
+    }
+
+    #[test]
+    fn borrowed_lookup_and_clear_need_no_new_storage() {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut native = ScopeTable::default();
+        native.insert(String::from("ex"), 7, &mut memory).unwrap();
+        let live = memory.live_bytes();
+        assert_eq!(native.get_by(|stored| "ex".cmp(stored.as_str())), Some(&7));
+        assert_eq!(native.get_by(|stored| "absent".cmp(stored.as_str())), None);
+        assert_eq!(memory.live_bytes(), live);
+        native.clear();
+        assert!(native.is_empty());
+        assert_eq!(
+            memory.live_bytes(),
+            live,
+            "clear retains covered arena capacity"
+        );
+        native.release(&mut memory).unwrap();
+        assert_eq!(memory.live_bytes(), 0);
+    }
+}

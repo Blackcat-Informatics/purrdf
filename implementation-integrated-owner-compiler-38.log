@@ -1,0 +1,285 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+error[E0308]: mismatched types
+   --> crates/text/tests/search_property_function.rs:799:5
+    |
+775 |   ) -> BTreeSet<IndexGeneration> {
+    |        ------------------------- expected `BTreeSet<IndexGeneration>` because of return type
+...
+799 | /     outcome
+800 | |         .relations()
+801 | |         .witness
+802 | |         .get(SEARCH)
+803 | |         .expect("the relation this query invoked must appear on the receipt")
+804 | |         .generations
+805 | |         .clone()
+    | |________________^ expected `BTreeSet<IndexGeneration>`, found `WitnessSet<IndexGeneration>`
+    |
+    = note: expected struct `BTreeSet<IndexGeneration>`
+               found struct `WitnessSet<IndexGeneration>`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-text` (test "search_property_function") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0624]: method `map_evidence` is private
+   --> crates/sparql-eval/tests/numeric_aggregate_ownership.rs:264:44
+    |
+264 |                   .map_err(|failure| failure.map_evidence(|evidence| evidence.view)),
+    |                                              ^^^^^^^^^^^^ private method
+    |
+   ::: crates/sparql-eval/src/fallible.rs:187:5
+    |
+187 | /     pub(crate) fn map_evidence<V>(
+188 | |         self,
+189 | |         map: impl FnOnce(Evidence) -> V,
+190 | |     ) -> FallibleSparqlError<OperationalError, V> {
+    | |_________________________________________________- private method defined here
+
+error[E0624]: method `map_evidence` is private
+   --> crates/sparql-eval/tests/numeric_aggregate_ownership.rs:274:44
+    |
+274 |                   .map_err(|failure| failure.map_evidence(|evidence| evidence.view)),
+    |                                              ^^^^^^^^^^^^ private method
+    |
+   ::: crates/sparql-eval/src/fallible.rs:187:5
+    |
+187 | /     pub(crate) fn map_evidence<V>(
+188 | |         self,
+189 | |         map: impl FnOnce(Evidence) -> V,
+190 | |     ) -> FallibleSparqlError<OperationalError, V> {
+    | |_________________________________________________- private method defined here
+
+For more information about this error, try `rustc --explain E0624`.
+error: could not compile `purrdf-sparql-eval` (test "numeric_aggregate_ownership") due to 2 previous errors
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/governed_query.rs:301:39
+    |
+299 | fn graph_of(result: &SparqlResult) -> &Arc<RdfDataset> {
+    |                                       ---------------- expected `&Arc<purrdf_core::RdfDataset>` because of return type
+300 |     match result {
+301 |         SparqlResult::Graph(graph) => graph,
+    |                                       ^^^^^ expected `&Arc<RdfDataset>`, found `&DatasetHandle`
+    |
+    = note: expected reference `&Arc<purrdf_core::RdfDataset>`
+               found reference `&DatasetHandle`
+
+error: could not compile `purrdf-sparql-eval` (test "governed_query") due to 1 previous error
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/union_join_positions.rs:381:31
+    |
+381 |         assert_eq!(rows.rows, vec![expected; 2]);
+    |                               ^^^^^^^^^^^^^^^^^ expected `RowBag`, found `Vec<SmallVec<[Option<SolutionTerm>; 4]>>`
+    |
+    = note: expected struct `RowBag`
+               found struct `Vec<SmallVec<[Option<SolutionTerm>; 4]>>`
+help: call `Into::into` on this expression to convert `Vec<SmallVec<[Option<SolutionTerm>; 4]>>` into `RowBag`
+    |
+381 |         assert_eq!(rows.rows, vec![expected; 2].into());
+    |                                                +++++++
+
+error: could not compile `purrdf-sparql-eval` (test "union_join_positions") due to 1 previous error
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/translated_property_paths.rs:427:9
+    |
+426 |     let (variables, rows) = solutions(run_prefixed(
+    |                                       ------------ arguments to this function are incorrect
+427 |         &graph,
+    |         ^^^^^^ expected `&Arc<RdfDataset>`, found `&DatasetHandle`
+    |
+    = note: expected reference `&Arc<purrdf_core::RdfDataset>`
+               found reference `&DatasetHandle`
+note: function defined here
+   --> crates/sparql-eval/tests/support/mod.rs:179:8
+    |
+179 | pub fn run_prefixed(ds: &Arc<RdfDataset>, prefix: &str, query_body: &str) -> SparqlResult {
+    |        ^^^^^^^^^^^^ --------------------
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/translated_property_paths.rs:458:27
+    |
+458 |             &run_prefixed(&graph, PREFIX, "SELECT ?s ?o WHERE { ?s ex:reachable ?o }"),
+    |              ------------ ^^^^^^ expected `&Arc<RdfDataset>`, found `&DatasetHandle`
+    |              |
+    |              arguments to this function are incorrect
+    |
+    = note: expected reference `&Arc<purrdf_core::RdfDataset>`
+               found reference `&DatasetHandle`
+note: function defined here
+   --> crates/sparql-eval/tests/support/mod.rs:179:8
+    |
+179 | pub fn run_prefixed(ds: &Arc<RdfDataset>, prefix: &str, query_body: &str) -> SparqlResult {
+    |        ^^^^^^^^^^^^ --------------------
+
+error: could not compile `purrdf-sparql-eval` (test "translated_property_paths") due to 2 previous errors
+error[E0614]: type `purrdf_core::RdfDataset` cannot be dereferenced
+    --> crates/sparql-eval/tests/segmented_query.rs:1213:18
+     |
+1213 |                 &**resident,
+     |                  ^^^^^^^^^^ can't be dereferenced
+
+For more information about this error, try `rustc --explain E0614`.
+error: could not compile `purrdf-sparql-eval` (test "segmented_query") due to 1 previous error
+error[E0277]: can't compare `WitnessSet<SharedText>` with `BTreeSet<std::string::String>`
+   --> crates/sparql-eval/tests/relation_witness.rs:320:5
+    |
+320 | /     assert_eq!(
+321 | |         attested.incompleteness,
+322 | |         BTreeSet::from([SHARD_REASON.to_owned()]),
+323 | |         "the incompleteness declared at close is reported on this receipt, verbatim"
+324 | |     );
+    | |_____^ no implementation for `WitnessSet<SharedText> == BTreeSet<std::string::String>`
+    |
+    = help: the trait `PartialEq<BTreeSet<std::string::String>>` is not implemented for `WitnessSet<SharedText>`
+help: `WitnessSet<T>` implements trait `PartialEq<Rhs>`
+   --> crates/sparql-eval/src/witness.rs:284:1
+    |
+284 | impl<T: PartialEq> PartialEq for WitnessSet<T> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `PartialEq`
+...
+290 | impl<T: Ord> PartialEq<BTreeSet<T>> for WitnessSet<T> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `PartialEq<BTreeSet<T>>`
+
+error[E0277]: can't compare `WitnessSet<SharedText>` with `BTreeSet<std::string::String>`
+   --> crates/sparql-eval/tests/relation_witness.rs:383:5
+    |
+383 | /     assert_eq!(
+384 | |         attested.incompleteness,
+385 | |         BTreeSet::from([SHARD_REASON.to_owned()])
+386 | |     );
+    | |_____^ no implementation for `WitnessSet<SharedText> == BTreeSet<std::string::String>`
+    |
+    = help: the trait `PartialEq<BTreeSet<std::string::String>>` is not implemented for `WitnessSet<SharedText>`
+help: `WitnessSet<T>` implements trait `PartialEq<Rhs>`
+   --> crates/sparql-eval/src/witness.rs:284:1
+    |
+284 | impl<T: PartialEq> PartialEq for WitnessSet<T> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `PartialEq`
+...
+290 | impl<T: Ord> PartialEq<BTreeSet<T>> for WitnessSet<T> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `PartialEq<BTreeSet<T>>`
+
+error[E0277]: can't compare `WitnessSet<SharedText>` with `BTreeSet<std::string::String>`
+   --> crates/sparql-eval/tests/relation_witness.rs:467:9
+    |
+467 |         assert_eq!(attested.incompleteness, expected);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no implementation for `WitnessSet<SharedText> == BTreeSet<std::string::String>`
+    |
+    = help: the trait `PartialEq<BTreeSet<std::string::String>>` is not implemented for `WitnessSet<SharedText>`
+help: `WitnessSet<T>` implements trait `PartialEq<Rhs>`
+   --> crates/sparql-eval/src/witness.rs:284:1
+    |
+284 | impl<T: PartialEq> PartialEq for WitnessSet<T> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `PartialEq`
+...
+290 | impl<T: Ord> PartialEq<BTreeSet<T>> for WitnessSet<T> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `PartialEq<BTreeSet<T>>`
+
+error[E0277]: can't compare `WitnessSet<SharedText>` with `BTreeSet<std::string::String>`
+   --> crates/sparql-eval/tests/relation_witness.rs:498:5
+    |
+498 | /     assert_eq!(
+499 | |         attested.incompleteness,
+500 | |         BTreeSet::from([SHARD_REASON.to_owned()]),
+501 | |         "and the late declaration still reached the receipt"
+502 | |     );
+    | |_____^ no implementation for `WitnessSet<SharedText> == BTreeSet<std::string::String>`
+    |
+    = help: the trait `PartialEq<BTreeSet<std::string::String>>` is not implemented for `WitnessSet<SharedText>`
+help: `WitnessSet<T>` implements trait `PartialEq<Rhs>`
+   --> crates/sparql-eval/src/witness.rs:284:1
+    |
+284 | impl<T: PartialEq> PartialEq for WitnessSet<T> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `PartialEq`
+...
+290 | impl<T: Ord> PartialEq<BTreeSet<T>> for WitnessSet<T> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `PartialEq<BTreeSet<T>>`
+
+error[E0277]: a value of type `Vec<(std::string::String, BTreeSet<IndexGeneration>, BTreeSet<std::string::String>)>` cannot be built from an iterator over elements of type `(std::string::String, WitnessSet<IndexGeneration>, WitnessSet<SharedText>)`
+    --> crates/sparql-eval/tests/relation_witness.rs:727:14
+     |
+ 727 |             .collect()
+     |              ^^^^^^^ value of type `Vec<(std::string::String, BTreeSet<IndexGeneration>, BTreeSet<std::string::String>)>` cannot be built from `std::iter::Iterator<Item=(std::string::String, WitnessSet<IndexGeneration>, WitnessSet<SharedText>)>`
+     |
+help: the trait `FromIterator<(String, WitnessSet<IndexGeneration>, WitnessSet<SharedText>)>` is not implemented for `Vec<(std::string::String, BTreeSet<IndexGeneration>, BTreeSet<std::string::String>)>`
+      but trait `FromIterator<(String, BTreeSet<IndexGeneration>, BTreeSet<std::string::String>)>` is implemented for it
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/vec/mod.rs:4036:1
+     |
+4036 | impl<T> FromIterator<T> for Vec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `BTreeSet<IndexGeneration>`, found `WitnessSet<IndexGeneration>`
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (test "relation_witness") due to 5 previous errors
+error: unused import: `DatasetView`
+ --> crates/sparql-eval/tests/custom_aggregate_ownership.rs:9:19
+  |
+9 | use purrdf_core::{DatasetView, SegmentedError, TermValue};
+  |                   ^^^^^^^^^^^
+  |
+  = note: `-D unused-imports` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: could not compile `purrdf-sparql-eval` (test "custom_aggregate_ownership") due to 1 previous error
+error[E0308]: mismatched types
+   --> crates/rdf/src/projections/dataset_description.rs:283:9
+    |
+283 |         dataset,
+    |         ^^^^^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+    |
+    = note: expected struct `Arc<purrdf_core::RdfDataset>`
+               found struct `DatasetHandle`
+
+error: could not compile `purrdf-rdf` (lib) due to 1 previous error
+error[E0599]: no method named `read_error` found for struct `SegmentedSession` in the current scope
+   --> crates/sparql-eval/tests/correlated_owned_admission.rs:153:28
+    |
+153 |             assert!(source.read_error().is_none());
+    |                            ^^^^^^^^^^ method not found in `SegmentedSession`
+    |
+   ::: crates/rdf-core/src/dataset_view.rs:386:8
+    |
+386 |     fn read_error(&self) -> Option<Self::ReadError> {
+    |        ---------- the method is available for `SegmentedSession` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `DatasetView` which provides `read_error` is implemented but not in scope; perhaps you want to import it
+    |
+  6 + use purrdf_core::DatasetView;
+    |
+
+error[E0599]: no method named `read_error` found for struct `SegmentedSession` in the current scope
+   --> crates/sparql-eval/tests/correlated_owned_admission.rs:246:28
+    |
+246 |             assert!(source.read_error().is_none());
+    |                            ^^^^^^^^^^ method not found in `SegmentedSession`
+    |
+   ::: crates/rdf-core/src/dataset_view.rs:386:8
+    |
+386 |     fn read_error(&self) -> Option<Self::ReadError> {
+    |        ---------- the method is available for `SegmentedSession` here
+    |
+    = help: items from traits can only be used if the trait is in scope
+help: trait `DatasetView` which provides `read_error` is implemented but not in scope; perhaps you want to import it
+    |
+  6 + use purrdf_core::DatasetView;
+    |
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-sparql-eval` (test "correlated_owned_admission") due to 2 previous errors
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/ranked_declaration.rs:174:36
+    |
+174 |     assert_eq!(ranked_for(EX_REL), Some(declaration()));
+    |                                    ^^^^^^^^^^^^^^^^^^^ expected `Option<Arc<RankedDeclaration>>`, found `Option<RankedDeclaration>`
+    |
+    = note: expected enum `Option<Arc<RankedDeclaration>>`
+               found enum `Option<RankedDeclaration>`
+
+error: could not compile `purrdf-sparql-eval` (test "ranked_declaration") due to 1 previous error

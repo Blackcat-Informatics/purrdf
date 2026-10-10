@@ -1,0 +1,420 @@
+--- a/crates/sparql-eval/src/bgp.rs
++++ b/crates/sparql-eval/src/bgp.rs
+@@ -1908,7 +1908,7 @@
+     else {
+         return Ok(None);
+     };
+-    let Some(p) = compile_predicate_admitted(&pattern.predicate, schema, dataset, workspace)?
++    let Some(p) = compile_predicate_admitted(&pattern.predicate, schema, dataset, workspace, source_error)?
+     else {
+         return Ok(None);
+     };
+@@ -2131,7 +2131,13 @@
+             }
+         } else {
+             let Some(p) =
+-                compile_predicate_admitted(&entry.triple.predicate, schema, dataset, workspace)?
++                compile_predicate_admitted(
++                    &entry.triple.predicate,
++                    schema,
++                    dataset,
++                    workspace,
++                    source_error,
++                )?
+             else {
+                 return Ok(None);
+             };
+@@ -2174,6 +2180,7 @@
+         schema,
+         dataset,
+         &crate::WorkspaceCapability::resident(),
++        &EvalError::source_read,
+     )
+     .expect("resident predicate compilation")
+ }
+@@ -2183,12 +2190,13 @@
+     schema: &VarSchema,
+     dataset: &D,
+     workspace: &crate::WorkspaceCapability,
++    source_error: &impl Fn(D::ReadError) -> EvalError,
+ ) -> Result<Option<Pos<D::Id>>, EvalError> {
+     match predicate {
+         NamedNodePattern::Variable(variable) => Ok(Some(Pos::Slot(slot_col(schema, variable)))),
+         NamedNodePattern::NamedNode(node) => {
+             let value = crate::convert::named_node_to_workspace_value(node, workspace)?;
+-            Ok(dataset.term_id_if_ready(&value).map(Pos::Bound))
++            Ok(dataset.term_id_by_value(&value).map_err(source_error)?.map(Pos::Bound))
+         }
+     }
+ }
+@@ -3021,7 +3029,7 @@
+             GraphPattern::Graph { name, inner } => match name {
+                 NamedNodePattern::NamedNode(n) => {
+                     let name = crate::convert::named_node_to_workspace_value(n, &workspace)?;
+-                    match addressed_graph(dataset, active_dataset, &name) {
++                    match addressed_graph(dataset, active_dataset, &name, &|error| account.source_error(error))? {
+                         Some(graph) => steps.push(Step::Visit(inner, GraphMatch::Named(graph)))?,
+                         // An empty scope: the block yields no row and its inner pattern
+                         // is never evaluated, so the block's estimate is zero.
+@@ -3062,16 +3070,22 @@
+ /// (`modifier::eval_graph`): the name's term, when it names a graph of `dataset` that
+ /// `active_dataset`'s named set admits. `None` is an empty scope — never the default
+ /// graph — whether the name is absent from the dictionary, a term that names no graph,
+-/// or excluded by `FROM NAMED`. A lookup that is not ready prices as an empty scope too,
+-/// the under-count this survey is documented to fail towards.
++/// or excluded by `FROM NAMED`. Operational lookup failures preserve their original
++/// source cause instead of certifying an empty scope.
++///
++/// # Errors
++///
++/// The source's typed reverse-lookup refusal.
+ pub(crate) fn addressed_graph<D: DatasetView>(
+     dataset: &D,
+     active_dataset: &ActiveDataset<D::Id>,
+     name: &purrdf_core::TermValue,
+-) -> Option<D::Id> {
+-    dataset
+-        .term_id_if_ready(name)
+-        .filter(|&id| dataset.has_named_graph(id) && active_dataset.named_allows(id))
++    source_error: &impl Fn(D::ReadError) -> EvalError,
++) -> Result<Option<D::Id>, EvalError> {
++    Ok(dataset
++        .term_id_by_value(name)
++        .map_err(source_error)?
++        .filter(|&id| dataset.has_named_graph(id) && active_dataset.named_allows(id)))
+ }
+ 
+ /// Survey one basic graph pattern — `node`, holding `patterns` — for
+--- a/crates/sparql-eval/tests/query_completion.rs
++++ b/crates/sparql-eval/tests/query_completion.rs
+@@ -89,6 +89,20 @@
+     owned_bytes: AtomicU64,
+     final_checkpoint: AtomicUsize,
+ }
++impl SourceState {
++    /// Requires the final cache, execution, and published-result owners to release
++    /// the same original account without inventing a second bounded permit.
++    fn assert_released(&self) {
++        assert_eq!(self.reporting_guards.load(Ordering::Relaxed), 0);
++        assert_eq!(self.execution_guards.load(Ordering::Relaxed), 0);
++        assert_eq!(self.owned_bytes.load(Ordering::Relaxed), 0);
++    }
++}
++impl Drop for SourceState {
++    fn drop(&mut self) {
++        self.assert_released();
++    }
++}
+ impl std::ops::Deref for Source {
+     type Target = SourceState;
+ 
+@@ -122,12 +136,6 @@
+     fn refuse(&self) {
+         self.failed.store(true, Ordering::Relaxed);
+     }
+-    /// Verifies that returning from an operation releases both workspace owners.
+-    fn assert_released(&self) {
+-        assert_eq!(self.reporting_guards.load(Ordering::Relaxed), 0);
+-        assert_eq!(self.execution_guards.load(Ordering::Relaxed), 0);
+-        assert_eq!(self.owned_bytes.load(Ordering::Relaxed), 0);
+-    }
+     /// Requires the published receipt to match the last checkpoint before cleanup.
+     fn assert_receipt(&self, receipt: &Receipt) {
+         assert_eq!(
+@@ -460,10 +468,18 @@
+     assert!(error.partial_answers().is_none());
+     assert!(error.tripped().is_none());
+     source.assert_receipt(error.evidence().view_receipt());
+-    source.assert_released();
++    assert_eq!(source.execution_guards.load(Ordering::Relaxed), 0);
++    if source.storage_live_budget().is_none() {
++        source.assert_released();
++    }
++    // A bounded engine may retain its admitted key scratch after failure. Its
++    // original account must live until that cache is destroyed, not until this
++    // receipt is sampled. SourceState checks exact zero at final destruction.
+     error
+ }
+ const LOOKUP_QUERY: &str = "SELECT ?s WHERE { ?s <https://example.org/p> ?o }";
++const GRAPH_LOOKUP_QUERY: &str =
++    "SELECT ?s WHERE { GRAPH <https://example.org/g> { ?s ?p ?o } }";
+ const CONSTRUCT: &str = "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }";
+ 
+ #[derive(Clone, Copy)]
+@@ -700,7 +716,6 @@
+ }
+ /// Direct reservation and lookup refusals retain their cause without a sticky failure.
+ fn direct_execution_admission_failures_keep_their_typed_cause_and_exact_evidence() {
+-    let engine = NativeSparqlEngine::new();
+     for site in [
+         RefusalSite::Execution,
+         RefusalSite::ExecutionInitial,
+@@ -718,6 +733,7 @@
+             RefusedRead::Workspace
+         };
+         for route in LOCAL_ROUTES {
++            let engine = NativeSparqlEngine::new();
+             let source = Source::at(site);
+             assert_query_refusal(&engine, &source, route, query, expected);
+             assert!(source.read_error().is_none());
+@@ -738,8 +754,11 @@
+             if site != RefusalSite::Lookup {
+                 assert_eq!(receipt.reads, 0, "admission refusal precedes evaluation");
+             }
++            drop(engine);
++            source.assert_released();
+         }
+     }
++    let engine = NativeSparqlEngine::new();
+     for route in SOURCE_ROUTES {
+         assert_query_refusal(
+             &engine,
+@@ -750,6 +769,33 @@
+         );
+     }
+ }
++/// A graph-name forecast and the actual query must preserve a direct lookup
++/// refusal, even when the provider has no sticky failure and no graph exists.
++fn named_graph_lookup_refusal_never_certifies_an_empty_scope() {
++    for route in LOCAL_ROUTES {
++        let engine = NativeSparqlEngine::new();
++        let source = Source::at(RefusalSite::Lookup);
++        assert_query_refusal(&engine, &source, route, GRAPH_LOOKUP_QUERY, RefusedRead::Lookup);
++        assert!(source.read_error().is_none());
++        assert!(source.reads.load(Ordering::Relaxed) > 0);
++        drop(engine);
++        source.assert_released();
++    }
++    for route in EXPLAIN_ROUTES {
++        let engine = NativeSparqlEngine::new();
++        let source = Source::at(RefusalSite::Lookup);
++        let error = assert_source_refusal(
++            explain(&engine, &source, route, GRAPH_LOOKUP_QUERY),
++            &source,
++            RefusedRead::Lookup,
++        );
++        assert!(source.read_error().is_none());
++        assert!(error.evidence().reads > 0);
++        drop(error);
++        drop(engine);
++        source.assert_released();
++    }
++}
+ /// A latched storage root takes precedence over the admission error that exposed it.
+ fn sticky_operational_root_outranks_the_direct_admission_error() {
+     let engine = NativeSparqlEngine::new();
+@@ -772,7 +818,6 @@
+ }
+ /// Admission failure prevents visitor entry and leaves the retained handle reusable.
+ fn refused_execution_never_invokes_a_scoped_visitor_and_the_handle_can_retry() {
+-    let engine = NativeSparqlEngine::new();
+     for site in [
+         RefusalSite::Reporting,
+         RefusalSite::Execution,
+@@ -781,6 +826,7 @@
+         RefusalSite::ExecutionSticky,
+         RefusalSite::Lookup,
+     ] {
++        let engine = NativeSparqlEngine::new();
+         let query = if site == RefusalSite::Lookup {
+             LOOKUP_QUERY
+         } else {
+@@ -815,6 +861,11 @@
+         assert!(visited.load(Ordering::Relaxed));
+         assert_eq!(value, 7);
+         assert_held_receipt(&healthy, &receipt);
++        drop(receipt);
++        drop(execution);
++        drop(engine);
++        source.assert_released();
++        healthy.assert_released();
+     }
+ }
+ /// Requires successful reads and workspace ownership through the final checkpoint.
+@@ -850,9 +901,18 @@
+ fn assert_complete_query<V: ViewReceipt>(
+     source: &Source,
+     answer: purrdf_sparql_eval::CompleteSparqlResult<V>,
++    engine: NativeSparqlEngine,
++    prepared: PreparedQuery,
++    state: Arc<GovernorState>,
+ ) {
+     assert_eq!(answer.result.solutions().expect("SELECT shape").1.len(), 1);
+     assert_held_receipt(source, answer.evidence.view_receipt());
++    // The result is the remaining publication owner only after operational
++    // governor handles, the prepared plan, and the engine's admitted key/cache
++    // buffers have been destroyed.
++    drop(state);
++    drop(prepared);
++    drop(engine);
+     let (result, evidence) = answer.into_parts();
+     let clone = result.clone();
+     let solutions = result.into_solutions().expect("SELECT extraction");
+@@ -876,10 +936,10 @@
+ }
+ /// Successful query routes retain workspace through publication for bounded and unbounded views.
+ fn healthy_query_routes_hold_execution_admission_through_final_checkpoint() {
+-    let engine = NativeSparqlEngine::new();
+-    let prepared = engine.prepare_query(QUERY, None).expect("prepare fixture");
+     for site in [RefusalSite::Never, RefusalSite::BoundedHealthy] {
+         for route in LOCAL_ROUTES {
++            let engine = NativeSparqlEngine::new();
++            let prepared = engine.prepare_query(QUERY, None).expect("prepare fixture");
+             let source = Source::at(site);
+             let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+             match route {
+@@ -888,12 +948,18 @@
+                     engine
+                         .query_fallible_view(&source, request(QUERY), QueryOptions::EMPTY)
+                         .expect("healthy owned query"),
++                    engine,
++                    prepared,
++                    state,
+                 ),
+                 QueryRoute::Prepared => assert_complete_query(
+                     &source,
+                     engine
+                         .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                         .expect("healthy prepared query"),
++                    engine,
++                    prepared,
++                    state,
+                 ),
+                 QueryRoute::Governed => assert_complete_query(
+                     &source,
+@@ -905,6 +971,9 @@
+                             &QueryGovernors::METERED,
+                         )
+                         .expect("healthy governed query"),
++                    engine,
++                    prepared,
++                    state,
+                 ),
+                 QueryRoute::PreparedGoverned => assert_complete_query(
+                     &source,
+@@ -917,6 +986,9 @@
+                             &QueryGovernors::METERED,
+                         )
+                         .expect("healthy per-call prepared query"),
++                    engine,
++                    prepared,
++                    state,
+                 ),
+                 QueryRoute::Shared => {
+                     let answer = engine
+@@ -929,7 +1001,7 @@
+                         )
+                         .expect("healthy shared operation");
+                     assert_eq!(answer.evidence.governors, state.evidence());
+-                    assert_complete_query(&source, answer);
++                    assert_complete_query(&source, answer, engine, prepared, state);
+                 }
+                 QueryRoute::GovernedSource
+                 | QueryRoute::PreparedGovernedSource
+@@ -1106,7 +1178,6 @@
+ }
+ /// Every EXPLAIN entry preserves admission causes and publishes no measuring ledger.
+ fn explain_admission_failures_remain_typed_without_an_explanation() {
+-    let engine = NativeSparqlEngine::new();
+     for site in [
+         RefusalSite::Reporting,
+         RefusalSite::Execution,
+@@ -1129,6 +1200,7 @@
+             QUERY
+         };
+         for route in EXPLAIN_ROUTES {
++            let engine = NativeSparqlEngine::new();
+             let source = Source::at(site);
+             let error =
+                 assert_source_refusal(explain(&engine, &source, route, query), &source, expected);
+@@ -1155,6 +1227,9 @@
+             if site != RefusalSite::Lookup {
+                 assert_eq!(receipt.reads, 0);
+             }
++            drop(error);
++            drop(engine);
++            source.assert_released();
+         }
+     }
+ }
+@@ -1201,9 +1276,9 @@
+ }
+ /// Checked EXPLAIN preserves resident bytes and governor evidence while holding workspace.
+ fn healthy_explain_is_identical_to_resident_and_holds_admission_through_publication() {
+-    let engine = NativeSparqlEngine::new();
+     for site in [RefusalSite::Never, RefusalSite::BoundedHealthy] {
+         for route in EXPLAIN_ROUTES {
++            let engine = NativeSparqlEngine::new();
+             let source = Source::at(site);
+             let expected = engine
+                 .explain_query(&source.resident, QUERY, None)
+@@ -1214,6 +1289,9 @@
+             assert_eq!(actual.evidence(), expected.evidence());
+             assert_eq!(actual.evidence().tripped, None);
+             assert_held_receipt(&source, &receipt);
++            drop(expected);
++            drop(engine);
++            drop(receipt);
+             if site == RefusalSite::BoundedHealthy {
+                 assert!(source.owned_bytes.load(Ordering::Relaxed) > 0);
+                 let clone = actual.clone();
+@@ -1226,6 +1304,7 @@
+             source.assert_released();
+         }
+     }
++    let engine = NativeSparqlEngine::new();
+     let source = Source::at(RefusalSite::Never);
+     let options = QueryOptions::EMPTY
+         .with_prebinding(ShaclPrebinding::Applied)
+@@ -1238,6 +1317,11 @@
+         .expect("operational configured explanation");
+     assert_eq!(actual.render(), expected.render());
+     assert_held_receipt(&source, &receipt);
++    drop(expected);
++    drop(engine);
++    drop(receipt);
++    drop(actual);
++    source.assert_released();
+ }
+ /// Query diagnostics retain exact final evidence unless a later storage root supersedes them.
+ fn healthy_explain_preserves_parse_and_evaluation_diagnostics_and_final_evidence() {
+@@ -1323,8 +1407,8 @@
+ }
+ /// Cancellation preserves a healthy stopped explanation, but concurrent storage failure wins.
+ fn explain_stop_retains_stopped_receipt_while_operational_failure_takes_precedence() {
+-    let engine = NativeSparqlEngine::new();
+     for site in [RefusalSite::Never, RefusalSite::BoundedHealthy] {
++        let engine = NativeSparqlEngine::new();
+         let source = Source::at(site);
+         let stop = CancellationFlag::new();
+         stop.cancel();
+@@ -1354,12 +1438,21 @@
+         );
+         assert_eq!(actual.render(), expected.render());
+         assert_workspace_receipt(&source, &receipt);
++        drop(expected);
++        drop(engine);
++        drop(receipt);
++        let clone = actual.clone();
+         if site == RefusalSite::BoundedHealthy {
+             assert!(source.owned_bytes.load(Ordering::Relaxed) > 0);
+         }
+         drop(actual);
++        if site == RefusalSite::BoundedHealthy {
++            assert!(source.owned_bytes.load(Ordering::Relaxed) > 0);
++        }
++        drop(clone);
+         source.assert_released();
+     }
++    let engine = NativeSparqlEngine::new();
+     let source = Source::at(RefusalSite::Checkpoint);
+     let stop = CancellationFlag::new();
+     stop.cancel();
+@@ -1670,6 +1763,7 @@
+     retained_prepared_visits_remain_inside_the_checked_publication_scope,
+     refused_reporting_admission_remains_typed_even_before_sticky_failure,
+     direct_execution_admission_failures_keep_their_typed_cause_and_exact_evidence,
++    named_graph_lookup_refusal_never_certifies_an_empty_scope,
+     sticky_operational_root_outranks_the_direct_admission_error,
+     refused_execution_never_invokes_a_scoped_visitor_and_the_handle_can_retry,
+     healthy_query_routes_hold_execution_admission_through_final_checkpoint,

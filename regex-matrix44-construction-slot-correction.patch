@@ -1,0 +1,20 @@
+--- a/crates/rdf-core/src/xsd_regex/xpath/compile.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/compile.rs
+@@ -545,13 +545,17 @@
+         properties,
+         ..
+     } = parser;
++    let construction_slots = frames.capacity() as u64 * 6 + properties.capacity() as u64;
+     budget.release_vec(frames)?;
+     budget.release_vec(properties)?;
++    budget.release_compile_slots(construction_slots);
+     scanner.release(&mut budget)?;
+     budget.release_compile_slots(scanner_slots);
+     if let Some((text, offsets)) = normalized {
+         budget.release_string(text)?;
+         budget.release_vec(offsets)?;
++        // These construction-only owners were charged together by strip_bounded.
++        budget.release_compile_slots(pattern.len() as u64 * 2 + 1);
+     }
+     let links = super::pike::analyze(&nodes, root, &mut budget)?;
+     let admission = Admission {

@@ -1,0 +1,35 @@
+/// Assemble the actual nested constructor from already admitted native operands.
+/// Ownership is transferred only after all three fallible boxes exist. The new
+/// payload grant covers the exact moved strings/child boxes and the three new
+/// native boxes while the original operand grants still cover those operands.
+pub(crate) fn triple_value_admitted(
+    s: Option<crate::WorkspaceTerm>, p: Option<crate::WorkspaceTerm>, o: Option<crate::WorkspaceTerm>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+    let (Some(s), Some(p), Some(o)) = (s, p, o) else { return Ok(None); };
+    if !matches!(&*s, TermValue::Iri(_) | TermValue::Blank { .. }) || !matches!(&*p, TermValue::Iri(_)) {
+        return Ok(None);
+    }
+    let mut bytes = 0u64;
+    for value in [&*s, &*p, &*o] {
+        bytes = bytes.checked_add(crate::retained::term_layout(value, workspace)?.bytes)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    }
+    let boxes = std::alloc::Layout::array::<TermValue>(3).map_err(|_| EvalError::WorkspaceBoundOverflow)?.size();
+    bytes = bytes.checked_add(u64::try_from(boxes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    let admission = workspace.charge(bytes)?;
+    let (s, s_owner) = s.into_parts();
+    let (p, p_owner) = p.into_parts();
+    let (o, o_owner) = o.into_parts();
+    let s = purrdf_core::small::try_boxed(s)
+        .map_err(|_| EvalError::AllocationFailed { construct: "TRIPLE subject box" })?;
+    let p = purrdf_core::small::try_boxed(p)
+        .map_err(|_| EvalError::AllocationFailed { construct: "TRIPLE predicate box" })?;
+    let o = purrdf_core::small::try_boxed(o)
+        .map_err(|_| EvalError::AllocationFailed { construct: "TRIPLE object box" })?;
+    let value = TermValue::Triple { s: s.into(), p: p.into(), o: o.into() };
+    let value = crate::WorkspaceTerm::new(value, admission);
+    drop((s_owner, p_owner, o_owner));
+    Ok(Some(value))
+}

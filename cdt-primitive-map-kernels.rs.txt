@@ -1,0 +1,144 @@
+fn release_keyed(mut keyed: Vec<(CdtKey, usize)>, memory: &mut Memory<'_>) -> Result<(), StorageError> {
+    for (key, _) in keyed.drain(..) { key.release_with_memory(memory)?; }
+    memory.release_vec(keyed)
+}
+
+fn map_constructor_with_memory(pairs: &[(CdtTerm, CdtTerm)], memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let mut keyed: Vec<(CdtKey, usize)> = Vec::new();
+    for (index, (key, _)) in pairs.iter().enumerate() {
+        if let Some(key) = CdtKey::from_term_with_memory(key, memory)? {
+            memory.push(&mut keyed, (key, index))?;
+        }
+    }
+    // Unique author indices make this exact original latest-binding-first order
+    // strict. The unstable sorter therefore changes no tie or winning key.
+    keyed.sort_unstable_by(|a, b| total_key_cmp(&a.0, &b.0).then_with(|| b.1.cmp(&a.1)));
+    let mut kept = 0usize;
+    for read in 0..keyed.len() {
+        if kept != 0 && keyed[kept - 1].0 == keyed[read].0 {
+            let key = core::mem::replace(&mut keyed[read].0, CdtKey::Iri(alloc::string::String::new()));
+            key.release_with_memory(memory)?;
+        } else {
+            keyed.swap(kept, read);
+            kept += 1;
+        }
+    }
+    keyed.truncate(kept);
+    let extent = try_map_extent(keyed.iter().map(|(key, index)| (key, &pairs[*index].1)), memory)?;
+    if let Err(error) = check_extent(&extent) {
+        release_keyed(keyed, memory)?;
+        return Ok(CdtOutcome::Bound(error));
+    }
+    let mut entries = Vec::new();
+    memory.reserve(&mut entries, keyed.len())?;
+    for (key, index) in keyed.drain(..) {
+        let value = pairs[index].1.clone_with_memory(memory)?;
+        entries.push(CdtEntry { key, value });
+    }
+    memory.release_vec(keyed)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_entries(entries, extent)))
+}
+
+fn map_get_with_memory(entries: &[CdtEntry], key: &CdtTerm, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtTerm>, StorageError> {
+    let Some(key) = CdtKey::from_term_with_memory(key, memory)? else {
+        return Ok(raise("cdt:get on a cdt:Map was given a term that cannot be a map key"));
+    };
+    let found = entries.binary_search_by(|entry| total_key_cmp(&entry.key, &key));
+    key.release_with_memory(memory)?;
+    let Ok(index) = found else {
+        return Ok(raise("cdt:get on a cdt:Map addressed a key the map does not hold"));
+    };
+    if entries[index].value.is_null() { return Ok(raise("cdt:get on a cdt:Map addressed a key whose value is null")); }
+    Ok(CdtOutcome::Value(entries[index].value.clone_with_memory(memory)?))
+}
+
+fn map_contains_key_with_memory(entries: &[CdtEntry], key: &CdtTerm, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+    let Some(key) = CdtKey::from_term_with_memory(key, memory)? else { return Ok(false); };
+    let found = entries.binary_search_by(|entry| total_key_cmp(&entry.key, &key)).is_ok();
+    key.release_with_memory(memory)?;
+    Ok(found)
+}
+
+fn map_keys_with_memory(entries: &[CdtEntry], memory: &mut Memory<'_>) -> Result<CdtValue, StorageError> {
+    let mut items = Vec::new();
+    memory.reserve(&mut items, entries.len())?;
+    for entry in entries { items.push(entry.key.to_term_with_memory(memory)?); }
+    let extent = try_list_extent(items.iter(), memory)?;
+    Ok(CdtValue::from_checked_items(items, extent))
+}
+
+fn map_put_with_memory(entries: &[CdtEntry], key: &CdtTerm, value: &CdtTerm, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let Some(key) = CdtKey::from_term_with_memory(key, memory)? else {
+        return Ok(raise("cdt:put was given a term that cannot be a map key"));
+    };
+    let position = entries.binary_search_by(|entry| total_key_cmp(&entry.key, &key));
+    let mut pairs: Vec<(&CdtKey, &CdtTerm)> = Vec::new();
+    memory.reserve(&mut pairs, entries.len().checked_add(1).ok_or(StorageError::SizeOverflow)?)?;
+    match position {
+        Ok(replaced) => {
+            for (index, entry) in entries.iter().enumerate() {
+                let stored = if index == replaced { value } else { &entry.value };
+                pairs.push((&entry.key, stored));
+            }
+        }
+        Err(insert) => {
+            pairs.extend(entries[..insert].iter().map(|entry| (&entry.key, &entry.value)));
+            pairs.push((&key, value));
+            pairs.extend(entries[insert..].iter().map(|entry| (&entry.key, &entry.value)));
+        }
+    }
+    let extent = try_map_extent(pairs.iter().copied(), memory)?;
+    if let Err(error) = check_extent(&extent) {
+        memory.release_vec(pairs)?;
+        key.release_with_memory(memory)?;
+        return Ok(CdtOutcome::Bound(error));
+    }
+    let mut built = Vec::new();
+    memory.reserve(&mut built, pairs.len())?;
+    for (key, value) in pairs.iter().copied() {
+        built.push(CdtEntry {
+            key: key.clone_with_memory(memory)?,
+            value: value.clone_with_memory(memory)?,
+        });
+    }
+    memory.release_vec(pairs)?;
+    key.release_with_memory(memory)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_entries(built, extent)))
+}
+
+fn map_remove_with_memory(entries: &[CdtEntry], key: &CdtTerm, memory: &mut Memory<'_>) -> Result<MapRemoval, StorageError> {
+    let Some(key) = CdtKey::from_term_with_memory(key, memory)? else { return Ok(MapRemoval::Unchanged); };
+    let found = entries.binary_search_by(|entry| total_key_cmp(&entry.key, &key));
+    key.release_with_memory(memory)?;
+    let Ok(index) = found else { return Ok(MapRemoval::Unchanged); };
+    let mut kept = Vec::new();
+    memory.reserve(&mut kept, entries.len() - 1)?;
+    for entry in entries[..index].iter().chain(entries[index + 1..].iter()) {
+        kept.push(entry.clone_with_memory(memory)?);
+    }
+    let extent = try_map_extent(kept.iter().map(|entry| (&entry.key, &entry.value)), memory)?;
+    Ok(MapRemoval::Removed(CdtValue::from_checked_entries(kept, extent)))
+}
+
+fn map_merge_with_memory(maps: &[&[CdtEntry]], memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let mut selected: Vec<(usize, &CdtEntry)> = Vec::new();
+    for entries in maps {
+        for entry in *entries {
+            let ordinal = selected.len();
+            memory.push(&mut selected, (ordinal, entry))?;
+        }
+    }
+    // Unique flattened positions preserve the original earliest-map winner.
+    selected.sort_unstable_by(|a, b| total_key_cmp(&a.1.key, &b.1.key).then_with(|| a.0.cmp(&b.0)));
+    selected.dedup_by(|a, b| a.1.key == b.1.key);
+    let extent = try_map_extent(selected.iter().map(|(_, entry)| (&entry.key, &entry.value)), memory)?;
+    if let Err(error) = check_extent(&extent) {
+        memory.release_vec(selected)?;
+        return Ok(CdtOutcome::Bound(error));
+    }
+    let mut entries = Vec::new();
+    memory.reserve(&mut entries, selected.len())?;
+    for (_, entry) in &selected { entries.push(entry.clone_with_memory(memory)?); }
+    memory.release_vec(selected)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_entries(entries, extent)))
+}

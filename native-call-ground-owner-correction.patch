@@ -1,0 +1,8 @@
+--- a/crates/sparql-eval/src/property_fn_eval.rs
++++ b/crates/sparql-eval/src/property_fn_eval.rs
+@@ -471,4 +471,4 @@
+-            Step::Compile(TermPattern::Triple(triple)) => {
++            Step::Compile(term @ TermPattern::Triple(triple)) => {
+                 if triple_is_ground_native(triple, memory)? {
+                     Arg::Constant(constant_native(term, workspace, owners, memory)?)
+                 } else {

@@ -1,0 +1,17 @@
+fn changed_source_schema_admitted(
+    source: &Query, planned: Option<&Query>, workspace: &crate::WorkspaceCapability,
+) -> Result<Option<purrdf_core::small::Shared<crate::solution::VarSchema>>, crate::EvalError> {
+    let Query::Select { pattern, .. } = source else { return Ok(None); };
+    let Some(planned) = planned else { return Ok(None); };
+    let visible = |pattern: &purrdf_sparql_algebra::GraphPattern| {
+        let schema = crate::eval::syntactic_schema_admitted(pattern, workspace)?;
+        if schema.vars().iter().any(crate::blank_scope::is_joined_blank) {
+            crate::solution::VarSchema::from_vars_admitted(
+                schema.vars().iter().filter(|variable| !crate::blank_scope::is_joined_blank(variable)).cloned(),
+                workspace,
+            )?.shared_admitted(workspace)
+        } else { Ok(schema) }
+    };
+    let source = visible(pattern)?;
+    Ok((*source != *visible(query_pattern(planned))?).then_some(source))
+}

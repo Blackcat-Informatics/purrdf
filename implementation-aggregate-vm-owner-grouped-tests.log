@@ -1,0 +1,64 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/expr.rs:1169:36
+     |
+1169 |         return Ok(value_holds_nan(&owned_value_of(ctx, term)?));
+     |                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `TermValue`, found `WorkspaceTerm`
+     |
+     = note: `?` operator cannot convert from `WorkspaceTerm` to `purrdf_core::TermValue`
+
+error[E0505]: cannot move out of `value` because it is borrowed
+    --> crates/sparql-eval/src/modifier.rs:3992:20
+     |
+3983 | fn fold_extreme(current: Option<crate::WorkspaceTerm>, value: crate::WorkspaceTerm,
+     |                                                        ----- binding `value` declared here
+...
+3989 |             let value_key = project_admitted(Some(&value), workspace)?;
+     |                                                   ------ borrow of `value` occurs here
+...
+3992 |                 Ok(value)
+     |                    ^^^^^ move out of `value` occurs here
+...
+3996 |         }
+     |         - borrow might be used here, when `value_key` is dropped and runs the destructor for type `OwnedSortKey<'_>`
+     |
+note: if `WorkspaceTerm` implemented `Clone`, you could clone the value
+    --> crates/sparql-eval/src/workspace.rs:300:1
+     |
+ 300 | pub struct WorkspaceTerm {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+     |
+    ::: crates/sparql-eval/src/modifier.rs:3989:52
+     |
+3989 |             let value_key = project_admitted(Some(&value), workspace)?;
+     |                                                    ----- you could clone this value
+
+error[E0505]: cannot move out of `current_value` because it is borrowed
+    --> crates/sparql-eval/src/modifier.rs:3994:20
+     |
+3988 |         Some(current_value) => {
+     |              ------------- binding `current_value` declared here
+3989 |             let value_key = project_admitted(Some(&value), workspace)?;
+3990 |             let current_key = project_admitted(Some(&current_value), workspace)?;
+     |                                                     -------------- borrow of `current_value` occurs here
+...
+3994 |                 Ok(current_value)
+     |                    ^^^^^^^^^^^^^ move out of `current_value` occurs here
+3995 |             }
+3996 |         }
+     |         - borrow might be used here, when `current_key` is dropped and runs the destructor for type `OwnedSortKey<'_>`
+     |
+note: if `WorkspaceTerm` implemented `Clone`, you could clone the value
+    --> crates/sparql-eval/src/workspace.rs:300:1
+     |
+ 300 | pub struct WorkspaceTerm {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^ consider implementing `Clone` for this type
+     |
+    ::: crates/sparql-eval/src/modifier.rs:3990:54
+     |
+3990 |             let current_key = project_admitted(Some(&current_value), workspace)?;
+     |                                                      ------------- you could clone this value
+
+Some errors have detailed explanations: E0308, E0505.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 3 previous errors

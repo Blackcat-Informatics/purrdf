@@ -1,0 +1,741 @@
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -166,6 +166,94 @@
+             loss_code: loss_code.into(),
+             lost_reifies: lost_reifies.into(),
+         }
++    }
++}
++
++/// One dataset-local identity and the admitted immutable value that keys it.
++struct TermLookupEntry<I: ViewTermId> {
++    value: crate::WorkspaceTerm,
++    id: Option<I>,
++}
++
++type TermLookupEntries<I> = crate::AdmittedMap<u64, crate::AdmittedVec<TermLookupEntry<I>>>;
++type SharedTermLookup<I> =
++    crate::workspace::SharedWorkspace<std::sync::Mutex<TermLookupEntries<I>>>;
++
++/// A query-local reverse-lookup memo for this context's immutable read view.
++/// The control is born lazily under the actual query grant; worker and function
++/// contexts retain the same owner. Exact RDF equality disambiguates hash collisions.
++struct TermLookup<I: ViewTermId> {
++    shared: std::sync::Mutex<Option<SharedTermLookup<I>>>,
++}
++
++impl<I: ViewTermId> Default for TermLookup<I> {
++    fn default() -> Self {
++        Self {
++            shared: std::sync::Mutex::new(None),
++        }
++    }
++}
++
++impl<I: ViewTermId> TermLookup<I> {
++    fn shared(
++        &self,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<SharedTermLookup<I>, EvalError> {
++        let mut shared = self
++            .shared
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner);
++        if shared.is_none() {
++            *shared = Some(crate::workspace::SharedWorkspace::new_admitted(
++                std::sync::Mutex::new(crate::AdmittedMap::default()),
++                workspace,
++            )?);
++        }
++        Ok(shared
++            .as_ref()
++            .expect("native lookup control was published above")
++            .clone())
++    }
++
++    fn fork_admitted(&self, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
++        Ok(Self {
++            shared: std::sync::Mutex::new(Some(self.shared(workspace)?)),
++        })
++    }
++
++    fn lookup(
++        &self,
++        value: &TermValue,
++        workspace: &crate::WorkspaceCapability,
++        read: impl FnOnce(&TermValue) -> Result<Option<I>, EvalError>,
++    ) -> Result<Option<I>, EvalError> {
++        let hash = workspace.term_hash(value)?;
++        let shared = self.shared(workspace)?;
++        let mut entries = shared
++            .lock()
++            .unwrap_or_else(std::sync::PoisonError::into_inner);
++        if let Some(bucket) = entries.get(&hash) {
++            for entry in bucket.iter() {
++                if workspace.terms_equal(&entry.value, value)? {
++                    return Ok(entry.id);
++                }
++            }
++        }
++        // A failed source read remains its original typed failure, never a cached
++        // absence. Every surviving key, table and bucket is admitted before birth.
++        let id = read(value)?;
++        let entry = TermLookupEntry {
++            value: workspace.clone_term(value)?,
++            id,
++        };
++        if let Some(bucket) = entries.get_mut(&hash) {
++            bucket.push(entry)?;
++        } else {
++            let mut bucket = crate::AdmittedVec::new(workspace);
++            bucket.push(entry)?;
++            entries.insert_admitted(hash, bucket, workspace)?;
++        }
++        Ok(id)
+     }
+ }
+ 
+@@ -423,6 +511,8 @@
+     pub(crate) workspace: crate::workspace::QueryWorkspace<D::ReadError>,
+     /// Erased grant shared with native producers and differently typed child views.
+     pub(crate) growth: crate::WorkspaceCapability,
++    /// Original query-owned reverse identities, shared only over this same view.
++    term_lookup: TermLookup<D::Id>,
+     /// The per-query interner for terms computed during evaluation (BIND, VALUES,
+     /// aggregate output, arithmetic/string-function results).
+     pub scratch: ScratchInterner,
+@@ -964,6 +1054,36 @@
+         }
+     }
+ 
++    /// Resolve an exact value once within the same immutable source view. Keys
++    /// and native ids retain their original account across correlated copies.
++    pub(crate) fn term_id_by_value(&self, value: &TermValue) -> Result<Option<D::Id>, EvalError> {
++        if !self.growth.is_bounded() {
++            return self
++                .dataset
++                .term_id_by_value(value)
++                .map_err(|error| self.workspace.source_error(error));
++        }
++        self.term_lookup.lookup(value, &self.growth, |value| {
++            self.dataset
++                .term_id_by_value(value)
++                .map_err(|error| self.workspace.source_error(error))
++        })
++    }
++
++    /// A forward resolution already proves this dataset-local identity. Retain
++    /// that proof before Values Insertion turns it into a lexical constant again.
++    pub(crate) fn remember_existing_term(
++        &self,
++        value: &TermValue,
++        id: D::Id,
++    ) -> Result<(), EvalError> {
++        if self.growth.is_bounded() {
++            self.term_lookup
++                .lookup(value, &self.growth, |_| Ok(Some(id)))?;
++        }
++        Ok(())
++    }
++
+     /// Transfer an admitted producer value only when interning adds its payload.
+     pub(crate) fn intern_workspace_term(
+         &mut self,
+@@ -973,12 +1093,23 @@
+         let before = self.scratch.owned_value_count();
+         let (value, admission) = value.into_parts();
+         let workspace = self.workspace.clone();
+-        let term = self.scratch.try_intern_checked_with_admission(
+-            self.dataset,
+-            value,
+-            &self.growth,
+-            |error| workspace.source_error(error),
+-        )?;
++        let lookup = &self.term_lookup;
++        let dataset = self.dataset;
++        let growth = &self.growth;
++        let term =
++            self.scratch
++                .try_intern_checked_with_admission(dataset, value, growth, |value| {
++                    let read = |value: &TermValue| {
++                        dataset
++                            .term_id_by_value(value)
++                            .map_err(|error| workspace.source_error(error))
++                    };
++                    if growth.is_bounded() {
++                        lookup.lookup(value, growth, read)
++                    } else {
++                        read(value)
++                    }
++                })?;
+         if self.scratch.owned_value_count() > before {
+             self.keep_computed(admission);
+         }
+@@ -1131,6 +1262,7 @@
+             bounded_workspace: WorkspaceAdmission::Unpriced,
+             workspace: crate::workspace::QueryWorkspace::resident(),
+             growth: crate::WorkspaceCapability::default(),
++            term_lookup: TermLookup::default(),
+             scratch: ScratchInterner::default(),
+             computed_admission: Vec::new(),
+             computed_admission_storage: None,
+@@ -2561,6 +2693,11 @@
+             bounded_workspace: self.bounded_workspace,
+             workspace: self.workspace.clone(),
+             growth: self.growth.clone(),
++            term_lookup: if self.growth.is_bounded() {
++                self.term_lookup.fork_admitted(&self.growth)?
++            } else {
++                TermLookup::default()
++            },
+             scratch,
+             computed_admission: Vec::new(),
+             computed_admission_storage: None,
+@@ -2907,6 +3044,11 @@
+             bounded_workspace: self.bounded_workspace,
+             workspace: self.workspace.clone(),
+             growth: self.growth.clone(),
++            term_lookup: if self.growth.is_bounded() {
++                self.term_lookup.fork_admitted(&self.growth)?
++            } else {
++                TermLookup::default()
++            },
+             // Fresh: the body is an independent query that mints its own computed
+             // terms; its parameter inputs ride in as ground substitutions, not
+             // scratch ids. The invocation carries parent blank reservations
+@@ -4850,6 +4992,115 @@
+     use purrdf_sparql_algebra::{Child, NamedNode};
+ 
+     #[test]
++    fn native_term_lookup_retains_known_ids_absence_and_shared_fork_state() {
++        let workspace = crate::WorkspaceCapability::resident();
++        let lookup = TermLookup::default();
++        let mut builder = RdfDatasetBuilder::new();
++        let id = builder.intern_iri("https://example.org/known");
++        let known = TermValue::Iri("https://example.org/known".to_owned());
++        let missing = TermValue::Iri("https://example.org/missing".to_owned());
++        assert_eq!(
++            lookup.lookup(&known, &workspace, |_| Ok(Some(id))).unwrap(),
++            Some(id)
++        );
++        let worker = lookup.fork_admitted(&workspace).unwrap();
++        assert_eq!(
++            worker
++                .lookup(&known, &workspace, |_| panic!("known identity was reread"))
++                .unwrap(),
++            Some(id)
++        );
++        let reads = std::cell::Cell::new(0);
++        for _ in 0..3 {
++            assert_eq!(
++                worker
++                    .lookup(&missing, &workspace, |_| {
++                        reads.set(reads.get() + 1);
++                        Ok(None)
++                    })
++                    .unwrap(),
++                None
++            );
++        }
++        assert_eq!(reads.get(), 1);
++        assert_eq!(
++            lookup
++                .lookup(&missing, &workspace, |_| panic!(
++                    "shared absence was reread"
++                ))
++                .unwrap(),
++            None
++        );
++    }
++
++    #[test]
++    fn native_term_lookup_disambiguates_collision_bucket_with_original_rdf_equality() {
++        let workspace = crate::WorkspaceCapability::resident();
++        let lookup = TermLookup::<TermId>::default();
++        let first = TermValue::Iri("https://example.org/first".to_owned());
++        let second = TermValue::Iri("https://example.org/second".to_owned());
++        let mut builder = RdfDatasetBuilder::new();
++        let first_id = builder.intern_iri("https://example.org/first");
++        let second_id = builder.intern_iri("https://example.org/second");
++        let shared = lookup.shared(&workspace).unwrap();
++        let mut bucket = crate::AdmittedVec::new(&workspace);
++        // Put a distinct real value in the bucket selected by the second hash.
++        // This tests actual equality rather than assuming the hash is identity.
++        bucket
++            .push(TermLookupEntry {
++                value: workspace.clone_term(&first).unwrap(),
++                id: Some(first_id),
++            })
++            .unwrap();
++        shared
++            .lock()
++            .unwrap()
++            .insert_admitted(workspace.term_hash(&second).unwrap(), bucket, &workspace)
++            .unwrap();
++        assert_eq!(
++            lookup
++                .lookup(&second, &workspace, |_| Ok(Some(second_id)))
++                .unwrap(),
++            Some(second_id)
++        );
++        assert_eq!(
++            lookup
++                .lookup(&second, &workspace, |_| panic!(
++                    "exact collision entry was reread"
++                ))
++                .unwrap(),
++            Some(second_id)
++        );
++    }
++
++    #[test]
++    fn native_term_lookup_keeps_a_failed_read_distinct_from_absence() {
++        let workspace = crate::WorkspaceCapability::resident();
++        let lookup = TermLookup::<TermId>::default();
++        let value = TermValue::Iri("https://example.org/value".to_owned());
++        assert!(matches!(
++            lookup.lookup(&value, &workspace, |_| Err(
++                EvalError::WorkspaceBoundOverflow
++            )),
++            Err(EvalError::WorkspaceBoundOverflow)
++        ));
++        let called = std::cell::Cell::new(false);
++        assert_eq!(
++            lookup
++                .lookup(&value, &workspace, |_| {
++                    called.set(true);
++                    Ok(None)
++                })
++                .unwrap(),
++            None
++        );
++        assert!(
++            called.get(),
++            "a failure must not have been retained as absence"
++        );
++    }
++
++    #[test]
+     fn cell_row_ceiling_checks_inclusive_layout_without_disengaging_observations() {
+         use crate::{QueryGovernors, Solution};
+ 
+--- a/crates/sparql-eval/src/binop.rs
++++ b/crates/sparql-eval/src/binop.rs
+@@ -105,26 +105,10 @@
+             }
+         });
+     }
++    if let Some(evaluated) = eval_values_restricted_join(node, left, right, ctx)? {
++        return Ok(evaluated);
++    }
+     let mut lift = Lift::at_admitted(node, &ctx.growth)?;
+-    // Values Insertion retains the authored leaf on the left and a singleton
+-    // restriction on the right. Drive that pure relation with its restriction,
+-    // rather than reading its entire unbound bag once per correlated outer row.
+-    // The source child roles and column order still belong to the authored join.
+-    if ctx.in_substituted_exists
+-        && matches!(right, GraphPattern::Values { bindings, .. } if bindings.len() == 1)
+-    {
+-        let driver_schema = crate::eval::syntactic_schema_admitted(right, &ctx.growth)?;
+-        if crate::bgp::PositivePlan::seed_eligible_admitted(left, &driver_schema, &ctx.growth)? {
+-            let output = crate::eval::syntactic_schema_admitted(node, &ctx.growth)?;
+-            let Some(driver) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+-                return Ok(lift.withheld());
+-            };
+-            if lift.is_truncated() {
+-                return Ok(lift.finish(SolutionSeq::empty(output)));
+-            }
+-            return finish_seeded_join(lift, driver, left, 0, Some(&output), ctx);
+-        }
+-    }
+     // A join is commutative, so a variable-endpoint `SERVICE` in the LEFT operand whose
+     // endpoint the right operand binds (`{ SERVICE ?e { … } ?s ex:endpoint ?e }`) is
+     // answered over the endpoints the right rows bind, exactly as the mirrored shape is:
+@@ -156,6 +140,35 @@
+         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
+     }
+     finish_join(lift, l, right, ctx)
++}
++
++/// Values Insertion keeps the authored leaf on the left and its singleton
++/// restriction on the right. Bulk and delivered execution enter this same
++/// child-role/schema law before reading the native restricted relation.
++fn eval_values_restricted_join<D: DatasetView + Sync>(
++    node: &GraphPattern,
++    left: &GraphPattern,
++    right: &GraphPattern,
++    ctx: &mut EvalCtx<'_, D>,
++) -> Result<Option<Evaluated<D::Id>>, EvalError> {
++    if !ctx.in_substituted_exists
++        || !matches!(right, GraphPattern::Values { bindings, .. } if bindings.len() == 1)
++    {
++        return Ok(None);
++    }
++    let driver_schema = crate::eval::syntactic_schema_admitted(right, &ctx.growth)?;
++    if !crate::bgp::PositivePlan::seed_eligible_admitted(left, &driver_schema, &ctx.growth)? {
++        return Ok(None);
++    }
++    let output = crate::eval::syntactic_schema_admitted(node, &ctx.growth)?;
++    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
++    let Some(driver) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
++        return Ok(Some(lift.withheld()));
++    };
++    if lift.is_truncated() {
++        return Ok(Some(lift.finish(SolutionSeq::empty(output))));
++    }
++    finish_seeded_join(lift, driver, left, 0, Some(&output), ctx).map(Some)
+ }
+ 
+ // Erase the static mode wrapper while preserving the native kernel call boundary.
+@@ -169,6 +182,15 @@
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+     if M::ACTIVE {
++        // BGP already materializes before RowDelivery. Keep that delivery law,
++        // but seed its scan instead of reading an unrestricted bag for every
++        // correlated row. Compound streamed arms keep their existing delivery.
++        if matches!(left, GraphPattern::Bgp { .. })
++            && let Some(evaluated) = eval_values_restricted_join(node, left, right, ctx)?
++        {
++            crate::eval::deliver_evaluated(&evaluated, delivery, ctx)?;
++            return Ok(evaluated);
++        }
+         eval_binary_yielding::<D, false, M>(node, left, right, delivery, ctx)
+     } else {
+         eval_join(node, left, right, ctx)
+@@ -274,6 +296,33 @@
+     output: Option<&VarSchema>,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
++    // A BGP has its original bound-mask/order compiler. Supplying input to the
++    // same leaf kernel needs no positive-region forecast or redundant constant
++    // reverse reads. The node checkpoint and child roles remain unchanged.
++    if let GraphPattern::Bgp { patterns } = driven {
++        let out = match output {
++            Some(output) => output.clone(),
++            None => driver.schema.union_admitted(
++                &crate::eval::syntactic_schema_admitted(driven, &ctx.growth)?,
++                &ctx.growth,
++            )?,
++        };
++        let Some(joined) = lift.absorb(
++            driven_position,
++            crate::eval::eval_evaluated_with(driven, ctx, |ctx| {
++                crate::bgp::eval_bgp_seeded(
++                    patterns,
++                    Some(crate::eval::PositiveInput::owned(driver)),
++                    None,
++                    ctx,
++                )
++                .map(Evaluated::Complete)
++            })?,
++        ) else {
++            return Ok(lift.withheld());
++        };
++        return Ok(lift.finish(joined.reorder_like_admitted(&out, &ctx.growth)?));
++    }
+     let seed = crate::bgp::SeedEstimate::from_rows_admitted(&driver, &ctx.growth)?;
+     let plan = crate::bgp::PositivePlan::build_seeded_admitted(
+         ctx.dataset,
+--- a/crates/sparql-eval/src/bgp.rs
++++ b/crates/sparql-eval/src/bgp.rs
+@@ -431,8 +431,8 @@
+     // the whole BGP empty.
+     let mut compiled = AdmittedVec::new(&ctx.growth);
+     for pattern in patterns {
+-        match compile_pattern_admitted(pattern, &working, ctx.dataset, &ctx.growth, &|error| {
+-            ctx.workspace.source_error(error)
++        match compile_pattern_admitted(pattern, &working, ctx.dataset, &ctx.growth, &|value| {
++            ctx.term_id_by_value(value)
+         })? {
+             Some(cp) => compiled.push(cp)?,
+             None => {
+@@ -520,19 +520,18 @@
+     // reifier layer at all (the predicate was never interned), so no virtual reifier
+     // candidates exist for any pattern.
+     //
+-    // The lookup value is a process-wide `static`, not a fresh `TermValue::Iri` per
+-    // BGP: `DatasetView::term_id_by_value` takes a borrowed value, the IRI is a
+-    // constant, and minting it here charged one heap allocation to every BGP
+-    // evaluation — a per-focus-node cost on the SHACL path, for a string that is the
+-    // same bytes every time. `TermValue::Iri` owns a `String`, so it cannot be a
+-    // `const`; a write-once `OnceLock` is the allocation-free-after-first-use form
+-    // and needs no dependency (same shape as `SINGLETON` in `plan_or_cached_order`).
++    // Resident callers keep their existing process-wide borrowed lookup value.
++    // A bounded query admits its lexical input before first construction and
++    // retains the same native reverse identity through its query-owned memo.
+     static REIFIES: std::sync::OnceLock<purrdf_core::TermValue> = std::sync::OnceLock::new();
+-    let reifies_value = REIFIES.get_or_init(|| purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
+-    let reifies_id = ctx
+-        .dataset
+-        .term_id_by_value(reifies_value)
+-        .map_err(EvalError::source_read)?;
++    let reifies_id = if ctx.growth.is_bounded() {
++        let reifies_value = ctx.growth.iri(RDF_REIFIES)?;
++        ctx.term_id_by_value(&reifies_value)?
++    } else {
++        let reifies_value =
++            REIFIES.get_or_init(|| purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
++        ctx.term_id_by_value(reifies_value)?
++    };
+ 
+     // Whether this execution charges fuel at all. Read once, outside the pattern loop:
+     // an ungoverned run (and a run whose caller set only a deadline or only an answer
+@@ -1872,7 +1871,11 @@
+         schema,
+         dataset,
+         &crate::WorkspaceCapability::resident(),
+-        &EvalError::source_read,
++        &|value| {
++            dataset
++                .term_id_by_value(value)
++                .map_err(EvalError::source_read)
++        },
+     )
+ }
+ 
+@@ -1895,7 +1898,7 @@
+     schema: &VarSchema,
+     dataset: &D,
+     workspace: &crate::WorkspaceCapability,
+-    source_error: &impl Fn(D::ReadError) -> EvalError,
++    lookup: &impl Fn(&purrdf_core::TermValue) -> Result<Option<D::Id>, EvalError>,
+ ) -> Result<Option<CompiledPattern<D::Id>>, EvalError> {
+     if let Some(bound) = dataset.triple_term_nesting_bound()
+         && (term_nesting_admitted(&pattern.subject, workspace)? > bound
+@@ -1903,17 +1906,16 @@
+     {
+         return Ok(None);
+     }
+-    let Some(s) =
+-        compile_term_admitted(&pattern.subject, schema, dataset, workspace, source_error)?
++    let Some(s) = compile_term_admitted(&pattern.subject, schema, dataset, workspace, lookup)?
+     else {
+         return Ok(None);
+     };
+     let Some(p) =
+-        compile_predicate_admitted(&pattern.predicate, schema, dataset, workspace, source_error)?
++        compile_predicate_admitted(&pattern.predicate, schema, dataset, workspace, lookup)?
+     else {
+         return Ok(None);
+     };
+-    let Some(o) = compile_term_admitted(&pattern.object, schema, dataset, workspace, source_error)?
++    let Some(o) = compile_term_admitted(&pattern.object, schema, dataset, workspace, lookup)?
+     else {
+         return Ok(None);
+     };
+@@ -1933,7 +1935,11 @@
+         schema,
+         dataset,
+         &crate::WorkspaceCapability::resident(),
+-        &EvalError::source_read,
++        &|value| {
++            dataset
++                .term_id_by_value(value)
++                .map_err(EvalError::source_read)
++        },
+     )
+ }
+ 
+@@ -1942,7 +1948,7 @@
+     schema: &VarSchema,
+     dataset: &D,
+     workspace: &crate::WorkspaceCapability,
+-    source_error: &impl Fn(D::ReadError) -> EvalError,
++    lookup: &impl Fn(&purrdf_core::TermValue) -> Result<Option<D::Id>, EvalError>,
+ ) -> Result<Option<Pos<D::Id>>, EvalError> {
+     match term {
+         TermPattern::Variable(variable) => Ok(Some(Pos::Slot(slot_col(schema, variable)))),
+@@ -1952,13 +1958,7 @@
+         TermPattern::Triple(triple) => {
+             let nested = index_nested_triples_admitted(triple, workspace)?;
+             if nested[0].has_variable {
+-                match compile_triple_pos_admitted(
+-                    &nested,
+-                    schema,
+-                    dataset,
+-                    workspace,
+-                    source_error,
+-                )? {
++                match compile_triple_pos_admitted(&nested, schema, dataset, workspace, lookup)? {
+                     Some(triple) => Ok(Some(Pos::Triple(OwnedTriplePos::new_admitted(
+                         triple, workspace,
+                     )?))),
+@@ -1968,19 +1968,13 @@
+                 let value = crate::convert::ground_term_pattern_to_workspace_value(
+                     term, "a BGP", workspace,
+                 )?;
+-                Ok(dataset
+-                    .term_id_by_value(&value)
+-                    .map_err(source_error)?
+-                    .map(Pos::Bound))
++                Ok(lookup(&value)?.map(Pos::Bound))
+             }
+         }
+         TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
+             let value =
+                 crate::convert::ground_term_pattern_to_workspace_value(term, "a BGP", workspace)?;
+-            Ok(dataset
+-                .term_id_by_value(&value)
+-                .map_err(source_error)?
+-                .map(Pos::Bound))
++            Ok(lookup(&value)?.map(Pos::Bound))
+         }
+     }
+ }
+@@ -2065,7 +2059,7 @@
+     schema: &VarSchema,
+     dataset: &D,
+     workspace: &crate::WorkspaceCapability,
+-    source_error: &impl Fn(D::ReadError) -> EvalError,
++    lookup: &impl Fn(&purrdf_core::TermValue) -> Result<Option<D::Id>, EvalError>,
+ ) -> Result<Option<TriplePos<D::Id>>, EvalError> {
+     /// A quoted triple being compiled: the positions compiled so far.
+     struct Frame<I: ViewTermId> {
+@@ -2115,7 +2109,7 @@
+                     let value = crate::convert::ground_term_pattern_to_workspace_value(
+                         term, "a BGP", workspace,
+                     )?;
+-                    match dataset.term_id_by_value(&value).map_err(source_error)? {
++                    match lookup(&value)? {
+                         Some(id) => Pos::Bound(id),
+                         None => return Ok(None),
+                     }
+@@ -2124,7 +2118,7 @@
+                     let value = crate::convert::ground_term_pattern_to_workspace_value(
+                         term, "a BGP", workspace,
+                     )?;
+-                    match dataset.term_id_by_value(&value).map_err(source_error)? {
++                    match lookup(&value)? {
+                         Some(id) => Pos::Bound(id),
+                         None => return Ok(None),
+                     }
+@@ -2136,7 +2130,7 @@
+                 schema,
+                 dataset,
+                 workspace,
+-                source_error,
++                lookup,
+             )?
+             else {
+                 return Ok(None);
+@@ -2180,7 +2174,11 @@
+         schema,
+         dataset,
+         &crate::WorkspaceCapability::resident(),
+-        &EvalError::source_read,
++        &|value| {
++            dataset
++                .term_id_by_value(value)
++                .map_err(EvalError::source_read)
++        },
+     )
+     .expect("resident predicate compilation")
+ }
+@@ -2188,18 +2186,15 @@
+ fn compile_predicate_admitted<D: DatasetView>(
+     predicate: &NamedNodePattern,
+     schema: &VarSchema,
+-    dataset: &D,
++    _dataset: &D,
+     workspace: &crate::WorkspaceCapability,
+-    source_error: &impl Fn(D::ReadError) -> EvalError,
++    lookup: &impl Fn(&purrdf_core::TermValue) -> Result<Option<D::Id>, EvalError>,
+ ) -> Result<Option<Pos<D::Id>>, EvalError> {
+     match predicate {
+         NamedNodePattern::Variable(variable) => Ok(Some(Pos::Slot(slot_col(schema, variable)))),
+         NamedNodePattern::NamedNode(node) => {
+             let value = crate::convert::named_node_to_workspace_value(node, workspace)?;
+-            Ok(dataset
+-                .term_id_by_value(&value)
+-                .map_err(source_error)?
+-                .map(Pos::Bound))
++            Ok(lookup(&value)?.map(Pos::Bound))
+         }
+     }
+ }
+@@ -3148,8 +3143,10 @@
+     let mut compiled = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
+     let mut any_absent = false;
+     for pattern in patterns {
+-        match compile_pattern_admitted(pattern, &working, dataset, &workspace, &|error| {
+-            account.source_error(error)
++        match compile_pattern_admitted(pattern, &working, dataset, &workspace, &|value| {
++            dataset
++                .term_id_by_value(value)
++                .map_err(|error| account.source_error(error))
+         })? {
+             Some(pattern) => compiled.push_reserved(pattern),
+             None => {
+--- a/crates/sparql-eval/src/scratch.rs
++++ b/crates/sparql-eval/src/scratch.rs
+@@ -661,7 +661,11 @@
+         self.intern_value_with(
+             dataset,
+             value,
+-            crate::EvalError::source_read,
++            |dataset, value| {
++                dataset
++                    .term_id_by_value(value)
++                    .map_err(crate::EvalError::source_read)
++            },
+             |arena| arena.admit_storage_growth(workspace),
+             |value| workspace.term_hash(value),
+             |left, right| workspace.terms_equal(left, right),
+@@ -693,7 +697,7 @@
+         dataset: &D,
+         value: TermValue,
+         workspace: &crate::WorkspaceCapability,
+-        map_error: impl FnMut(D::ReadError) -> crate::EvalError,
++        lookup: impl FnOnce(&TermValue) -> Result<Option<D::Id>, crate::EvalError>,
+     ) -> Result<Option<SolutionTerm<D::Id>>, crate::EvalError> {
+         let _working = admit_identity_walk(&value, workspace)?;
+         if !language_tags_with_storage(&value).map_err(|_| crate::EvalError::AllocationFailed {
+@@ -704,7 +708,7 @@
+         self.intern_value_with(
+             dataset,
+             value,
+-            map_error,
++            |_, value| lookup(value),
+             |arena| arena.admit_storage_growth(workspace),
+             |value| workspace.term_hash(value),
+             |left, right| workspace.terms_equal(left, right),
+@@ -918,7 +922,7 @@
+         self.intern_value_with(
+             dataset,
+             value,
+-            core::convert::identity,
++            |dataset, value| dataset.term_id_by_value(value),
+             |_| Ok(()),
+             |value| Ok(purrdf_hash::fixed::hash_one(value)),
+             |left, right| Ok(left == right),
+@@ -934,7 +938,7 @@
+         &mut self,
+         dataset: &D,
+         value: TermValue,
+-        read_error: impl FnOnce(D::ReadError) -> E,
++        lookup: impl FnOnce(&D, &TermValue) -> Result<Option<D::Id>, E>,
+         admit: impl FnOnce(&mut Self) -> Result<(), E>,
+         hash_value: impl FnOnce(&TermValue) -> Result<u64, E>,
+         mut equal: impl FnMut(&TermValue, &TermValue) -> Result<bool, E>,
+@@ -948,7 +952,7 @@
+             return Ok(SolutionTerm::Computed(sid));
+         }
+         if !is_query_scoped_blank(&value)
+-            && let Some(id) = dataset.term_id_by_value(&value).map_err(read_error)?
++            && let Some(id) = lookup(dataset, &value)?
+         {
+             return Ok(SolutionTerm::Existing(id));
+         }
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -4638,6 +4638,9 @@
+                 .try_owned_value_of(ctx.dataset, cell, &workspace, |error| {
+                     ctx.workspace.source_error(error)
+                 })?;
++            if let SolutionTerm::Existing(id) = cell {
++                ctx.remember_existing_term(&value, id)?;
++            }
+             let Some(ground) = ground_term_from_term_value_with_memory(&value, memory)? else {
+                 continue;
+             };

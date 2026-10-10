@@ -1,0 +1,41 @@
+crates/sparql-eval/src/engine.rs:1970:    fn query_governed_view<'d, D: DatasetView + Sync>(
+crates/rdf-core/benches/shared_views.rs:635:            Arc::clone(shape.delta.base()),
+crates/validate/src/product.rs:653:    let _ = writeln!(out, "parse-base {}", provenance.base().unwrap_or("none"));
+crates/json/src/profile.rs:211:            self.vocabulary.base(),
+crates/json/src/profile.rs:232:        let namespace = self.vocabulary.base();
+crates/json/src/decode.rs:301:                .strip_prefix(profile.vocabulary().base())
+crates/rdf-core/src/ir/pipeline_bundle.rs:669:                let base = delta.base();
+crates/rdf-core/src/ir/pipeline_bundle.rs:1392:            ledger.retain_dataset_handle(delta.base()),
+crates/rdf-wasm/src/query.rs:2556:            assert!(std::ptr::eq(dataset.view().base().as_ref(), original));
+crates/rdf-core/src/ir/mutable/delta_view.rs:1192:        assert!(std::ptr::eq(first.base().as_ref(), base.as_ref()));
+crates/rdf-core/src/ir/composite.rs:663:                stats.retain(ds.base());
+crates/rdf-core/src/ir/composite.rs:1286:                Carrier::Delta(view) => out.push(view.base()),
+crates/rdf-core/src/ir/mutable.rs:3697:        let mut m = MutableDataset::new(m.base().clone());
+crates/shapes/tests/product_api_compat.rs:155:    assert!(shapes.provenance().base().is_none());
+crates/shapes/tests/shared_validation_views.rs:91:    assert!(Arc::ptr_eq(snapshot.base(), &source));
+crates/sparql-eval/src/engine.rs:1970:    fn query_governed_view<'d, D: DatasetView + Sync>(
+crates/shapes/src/shapes/parser/functions.rs:88:        provenance.base().map(ToOwned::to_owned),
+crates/shapes/src/shapes/parser/admission.rs:520:            provenance.base().map(ToOwned::to_owned),
+crates/rdf/src/native_codecs/jsonld.rs:446:        .base()
+crates/rdf/src/native_codecs/jsonld.rs:466:    let Some(base) = graph.base().filter(|_| context.base_iri().is_none()) else {
+crates/shapes/src/shapes.rs:918:            self.parse_provenance.base(),
+crates/shapes/src/shapes.rs:955:                    && admission.provenance.base() == self.parse_provenance.base()
+crates/shapes/src/shapes.rs:1196:        provenance.base().map(ToOwned::to_owned),
+crates/rdf/src/native_codecs/ser_model.rs:402:    write_term_in(g, ix, tid, out, g.base(), false);
+crates/rdf/src/native_codecs/ser_model.rs:553:        write_iri_ref(out, RDF_REIFIES, g.base());
+crates/rdf/src/native_codecs/ser_model.rs:598:    let Some(base) = g.base() else {
+crates/rdf/src/native_codecs/ser_model.rs:693:    write_term_in(g, ix, tid, out, g.base(), true);
+crates/rdf/src/native_codecs/rdfxml.rs:1332:    if let Some(base) = graph.base() {
+crates/rdf/src/native_codecs/rdfxml.rs:1676:    super::ser_model::spell_iri(iri, graph.base())
+crates/shapes/src/class_membership.rs:1334:                crate::term::term_id_to_native(view.base(), iri_subject),
+crates/shapes/src/class_membership.rs:1335:                crate::term::term_id_to_native(view.base(), blank_subject),
+crates/shapes/src/class_membership.rs:1523:            assert!(Arc::ptr_eq(view.base(), &dataset));
+crates/shapes/src/data_view.rs:396:        let base = source.base().as_ref().term_count();
+crates/shapes/src/imports.rs:858:                || provenance.base() == Some(link.as_str())
+crates/shapes/src/engine.rs:3676:    crate::imports::data_graph_links_by(delta.base().as_ref(), &link, &[])
+crates/shapes/src/provenance.rs:363:        assert_eq!(provenance.base(), Some("https://example.org/base"));
+crates/shapes/src/provenance.rs:452:            shapes.provenance().base(),
+crates/shapes/src/provenance.rs:464:        assert_eq!(provenance.base(), None);
+crates/shapes/src/product/mod.rs:601:    write_opt_text(&mut out, provenance.base());
+crates/shapes/src/product/mod.rs:1547:            self.provenance.base(),
+crates/shapes/src/product/identity.rs:855:        encode_optional_str(provenance.base()),

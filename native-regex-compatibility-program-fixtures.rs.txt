@@ -1,0 +1,59 @@
+// Insert inside existing native_program_owner_fixtures, reusing account().
+
+    #[test]
+    fn compatibility_program_clone_keeps_the_original_live_workspace() {
+        let (source, workspace, baseline) = account();
+        let capability = workspace.capability();
+        let program = compile_compatibility_owned("((a?)*)\\p{Lu}?", "i",
+            xpath::Limits::without_presets(), &capability).unwrap().unwrap();
+        let loaded = source.evidence().live_bytes();
+        let cloned = program.clone();
+        assert!(std::ptr::eq(&*program, &*cloned));
+        assert_eq!(source.evidence().live_bytes(), loaded);
+        drop(program);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(source.evidence().live_bytes(), loaded);
+        assert!(cloned.pattern.matches_source(None, "((a?)*)\\p{Lu}?", "i"));
+        assert!(!cloned.pattern.matches_source(Some(xpath::Profile::Xpath31), "((a?)*)\\p{Lu}?", "i"));
+        drop(cloned);
+        assert_eq!(source.evidence().live_bytes(), baseline);
+    }
+
+    #[test]
+    fn compatibility_replacement_transfers_its_original_utf8_allocation_and_grant() {
+        let (source, workspace, baseline) = account();
+        let capability = workspace.capability();
+        let program = compile_compatibility_owned("", "", xpath::Limits::without_presets(),
+            &capability).unwrap().unwrap();
+        let native = program.pattern.replace_all_with_storage("aé", "|", xpath::Limits::without_presets(),
+            LexicalFrame::new(&capability), LexicalFrame::new(&capability)).unwrap();
+        let Cow::Owned(text) = native.value() else { panic!("empty matches generate output"); };
+        let original_pointer = text.as_ptr();
+        let result = native.publish_with(StringLiteralPublication { language: None, direction: None }).unwrap();
+        let TermValue::Literal { lexical_form, .. } = &*result else { unreachable!(); };
+        assert_eq!(lexical_form, "|a|é|");
+        assert_eq!(lexical_form.as_ptr(), original_pointer);
+        drop(program);
+        drop(capability);
+        drop(workspace);
+        assert!(source.evidence().live_bytes() > baseline);
+        assert_eq!(lexical_form, "|a|é|");
+        drop(result);
+        assert_eq!(source.evidence().live_bytes(), baseline);
+    }
+
+    #[test]
+    fn compatibility_capacity_refusal_preserves_the_first_actual_source_cause() {
+        let (source, workspace, _) = account();
+        let capability = workspace.capability();
+        let before = source.evidence().live_bytes();
+        // The explicit fixture source allows 1 MB live. This request actually
+        // exceeds that source profile; it is not a guessed parser allowance.
+        assert!(matches!(capability.charge(2_000_000), Err(EvalError::WorkspaceStopped)));
+        let failure = compile_compatibility_owned("(?<bad>", "", xpath::Limits::without_presets(),
+            &capability).unwrap_err();
+        assert!(matches!(failure, EvalError::WorkspaceStopped));
+        assert_eq!(source.evidence().live_bytes(), before);
+        assert!(workspace.take_failure().is_some(), "original typed SegmentedError must survive");
+    }

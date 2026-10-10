@@ -1,0 +1,485 @@
+diff --git a/crates/hash/src/hex.rs b/crates/hash/src/hex.rs
+--- a/crates/hash/src/hex.rs
++++ b/crates/hash/src/hex.rs
+@@ -557,6 +557,32 @@
+         })
+ }
+ 
++/// Validate either-case hex without heap allocation and return its byte length.
++pub fn decoded_len(text: &str) -> Result<usize, HexError> {
++    validated_len::<true>(text)
++}
++
++fn validated_len<const ANY_CASE: bool>(text: &str) -> Result<usize, HexError> {
++    let digits = text.as_bytes();
++    if !digits.len().is_multiple_of(2) { return Err(HexError::OddLength { len: digits.len() }); }
++    let mut output = [0_u8; LANES / 2];
++    for chunk in digits.chunks(LANES) {
++        if !decode_into::<ANY_CASE>(chunk, &mut output[..chunk.len() / 2]) {
++            return Err(first_invalid::<ANY_CASE>(digits));
++        }
++    }
++    Ok(digits.len() / 2)
++}
++
++/// Decode into caller-owned storage, without allocating or growing it.
++/// Lexical/output errors leave the destination unchanged.
++pub fn decode_to_slice(text: &str, output: &mut [u8]) -> Result<usize, HexError> {
++    let needed = decoded_len(text)?;
++    if output.len() < needed { return Err(HexError::OutputTooShort { needed, available: output.len() }); }
++    if decode_into::<true>(text.as_bytes(), &mut output[..needed]) { Ok(needed) }
++    else { Err(first_invalid::<true>(text.as_bytes())) }
++}
++
+ #[inline]
+ fn decode_vec<const ANY_CASE: bool>(text: &str) -> Result<Vec<u8>, HexError> {
+     let digits = text.as_bytes();
+diff --git a/crates/xsd/src/simple.rs b/crates/xsd/src/simple.rs
+--- a/crates/xsd/src/simple.rs
++++ b/crates/xsd/src/simple.rs
+@@ -12,16 +12,40 @@
+ use crate::value::XsdError;
+ 
+ /// `xsd:boolean`: lexical space is `true | false | 1 | 0`; canonical is `true|false`.
+-pub fn parse_boolean(s: &str) -> Result<bool, XsdError> {
++/// Read the Boolean lexical space without copying a refused lexical.
++pub fn read_boolean(s: &str) -> Result<bool, &'static str> {
+     match s {
+         "true" | "1" => Ok(true),
+         "false" | "0" => Ok(false),
+-        _ => Err(XsdError::invalid(
+-            XsdDatatype::Boolean,
+-            s,
+-            "expected one of: true, false, 1, 0",
+-        )),
+-    }
++        _ => Err("expected one of: true, false, 1, 0"),
++    }
++}
++
++pub fn parse_boolean(s: &str) -> Result<bool, XsdError> {
++    read_boolean(s).map_err(|reason| XsdError::invalid(XsdDatatype::Boolean, s, reason))
++}
++
++/// The exact destination layout of an unchanged xsd:string lexical copy.
++pub fn string_output_layout(s: &str) -> Result<std::alloc::Layout, std::alloc::LayoutError> {
++    std::alloc::Layout::array::<u8>(s.len())
++}
++
++/// A supplied String cannot hold the literal without allocating more capacity.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct StringOutputTooShort {
++    pub needed: usize,
++    pub available: usize,
++}
++
++/// Copy unchanged lexical UTF-8 into an already allocated destination. This
++/// never reserves/grows, and refuses insufficient storage before mutation.
++pub fn read_string_into(s: &str, output: &mut String) -> Result<(), StringOutputTooShort> {
++    if output.capacity() < s.len() {
++        return Err(StringOutputTooShort { needed: s.len(), available: output.capacity() });
++    }
++    output.clear();
++    output.push_str(s);
++    Ok(())
+ }
+ 
+ /// Apply the XSD `whiteSpace = replace` facet (the value space of `xsd:normalizedString`).
+diff --git a/crates/xsd/src/binary.rs b/crates/xsd/src/binary.rs
+--- a/crates/xsd/src/binary.rs
++++ b/crates/xsd/src/binary.rs
+@@ -78,120 +78,11 @@
+ ///   `AQJ=` are not.
+ /// - The empty string (after stripping whitespace) is valid and decodes to empty `Vec<u8>`.
+ pub fn parse_base64(lexical: &str) -> Result<Vec<u8>, XsdError> {
+-    let err = |reason| XsdError::invalid(XsdDatatype::Base64Binary, lexical, reason);
+-
+-    // Strip ASCII whitespace first (XSD base64Binary lexical space permits it).
+-    let stripped: Vec<u8> = lexical
+-        .bytes()
+-        .filter(|&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+-        .collect();
+-
+-    if stripped.is_empty() {
+-        return Ok(Vec::new());
+-    }
+-
+-    // After stripping, length must be a multiple of 4.
+-    if !stripped.len().is_multiple_of(4) {
+-        return Err(err(
+-            "base64Binary lexical length (after stripping whitespace) must be a multiple of 4",
+-        ));
+-    }
+-
+-    // Count and validate trailing `=` padding — at most 2.
+-    let pad_count = stripped.iter().rev().take_while(|&&b| b == b'=').count();
+-    if pad_count > 2 {
+-        return Err(err(
+-            "base64Binary lexical has more than 2 padding characters",
+-        ));
+-    }
+-
+-    // Ensure `=` only appears at the end (no internal `=`).
+-    let data_len = stripped.len() - pad_count;
+-    for &b in &stripped[..data_len] {
+-        if b == b'=' {
+-            return Err(err(
+-                "internal padding character '=' in base64Binary lexical",
+-            ));
+-        }
+-    }
+-
+-    // Decode groups of 4 characters.
+-    let mut out = Vec::with_capacity((stripped.len() / 4) * 3);
+-    let groups = stripped.len() / 4;
+-
+-    for g in 0..groups {
+-        let base = g * 4;
+-        let is_last = g == groups - 1;
+-
+-        let (a_raw, b_raw, c_raw, d_raw) = (
+-            stripped[base],
+-            stripped[base + 1],
+-            stripped[base + 2],
+-            stripped[base + 3],
+-        );
+-
+-        if is_last && pad_count > 0 {
+-            // Final group with padding. pad_count is 1 or 2 (0 takes the else branch;
+-            // >2 was rejected above). Both arms are explicit; no wildcard needed.
+-            if pad_count == 1 {
+-                // Three base64 chars + one `=` → 2 output bytes.
+-                let a = decode_b64_char(a_raw)
+-                    .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
+-                let b = decode_b64_char(b_raw)
+-                    .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
+-                let c = decode_b64_char(c_raw)
+-                    .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
+-                if d_raw != b'=' {
+-                    return Err(err(
+-                        "expected padding character '=' in base64Binary lexical",
+-                    ));
+-                }
+-                // XSD 1.1 Part 2 §3.3.17 `B16`: the character before a single `=`
+-                // carries no bits past the two encoded bytes.
+-                if c & 0b11 != 0 {
+-                    return Err(err(
+-                        "base64Binary character before '=' must be one of AEIMQUYcgkosw048",
+-                    ));
+-                }
+-                out.push((a << 2) | (b >> 4));
+-                out.push((b << 4) | (c >> 2));
+-            } else {
+-                // pad_count == 2: Two base64 chars + two `=` → 1 output byte.
+-                let a = decode_b64_char(a_raw)
+-                    .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
+-                let b = decode_b64_char(b_raw)
+-                    .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
+-                if c_raw != b'=' || d_raw != b'=' {
+-                    return Err(err(
+-                        "expected padding characters '==' in base64Binary lexical",
+-                    ));
+-                }
+-                // XSD 1.1 Part 2 §3.3.17 `B04`: the character before `==` carries no
+-                // bits past the one encoded byte.
+-                if b & 0b1111 != 0 {
+-                    return Err(err(
+-                        "base64Binary character before '==' must be one of AQgw",
+-                    ));
+-                }
+-                out.push((a << 2) | (b >> 4));
+-            }
+-        } else {
+-            // Full group (no padding needed).
+-            let a = decode_b64_char(a_raw)
+-                .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
+-            let b = decode_b64_char(b_raw)
+-                .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
+-            let c = decode_b64_char(c_raw)
+-                .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
+-            let d = decode_b64_char(d_raw)
+-                .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
+-            out.push((a << 2) | (b >> 4));
+-            out.push((b << 4) | (c >> 2));
+-            out.push((c << 6) | d);
+-        }
+-    }
+-
+-    Ok(out)
++    let plan = BinaryPlan::new(XsdDatatype::Base64Binary, lexical)
++        .map_err(|error| error.into_xsd(lexical))?;
++    let mut output = vec![0; plan.len()];
++    plan.decode_into(&mut output).map_err(|error| error.into_xsd(lexical))?;
++    Ok(output)
+ }
+ 
+ /// Map a base64 alphabet character to its 6-bit value, or `None` for invalid chars.
+@@ -259,6 +150,159 @@
+     out
+ }
+ 
++/// Borrowed native parse failures. No lexical String is constructed here.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum BinaryReadError {
++    InvalidLexical { datatype: XsdDatatype, reason: &'static str },
++    LayoutOverflow,
++    OutputTooShort { needed: usize, available: usize },
++}
++
++impl BinaryReadError {
++    fn base64(reason: &'static str) -> Self {
++        Self::InvalidLexical { datatype: XsdDatatype::Base64Binary, reason }
++    }
++
++    fn into_xsd(self, lexical: &str) -> XsdError {
++        match self {
++            Self::InvalidLexical { datatype, reason } => XsdError::invalid(datatype, lexical, reason),
++            // These are unreachable in the resident exact-size adapter for a
++            // real &str, but remain hard failures rather than decoded success.
++            Self::LayoutOverflow => XsdError::invalid(XsdDatatype::Base64Binary, lexical, "binary output layout overflow"),
++            Self::OutputTooShort { .. } => XsdError::invalid(XsdDatatype::Base64Binary, lexical, "binary destination is too short"),
++        }
++    }
++}
++
++#[derive(Clone, Copy, Debug)]
++struct Base64Shape { groups: usize, padding: usize }
++
++/// A checked native plan over immutable caller-owned lexical bytes.
++#[derive(Clone, Copy, Debug)]
++pub struct BinaryPlan<'a> {
++    lexical: &'a str,
++    datatype: XsdDatatype,
++    output: std::alloc::Layout,
++    base64: Option<Base64Shape>,
++}
++
++impl<'a> BinaryPlan<'a> {
++    /// Validate the lexical without heap allocation and price its destination.
++    pub fn new(datatype: XsdDatatype, lexical: &'a str) -> Result<Self, BinaryReadError> {
++        let (length, base64) = match datatype {
++            XsdDatatype::HexBinary => {
++                let length = purrdf_hash::hex::decoded_len(lexical).map_err(|error| BinaryReadError::InvalidLexical {
++                    datatype, reason: match error {
++                        purrdf_hash::hex::HexError::OddLength { .. } => "hexBinary lexical must have an even number of digits",
++                        _ => "non-hexadecimal character in hexBinary lexical",
++                    },
++                })?;
++                (length, None)
++            }
++            XsdDatatype::Base64Binary => {
++                let shape = base64_shape(lexical)?;
++                decode_base64_groups(lexical, shape, |_| {})?;
++                let length = shape.groups.checked_mul(3).and_then(|n| n.checked_sub(shape.padding))
++                    .ok_or(BinaryReadError::LayoutOverflow)?;
++                (length, Some(shape))
++            }
++            _ => return Err(BinaryReadError::InvalidLexical {
++                datatype, reason: "parse_binary called with non-binary datatype",
++            }),
++        };
++        let output = std::alloc::Layout::array::<u8>(length).map_err(|_| BinaryReadError::LayoutOverflow)?;
++        Ok(Self { lexical, datatype, output, base64 })
++    }
++
++    #[must_use]
++    pub const fn output_layout(self) -> std::alloc::Layout { self.output }
++    #[must_use]
++    pub const fn len(self) -> usize { self.output.size() }
++    #[must_use]
++    pub const fn is_empty(self) -> bool { self.output.size() == 0 }
++
++    /// Fill supplied bytes. No allocation/growth and no stripped lexical buffer.
++    pub fn decode_into(self, output: &mut [u8]) -> Result<(), BinaryReadError> {
++        if output.len() < self.len() {
++            return Err(BinaryReadError::OutputTooShort { needed: self.len(), available: output.len() });
++        }
++        if let Some(shape) = self.base64 {
++            let mut cursor = 0;
++            decode_base64_groups(self.lexical, shape, |bytes| {
++                let end = cursor + bytes.len();
++                output[cursor..end].copy_from_slice(bytes);
++                cursor = end;
++            })?;
++            debug_assert_eq!(cursor, self.len());
++        } else {
++            purrdf_hash::hex::decode_to_slice(self.lexical, output).map_err(|error| match error {
++                purrdf_hash::hex::HexError::OutputTooShort { needed, available } => BinaryReadError::OutputTooShort { needed, available },
++                purrdf_hash::hex::HexError::OddLength { .. } => BinaryReadError::InvalidLexical {
++                    datatype: self.datatype, reason: "hexBinary lexical must have an even number of digits",
++                },
++                _ => BinaryReadError::InvalidLexical {
++                    datatype: self.datatype, reason: "non-hexadecimal character in hexBinary lexical",
++                },
++            })?;
++        }
++        Ok(())
++    }
++}
++
++fn base64_bytes(lexical: &str) -> impl Iterator<Item = u8> + '_ {
++    lexical.bytes().filter(|&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
++}
++
++fn base64_shape(lexical: &str) -> Result<Base64Shape, BinaryReadError> {
++    let (mut length, mut padding, mut internal) = (0_usize, 0_usize, false);
++    for byte in base64_bytes(lexical) {
++        length = length.checked_add(1).ok_or(BinaryReadError::LayoutOverflow)?;
++        if byte == b'=' {
++            padding = padding.checked_add(1).ok_or(BinaryReadError::LayoutOverflow)?;
++        } else {
++            internal |= padding != 0;
++            padding = 0;
++        }
++    }
++    if !length.is_multiple_of(4) {
++        return Err(BinaryReadError::base64("base64Binary lexical length (after stripping whitespace) must be a multiple of 4"));
++    }
++    if padding > 2 { return Err(BinaryReadError::base64("base64Binary lexical has more than 2 padding characters")); }
++    if internal { return Err(BinaryReadError::base64("internal padding character '=' in base64Binary lexical")); }
++    Ok(Base64Shape { groups: length / 4, padding })
++}
++
++/// The one native base64 group decoder; validation uses a zero-allocation sink.
++fn decode_base64_groups(
++    lexical: &str, shape: Base64Shape, mut emit: impl FnMut(&[u8]),
++) -> Result<(), BinaryReadError> {
++    let mut input = base64_bytes(lexical);
++    for group in 0..shape.groups {
++        let mut raw = [0_u8; 4];
++        for byte in &mut raw { *byte = input.next().expect("the checked shape counts all group bytes"); }
++        let [a_raw, b_raw, c_raw, d_raw] = raw;
++        let invalid = || BinaryReadError::base64("invalid character in base64Binary lexical");
++        let a = decode_b64_char(a_raw).ok_or_else(invalid)?;
++        let b = decode_b64_char(b_raw).ok_or_else(invalid)?;
++        let last = group == shape.groups - 1;
++        let (c, d, length) = if last && shape.padding == 2 {
++            if c_raw != b'=' || d_raw != b'=' { return Err(BinaryReadError::base64("expected padding characters '==' in base64Binary lexical")); }
++            if b & 0b1111 != 0 { return Err(BinaryReadError::base64("base64Binary character before '==' must be one of AQgw")); }
++            (0, 0, 1)
++        } else if last && shape.padding == 1 {
++            let c = decode_b64_char(c_raw).ok_or_else(invalid)?;
++            if d_raw != b'=' { return Err(BinaryReadError::base64("expected padding character '=' in base64Binary lexical")); }
++            if c & 0b11 != 0 { return Err(BinaryReadError::base64("base64Binary character before '=' must be one of AEIMQUYcgkosw048")); }
++            (c, 0, 2)
++        } else {
++            (decode_b64_char(c_raw).ok_or_else(invalid)?, decode_b64_char(d_raw).ok_or_else(invalid)?, 3)
++        };
++        let output = [(a << 2) | (b >> 4), (b << 4) | (c >> 2), (c << 6) | d];
++        emit(&output[..length]);
++    }
++    Ok(())
++}
++
+ // ── dispatch ──────────────────────────────────────────────────────────────────────
+ 
+ /// Dispatch `hexBinary` or `base64Binary` lexical parsing to the appropriate codec.
+diff --git a/crates/sparql-eval/src/parsed_value.rs b/crates/sparql-eval/src/parsed_value.rs
+--- a/crates/sparql-eval/src/parsed_value.rs
++++ b/crates/sparql-eval/src/parsed_value.rs
+@@ -5,7 +5,7 @@
+ 
+ use std::hash::Hash;
+ use std::ops::Deref;
+-use std::sync::Arc;
++use purrdf_core::small::Shared;
+ 
+ use hashbrown::HashTable;
+ use purrdf_xsd::{XsdDatatype, XsdValue};
+@@ -30,7 +30,7 @@
+ enum ParsedStorage {
+     // Constructed only when the value owns no heap allocation.
+     Inline(XsdValue),
+-    Shared(Arc<ParsedPayload>),
++    Shared(Shared<ParsedPayload>),
+ }
+ 
+ /// No raw extraction or independent lease clone is exposed. Numeric operators
+@@ -61,6 +61,68 @@
+ }
+ 
+ impl ParsedValue {
++    /// Native Boolean/String/binary ownership; OtherDatatype requires another
++    /// admitted native dispatch branch, never a raw-parser fallback.
++    pub(crate) fn parse_simple(
++        lexical: &str, datatype: XsdDatatype, workspace: &WorkspaceCapability,
++    ) -> Result<NumericParse, EvalError> {
++        use purrdf_xsd::binary::{BinaryPlan, BinaryReadError};
++        match datatype {
++            XsdDatatype::Boolean => Ok(NumericParse::Value(
++                purrdf_xsd::simple::read_boolean(lexical).ok().map(|value| Self { storage: ParsedStorage::Inline(XsdValue::Boolean(value)) }),
++            )),
++            XsdDatatype::String => {
++                let layout = purrdf_xsd::simple::string_output_layout(lexical).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++                Self::simple_owned(layout, workspace, || {
++                    let mut output = String::new();
++                    output.try_reserve_exact(layout.size()).map_err(|_| EvalError::AllocationFailed { construct: "XSD string parse destination" })?;
++                    purrdf_xsd::simple::read_string_into(lexical, &mut output).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++                    Ok(Some(XsdValue::String(output)))
++                }).map(NumericParse::Value)
++            }
++            XsdDatatype::HexBinary | XsdDatatype::Base64Binary => {
++                let plan = match BinaryPlan::new(datatype, lexical) {
++                    Ok(plan) => plan,
++                    Err(BinaryReadError::InvalidLexical { .. }) => return Ok(NumericParse::Value(None)),
++                    Err(_) => return Err(EvalError::WorkspaceBoundOverflow),
++                };
++                Self::simple_owned(plan.output_layout(), workspace, || {
++                    let mut bytes = Vec::new();
++                    bytes.try_reserve_exact(plan.len()).map_err(|_| EvalError::AllocationFailed { construct: "XSD binary parse destination" })?;
++                    bytes.resize(plan.len(), 0);
++                    match plan.decode_into(&mut bytes) {
++                        Ok(()) => Ok(Some(XsdValue::Binary { bytes, datatype })),
++                        Err(BinaryReadError::InvalidLexical { .. }) => Ok(None),
++                        Err(_) => Err(EvalError::WorkspaceBoundOverflow),
++                    }
++                }).map(NumericParse::Value)
++            }
++            _ => Ok(NumericParse::OtherDatatype),
++        }
++    }
++
++    fn simple_owned(
++        layout: std::alloc::Layout, workspace: &WorkspaceCapability,
++        construct: impl FnOnce() -> Result<Option<XsdValue>, EvalError>,
++    ) -> Result<Option<Self>, EvalError> {
++        if layout.size() == 0 {
++            let Some(value) = construct()? else { return Ok(None); };
++            if value.owned_heap_bytes().ok_or(EvalError::WorkspaceBoundOverflow)? != 0 { return Err(EvalError::WorkspaceBoundOverflow); }
++            return Ok(Some(Self { storage: ParsedStorage::Inline(value) }));
++        }
++        let header = purrdf_core::small::Shared::<ParsedPayload>::allocation_layout().size();
++        let peak = layout.size().checked_add(header).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        let mut allocation = workspace.charge(u64::try_from(peak).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++        let Some(value) = construct()? else { return Ok(None); };
++        let bytes = value.owned_heap_bytes().ok_or(EvalError::WorkspaceBoundOverflow)?;
++        if bytes > layout.size() { return Err(EvalError::WorkspaceBoundOverflow); }
++        let retained = bytes.checked_add(header).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        allocation.resize(u64::try_from(retained).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++        let payload = purrdf_core::small::Shared::try_new(ParsedPayload { value, _allocation: allocation })
++            .map_err(|_| EvalError::AllocationFailed { construct: "parsed value shared control" })?;
++        Ok(Some(Self { storage: ParsedStorage::Shared(payload) }))
++    }
++
+     /// Parse a numeric literal after native checked physical admission.
+     /// Datatype/lexical errors keep the previous unbound result; operational
+     /// admission errors return directly without constructing diagnostic text.
+@@ -76,7 +138,7 @@
+             return Ok(NumericParse::OtherDatatype);
+         };
+         let header = if layout.retained_bytes() == 0 { 0 } else {
+-            crate::workspace::shared_layout::<ParsedPayload>()?
++            u64::try_from(Shared::<ParsedPayload>::allocation_layout().size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?
+         };
+         let peak = u64::try_from(layout.peak_bytes())
+             .map_err(|_| EvalError::WorkspaceBoundOverflow)?
+@@ -108,7 +170,8 @@
+             .checked_add(header).ok_or(EvalError::WorkspaceBoundOverflow)?;
+         let mut allocation = allocation.take().ok_or(EvalError::WorkspaceBoundOverflow)?;
+         allocation.resize(retained)?;
+-        let payload = Arc::new(ParsedPayload { value, _allocation: allocation });
++        let payload = Shared::try_new(ParsedPayload { value, _allocation: allocation })
++            .map_err(|_| EvalError::AllocationFailed { construct: "parsed value shared control" })?;
+         Ok(NumericParse::Value(Some(Self { storage: ParsedStorage::Shared(payload) })))
+     }
+ }

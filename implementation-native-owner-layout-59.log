@@ -1,0 +1,87 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 1m 07s
+     Running tests/correlated_owned_admission.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/10029f317e363a5f/out/correlated_owned_admission-10029f317e363a5f)
+
+running 3 tests
+test http_native_decode_and_blank_ingest_preserve_duplicates_and_physical_refusal_beats_silent ... ok
+test service_public_forms_direct_prepared_and_governed_price_the_real_native_producers ... ok
+test all_public_forms_and_routes_share_native_correlated_scopes_and_owned_outputs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests/prepared_execution.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/dfb497cce083cf1d/out/prepared_execution-dfb497cce083cf1d)
+
+running 17 tests
+test binding_a_name_that_was_not_declared_is_refused ... ok
+test declaring_one_parameter_twice_is_refused ... ok
+test a_duplicate_declaration_is_refused_before_either_door_exists ... ok
+test a_repeated_pre_bound_name_answers_the_empty_solution ... ok
+test a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle ... ok
+test a_prepared_execution_answers_each_binding_from_one_plan ... ok
+test evaluating_an_admitted_plan_costs_a_pinned_constant_per_call ... ok
+test executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does ... ok
+test executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test re_running_a_prepared_execution_costs_a_pinned_constant ... ok
+test running_with_a_parameter_unbound_is_refused ... ok
+test the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does ... ok
+test the_third_run_costs_measurably_less_because_the_memo_is_reused ... ok
+test the_two_doors_are_interchangeable_within_one_execution ... ok
+test unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_value ... ok
+test a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/query_completion.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/9878b07c0c4f8576/out/query_completion-9878b07c0c4f8576)
+
+running 21 tests
+test preexisting_source_failure_outranks_parse_and_empty_pattern_success ... ok
+test refused_reporting_admission_remains_typed_even_before_sticky_failure ... ok
+test sticky_operational_root_outranks_the_direct_admission_error ... ok
+test retained_prepared_visits_remain_inside_the_checked_publication_scope ... ok
+test public_explain_projection_holds_real_execution_permit_through_final_read ... ok
+test refused_execution_never_invokes_a_scoped_visitor_and_the_handle_can_retry ... ok
+test explain_preflight_failure_outranks_malformed_query ... ok
+test typed_owned_and_governed_queries_never_publish_iterator_or_materialization_failures ... ok
+test named_graph_lookup_refusal_never_certifies_an_empty_scope ... ok
+test final_checkpoint_failure_discards_success_and_keeps_workspace_held ... ok
+test explain_admitted_supplied_inputs_preserve_parse_failure_before_reading ... ok
+test direct_execution_admission_failures_keep_their_typed_cause_and_exact_evidence ... ok
+test graph_admission_and_final_checkpoint_failures_leave_destination_unchanged ... ok
+test explain_admission_failures_remain_typed_without_an_explanation ... ok
+test prepared_governed_queries_discard_rows_produced_before_an_iterator_failure ... ok
+test explain_measuring_and_final_checkpoint_failures_publish_no_ledger ... ok
+test healthy_explain_preserves_parse_and_evaluation_diagnostics_and_final_evidence ... ok
+test healthy_query_routes_hold_execution_admission_through_final_checkpoint ... ok
+test explain_stop_retains_stopped_receipt_while_operational_failure_takes_precedence ... ok
+test the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome ... ok
+test healthy_explain_is_identical_to_resident_and_holds_admission_through_publication ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/segmented_query.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/2acac609d6bb53df/out/segmented_query-2acac609d6bb53df)
+
+running 20 tests
+test dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal ... ok
+test explain_tight_capacity_releases_native_preparation_and_reporting ... ok
+test bounded_virtual_streams_and_empty_graph_declarations_match_resident ... ok
+test construct_mint_prefix_completes_and_tight_refusal_preserves_destination ... ok
+test bounded_ask_construct_describe_match_resident_across_public_entries ... ok
+test fallible_explain_preserves_a_segmented_provider_fault_over_a_fired_stop ... ok
+test governed_reporting_refuses_independently_tight_capacity ... ok
+test fallible_explain_measures_the_segmented_store_within_its_certified_reservation ... ok
+test configured_explain_matches_resident_and_retains_last_owner ... ok
+test interned_graph_retention_keeps_original_account_until_last_extraction ... ok
+test long_host_refusal_keeps_its_typed_cause_without_unbounded_report_allocation ... ok
+test ordered_query_matches_resident_and_tiny_capacity_refuses ... ok
+test persistent_id_binding_retains_original_admission_and_refuses_atomically ... ok
+test raw_evaluator_cannot_bypass_a_bounded_source_ownership_capability ... ok
+test scoped_and_prepared_engine_egresses_hold_the_reservation_through_consumption ... ok
+test selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger ... ok
+test prepared_governed_cold_sessions_match_text_receipts_and_release_reporting ... ok
+test request_metadata_and_prefix_match_resident_and_refuse_tight_capacity ... ok
+test duplicate_computed_payload_releases_temporaries_and_retains_extracted_output ... ok
+test bounded_select_algebra_matches_resident_bags_across_public_entries ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

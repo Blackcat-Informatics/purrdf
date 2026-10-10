@@ -1,0 +1,25 @@
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -120,7 +120,7 @@
+ use purrdf_xsd::datatype::XSD_STRING;
+ 
+ use crate::agg_fn::AggregateAccumulator as _;
+-use crate::convert::{ground_term_to_workspace_value, named_node_to_value};
++use crate::convert::ground_term_to_workspace_value;
+ use crate::error::EvalError;
+ use crate::eval::{EvalCtx, eval_evaluated};
+ #[cfg(test)]
+@@ -692,10 +692,11 @@
+     match name {
+         NamedNodePattern::NamedNode(n) => {
+             let mut lift = Lift::at_admitted(node, &ctx.growth)?;
++            let name = crate::convert::named_node_to_workspace_value(n, &ctx.growth)?;
+             match ctx
+                 .dataset
+-                .term_id_by_value(&named_node_to_value(n))
+-                .map_err(EvalError::source_read)?
++                .term_id_by_value(&name)
++                .map_err(|error| ctx.workspace.source_error(error))?
+             {
+                 // Addressable only if the term names a graph of the dataset — the same
+                 // set `GRAPH ?g` ranges over, so a term known only in another position

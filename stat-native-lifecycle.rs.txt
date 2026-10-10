@@ -1,0 +1,115 @@
+
+/// A native factory's original accumulator box and its physical grant travel
+/// together. The box is destroyed before its outside admission is released.
+pub struct WorkspaceAccumulator {
+    value: Box<dyn AggregateAccumulator>,
+    allocation: crate::WorkspaceAllocation,
+}
+impl WorkspaceAccumulator {
+    /// Box the actual concrete native state after admitting its exact layout.
+    /// State payloads must already retain their own original producer grants.
+    /// # Errors
+    /// Returns physical refusal before the accumulator box is allocated.
+    pub fn new<A: AggregateAccumulator>(value: A, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
+        let allocation = workspace.charge(u64::try_from(size_of::<A>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let value = purrdf_core::small::try_boxed(value).map_err(|_| EvalError::AllocationFailed { construct: "native aggregate control" })?;
+        Ok(Self { value, allocation })
+    }
+    fn resident(value: Box<dyn AggregateAccumulator>) -> Self {
+        Self { value, allocation: crate::WorkspaceCapability::resident().charge(0).expect("resident zero admission") }
+    }
+    fn as_mut(&mut self) -> &mut dyn AggregateAccumulator { self.value.as_mut() }
+    pub(crate) fn into_resident(self) -> Result<Box<dyn AggregateAccumulator>, Self> {
+        if self.allocation.is_bounded() { Err(self) } else { Ok(self.value) }
+    }
+}
+
+/// Recover native state through the original downcast, admitting its diagnostic
+/// only if a host violates the concrete-type contract.
+pub(crate) fn downcast_combine_partial_admitted<T: 'static>(
+    other: Box<dyn AggregateAccumulator>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<T, EvalError> {
+    other.into_any().downcast::<T>().map(|boxed| *boxed).map_err(|_| {
+        crate::error::NativeDiagnostic::error(
+            crate::error::NativeDiagnosticKind::FunctionOperational,
+            concat!("AggregateAccumulator::combine received a partial accumulator of a different ",
+                "concrete type than Self — every partial combine merges was created by the SAME ",
+                "CustomAggregate::init factory, so a mismatch here is a host bug in how partial ",
+                "accumulators were constructed, not a state this crate's own evaluator can produce"),
+            workspace,
+        )
+    })
+}
+
+pub(crate) fn init_contained_admitted(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+    scalarvals: &[(String, TermValue)],
+    division: purrdf_xsd::exact::DivisionPolicy,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<WorkspaceAccumulator, EvalError> {
+    crate::contain::call_contained_admitted(KIND, iri, "initial accumulator", || agg.init_admitted(scalarvals, division, workspace), workspace)
+}
+
+pub(crate) fn step_contained_admitted(
+    accumulator: &mut WorkspaceAccumulator,
+    iri: &str,
+    args: &[TermValue],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
+    crate::contain::call_contained_admitted(KIND, iri, "folding a row", || accumulator.as_mut().step_admitted(args, workspace), workspace)
+}
+
+pub(crate) fn combine_contained_admitted(
+    accumulator: &mut WorkspaceAccumulator,
+    iri: &str,
+    other: WorkspaceAccumulator,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let WorkspaceAccumulator { value, allocation } = other;
+    let result = crate::contain::call_contained_admitted(KIND, iri, "combining partial state", || accumulator.as_mut().combine_admitted(value, workspace), workspace);
+    drop(allocation);
+    result
+}
+
+pub(crate) fn finish_contained_admitted(
+    accumulator: WorkspaceAccumulator,
+    iri: &str,
+    absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+    let WorkspaceAccumulator { value, allocation } = accumulator;
+    let result = crate::contain::call_contained_admitted(KIND, iri, "finishing", || value.finish_absorbing_admitted(absorb, workspace), workspace);
+    drop(allocation);
+    result
+}
+
+pub(crate) fn exact_numeric_cost_contained_admitted(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+    survivors: &[Vec<TermValue>],
+    scalarvals: &[(String, TermValue)],
+    division: purrdf_xsd::exact::DivisionPolicy,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<purrdf_xsd::exact::Cost, EvalError> {
+    crate::contain::call_contained_admitted(KIND, iri, "exact numeric cost", || agg.exact_numeric_cost_admitted(survivors, scalarvals, division, workspace), workspace)
+}
+
+/// Read the original declaration with admitted panic diagnostics.
+pub(crate) fn state_bound_contained_admitted(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<u64, EvalError> {
+    crate::contain::declaration_contained_admitted(KIND, iri, "state bound", || agg.state_bound(), workspace)
+}
+
+/// Read the original determinism declaration with admitted panic diagnostics.
+pub(crate) fn volatility_contained_admitted(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Volatility, EvalError> {
+    crate::contain::declaration_contained_admitted(KIND, iri, "determinism class", || agg.volatility(), workspace)
+}

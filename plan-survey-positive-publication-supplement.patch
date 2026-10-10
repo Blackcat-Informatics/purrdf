@@ -1,0 +1,12 @@
+diff --git a/crates/sparql-eval/src/bgp/positive.rs b/crates/sparql-eval/src/bgp/positive.rs
+--- a/crates/sparql-eval/src/bgp/positive.rs
++++ b/crates/sparql-eval/src/bgp/positive.rs
+@@ -504,7 +504,7 @@
+                                         .get(&key)
+                                         .map_or(&[], std::sync::Arc::as_ref),
+                                     survey,
+-                                );
++                                )?;
+                             }
+                         }
+                         GraphPattern::Join { left, right } => {

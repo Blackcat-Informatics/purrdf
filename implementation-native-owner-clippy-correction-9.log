@@ -1,0 +1,154 @@
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/validate)
+    Checking purrdf-envelope-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/envelope-probe)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shapes)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/geo)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cli)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-conformance)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-capi)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-wasm)
+error[E0308]: mismatched types
+   --> crates/rdf-capi/src/query.rs:319:61
+    |
+319 |                 *out_graph = into_handle(PurrdfDataset::new(graph));
+    |                                          ------------------ ^^^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+    |                                          |
+    |                                          arguments to this function are incorrect
+    |
+    = note: expected struct `std::sync::Arc<purrdf_core::RdfDataset>`
+               found struct `purrdf_core::DatasetHandle`
+note: associated function defined here
+   --> crates/rdf-capi/src/handles.rs:35:25
+    |
+ 35 |     pub(crate) const fn new(dataset: Arc<RdfDataset>) -> Self {
+    |                         ^^^ ------------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-capi/src/query.rs:529:61
+    |
+529 |                 *out_graph = into_handle(PurrdfDataset::new(graph));
+    |                                          ------------------ ^^^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+    |                                          |
+    |                                          arguments to this function are incorrect
+    |
+    = note: expected struct `std::sync::Arc<purrdf_core::RdfDataset>`
+               found struct `purrdf_core::DatasetHandle`
+note: associated function defined here
+   --> crates/rdf-capi/src/handles.rs:35:25
+    |
+ 35 |     pub(crate) const fn new(dataset: Arc<RdfDataset>) -> Self {
+    |                         ^^^ ------------------------
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-capi` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0277]: the trait bound `purrdf_core::DatasetHandle: purrdf_core::DatasetView` is not satisfied
+   --> crates/sparql-conformance/src/run.rs:446:27
+    |
+446 |         serialize_dataset(&graph, &construct.format, SerializeGraph::Dataset).map_err(|e| {
+    |         ----------------- ^^^^^^ the trait `purrdf_core::DatasetView` is not implemented for `purrdf_core::DatasetHandle`
+    |         |
+    |         required by a bound introduced by this call
+    |
+    = help: the following other types implement trait `purrdf_core::DatasetView`:
+              purrdf_core::CompositeDatasetView
+              purrdf_core::DeltaDatasetView
+              purrdf_core::PackView<'_>
+              purrdf_core::PagedDataset
+              purrdf_core::PagedQueryView<'_>
+              purrdf_core::PagedStackQueryView<'_>
+              purrdf_core::RdfDataset
+              purrdf_core::SegmentedSession
+            and 2 others
+note: required by a bound in `purrdf::serialize_dataset`
+   --> crates/rdf/src/native_codecs/serialize.rs:119:29
+    |
+119 | pub fn serialize_dataset<D: DatasetView>(
+    |                             ^^^^^^^^^^^ required by this bound in `serialize_dataset`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-conformance` (lib) due to 1 previous error
+error[E0308]: mismatched types
+    --> crates/rdf-wasm/src/query.rs:2001:69
+     |
+2001 |         SparqlResult::Graph(graph) => serialize_frozen_with_options(&graph, format, options, None),
+     |                                       ----------------------------- ^^^^^^ expected `&Arc<RdfDataset>`, found `&DatasetHandle`
+     |                                       |
+     |                                       arguments to this function are incorrect
+     |
+     = note: expected reference `&std::sync::Arc<purrdf::RdfDataset>`
+                found reference `&purrdf_core::DatasetHandle`
+note: function defined here
+    --> crates/rdf-wasm/src/dataset.rs:980:15
+     |
+ 980 | pub(crate) fn serialize_frozen_with_options(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 981 |     frozen: &Arc<RdfDataset>,
+     |     ------------------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-wasm/src/query.rs:2092:17
+     |
+2091 |             value: Some(QueryResultValue::Graph(Box::new(Dataset::from_frozen(
+     |                                                          -------------------- arguments to this function are incorrect
+2092 |                 graph,
+     |                 ^^^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+     |
+     = note: expected struct `std::sync::Arc<purrdf::RdfDataset>`
+                found struct `purrdf_core::DatasetHandle`
+note: associated function defined here
+    --> crates/rdf-wasm/src/dataset.rs:407:19
+     |
+ 407 |     pub(crate) fn from_frozen(frozen: Arc<RdfDataset>) -> Result<Self, JsError> {
+     |                   ^^^^^^^^^^^ -----------------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-wasm/src/query.rs:2112:60
+     |
+2112 |         SparqlResult::Graph(graph) => Dataset::from_frozen(graph),
+     |                                       -------------------- ^^^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+     |                                       |
+     |                                       arguments to this function are incorrect
+     |
+     = note: expected struct `std::sync::Arc<purrdf::RdfDataset>`
+                found struct `purrdf_core::DatasetHandle`
+note: associated function defined here
+    --> crates/rdf-wasm/src/dataset.rs:407:19
+     |
+ 407 |     pub(crate) fn from_frozen(frozen: Arc<RdfDataset>) -> Result<Self, JsError> {
+     |                   ^^^^^^^^^^^ -----------------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-wasm/src/query.rs:2291:89
+     |
+2291 |             serialize_graph_result(graph, format.unwrap_or_else(|| default_graph_format(graph)))
+     |                                                                    -------------------- ^^^^^ expected `&Arc<RdfDataset>`, found `&DatasetHandle`
+     |                                                                    |
+     |                                                                    arguments to this function are incorrect
+     |
+     = note: expected reference `&std::sync::Arc<purrdf::RdfDataset>`
+                found reference `&purrdf_core::DatasetHandle`
+note: function defined here
+    --> crates/rdf-wasm/src/query.rs:2352:4
+     |
+2352 | fn default_graph_format(graph: &Arc<purrdf::RdfDataset>) -> &'static str {
+     |    ^^^^^^^^^^^^^^^^^^^^ -------------------------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-wasm/src/query.rs:2291:36
+     |
+2291 |             serialize_graph_result(graph, format.unwrap_or_else(|| default_graph_format(graph)))
+     |             ---------------------- ^^^^^ expected `&Arc<RdfDataset>`, found `&DatasetHandle`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&std::sync::Arc<purrdf::RdfDataset>`
+                found reference `&purrdf_core::DatasetHandle`
+note: function defined here
+    --> crates/rdf-wasm/src/query.rs:2416:4
+     |
+2416 | fn serialize_graph_result(graph: &Arc<purrdf::RdfDataset>, format: &str) -> Result<String, String> {
+     |    ^^^^^^^^^^^^^^^^^^^^^^ -------------------------------
+
+error: could not compile `purrdf-wasm` (lib) due to 5 previous errors
+error: could not compile `purrdf-wasm` (lib test) due to 5 previous errors

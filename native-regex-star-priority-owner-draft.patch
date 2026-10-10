@@ -1,0 +1,114 @@
+--- a/crates/rdf-core/src/xsd_regex/xpath/pike.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/pike.rs
+@@ -238,6 +238,30 @@
+ /// Three linear passes over a breadth-first order of the tree, which lists
+ /// every parent before its operands. The table is retained with the program;
+ /// the order is released.
++/// The one empty/nullable property law shared by construction and link analysis.
++/// Children are supplied from their original already-built arena metadata.
++pub(super) fn node_properties(node: Node, child: impl Fn(usize) -> (bool, bool)) -> (bool, bool) {
++    match node {
++            Node::Character(_) => (false, false),
++            Node::Empty => (true, true),
++            Node::Backreference(_) => (false, true),
++            Node::Start | Node::End => (false, true),
++            Node::Sequence(left, right) => (
++                child(left).0 && child(right).0,
++                child(left).1 && child(right).1,
++            ),
++            Node::Choice(left, right) => (
++                child(left).0 || child(right).0,
++                child(left).1 || child(right).1,
++            ),
++            Node::Capture { body, .. } => (child(body).0, child(body).1),
++            Node::Repeat { body, min, .. } => (
++                min == Count::Finite(0) || child(body).0,
++                min == Count::Finite(0) || child(body).1,
++            ),
++        }
++}
++
+ pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget<'_>) -> Result<Links, Error> {
+     let count = nodes.len();
+     // A link is five cells: its parent, its two nesting depths, its set and
+@@ -277,25 +301,7 @@
+     }
+     for &node in order.iter().rev() {
+         // A backreference to an unset or empty group matches the empty string.
+-        let (empty, nullable) = match nodes[node] {
+-            Node::Character(_) => (false, false),
+-            Node::Empty => (true, true),
+-            Node::Backreference(_) => (false, true),
+-            Node::Start | Node::End => (false, true),
+-            Node::Sequence(left, right) => (
+-                links[left].empty && links[right].empty,
+-                links[left].nullable && links[right].nullable,
+-            ),
+-            Node::Choice(left, right) => (
+-                links[left].empty || links[right].empty,
+-                links[left].nullable || links[right].nullable,
+-            ),
+-            Node::Capture { body, .. } => (links[body].empty, links[body].nullable),
+-            Node::Repeat { body, min, .. } => (
+-                min == Count::Finite(0) || links[body].empty,
+-                min == Count::Finite(0) || links[body].nullable,
+-            ),
+-        };
++        let (empty, nullable) = node_properties(nodes[node], |child| (links[child].empty, links[child].nullable));
+         links[node].empty = empty;
+         links[node].nullable = nullable;
+     }
+--- a/crates/rdf-core/src/xsd_regex/xpath/compile.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/compile.rs
+@@ -477,6 +477,7 @@
+         offsets,
+         pending: None,
+         nodes: Vec::new(),
++        properties: Vec::new(),
+         sets: Vec::new(),
+         frames: Vec::new(),
+         captures: 0,
+@@ -498,9 +499,11 @@
+         captures,
+         windows,
+         frames,
++        properties,
+         ..
+     } = parser;
+     budget.release_vec(frames)?;
++    budget.release_vec(properties)?;
+     scanner.release(&mut budget)?;
+     budget.release_compile_slots(scanner_slots);
+     if let Some((text, offsets)) = normalized {
+@@ -639,6 +642,7 @@
+     offsets: Option<&'a [usize]>,
+     pending: Option<Spanned<'a>>,
+     nodes: Vec<Node>,
++    properties: Vec<(bool, bool)>,
+     sets: Vec<Set>,
+     frames: Vec<Frame>,
+     captures: usize,
+@@ -696,8 +700,11 @@
+         self.budget.charge(Resource::CompileSteps, 1)?;
+         self.budget.charge(Resource::ProgramNodes, 1)?;
+         grow(&mut self.budget, &mut self.nodes, 6)?;
++        let properties = super::pike::node_properties(node, |child| self.properties[child]);
++        grow(&mut self.budget, &mut self.properties, 1)?;
+         let id = self.nodes.len();
+         self.nodes.push(node);
++        self.properties.push(properties);
+         Ok(id)
+     }
+ 
+@@ -1097,7 +1104,10 @@
+             true
+         };
+         let (body, min, max) = if self.law.is_compatibility()
+-            && min == Count::Finite(0) && max.is_none() {
++            && min == Count::Finite(0) && max.is_none() && self.properties[body].1 {
++            // Only a nullable body needs the optional-plus lowering. Giving a
++            // nonnullable star two split points changes nested reluctant capture
++            // priority even though it accepts the same whole-match strings.
+             let plus = self.node(Node::Repeat {
+                 body, min: Count::Finite(1), max: None, greedy, follow: None,
+             })?;

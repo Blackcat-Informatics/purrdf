@@ -1,0 +1,341 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The SPARQL query algebra (W3C SPARQL 1.1 §18.2), purrdf-owned and RDF 1.2-native.
+//!
+//! This is the *algebra* form, not a raw syntax tree: solution modifiers
+//! (`DISTINCT`, `ORDER BY`, `LIMIT`/`OFFSET`, `GROUP BY`) are encoded as
+//! [`GraphPattern`] nodes wrapping the `WHERE` algebra, exactly as the standard
+//! translation prescribes. That is why a [`Query::Select`] holds only its root
+//! `pattern` and a consumer walks *into* the pattern to find `Project`/`Distinct`/
+//! `Slice`/`OrderBy`/`Group`.
+//!
+//! ## S6 extension seam
+//!
+//! This algebra is intentionally a faithful, standard, *evaluable* IR — the form
+//! the downstream evaluator S6 (`sparql-eval`) consumes. The greenfield lever for
+//! exploiting the native OWL/EL-DL reasoner (e.g. routing `rdfs:subClassOf*` to
+//! the DL subsumption closure rather than evaluating the path structurally, or
+//! making the entailment regime a first-class concern) is an *evaluation*-time
+//! decision and belongs in S6: it would annotate or wrap these nodes there. S5
+//! keeps the door open by owning its own enums (free to grow variants/annotations
+//! later) rather than cloning a fixed external type.
+
+use crate::ast::{
+    GroundTerm, Literal, NamedNode, NamedNodePattern, QuadPattern, TermPattern, TriplePattern,
+    Variable,
+};
+use crate::tree::{Args, Chain, Child, NonEmpty};
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+use purrdf_lex::term_syntax::{
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+};
+
+/// The closed SEP-0009 function registry and its argument-count signatures,
+/// re-exported so a consumer that matches on [`Function::Cdt`] can name
+/// [`CdtCall::fn_kind`]'s type without taking its own `purrdf-cdt` dependency.
+pub use purrdf_cdt::{CdtArity, CdtFn};
+
+/// The SPARQL version an in-prologue `VERSION "<string>"` declaration named
+/// (SPARQL 1.2 Query specification §4.4 / grammar production `Version`).
+///
+/// Two spellings are recognized and get their own variant; anything else is
+/// retained verbatim in [`Self::Other`] rather than rejected — the `VERSION`
+/// clause is **syntax-only** (parsing never rejects an unrecognized string; see
+/// vendored W3C `w3c-sparql12` `version-04.rq`, which declares `"1.1"` and is a
+/// `PositiveSyntaxTest`). [`Self::raw`] returns the declared string byte-exactly
+/// for every variant, including the two recognized ones, whose raw spelling is
+/// always identical to their canonical one (recognition is an exact match).
+///
+/// A prologue may repeat the declaration (the grammar's own `Version*`); the
+/// parser records the LAST one when several appear (an owned reading — the
+/// SPARQL 1.2 Query specification does not itself state a tie-breaking rule for
+/// a request that legally re-declares the clause).
+///
+/// # What evaluation does with each
+///
+/// Recognition is enforced at evaluation ADMISSION, not at parse time — by
+/// `purrdf-sparql-eval`'s `admit_version`, the ONE function both the query-evaluation
+/// entry point and the update-evaluation entry point call, so a query and an UPDATE
+/// declaring the same unrecognized version are refused identically (an UPDATE's
+/// refusal, in particular, applies no mutation):
+///
+/// - [`Self::V12`] evaluates normally on the full engine.
+/// - [`Self::V12Basic`] is admitted, then walked: the SPARQL 1.2 Query
+///   specification's §4.3.1 "Version Labels" table defines `1.2-basic` as
+///   `1.2` syntax "without triple terms and without triple patterns that have
+///   a triple pattern in their subject or object position" — the RDF 1.2
+///   triple-term/reification feature area (`<<( s p o )>>`, `<< s p o >>`,
+///   `{| ... |}`, and the `TRIPLE`/`isTRIPLE`/`SUBJECT`/`PREDICATE`/`OBJECT`
+///   functions on triple terms, §17.4.6). `purrdf-sparql-eval`'s
+///   `basic_profile` module enforces exactly that restriction (see its docs
+///   for the full spec citation and the gated construct set); a `1.2-basic`
+///   request that uses none of those constructs evaluates exactly as a `1.2`
+///   one would, and one that does use one of them is refused at admission,
+///   naming the offending construct.
+/// - [`Self::Other`] is refused at admission with a typed error naming the
+///   declared version — an unrecognized `VERSION` names a spec this evaluator
+///   does not know how to honor, so admitting it would silently evaluate (or,
+///   for an UPDATE, silently mutate) under the wrong (or an unknown) semantics.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SparqlVersion {
+    /// `VERSION "1.2"` — the SPARQL 1.2 Query specification, full profile.
+    V12,
+    /// `VERSION "1.2-basic"` — the SPARQL 1.2 Query specification's Basic profile.
+    V12Basic,
+    /// Any other declared string, retained verbatim. Refused at evaluation
+    /// admission (see the type docs); never a parse error.
+    Other(String),
+}
+
+impl SparqlVersion {
+    /// Classify a declared `VERSION` string, recognizing `"1.2"` and
+    /// `"1.2-basic"`; anything else becomes [`Self::Other`] verbatim.
+    #[must_use]
+    pub fn parse(raw: &str) -> Self {
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        Self::parse_with_memory(raw, &mut memory).expect("resident version storage")
+    }
+
+    /// Classify a declaration before allocating its unknown spelling.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal for an owned unknown spelling.
+    pub fn parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(raw: &str, memory: &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        match raw {
+            "1.2" => Ok(Self::V12),
+            "1.2-basic" => Ok(Self::V12Basic),
+            other => Ok(Self::Other(memory.string(other)?)),
+        }
+    }
+
+    /// The declared version string, byte-exactly as it appeared in the
+    /// `VERSION "<string>"` declaration — including for the two recognized
+    /// variants, whose raw spelling is always their canonical one.
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        match self {
+            Self::V12 => "1.2",
+            Self::V12Basic => "1.2-basic",
+            Self::Other(s) => s,
+        }
+    }
+
+    /// Is this a version this evaluator recognizes and evaluates normally?
+    #[must_use]
+    pub fn is_recognized(&self) -> bool {
+        !matches!(self, Self::Other(_))
+    }
+}
+
+/// A parsed SPARQL query. The four query forms differ only in their head; the
+/// `WHERE` clause and all solution modifiers live inside `pattern` as algebra.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum Query {
+    /// `SELECT` query. `pattern` is the full modifier-wrapped algebra.
+    Select {
+        /// The root graph pattern (already wrapped by projection/modifiers).
+        pattern: GraphPattern,
+        /// The `FROM` / `FROM NAMED` dataset clause (empty = the store's default).
+        dataset: QueryDataset,
+        /// An explicit `BASE` IRI, if the prologue declared one.
+        base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
+    },
+    /// `CONSTRUCT` query. `template` is the output **quad** template.
+    Construct {
+        /// The `CONSTRUCT { ... }` template, as a sequence of quad patterns:
+        /// one statement pattern each, carrying the graph it is instantiated
+        /// into.
+        ///
+        /// # The graph slot
+        ///
+        /// [`QuadPattern::graph`] is `None` for the SPARQL 1.1 §16.2 form — the
+        /// statement lands in the **default graph** of the returned dataset, so
+        /// a template whose every slot is `None` emits byte-identically to a
+        /// pre-quad-template `CONSTRUCT`. `Some(g)` names the graph the
+        /// instantiated statement is tagged with, making the result a *dataset*
+        /// rather than a graph; `g` may be an IRI or a **variable**.
+        ///
+        /// Nothing else about instantiation changes: the per-row blank-node
+        /// freshness rule, the unbound-variable skip and the ill-formed-triple
+        /// skip all run exactly as they do for the triple form. A graph
+        /// variable joins that same skip rule — an unbound graph variable, or
+        /// one bound to a non-IRI (a literal, a blank node or a triple term),
+        /// **skips** the statement rather than raising or silently retargeting
+        /// it at the default graph.
+        ///
+        /// # Surface syntax
+        ///
+        /// Two spellings reach this one shape. `GRAPH VarOrIri { ... }` blocks
+        /// **inside** the template scope the statements they enclose, may be
+        /// repeated, and may be mixed with unscoped (default-graph) statements
+        /// in the same template — the quad-producing `CONSTRUCT` that Jena and
+        /// Stardog ship. `CONSTRUCT GRAPH VarOrIri { ... }` is the
+        /// whole-template shorthand: the named graph becomes the default for
+        /// every template slot that does not name one itself, so an inner
+        /// `GRAPH` block still wins over it.
+        template: Vec<QuadPattern>,
+        /// The `WHERE` algebra.
+        pattern: GraphPattern,
+        /// The `FROM` / `FROM NAMED` dataset clause (empty = the store's default).
+        dataset: QueryDataset,
+        /// An explicit `BASE` IRI, if any.
+        base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
+    },
+    /// `DESCRIBE` query.
+    Describe {
+        /// The `WHERE` algebra (or the unit pattern for a bare `DESCRIBE <iri>`).
+        pattern: GraphPattern,
+        /// The resources to describe (IRIs and/or variables).
+        targets: Vec<NamedNodePattern>,
+        /// The `FROM` / `FROM NAMED` dataset clause (empty = the store's default).
+        dataset: QueryDataset,
+        /// An explicit `BASE` IRI, if any.
+        base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
+    },
+    /// `ASK` query.
+    Ask {
+        /// The `WHERE` algebra.
+        pattern: GraphPattern,
+        /// The `FROM` / `FROM NAMED` dataset clause (empty = the store's default).
+        dataset: QueryDataset,
+        /// An explicit `BASE` IRI, if any.
+        base_iri: Option<NamedNode>,
+        /// The prologue's `VERSION` declaration, if any (last-wins; see [`SparqlVersion`]).
+        version: Option<SparqlVersion>,
+    },
+}
+
+impl Clone for Query {
+    fn clone(&self) -> Self {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        self.clone_with_memory(&mut memory)
+            .expect("resident parsed query clone storage")
+    }
+}
+
+impl Query {
+    /// Clone the full parsed query through its original native storage account.
+    ///
+    /// Templates, target/dataset arrays and an unknown VERSION spelling are
+    /// admitted before copying. Immutable term and base-IRI leaves remain shared;
+    /// the WHERE tree uses the same bottom-up clone as resident callers. Keep
+    /// this memory's original grant with the returned query.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission or allocator refusal.
+    pub fn clone_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        self.clone_with_pattern_by(memory, |memory| self.pattern().clone_with_memory(memory))
+    }
+
+    /// Copy query head/prologue while moving an already admitted WHERE payload.
+    ///
+    /// # Errors
+    /// Returns checked original-account storage refusal before a copied head grows.
+    pub fn clone_with_pattern_with_memory<S: Admission + ?Sized>(
+        &self, pattern: GraphPattern, memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        self.clone_with_pattern_by(memory, |_| Ok(pattern))
+    }
+
+    fn clone_with_pattern_by<S: Admission + ?Sized>(
+        &self, memory: &mut Memory<'_, S>,
+        pattern_copy: impl FnOnce(&mut Memory<'_, S>) -> Result<GraphPattern, StorageError>,
+    ) -> Result<Self, StorageError> {
+        use crate::owned::{clone_shallow_vec_with_memory, clone_vec_with_memory};
+        let original = self.dataset();
+        let dataset = QueryDataset {
+            default: clone_shallow_vec_with_memory(&original.default, memory)?,
+            named: clone_shallow_vec_with_memory(&original.named, memory)?,
+        };
+        let base_iri = self.base_iri().cloned();
+        let version = self
+            .version()
+            .map(|version| SparqlVersion::parse_with_memory(version.raw(), memory))
+            .transpose()?;
+        Ok(match self {
+            Self::Select { .. } => Self::Select {
+                pattern: pattern_copy(memory)?,
+                dataset,
+                base_iri,
+                version,
+            },
+            Self::Construct { template, .. } => Self::Construct {
+                template: clone_vec_with_memory(template, memory, |quad, memory| {
+                    Ok(QuadPattern {
+                        triple: quad.triple.clone_with_memory(memory)?,
+                        graph: quad.graph.clone(),
+                    })
+                })?,
+                pattern: pattern_copy(memory)?,
+                dataset,
+                base_iri,
+                version,
+            },
+            Self::Describe { targets, .. } => Self::Describe {
+                pattern: pattern_copy(memory)?,
+                targets: clone_shallow_vec_with_memory(targets, memory)?,
+                dataset,
+                base_iri,
+                version,
+            },
+            Self::Ask { .. } => Self::Ask {
+                pattern: pattern_copy(memory)?,
+                dataset,
+                base_iri,
+                version,
+            },
+        })
+    }
+
+    /// The same full query identity with admitted recursive comparison spill.
+    ///
+    /// # Errors
+    /// Returns checked native traversal storage refusal.
+    pub fn eq_with_memory<S: Admission + ?Sized>(
+        &self, other: &Self, memory: &mut Memory<'_, S>,
+    ) -> Result<bool, StorageError> {
+        if core::mem::discriminant(self) != core::mem::discriminant(other)
+            || self.dataset() != other.dataset()
+            || self.base_iri() != other.base_iri()
+            || self.version() != other.version()
+        { return Ok(false); }
+        match (self, other) {
+            (Self::Construct { template: left, .. }, Self::Construct { template: right, .. }) => {
+                if left.len() != right.len() { return Ok(false); }
+                for (left, right) in left.iter().zip(right) {
+                    if left.graph != right.graph
+                        || !crate::traits::nodes_eq_with_memory(
+                            crate::walk::NodeRef::Triple(&left.triple),
+                            crate::walk::NodeRef::Triple(&right.triple), memory,
+                        )? { return Ok(false); }
+                }
+            }
+            (Self::Describe { targets: left, .. }, Self::Describe { targets: right, .. })
+                if left != right => return Ok(false),
+            _ => {}
+        }
+        self.pattern().eq_with_memory(other.pattern(), memory)
+    }
+
+    /// The query's `WHERE`-body pattern, whichever query form it is.
+    #[must_use]
+    pub const fn pattern(&self) -> &GraphPattern {
+        match self {
+            Self::Select { pattern, .. }
+            | Self::Construct { pattern, .. }
+            | Self::Describe { pattern, .. }
+            | Self::Ask { pattern, .. } => pattern,
+        }
+    }

@@ -1,0 +1,67 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error: associated function `from_query_dataset` is never used
+   --> crates/sparql-eval/src/dataset_spec.rs:142:19
+    |
+131 | impl<I: ViewTermId> ActiveDataset<I> {
+    | ------------------------------------ associated function in this implementation
+...
+142 |     pub(crate) fn from_query_dataset<D: DatasetView<Id = I>>(
+    |                   ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: function `make_string_dir` is never used
+    --> crates/sparql-eval/src/expr.rs:5556:4
+     |
+5556 | fn make_string_dir<D: DatasetView + Sync>(
+     |    ^^^^^^^^^^^^^^^
+
+error: function `visit_exists_patterns` is never used
+   --> crates/sparql-eval/src/governor/soundness.rs:713:15
+    |
+713 | pub(crate) fn visit_exists_patterns<'a, F>(expr: &'a Expression, visit: &mut F) -> bool
+    |               ^^^^^^^^^^^^^^^^^^^^^
+
+error: method `handle` is never used
+   --> crates/sparql-eval/src/plan/mod.rs:703:19
+    |
+636 | impl PlanCache {
+    | -------------- method in this implementation
+...
+703 |     pub(crate) fn handle(&self, root: &GraphPattern) -> PlanHandle {
+    |                   ^^^^^^
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: method `record_silenced` is never used
+   --> crates/sparql-eval/src/governor/mod.rs:913:19
+    |
+878 | impl GovernorState {
+    | ------------------ method in this implementation
+...
+913 |     pub(crate) fn record_silenced(&self, invocation: SilencedInvocation) -> Result<(), crate::EvalError> {
+    |                   ^^^^^^^^^^^^^^^
+
+error: function `schedule_preimage` is never used
+    --> crates/sparql-eval/src/governor/mod.rs:2102:4
+     |
+2102 | fn schedule_preimage(id: &str, version: u32, schedule: &[(&str, u64)]) -> String {
+     |    ^^^^^^^^^^^^^^^^^
+
+error: associated function `new` is never used
+   --> crates/sparql-eval/src/governor/ledger.rs:478:19
+    |
+475 | impl QueryExplanation {
+    | --------------------- associated function in this implementation
+...
+478 |     pub(crate) fn new(
+    |                   ^^^
+
+error: function `scan` is never used
+   --> crates/sparql-eval/src/service_endpoints.rs:568:15
+    |
+568 | pub(crate) fn scan(
+    |               ^^^^
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 8 previous errors

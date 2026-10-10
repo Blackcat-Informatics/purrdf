@@ -1,0 +1,106 @@
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error: unused import: `purrdf_core::TermBox`
+  --> crates/sparql-eval/src/expr.rs:33:5
+   |
+33 | use purrdf_core::TermBox;
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `-D unused-imports` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unused import: `crate::expr::xsd_of`
+   --> crates/sparql-eval/src/modifier.rs:125:5
+    |
+125 | use crate::expr::xsd_of;
+    |     ^^^^^^^^^^^^^^^^^^^
+
+error[E0425]: cannot find function `intern_workspace_term` in this scope
+    --> crates/sparql-eval/src/expr.rs:4727:26
+     |
+4727 |             .map(|value| intern_workspace_term(ctx, value))
+     |                          ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: use the `.` operator to call the method `intern_workspace_term` on `&mut EvalCtx<'_, D>`
+     |
+4727 -             .map(|value| intern_workspace_term(ctx, value))
+4727 +             .map(|value| ctx.intern_workspace_term(value))
+     |
+
+error[E0425]: cannot find function `intern_workspace_term` in this scope
+    --> crates/sparql-eval/src/expr.rs:4741:26
+     |
+4741 |             .map(|value| intern_workspace_term(ctx, value))
+     |                          ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: use the `.` operator to call the method `intern_workspace_term` on `&mut EvalCtx<'_, D>`
+     |
+4741 -             .map(|value| intern_workspace_term(ctx, value))
+4741 +             .map(|value| ctx.intern_workspace_term(value))
+     |
+
+error[E0599]: no associated function or constant named `resident` found for struct `WorkspaceAllocation` in the current scope
+    --> crates/sparql-eval/src/user_fn.rs:1640:78
+     |
+1640 |             value.map(|value| WorkspaceTerm::new(value, WorkspaceAllocation::resident()))
+     |                                                                              ^^^^^^^^ associated function or constant not found in `WorkspaceAllocation`
+     |
+    ::: crates/sparql-eval/src/workspace.rs:294:1
+     |
+ 294 | pub struct WorkspaceAllocation {
+     | ------------------------------ associated function or constant `resident` not found for this struct
+     |
+help: there is a method `resize` with a similar name, but with different arguments
+    --> crates/sparql-eval/src/workspace.rs:333:5
+     |
+ 333 |     pub fn resize(&mut self, bytes: u64) -> Result<(), EvalError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no associated function or constant named `resident` found for struct `WorkspaceAllocation` in the current scope
+    --> crates/sparql-eval/src/user_fn.rs:1729:78
+     |
+1729 |             value.map(|value| WorkspaceTerm::new(value, WorkspaceAllocation::resident()))
+     |                                                                              ^^^^^^^^ associated function or constant not found in `WorkspaceAllocation`
+     |
+    ::: crates/sparql-eval/src/workspace.rs:294:1
+     |
+ 294 | pub struct WorkspaceAllocation {
+     | ------------------------------ associated function or constant `resident` not found for this struct
+     |
+help: there is a method `resize` with a similar name, but with different arguments
+    --> crates/sparql-eval/src/workspace.rs:333:5
+     |
+ 333 |     pub fn resize(&mut self, bytes: u64) -> Result<(), EvalError> {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0425]: cannot find function `intern_workspace_term` in this scope
+    --> crates/sparql-eval/src/expr.rs:4727:26
+     |
+4727 |             .map(|value| intern_workspace_term(ctx, value))
+     |                          ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: use the `.` operator to call the method `intern_workspace_term` on `&mut eval::EvalCtx<'_, D>`
+     |
+4727 -             .map(|value| intern_workspace_term(ctx, value))
+4727 +             .map(|value| ctx.intern_workspace_term(value))
+     |
+
+error[E0425]: cannot find function `intern_workspace_term` in this scope
+    --> crates/sparql-eval/src/expr.rs:4741:26
+     |
+4741 |             .map(|value| intern_workspace_term(ctx, value))
+     |                          ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: use the `.` operator to call the method `intern_workspace_term` on `&mut eval::EvalCtx<'_, D>`
+     |
+4741 -             .map(|value| intern_workspace_term(ctx, value))
+4741 +             .map(|value| ctx.intern_workspace_term(value))
+     |
+
+Some errors have detailed explanations: E0425, E0599.
+For more information about an error, try `rustc --explain E0425`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-eval` (lib test) due to 4 previous errors

@@ -1,0 +1,29 @@
+diff --git a/crates/sparql-eval/src/workspace.rs b/crates/sparql-eval/src/workspace.rs
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -56,4 +56,13 @@
+ impl<T> SharedWorkspace<T> {
++    /// Only explicitly caller-owned resident controls may be mutated. A native
++    /// shared owner never exposes mutable payload ownership or its admission.
++    pub(crate) fn caller_unique_mut(&mut self) -> Option<&mut T> {
++        match &mut self.0 {
++            SharedWorkspaceStorage::Caller(value) => std::sync::Arc::get_mut(value),
++            SharedWorkspaceStorage::Native(_) => None,
++        }
++    }
++
+     pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
+         let bytes = fallible_shared_layout::<SharedWorkspacePayload<T>>()?;
+         let allocation = workspace.charge(bytes)?;
+diff --git a/crates/sparql-eval/src/workspace.rs b/crates/sparql-eval/src/workspace.rs
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -273,5 +273,8 @@
+     }
+ 
++    /// Retain a subset in place without growing or detaching the original array.
++    pub(crate) fn retain(&mut self, keep: impl FnMut(&T) -> bool) { self.values.retain(keep); }
++
+     /// Drop all values while retaining the existing metadata buffer admission.
+     pub fn clear(&mut self) { self.values.clear(); }
+     /// Drop values after a prefix, retaining the existing buffer admission.

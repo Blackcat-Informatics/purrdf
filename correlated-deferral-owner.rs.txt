@@ -1,0 +1,87 @@
+impl<'a> Deferral<'a> {
+    pub(crate) fn into_placeholders(self,workspace:&crate::WorkspaceCapability)
+        -> Result<Option<crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>>,EvalError> {
+        if self.placeholders.is_empty() { return Ok(None); }
+        crate::workspace::SharedWorkspace::new_admitted(self.placeholders,workspace).map(Some)
+    }
+    fn defer(&mut self,body:&GraphPattern,row:&SubstitutionRow,memory:&mut CorrelatedMemory<'_>)
+        -> Result<Option<Box<GraphPattern>>,EvalError> {
+        let Some((site,carried))=self.deferred_site(body) else { return Ok(None); };
+        let workspace=memory.admission_mut().workspace().clone();
+        let env=carried.cloned().unwrap_or_default().then(row,&site.vars,&workspace)?;
+        let slot=crate::deferred_exists::DeferredExists { site:site.clone(),env };
+        let placeholder=crate::deferred_exists::placeholder_with_memory(memory)?;
+        self.placeholders.insert_admitted(std::ptr::from_ref(placeholder.as_ref()) as usize,
+            crate::deferred_exists::Deferred::Exists(slot),&workspace)?;
+        Ok(Some(placeholder))
+    }
+    fn defer_lateral(&mut self,right:&GraphPattern,row:&SubstitutionRow,memory:&mut CorrelatedMemory<'_>)
+        -> Result<Option<Box<GraphPattern>>,EvalError> {
+        let Some(sites)=self.sites else { return Ok(None); };
+        let address=std::ptr::from_ref(right) as usize;
+        let workspace=memory.admission_mut().workspace().clone();
+        let (site,env)=match self.enclosing.and_then(|map| map.get(&address)).and_then(crate::deferred_exists::Deferred::lateral) {
+            Some(slot)=>(slot.site.clone(),slot.env.then(row,&slot.site.vars,&workspace)?),
+            None if self.eager_depth>0=>return Ok(None),
+            None=>{
+                let Some(site)=sites.lateral.get(&address) else { return Ok(None); };
+                (site.clone(),crate::deferred_exists::SubstitutionEnv::default().then(row,&site.vars,&workspace)?)
+            }
+        };
+        let placeholder=crate::deferred_exists::lateral_placeholder_with_memory(site.schema.vars(),memory)?;
+        self.placeholders.insert_admitted(std::ptr::from_ref(placeholder.as_ref()) as usize,
+            crate::deferred_exists::Deferred::Lateral(crate::deferred_exists::DeferredLateral { site,env }),&workspace)?;
+        Ok(Some(placeholder))
+    }
+    fn expr_vars(&self,expr:&Expression,out:&mut FreeVars,memory:&mut CorrelatedMemory<'_>)->Result<(),EvalError> {
+        use crate::governor::soundness::{ExpressionPart,visit_expression_parts};
+        enum Node<'a> { Expression(&'a Expression),Body(&'a GraphPattern) }
+        let workspace=memory.admission_mut().workspace().clone();
+        let mut pending=crate::AdmittedVec::new(&workspace);
+        pending.push(Node::Expression(expr))?;
+        while let Some(node)=pending.pop() {
+            match node {
+                Node::Body(body)=>self.expr_vars_of_body(body,out,&workspace)?,
+                Node::Expression(Expression::Exists(body))=>self.expr_vars_of_body(body,out,&workspace)?,
+                Node::Expression(atom @ (Expression::Variable(_)|Expression::Bound(_)|Expression::NamedNode(_)|Expression::Literal(_)))=>{
+                    let vars=expr_vars_admitted(atom,&workspace)?;
+                    for variable in vars.vars() { out.direct.insert_admitted(variable.clone(),(),&workspace)?; }
+                }
+                Node::Expression(expr)=>{
+                    let first=pending.len();
+                    let mut failure=None;
+                    visit_expression_parts(expr,&mut |part| {
+                        let node=match part {
+                            ExpressionPart::Sub(sub)=>Some(Node::Expression(sub)),
+                            ExpressionPart::Exists(body)=>Some(Node::Body(body)),
+                            ExpressionPart::Call(_)=>None,
+                        };
+                        if let Some(node)=node && let Err(error)=pending.push(node) { failure=Some(error);return true; }
+                        false
+                    });
+                    if let Some(error)=failure { return Err(error); }
+                    pending.as_mut_slice()[first..].reverse();
+                }
+            }
+        }
+        Ok(())
+    }
+    fn expr_vars_of_body(&self,body:&GraphPattern,out:&mut FreeVars,workspace:&crate::WorkspaceCapability)->Result<(),EvalError> {
+        match self.deferred_site(body) {
+            Some((site,_))=>out.sites.push(site.clone())?,
+            None=>{
+                let vars=pattern_all_vars_admitted(body,workspace)?;
+                for variable in vars.vars() { out.direct.insert_admitted(variable.clone(),(),workspace)?; }
+            }
+        }
+        Ok(())
+    }
+}
+struct FreeVars {
+    direct:crate::AdmittedMap<Variable,()>,
+    sites:crate::AdmittedVec<crate::workspace::SharedWorkspace<crate::deferred_exists::ExistsSite>>,
+}
+impl FreeVars {
+    fn new(workspace:&crate::WorkspaceCapability)->Self { Self { direct:crate::AdmittedMap::default(),sites:crate::AdmittedVec::new(workspace) } }
+    fn contains(&self,variable:&Variable)->bool { self.direct.contains_key(variable)||self.sites.iter().any(|site|site.vars.contains(variable)) }
+}

@@ -1,0 +1,100 @@
+--- a/crates/xsd/src/exact/decimal.rs
++++ b/crates/xsd/src/exact/decimal.rs
+@@ -1021,10 +1021,8 @@
+         ) -> Result<(), crate::bigint::LimbScratchError>,
+     ) -> Result<Self, super::ExactOperationError> {
+         div_rounded_parts_admitted_using(
+-            &self.unscaled,
+-            self.scale,
+-            &rhs.unscaled,
+-            rhs.scale,
++            (&self.unscaled, self.scale),
++            (&rhs.unscaled, rhs.scale),
+             scale,
+             rounding,
+             storage,
+@@ -1306,10 +1304,8 @@
+         }
+         match policy {
+             DivisionPolicy::Scale { scale, rounding } => div_rounded_parts_admitted_using(
+-                left,
+-                ls,
+-                right,
+-                rs,
++                (left, ls),
++                (right, rs),
+                 scale,
+                 rounding,
+                 &crate::bigint::scratch::Fallible,
+@@ -1419,15 +1415,15 @@
+ }
+ 
+ fn div_rounded_parts_admitted_using(
+-    left: &Integer,
+-    ls: u32,
+-    right: &Integer,
+-    rs: u32,
++    left_parts: (&Integer, u32),
++    right_parts: (&Integer, u32),
+     scale: u32,
+     rounding: Rounding,
+     storage: &impl crate::bigint::scratch::Allocate,
+     admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+ ) -> Result<Decimal, super::ExactOperationError> {
++    let (left, ls) = left_parts;
++    let (right, rs) = right_parts;
+     let negative = left.is_negative() != right.is_negative();
+     let shift = i64::from(scale) + i64::from(rs) - i64::from(ls);
+     let digits = u32::try_from(shift.unsigned_abs()).map_err(|_| ExactError::ScaleOverflow)?;
+--- a/crates/xsd/src/temporal.rs
++++ b/crates/xsd/src/temporal.rs
+@@ -1170,12 +1170,13 @@
+     let (seconds, sec_frac) = match sec_decimal {
+         Some(decimal) => {
+             let decimal = decimal?;
+-            let whole = seconds.checked_add(decimal.whole_part()).ok_or_else(|| {
+-                TemporalReadError::OutOfRange {
+-                    datatype: dt,
+-                    reason: "duration seconds overflow",
+-                }
+-            })?;
++            let whole =
++                seconds
++                    .checked_add(decimal.whole_part())
++                    .ok_or(TemporalReadError::OutOfRange {
++                        datatype: dt,
++                        reason: "duration seconds overflow",
++                    })?;
+             (whole, decimal.frac_part())
+         }
+         None => (seconds, Decimal::from_parts(0, 0)),
+@@ -1186,23 +1187,21 @@
+     let combined = seconds
+         .checked_mul(10i128.pow(u32::from(scale)))
+         .and_then(|w| w.checked_add(sec_frac.mantissa()))
+-        .ok_or_else(|| TemporalReadError::OutOfRange {
++        .ok_or(TemporalReadError::OutOfRange {
+             datatype: dt,
+             reason: "duration seconds overflow",
+         })?;
+     let mut total_secs = Decimal::from_parts(combined, scale);
+     if neg {
+-        months = months
+-            .checked_neg()
+-            .ok_or_else(|| TemporalReadError::OutOfRange {
+-                datatype: dt,
+-                reason: "duration months overflow",
+-            })?;
++        months = months.checked_neg().ok_or(TemporalReadError::OutOfRange {
++            datatype: dt,
++            reason: "duration months overflow",
++        })?;
+         let negated_mantissa =
+             total_secs
+                 .mantissa()
+                 .checked_neg()
+-                .ok_or_else(|| TemporalReadError::OutOfRange {
++                .ok_or(TemporalReadError::OutOfRange {
+                     datatype: dt,
+                     reason: "duration seconds overflow",
+                 })?;

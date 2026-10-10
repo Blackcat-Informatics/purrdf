@@ -1,0 +1,410 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Fallible physical buffer growth for native lexical parsers and compilers.
+//!
+//! Concrete shared and boxed allocations live in two confined storage modules.
+//! The front-end algebra and the RDF kernel both use this lower home, so grammar
+//! callers can report allocator refusal without a reverse dependency or unsafe
+//! code. Their native payload owners keep admission live through deallocation.
+
+// Only these storage primitives manipulate their own freshly allocated blocks.
+// Scanners, parsers, and the admission/accounting body remain safe Rust.
+#[allow(unsafe_code)]
+pub mod shared;
+#[allow(unsafe_code)]
+mod boxed;
+pub use boxed::{try_boxed, try_boxed_one};
+pub use shared::{Shared, SharedAllocError, SharedCloneError, SharedOwned, SharedText};
+mod text;
+pub use text::OwnedText;
+
+use std::string::String;
+use std::vec::Vec;
+use core::alloc::Layout;
+use core::fmt;
+
+/// A physical failure, separate from any native lexical language.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageError {
+    /// A concrete allocation layout or live-byte sum cannot be represented.
+    SizeOverflow,
+    /// A fallible allocation refused its already admitted destination.
+    AllocationFailed,
+    /// The caller's admission callback refused; it retains its original typed error.
+    AdmissionFailed,
+    /// A native Display implementation failed without a physical storage refusal.
+    FormattingFailed,
+}
+
+impl fmt::Display for StorageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::SizeOverflow => "native allocation layout overflow",
+            Self::AllocationFailed => "native destination allocation failed",
+            Self::AdmissionFailed => "native workspace admission refused",
+            Self::FormattingFailed => "native diagnostic formatting failed",
+        })
+    }
+}
+
+impl std::error::Error for StorageError {}
+
+/// A borrowed caller's live-capacity admission for one native computation.
+pub trait Admission {
+    /// Admit the next exact total before allocation; shrink only after destruction.
+    fn resize(&mut self, live_bytes: usize) -> Result<(), StorageError>;
+}
+
+/// A zero-size resident callback with no application capacity preset.
+///
+/// Accepts each exact native live layout; Memory still checks the layout and
+/// performs the actual allocation fallibly. This supplies no borrowed external
+/// grant, so resident callers own the returned payload themselves.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Resident;
+
+impl Admission for Resident {
+    fn resize(&mut self, _live_bytes: usize) -> Result<(), StorageError> { Ok(()) }
+}
+
+/// Exact live-buffer accounting shared by native scanners, compilers and walks.
+/// The borrowed callback itself is stack storage, never a retained payload owner.
+/// After a native result leaves, its caller retains the original admission grant
+/// with that result; use `live_bytes` only after construction scratch has died.
+pub struct Memory<'a, S: Admission + ?Sized> {
+    storage: &'a mut S,
+    live: usize,
+}
+
+impl<'a, S: Admission + ?Sized> Memory<'a, S> {
+    /// Start one native computation with no owned heap capacity.
+    /// All nonempty buffers passed to this memory must have been allocated through
+    /// it, or explicitly included with `add_bytes` under the same original grant.
+    #[must_use]
+    pub fn new(storage: &'a mut S) -> Self {
+        Self { storage, live: 0 }
+    }
+
+    /// Resume a native computation under the same original admission grant.
+    /// `live_bytes` must be the requested layout total already owned by `storage`;
+    /// the caller keeps those payloads alive until this memory adopts or releases
+    /// them. This constructor allocates nothing and does not resize the grant.
+    #[must_use]
+    pub fn resume(storage: &'a mut S, live_bytes: usize) -> Self {
+        Self { storage, live: live_bytes }
+    }
+
+    /// The currently admitted requested layouts of payload and working buffers.
+    /// Read the surviving total only after construction scratch has been released.
+    #[must_use]
+    pub const fn live_bytes(&self) -> usize { self.live }
+
+    /// Borrow the original admission for a native payload factory above this leaf.
+    pub fn admission_mut(&mut self) -> &mut S { self.storage }
+
+    /// Admit a native payload's concrete layout before calling its fallible factory.
+    ///
+    /// # Errors
+    /// Returns checked live-byte overflow or the caller's original refusal marker.
+    pub fn add_bytes(&mut self, bytes: usize) -> Result<(), StorageError> { self.add(bytes) }
+
+    /// Move an originally admitted array into another admitted array.
+    /// Empty destinations reuse the original buffer; otherwise both buffers stay
+    /// covered through growth and the source capacity is released after destruction.
+    ///
+    /// # Errors
+    /// Returns checked layout, allocator or original admission refusal.
+    pub fn append<T>(&mut self, destination: &mut Vec<T>, source: Vec<T>) -> Result<(), StorageError> {
+        if destination.is_empty() {
+            let previous = std::mem::replace(destination, source);
+            return self.release_vec(previous);
+        }
+        let capacity = source.capacity();
+        self.extend(destination, source)?;
+        self.release_bytes(Layout::array::<T>(capacity).map_err(|_| StorageError::SizeOverflow)?.size())
+    }
+
+    /// Release a concrete layout only after destroying its original allocation.
+    ///
+    /// # Errors
+    /// Returns an unbalanced live-byte invariant or the caller's refusal marker.
+    pub fn release_bytes(&mut self, bytes: usize) -> Result<(), StorageError> {
+        self.remove(bytes)
+    }
+
+    fn add(&mut self, bytes: usize) -> Result<(), StorageError> {
+        let next = self.live.checked_add(bytes).ok_or(StorageError::SizeOverflow)?;
+        if next != self.live { self.storage.resize(next)?; }
+        self.live = next;
+        Ok(())
+    }
+
+    fn remove(&mut self, bytes: usize) -> Result<(), StorageError> {
+        let next = self.live.checked_sub(bytes).ok_or(StorageError::SizeOverflow)?;
+        if next != self.live { self.storage.resize(next)?; }
+        self.live = next;
+        Ok(())
+    }
+
+    /// Replace a vector buffer while both old and new layouts remain admitted.
+    /// The old contents survive admission or allocator refusal unchanged. The buffer
+    /// must already belong to this memory's live total if it is nonempty.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission refusal or allocator refusal.
+    pub fn reserve<T>(
+        &mut self, values: &mut Vec<T>, required: usize,
+    ) -> Result<(), StorageError> {
+        if required <= values.capacity() { return Ok(()); }
+        let old = Layout::array::<T>(values.capacity()).map_err(|_| StorageError::SizeOverflow)?.size();
+        let next = Layout::array::<T>(required).map_err(|_| StorageError::SizeOverflow)?.size();
+        self.add(next)?;
+        let mut replacement = Vec::new();
+        replacement.try_reserve_exact(required).map_err(|_| StorageError::AllocationFailed)?;
+        // Global Vec's exact reservation requests precisely the certified Layout.
+        // Refuse a violated allocator/collection certificate before using it.
+        if size_of::<T>() != 0 && replacement.capacity() != required {
+            return Err(StorageError::SizeOverflow);
+        }
+        replacement.append(values);
+        drop(core::mem::replace(values, replacement));
+        self.remove(old)
+    }
+
+    /// Admit a single boxed value before fallible physical construction.
+    /// Its existing payload already belongs to this memory or an independent owner.
+    ///
+    /// # Errors
+    /// Returns original admission, layout or allocator refusal.
+    pub fn boxed<T>(&mut self, value: T) -> Result<Box<T>, StorageError> {
+        let bytes = Layout::new::<T>().size();
+        self.add_bytes(bytes)?;
+        match try_boxed(value) {
+            Ok(value) => Ok(value),
+            Err(_) => {
+                self.release_bytes(bytes)?;
+                Err(StorageError::AllocationFailed)
+            }
+        }
+    }
+
+    /// Freeze an originally admitted array without an infallible shrinking
+    /// reallocation. If the array has spare capacity, its exact replacement is
+    /// admitted while the original remains alive.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission or allocator refusal.
+    pub fn boxed_slice<T>(&mut self, mut values: Vec<T>) -> Result<Box<[T]>, StorageError> {
+        if size_of::<T>() != 0 && values.capacity() != values.len() {
+            let old = Layout::array::<T>(values.capacity()).map_err(|_| StorageError::SizeOverflow)?.size();
+            let next = Layout::array::<T>(values.len()).map_err(|_| StorageError::SizeOverflow)?.size();
+            self.add(next)?;
+            let mut replacement = Vec::new();
+            replacement.try_reserve_exact(values.len()).map_err(|_| StorageError::AllocationFailed)?;
+            if replacement.capacity() != values.len() { return Err(StorageError::SizeOverflow); }
+            replacement.append(&mut values);
+            drop(values);
+            self.remove(old)?;
+            values = replacement;
+        }
+        // Exact capacity equals length, so this conversion reallocates nothing.
+        Ok(values.into_boxed_slice())
+    }
+
+    /// Append one value after admitting and fallibly allocating any buffer growth.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission refusal or allocator refusal.
+    pub fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), StorageError> {
+        let required = values.len().checked_add(1).ok_or(StorageError::SizeOverflow)?;
+        if required > values.capacity() {
+            let capacity = values.capacity().checked_mul(2).ok_or(StorageError::SizeOverflow)?
+                .max(required);
+            self.reserve(values, capacity)?;
+        }
+        values.push(value);
+        Ok(())
+    }
+
+    /// Collect native values through the same fallible vector growth home.
+    /// Payloads supplied by the iterator retain their original admission.
+    ///
+    /// # Errors
+    /// Returns checked layout, admission or physical allocation refusal.
+    pub fn collect<T>(&mut self, values: impl IntoIterator<Item = T>) -> Result<Vec<T>, StorageError> {
+        let mut output = Vec::new();
+        for value in values { self.push(&mut output, value)?; }
+        Ok(output)
+    }
+
+    /// Append native values without an infallible capacity-growth path.
+    ///
+    /// # Errors
+    /// Returns checked layout, admission or physical allocation refusal.
+    pub fn extend<T>(&mut self, output: &mut Vec<T>, values: impl IntoIterator<Item = T>) -> Result<(), StorageError> {
+        for value in values { self.push(output, value)?; }
+        Ok(())
+    }
+
+    /// Destroy a vector before releasing its original buffer's admission.
+    /// Independently priced owned element payloads require their matching release;
+    /// this method releases only the vector's concrete backing array layout.
+    ///
+    /// # Errors
+    /// Returns layout overflow, an unbalanced live-byte invariant or refusal.
+    pub fn release_vec<T>(&mut self, values: Vec<T>) -> Result<(), StorageError> {
+        let bytes = Layout::array::<T>(values.capacity()).map_err(|_| StorageError::SizeOverflow)?.size();
+        drop(values);
+        self.remove(bytes)
+    }
+
+    /// Destroy owned UTF-8 storage before releasing its original buffer admission.
+    ///
+    /// # Errors
+    /// Returns an unbalanced live-byte invariant or the caller's refusal marker.
+    pub fn release_string(&mut self, text: String) -> Result<(), StorageError> {
+        let bytes = text.capacity();
+        drop(text);
+        self.remove(bytes)
+    }
+
+    /// Replace UTF-8 storage while old and new allocations both remain admitted.
+    /// The old text survives admission or allocator refusal unchanged.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission refusal or allocator refusal.
+    pub fn reserve_string(&mut self, text: &mut String, required: usize) -> Result<(), StorageError> {
+        if required <= text.capacity() { return Ok(()); }
+        let next = Layout::array::<u8>(required).map_err(|_| StorageError::SizeOverflow)?.size();
+        let old = text.capacity();
+        self.add(next)?;
+        let mut replacement = String::new();
+        replacement.try_reserve_exact(required).map_err(|_| StorageError::AllocationFailed)?;
+        if replacement.capacity() != required { return Err(StorageError::SizeOverflow); }
+        replacement.push_str(text);
+        drop(core::mem::replace(text, replacement));
+        self.remove(old)
+    }
+
+    /// Append borrowed UTF-8 after admitting any amortized buffer growth.
+    /// The original text survives admission or allocator refusal unchanged.
+    /// Its nonempty buffer must already belong to this memory's live total.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission refusal or allocator refusal.
+    pub fn push_str(&mut self, text: &mut String, suffix: &str) -> Result<(), StorageError> {
+        let required = text.len().checked_add(suffix.len()).ok_or(StorageError::SizeOverflow)?;
+        if required > text.capacity() {
+            let capacity = text.capacity().checked_mul(2)
+                .ok_or(StorageError::SizeOverflow)?.max(required);
+            self.reserve_string(text, capacity)?;
+        }
+        text.push_str(suffix);
+        Ok(())
+    }
+
+    /// Append one scalar after admitting any physical UTF-8 buffer growth.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission refusal or allocator refusal.
+    pub fn push_char(&mut self, text: &mut String, ch: char) -> Result<(), StorageError> {
+        let mut utf8 = [0; 4];
+        self.push_str(text, ch.encode_utf8(&mut utf8))
+    }
+
+    /// Render borrowed native fields once, admitting each actual UTF-8 growth
+    /// before allocation. The Display implementation must itself allocate no
+    /// payload storage; this sink owns the rendered destination.
+    ///
+    /// # Errors
+    /// Preserves physical failures and distinguishes a formatter's own failure.
+    pub fn format(&mut self, value: &(impl fmt::Display + ?Sized)) -> Result<String, StorageError> {
+        use core::fmt::Write;
+        let mut text = String::new();
+        let mut sink = FormatSink { memory: self, text: &mut text, failure: None };
+        match write!(&mut sink, "{value}") {
+            Ok(()) => Ok(text),
+            Err(_) => Err(sink.failure.unwrap_or(StorageError::FormattingFailed)),
+        }
+    }
+
+    /// Copy borrowed text into an admitted, fallibly allocated UTF-8 destination.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission refusal or allocator refusal.
+    pub fn string(&mut self, input: &str) -> Result<String, StorageError> {
+        let mut result = String::new();
+        self.reserve_string(&mut result, input.len())?;
+        result.push_str(input);
+        Ok(result)
+    }
+
+
+
+
+}
+
+
+impl<S: Admission + ?Sized> fmt::Debug for Memory<'_, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Memory").field("live_bytes", &self.live).finish_non_exhaustive()
+    }
+}
+
+struct FormatSink<'m, 'a, S: Admission + ?Sized> {
+    memory: &'m mut Memory<'a, S>,
+    text: &'m mut String,
+    failure: Option<StorageError>,
+}
+
+impl<S: Admission + ?Sized> fmt::Write for FormatSink<'_, '_, S> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        let result = self.memory.push_str(self.text, text);
+        result.map_err(|failure| {
+            self.failure = Some(failure);
+            fmt::Error
+        })
+    }
+}
+
+
+#[cfg(test)]
+mod resumed_memory_regressions {
+    use super::{Admission, Memory, StorageError};
+
+    #[derive(Default)]
+    struct OriginalGrant { live: usize, limit: usize, attempted: usize }
+    impl Admission for OriginalGrant {
+        fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+            self.attempted = live;
+            if live > self.limit { return Err(StorageError::AdmissionFailed); }
+            self.live = live;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn resume_preserves_original_payload_during_refused_buffer_growth() {
+        let mut grant = OriginalGrant { limit: 44, ..OriginalGrant::default() };
+        let mut original = Vec::<u8>::new();
+        let live = {
+            let mut memory = Memory::new(&mut grant);
+            memory.reserve(&mut original, 13).expect("original admitted array");
+            memory.live_bytes()
+        };
+        assert_eq!(live, 13);
+        let mut next = Vec::<u8>::new();
+        {
+            let mut memory = Memory::resume(&mut grant, live);
+            assert_eq!(memory.reserve(&mut next, 32), Err(StorageError::AdmissionFailed));
+            assert_eq!(memory.live_bytes(), live);
+            assert_eq!(next.capacity(), 0, "refused before allocating replacement");
+        }
+        assert_eq!(grant.attempted, 45, "original and new requested layouts overlap");
+        assert_eq!(grant.live, 13, "original payload stayed covered");
+        let mut memory = Memory::resume(&mut grant, live);
+        memory.release_vec(original).expect("payload dies before its original admission");
+        assert_eq!(memory.live_bytes(), 0);
+    }
+}

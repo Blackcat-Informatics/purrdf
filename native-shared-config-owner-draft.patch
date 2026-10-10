@@ -1,0 +1,139 @@
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -477,12 +477,12 @@
+     /// `heldIn` then hard-errors and `CONSTRUCT` cannot attribute a dropped
+     /// annotation to a standpoint scope — deliberately, since these are domain
+     /// predicates from the caller's ontology, never engine defaults.
+-    pub standpoint_predicates: Option<StandpointPredicates>,
++    pub standpoint_predicates: Option<std::sync::Arc<StandpointPredicates>>,
+     /// The caller-supplied loss-declaration vocabulary (see [`LossVocabulary`])
+     /// used by loss-aware `CONSTRUCT`. `None` (the default) means loss
+     /// declarations are inactive: a dropped reifier is projected silently, like
+     /// a plain `CONSTRUCT`.
+-    pub loss_vocabulary: Option<LossVocabulary>,
++    pub loss_vocabulary: Option<std::sync::Arc<LossVocabulary>>,
+     /// Memoized `EXISTS`/`NOT EXISTS` inner patterns **and their probe index**
+     /// ([`ExistsInner`]), keyed by [`ExistsCacheKey`]. The inner eval and the index
+     /// over it are outer-row-independent, so this turns `expr::exists`'s per-row
+@@ -1256,7 +1256,12 @@
+     /// [`StandpointPredicates`]) for `heldIn` and loss-aware `CONSTRUCT`.
+     /// Without it, `heldIn` is a hard evaluation error.
+     #[must_use]
+-    pub fn with_standpoint_predicates(mut self, predicates: StandpointPredicates) -> Self {
++    pub fn with_standpoint_predicates(self, predicates: StandpointPredicates) -> Self {
++        self.with_shared_standpoint_predicates(std::sync::Arc::new(predicates))
++    }
++
++    /// Share the caller's immutable registration without new execution storage.
++    pub(crate) fn with_shared_standpoint_predicates(mut self, predicates: std::sync::Arc<StandpointPredicates>) -> Self {
+         self.standpoint_predicates = Some(predicates);
+         self
+     }
+@@ -1266,7 +1271,12 @@
+     /// when a reifier is dropped by the template. Without it, loss declarations
+     /// stay inactive.
+     #[must_use]
+-    pub fn with_loss_vocabulary(mut self, vocab: LossVocabulary) -> Self {
++    pub fn with_loss_vocabulary(self, vocab: LossVocabulary) -> Self {
++        self.with_shared_loss_vocabulary(std::sync::Arc::new(vocab))
++    }
++
++    /// Share the existing vocabulary registration through worker/context copies.
++    pub(crate) fn with_shared_loss_vocabulary(mut self, vocab: std::sync::Arc<LossVocabulary>) -> Self {
+         self.loss_vocabulary = Some(vocab);
+         self
+     }
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -1375,11 +1375,11 @@
+     /// The caller-supplied standpoint predicate table threaded into every
+     /// evaluation context. `None` (the default) means `heldIn` hard-errors
+     /// and `CONSTRUCT` emits no standpoint-scope loss attribution.
+-    standpoint_predicates: Option<StandpointPredicates>,
++    standpoint_predicates: Option<std::sync::Arc<StandpointPredicates>>,
+     /// The caller-supplied loss-declaration vocabulary threaded into every
+     /// evaluation context. `None` (the default) means loss-aware `CONSTRUCT`
+     /// emits no in-band loss declarations.
+-    loss_vocabulary: Option<LossVocabulary>,
++    loss_vocabulary: Option<std::sync::Arc<LossVocabulary>>,
+     /// Evaluation-time options threaded into every per-query context. Defaults to
+     /// production settings; tests and benches override individual flags through
+     /// [`Self::with_eval_options`].
+@@ -2838,7 +2838,7 @@
+     /// without this configuration is a hard error.
+     #[must_use]
+     pub fn with_standpoint_predicates(mut self, predicates: StandpointPredicates) -> Self {
+-        self.standpoint_predicates = Some(predicates);
++        self.standpoint_predicates = Some(std::sync::Arc::new(predicates));
+         self
+     }
+ 
+@@ -2849,7 +2849,7 @@
+     /// inactive and a dropped reifier is projected like a plain `CONSTRUCT`.
+     #[must_use]
+     pub fn with_loss_vocabulary(mut self, vocab: LossVocabulary) -> Self {
+-        self.loss_vocabulary = Some(vocab);
++        self.loss_vocabulary = Some(std::sync::Arc::new(vocab));
+         self
+     }
+ 
+@@ -3081,10 +3081,10 @@
+             ctx = ctx.with_bounded_order_cache(&self.order_cache);
+         }
+         if let Some(predicates) = &self.standpoint_predicates {
+-            ctx = ctx.with_standpoint_predicates(predicates.clone());
++            ctx = ctx.with_shared_standpoint_predicates(std::sync::Arc::clone(predicates));
+         }
+         if let Some(vocab) = &self.loss_vocabulary {
+-            ctx = ctx.with_loss_vocabulary(vocab.clone());
++            ctx = ctx.with_shared_loss_vocabulary(std::sync::Arc::clone(vocab));
+         }
+         Ok(ctx)
+     }
+--- a/crates/sparql-eval/src/property_fn_eval.rs
++++ b/crates/sparql-eval/src/property_fn_eval.rs
+@@ -1463,9 +1463,9 @@
+     /// ([`crate::QueryOptions::disjoint_language_strings`]).
+     pub(crate) disjoint_language_strings: bool,
+     /// The engine's standpoint predicate table, which `heldIn` reads.
+-    pub(crate) standpoint_predicates: Option<crate::eval::StandpointPredicates>,
++    pub(crate) standpoint_predicates: Option<std::sync::Arc<crate::eval::StandpointPredicates>>,
+     /// The engine's loss vocabulary.
+-    pub(crate) loss_vocabulary: Option<crate::eval::LossVocabulary>,
++    pub(crate) loss_vocabulary: Option<std::sync::Arc<crate::eval::LossVocabulary>>,
+     /// The query's effective base IRI, which `IRI()` resolves against.
+     pub(crate) base_iri: Option<purrdf_core::small::Shared<crate::eval::EffectiveBase>>,
+     /// `NOW()`, read once, the instant the read opened.
+@@ -1482,10 +1482,10 @@
+             .with_disjoint_language_strings(self.disjoint_language_strings);
+         ctx.xpath_regex = self.xpath_regex;
+         if let Some(predicates) = &self.standpoint_predicates {
+-            ctx = ctx.with_standpoint_predicates(predicates.clone());
++            ctx = ctx.with_shared_standpoint_predicates(std::sync::Arc::clone(predicates));
+         }
+         if let Some(vocabulary) = &self.loss_vocabulary {
+-            ctx = ctx.with_loss_vocabulary(vocabulary.clone());
++            ctx = ctx.with_shared_loss_vocabulary(std::sync::Arc::clone(vocabulary));
+         }
+         ctx.base_iri.clone_from(&self.base_iri);
+         ctx
+--- a/crates/sparql-eval/src/update.rs
++++ b/crates/sparql-eval/src/update.rs
+@@ -164,7 +164,7 @@
+ /// `DELETE/INSERT … WHERE` evaluates identically to a `SELECT`.
+ pub(crate) struct UpdateEvalConfig<'e> {
+     pub(crate) xpath_regex: Option<crate::xpath_regex::Selection>,
+-    pub(crate) standpoint_predicates: Option<&'e StandpointPredicates>,
++    pub(crate) standpoint_predicates: Option<&'e std::sync::Arc<StandpointPredicates>>,
+     pub(crate) order_cache: &'e BoundedOrderCache,
+     /// This request's live governor accounting, or `None` for an ungoverned request.
+     ///
+@@ -656,7 +656,7 @@
+         ctx = ctx.with_governors(Arc::clone(state));
+     }
+     if let Some(preds) = cfg.standpoint_predicates {
+-        ctx = ctx.with_standpoint_predicates(preds.clone());
++        ctx = ctx.with_shared_standpoint_predicates(std::sync::Arc::clone(preds));
+     }
+     // Seed the WHERE/template context from the request-wide counter (never reset
+     // between operations — see `eval_update`) and hand it back below, so blanks

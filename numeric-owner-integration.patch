@@ -1,0 +1,104 @@
+diff --git a/crates/xsd/src/exact/cost.rs b/crates/xsd/src/exact/cost.rs
+--- a/crates/xsd/src/exact/cost.rs
++++ b/crates/xsd/src/exact/cost.rs
+@@ -772,16 +772,28 @@
+             } else {
+                 (la, lb.saturating_add(limbs_for_digits(digits)))
+             };
+-            let shifted = if la < lb { la } else { lb };
+-            shift10(shifted, digits).saturating_add(div(numerator, denominator))
+-        }
+-        super::DivisionPolicy::Exact => {
+-            let strip = lb.saturating_mul(128).saturating_mul(lb.saturating_add(1));
+-            gcd(la, lb)
+-                .saturating_add(div(la, 1))
+-                .saturating_add(div(lb, 1))
+-                .saturating_add(Cost::new(strip, 0))
+-                .saturating_add(mul(la, lb.saturating_mul(3)))
++            let shifted = if shift >= 0 { la } else { lb };
++            shift10(shifted, digits).saturating_add(div(numerator, denominator))
++        }
++        super::DivisionPolicy::Exact => {
++            let strip = lb.saturating_mul(128).saturating_mul(lb.saturating_add(1));
++            let reduction = gcd(la, lb)
++                .saturating_add(div(la, 1))
++                .saturating_add(div(lb, 1))
++                .saturating_add(Cost::new(strip, 0))
++                .saturating_add(mul(la, lb.saturating_mul(3)));
++            // div_exact finishes coefficient * 10^(sb - sa - k) when the
++            // exponent is positive. k >= 0, and the coefficient before that
++            // scale-up occupies at most la + 3*lb limbs.
++            let gap = b.scale.saturating_sub(a.scale);
++            if gap == 0 {
++                reduction
++            } else {
++                reduction.saturating_add(shift10(
++                    la.saturating_add(lb.saturating_mul(3)),
++                    gap,
++                ))
++            }
+         }
+     }
+ }
+diff --git a/crates/xsd/tests/exact_governance.rs b/crates/xsd/tests/exact_governance.rs
+--- a/crates/xsd/tests/exact_governance.rs
++++ b/crates/xsd/tests/exact_governance.rs
+@@ -219,3 +219,58 @@
+     assert_eq!(double, 1e308);
+     assert_bounded("10^308 to f64", cost, measurement);
+ }
++
++/// A final exact scale-up is part of the quotient's actual retained storage.
++#[test]
++fn exact_division_positive_scale_gap_covers_retained_result() {
++    let divisor = Decimal::new(Integer::ONE, 10_000);
++    let cost = Decimal::ONE.div_cost(&divisor, DivisionPolicy::Exact);
++    let expected = format!("1{}", "0".repeat(10_000));
++    let (result, measurement) = measured(|| {
++        Decimal::ONE
++            .div(&divisor, DivisionPolicy::Exact)
++            .expect("a power-of-ten divisor terminates")
++    });
++    assert_eq!(result.scale(), 0);
++    assert!(result.heap_bytes() <= cost.bytes(), "{cost:?}");
++    assert_eq!(result.canonical_lexical(), expected);
++    assert_bounded("exact positive scale gap", cost, measurement);
++}
++
++/// (3*10^2000 + 1)/3 = 10^2000 + 1/3, rounded to two places.
++#[test]
++fn rounded_division_prices_a_long_scaled_dividend() {
++    let coefficient: Integer = format!("3{}1", "0".repeat(1_999))
++        .parse()
++        .expect("an integer");
++    let dividend = Decimal::from_integer(coefficient);
++    let divisor = Decimal::from_integer(Integer::from(3));
++    let policy = DivisionPolicy::scale(2, Rounding::HalfEven);
++    let cost = dividend.div_cost(&divisor, policy);
++    let expected = format!("1{}.33", "0".repeat(2_000));
++    let (result, measurement) = measured(|| {
++        dividend.div(&divisor, policy).expect("a rounded quotient")
++    });
++    assert_eq!(result.canonical_lexical(), expected);
++    assert!(result.heap_bytes() <= cost.bytes(), "{cost:?}");
++    // This measures the real native computation, including its temporary
++    // coefficients, rather than reconstructing the estimate's formula.
++    assert_bounded("long rounded dividend", cost, measurement);
++}
++
++/// 0.01/(3*10^2000 + 1) rounds to zero; its denominator still grows by 10^2.
++#[test]
++fn rounded_division_prices_a_long_scaled_divisor() {
++    let coefficient: Integer = format!("3{}1", "0".repeat(1_999))
++        .parse()
++        .expect("an integer");
++    let dividend = Decimal::new(Integer::ONE, 2);
++    let divisor = Decimal::from_integer(coefficient);
++    let policy = DivisionPolicy::scale(0, Rounding::HalfEven);
++    let cost = dividend.div_cost(&divisor, policy);
++    let (result, measurement) = measured(|| {
++        dividend.div(&divisor, policy).expect("a rounded quotient")
++    });
++    assert_eq!(result.canonical_lexical(), "0");
++    assert_bounded("long rounded divisor", cost, measurement);
++}

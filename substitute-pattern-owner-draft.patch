@@ -1,0 +1,181 @@
+diff --git a/crates/sparql-eval/src/substitute.rs b/crates/sparql-eval/src/substitute.rs
+index e91c28e8d..14b71c690 100644
+--- a/crates/sparql-eval/src/substitute.rs
++++ b/crates/sparql-eval/src/substitute.rs
+@@ -1591,6 +1591,20 @@ impl<'a> Pushability<'a> {
+ /// subject first, then its object — so a term of any depth is spelled without a
+ /// machine-stack frame per level.
+ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPattern> {
++    let mut resident = purrdf_lex::allocation::Resident;
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
++    term_pattern_from_ground_with_memory(ground, &mut memory)
++        .expect("resident prebinding pattern allocation failed")
++}
++
++/// The same pattern spelling under its caller's original allocation owner.
++/// Shared lexical leaves keep their own immutable grants; newly authored child
++/// boxes remain in `memory` until the enclosing query destroys them. A blank
++/// refuses the complete spelling and releases every temporary before success.
++pub(crate) fn term_pattern_from_ground_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++    ground: &GroundTerm,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<Option<TermPattern>, purrdf_lex::allocation::StorageError> {
+     /// A quoted triple whose spelling is under way: its subject's spelling once that
+     /// is built, with its object's the position being built.
+     struct OpenTriple<'a> {
+@@ -1598,40 +1612,54 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
+         subject: Option<TermPattern>,
+     }
+     let mut open: Vec<OpenTriple<'_>> = Vec::new();
++    let box_bytes = std::alloc::Layout::new::<TriplePattern>().size();
++    let mut boxes = 0usize;
+     let mut next = ground;
+     loop {
+         let mut built = match Pushability::of(next) {
+             Pushability::Iri(node) => TermPattern::NamedNode(node.clone()),
+             Pushability::Literal(literal) => TermPattern::Literal(literal.clone()),
+             Pushability::QuotedTriple(triple) => {
+-                open.push(OpenTriple {
++                memory.push(&mut open, OpenTriple {
+                     triple,
+                     subject: None,
+-                });
++                })?;
+                 next = &triple.subject;
+                 continue;
+             }
+-            Pushability::SeedOnly => return None,
++            Pushability::SeedOnly => {
++                // Pending subjects own all completed boxes. Destroy them before
++                // releasing either their backing array or their payload layout.
++                memory.release_vec(open)?;
++                memory.release_bytes(boxes)?;
++                return Ok(None);
++            }
+         };
+         // Hand the spelling up: it is the open triple's subject, whose object is next,
+         // or its object, which completes the triple's own spelling.
+         loop {
+             let Some(mut top) = open.pop() else {
+-                return Some(built);
++                memory.release_vec(open)?;
++                return Ok(Some(built));
+             };
+             match top.subject.take() {
+                 None => {
+                     top.subject = Some(built);
+                     next = &top.triple.object;
+-                    open.push(top);
++                    memory.push(&mut open, top)?;
+                     break;
+                 }
+                 Some(subject) => {
+-                    built = TermPattern::Triple(Child::new(TriplePattern {
++                    let next_boxes = boxes.checked_add(box_bytes)
++                        .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
++                    memory.add_bytes(box_bytes)?;
++                    let triple = purrdf_lex::allocation::try_boxed(TriplePattern {
+                         subject,
+                         predicate: NamedNodePattern::NamedNode(top.triple.predicate.clone()),
+                         object: built,
+-                    }));
++                    }).map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
++                    boxes = next_boxes;
++                    built = TermPattern::Triple(triple.into());
+                 }
+             }
+         }
+@@ -5330,6 +5358,93 @@ mod walk_tests {
+ 
+     // ── Terms ──────────────────────────────────────────────────────────────────────
+ 
++    struct PatternAdmission {
++        limit: usize,
++        live: usize,
++        peak: usize,
++    }
++
++    impl purrdf_lex::allocation::Admission for PatternAdmission {
++        fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
++            if live > self.limit {
++                return Err(purrdf_lex::allocation::StorageError::AdmissionFailed);
++            }
++            self.live = live;
++            self.peak = self.peak.max(live);
++            Ok(())
++        }
++    }
++
++    #[test]
++    fn admitted_pattern_spelling_preserves_generated_reference_and_original_owner() {
++        for seed in 0..600_u64 {
++            let input = ground(&mut Choices::new(seed, 12));
++            let mut admission = PatternAdmission { limit: usize::MAX, live: 0, peak: 0 };
++            let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
++            let actual = term_pattern_from_ground_with_memory(&input, &mut memory)
++                .expect("admitted spelling");
++            assert_eq!(actual, reference_term_pattern_from_ground(&input), "seed {seed}");
++            let retained = memory.live_bytes();
++            if actual.is_none() { assert_eq!(retained, 0, "refused seed {seed}"); }
++            // The enclosing query drops its spelling before releasing the grant.
++            drop(actual);
++            memory.release_bytes(retained).expect("destroyed original payload");
++            assert_eq!(memory.live_bytes(), 0);
++        }
++    }
++
++    #[test]
++    fn admitted_pattern_blank_refusal_releases_completed_subject_and_walk() {
++        let named = || GroundTerm::NamedNode(iri(0));
++        let input = GroundTerm::Triple(Child::new(GroundTriple {
++            subject: GroundTerm::Triple(Child::new(GroundTriple {
++                subject: named(), predicate: iri(1), object: named(),
++            })),
++            predicate: iri(1),
++            object: GroundTerm::BlankNode(BlankNode::new("seed-only")),
++        }));
++        let mut admission = PatternAdmission { limit: usize::MAX, live: 0, peak: 0 };
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
++        assert!(term_pattern_from_ground_with_memory(&input, &mut memory)
++            .expect("blank identity is a semantic refusal").is_none());
++        assert_eq!(memory.live_bytes(), 0);
++        assert!(admission.peak >= std::alloc::Layout::new::<TriplePattern>().size());
++        assert_eq!(admission.live, 0);
++    }
++
++    #[test]
++    fn admitted_pattern_physical_refusal_is_distinct_from_seed_only() {
++        let input = GroundTerm::Triple(Child::new(GroundTriple {
++            subject: GroundTerm::NamedNode(iri(0)),
++            predicate: iri(1), object: GroundTerm::Literal(Literal::new_simple("object")),
++        }));
++        let mut admitted = PatternAdmission { limit: usize::MAX, live: 0, peak: 0 };
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut admitted);
++        let healthy = term_pattern_from_ground_with_memory(&input, &mut memory)
++            .expect("healthy original owner").expect("pushable input");
++        let retained = memory.live_bytes();
++        assert_eq!(retained, std::alloc::Layout::new::<TriplePattern>().size());
++        drop(healthy);
++        memory.release_bytes(retained).expect("original payload destroyed");
++        // Refuse both initial walk allocation and the box after its walk exists.
++        for limit in [0, 1, admitted.peak - 1] {
++            let mut admission = PatternAdmission { limit, live: 0, peak: 0 };
++            let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
++            assert_eq!(term_pattern_from_ground_with_memory(&input, &mut memory),
++                Err(purrdf_lex::allocation::StorageError::AdmissionFailed));
++            // Failure destroys local payloads before returning. The enclosing
++            // frame still holds their grant and may release it only afterwards.
++            let remaining = memory.live_bytes();
++            memory.release_bytes(remaining).expect("failed locals destroyed");
++            assert_eq!(memory.live_bytes(), 0);
++        }
++        let mut admission = PatternAdmission { limit: 0, live: 0, peak: 0 };
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
++        assert!(term_pattern_from_ground_with_memory(&GroundTerm::NamedNode(iri(0)), &mut memory)
++            .expect("a shallow shared leaf needs no new allocation").is_some());
++        assert_eq!(memory.live_bytes(), 0);
++    }
++
+     #[test]
+     fn term_pattern_from_ground_agrees_with_its_recursive_reference() {
+         let (mut spelled, mut refused) = (0, 0);

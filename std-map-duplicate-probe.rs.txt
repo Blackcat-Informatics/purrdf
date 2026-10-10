@@ -1,0 +1,11 @@
+use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
+use std::collections::hash_map::DefaultHasher;
+fn main() {
+    let mut map = HashMap::with_hasher(BuildHasherDefault::<DefaultHasher>::default());
+    map.try_reserve(1).unwrap();
+    for key in 0..3_u32 { map.insert((key, 0, 0, 0), ()); }
+    println!("before: len={} capacity={}", map.len(), map.capacity());
+    map.insert((0_u32, 0, 0, 0), ());
+    println!("after: len={} capacity={}", map.len(), map.capacity());
+}

@@ -1,0 +1,328 @@
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shex)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/markdown)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/json)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/columnar)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/entail)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/retrieval)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/geo)
+   Compiling heck v0.5.0
+    Checking utf8parse v0.2.2
+    Checking anstyle-parse v1.0.0
+    Checking is_terminal_polyfill v1.70.2
+error[E0004]: non-exhaustive patterns: `purrdf_lex::json::ErrorKind::Storage(_)` not covered
+   --> crates/json/src/parse.rs:90:11
+    |
+ 90 |     match error.kind() {
+    |           ^^^^^^^^^^^^ pattern `purrdf_lex::json::ErrorKind::Storage(_)` not covered
+    |
+note: `purrdf_lex::json::ErrorKind` defined here
+   --> crates/lex/src/json/error.rs:12:1
+    |
+ 12 | pub enum ErrorKind {
+    | ^^^^^^^^^^^^^^^^^^
+...
+ 45 |     Storage(crate::allocation::StorageError),
+    |     ------- not covered
+    = note: the matched value is of type `purrdf_lex::json::ErrorKind`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+119 ~         },
+120 ~         purrdf_lex::json::ErrorKind::Storage(_) => todo!(),
+    |
+
+error[E0004]: non-exhaustive patterns: `JsonEscapeErrorKind::Storage(_)` not covered
+   --> crates/json/src/parse.rs:127:54
+    |
+127 |     json_escape::unescape(raw).map_err(|error| match error.kind {
+    |                                                      ^^^^^^^^^^ pattern `JsonEscapeErrorKind::Storage(_)` not covered
+    |
+note: `JsonEscapeErrorKind` defined here
+   --> crates/lex/src/json_escape.rs:229:1
+    |
+229 | pub enum JsonEscapeErrorKind {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+243 |     Storage(StorageError),
+    |     ------- not covered
+    = note: the matched value is of type `JsonEscapeErrorKind`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+    |
+136 ~         },
+137 ~         JsonEscapeErrorKind::Storage(_) => todo!(),
+    |
+
+For more information about this error, try `rustc --explain E0004`.
+error: could not compile `purrdf-json` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+    Checking anstyle v1.0.14
+    Checking anstyle-query v1.1.5
+    Checking colorchoice v1.0.5
+    Checking clap_lex v1.1.0
+    Checking strsim v0.11.1
+    Checking anstream v1.0.0
+   Compiling clap_derive v4.6.1
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/conformance-kit)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/bench)
+    Checking clap_builder v4.6.0
+   Compiling target-lexicon v0.13.5
+    Checking clap v4.6.1
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash-conformance)
+    Checking once_cell v1.21.4
+    Checking leb128fmt v0.1.0
+   Compiling pyo3-macros-backend v0.29.0
+    Checking wasm-bindgen v0.2.125
+    Checking purrdf-envelope-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/envelope-probe)
+    Checking wasm-encoder v0.259.0
+   Compiling pyo3-build-config v0.29.0
+   Compiling pyo3-ffi v0.29.0
+   Compiling pyo3 v0.29.0
+    Checking wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/wasm-link)
+error[E0308]: mismatched types
+    --> crates/retrieval/src/compile.rs:1919:5
+     |
+1918 |   ) -> Result<&'a RankedDeclaration, AdmissionError> {
+     |        --------------------------------------------- expected `Result<&'a RankedDeclaration, AdmissionError>` because of return type
+1919 | /     descriptors
+1920 | |         .get(&binding.producer)
+1921 | |         .ok_or_else(|| malformed(binding, "has no registry declaration to compile against"))?
+1922 | |         .ranked
+1923 | |         .as_ref()
+1924 | |         .ok_or_else(|| malformed(binding, "declares no ranked capability to compile against"))
+     | |______________________________________________________________________________________________^ expected `Result<&RankedDeclaration, _>`, found `Result<&Arc<RankedDeclaration>, _>`
+     |
+     = note: expected enum `Result<&'a RankedDeclaration, _>`
+                found enum `Result<&Arc<RankedDeclaration>, _>`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-retrieval` (lib) due to 1 previous error
+   Compiling pyo3-macros v0.29.0
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/validate)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/slice)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+error: could not compile `purrdf-json` (lib test) due to 2 previous errors
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/helper-census)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema)
+error: could not compile `purrdf-retrieval` (lib test) due to 1 previous error
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/deflate)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/testkit)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/stack)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/ed25519)
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-events)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/alloc-probe)
+error[E0277]: the trait bound `DatasetHandle: purrdf_core::DatasetView` is not satisfied
+    --> crates/rdf/src/projections/dataset_description.rs:1215:37
+     |
+1215 |         assert!(datasets_isomorphic(&resident.dataset, &reversed.dataset));
+     |                 ------------------- ^^^^^^^^^^^^^^^^^ the trait `purrdf_core::DatasetView` is not implemented for `DatasetHandle`
+     |                 |
+     |                 required by a bound introduced by this call
+     |
+     = help: the following other types implement trait `purrdf_core::DatasetView`:
+               CompositeDatasetView
+               DeltaDatasetView
+               PackView<'_>
+               PagedDataset
+               PagedQueryView<'_>
+               PagedStackQueryView<'_>
+               SegmentedSession
+               purrdf_core::RdfDataset
+               std::sync::Arc<T>
+note: required by a bound in `datasets_isomorphic`
+    --> crates/rdf-core/src/ir/compare.rs:65:8
+     |
+  64 | pub fn datasets_isomorphic<
+     |        ------------------- required by a bound in this function
+  65 |     A: DatasetView<ReadError = core::convert::Infallible>,
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `datasets_isomorphic`
+
+error[E0277]: the trait bound `DatasetHandle: purrdf_core::DatasetView` is not satisfied
+    --> crates/rdf/src/projections/dataset_description.rs:1215:56
+     |
+1215 |         assert!(datasets_isomorphic(&resident.dataset, &reversed.dataset));
+     |                 -------------------                    ^^^^^^^^^^^^^^^^^ the trait `purrdf_core::DatasetView` is not implemented for `DatasetHandle`
+     |                 |
+     |                 required by a bound introduced by this call
+     |
+     = help: the following other types implement trait `purrdf_core::DatasetView`:
+               CompositeDatasetView
+               DeltaDatasetView
+               PackView<'_>
+               PagedDataset
+               PagedQueryView<'_>
+               PagedStackQueryView<'_>
+               SegmentedSession
+               purrdf_core::RdfDataset
+               std::sync::Arc<T>
+note: required by a bound in `datasets_isomorphic`
+    --> crates/rdf-core/src/ir/compare.rs:66:8
+     |
+  64 | pub fn datasets_isomorphic<
+     |        ------------------- required by a bound in this function
+  65 |     A: DatasetView<ReadError = core::convert::Infallible>,
+  66 |     B: DatasetView<ReadError = core::convert::Infallible>,
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `datasets_isomorphic`
+
+error[E0277]: the trait bound `DatasetHandle: purrdf_core::DatasetView` is not satisfied
+    --> crates/rdf/src/projections/dataset_description.rs:1220:37
+     |
+1220 |         assert!(datasets_isomorphic(&resident.dataset, &packed.dataset));
+     |                 ------------------- ^^^^^^^^^^^^^^^^^ the trait `purrdf_core::DatasetView` is not implemented for `DatasetHandle`
+     |                 |
+     |                 required by a bound introduced by this call
+     |
+     = help: the following other types implement trait `purrdf_core::DatasetView`:
+               CompositeDatasetView
+               DeltaDatasetView
+               PackView<'_>
+               PagedDataset
+               PagedQueryView<'_>
+               PagedStackQueryView<'_>
+               SegmentedSession
+               purrdf_core::RdfDataset
+               std::sync::Arc<T>
+note: required by a bound in `datasets_isomorphic`
+    --> crates/rdf-core/src/ir/compare.rs:65:8
+     |
+  64 | pub fn datasets_isomorphic<
+     |        ------------------- required by a bound in this function
+  65 |     A: DatasetView<ReadError = core::convert::Infallible>,
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `datasets_isomorphic`
+
+error[E0277]: the trait bound `DatasetHandle: purrdf_core::DatasetView` is not satisfied
+    --> crates/rdf/src/projections/dataset_description.rs:1220:56
+     |
+1220 |         assert!(datasets_isomorphic(&resident.dataset, &packed.dataset));
+     |                 -------------------                    ^^^^^^^^^^^^^^^ the trait `purrdf_core::DatasetView` is not implemented for `DatasetHandle`
+     |                 |
+     |                 required by a bound introduced by this call
+     |
+     = help: the following other types implement trait `purrdf_core::DatasetView`:
+               CompositeDatasetView
+               DeltaDatasetView
+               PackView<'_>
+               PagedDataset
+               PagedQueryView<'_>
+               PagedStackQueryView<'_>
+               SegmentedSession
+               purrdf_core::RdfDataset
+               std::sync::Arc<T>
+note: required by a bound in `datasets_isomorphic`
+    --> crates/rdf-core/src/ir/compare.rs:66:8
+     |
+  64 | pub fn datasets_isomorphic<
+     |        ------------------- required by a bound in this function
+  65 |     A: DatasetView<ReadError = core::convert::Infallible>,
+  66 |     B: DatasetView<ReadError = core::convert::Infallible>,
+     |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `datasets_isomorphic`
+
+error[E0277]: the trait bound `DatasetHandle: purrdf_core::DatasetView` is not satisfied
+   --> crates/rdf/src/projections/dcat_rdf.rs:620:48
+    |
+620 |         assert!(datasets_isomorphic(&semantic, &projected.dataset));
+    |                 -------------------            ^^^^^^^^^^^^^^^^^^ the trait `purrdf_core::DatasetView` is not implemented for `DatasetHandle`
+    |                 |
+    |                 required by a bound introduced by this call
+    |
+    = help: the following other types implement trait `purrdf_core::DatasetView`:
+              CompositeDatasetView
+              DeltaDatasetView
+              PackView<'_>
+              PagedDataset
+              PagedQueryView<'_>
+              PagedStackQueryView<'_>
+              SegmentedSession
+              purrdf_core::RdfDataset
+              std::sync::Arc<T>
+note: required by a bound in `datasets_isomorphic`
+   --> crates/rdf-core/src/ir/compare.rs:66:8
+    |
+ 64 | pub fn datasets_isomorphic<
+    |        ------------------- required by a bound in this function
+ 65 |     A: DatasetView<ReadError = core::convert::Infallible>,
+ 66 |     B: DatasetView<ReadError = core::convert::Infallible>,
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `datasets_isomorphic`
+
+error[E0277]: the trait bound `DatasetHandle: purrdf_core::DatasetView` is not satisfied
+   --> crates/rdf/src/projections/dcat_rdf.rs:639:41
+    |
+639 |             assert!(datasets_isomorphic(&mapped.dataset, &reparsed));
+    |                     ------------------- ^^^^^^^^^^^^^^^ the trait `purrdf_core::DatasetView` is not implemented for `DatasetHandle`
+    |                     |
+    |                     required by a bound introduced by this call
+    |
+    = help: the following other types implement trait `purrdf_core::DatasetView`:
+              CompositeDatasetView
+              DeltaDatasetView
+              PackView<'_>
+              PagedDataset
+              PagedQueryView<'_>
+              PagedStackQueryView<'_>
+              SegmentedSession
+              purrdf_core::RdfDataset
+              std::sync::Arc<T>
+note: required by a bound in `datasets_isomorphic`
+   --> crates/rdf-core/src/ir/compare.rs:65:8
+    |
+ 64 | pub fn datasets_isomorphic<
+    |        ------------------- required by a bound in this function
+ 65 |     A: DatasetView<ReadError = core::convert::Infallible>,
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `datasets_isomorphic`
+
+error[E0277]: the trait bound `DatasetHandle: purrdf_core::DatasetView` is not satisfied
+   --> crates/rdf/src/projections/dcat_rdf.rs:661:41
+    |
+661 |             assert!(datasets_isomorphic(&constructed.dataset, &reparsed));
+    |                     ------------------- ^^^^^^^^^^^^^^^^^^^^ the trait `purrdf_core::DatasetView` is not implemented for `DatasetHandle`
+    |                     |
+    |                     required by a bound introduced by this call
+    |
+    = help: the following other types implement trait `purrdf_core::DatasetView`:
+              CompositeDatasetView
+              DeltaDatasetView
+              PackView<'_>
+              PagedDataset
+              PagedQueryView<'_>
+              PagedStackQueryView<'_>
+              SegmentedSession
+              purrdf_core::RdfDataset
+              std::sync::Arc<T>
+note: required by a bound in `datasets_isomorphic`
+   --> crates/rdf-core/src/ir/compare.rs:65:8
+    |
+ 64 | pub fn datasets_isomorphic<
+    |        ------------------- required by a bound in this function
+ 65 |     A: DatasetView<ReadError = core::convert::Infallible>,
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `datasets_isomorphic`
+
+error[E0277]: the trait bound `DatasetHandle: purrdf_core::DatasetView` is not satisfied
+   --> crates/rdf/src/projections/void/mapping.rs:880:41
+    |
+880 |             assert!(datasets_isomorphic(&resident.dataset, &reparsed));
+    |                     ------------------- ^^^^^^^^^^^^^^^^^ the trait `purrdf_core::DatasetView` is not implemented for `DatasetHandle`
+    |                     |
+    |                     required by a bound introduced by this call
+    |
+    = help: the following other types implement trait `purrdf_core::DatasetView`:
+              CompositeDatasetView
+              DeltaDatasetView
+              PackView<'_>
+              PagedDataset
+              PagedQueryView<'_>
+              PagedStackQueryView<'_>
+              SegmentedSession
+              purrdf_core::RdfDataset
+              std::sync::Arc<T>
+note: required by a bound in `datasets_isomorphic`
+   --> crates/rdf-core/src/ir/compare.rs:65:8
+    |
+ 64 | pub fn datasets_isomorphic<
+    |        ------------------- required by a bound in this function
+ 65 |     A: DatasetView<ReadError = core::convert::Infallible>,
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `datasets_isomorphic`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-rdf` (lib test) due to 8 previous errors

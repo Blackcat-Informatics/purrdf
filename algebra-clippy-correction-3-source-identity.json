@@ -1,0 +1,47 @@
+[
+  {
+    "path": "crates/sparql-algebra/src/error.rs",
+    "source_sha256": "df19f73c7e5400320106aeeab99590b59e35eb4bb5e9c1fef3303c04e8ef59fe",
+    "postimage_sha256": "d370bef045c9f24ffd9caf0ad0f083f2dca8716fc1069d0f42cb3fcb8fa52476"
+  },
+  {
+    "path": "crates/sparql-algebra/src/lexer.rs",
+    "source_sha256": "bacc6ae1fe021a55a2d0fccb3bb1c9b262972754e0012a78322e11ba33c0a5fb",
+    "postimage_sha256": "89bca0e26f56257253551012455f80fc2eb8f8d41507d8e32cc2bcfc8f448f39"
+  },
+  {
+    "path": "crates/sparql-algebra/src/parser/machine.rs",
+    "source_sha256": "b581bebcf51e8faf4696b79715d6e9b7062e2b152a3a281fd4fe0e023c6da023",
+    "postimage_sha256": "cdc56d8af315a3ac5fede2e74476825c62bd118aa32d431a767a640cdef1c806"
+  },
+  {
+    "path": "crates/sparql-algebra/src/parser/triples.rs",
+    "source_sha256": "c32c07e3fea2441c8057f9c4453f2d44342d76c198d29db2efd582a603af9041",
+    "postimage_sha256": "96d0fd80815f9c1e36ee7739d110130dbb94136a663621c1e105486e7af2169b"
+  },
+  {
+    "path": "crates/sparql-algebra/src/parser.rs",
+    "source_sha256": "6f57e18ae6dad4d1f195e992d94fe03e8f93dd1b282846fb71ac798ef120a43b",
+    "postimage_sha256": "efbc5fadf2d3ae1c49205953a165bf551f9495a6ec1ba1f16bd70ba1b6acca6e"
+  },
+  {
+    "path": "crates/sparql-algebra/src/serialize.rs",
+    "source_sha256": "fec80855b024dbbaf2e0d61981942918d475ac2d847421dcebce2c2978409d20",
+    "postimage_sha256": "a6d153724ebb7b51be36a058931863704e66176fb3289aa351f7bd932e177bec"
+  },
+  {
+    "path": "crates/sparql-algebra/src/traits.rs",
+    "source_sha256": "ff9865485a9a78854fa1454078335e1966d5767f39d34f5fec5520d78bc51c12",
+    "postimage_sha256": "d6cd06099461175c0bd43fc2dd2865baa6178b8225b45a78849a4746f015a215"
+  },
+  {
+    "path": "crates/sparql-algebra/src/validate.rs",
+    "source_sha256": "23e4684d92eeb91c3bccf3e0fe5c062870a6bc06f7bf389227cbd44c36ccf185",
+    "postimage_sha256": "53182760d5972a35699ac8d303a6c19694739991f47b597e84a75b33b87faf5f"
+  },
+  {
+    "path": "crates/sparql-algebra/src/walk.rs",
+    "source_sha256": "669a92dad51c2570083fda718941d6f98c308bbde16a0ea61cac0dd81f1b1438",
+    "postimage_sha256": "db7eac2b3d3659bd1986979c23c9d9efb46b794f909a36ca6c405eec7ed25041"
+  }
+]

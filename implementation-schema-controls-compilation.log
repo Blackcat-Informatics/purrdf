@@ -1,0 +1,120 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/bgp/positive.rs:40:49
+     |
+  40 |         schema: std::sync::Arc::unwrap_or_clone(crate::eval::syntactic_schema(node)),
+     |                 ------------------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Arc<VarSchema, _>`, found `Shared<VarSchema>`
+     |                 |
+     |                 arguments to this function are incorrect
+     |
+     = note: expected struct `Arc<VarSchema, _>`
+                found struct `purrdf_core::small::Shared<VarSchema>`
+note: associated function defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/sync.rs:2761:12
+     |
+2761 |     pub fn unwrap_or_clone(this: Self) -> T {
+     |            ^^^^^^^^^^^^^^^
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/bgp/positive.rs:273:59
+     |
+ 273 |         let root_schema = std::sync::Arc::unwrap_or_clone(crate::eval::syntactic_schema(root));
+     |                           ------------------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Arc<_, _>`, found `Shared<VarSchema>`
+     |                           |
+     |                           arguments to this function are incorrect
+     |
+     = note: expected struct `Arc<_, _>`
+                found struct `purrdf_core::small::Shared<VarSchema>`
+note: associated function defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/sync.rs:2761:12
+     |
+2761 |     pub fn unwrap_or_clone(this: Self) -> T {
+     |            ^^^^^^^^^^^^^^^
+help: call `Into::into` on this expression to convert `purrdf_core::small::Shared<VarSchema>` into `Arc<_, _>`
+     |
+ 273 |         let root_schema = std::sync::Arc::unwrap_or_clone(crate::eval::syntactic_schema(root).into());
+     |                                                                                              +++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/bgp.rs:2119:58
+     |
+2119 | ...                   schema: Arc::unwrap_or_clone(crate::eval::syntactic_schema(left)),
+     |                               -------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Arc<VarSchema, _>`, found `Shared<VarSchema>`
+     |                               |
+     |                               arguments to this function are incorrect
+     |
+     = note: expected struct `Arc<VarSchema, _>`
+                found struct `purrdf_core::small::Shared<VarSchema>`
+note: associated function defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/alloc/src/sync.rs:2761:12
+     |
+2761 |     pub fn unwrap_or_clone(this: Self) -> T {
+     |            ^^^^^^^^^^^^^^^
+
+error[E0369]: binary operation `!=` cannot be applied to type `purrdf_core::small::Shared<VarSchema>`
+   --> crates/sparql-eval/src/engine.rs:410:13
+    |
+410 |     (source != visible(query_pattern(planned))).then_some(source)
+    |      ------ ^^ ------------------------------- purrdf_core::small::Shared<VarSchema>
+    |      |
+    |      purrdf_core::small::Shared<VarSchema>
+    |
+note: `purrdf_core::small::Shared<VarSchema>` does not implement `PartialEq`
+   --> crates/rdf-core/src/small/shared.rs:43:1
+    |
+ 43 | pub struct Shared<T> {
+    | ^^^^^^^^^^^^^^^^^^^^ `purrdf_core::small::Shared<VarSchema>` is defined in another crate
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/eval.rs:3997:5
+     |
+3774 |   pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> purrdf_core::small::Shared<VarSchema> {
+     |                                                             ------------------------------------- expected `purrdf_core::small::Shared<VarSchema>` because of return type
+...
+3997 | /     Arc::new(
+3998 | |         schemas
+3999 | |             .pop()
+4000 | |             .expect("the root's schema is the last one derived"),
+4001 | |     )
+     | |_____^ expected `Shared<VarSchema>`, found `Arc<VarSchema>`
+     |
+     = note: expected struct `purrdf_core::small::Shared<VarSchema>`
+                found struct `Arc<VarSchema>`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/join_plan.rs:173:24
+    |
+173 |                 slots: std::sync::Arc::new(slots),
+    |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Shared<VarSchema>`, found `Arc<VarSchema>`
+    |
+    = note: expected struct `purrdf_core::small::Shared<VarSchema>`
+               found struct `Arc<VarSchema>`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/join_plan.rs:185:20
+    |
+185 |             slots: std::sync::Arc::new(unrelated_slots),
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `Shared<VarSchema>`, found `Arc<VarSchema>`
+    |
+    = note: expected struct `purrdf_core::small::Shared<VarSchema>`
+               found struct `Arc<VarSchema>`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/join_plan.rs:202:42
+    |
+202 |         slots.push(std::sync::Arc::clone(&factor.slots));
+    |                    --------------------- ^^^^^^^^^^^^^ expected `&Arc<_, _>`, found `&Shared<VarSchema>`
+    |                    |
+    |                    arguments to this function are incorrect
+    |
+    = note: expected reference `&Arc<_, _>`
+               found reference `&purrdf_core::small::Shared<VarSchema>`
+note: method defined here
+   --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/clone.rs:236:8
+    |
+236 |     fn clone(&self) -> Self;
+    |        ^^^^^
+
+Some errors have detailed explanations: E0308, E0369.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 8 previous errors

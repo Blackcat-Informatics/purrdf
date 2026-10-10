@@ -1,0 +1,557 @@
+--- a/crates/sparql-eval/src/substitute.rs
++++ b/crates/sparql-eval/src/substitute.rs
+@@ -73,7 +73,7 @@
+ /// dataset's OWN id for a term it already interns, and [`ground_term_from_id`]
+ /// resolves it straight into the algebra term the rewrite wants. Without that door a
+ /// caller holding an id had to spell the term out as a `TermValue` (an owned `String`
+-/// per component) purely so [`ground_term_from_value`] could allocate it a SECOND
++/// per component) purely so [`ground_term_from_value_with_memory`] could allocate it a SECOND
+ /// time into the algebra, and so `crate::bgp`'s `compile_term` could then hash it
+ /// back to the very id the caller started from.
+ ///
+@@ -146,7 +146,7 @@
+     ///
+     /// # Errors
+     ///
+-    /// As [`ground_term_from_value`], and only for a value-door binding: an id-door
++    /// As [`ground_term_from_value_with_memory`], and only for a value-door binding: an id-door
+     /// binding did its refusing at the door.
+     ///
+     /// # Panics
+@@ -321,7 +321,7 @@
+ /// Ground every pre-binding once: one [`Variable`] per name, one [`GroundTerm`] per
+ /// value.
+ ///
+-/// Separate from [`apply_probes`] because [`apply_shacl_prebinding`] needs the
++/// Separate from [`apply_probes_with_memory`] because [`apply_shacl_prebinding`] needs the
+ /// grounded values for its expression-position rewrite as well as for the seed, and
+ /// deriving them twice from the same [`TermValue`]s was a measured per-focus-node
+ /// cost: the conversion allocates, and SHACL runs it once per focus node, per value
+@@ -373,51 +373,18 @@
+     Ok(probes)
+ }
+ 
+-/// [`build_probes`], into a buffer the caller keeps.
+-///
+-/// A [`PreparedExecution`](crate::PreparedExecution) runs the same query over and
+-/// over, so the probe list has the same LENGTH every time and only its cells change.
+-/// Filling a retained buffer therefore costs no allocation at all after the first
+-/// run, where `build_probes`' fresh `Vec` charged one per run — on a path whose whole
+-/// purpose is to stop allocating per run.
+-///
+-/// Each cell is overwritten in place, and a typed literal whose datatype is the one its
+-/// cell held before shares that datatype IRI ([`Prebindings::ground_reusing_with_memory`]).
+-///
+-/// # Errors
+-///
+-/// As [`build_probes`]: a datatype IRI that is not a valid IRI, or a language tag the
+-/// concrete syntaxes would not have lexed. The buffer is cleared when a value is
+-/// refused, so a refused pre-binding leaves no earlier run's terms behind for a caller
+-/// that ignores the error to read.
+-pub(crate) fn build_probes_into(
+-    probes: &mut Vec<(Variable, GroundTerm)>,
+-    substitutions: Prebindings<'_>,
+-) -> Result<(), RdfDiagnostic> {
+-    let mut native = PreparedProbes::from_resident(std::mem::take(probes))
+-        .map_err(GroundFailure::into_resident_diagnostic)?;
+-    let result = build_prepared_probes(
+-        &mut native,
+-        substitutions,
+-        &crate::WorkspaceCapability::resident(),
+-    );
+-    *probes = native
+-        .try_into_resident()
+-        .expect("resident prepared probe arrays");
+-    result.map_err(GroundFailure::into_resident_diagnostic)
+-}
+-
+ /// The first half of the one pre-binding rewrite ([`apply_shacl_probes`]), over
+ /// probes that are already grounded and already known to be non-empty: every value is
+ /// pushed into the leaves the pushdown reaches and injected as a single-row `VALUES`
+ /// join at the core `WHERE` pattern, beneath the solution-modifier stack but visible
+ /// to the projected variable list.
++#[cfg(test)]
+ pub(crate) fn apply_probes(query: Query, probes: Vec<(Variable, GroundTerm)>) -> Query {
+     resident_rewrite(|memory| apply_probes_with_memory(query, &probes, memory))
+ }
+ 
+ /// Whether any variable is pre-bound twice, which is the one shape the combined
+-/// seed in [`apply_probes`] cannot represent.
++/// seed in [`apply_probes_with_memory`] cannot represent.
+ ///
+ /// Quadratic on purpose: a pre-binding list is the handful of variables one shape
+ /// names (`$this`, `$value`, `$shapesGraph`, `$currentShape`, the component's
+@@ -827,6 +794,7 @@
+ ///
+ /// A value no argument names is neither written nor driven, so a row carrying
+ /// unrelated bindings leaves `call` as it was and returns `None`.
++#[cfg(test)]
+ pub(crate) fn bind_call_arguments(
+     call: &mut PropertyFunctionCall,
+     values: &[(Variable, GroundTerm)],
+@@ -882,30 +850,6 @@
+ enum ProbeRule {
+     Pushdown,
+     Shacl,
+-}
+-
+-/// The shared iterative matched-position walk. SHACL predicates are written only
+-/// for IRIs; every other value remains a variable whose local VALUES binding cannot
+-/// match an RDF predicate, yielding no solution without constructing invalid algebra.
+-#[cfg(test)]
+-fn probe_positions<'a>(
+-    positions: impl IntoIterator<Item = ProbePosition<'a>>,
+-    probes: &[(Variable, GroundTerm)],
+-    probed: &mut Vec<usize>,
+-    rule: ProbeRule,
+-) {
+-    let mut resident = purrdf_lex::allocation::Resident;
+-    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+-    // The resident adapter borrows an existing resident output buffer. Native
+-    // rewrites instead lend the original memory that already owns this buffer.
+-    let bytes = std::alloc::Layout::array::<usize>(probed.capacity())
+-        .expect("resident probe index layout")
+-        .size();
+-    memory
+-        .add_bytes(bytes)
+-        .expect("resident probe index admission");
+-    probe_positions_with_memory(positions, probes, probed, rule, &mut memory)
+-        .expect("resident matched-position allocation failed");
+ }
+ 
+ fn probe_positions_with_memory<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
+@@ -1196,7 +1140,7 @@
+ /// A) and what the parser's grouping exemption
+ /// (`SparqlParser::with_prebound_variables`) assumes.
+ ///
+-/// First performs the VALUES-join seed and pushdown via [`apply_probes`]. Then
++/// First performs the VALUES-join seed and pushdown via [`apply_probes_with_memory`]. Then
+ /// completes every BGP/path leaf at every depth,
+ /// including OPTIONAL and MINUS right arms and nested EXISTS bodies. A leaf-local
+ /// VALUES join constrains blank and blank-bearing quoted identities and restores
+@@ -1231,7 +1175,7 @@
+ /// [`apply_shacl_prebinding`]'s rewrite, over probes that are already grounded and
+ /// already known to be non-empty.
+ ///
+-/// Split out for the same reason [`apply_probes`] is: a
++/// Split out for the same reason [`apply_probes_with_memory`] is: a
+ /// [`PreparedExecution`](crate::PreparedExecution) grounds its bindings into a
+ /// retained buffer rather than through a [`Prebindings`] list, and
+ /// [`crate::prebind_memo`] has to be able to run EXACTLY this rewrite — not a second
+@@ -1271,7 +1215,7 @@
+ /// The constant both sides bind it to; any one term would do.
+ const MINUS_MARK: &str = "urn:purrdf:prebinding:minus";
+ 
+-/// Whether the seed [`apply_probes`] joins at the core already reaches every place
++/// Whether the seed [`apply_probes_with_memory`] joins at the core already reaches every place
+ /// the query can read a pre-bound variable, so the expression walk would change no
+ /// answer.
+ ///
+@@ -1286,7 +1230,7 @@
+ ///
+ /// A query that assigns a pre-bound name in its head (a `SELECT` expression or
+ /// `UNFOLD` target) is not one: the assignment has to join with the bound value
+-/// ([`join_assignments_with_prebinding`]), which only the full rewrite arranges.
++/// ([`join_assignments_with_prebinding_with_memory`]), which only the full rewrite arranges.
+ #[cfg(test)]
+ fn seed_reaches_every_read(query: &Query, probes: &[(Variable, GroundTerm)]) -> bool {
+     resident_rewrite(|memory| seed_reaches_every_read_with_memory(query, probes, memory))
+@@ -1310,7 +1254,7 @@
+ ///   without borrowing: it is `Arc<str>`-backed, so the key is a refcount bump on
+ ///   the name the probe list already holds, and the list is then free of any
+ ///   borrow of the caller's request — which is what lets [`apply_shacl_probes`]
+-///   take its probes BY VALUE and hand them straight to [`apply_probes`].
++///   take its probes BY VALUE and hand them straight to [`apply_probes_with_memory`].
+ ///
+ /// The value each entry carries is the GROUNDED TERM, not a pre-computed constant
+ /// expression. That is what lets the three consumers below — an expression position,
+@@ -1614,27 +1558,6 @@
+     resident_rewrite(|memory| rename_reads_with_memory(expr, renames, memory))
+ }
+ 
+-/// Call `visit` on each of `roots` and every expression beneath it, each before the
+-/// expressions it holds and those in source order, over a work list rather than the
+-/// machine stack. An `EXISTS` body is a pattern, not an expression, so the walk does not
+-/// enter it.
+-#[cfg(test)]
+-fn for_each_expression<'e>(
+-    roots: impl IntoIterator<Item = &'e Expression>,
+-    mut visit: impl FnMut(&'e Expression),
+-) {
+-    resident_rewrite(|memory| {
+-        for_each_expression_with_memory(
+-            roots,
+-            |expression, _| {
+-                visit(expression);
+-                Ok(())
+-            },
+-            memory,
+-        )
+-    });
+-}
+-
+ pub(crate) use purrdf_sparql_algebra::walk::for_each_expression_mut;
+ 
+ /// Push the expressions `expr` holds onto `pending`, last first, so the work list pops
+@@ -1919,41 +1842,6 @@
+ impl PreparedProbes {
+     pub(crate) fn entries(&self) -> &[(Variable, GroundTerm)] {
+         &self.entries
+-    }
+-
+-    fn from_resident(entries: Vec<(Variable, GroundTerm)>) -> RewriteResult<Self> {
+-        let workspace = crate::WorkspaceCapability::resident();
+-        let mut out = Self {
+-            entries,
+-            children: Vec::new(),
+-            entries_allocation: None,
+-            children_allocation: None,
+-        };
+-        out.reserve(out.entries.len(), &workspace)?;
+-        for _ in 0..out.entries.len() {
+-            out.children.push(None);
+-        }
+-        Ok(out)
+-    }
+-
+-    fn try_into_resident(mut self) -> Result<Vec<(Variable, GroundTerm)>, Self> {
+-        let bounded = self
+-            .entries_allocation
+-            .as_ref()
+-            .is_some_and(crate::WorkspaceAllocation::is_bounded)
+-            || self
+-                .children_allocation
+-                .as_ref()
+-                .is_some_and(crate::WorkspaceAllocation::is_bounded)
+-            || self
+-                .children
+-                .iter()
+-                .flatten()
+-                .any(crate::WorkspaceAllocation::is_bounded);
+-        if bounded {
+-            return Err(self);
+-        }
+-        Ok(std::mem::take(&mut self.entries))
+     }
+ 
+     pub(crate) fn clear(&mut self) {
+@@ -4469,6 +4357,7 @@
+ 
+ /// Convert a caller-owned term through the same native grounding body.
+ /// The resident allocation contract is unchanged; bounded callers use the typed door.
++#[cfg(test)]
+ fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic> {
+     ground_term_from_value_admitted(value, &crate::WorkspaceCapability::default())
+         .map(|ground| {
+@@ -4594,6 +4483,7 @@
+ }
+ 
+ /// Convert a caller-owned value without re-owning intermediate TermValue trees.
++#[cfg(test)]
+ pub(crate) fn ground_term_from_value_admitted(
+     value: &TermValue,
+     workspace: &crate::WorkspaceCapability,
+@@ -7638,27 +7528,6 @@
+ /// Make every remaining assignment of a pre-bound name join (SPARQL 1.1 §18.5) with
+ /// the bound value, at the assignment.
+ ///
+-/// A pre-bound variable is one value at every depth. An assignment of it where it is
+-/// not in scope (a `BIND` there is SPARQL, §18.2.1) yields rows that carry the name,
+-/// and such a row is compatible with the bound value only when the two are the same
+-/// term, or the assignment left the name unbound. So each assignment is rewritten to
+-/// bind a fresh variable and is wrapped in `FILTER(!BOUND(?fresh) || sameTerm(?fresh,
+-/// ?name))`, whose `?name` the pre-binding rewrite then reads as the bound value.
+-/// The rule is the same wherever the assignment sits — the query's own group, a
+-/// nested group, an `OPTIONAL` arm, a projected sub-`SELECT`, a `SELECT` expression,
+-/// a sub-`SELECT` whether or not it projects the name, an aggregate — so the answer
+-/// cannot depend on what else the query holds. There is no scope in which a
+-/// pre-bound name is another variable: the bound value is one value everywhere.
+-///
+-/// Run once, when the plan is prepared, for the names it pre-binds, and again by the
+-/// rewrite for a door that prepared it without them; over a plan already rewritten
+-/// it finds nothing to do.
+-pub(crate) fn join_assignments_with_prebinding(query: &mut Query, names: &[&str]) {
+-    resident_rewrite(|memory| {
+-        join_assignments_with_prebinding_with_memory(query, names, memory).map(|_| ())
+-    })
+-}
+-
+-/// The prefix of the variable [`join_assignments_with_prebinding`] moves an
++/// The prefix of the variable [`join_assignments_with_prebinding_with_memory`] moves an
+ /// assignment of a pre-bound name to: `{ASSIGNED_PREFIX}{n}_{name}`.
+ const ASSIGNED_PREFIX: &str = "__purrdf_assigned_";
+--- a/crates/sparql-eval/src/service_endpoints.rs
++++ b/crates/sparql-eval/src/service_endpoints.rs
+@@ -523,6 +523,7 @@
+ /// A loop over a work list that keeps a shallow query's pending nodes inline, so the
+ /// scan every evaluation runs allocates nothing for one and never needs more stack for
+ /// a deeper query.
++#[cfg(test)]
+ pub(crate) fn mentions_variable_endpoint(pattern: &GraphPattern) -> bool {
+     mentions_variable_endpoint_admitted(pattern, &crate::WorkspaceCapability::resident())
+         .expect("resident SERVICE scan")
+--- a/crates/sparql-eval/src/parallel.rs
++++ b/crates/sparql-eval/src/parallel.rs
+@@ -414,7 +414,7 @@
+ /// A judgment of one `EXISTS` body the fork-safety walks consult before walking it:
+ /// `Some(unsafe)` decides the body without entering it, `None` walks it as written. See
+ /// [`is_parallel_safe_with`]. A lateral placeholder
+-/// (`crate::deferred_exists::lateral_placeholder`) is offered to it too, and one it
++/// (`crate::deferred_exists::lateral_placeholder_with_memory`) is offered to it too, and one it
+ /// answers `None` for is unsafe: there is nothing behind a placeholder to walk.
+ pub(crate) type ExistsVerdict<'h> = &'h dyn Fn(&GraphPattern) -> Option<bool>;
+ 
+@@ -1253,9 +1253,10 @@
+     Ok(out)
+ }
+ 
+-/// [`par_blocks_try_map_init`] under a caller's fuel or scratch ceiling,
++/// [`par_blocks_try_map_init_fallible`] under a caller's fuel or scratch ceiling,
+ /// [`par_chunk_try_map_init`] otherwise. Cancellation and unlimited metering keep the
+ /// chunked fork; their checkpoints and ordered ledgers still observe each item.
++#[cfg(test)]
+ pub(crate) fn par_loop_try_map_init<T, S, R, H>(
+     bounded: bool,
+     sequential: bool,
+@@ -1272,41 +1273,15 @@
+     par_loop_try_map_init_fallible(bounded, sequential, items, || Ok(init()), push, harvest)
+ }
+ 
+-/// One block's outcome in [`par_blocks_try_map_init`], once a worker has run it.
++/// One block's outcome in [`par_blocks_try_map_init_fallible`], once a worker has run it.
+ type BlockSlot<R, H> = std::sync::Mutex<Option<Result<(Vec<R>, H), EvalError>>>;
+ 
+-/// Blocks per worker [`par_blocks_try_map_init`] cuts its items into.
++/// Blocks per worker [`par_blocks_try_map_init_fallible`] cuts its items into.
+ const ORDERED_BLOCKS_PER_THREAD: usize = 64;
+ 
+ /// Enough items to amortize a block's context, program links and harvest. Workers still
+ /// settle and check shared headroom at every item; this does not delay bounded stopping.
+ const ORDERED_MIN_BLOCK_LEN: usize = 64;
+-
+-/// [`par_chunk_try_map_init`] for a governed loop whose workers stop on what they spend
+-/// together (`crate::row_checkpoint`): the items are cut into small blocks, and each
+-/// worker takes the next block in item order until none is left, so the workers advance
+-/// together from the front of the input rather than each from its own far-apart chunk.
+-/// When the workers' running spend passes a ceiling, then, the rows they have evaluated
+-/// are close to a prefix of the input — what the in-order loop would have evaluated by
+-/// its trip — and little they evaluated lies past it. `init` and `harvest` run once per
+-/// block, as they run once per chunk there, so `init` should be cheap (a worker's arena
+-/// over a snapshot of the evaluation's, not a copy of it). The rows and harvests come
+-/// back in block order, so a caller sees exactly what [`par_chunk_try_map_init`]
+-/// returns, cut finer. The first error in block order is returned, as there.
+-pub(crate) fn par_blocks_try_map_init<T, S, R, H>(
+-    sequential: bool,
+-    items: &[T],
+-    init: impl Fn() -> S + Sync,
+-    push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
+-    harvest: impl Fn(&mut S) -> H + Sync,
+-) -> Result<(Vec<R>, purrdf_core::SmallVec<[H; 1]>), EvalError>
+-where
+-    T: Sync,
+-    R: Send,
+-    H: Send,
+-{
+-    par_blocks_try_map_init_fallible(sequential, items, || Ok(init()), push, harvest)
+-}
+ 
+ /// The reducing sibling of [`par_chunk_try_map_init`]: rather than flattening
+ /// every chunk's pushed items into one `Vec<R>`, each chunk folds down to
+--- a/crates/sparql-eval/src/deferred_exists.rs
++++ b/crates/sparql-eval/src/deferred_exists.rs
+@@ -469,24 +469,7 @@
+ /// a space, so it names no variable of any query.
+ const PLACEHOLDER_VARIABLE: &str = "purrdf deferred exists";
+ 
+-/// The placeholder standing in a copy for a nested `EXISTS` body: a `VALUES` block with no
+-/// rows over a variable no query can name. Its address keys the window's [`DeferredMap`];
+-/// its shape lets [`is_placeholder`] tell a placeholder that lost its entry (which would
+-/// be a bug) from a body, so it can never be evaluated as one.
+-#[allow(
+-    clippy::unnecessary_box_returns,
+-    reason = "the box's heap address is the placeholder's identity: it keys the DeferredMap \
+-              and must be fixed before the placeholder moves into the substituted copy \
+-              (the lint fires only where GraphPattern is small, i.e. on wasm32)"
+-)]
+-#[cfg(test)]
+-pub(crate) fn placeholder() -> Box<GraphPattern> {
+-    let mut frame = crate::workspace::LexicalFrame::new(&WorkspaceCapability::resident());
+-    placeholder_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut frame))
+-        .expect("resident placeholder allocation failed")
+-}
+-
+-/// Whether `pattern` has the shape [`placeholder`] builds.
++/// Whether `pattern` has the shape [`placeholder_with_memory`] builds.
+ pub(crate) fn is_placeholder(pattern: &GraphPattern) -> bool {
+     matches!(
+         pattern,
+@@ -497,25 +480,7 @@
+     )
+ }
+ 
+-/// The placeholder standing in a copy for a nested `LATERAL`'s right operand, whose
+-/// columns are `schema`: a `SELECT` of those columns over a [`placeholder`], so the
+-/// columns read off the copy without evaluating it are the operand's. Its address keys
+-/// the window's [`DeferredMap`]; its shape lets [`is_lateral_placeholder`] tell one that
+-/// lost its entry from an operand, so it is never evaluated as one.
+-#[allow(
+-    clippy::unnecessary_box_returns,
+-    reason = "the box's heap address is the placeholder's identity: it keys the DeferredMap \
+-              and must be fixed before the placeholder moves into the substituted copy \
+-              (the lint fires only where GraphPattern is small, i.e. on wasm32)"
+-)]
+-#[cfg(test)]
+-pub(crate) fn lateral_placeholder(schema: &[Variable]) -> Box<GraphPattern> {
+-    let mut frame = crate::workspace::LexicalFrame::new(&WorkspaceCapability::resident());
+-    lateral_placeholder_with_memory(schema, &mut purrdf_lex::allocation::Memory::new(&mut frame))
+-        .expect("resident placeholder allocation failed")
+-}
+-
+-/// Whether `pattern` has the shape [`lateral_placeholder`] builds.
++/// Whether `pattern` has the shape [`lateral_placeholder_with_memory`] builds.
+ pub(crate) fn is_lateral_placeholder(pattern: &GraphPattern) -> bool {
+     matches!(pattern, GraphPattern::Project { inner, .. } if is_placeholder(inner))
+ }
+--- a/crates/sparql-eval/src/enf.rs
++++ b/crates/sparql-eval/src/enf.rs
+@@ -370,7 +370,7 @@
+ /// `normalize`'s two SYNTHESIZING cases, `Project` and `Union`: their own root is a
+ /// freshly built combination, not a clone of one single node, and reconstructing that
+ /// correspondence needs the same `counts_rows` arbitration
+-/// [`crate::expr::substitute_pattern_tracked`] already does for `LATERAL`'s Values-Insertion
++/// [`crate::expr::substitute_pattern_tracked_admitted`] already does for `LATERAL`'s Values-Insertion
+ /// wrappers. Left as a documented, deliberate limitation rather than attempted here: a
+ /// query whose `EXISTS` inner is directly `{ SELECT/DISTINCT/UNION ... }`-shaped at its
+ /// OWN top level still charges correctly — its charges simply keep rolling into the
+@@ -446,21 +446,6 @@
+             _ => return map_clone_admitted(original, normalized, map, workspace),
+         }
+     }
+-}
+-
+-/// Record every node of `copy` — a structural clone of `original` — against the node of
+-/// `original` it copies, `counts_rows` set: each copied node's output IS its original's.
+-/// Every descendant is paired, INCLUDING any `EXISTS` pattern reached through a nested
+-/// expression. The pairs wait on a work list, so a tree of any depth is mapped without a
+-/// machine-stack frame per level.
+-#[cfg(test)]
+-pub(crate) fn map_clone(
+-    original: &GraphPattern,
+-    copy: &GraphPattern,
+-    map: &mut SubstitutionSourceMap,
+-) {
+-    map_clone_admitted(original, copy, map, &crate::WorkspaceCapability::resident())
+-        .expect("resident clone mapping allocation failed")
+ }
+ 
+ #[cfg(test)]
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -3189,38 +3189,11 @@
+         .map(CorrelatedPattern::into_resident)
+ }
+ 
+-/// [`substitute_pattern`], leaving every nested `EXISTS` body outside a `SERVICE` body as a
+-/// placeholder recorded on `defer` (see [`Deferral`] and `crate::deferred_exists`).
+-///
+-/// # Errors
+-///
+-/// As [`substitute_pattern`].
+-#[allow(
+-    clippy::unnecessary_box_returns,
+-    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+-              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+-              32-bit targets such as wasm32, where the same box is still the field's type"
+-)]
+-#[cfg(test)]
+-pub(crate) fn substitute_pattern_deferring<const PRESERVE: bool>(
+-    pattern: &GraphPattern,
+-    row: &SubstitutionRow,
+-    defer: &mut Deferral<'_>,
+-) -> Result<Box<GraphPattern>, EvalError> {
+-    substitute_pattern_deferring_admitted::<PRESERVE>(
+-        pattern,
+-        row,
+-        defer,
+-        &crate::WorkspaceCapability::resident(),
+-    )
+-    .map(CorrelatedPattern::into_resident)
+-}
+-
+ /// How the substitution walk treats a nested `EXISTS` body — see
+ /// `crate::deferred_exists` for why it is not copied.
+ ///
+ /// A deferring walk leaves each body it meets outside a `SERVICE` body as a
+-/// [`crate::deferred_exists::placeholder`], recorded here with the body's site and the
++/// [`crate::deferred_exists::placeholder_with_memory], recorded here with the body's site and the
+ /// substitution it is owed; an eager walk (and every walk below a `SERVICE`, whose body is
+ /// forwarded as text) substitutes the body in full, as SPARQL's `substitute` reads.
+ pub(crate) struct Deferral<'a> {
+@@ -3569,7 +3542,7 @@
+ }
+ 
+ /// Substituted-node address → [`SubstitutionSource`], one entry per node
+-/// [`substitute_pattern_tracked`]'s walk produces from the plan it is substituting.
++/// [`substitute_pattern_tracked_admitted`]'s walk produces from the plan it is substituting.
+ ///
+ /// Keyed by a per-row heap-temporary address. That address is internal evaluator
+ /// bookkeeping only: [`crate::governor::ledger::QueryExplanation::render`] emits ordinals
+@@ -3577,7 +3550,7 @@
+ /// prints — see that function's determinism note.
+ pub(crate) type SubstitutionSourceMap = crate::AdmittedMap<usize, SubstitutionSource>;
+ 
+-/// The state [`substitute_pattern_tracked`]'s walk threads through
++/// The state [`substitute_pattern_tracked_admitted`]'s walk threads through
+ /// [`substitute_pattern_impl`]'s recursion alongside the map it is building for the CURRENT
+ /// window — everything [`boxed_and_mapped_as`] needs to arbitrate `counts_rows` across
+ /// nested `LATERAL` windows rather than only within this one. See [`SubstitutionSource`]'s
+@@ -3596,49 +3569,6 @@
+     /// from an enclosing window's already-wrapped subtree — only the first keeps its local
+     /// `true`.
+     claimed: &'a mut crate::AdmittedMap<usize, ()>,
+-}
+-
+-/// [`substitute_pattern`], additionally populating `tracked` (see [`SubstitutionSourceMap`])
+-/// — the seam [`crate::binop::eval_correlated`] uses for a `LATERAL` right operand, whose
+-/// nodes ARE plan nodes and must keep their own ledger identity across the per-row
+-/// substituted copy. A correlated-`EXISTS` inner (also reached through
+-/// `eval_correlated`, via [`substitute_pattern`] without a map) has no plan identity to
+-/// preserve — see the ledger module doc's "Attribution of work that is not a plan node" —
+-/// so it is deliberately never tracked.
+-///
+-/// `enclosing` is the immediately enclosing window's map — the last entry of
+-/// [`EvalCtx::correlated_node_maps`](crate::eval::EvalCtx::correlated_node_maps) at the call
+-/// site, BEFORE this call's own map is pushed — or `None` when `pattern` is not itself
+-/// inside an already-substituted subtree. See [`SubstitutionSource`]'s doc for why a
+-/// nested `LATERAL` needs it.
+-///
+-/// # Errors
+-///
+-/// As [`substitute_pattern`]; `tracked` then holds entries for a discarded copy, and the
+-/// caller drops it with the error.
+-#[allow(
+-    clippy::unnecessary_box_returns,
+-    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+-              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+-              32-bit targets such as wasm32, where the same box is still the field's type"
+-)]
+-#[cfg(test)]
+-pub(crate) fn substitute_pattern_tracked<const PRESERVE: bool>(
+-    pattern: &GraphPattern,
+-    row: &SubstitutionRow,
+-    tracked: &mut SubstitutionSourceMap,
+-    enclosing: Option<&SubstitutionSourceMap>,
+-    defer: &mut Deferral<'_>,
+-) -> Result<Box<GraphPattern>, EvalError> {
+-    substitute_pattern_tracked_admitted::<PRESERVE>(
+-        pattern,
+-        row,
+-        tracked,
+-        enclosing,
+-        defer,
+-        &crate::WorkspaceCapability::resident(),
+-    )
+-    .map(CorrelatedPattern::into_resident)
+ }
+ 
+ pub(crate) fn substitute_pattern_admitted(

@@ -1,0 +1,1373 @@
+reading file ".stage/sparql-eval-complete-bounded-workspace/admit-allocation-trace.zst" - please wait, this might take some time...
+Debuggee command was: /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e --exact admit_allocation_is_independent_of_dataset_size --nocapture --test-threads=1
+finished reading file, now analyzing data:
+
+MOST CALLS TO ALLOCATION FUNCTIONS
+800 calls to allocation functions with 0B peak consumption from
+_RNvXCs5RvEnfveOuI_18purrdf_alloc_probeNtB2_17CountingAllocatorNtNtNtCs2k2z8Zem4rB_4core5alloc6global11GlobalAlloc5alloc
+  in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+13 calls with 0B peak consumption from:
+    _RNvXsb_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identity17IdentityComponentENtNtCs2k2z8Zem4rB_4core5clone5Clone5cloneCslqifKVGK0Ry_13purrdf_shapes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+13 calls with 0B peak consumption from:
+    _RNvXs4_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvXsb_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identity17IdentityComponentENtNtCs2k2z8Zem4rB_4core5clone5Clone5cloneCslqifKVGK0Ry_13purrdf_shapes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+13 calls with 0B peak consumption from:
+    _RNvXs4_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvXsb_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identity17IdentityComponentENtNtCs2k2z8Zem4rB_4core5clone5Clone5cloneCslqifKVGK0Ry_13purrdf_shapes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+13 calls with 0B peak consumption from:
+    _RNvXsb_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identity17IdentityComponentENtNtCs2k2z8Zem4rB_4core5clone5Clone5cloneCslqifKVGK0Ry_13purrdf_shapes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+13 calls with 0B peak consumption from:
+    _RNvXsb_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identity17IdentityComponentENtNtCs2k2z8Zem4rB_4core5clone5Clone5cloneCslqifKVGK0Ry_13purrdf_shapes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+13 calls with 0B peak consumption from:
+    _RNvXs4_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvXsb_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identity17IdentityComponentENtNtCs2k2z8Zem4rB_4core5clone5Clone5cloneCslqifKVGK0Ry_13purrdf_shapes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+13 calls with 0B peak consumption from:
+    _RNvXs4_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvXsb_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identity17IdentityComponentENtNtCs2k2z8Zem4rB_4core5clone5Clone5cloneCslqifKVGK0Ry_13purrdf_shapes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+13 calls with 0B peak consumption from:
+    _RNvXsb_NtCsc70TAahYccp_5alloc3vecINtB5_3VecNtNtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identity17IdentityComponentENtNtCs2k2z8Zem4rB_4core5clone5Clone5cloneCslqifKVGK0Ry_13purrdf_shapes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+6 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvMs1_NtCs3BJWK8ENHrA_10purrdf_lex10allocationINtB6_6MemoryNtB6_8ResidentE7collectNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir8validate10VisitStateINtNtNtNtCs2k2z8Zem4rB_4core4iter7sources8repeat_n7RepeatNB1k_EEB1q_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCsiAAmK6eA5Tp_11purrdf_core2ir8validate20validate_with_memoryNtNtCs3BJWK8ENHrA_10purrdf_lex10allocation8ResidentEB6_.llvm.15108212944240363857
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtNtCsiAAmK6eA5Tp_11purrdf_core2ir7builderNtB5_17RdfDatasetBuilder8validate
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack7certify12restore_pack
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product7dataset12open_dataset
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+6 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvMs1_NtCs3BJWK8ENHrA_10purrdf_lex10allocationINtB6_6MemoryNtB6_8ResidentE7collectNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir8validate10VisitStateINtNtNtNtCs2k2z8Zem4rB_4core4iter7sources8repeat_n7RepeatNB1k_EEB1q_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCsiAAmK6eA5Tp_11purrdf_core2ir8validate20validate_with_memoryNtNtCs3BJWK8ENHrA_10purrdf_lex10allocation8ResidentEB6_.llvm.15108212944240363857
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtNtCsiAAmK6eA5Tp_11purrdf_core2ir7builderNtB5_17RdfDatasetBuilder8validate
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack7certify12restore_pack
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product7dataset12open_dataset
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+6 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvMs1_NtCs3BJWK8ENHrA_10purrdf_lex10allocationINtB6_6MemoryNtB6_8ResidentE7collectNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir8validate10VisitStateINtNtNtNtCs2k2z8Zem4rB_4core4iter7sources8repeat_n7RepeatNB1k_EEB1q_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCsiAAmK6eA5Tp_11purrdf_core2ir8validate20validate_with_memoryNtNtCs3BJWK8ENHrA_10purrdf_lex10allocation8ResidentEB6_.llvm.15108212944240363857
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtNtCsiAAmK6eA5Tp_11purrdf_core2ir7builderNtB5_17RdfDatasetBuilder8validate
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack7certify12restore_pack
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product7dataset12open_dataset
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+6 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvMs1_NtCs3BJWK8ENHrA_10purrdf_lex10allocationINtB6_6MemoryNtB6_8ResidentE7collectNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir8validate10VisitStateINtNtNtNtCs2k2z8Zem4rB_4core4iter7sources8repeat_n7RepeatNB1k_EEB1q_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCsiAAmK6eA5Tp_11purrdf_core2ir8validate20validate_with_memoryNtNtCs3BJWK8ENHrA_10purrdf_lex10allocation8ResidentEB6_.llvm.15108212944240363857
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtNtCsiAAmK6eA5Tp_11purrdf_core2ir7builderNtB5_17RdfDatasetBuilder8validate
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack7certify12restore_pack
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product7dataset12open_dataset
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+4 calls with 0B peak consumption from:
+    _RNvXs4_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes8prefixesNtB2_14PrefixResolver3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes6shapesNtB5_6Parser3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes6parser9functions34register_declared_sparql_functions
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certified26assemble_functions_request.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certified7install
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+4 calls with 0B peak consumption from:
+    _RNvXs4_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes8prefixesNtB2_14PrefixResolver3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes6shapesNtB5_6Parser3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes6parser9functions34register_declared_sparql_functions
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+4 calls with 0B peak consumption from:
+    _RNvXs4_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes8prefixesNtB2_14PrefixResolver3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes6shapesNtB5_6Parser3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes6parser9functions34register_declared_sparql_functions
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+4 calls with 0B peak consumption from:
+    _RNvXs4_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes8prefixesNtB2_14PrefixResolver3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes6shapesNtB5_6Parser3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes6parser9functions34register_declared_sparql_functions
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certified26assemble_functions_request.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certified7install
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+4 calls with 0B peak consumption from:
+    _RNvXs4_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes8prefixesNtB2_14PrefixResolver3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes6shapesNtB5_6Parser3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes6parser9functions34register_declared_sparql_functions
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certified26assemble_functions_request.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certified7install
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+4 calls with 0B peak consumption from:
+    _RNvXs4_NtCsc70TAahYccp_5alloc6stringNtB5_6StringNtNtCs2k2z8Zem4rB_4core5clone5Clone5clone
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes8prefixesNtB2_14PrefixResolver3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes6shapesNtB5_6Parser3new
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCslqifKVGK0Ry_13purrdf_shapes6shapes6parser9functions34register_declared_sparql_functions
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certified26assemble_functions_request.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certified7install
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+4 calls with 0B peak consumption from:
+    _RINvMs_NtNtCslqifKVGK0Ry_13purrdf_shapes7product3astNtB5_9AstReader3seqNtNtB9_6shapes10ConstraintNvB2_10constraintEB9_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvMs_NtNtCslqifKVGK0Ry_13purrdf_shapes7product3astNtB5_9AstReader3seqNtNtB9_6shapes13PropertyShapeNvB2_14property_shapeEB9_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs_NtNtCslqifKVGK0Ry_13purrdf_shapes7product3astNtB4_9AstReader5shape
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvMs_NtNtCslqifKVGK0Ry_13purrdf_shapes7product3astNtB5_9AstReader3seqNtNtB9_6shapes5ShapeNvB2_5shapeEB9_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product3ast10decode_ast
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+4 calls with 0B peak consumption from:
+    _RNvMs_NtNtCslqifKVGK0Ry_13purrdf_shapes7product3astNtB4_9AstReader4text
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs_NtNtCslqifKVGK0Ry_13purrdf_shapes7product3astNtB4_9AstReader4path
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvMs_NtNtCslqifKVGK0Ry_13purrdf_shapes7product3astNtB5_9AstReader3seqNtNtB9_6shapes13PropertyShapeNvB2_14property_shapeEB9_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs_NtNtCslqifKVGK0Ry_13purrdf_shapes7product3astNtB4_9AstReader5shape
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvMs_NtNtCslqifKVGK0Ry_13purrdf_shapes7product3astNtB5_9AstReader3seqNtNtB9_6shapes5ShapeNvB2_5shapeEB9_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product3ast10decode_ast
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+  and 640 from 536 other places
+
+328 calls to allocation functions with 0B peak consumption from
+_RNvXCs5RvEnfveOuI_18purrdf_alloc_probeNtB2_17CountingAllocatorNtNtNtCs2k2z8Zem4rB_4core5alloc6global11GlobalAlloc7realloc
+  in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+3 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack4dict17decode_value_list.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack4dictNtB5_8PackDict4open
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs4_NtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack9containerNtB5_8PackView10from_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack7certify12restore_pack
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product7dataset12open_dataset
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+3 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack4dict17decode_value_list.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack4dictNtB5_8PackDict4open
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs4_NtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack9containerNtB5_8PackView10from_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack7certify12restore_pack
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product7dataset12open_dataset
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+3 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack4dict17decode_value_list.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack4dictNtB5_8PackDict4open
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs4_NtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack9containerNtB5_8PackView10from_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack7certify12restore_pack
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product7dataset12open_dataset
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+3 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack4dict17decode_value_list.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack4dictNtB5_8PackDict4open
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs4_NtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack9containerNtB5_8PackView10from_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtNtCsiAAmK6eA5Tp_11purrdf_core2ir4pack7certify12restore_pack
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product7dataset12open_dataset
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVechE8grow_oneB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtCsaLREK5iEj4Y_17change_path_alloc8measured7measureINtNtCs2k2z8Zem4rB_4core6result6ResultNtNtCslqifKVGK0Ry_13purrdf_shapes6engine14PreparedShapesNtNtNtB1y_7product5error18ShapesProductErrorENCNvB4_s_47admit_allocation_is_independent_of_dataset_size0EB4_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCslqifKVGK0Ry_13purrdf_shapes.llvm.10995504114133433260
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECslqifKVGK0Ry_13purrdf_shapes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVechE8grow_oneB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVechE8grow_oneB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVechE8grow_oneB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVechE8grow_oneB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growCsiAAmK6eA5Tp_11purrdf_core.llvm.11483625554014343320
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNvMs2_NtCsc70TAahYccp_5alloc7raw_vecINtB8_11RawVecInnerpE7reserve21do_reserve_and_handleNtNtBa_5alloc6GlobalECsiAAmK6eA5Tp_11purrdf_core
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+2 calls with 0B peak consumption from:
+    _RNvMs5_NtCsc70TAahYccp_5alloc7raw_vecNtB5_11RawVecInner11finish_growB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs4_NtCsc70TAahYccp_5alloc7raw_vecINtB5_6RawVechE8grow_oneB7_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity8to_bytes
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity7refresh
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs0_NtNtCsiAAmK6eA5Tp_11purrdf_core8artifact8identityNtB5_8Identity4push
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNtNtCslqifKVGK0Ry_13purrdf_shapes7product8identity8assemble.llvm.12173630046873738762
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMNtNtCslqifKVGK0Ry_13purrdf_shapes7product9certifiedNtB2_14CertifiedParts13from_admitted
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+  and 284 from 196 other places
+
+1 calls to allocation functions with 32B peak consumption from
+__cxa_thread_atexit_impl
+  in /usr/lib/libc.so.6
+1 calls with 32B peak consumption from:
+    _RNvYNCNKNvNtCslqifKVGK0Ry_13purrdf_shapes6sparql17CURRENT_GOVERNORS00INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceTINtNtB1c_6option6OptionQIB1R_INtNtB1c_4cell7RefCellIB1R_INtNtCsc70TAahYccp_5alloc4sync3ArcNtNtCs2YkA82GUMRY_18purrdf_sparql_eval8governor13GovernorStateEEEEEEE9call_onceBa_.llvm.10899785400150710205
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView26refuse_ungovernable_decode
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView11admit_bound
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvMs3_NtCslqifKVGK0Ry_13purrdf_shapes7productNtB5_17ShapesProductView5admit
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvYNCNvCsaLREK5iEj4Y_17change_path_alloc47admit_allocation_is_independent_of_dataset_size0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_onceB6_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvCs2F6NPh8Oo0M_4test28___rust_begin_short_backtraceINtNtCs2k2z8Zem4rB_4core6result6ResultuNtNtCsc70TAahYccp_5alloc6string6StringEFEBQ_EB2_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNCNvCs2F6NPh8Oo0M_4test8run_test0B3_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RINvNtNtCs7jcFBdfocI9_3std3sys9backtrace28___rust_begin_short_backtraceNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEB1b_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNSNvYNCINvNtNtCs7jcFBdfocI9_3std6thread9lifecycle15spawn_uncheckedNCNvCs2F6NPh8Oo0M_4test8run_tests_0uEs_0INtNtNtCs2k2z8Zem4rB_4core3ops8function6FnOnceuE9call_once6vtableB17_
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    _RNvNvMs0_NtNtNtCs7jcFBdfocI9_3std3sys6thread4unixNtB7_6Thread3new12thread_start
+      in /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e
+    0x7f74c9eacef0
+      in /usr/lib/libc.so.6
+    0x7f74c9f4c05b
+      in /usr/lib/libc.so.6
+
+
+total runtime: 0.12s.
+calls to allocation functions: 103930 (866083/s)
+temporary memory allocations: 75107 (625891/s)
+peak heap memory consumption: 6.54M
+peak RSS (including heaptrack overhead): 42.31M
+total memory leaked: 277.32K

@@ -1,0 +1,10 @@
+reading file ".stage/sparql-eval-complete-bounded-workspace/prepared-current-plan.zst.zst" - please wait, this might take some time...
+Debuggee command was: /opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/dfb497cce083cf1d/out/prepared_execution-dfb497cce083cf1d --exact evaluating_an_admitted_plan_costs_a_pinned_constant_per_call --nocapture --test-threads=1
+finished reading file, now analyzing data:
+
+total runtime: 0.018000s.
+calls to allocation functions: 775 (43055/s)
+temporary memory allocations: 112 (6222/s)
+peak heap memory consumption: 96.88K
+peak RSS (including heaptrack overhead): 17.85M
+total memory leaked: 1.44K

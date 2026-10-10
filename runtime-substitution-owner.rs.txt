@@ -1,0 +1,20 @@
+/// The cloned query and its original native container grant are destroyed in
+/// that order on success, rewrite refusal and evaluator failure.
+struct RuntimeSubstitution {
+    query: Query,
+    _frame: crate::workspace::LexicalFrame,
+}
+
+fn runtime_substitution(
+    query: &Query, substitutions: Prebindings<'_>, workspace: &crate::WorkspaceCapability,
+) -> Result<RuntimeSubstitution, EvaluationFailure> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let query = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        let query = query.clone_with_memory(&mut memory)
+            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "request substitution AST")))?;
+        crate::substitute::apply_shacl_prebinding_with_memory(query, substitutions, &mut memory)
+            .map_err(EvaluationFailure::from)?
+    };
+    Ok(RuntimeSubstitution { query, _frame: frame })
+}

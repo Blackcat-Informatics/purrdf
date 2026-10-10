@@ -1,0 +1,138 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Immutable owned native composite keys, at the evaluator's parser adapter.
+
+use std::cmp::Ordering;
+use std::ops::Deref;
+use purrdf_core::small::Shared;
+use purrdf_cdt::{CdtDatatype, CdtTripleTerm, CdtValue};
+use purrdf_cdt::memory::{ReadError, Storage, StorageError};
+use crate::{EvalError, WorkspaceAllocation, WorkspaceCapability};
+
+struct CompositePayload {
+    value: CdtValue,
+    // The original value dies before its grant, including on the last shared view.
+    _allocation: WorkspaceAllocation,
+}
+
+/// Resident values remain explicit caller-owned allocations. Operational values
+/// have one immutable payload and original lease; there is no raw extraction.
+pub(crate) enum CompositeValue {
+    Resident(CdtValue),
+    Owned(Shared<CompositePayload>),
+}
+
+impl Deref for CompositeValue {
+    type Target = CdtValue;
+    fn deref(&self) -> &CdtValue {
+        match self { Self::Resident(value) => value, Self::Owned(value) => &value.value }
+    }
+}
+
+impl std::fmt::Debug for CompositeValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Engine diagnostics do not recursively format the composite payload.
+        f.debug_struct("CompositeValue").finish_non_exhaustive()
+    }
+}
+
+impl Clone for CompositeValue {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Resident(value) => Self::Resident(value.clone()),
+            Self::Owned(value) => Self::Owned(value.clone()),
+        }
+    }
+}
+
+impl CompositeValue {
+    pub(crate) fn resident(value: CdtValue) -> Self { Self::Resident(value) }
+
+    /// Malformed lexical forms alone keep ORDER's original opaque-literal rule.
+    /// Every admission, capacity and allocator failure remains operational.
+    pub(crate) fn parse(
+        lexical: &str, datatype: &str, workspace: &WorkspaceCapability,
+    ) -> Result<Option<Self>, EvalError> {
+        let Some(datatype) = CdtDatatype::from_iri(datatype) else { return Ok(None); };
+        let mut frame = CompositeFrame::new(workspace);
+        let result = purrdf_cdt::parse::try_parse_cdt(lexical, datatype, &mut frame);
+        if let Some(error) = frame.failure.take() {
+            // A raw lexical diagnostic, if present, dies before the frame grant.
+            drop(result);
+            return Err(error);
+        }
+        let (value, bytes) = match result {
+            Ok(value) => value,
+            Err(ReadError::Lexical(error)) => { drop(error); return Ok(None); }
+            Err(ReadError::Storage(error)) => return Err(physical_error(error)),
+        };
+        let header = Shared::<CompositePayload>::allocation_layout().size();
+        let bytes = bytes.checked_add(header).ok_or(EvalError::WorkspaceBoundOverflow)?;
+        if let Err(error) = frame.resize(bytes) {
+            return Err(frame.failure.take().unwrap_or_else(|| physical_error(error)));
+        }
+        let allocation = frame.allocation.take().ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let value = Shared::try_new(CompositePayload { value, _allocation: allocation })
+            .map_err(|_| EvalError::AllocationFailed { construct: "parsed composite shared control" })?;
+        Ok(Some(Self::Owned(value)))
+    }
+
+    pub(crate) fn total_cmp(
+        &self, other: &Self, workspace: &WorkspaceCapability,
+    ) -> Result<Ordering, EvalError> {
+        let mut frame = CompositeFrame::new(workspace);
+        let result = purrdf_cdt::ops::try_total_value_cmp(self, other, &mut frame);
+        match frame.failure.take() {
+            Some(error) => Err(error),
+            None => result.map_err(physical_error),
+        }
+    }
+}
+
+/// One owner for the native call's exact live buffers; native helpers decrease it
+/// only after the allocation has actually died. No Vec of leases is required.
+struct CompositeFrame<'a> {
+    workspace: &'a WorkspaceCapability,
+    allocation: Option<WorkspaceAllocation>,
+    failure: Option<EvalError>,
+}
+
+impl<'a> CompositeFrame<'a> {
+    const fn new(workspace: &'a WorkspaceCapability) -> Self {
+        Self { workspace, allocation: None, failure: None }
+    }
+}
+
+impl Storage for CompositeFrame<'_> {
+    fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+        if self.failure.is_some() { return Err(StorageError::AdmissionFailed); }
+        let bytes = u64::try_from(bytes).map_err(|_| StorageError::SizeOverflow)?;
+        let result = if let Some(allocation) = &mut self.allocation {
+            allocation.resize(bytes)
+        } else if bytes == 0 { Ok(()) } else {
+            self.workspace.charge(bytes).map(|allocation| { self.allocation = Some(allocation); })
+        };
+        if let Err(error) = result {
+            self.failure = Some(error);
+            return Err(StorageError::AdmissionFailed);
+        }
+        Ok(())
+    }
+
+    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
+        purrdf_core::small::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
+    }
+
+    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
+        purrdf_core::small::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
+    }
+}
+
+fn physical_error(error: StorageError) -> EvalError {
+    match error {
+        StorageError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
+        StorageError::AllocationFailed => EvalError::AllocationFailed { construct: "native composite storage" },
+        StorageError::AdmissionFailed => EvalError::WorkspaceStopped,
+    }
+}

@@ -1,0 +1,428 @@
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0425]: cannot find value `xsd_integer_of` in this scope
+    --> crates/sparql-eval/src/expr.rs:6307:45
+     |
+6307 |     let Some(start) = arg(vals, 1).and_then(xsd_integer_of) else {
+     |                                             ^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `xsd_integer_of` in this scope
+    --> crates/sparql-eval/src/expr.rs:6313:57
+     |
+6313 |             let Some(length) = length.as_ref().and_then(xsd_integer_of) else {
+     |                                                         ^^^^^^^^^^^^^^ not found in this scope
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/cdt_agg.rs:145:13
+    |
+145 |     owners: crate::workspace::AdmittedVec<crate::cdt_fn::OwnedCdtTerm>,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+145 -     owners: crate::workspace::AdmittedVec<crate::cdt_fn::OwnedCdtTerm>,
+145 +     owners: AdmittedVec<crate::cdt_fn::OwnedCdtTerm>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/cdt_agg.rs:171:21
+    |
+171 |             owners: crate::workspace::AdmittedVec::new(workspace),
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+171 -             owners: crate::workspace::AdmittedVec::new(workspace),
+171 +             owners: AdmittedVec::new(workspace),
+    |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/expr.rs:4765:17
+     |
+4765 |                 purrdf_xsd::XsdDatatype::from_iri(datatype),
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4765 -                 purrdf_xsd::XsdDatatype::from_iri(datatype),
+4765 +                 XsdDatatype::from_iri(datatype),
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/expr.rs:4767:21
+     |
+4767 |                     purrdf_xsd::XsdDatatype::DateTime
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4767 -                     purrdf_xsd::XsdDatatype::DateTime
+4767 +                     XsdDatatype::DateTime
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/expr.rs:4768:27
+     |
+4768 |                         | purrdf_xsd::XsdDatatype::Date
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4768 -                         | purrdf_xsd::XsdDatatype::Date
+4768 +                         | XsdDatatype::Date
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/expr.rs:4769:27
+     |
+4769 |                         | purrdf_xsd::XsdDatatype::Time
+     |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4769 -                         | purrdf_xsd::XsdDatatype::Time
+4769 +                         | XsdDatatype::Time
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/expr.rs:4801:23
+     |
+4801 |                 }) if purrdf_xsd::XsdDatatype::from_iri(datatype)
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+4801 -                 }) if purrdf_xsd::XsdDatatype::from_iri(datatype)
+4801 +                 }) if XsdDatatype::from_iri(datatype)
+     |
+
+error[E0425]: cannot find type `WorkspaceCapability` in this scope
+    --> crates/sparql-eval/src/workspace.rs:3526:29
+     |
+3526 |                 workspace: &WorkspaceCapability,
+     |                             ^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this struct through its public re-export
+     |
+1987 +     use crate::WorkspaceCapability;
+     |
+
+error[E0277]: expected an `FnMut()` closure, found `Option<TermValue>`
+   --> crates/sparql-eval/src/expr.rs:569:54
+    |
+569 |     ctx.intern_workspace_term(frame.finish_term(&mut value)?)
+    |                                     -----------      ^^^^^ expected an `FnMut()` closure, found `Option<TermValue>`
+    |                                     |
+    |                                     required by a bound introduced by this call
+    |
+    = help: the trait `FnMut()` is not implemented for `Option<TermValue>`
+    = note: wrap the `Option<TermValue>` in a closure with no arguments: `|| { /* code */ }`
+    = note: required for `&mut Option<TermValue>` to implement `FnOnce()`
+note: required by a bound in `LexicalFrame::finish_term`
+   --> crates/sparql-eval/src/workspace.rs:357:23
+    |
+355 |     pub(crate) fn finish_term(
+    |                   ----------- required by a bound in this associated function
+356 |         &mut self,
+357 |         factory: impl FnOnce() -> purrdf_core::TermValue,
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `LexicalFrame::finish_term`
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/expr.rs:1304:42
+     |
+1304 |         return value_holds_nan_admitted(&owned_value_of(ctx, term)?, &ctx.growth);
+     |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `TermValue`, found `WorkspaceTerm`
+     |
+     = note: `?` operator cannot convert from `WorkspaceTerm` to `TermValue`
+
+error[E0277]: expected an `FnMut()` closure, found `Option<TermValue>`
+    --> crates/sparql-eval/src/expr.rs:4991:66
+     |
+4991 |                 ctx.intern_workspace_term(frame.finish_term(&mut value)?)
+     |                                                 -----------      ^^^^^ expected an `FnMut()` closure, found `Option<TermValue>`
+     |                                                 |
+     |                                                 required by a bound introduced by this call
+     |
+     = help: the trait `FnMut()` is not implemented for `Option<TermValue>`
+     = note: wrap the `Option<TermValue>` in a closure with no arguments: `|| { /* code */ }`
+     = note: required for `&mut Option<TermValue>` to implement `FnOnce()`
+note: required by a bound in `LexicalFrame::finish_term`
+    --> crates/sparql-eval/src/workspace.rs:357:23
+     |
+ 355 |     pub(crate) fn finish_term(
+     |                   ----------- required by a bound in this associated function
+ 356 |         &mut self,
+ 357 |         factory: impl FnOnce() -> purrdf_core::TermValue,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `LexicalFrame::finish_term`
+
+error[E0277]: expected an `FnMut()` closure, found `Option<TermValue>`
+    --> crates/sparql-eval/src/expr.rs:6533:54
+     |
+6533 |     ctx.intern_workspace_term(frame.finish_term(&mut value)?)
+     |                                     -----------      ^^^^^ expected an `FnMut()` closure, found `Option<TermValue>`
+     |                                     |
+     |                                     required by a bound introduced by this call
+     |
+     = help: the trait `FnMut()` is not implemented for `Option<TermValue>`
+     = note: wrap the `Option<TermValue>` in a closure with no arguments: `|| { /* code */ }`
+     = note: required for `&mut Option<TermValue>` to implement `FnOnce()`
+note: required by a bound in `LexicalFrame::finish_term`
+    --> crates/sparql-eval/src/workspace.rs:357:23
+     |
+ 355 |     pub(crate) fn finish_term(
+     |                   ----------- required by a bound in this associated function
+ 356 |         &mut self,
+ 357 |         factory: impl FnOnce() -> purrdf_core::TermValue,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `LexicalFrame::finish_term`
+
+error[E0277]: expected an `FnMut()` closure, found `Option<TermValue>`
+    --> crates/sparql-eval/src/expr.rs:7101:36
+     |
+7101 |     Ok(Some(frame.finish_term(&mut value)?))
+     |                   -----------      ^^^^^ expected an `FnMut()` closure, found `Option<TermValue>`
+     |                   |
+     |                   required by a bound introduced by this call
+     |
+     = help: the trait `FnMut()` is not implemented for `Option<TermValue>`
+     = note: wrap the `Option<TermValue>` in a closure with no arguments: `|| { /* code */ }`
+     = note: required for `&mut Option<TermValue>` to implement `FnOnce()`
+note: required by a bound in `LexicalFrame::finish_term`
+    --> crates/sparql-eval/src/workspace.rs:357:23
+     |
+ 355 |     pub(crate) fn finish_term(
+     |                   ----------- required by a bound in this associated function
+ 356 |         &mut self,
+ 357 |         factory: impl FnOnce() -> purrdf_core::TermValue,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `LexicalFrame::finish_term`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/list_fn.rs:265:56
+    |
+265 |     let Some(value) = ParsedValue::parse(lexical_form, datatype, false, workspace)? else {
+    |                       ------------------               ^^^^^^^^ expected `XsdDatatype`, found `&String`
+    |                       |
+    |                       arguments to this function are incorrect
+    |
+note: associated function defined here
+   --> crates/sparql-eval/src/parsed_value.rs:118:19
+    |
+118 |     pub(crate) fn parse(
+    |                   ^^^^^
+119 |         lexical: &str,
+120 |         datatype: XsdDatatype,
+    |         ---------------------
+
+error: unreachable call
+    --> crates/sparql-eval/src/remote.rs:2239:62
+     |
+2239 | ...                   |error| workspace_source.source_error(error),
+     |                                                ^^^^^^^^^^^^ ----- any code following this expression is unreachable
+     |                                                |
+     |                                                unreachable call
+     |
+     = note: `-D unreachable-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unreachable_code)]`
+
+error[E0277]: expected an `FnMut()` closure, found `Option<purrdf_core::TermValue>`
+   --> crates/sparql-eval/src/expr.rs:569:54
+    |
+569 |     ctx.intern_workspace_term(frame.finish_term(&mut value)?)
+    |                                     -----------      ^^^^^ expected an `FnMut()` closure, found `Option<purrdf_core::TermValue>`
+    |                                     |
+    |                                     required by a bound introduced by this call
+    |
+    = help: the trait `FnMut()` is not implemented for `Option<purrdf_core::TermValue>`
+    = note: wrap the `Option<purrdf_core::TermValue>` in a closure with no arguments: `|| { /* code */ }`
+    = note: required for `&mut Option<purrdf_core::TermValue>` to implement `FnOnce()`
+note: required by a bound in `workspace::LexicalFrame::finish_term`
+   --> crates/sparql-eval/src/workspace.rs:357:23
+    |
+355 |     pub(crate) fn finish_term(
+    |                   ----------- required by a bound in this associated function
+356 |         &mut self,
+357 |         factory: impl FnOnce() -> purrdf_core::TermValue,
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `LexicalFrame::finish_term`
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/expr.rs:614:53
+     |
+ 614 |         .map_err(|error| ctx.workspace.source_error(error))
+     |                                        ------------ ^^^^^ expected associated type, found `TermLookupError<_>`
+     |                                        |
+     |                                        arguments to this method are incorrect
+     |
+     = note: expected associated type `<D as purrdf_core::DatasetView>::ReadError`
+                           found enum `TermLookupError<<D as purrdf_core::DatasetView>::ReadError>`
+note: method defined here
+    --> crates/sparql-eval/src/workspace.rs:1728:19
+     |
+1728 |     pub(crate) fn source_error(&self, error: E) -> EvalError
+     |                   ^^^^^^^^^^^^        --------
+
+error[E0308]: `?` operator has incompatible types
+    --> crates/sparql-eval/src/expr.rs:1304:42
+     |
+1304 |         return value_holds_nan_admitted(&owned_value_of(ctx, term)?, &ctx.growth);
+     |                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `TermValue`, found `WorkspaceTerm`
+     |
+     = note: `?` operator cannot convert from `WorkspaceTerm` to `purrdf_core::TermValue`
+
+error[E0596]: cannot borrow data in dereference of `AdmittedVec<FoldRow>` as mutable
+   --> crates/sparql-eval/src/cdt_agg.rs:501:43
+    |
+501 |             reordered.push(std::mem::take(&mut survivors[position]))?;
+    |                                           ^^^^^^^^^^^^^^^^^^^^^^^^ cannot borrow as mutable
+    |
+    = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `AdmittedVec<FoldRow>`
+
+error[E0277]: expected an `FnMut()` closure, found `Option<purrdf_core::TermValue>`
+    --> crates/sparql-eval/src/expr.rs:4991:66
+     |
+4991 |                 ctx.intern_workspace_term(frame.finish_term(&mut value)?)
+     |                                                 -----------      ^^^^^ expected an `FnMut()` closure, found `Option<purrdf_core::TermValue>`
+     |                                                 |
+     |                                                 required by a bound introduced by this call
+     |
+     = help: the trait `FnMut()` is not implemented for `Option<purrdf_core::TermValue>`
+     = note: wrap the `Option<purrdf_core::TermValue>` in a closure with no arguments: `|| { /* code */ }`
+     = note: required for `&mut Option<purrdf_core::TermValue>` to implement `FnOnce()`
+note: required by a bound in `workspace::LexicalFrame::finish_term`
+    --> crates/sparql-eval/src/workspace.rs:357:23
+     |
+ 355 |     pub(crate) fn finish_term(
+     |                   ----------- required by a bound in this associated function
+ 356 |         &mut self,
+ 357 |         factory: impl FnOnce() -> purrdf_core::TermValue,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `LexicalFrame::finish_term`
+
+error[E0277]: expected an `FnMut()` closure, found `Option<purrdf_core::TermValue>`
+    --> crates/sparql-eval/src/expr.rs:6533:54
+     |
+6533 |     ctx.intern_workspace_term(frame.finish_term(&mut value)?)
+     |                                     -----------      ^^^^^ expected an `FnMut()` closure, found `Option<purrdf_core::TermValue>`
+     |                                     |
+     |                                     required by a bound introduced by this call
+     |
+     = help: the trait `FnMut()` is not implemented for `Option<purrdf_core::TermValue>`
+     = note: wrap the `Option<purrdf_core::TermValue>` in a closure with no arguments: `|| { /* code */ }`
+     = note: required for `&mut Option<purrdf_core::TermValue>` to implement `FnOnce()`
+note: required by a bound in `workspace::LexicalFrame::finish_term`
+    --> crates/sparql-eval/src/workspace.rs:357:23
+     |
+ 355 |     pub(crate) fn finish_term(
+     |                   ----------- required by a bound in this associated function
+ 356 |         &mut self,
+ 357 |         factory: impl FnOnce() -> purrdf_core::TermValue,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `LexicalFrame::finish_term`
+
+error[E0277]: expected an `FnMut()` closure, found `Option<purrdf_core::TermValue>`
+    --> crates/sparql-eval/src/expr.rs:7101:36
+     |
+7101 |     Ok(Some(frame.finish_term(&mut value)?))
+     |                   -----------      ^^^^^ expected an `FnMut()` closure, found `Option<purrdf_core::TermValue>`
+     |                   |
+     |                   required by a bound introduced by this call
+     |
+     = help: the trait `FnMut()` is not implemented for `Option<purrdf_core::TermValue>`
+     = note: wrap the `Option<purrdf_core::TermValue>` in a closure with no arguments: `|| { /* code */ }`
+     = note: required for `&mut Option<purrdf_core::TermValue>` to implement `FnOnce()`
+note: required by a bound in `workspace::LexicalFrame::finish_term`
+    --> crates/sparql-eval/src/workspace.rs:357:23
+     |
+ 355 |     pub(crate) fn finish_term(
+     |                   ----------- required by a bound in this associated function
+ 356 |         &mut self,
+ 357 |         factory: impl FnOnce() -> purrdf_core::TermValue,
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `LexicalFrame::finish_term`
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/list_fn.rs:1028:65
+     |
+1028 |             SparqlResult::Solutions { rows, aux, .. } => (rows, aux),
+     |                                                                 ^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+     |
+     = note: expected struct `std::sync::Arc<purrdf_core::RdfDataset>`
+                found struct `purrdf_core::DatasetHandle`
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/list_fn.rs:1053:39
+     |
+1034 |     fn run_graph(ds: &Arc<RdfDataset>, query: &str) -> Arc<RdfDataset> {
+     |                                                        --------------- expected `std::sync::Arc<purrdf_core::RdfDataset>` because of return type
+...
+1053 |             SparqlResult::Graph(g) => g,
+     |                                       ^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+     |
+     = note: expected struct `std::sync::Arc<purrdf_core::RdfDataset>`
+                found struct `purrdf_core::DatasetHandle`
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/list_fn.rs:1245:9
+     |
+1241 |       ) -> (Vec<String>, Arc<RdfDataset>) {
+     |            ------------------------------ expected `(Vec<std::string::String>, std::sync::Arc<purrdf_core::RdfDataset>)` because of return type
+...
+1245 | /         engine
+1246 | |             .query_interned_view(
+1247 | |                 ds.as_ref(),
+1248 | |                 InternedRequest {
+...    |
+1275 | |             .expect("interned query")
+     | |_____________________________________^ expected `(Vec<String>, Arc<RdfDataset>)`, found `(_, RetainedGraph)`
+     |
+     = note: expected tuple `(Vec<std::string::String>, std::sync::Arc<purrdf_core::RdfDataset>)`
+                found tuple `(_, RetainedGraph)`
+
+Some errors have detailed explanations: E0277, E0308, E0425, E0596.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 17 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/remote.rs:2417:21
+     |
+2417 |                     aux,
+     |                     ^^^ expected `DatasetHandle`, found `Result<DatasetHandle, EvalError>`
+     |
+     = note: expected struct `DatasetHandle`
+                  found enum `Result<DatasetHandle, error::EvalError>`
+help: use the `?` operator to extract the `Result<purrdf_core::DatasetHandle, error::EvalError>` value, propagating a `Result::Err` value to the caller
+     |
+2417 |                     aux: aux?,
+     |                        ++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/remote.rs:2452:25
+     |
+2452 |                         aux,
+     |                         ^^^ expected `DatasetHandle`, found `Result<DatasetHandle, EvalError>`
+     |
+     = note: expected struct `DatasetHandle`
+                  found enum `Result<DatasetHandle, error::EvalError>`
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::DatasetHandle, error::EvalError>` value, panicking if the value is a `Result::Err`
+     |
+2452 |                         aux: aux.expect("REASON"),
+     |                            ++++++++++++++++++++++
+
+error[E0277]: expected an `FnOnce(&SharedText)` closure, found `for<'a> fn(&'a std::string::String) -> &'a str {std::string::String::as_str}`
+    --> crates/sparql-eval/src/workspace.rs:2108:22
+     |
+2108 |                 .map(String::as_str),
+     |                  --- ^^^^^^^^^^^^^^ expected an `FnOnce(&SharedText)` closure, found `for<'a> fn(&'a std::string::String) -> &'a str {std::string::String::as_str}`
+     |                  |
+     |                  required by a bound introduced by this call
+     |
+     = help: the trait `FnOnce(&SharedText)` is not implemented for fn item `for<'a> fn(&'a std::string::String) -> &'a str {std::string::String::as_str}`
+     = note: expected a closure with signature `fn(&SharedText)`
+                found a closure with signature `fn(&std::string::String)`
+note: required by a bound in `Option::<T>::map`
+    --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:1162:12
+     |
+1160 |     pub const fn map<U, F>(self, f: F) -> Option<U>
+     |                  --- required by a bound in this associated function
+1161 |     where
+1162 |         F: [const] FnOnce(T) -> U + [const] Destruct,
+     |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Option::<T>::map`
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 25 previous errors

@@ -1,0 +1,308 @@
+--- a/crates/rdf-core/src/ir/term.rs
++++ b/crates/rdf-core/src/ir/term.rs
+@@ -456,6 +456,19 @@
+     #[inline]
+     pub fn is_blank(&self) -> bool {
+         matches!(self, Self::Blank { .. })
++    }
++
++    /// A borrowed, allocation-free description of this RDF term's kind.
++    /// Native diagnostics use it when the value's contents are unnecessary to
++    /// explain a type refusal, avoiding recursive Debug's two spill work lists.
++    #[must_use]
++    pub const fn kind_description(&self) -> &'static str {
++        match self {
++            Self::Iri(_) => "an IRI",
++            Self::Blank { .. } => "a blank node",
++            Self::Literal { .. } => "a literal",
++            Self::Triple { .. } => "a triple term",
++        }
+     }
+ 
+     /// The canonical kind tag used to order terms of DIFFERENT kinds (see
+--- a/crates/text/src/relation.rs
++++ b/crates/text/src/relation.rs
+@@ -41,7 +41,7 @@
+ 
+ use std::mem::size_of;
+ use purrdf_sparql_eval::{AdmittedVec, AdmittedPfRow, WorkspaceTerm, WorkspaceAllocation, WorkspaceCapability, NativeDiagnostic, NativeDiagnosticKind};
+-use crate::query_workspace::{QueryString, admitted};
++use crate::query_workspace::{QueryString, admitted, query_error};
+ use crate::score::{distinct_terms_owned, score_located_owned, select_counted_owned};
+ use std::sync::Arc;
+ use std::sync::atomic::{AtomicU64, Ordering};
+@@ -151,8 +151,9 @@
+              rdf:dirLangString"
+         ), workspace)),
+         other => Err(NativeDiagnostic::error(NativeDiagnosticKind::Function, format_args!(
+-            "the needle at position {position} is {other:?}; only a literal carries text, so an \
++            "the needle at position {position} is {}; only a literal carries text, so an \
+              IRI, a blank node or a triple term names nothing this relation can search for"
++            , other.kind_description()
+         ), workspace)),
+     }
+ }
+@@ -178,9 +179,10 @@
+             Constraint::Exactly(lexical_form.as_str())
+         }),
+         other => Err(NativeDiagnostic::error(NativeDiagnosticKind::Function, format_args!(
+-            "the language at position {position} is {other:?}; this relation emits an xsd:string \
++            "the language at position {position} is {}; this relation emits an xsd:string \
+              there — the tag itself, or the empty string for an untagged document — so nothing \
+              else can name a language"
++            , other.kind_description()
+         ), workspace)),
+     }
+ }
+@@ -238,8 +240,9 @@
+     } = value
+     else {
+         return Err(NativeDiagnostic::error(NativeDiagnosticKind::Function, format_args!(
+-            "the rank at position {SEARCH_RANK} is {value:?}; a rank is a 1-based position, which \
++            "the rank at position {SEARCH_RANK} is {}; a rank is a 1-based position, which \
+              only an xsd:integer literal can name"
++            , value.kind_description()
+         ), workspace));
+     };
+     if datatype != XSD_INTEGER {
+@@ -269,16 +272,6 @@
+         .parse::<u32>()
+         .map_or(RankBound::BeyondTheIndex, RankBound::At))
+ }
+-
+-/// Whether `row` agrees with every bound position of the invocation.
+-
+-
+-/// The invocation's bound values by flattened position, cloned out of the
+-/// borrow `args` lends for the duration of `open`.
+-
+-
+-/// A `?lang` cell: the tag itself, or the empty string for an untagged document.
+-
+ 
+ /// Refuse an invocation whose argument vectors do not match `declared`.
+ ///
+@@ -723,8 +716,8 @@
+ struct Holding<'i> {
+     /// The document id.
+     document: u32,
+-    /// Its partition.
+-    key: &'i PartitionKey,
++    /// Stable ordinal of its partition in the immutable caller index.
++    partition: usize,
+     /// `(term ordinal, predicate frequencies)` for each distinct needle term the
+     /// document holds, in ascending ordinal order — what the point scorer reads.
+     located: AdmittedVec<(usize, &'i [(u32, u64)])>,
+@@ -1075,7 +1068,7 @@
+     /// caller that goes on to score the document reads the same facts the lookup
+     /// already located instead of searching for them again.
+     ///
+-    /// `terms` is the needle's [`distinct_terms`], which the caller computes and
++    /// `terms` is the needle's [`distinct_terms_owned`], which the caller computes and
+     /// which is where a needle wider than the ranking profile admits is refused —
+     /// the ranker's own check, called rather than restated, so a needle too wide
+     /// to rank is too wide to look up rather than quietly answering empty.
+@@ -1095,11 +1088,19 @@
+                     admitted(located.push((ordinal, counts)))?;
+                 }
+             }
+-            if !located.is_empty() { admitted(held.push(Holding { document, key, located }))?; }
++            if !located.is_empty() {
++                let partition = self.index.partition_ordinal_of(document).ok_or_else(||
++                    query_error(workspace, NativeDiagnosticKind::Internal,
++                        format_args!("text index document {document} has no partition"))
++                        .unwrap_or_else(|failure| failure))?;
++                admitted(held.push(Holding { document, partition, located }))?;
++            }
+         }
+         Ok(held)
+     }
+ 
++    /// Score only held documents when rank is unobserved, through the same
++    /// admitted summation the partition ranker uses.
+     fn scored_in_place_owned(
+         &self, terms: &[&str], holdings: &[Holding<'_>], workspace: &WorkspaceCapability,
+     ) -> Result<AdmittedVec<Hit>, TextError> {
+@@ -1117,6 +1118,7 @@
+         result
+     }
+ 
++    /// The single partition-ranker entry; record actual work even on refusal.
+     fn ranked_owned(
+         &self, needle: &[QueryString], matches: impl Fn(&PartitionKey) -> bool,
+         ceiling: Option<u64>, partition_rank: Option<u32>, workspace: &WorkspaceCapability,
+@@ -1161,10 +1163,10 @@
+                 } else if !holdings.is_empty() {
+                     let mut documents = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
+                     let mut keys = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
+-                    for holding in holdings.iter() { documents.push(holding.document)?; keys.push(holding.key)?; }
++                    for holding in holdings.iter() { documents.push(holding.document)?; keys.push(holding.partition)?; }
+                     drop(holdings);
+                     let scored = self.ranked_owned(&analyzed,
+-                        |key| language_matches(&language, key) && keys.iter().any(|held| *held == key),
++                        |key| language_matches(&language, key) && self.index.local_partition_ordinal(key).is_some_and(|ordinal| keys.contains(&ordinal)),
+                         select_ceiling, rank_at, &workspace)?;
+                     rows = AdmittedVec::with_capacity(documents.len().min(scored.len()), &workspace)?;
+                     for row in scored {
+@@ -1182,21 +1184,6 @@
+         Ok(cursor)
+     }
+ 
+-    /// Score each holding document in place, without ranking anything.
+-    ///
+-    /// The path a bound `?doc` takes when `?rank` is **unobserved** — see
+-    /// [`PropertyFunction::open`]. Each document's score is the one the ranker
+-    /// would give it, exactly: [`score_located`] sums through the one summation
+-    /// the ranker uses, over the same stored corpus statistics. What is not
+-    /// computed is the rank, because nothing will read it.
+-
+-
+-    /// Enter the partition ranker, counting the entry and the work it did.
+-    ///
+-    /// The **only** call site of [`crate::select`] in this relation, which is
+-    /// what makes [`SearchObservations::rankings`] a measurement rather than an
+-    /// estimate: an invocation that did not come through here did not rank
+-    /// anything, because there is no other way for it to have done so.
+ 
+ }
+ 
+@@ -1632,7 +1619,7 @@
+         if analyzed.first().is_some_and(|term| !term.is_empty()) {
+             for (ordinal, (key, _)) in self.index.partitions().enumerate() {
+                 if language_matches(&language, key) && documents.is_none_or(|documents| {
+-                    documents.iter().any(|&document| self.index.partition_key_of(document) == Some(key))
++                    documents.iter().any(|&document| self.index.partition_ordinal_of(document) == Some(ordinal))
+                 }) { partitions.push(ordinal)?; }
+             }
+         }
+--- a/crates/text/src/index.rs
++++ b/crates/text/src/index.rs
+@@ -739,7 +739,10 @@
+     pub(crate) fn prepared_corpus_owned(
+         &self, partition: &PartitionKey, workspace: &purrdf_sparql_eval::WorkspaceCapability,
+     ) -> Result<PreparedCorpus<'_>, TextError> {
+-        let at = self.partition_index(partition).ok_or_else(|| query_error(workspace, NativeDiagnosticKind::Data, "ranking partition is absent").unwrap_or_else(|failure| failure))? as usize;
++        let partition = crate::query_workspace::admitted(self.partition_key_owned(partition, workspace))?
++            .ok_or_else(|| query_error(workspace, NativeDiagnosticKind::Data,
++                "ranking partition is absent").unwrap_or_else(|failure| failure))?;
++        let at = self.local_partition_ordinal(partition).expect("resolved index-owned partition");
+         PreparedCorpus::from_index_owned(&self.ranking, self.partitions[at].1.document_count,
+             &self.field_totals[at], &self.field_populations[at], workspace)
+     }
+@@ -1034,6 +1037,51 @@
+             .map(|(key, _)| key)
+     }
+ 
++    /// The stored partition ordinal of one document, without comparing terms.
++    pub(crate) fn partition_ordinal_of(&self, document: u32) -> Option<usize> {
++        self.documents.get(document as usize).map(|document| document.partition as usize)
++    }
++
++    /// Resolve an actual index-owned key borrow to its stable ordinal.
++    pub(crate) fn local_partition_ordinal(&self, partition: &PartitionKey) -> Option<usize> {
++        let first = &self.partitions.first()?.0;
++        let stride = core::mem::size_of::<(PartitionKey, PartitionStats)>();
++        let distance = core::ptr::from_ref(partition).addr()
++            .checked_sub(core::ptr::from_ref(first).addr())?;
++        if distance.checked_rem(stride)? != 0 { return None; }
++        let ordinal = distance.checked_div(stride)?;
++        let candidate = &self.partitions.get(ordinal)?.0;
++        core::ptr::eq(candidate, partition).then_some(ordinal)
++    }
++
++    /// Resolve an external key through fallible native graph-term comparison.
++    /// A failed comparator's search result is discarded before publication.
++    pub(crate) fn partition_key_owned(
++        &self, partition: &PartitionKey, workspace: &purrdf_sparql_eval::WorkspaceCapability,
++    ) -> Result<Option<&PartitionKey>, purrdf_sparql_eval::EvalError> {
++        if let Some(ordinal) = self.local_partition_ordinal(partition) {
++            return Ok(Some(&self.partitions[ordinal].0));
++        }
++        let mut failure = None;
++        let result = self.partitions.binary_search_by(|(key, _)| {
++            if failure.is_some() { return Ordering::Equal; }
++            let graph = match (key.graph(), partition.graph()) {
++                (None, None) => Ok(Ordering::Equal),
++                (None, Some(_)) => Ok(Ordering::Less),
++                (Some(_), None) => Ok(Ordering::Greater),
++                (Some(left), Some(right)) => workspace.terms_cmp(left, right),
++            };
++            match graph {
++                Ok(graph) => graph.then_with(|| key.language().cmp(&partition.language())),
++                Err(error) => { failure = Some(error); Ordering::Equal }
++            }
++        });
++        match failure {
++            Some(error) => Err(error),
++            None => Ok(result.ok().map(|ordinal| &self.partitions[ordinal].0)),
++        }
++    }
++
+     /// How many analyzed tokens the document `id` names holds, or `None` if
+     /// there is no such document. Auxiliary-only documents have length zero.
+     pub fn document_length(&self, id: u32) -> Option<u64> {
+@@ -1145,6 +1193,9 @@
+ 
+     /// The index of `partition` in [`Self::partitions`], if the index holds it.
+     fn partition_index(&self, partition: &PartitionKey) -> Option<u32> {
++        if let Some(ordinal) = self.local_partition_ordinal(partition) {
++            return u32::try_from(ordinal).ok();
++        }
+         self.partitions
+             .binary_search_by(|(key, _)| key.cmp(partition))
+             .ok()
+--- a/crates/text/src/score.rs
++++ b/crates/text/src/score.rs
+@@ -561,6 +561,9 @@
+     index: &TextIndex, partition: &PartitionKey, terms: &[&str],
+     limit: Option<u64>, work: &mut ScoringWork, workspace: &WorkspaceCapability,
+ ) -> Result<AdmittedVec<Scored>, TextError> {
++    let Some(partition) = admitted(index.partition_key_owned(partition, workspace))? else {
++        return Ok(AdmittedVec::new(workspace));
++    };
+     let candidates = candidates_owned(index, partition, terms, work, workspace)?;
+     let keep = limit.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+     let ordered = order_owned(candidates, keep, workspace)?;
+@@ -727,11 +730,7 @@
+ ///
+ /// Work is independent of the corpus: one binary search per needle term for its
+ /// document frequency, and one field-input assembly per held term.
+-pub(crate) fn score_located(
+-    index: &TextIndex, document: u32, terms: &[&str], located: &[(usize, &[(u32, u64)])], work: &mut ScoringWork,
+-) -> Result<(Fixed, u32), TextError> {
+-    score_located_owned(index, document, terms, located, work, &WorkspaceCapability::default())
+-}
++
+ 
+ pub(crate) fn score_located_owned(
+     index: &TextIndex, document: u32, terms: &[&str], located: &[(usize, &[(u32, u64)])], work: &mut ScoringWork,
+--- a/crates/text/src/error.rs
++++ b/crates/text/src/error.rs
+@@ -188,7 +188,8 @@
+         ] {
+             let rendered = err.to_string();
+             let detail = match &err {
+-                TextError::Html(_) | TextError::Substring(_) | TextError::Phonetic(_) => {
++                TextError::Html(_) | TextError::Substring(_) | TextError::Phonetic(_)
++                | TextError::Capacity(_) | TextError::Diagnostic(_) => {
+                     unreachable!("test uses string diagnostic variants")
+                 }
+                 TextError::Config(m)
+--- a/crates/text/src/fixed.rs
++++ b/crates/text/src/fixed.rs
+@@ -284,14 +284,7 @@
+     /// fixed field width makes the output byte-deterministic and orders
+     /// lexically the same way the values order numerically for any two
+     /// same-signed numbers with the same number of integer digits.
+-    pub fn to_decimal_lexical(self) -> String {
+-        let magnitude = self.0.unsigned_abs();
+-        let integer = magnitude / SCALE_U;
+-        let fraction = magnitude % SCALE_U;
+-        let sign = if self.0 < 0 { "-" } else { "" };
+-        let width = SCALE_DIGITS as usize;
+-        format!("{sign}{integer}.{fraction:0width$}")
+-    }
++    pub fn to_decimal_lexical(self) -> String { self.decimal_display().to_string() }
+ }
+ 
+ /// [`INTERNAL_TO_SCALE`] as an unsigned value, for the magnitude arithmetic in

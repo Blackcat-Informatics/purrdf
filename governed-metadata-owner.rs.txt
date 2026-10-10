@@ -1,0 +1,44 @@
+/// A private governed outcome keeps original registry buffers admitted until
+/// the fallible publication boundary destroys them. Legacy owned APIs transfer
+/// their already-built payload to caller storage explicitly.
+struct AdmittedGovernedOutcome {
+    outcome: GovernedOutcome,
+    _identity: crate::workspace::LexicalFrame,
+}
+
+impl AdmittedGovernedOutcome {
+    fn into_caller(self) -> GovernedOutcome { self.outcome }
+}
+
+struct AdmittedRelationIdentity {
+    value: RelationIdentity,
+    _frame: crate::workspace::LexicalFrame,
+}
+
+fn relation_identity(
+    prepared: &PreparedQuery,
+    relations: &crate::property_fn::PropertyFunctionRegistry,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedRelationIdentity, EvaluationFailure> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    // Read the same live declarations as the original producer. Each
+    // descriptor retains its original admission while its IRI is copied.
+    let described = relations.describe_admitted(workspace)?;
+    let mut iris = Vec::new();
+    memory.reserve(&mut iris, described.len())
+        .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "governed registry IRI array")))?;
+    for descriptor in described.iter() {
+        let iri = memory.string(&descriptor.iri)
+            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "governed registry IRI")))?;
+        memory.push(&mut iris, iri)
+            .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "governed registry IRI array")))?;
+    }
+    drop(described);
+    let fingerprint = memory.string(&prepared.relations)
+        .map_err(|error| EvaluationFailure::Evaluation(memory.admission_mut().storage_error(error, "governed registry fingerprint")))?;
+    drop(memory);
+    Ok(AdmittedRelationIdentity { value: RelationIdentity {
+        fingerprint, iris, witness: crate::witness::RelationWitness::default(),
+    }, _frame: frame })
+}

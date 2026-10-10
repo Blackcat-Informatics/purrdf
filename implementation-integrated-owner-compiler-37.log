@@ -1,0 +1,26 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0425]: cannot find type `DetHashSet` in this scope
+    --> crates/sparql-eval/src/expr.rs:1795:66
+     |
+1795 | pub(crate) fn pattern_all_vars(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+     |                                                                  ^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this type alias
+     |
+  35 + use crate::DetHashSet;
+     |
+
+error[E0425]: cannot find type `DetHashSet` in this scope
+    --> crates/sparql-eval/src/expr.rs:1808:15
+     |
+1808 |     out: &mut DetHashSet<Variable>,
+     |               ^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this type alias
+     |
+  35 + use crate::DetHashSet;
+     |
+
+For more information about this error, try `rustc --explain E0425`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

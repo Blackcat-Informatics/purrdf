@@ -1,0 +1,3 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 6.92s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_tables case-context`

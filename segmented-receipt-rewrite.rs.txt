@@ -1,0 +1,60 @@
+/// Cold text/prepared/operation routes share answers and governor charges, while
+/// their original controls and output leases retain their actual owner lifetimes.
+#[test]
+fn prepared_governed_cold_sessions_match_text_receipts_and_release_reporting() {
+    let (image, _) = fixture();
+    let resident_engine = NativeSparqlEngine::new();
+    let prepared = resident_engine.prepare_query(QUERY, None).unwrap();
+    let scoped_source = open(&image, CEILING);
+    let mut execution = resident_engine.prepare_execution(QUERY, None, &[], QueryOptions::EMPTY).unwrap();
+    let before = scoped_source.evidence().live_bytes();
+    let ((), scoped_evidence) = resident_engine.execute_fallible(&mut execution, &scoped_source, QueryOptions::EMPTY, |outcome| {
+        assert!(scoped_source.evidence().live_bytes() > before);
+        let purrdf_sparql_eval::InternedOutcome::Solutions(rows) = outcome else { panic!("SELECT") };
+        assert_eq!(rows.rows().len(), 1);
+    }).unwrap();
+    assert!(scoped_evidence.live_bytes() > scoped_source.evidence().live_bytes(), "scoped publication captures active execution controls");
+    for governors in [QueryGovernors::METERED, QueryGovernors::METERED.with_max_answers(0)] {
+        let mut expected = None;
+        for route in 0..3 {
+            let engine = NativeSparqlEngine::new();
+            let state = Arc::new(GovernorState::new(&governors));
+            let entry = match route { 0 => GovernedEntry::Text(QUERY), 1 => GovernedEntry::Prepared, _ => GovernedEntry::Operation(&state) };
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let source = open(&image, CEILING);
+            let outcome = entry.run(&engine, &source, &prepared, &[], QueryOptions::EMPTY, &governors);
+            let measured = window.close();
+            let (rows, evidence) = match &outcome {
+                Ok(answer) => {
+                    let rows = answer.result.solutions().expect("SELECT").1;
+                    assert_eq!(rows.len(), 1);
+                    (rows.to_vec(), (*answer.evidence).clone())
+                }
+                Err(FallibleSparqlError::BudgetExhausted { partial, evidence, .. }) => {
+                    let rows = partial.result().unwrap().result().solutions().expect("SELECT").1;
+                    assert!(rows.is_empty());
+                    (rows.to_vec(), evidence.clone())
+                }
+                error => panic!("healthy query completes or exhausts answers: {error:?}"),
+            };
+            assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= evidence.view.peak_bytes());
+            assert!(evidence.view.peak_bytes() <= CEILING);
+            assert!(source.read_error().is_none());
+            if let Some((expected_rows, expected_evidence)) = &expected {
+                assert_eq!(&rows, expected_rows);
+                let expected_evidence: &GovernedEvidence<SegmentedEvidence> = expected_evidence;
+                assert_eq!(evidence.governors, expected_evidence.governors);
+                assert_eq!(evidence.view.request_count(), expected_evidence.view.request_count());
+            } else { expected = Some((rows, evidence)); }
+            // Remove only the cache's plan owners, leaving published owners alive.
+            drop(engine);
+            let held = source.evidence().live_bytes();
+            let shared = outcome.clone();
+            assert_eq!(source.evidence().live_bytes(), held, "publication clone shares owners");
+            drop(outcome);
+            assert_eq!(source.evidence().live_bytes(), held, "the final publication clone remains live");
+            drop(shared);
+            assert!(source.evidence().live_bytes() < held, "last publication owner releases its output and reporting controls");
+        }
+    }
+}

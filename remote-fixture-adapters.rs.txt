@@ -1,0 +1,18 @@
+// Resident oracle doors delegate the production native bodies; none is used
+// by a bounded query or opaque resolver.
+#[cfg(test)]
+fn ground_term_has_blank_node(term:&GroundTerm)->bool {
+    ground_term_has_blank_node_with_memory(term,&mut purrdf_lex::allocation::Memory::new(&mut crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident()))).expect("resident ground blank walk")
+}
+#[cfg(test)]
+fn strip_blank_columns(variables:&[Variable],bindings:&[Vec<Option<GroundTerm>>])->(Vec<Variable>,Vec<Vec<Option<GroundTerm>>>) {
+    strip_blank_columns_with_memory(variables,bindings,&mut purrdf_lex::allocation::Memory::new(&mut crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident()))).expect("resident blank column stripping")
+}
+#[cfg(test)]
+fn join_dropping_empty_values(left:GraphPattern,right:GraphPattern)->GraphPattern {
+    join_dropping_empty_values_with_memory(left,right,&mut purrdf_lex::allocation::Memory::new(&mut crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident()))).expect("resident SERVICE join sanitization")
+}
+#[cfg(test)]
+pub(crate) fn evaluate_in_memory(dataset:&RdfDataset,request:ServiceRequest<'_>,nested:&(dyn ServiceResolver+Sync))->Result<ResolvedBindings,RemoteError> {
+    resident_resolution(evaluate_in_memory_admitted(dataset,request,nested,&crate::WorkspaceCapability::resident()))
+}

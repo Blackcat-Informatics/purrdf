@@ -1,0 +1,17 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+error[E0500]: closure requires unique access to `*self.memory` but it is already borrowed
+    --> crates/sparql-algebra/src/parser/machine.rs:2870:26
+     |
+2863 |             self.boxed(Query::Select {
+     |             ---- ----- first borrow later used by call
+     |             |
+     |             borrow occurs here
+...
+2870 |                     .map(|version| crate::SparqlVersion::parse_with_memory(version.raw(), self.memory))
+     |                          ^^^^^^^^^ closure construction occurs here                       ----------- second borrow occurs due to use of `*self.memory` in closure
+
+For more information about this error, try `rustc --explain E0500`.
+error: could not compile `purrdf-sparql-algebra` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-algebra` (lib test) due to 1 previous error

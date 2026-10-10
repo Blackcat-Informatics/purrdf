@@ -1,0 +1,51 @@
+Auto-merging Cargo.lock
+Auto-merging Makefile
+Auto-merging crates/iri/unicode/PROVENANCE.md
+Auto-merging crates/lex/examples/gen_unicode_tables.rs
+Auto-merging crates/purrdf/src/lib.rs
+Auto-merging crates/rdf-core/src/dataset_view.rs
+CONFLICT (content): Merge conflict in crates/rdf-core/src/dataset_view.rs
+Auto-merging crates/rdf-core/src/lib.rs
+CONFLICT (content): Merge conflict in crates/rdf-core/src/lib.rs
+Auto-merging crates/retrieval/src/compile.rs
+Auto-merging crates/retrieval/src/execute.rs
+Auto-merging crates/retrieval/tests/candidate_union.rs
+CONFLICT (add/add): Merge conflict in crates/retrieval/tests/candidate_union.rs
+Auto-merging crates/retrieval/tests/wasm_determinism.rs
+Auto-merging crates/shapes/README.md
+Auto-merging crates/sparql-eval/src/bgp.rs
+CONFLICT (content): Merge conflict in crates/sparql-eval/src/bgp.rs
+Auto-merging crates/sparql-eval/src/expr.rs
+CONFLICT (content): Merge conflict in crates/sparql-eval/src/expr.rs
+Auto-merging crates/text/src/fixed.rs
+CONFLICT (content): Merge conflict in crates/text/src/fixed.rs
+Auto-merging crates/text/src/index.rs
+CONFLICT (content): Merge conflict in crates/text/src/index.rs
+Auto-merging crates/text/src/lib.rs
+Auto-merging crates/text/src/ranking.rs
+CONFLICT (content): Merge conflict in crates/text/src/ranking.rs
+Auto-merging crates/text/src/relation.rs
+CONFLICT (content): Merge conflict in crates/text/src/relation.rs
+Auto-merging crates/text/src/score.rs
+CONFLICT (content): Merge conflict in crates/text/src/score.rs
+Auto-merging crates/text/tests/determinism.rs
+CONFLICT (content): Merge conflict in crates/text/tests/determinism.rs
+Auto-merging crates/xsd/src/temporal.rs
+CONFLICT (content): Merge conflict in crates/xsd/src/temporal.rs
+Auto-merging crates/xsd/src/value.rs
+Auto-merging helpers-ledger.toml
+Auto-merging scripts/check-generated.sh
+Auto-merging scripts/conformance-frozen/iri-unicode.sha256
+Recorded preimage for 'crates/rdf-core/src/dataset_view.rs'
+Recorded preimage for 'crates/rdf-core/src/lib.rs'
+Recorded preimage for 'crates/retrieval/tests/candidate_union.rs'
+Recorded preimage for 'crates/sparql-eval/src/bgp.rs'
+Recorded preimage for 'crates/sparql-eval/src/expr.rs'
+Recorded preimage for 'crates/text/src/fixed.rs'
+Recorded preimage for 'crates/text/src/index.rs'
+Recorded preimage for 'crates/text/src/ranking.rs'
+Recorded preimage for 'crates/text/src/relation.rs'
+Recorded preimage for 'crates/text/src/score.rs'
+Recorded preimage for 'crates/text/tests/determinism.rs'
+Recorded preimage for 'crates/xsd/src/temporal.rs'
+Automatic merge failed; fix conflicts and then commit the result.

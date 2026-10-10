@@ -1,0 +1,24 @@
+OK: self-test — the tree as committed declares 'MIT OR Apache-2.0 OR MulanPSL-2.0' throughout
+OK: self-test — a first-party file left at a narrower offer is refused
+OK: self-test — a fixture repository inside the checkout is refused
+OK: self-test — a registration that no longer matches its file is refused
+OK: self-test — a registration whose suffix is unchecked is refused
+OK: self-test — a published README with no licence section is refused
+OK: self-test — a published README with a proper subset of the offer is refused
+OK: self-test — a fixture README stating the full offer is accepted
+OK: self-test — every published crate README as committed states the full offer
+OK: self-test — the expectation follows Cargo.toml (2380 files offend against 'Zlib OR WTFPL'), so it is read rather than restated
+OK: self-test — a TOML literal-string license parses instead of crashing
+OK: self-test — a complete file is accepted
+OK: self-test — a file without `sources` is refused
+OK: self-test — `replaced` without the clean-room statement is refused
+OK: self-test — the same statement with `replaced` empty is accepted
+OK: self-test — a module path that does not exist is refused
+OK: self-test — an unknown source kind is refused
+SELF-TEST PASS
+OK: self-test — all 2 tracked PROVENANCE.toml file(s) follow the schema
+SELF-TEST PASS
+OK: 13 vendored root(s) license-clean; MulanPSL-2.0 text matches its pin; every first-party SPDX header declares 'MIT OR Apache-2.0 OR MulanPSL-2.0'; every published crate README states that offer in full; 2 PROVENANCE.toml file(s) follow the provenance schema.
+directory artifact self-test: console/Pages accepted deterministically; missing/corrupt base/runtime/metadata/compiler/module/shell, symlink/private/traversal and compiler redirection refused; explicit empty wrapper honored
+Docs artifact self-test: full grants/source forms and deterministic resource expansions accepted; missing/corrupt texts/sources, altered static/generated/font assets, unknown assets and missing locale refused
+license artifact self-test: valid tar/wheel accepted; missing/altered source and runtime notices, stale bundles, private/acquired payloads and traversal refused; runtime capture byte-idempotent

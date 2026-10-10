@@ -1,0 +1,575 @@
+--- a/crates/lex/src/allocation.rs
++++ b/crates/lex/src/allocation.rs
+@@ -170,6 +170,29 @@
+         replacement.append(values);
+         drop(core::mem::replace(values, replacement));
+         self.remove(old)
++    }
++
++    /// Freeze an originally admitted array without an infallible shrinking
++    /// reallocation. If the array has spare capacity, its exact replacement is
++    /// admitted while the original remains alive.
++    ///
++    /// # Errors
++    /// Returns checked layout overflow, admission or allocator refusal.
++    pub fn boxed_slice<T>(&mut self, mut values: Vec<T>) -> Result<Box<[T]>, StorageError> {
++        if size_of::<T>() != 0 && values.capacity() != values.len() {
++            let old = Layout::array::<T>(values.capacity()).map_err(|_| StorageError::SizeOverflow)?.size();
++            let next = Layout::array::<T>(values.len()).map_err(|_| StorageError::SizeOverflow)?.size();
++            self.add(next)?;
++            let mut replacement = Vec::new();
++            replacement.try_reserve_exact(values.len()).map_err(|_| StorageError::AllocationFailed)?;
++            if replacement.capacity() != values.len() { return Err(StorageError::SizeOverflow); }
++            replacement.append(&mut values);
++            drop(values);
++            self.remove(old)?;
++            values = replacement;
++        }
++        // Exact capacity equals length, so this conversion reallocates nothing.
++        Ok(values.into_boxed_slice())
+     }
+ 
+     /// Append one value after admitting and fallibly allocating any buffer growth.
+--- a/crates/rdf-core/src/hash.rs
++++ b/crates/rdf-core/src/hash.rs
+@@ -239,3 +239,48 @@
+         assert_eq!(seen.len(), 1516);
+     }
+ }
++
++/// Grow a native table under the original buffer admission. Both old and new
++/// tables remain covered until the old allocation has been destroyed.
++///
++/// # Errors
++/// Returns layout overflow, original admission refusal or allocator refusal.
++pub fn reserve_table_with_memory<T, S: purrdf_lex::allocation::Admission + ?Sized>(
++    table: &mut hashbrown::HashTable<T>,
++    required: usize,
++    hash: impl Fn(&T) -> u64,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<(), purrdf_lex::allocation::StorageError> {
++    use purrdf_lex::allocation::StorageError;
++    if required <= table.capacity() { return Ok(()); }
++    let old = hash_table_allocation_bound::<T>(table.capacity()).ok_or(StorageError::SizeOverflow)?;
++    let next = hash_table_allocation_bound::<T>(required).ok_or(StorageError::SizeOverflow)?;
++    memory.add_bytes(next)?;
++    let mut replacement = hashbrown::HashTable::new();
++    replacement.try_reserve(required, &hash).map_err(|_| StorageError::AllocationFailed)?;
++    for value in table.drain() {
++        replacement.insert_unique(hash(&value), value, &hash);
++    }
++    drop(core::mem::replace(table, replacement));
++    memory.release_bytes(old)
++}
++
++/// Grow a fixed-key map at the same physical table home as native hash tables.
++///
++/// # Errors
++/// Returns layout overflow, original admission or allocator refusal.
++pub fn reserve_map_with_memory<K: Eq + core::hash::Hash, V, S: purrdf_lex::allocation::Admission + ?Sized>(
++    map: &mut FastMap<K, V>, required: usize,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<(), purrdf_lex::allocation::StorageError> {
++    use purrdf_lex::allocation::StorageError;
++    if required <= map.capacity() { return Ok(()); }
++    let old = hash_table_allocation_bound::<(K, V)>(map.capacity()).ok_or(StorageError::SizeOverflow)?;
++    let next = hash_table_allocation_bound::<(K, V)>(required).ok_or(StorageError::SizeOverflow)?;
++    memory.add_bytes(next)?;
++    let mut replacement = FastMap::default();
++    replacement.try_reserve(required).map_err(|_| StorageError::AllocationFailed)?;
++    replacement.extend(map.drain());
++    drop(core::mem::replace(map, replacement));
++    memory.release_bytes(old)
++}
+--- a/crates/rdf-core/src/ir/term.rs
++++ b/crates/rdf-core/src/ir/term.rs
+@@ -231,11 +231,16 @@
+ /// The builder and the frozen lookup both key literals through this one function, so
+ /// their notions of "the same literal" cannot drift.
+ pub(crate) fn interned_language(tag: &str) -> std::borrow::Cow<'_, str> {
+-    if purrdf_iri::langtag::is_identity_folded(tag) {
+-        std::borrow::Cow::Borrowed(tag)
+-    } else {
+-        std::borrow::Cow::Owned(purrdf_iri::langtag::identity_fold(tag))
+-    }
++    interned_language_with_memory(tag, &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident))
++        .expect("resident language fold allocation failed")
++}
++
++/// The shared identity fold, with its actual destination admitted at birth.
++pub(crate) fn interned_language_with_memory<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
++    tag: &'a str, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<std::borrow::Cow<'a, str>, purrdf_lex::allocation::StorageError> {
++    if purrdf_iri::langtag::is_identity_folded(tag) { Ok(std::borrow::Cow::Borrowed(tag)) }
++    else { Ok(std::borrow::Cow::Owned(purrdf_iri::langtag::identity_fold_with_memory(tag, memory)?)) }
+ }
+ 
+ /// Append `s` to `arena` and return the range it occupies: the one writer of the
+@@ -249,13 +254,22 @@
+ ///
+ /// When the arena would pass `u32::MAX` bytes.
+ pub(crate) fn push_arena_str(arena: &mut Vec<u8>, s: &str) -> StrRange {
+-    let offset = u32::try_from(arena.len()).expect("term arena exceeds u32::MAX bytes");
+-    let len = u32::try_from(s.len()).expect("term string exceeds u32::MAX bytes");
+-    offset
+-        .checked_add(len)
+-        .expect("term arena exceeds u32::MAX bytes");
+-    arena.extend_from_slice(s.as_bytes());
+-    StrRange { offset, len }
++    use purrdf_lex::allocation::{Memory, Resident};
++    let mut resident = Resident;
++    let mut memory = Memory::resume(&mut resident, arena.capacity());
++    push_arena_str_with_memory(arena, s, &mut memory).expect("resident term arena allocation failed")
++}
++
++/// The original arena producer, admitting growth before any allocation.
++pub(crate) fn push_arena_str_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++    arena: &mut Vec<u8>, s: &str, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<StrRange, purrdf_lex::allocation::StorageError> {
++    use purrdf_lex::allocation::StorageError;
++    let offset = u32::try_from(arena.len()).map_err(|_| StorageError::SizeOverflow)?;
++    let len = u32::try_from(s.len()).map_err(|_| StorageError::SizeOverflow)?;
++    offset.checked_add(len).ok_or(StorageError::SizeOverflow)?;
++    memory.extend(arena, s.bytes())?;
++    Ok(StrRange { offset, len })
+ }
+ 
+ /// Borrow an arena range as `&str`. The arena only ever receives validated UTF-8
+--- a/crates/iri/src/langtag.rs
++++ b/crates/iri/src/langtag.rs
+@@ -1826,7 +1826,20 @@
+ /// ```
+ #[must_use]
+ pub fn identity_fold(tag: &str) -> String {
+-    tag.to_ascii_lowercase()
++    identity_fold_with_memory(tag, &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident))
++        .expect("resident language identity fold allocation failed")
++}
++
++/// Fold a language identity into an originally admitted destination.
++///
++/// # Errors
++/// Returns native layout, admission or allocator refusal.
++pub fn identity_fold_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++    tag: &str, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<String, purrdf_lex::allocation::StorageError> {
++    let mut text = memory.string(tag)?;
++    text.make_ascii_lowercase();
++    Ok(text)
+ }
+ 
+ /// `true` when `tag` is already its own [`identity_fold`], tested without
+--- a/crates/rdf-core/src/cdt_blank.rs
++++ b/crates/rdf-core/src/cdt_blank.rs
+@@ -442,19 +442,30 @@
+ /// Empty for a non-composite datatype.
+ #[must_use]
+ pub fn cdt_embedded_blanks(lexical: &str, datatype: &str) -> Vec<(String, BlankScope)> {
+-    if !is_cdt_datatype(datatype) {
+-        return Vec::new();
+-    }
+-    scan_tokens(lexical)
+-        .into_iter()
+-        .filter_map(|span| match span.kind {
+-            TokenKind::Blank(token) => {
+-                let (label, scope) = decode_blank_label(&token, LabelAlphabet::BlankNodeLabel);
+-                Some((label.into_owned(), scope))
+-            }
+-            TokenKind::Iri { .. } => None,
+-        })
+-        .collect()
++    cdt_embedded_blanks_with_memory(lexical, datatype, &mut Memory::new(&mut Resident))
++        .expect("resident composite blank discovery allocation failed")
++}
++
++/// Discover the same embedded blank identities through the original scanner,
++/// preserving their original buffer grant until the returned labels die.
++///
++/// # Errors
++/// Returns physical layout, admission or allocator refusal.
++pub fn cdt_embedded_blanks_with_memory<S: Admission + ?Sized>(
++    lexical: &str, datatype: &str, memory: &mut Memory<'_, S>,
++) -> Result<Vec<(String, BlankScope)>, StorageError> {
++    if !is_cdt_datatype(datatype) { return Ok(Vec::new()); }
++    let spans = scan_tokens_with_memory(lexical, memory)?;
++    let mut blanks = Vec::new();
++    for span in &spans {
++        if let TokenKind::Blank(token) = &span.kind {
++            let (label, scope) = decode_blank_label_with_memory(token, LabelAlphabet::BlankNodeLabel, memory)?;
++            let label = match label { Cow::Owned(label) => label, Cow::Borrowed(label) => memory.string(label)? };
++            memory.push(&mut blanks, (label, scope))?;
++        }
++    }
++    release_spans(spans, memory)?;
++    Ok(blanks)
+ }
+ 
+ /// Parse `lexical` as a value of the composite `datatype`, mapping every
+--- a/crates/rdf-core/src/term_fixture.rs
++++ b/crates/rdf-core/src/term_fixture.rs
+@@ -120,27 +120,10 @@
+ /// Intern one dataset-independent value into `builder`, triple terms included: the
+ /// by-value inverse every paged and packed fixture builds its pages with.
+ pub fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
+-    match value {
+-        TermValue::Iri(iri) => builder.intern_iri(iri),
+-        TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
+-        TermValue::Literal {
+-            lexical_form,
+-            datatype,
+-            language,
+-            direction,
+-        } => builder.intern_literal(RdfLiteral {
+-            lexical_form: lexical_form.clone(),
+-            datatype: Some(datatype.clone()),
+-            language: language.clone(),
+-            direction: *direction,
+-        }),
+-        TermValue::Triple { s, p, o } => {
+-            let s = intern_value(builder, s);
+-            let p = intern_value(builder, p);
+-            let o = intern_value(builder, o);
+-            builder.intern_triple(s, p, o)
+-        }
+-    }
++    use purrdf_lex::allocation::{Memory, Resident};
++    let mut resident = Resident;
++    let mut memory = Memory::resume(&mut resident, builder.interner_buffer_bytes().expect("resident interner layout"));
++    intern_value_with_memory(builder, value, &mut memory).expect("resident term interning allocation failed")
+ }
+ 
+ /// Freeze one page (or a single reference dataset) from `triples`, all in the
+@@ -448,3 +431,43 @@
+         assert!(failed.read_error().is_some());
+     }
+ }
++
++/// Intern borrowed values at their original producer, including every triple
++/// component. Temporary walk arrays die before their original admission shrinks.
++///
++/// # Errors
++/// Returns physical layout, admission or allocator refusal.
++pub fn intern_value_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++    builder: &mut RdfDatasetBuilder, value: &TermValue,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<TermId, purrdf_lex::allocation::StorageError> {
++    enum Step<'a> { Enter(&'a TermValue), Assemble }
++    let mut steps = Vec::new();
++    let mut answers = Vec::new();
++    memory.push(&mut steps, Step::Enter(value))?;
++    while let Some(step) = steps.pop() {
++        let answer = match step {
++            Step::Enter(TermValue::Triple { s, p, o }) => {
++                for next in [Step::Assemble, Step::Enter(o), Step::Enter(p), Step::Enter(s)] {
++                    memory.push(&mut steps, next)?;
++                }
++                continue;
++            }
++            Step::Enter(TermValue::Iri(iri)) => builder.intern_iri_with_memory(iri, memory)?,
++            Step::Enter(TermValue::Blank { label, scope }) => builder.intern_blank_with_memory(label, *scope, memory)?,
++            Step::Enter(TermValue::Literal { lexical_form, datatype, language, direction }) =>
++                builder.intern_literal_parts_with_memory(lexical_form, Some(datatype), language.as_deref(), *direction, memory)?,
++            Step::Assemble => {
++                let o = answers.pop().expect("the object has been interned");
++                let p = answers.pop().expect("the predicate has been interned");
++                let s = answers.pop().expect("the subject has been interned");
++                builder.intern_triple_with_memory(s, p, o, memory)?
++            }
++        };
++        memory.push(&mut answers, answer)?;
++    }
++    let output = answers.pop().expect("the root has been interned");
++    memory.release_vec(answers)?;
++    memory.release_vec(steps)?;
++    Ok(output)
++}
+--- a/crates/rdf-core/src/ir/builder.rs
++++ b/crates/rdf-core/src/ir/builder.rs
+@@ -22,6 +22,7 @@
+ use std::sync::Arc;
+ 
+ use hashbrown::HashTable;
++use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+ use purrdf_iri::IriError;
+ 
+ use crate::blank_label::LabelAlphabet;
+@@ -32,7 +33,7 @@
+ 
+ use super::dataset::{FastHasher, QuadHandle, QuadIds, QuadRow, RdfDataset, TermRef};
+ use super::term::{
+-    BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, arena_str, push_arena_str,
++    BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, arena_str, push_arena_str_with_memory,
+ };
+ use crate::RdfLocation;
+ // The store-once tables hash with the fixed-key `hash_of`, so they are
+@@ -91,14 +92,23 @@
+ /// `vec` and `table` are distinct `&mut` params — callers pass disjoint struct fields,
+ /// so the find-then-push-then-insert sequence has no overlapping borrow.
+ fn store_once<T: Hash + Eq>(vec: &mut Vec<T>, table: &mut HashTable<u32>, value: T) -> u32 {
++    let mut resident = Resident;
++    let bytes = std::alloc::Layout::array::<T>(vec.capacity()).expect("resident array layout").size()
++        .checked_add(crate::hash::hash_table_allocation_bound::<u32>(table.capacity()).expect("resident table layout"))
++        .expect("resident store-once layout");
++    let mut memory = Memory::resume(&mut resident, bytes);
++    store_once_with_memory(vec, table, value, &mut memory).expect("resident store-once allocation failed")
++}
++fn store_once_with_memory<T: Hash + Eq, S: Admission + ?Sized>(vec: &mut Vec<T>, table: &mut HashTable<u32>, value: T, memory: &mut Memory<'_, S>) -> Result<u32, StorageError> {
+     let hash = hash_of(&value);
+     if let Some(&i) = table.find(hash, |&i| vec[i as usize] == value) {
+-        return i;
+-    }
+-    let i = u32::try_from(vec.len()).expect("interner table exceeds u32::MAX entries");
+-    vec.push(value);
++        return Ok(i);
++    }
++    let i = u32::try_from(vec.len()).map_err(|_| StorageError::SizeOverflow)?;
++    memory.push(vec, value)?;
++    crate::hash::reserve_table_with_memory(table, vec.len(), |&i| hash_of(&vec[i as usize]), memory)?;
+     table.insert_unique(hash, i, |&i| hash_of(&vec[i as usize]));
+-    i
++    Ok(i)
+ }
+ 
+ /// Reserve room for `additional` more values in a [`store_once`] pair: the table
+@@ -231,8 +241,16 @@
+     }
+ 
+     /// Append a string to the arena, returning its range.
+-    fn push_str(&mut self, s: &str) -> StrRange {
+-        push_arena_str(&mut self.arena, s)
++    fn push_str_with_memory<S: Admission + ?Sized>(&mut self, s: &str, memory: &mut Memory<'_, S>) -> Result<StrRange, StorageError> {
++        push_arena_str_with_memory(&mut self.arena, s, memory)
++    }
++
++    fn buffer_bytes(&self) -> Result<usize, StorageError> {
++        let terms = std::alloc::Layout::array::<InternedTerm>(self.terms.capacity()).map_err(|_| StorageError::SizeOverflow)?.size();
++        let index = crate::hash::hash_table_allocation_bound::<u32>(self.index.capacity()).ok_or(StorageError::SizeOverflow)?;
++        let content = crate::hash::hash_table_allocation_bound::<(TermId, Blake3ContentId)>(self.content_ids.capacity()).ok_or(StorageError::SizeOverflow)?;
++        [self.arena.capacity(), terms, index, content, self.relative_iri.as_ref().map_or(0, |(iri, _)| iri.capacity())]
++            .into_iter().try_fold(0usize, |total, bytes| total.checked_add(bytes).ok_or(StorageError::SizeOverflow))
+     }
+ 
+     /// Intern a term BY VALUE: dedups against existing terms (resolving their ranges
+@@ -246,6 +264,11 @@
+     /// absoluteness exactly once — when it is first inserted — no matter how many
+     /// times it is subsequently interned. See [`super::absolute`].
+     fn intern(&mut self, lookup: TermLookup<'_>) -> TermId {
++        let mut resident = Resident;
++        let mut memory = Memory::resume(&mut resident, self.buffer_bytes().expect("resident interner layout"));
++        self.intern_with_memory(lookup, &mut memory).expect("resident term interning allocation failed")
++    }
++    fn intern_with_memory<S: Admission + ?Sized>(&mut self, lookup: TermLookup<'_>, memory: &mut Memory<'_, S>) -> Result<TermId, StorageError> {
+         let hash = hash_lookup_value(&lookup);
+         {
+             let (arena, terms) = (&self.arena, &self.terms);
+@@ -253,10 +276,10 @@
+                 .index
+                 .find(hash, |&i| term_eq(arena, &terms[i as usize], &lookup))
+             {
+-                return TermId::from_index(i);
++                return Ok(TermId::from_index(i));
+             }
+         }
+-        let i = u32::try_from(self.terms.len()).expect("term table exceeds u32::MAX entries");
++        let i = u32::try_from(self.terms.len()).map_err(|_| StorageError::SizeOverflow)?;
+         // The IR-boundary absoluteness invariant (miss branch, IRI arm ONLY). A
+         // violation cannot be reported from this signature, so it is recorded and
+         // `super::validate::validate` turns it into the hard `Err` that
+@@ -268,7 +291,7 @@
+             && self.relative_iri.is_none()
+             && let Err(err) = super::absolute::check_absolute(iri)
+         {
+-            self.relative_iri = Some((iri.to_owned(), err));
++            self.relative_iri = Some((memory.string(iri)?, err));
+         }
+         // Content-id recognition (miss branch, IRI arm ONLY): gated first on
+         // `content_scheme` so the check is a single `Option` branch — skipped
+@@ -286,9 +309,9 @@
+         };
+         // Miss: now (and only now) push the strings to the arena and build the term.
+         let term = match lookup {
+-            TermLookup::Iri(iri) => InternedTerm::Iri(self.push_str(iri)),
++            TermLookup::Iri(iri) => InternedTerm::Iri(self.push_str_with_memory(iri, memory)?),
+             TermLookup::Blank { label, scope } => InternedTerm::Blank {
+-                label: self.push_str(label),
++                label: self.push_str_with_memory(label, memory)?,
+                 scope,
+             },
+             TermLookup::Literal {
+@@ -297,8 +320,8 @@
+                 language,
+                 direction,
+             } => {
+-                let lexical_form = self.push_str(lexical);
+-                let language = language.map(|l| self.push_str(l));
++                let lexical_form = self.push_str_with_memory(lexical, memory)?;
++                let language = language.map(|l| self.push_str_with_memory(l, memory)).transpose()?;
+                 InternedTerm::Literal(InternedLiteral {
+                     lexical_form,
+                     datatype,
+@@ -308,14 +331,16 @@
+             }
+             TermLookup::Triple { s, p, o } => InternedTerm::Triple { s, p, o },
+         };
+-        self.terms.push(term);
++        memory.push(&mut self.terms, term)?;
+         if let Some(id) = recognized {
++            crate::hash::reserve_map_with_memory(&mut self.content_ids, self.content_ids.len().checked_add(1).ok_or(StorageError::SizeOverflow)?, memory)?;
+             self.content_ids.insert(TermId::from_index(i), id);
+         }
+         let (arena, terms) = (&self.arena, &self.terms);
++        crate::hash::reserve_table_with_memory(&mut self.index, terms.len(), |&i| hash_stored_value(arena, &terms[i as usize]), memory)?;
+         self.index
+             .insert_unique(hash, i, |&i| hash_stored_value(arena, &terms[i as usize]));
+-        TermId::from_index(i)
++        Ok(TermId::from_index(i))
+     }
+ 
+     /// The decoded content id for a recognized term, if any (builder-level
+@@ -488,6 +513,106 @@
+ }
+ 
+ impl RdfDatasetBuilder {
++    /// Intern borrowed values while retaining their original allocation grant.
++    ///
++    /// # Errors
++    /// Returns physical layout, admission or allocator refusal.
++    pub fn intern_value_with_memory<S: Admission + ?Sized>(
++        &mut self, value: &super::term::TermValue, memory: &mut Memory<'_, S>,
++    ) -> Result<TermId, StorageError> {
++        crate::term_fixture::intern_value_with_memory(self, value, memory)
++    }
++
++    /// Native borrowed IRI ingress.
++    ///
++    /// # Errors
++    /// Returns physical storage refusal before any unadmitted allocation.
++    pub fn intern_iri_with_memory<S: Admission + ?Sized>(&mut self, iri: &str, memory: &mut Memory<'_, S>) -> Result<TermId, StorageError> {
++        self.interner.intern_with_memory(TermLookup::Iri(iri), memory)
++    }
++
++    /// Native already-bound blank ingress.
++    ///
++    /// # Errors
++    /// Returns physical storage refusal before buffer growth.
++    pub fn intern_blank_with_memory<S: Admission + ?Sized>(&mut self, label: &str, scope: BlankScope, memory: &mut Memory<'_, S>) -> Result<TermId, StorageError> {
++        self.interner.intern_with_memory(TermLookup::Blank { label, scope }, memory)
++    }
++
++    /// Native triple ingress, sharing the original interning body.
++    ///
++    /// # Errors
++    /// Returns physical storage refusal before buffer growth.
++    pub fn intern_triple_with_memory<S: Admission + ?Sized>(&mut self, s: TermId, p: TermId, o: TermId, memory: &mut Memory<'_, S>) -> Result<TermId, StorageError> {
++        self.interner.intern_with_memory(TermLookup::Triple { s, p, o }, memory)
++    }
++
++    /// Insert a native quad at the original store-once producer.
++    ///
++    /// # Errors
++    /// Returns physical storage refusal before buffer growth.
++    pub fn push_quad_with_memory<S: Admission + ?Sized>(&mut self, s: TermId, p: TermId, o: TermId, g: Option<TermId>, memory: &mut Memory<'_, S>) -> Result<(), StorageError> {
++        store_once_with_memory(&mut self.quads, &mut self.quad_index, QuadRow { s, p, o, g }, memory)?;
++        Ok(())
++    }
++
++    /// Insert a native RDF 1.2 reifier binding.
++    ///
++    /// # Errors
++    /// Returns physical storage refusal before buffer growth.
++    pub fn push_reifier_in_graph_with_memory<S: Admission + ?Sized>(&mut self, reifier: TermId, triple: TermId, graph: Option<TermId>, memory: &mut Memory<'_, S>) -> Result<(), StorageError> {
++        if self.reifies_predicate.is_none() {
++            self.reifies_predicate = Some(self.intern_iri_with_memory(purrdf_iri::vocab::rdf::REIFIES, memory)?);
++        }
++        store_once_with_memory(&mut self.reifiers, &mut self.reifier_index, (reifier, triple, graph), memory)?;
++        Ok(())
++    }
++
++    /// Insert a native RDF 1.2 annotation.
++    ///
++    /// # Errors
++    /// Returns physical storage refusal before buffer growth.
++    pub fn push_annotation_in_graph_with_memory<S: Admission + ?Sized>(&mut self, reifier: TermId, predicate: TermId, object: TermId, graph: Option<TermId>, memory: &mut Memory<'_, S>) -> Result<(), StorageError> {
++        store_once_with_memory(&mut self.annotations, &mut self.annotation_index, (reifier, predicate, object, graph), memory)?;
++        Ok(())
++    }
++
++    /// Native literal identity and original arena allocation. Borrowed lexical
++    /// spelling remains verbatim; the shared language fold changes only its key.
++    ///
++    /// # Errors
++    /// Returns physical storage refusal before buffer growth.
++    pub fn intern_literal_parts_with_memory<S: Admission + ?Sized>(
++        &mut self, lexical: &str, datatype: Option<&str>, language: Option<&str>, direction: Option<RdfTextDirection>, memory: &mut Memory<'_, S>,
++    ) -> Result<TermId, StorageError> {
++        let datatype_iri = match (language, datatype) {
++            (Some(_), _) => RdfLiteral::language_datatype_iri(direction),
++            (None, Some(explicit)) => explicit,
++            (None, None) => super::term::XSD_STRING,
++        };
++        if self.interner.invalid_literal.is_none() {
++            self.interner.invalid_literal = RdfLiteral::diagnose_components(datatype_iri, language, direction).err();
++        }
++        let datatype_id = self.intern_iri_with_memory(datatype_iri, memory)?;
++        let blanks = crate::cdt_blank::cdt_embedded_blanks_with_memory(lexical, datatype_iri, memory)?;
++        for (label, scope) in &blanks {
++            self.intern_blank_with_memory(label, *scope, memory)?;
++        }
++        let bytes = blanks.iter().try_fold(0usize, |bytes, (label, _)| bytes.checked_add(label.capacity()).ok_or(StorageError::SizeOverflow))?;
++        memory.release_vec(blanks)?;
++        memory.release_bytes(bytes)?;
++        let language = language.map(|tag| super::term::interned_language_with_memory(tag, memory)).transpose()?;
++        let result = self.interner.intern_with_memory(TermLookup::Literal {
++            lexical, datatype: datatype_id, language: language.as_deref(), direction,
++        }, memory)?;
++        if let Some(std::borrow::Cow::Owned(language)) = language { memory.release_string(language)?; }
++        Ok(result)
++    }
++
++    // Resident wrappers resume only their own resident buffers. Operational
++    // callers supply Memory from birth and never certify an already-built tree.
++    pub(crate) fn interner_buffer_bytes(&self) -> Result<usize, StorageError> { self.interner.buffer_bytes() }
++
+     /// A fresh, empty builder.
+     #[must_use]
+     pub fn new() -> Self {
+@@ -706,35 +831,10 @@
+         language: Option<&str>,
+         direction: Option<RdfTextDirection>,
+     ) -> TermId {
+-        // C0.1 datatype expansion, identical to `RdfLiteral::datatype_iri`: a language
+-        // tag names the datatype whatever the explicit one says, then an explicit
+-        // datatype, then `xsd:string`.
+-        let datatype_iri = match (language, datatype) {
+-            (Some(_), _) => RdfLiteral::language_datatype_iri(direction),
+-            (None, Some(explicit)) => explicit,
+-            (None, None) => super::term::XSD_STRING,
+-        };
+-        if self.interner.invalid_literal.is_none() {
+-            // Judged on the tag AS AUTHORED, before the lowercase fold below;
+-            // the `LANGTAG` terminal is case-insensitive, so the answer is the
+-            // same either side of it.
+-            self.interner.invalid_literal =
+-                RdfLiteral::diagnose_components(datatype_iri, language, direction).err();
+-        }
+-        let datatype_id = self.intern_iri(datatype_iri);
+-
+-        // A composite literal's embedded labels are blank nodes of this dataset.
+-        for (label, scope) in crate::cdt_blank::cdt_embedded_blanks(lexical, datatype_iri) {
+-            self.intern_blank(&label, scope);
+-        }
+-
+-        let language = language.map(super::term::interned_language);
+-        self.interner.intern(TermLookup::Literal {
+-            lexical,
+-            datatype: datatype_id,
+-            language: language.as_deref(),
+-            direction,
+-        })
++        let mut resident = Resident;
++        let mut memory = Memory::resume(&mut resident, self.interner.buffer_bytes().expect("resident interner layout"));
++        self.intern_literal_parts_with_memory(lexical, datatype, language, direction, &mut memory)
++            .expect("resident literal interning allocation failed")
+     }
+ 
+     /// Intern a literal read from a document, binding the blank-node labels a

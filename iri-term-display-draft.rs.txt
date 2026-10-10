@@ -1,0 +1,28 @@
+/// Borrowed term-position IRI diagnostic fields, without lexical or reason copies.
+/// The caller retains any native reason's original owner while this view renders.
+#[derive(Clone, Copy)]
+pub struct IriTermDisplay<'a> {
+    lexical: &'a str,
+    reason: &'a dyn fmt::Display,
+}
+
+impl<'a> IriTermDisplay<'a> {
+    /// Borrow the original lexical spelling and its precise refusal reason.
+    #[must_use]
+    pub fn new(lexical: &'a str, reason: &'a dyn fmt::Display) -> Self {
+        Self { lexical, reason }
+    }
+}
+
+impl fmt::Debug for IriTermDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IriTermDisplay").field("lexical", &self.lexical).finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for IriTermDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid IRI {lexical:?} in term position: {reason}",
+            lexical = self.lexical, reason = self.reason)
+    }
+}

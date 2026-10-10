@@ -1,0 +1,203 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Independent allocation measurements over native compile, match and replacement.
+
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_core::xsd_regex::xpath::{self, Limits, Profile};
+use purrdf_lex::allocation::{Admission, StorageError};
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+#[derive(Debug)]
+struct Account {
+    limit: usize,
+    live: usize,
+    peak: usize,
+    refused: Option<usize>,
+    resets_to_zero: usize,
+}
+
+impl Account {
+    const fn new(limit: usize) -> Self {
+        Self { limit, live: 0, peak: 0, refused: None, resets_to_zero: 0 }
+    }
+}
+
+impl Admission for Account {
+    fn resize(&mut self, live_bytes: usize) -> Result<(), StorageError> {
+        if live_bytes > self.limit {
+            if self.refused.is_none() { self.refused = Some(live_bytes); }
+            return Err(StorageError::AdmissionFailed);
+        }
+        if self.live > 0 && live_bytes == 0 {
+            self.resets_to_zero += 1;
+        }
+        self.live = live_bytes;
+        self.peak = self.peak.max(live_bytes);
+        Ok(())
+    }
+}
+
+#[test]
+fn compiler_peak_and_retained_layout_cover_actual_native_buffers() {
+    let source = "(a|b){1,20}[c-z-[d-f]]\\p{Lu}".repeat(48);
+    for flags in ["", "ix", "qsimx"] {
+        let window = CurrentThreadWindow::open();
+        let program = xpath::compile_with_storage(
+            Profile::Xpath31, &source, flags, Limits::new(), Account::new(2_000_000),
+        ).unwrap();
+        let measured = window.close();
+        assert!(
+            usize::try_from(measured.peak_working_bytes).unwrap() <= program.storage().peak,
+            "flags {flags:?}: compiler heap exceeded its physical admission"
+        );
+        assert_eq!(
+            usize::try_from(measured.retained_bytes).unwrap(), program.storage().live,
+            "construction scratch must be destroyed and released before publication"
+        );
+        assert_eq!(
+            program.storage().live,
+            program.value().storage_bytes() - size_of::<xpath::CompiledPattern>(),
+            "the program's source, flags, nodes, sets, links and flat tables are retained"
+        );
+        let resident = xpath::compile(Profile::Xpath31, &source, flags, Limits::new()).unwrap();
+        for input in ["", "abc", "ABCD", &source] {
+            assert_eq!(
+                program.value().is_match(input, Limits::new()),
+                resident.is_match(input, Limits::new()),
+                "physical admission must preserve the selected native law"
+            );
+        }
+    }
+}
+
+#[test]
+fn compiler_refusal_precedes_unadmitted_allocation_and_preserves_its_owner() {
+    let source = "(a|b){1,20}[c-z-[d-f]]\\p{Lu}".repeat(48);
+    for limit in [0, 32, 1024, 4096] {
+        let window = CurrentThreadWindow::open();
+        let failure = xpath::compile_with_storage(
+            Profile::Xpath31, &source, "ix", Limits::new(), Account::new(limit),
+        ).unwrap_err();
+        let measured = window.close();
+        assert!(matches!(failure.value(), xpath::Error::Storage(StorageError::AdmissionFailed)));
+        assert!(failure.storage().refused.unwrap() > limit);
+        assert!(failure.storage().peak <= limit);
+        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= failure.storage().peak);
+        assert_eq!(measured.retained_bytes, 0, "failed compiler buffers are already destroyed");
+    }
+}
+
+#[test]
+fn owned_program_drop_destroys_all_compiler_storage() {
+    let source = "((ab|cd){2,8}[a-z-[e]]?)+".repeat(32);
+    let window = CurrentThreadWindow::open();
+    let program = xpath::compile_with_storage(
+        Profile::Xpath31, &source, "x", Limits::new(), Account::new(2_000_000),
+    ).unwrap();
+    assert!(program.storage().live > 0);
+    drop(program);
+    let measured = window.close();
+    assert_eq!(measured.retained_bytes, 0);
+}
+
+#[test]
+fn matcher_peak_and_retained_captures_cover_native_paths() {
+    let spill_source = "(a)".repeat(48);
+    let spill_input = "a".repeat(48);
+    let ambiguous_input = format!("{}ab", "a".repeat(8192));
+    for (source, input) in [
+        (r"(a+)\1", "aaaa"),
+        (spill_source.as_str(), spill_input.as_str()),
+        ("(a|aa){1,64}b", ambiguous_input.as_str()),
+        ("(a|aa){1,64}b", "cccc"),
+    ] {
+        let program = xpath::compile(Profile::Xpath31, source, "", Limits::new()).unwrap();
+        let expected = program.find(input, Limits::new()).unwrap();
+        let window = CurrentThreadWindow::open();
+        let found = program.find_with_storage(input, Limits::new(), Account::new(4_000_000)).unwrap();
+        let measured = window.close();
+        assert_eq!(found.value(), &expected, "{source}");
+        if source == "(a|aa){1,64}b" && input == ambiguous_input {
+            assert!(found.storage().resets_to_zero > 0,
+                "fallback must release the abandoned machine before linear allocation");
+        }
+        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= found.storage().peak,
+            "{source}: native state, spills, table rebuilds and captures must be priced");
+        assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), found.storage().live,
+            "{source}: only captures survive the native machine");
+
+        let window = CurrentThreadWindow::open();
+        let matched = program.is_match_with_storage(input, Limits::new(), Account::new(4_000_000)).unwrap();
+        let measured = window.close();
+        assert_eq!(*matched.value(), expected.is_some(), "{source}");
+        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= matched.storage().peak);
+        assert_eq!(matched.storage().live, 0);
+        assert_eq!(measured.retained_bytes, 0);
+    }
+}
+
+#[test]
+fn matcher_refusal_preserves_the_original_account_before_allocation() {
+    let source = "(a)".repeat(48);
+    let input = "a".repeat(48);
+    let program = xpath::compile(Profile::Xpath31, &source, "", Limits::new()).unwrap();
+    for limit in [0, 32, 256] {
+        let window = CurrentThreadWindow::open();
+        let failure = program.find_with_storage(&input, Limits::new(), Account::new(limit)).unwrap_err();
+        let measured = window.close();
+        assert!(matches!(failure.value(), xpath::Error::Storage(StorageError::AdmissionFailed)));
+        assert!(failure.storage().refused.unwrap() > limit);
+        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= failure.storage().peak);
+        assert_eq!(measured.retained_bytes, 0);
+    }
+}
+
+#[test]
+fn replacement_prices_output_separately_and_releases_every_search_capture() {
+    let ambiguous_input = format!("{}ababa", "a".repeat(8192));
+    for (source, flags, input, template) in [
+        ("(ab)|(a)", "", "aba", "$2$1!"),
+        (r"(a+)\1", "", "aaaazaaaa", "$1"),
+        ("(a|aa){1,64}b", "", ambiguous_input.as_str(), "[$1]"),
+        ("a", "q", "aaa", r"$x\n"),
+        ("a", "", "zzzz", "unused"),
+    ] {
+        let program = xpath::compile(Profile::Xpath31, source, flags, Limits::new()).unwrap();
+        let expected = program.replace_all(input, template, Limits::new()).unwrap();
+        let window = CurrentThreadWindow::open();
+        let replaced = program.replace_all_with_storage(input, template, Limits::new(),
+            Account::new(4_000_000), Account::new(4_000_000)).unwrap();
+        let measured = window.close();
+        assert_eq!(replaced.value(), &expected, "{source}");
+        let (matcher, output) = replaced.storage();
+        assert_eq!(matcher.live, 0, "machine and every capture die before publication");
+        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= matcher.peak + output.peak);
+        assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), output.live);
+        match replaced.value() {
+            std::borrow::Cow::Borrowed(value) => {
+                assert_eq!(value.as_ptr(), input.as_ptr());
+                assert_eq!(output.live, 0);
+            }
+            std::borrow::Cow::Owned(value) => assert_eq!(output.live, value.capacity()),
+        }
+    }
+}
+
+#[test]
+fn replacement_refusals_drop_partial_output_and_keep_both_typed_accounts() {
+    let program = xpath::compile(Profile::Xpath31, "(a)", "", Limits::new()).unwrap();
+    for (matcher_limit, output_limit) in [(0, 4_000_000), (4_000_000, 0), (4_000_000, 8)] {
+        let window = CurrentThreadWindow::open();
+        let failure = program.replace_all_with_storage("aaa", "expanded-output", Limits::new(),
+            Account::new(matcher_limit), Account::new(output_limit)).unwrap_err();
+        let measured = window.close();
+        assert!(matches!(failure.value(), xpath::Error::Storage(StorageError::AdmissionFailed)));
+        let (matcher, output) = failure.storage();
+        assert!(matcher.refused.is_some() || output.refused.is_some());
+        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= matcher.peak + output.peak);
+        assert_eq!(measured.retained_bytes, 0, "refused output is never published");
+    }
+}

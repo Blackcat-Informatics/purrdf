@@ -1,0 +1,40 @@
+pub(crate) fn invocation_mode(
+    call: &PropertyFunctionCall,
+    bound: &DetHashSet<Variable>,
+) -> BindingPattern {
+    BindingPattern::from_bools(
+        call.subject_args
+            .iter()
+            .chain(&call.object_args)
+            .map(|term| term_is_bound(term, bound)),
+    )
+}
+
+/// Whether an argument term denotes a known value under `bound`.
+///
+/// A blank node is a non-distinguished variable and is never bound; a quoted triple is
+/// bound only when every component is, its nested triples walked over a work list.
+fn term_is_bound(term: &TermPattern, bound: &DetHashSet<Variable>) -> bool {
+    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
+            TermPattern::BlankNode(_) => return false,
+            TermPattern::Variable(variable) => {
+                if !bound.contains(variable) {
+                    return false;
+                }
+            }
+            TermPattern::Triple(triple) => {
+                if let NamedNodePattern::Variable(variable) = &triple.predicate
+                    && !bound.contains(variable)
+                {
+                    return false;
+                }
+                pending.push(&triple.object);
+                pending.push(&triple.subject);
+            }
+        }
+    }
+    true
+}

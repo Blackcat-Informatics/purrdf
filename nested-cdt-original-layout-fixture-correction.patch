@@ -1,0 +1,49 @@
+--- a/crates/sparql-eval/tests/cdt_owned_admission.rs
++++ b/crates/sparql-eval/tests/cdt_owned_admission.rs
+@@ -1,8 +1,7 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! Proposed `crates/sparql-eval/tests/cdt_owned_admission.rs`.
+-//! Reuses existing test support and alloc-probe dependency. Not compiled or run.
++//! Native CDT allocation, refusal and original-owner checks.
+ 
+ mod support;
+ 
+@@ -88,22 +87,31 @@
+     drop(items);
+     storage.resize(0).unwrap();
+ 
++    let window = CurrentThreadWindow::open();
+     let (value, bytes) =
+         purrdf_cdt::parse::try_parse_cdt("[[null]]", CdtDatatype::List, &mut storage).unwrap();
+-    let CdtParts::List(items) = value.into_parts() else {
++    let measured = window.close();
++    assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), bytes);
++    assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= storage.peak);
++    let CdtParts::List(mut items) = value.into_parts() else {
+         panic!("list fixture")
+     };
+-    let CdtTerm::Composite(inner) = &items[0] else {
++    assert_eq!(items.len(), 1);
++    let CdtTerm::Composite(inner) = items.pop().unwrap() else {
+         panic!("nested fixture")
+     };
+-    // Both lists have one exact requested cell in the native constructor.
+-    assert_eq!(inner.as_list().unwrap().len(), 1);
++    let CdtParts::List(inner_items) = (*inner).into_parts() else {
++        panic!("inner list fixture")
++    };
++    assert_eq!(inner_items.len(), 1);
++    // Inspect both original buffers without cloning or allocating a census.
+     assert_eq!(
+         bytes,
+         Layout::array::<CdtTerm>(items.capacity()).unwrap().size()
+             + Layout::new::<CdtValue>().size()
+-            + Layout::array::<CdtTerm>(1).unwrap().size()
++            + Layout::array::<CdtTerm>(inner_items.capacity()).unwrap().size()
+     );
++    drop(inner_items);
+     drop(items);
+     storage.resize(0).unwrap();
+ }

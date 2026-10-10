@@ -1,0 +1,392 @@
+--- a/crates/sparql-eval/src/governor/soundness.rs
++++ b/crates/sparql-eval/src/governor/soundness.rs
+@@ -712,9 +712,9 @@
+ /// i.e. without descending into a pattern. Stops as soon as `visit` returns `true`.
+ pub(crate) fn visit_exists_patterns_admitted<'a>(
+     expr: &'a Expression,
+-    workspace: &crate::WorkspaceCapability,
+-    visit: &mut impl FnMut(&'a GraphPattern) -> Result<bool, crate::EvalError>,
+-) -> Result<bool, crate::EvalError> {
++    workspace: &WorkspaceCapability,
++    visit: &mut impl FnMut(&'a GraphPattern) -> Result<bool, EvalError>,
++) -> Result<bool, EvalError> {
+     let mut storage = crate::workspace::LexicalFrame::new(workspace);
+     let mut pending = purrdf_lex::walk::WorkList::<ExpressionPart<'a>, 16>::new();
+     let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+@@ -760,15 +760,15 @@
+     F: FnMut(&'a GraphPattern, ChildEdge) -> bool,
+ {
+ 
+-    visit_classified_children_admitted(pattern, &crate::WorkspaceCapability::resident(), &mut |child, edge| Ok(visit(child, edge)))
++    visit_classified_children_admitted(pattern, &WorkspaceCapability::resident(), &mut |child, edge| Ok(visit(child, edge)))
+         .expect("resident classified child walk")
+ }
+ 
+ pub(crate) fn visit_classified_children_admitted<'a>(
+     pattern: &'a GraphPattern,
+-    workspace: &crate::WorkspaceCapability,
+-    visit: &mut impl FnMut(&'a GraphPattern, ChildEdge) -> Result<bool, crate::EvalError>,
+-) -> Result<bool, crate::EvalError> {
++    workspace: &WorkspaceCapability,
++    visit: &mut impl FnMut(&'a GraphPattern, ChildEdge) -> Result<bool, EvalError>,
++) -> Result<bool, EvalError> {
+     let mut failure = None;
+     let stopped = visit_pattern_parts(pattern, &mut |part| {
+         let result = match part {
+@@ -874,7 +874,7 @@
+     F: FnMut(&'a GraphPattern, SpineContext, usize),
+ {
+ 
+-    walk_spine_admitted(root, &crate::WorkspaceCapability::resident(), &mut |node, context, depth| {
++    walk_spine_admitted(root, &WorkspaceCapability::resident(), &mut |node, context, depth| {
+         visit(node, context, depth);
+         Ok(())
+     }).expect("resident plan walk")
+@@ -882,9 +882,9 @@
+ 
+ pub(crate) fn walk_spine_admitted<'a>(
+     root: &'a GraphPattern,
+-    workspace: &crate::WorkspaceCapability,
+-    visit: &mut impl FnMut(&'a GraphPattern, SpineContext, usize) -> Result<(), crate::EvalError>,
+-) -> Result<(), crate::EvalError> {
++    workspace: &WorkspaceCapability,
++    visit: &mut impl FnMut(&'a GraphPattern, SpineContext, usize) -> Result<(), EvalError>,
++) -> Result<(), EvalError> {
+     let mut storage = crate::workspace::LexicalFrame::new(workspace);
+     let mut pending = purrdf_lex::walk::WorkList::<(&'a GraphPattern, SpineContext, usize), 16>::new();
+     let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+@@ -894,7 +894,7 @@
+         visit(node, context, depth)?;
+         let start = pending.len();
+         visit_classified_children_admitted(node, workspace, &mut |child, edge| {
+-            let next = depth.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
++            let next = depth.checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
+             pending.try_push_admitted((child, context.descend(edge), next), &mut memory)
+                 .map_err(|error| memory.admission_mut().storage_error(error, "plan spine walk"))?;
+             Ok(false)
+@@ -916,15 +916,15 @@
+ /// iteratively, against the stack the evaluation starts on ([`crate::stack::height`]): a
+ /// parsed query, a prepared one run on another thread and a pattern built through
+ /// [`crate::engine::PreparedQuery::rewritten`] alike are admitted exactly where
+-/// that stack holds their walks, and refused with [`crate::EvalError::StackExhausted`]
++/// that stack holds their walks, and refused with [`EvalError::StackExhausted`]
+ /// where it does not.
+ ///
+ /// On `wasm32` the host engine's call stack, which no measurement reaches, bounds the
+ /// evaluation's recursion too, so graph patterns nested deeper than
+ /// [`crate::stack::height::WASM_GRAPH_PATTERN_DEPTH`] are refused there as well, with
+-/// [`crate::EvalError::HostStackExhausted`].
+-pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), crate::EvalError> {
+-    let capability = crate::WorkspaceCapability::resident();
++/// [`EvalError::HostStackExhausted`].
++pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), EvalError> {
++    let capability = WorkspaceCapability::resident();
+     let mut frame = crate::workspace::LexicalFrame::new(&capability);
+     validate_graph_pattern_depth_with_memory(
+         root, &mut purrdf_lex::allocation::Memory::new(&mut frame),
+@@ -935,7 +935,7 @@
+ pub(crate) fn validate_graph_pattern_depth_with_memory(
+     root: &GraphPattern,
+     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+-) -> Result<(), crate::EvalError> {
++) -> Result<(), EvalError> {
+     crate::stack::height::admit_pattern_with_memory(root, memory)?;
+     if cfg!(target_arch = "wasm32") {
+         let capability = memory.admission_mut().workspace().clone();
+@@ -944,10 +944,10 @@
+             purrdf_lex::walk::WorkList::with((root, 1_usize));
+         while let Some((node, depth)) = pending.pop() {
+             if depth > limit {
+-                return Err(crate::EvalError::HostStackExhausted { construct: "graph pattern" });
++                return Err(EvalError::HostStackExhausted { construct: "graph pattern" });
+             }
+             visit_classified_children_admitted(node, &capability, &mut |child, _edge| {
+-                let next = depth.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
++                let next = depth.checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
+                 pending.try_push_admitted((child, next), memory)
+                     .map_err(|error| memory.admission_mut().storage_error(error, "graph pattern depth"))?;
+                 Ok(false)
+@@ -1534,7 +1534,7 @@
+     /// including through a nested `EXISTS`.
+     pub(crate) has_stateful_builtin: bool,
+     /// Whether evaluating this node **to completion** — no `crate::enf` erasure —
+-    /// can raise a hard [`EvalError`](crate::EvalError) or an observable remote
++    /// can raise a hard [`EvalError`](EvalError) or an observable remote
+     /// effect, anywhere within it, including through a nested `EXISTS`/`NOT
+     /// EXISTS`.
+     ///
+@@ -1551,25 +1551,25 @@
+     /// Conservatively `true` for:
+     /// * a [`GraphPattern::Service`] call, of ANY `silent`-ness — `SILENT` only
+     ///   swallows the federation transport failure itself
+-    ///   ([`EvalError::Remote`](crate::EvalError::Remote)); a property-function call
++    ///   ([`EvalError::Remote`](EvalError::Remote)); a property-function call
+     ///   forwarded inside the body is refused at the forwarding boundary regardless
+     ///   of `silent` (see [`crate::remote::eval_service`]), and that refusal is a
+-    ///   hard [`EvalError::Unsupported`](crate::EvalError::Unsupported) `SILENT`
++    ///   hard [`EvalError::Unsupported`](EvalError::Unsupported) `SILENT`
+     ///   does not touch;
+     /// * a [`GraphPattern::PropertyFunction`] call — an unresolved relation IRI, an
+     ///   access-pattern no declared mode admits, or the relation's own returned
+-    ///   `Err`/caught panic is [`EvalError::Function`](crate::EvalError::Function);
++    ///   `Err`/caught panic is [`EvalError::Function`](EvalError::Function);
+     /// * an expression [`Function::Custom`] call — an IRI resolving to nothing
+-    ///   registered is [`EvalError::Unsupported`](crate::EvalError::Unsupported)
++    ///   registered is [`EvalError::Unsupported`](EvalError::Unsupported)
+     ///   (`UnsupportedKind::CustomFunction`), and one that DOES resolve (a SHACL-AF
+     ///   SPARQL-bodied function or a host-native closure) can itself raise
+-    ///   [`EvalError::Function`](crate::EvalError::Function) — neither is knowable
++    ///   [`EvalError::Function`](EvalError::Function) — neither is knowable
+     ///   at this analysis's evaluation point, so every `Custom` call is conservative;
+     /// * an expression [`Function::Purrdf`] call — `heldIn` hard-errors
+     ///   ([`UnsupportedKind::HeldInUnconfigured`](crate::error::UnsupportedKind::HeldInUnconfigured))
+     ///   with no caller-supplied standpoint-predicate configuration, and every
+     ///   `rdf:List` function (`listLength`, …) hard-errors
+-    ///   ([`EvalError::Data`](crate::EvalError::Data)) over a cyclic or torn list —
++    ///   ([`EvalError::Data`](EvalError::Data)) over a cyclic or torn list —
+     ///   both conditions this analysis cannot see from the algebra alone;
+     /// * a `GROUP BY` aggregate whose [`AggregateFunction`] is
+     ///   [`AggregateFunction::Custom`] — the same "unresolved or the registered
+@@ -1703,7 +1703,7 @@
+ ///
+ /// * `Extend` inserts `variable` into `certainly_bound` UNCONDITIONALLY — but a
+ ///   `BIND` whose expression raises a TYPE error (not a hard
+-///   [`EvalError`](crate::EvalError)) leaves the target unbound per SPARQL §18.6,
++///   [`EvalError`](EvalError)) leaves the target unbound per SPARQL §18.6,
+ ///   not bound to some value. This analysis has no per-expression-shape way to
+ ///   know whether `expression` can type-error.
+ /// * `Group` inserts every aggregate output variable into `certainly_bound`
+@@ -2403,7 +2403,7 @@
+ }
+ 
+ /// Whether evaluating `pattern` **to completion** — no `crate::enf` erasure — can
+-/// raise a hard [`EvalError`](crate::EvalError) or an observable remote effect
++/// raise a hard [`EvalError`](EvalError) or an observable remote effect
+ /// anywhere within it; see [`NodeAnalysis::can_hard_error`].
+ ///
+ /// `crate::enf`'s laws call this (and [`expr_can_hard_error`]) on the PORTION they
+@@ -2655,10 +2655,10 @@
+             expression,
+         } => {
+             let Some(inner_analysis) = node_analysis(inner, table) else {
+-                return false;
++                return Ok(false);
+             };
+             if current_row_vars.contains(variable) {
+-                return false;
++                return Ok(false);
+             }
+             pending.push(ProbeStep::Expr(expression, &inner_analysis.certainly_bound))?;
+             pending.push(ProbeStep::Pattern(inner))?;
+@@ -2674,14 +2674,14 @@
+             companion,
+         } => {
+             let Some(inner_analysis) = node_analysis(inner, table) else {
+-                return false;
++                return Ok(false);
+             };
+             if current_row_vars.contains(element)
+                 || companion
+                     .as_ref()
+                     .is_some_and(|v| current_row_vars.contains(v))
+             {
+-                return false;
++                return Ok(false);
+             }
+             pending.push(ProbeStep::Expr(expression, &inner_analysis.certainly_bound))?;
+             pending.push(ProbeStep::Pattern(inner))?;
+@@ -3174,7 +3174,7 @@
+                     .expect("the small stack runs the check")
+                     .expect_err("direct algebra too tall for the stack is refused");
+             assert!(
+-                matches!(error, crate::EvalError::StackExhausted { .. }),
++                matches!(error, EvalError::StackExhausted { .. }),
+                 "{error:?}"
+             );
+         })
+--- a/crates/sparql-eval/src/property_fn_plan.rs
++++ b/crates/sparql-eval/src/property_fn_plan.rs
+@@ -170,7 +170,7 @@
+ pub(crate) enum PreparationError {
+     Plan(PlanError),
+     Evaluation(EvalError),
+-    Storage(purrdf_lex::allocation::StorageError),
++    Storage(StorageError),
+ }
+ impl From<PlanError> for PreparationError {
+     fn from(error: PlanError) -> Self { Self::Plan(error) }
+@@ -178,14 +178,14 @@
+ impl From<EvalError> for PreparationError {
+     fn from(error: EvalError) -> Self { Self::Evaluation(error) }
+ }
+-impl From<purrdf_lex::allocation::StorageError> for PreparationError {
+-    fn from(error: purrdf_lex::allocation::StorageError) -> Self { Self::Storage(error) }
++impl From<StorageError> for PreparationError {
++    fn from(error: StorageError) -> Self { Self::Storage(error) }
+ }
+ pub(crate) type PrepResult<T> = Result<T, PreparationError>;
+ 
+ impl PreparationError {
+     fn into_failure(
+-        self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++        self, memory: &mut Memory<'_, LexicalFrame>,
+     ) -> crate::engine::EvaluationFailure {
+         match self {
+             Self::Storage(error) => crate::engine::EvaluationFailure::Evaluation(
+@@ -202,7 +202,7 @@
+             }
+         }
+     }
+-    fn into_plan(self, memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>) -> PlanError {
++    fn into_plan(self, memory: &mut Memory<'_, LexicalFrame>) -> PlanError {
+         match self {
+             Self::Plan(error) => error,
+             Self::Evaluation(error) => PlanError::property_function(error),
+@@ -856,7 +856,7 @@
+     invocation_mode_with_memory(
+         call,
+         &|variable| bound.contains(variable),
+-        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
++        &mut Memory::new(&mut purrdf_lex::allocation::Resident),
+     )
+     .expect("resident invocation-mode traversal allocation failed")
+ }
+@@ -866,8 +866,8 @@
+ pub(crate) fn invocation_mode_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+     call: &PropertyFunctionCall,
+     bound: &dyn Fn(&Variable) -> bool,
+-    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+-) -> Result<BindingPattern, purrdf_lex::allocation::StorageError> {
++    memory: &mut Memory<'_, S>,
++) -> Result<BindingPattern, StorageError> {
+     // The existing BindingPattern contract is a 64-bit pure value. Its positions
+     // need no heap storage while each argument's traversal admits actual spill.
+     let mut bits = [false; BindingPattern::MAX_ARITY];
+@@ -894,7 +894,7 @@
+     term_is_bound_with_memory(
+         term,
+         &|variable| bound.contains(variable),
+-        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
++        &mut Memory::new(&mut purrdf_lex::allocation::Resident),
+     )
+     .expect("resident term-boundness traversal allocation failed")
+ }
+@@ -906,8 +906,8 @@
+ fn term_is_bound_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+     term: &TermPattern,
+     bound: &dyn Fn(&Variable) -> bool,
+-    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+-) -> Result<bool, purrdf_lex::allocation::StorageError> {
++    memory: &mut Memory<'_, S>,
++) -> Result<bool, StorageError> {
+     let mut pending: purrdf_lex::walk::WorkList<_, 8> = purrdf_lex::walk::WorkList::with(term);
+     let mut answer = true;
+     while let Some(term) = pending.pop() {
+@@ -1977,18 +1977,18 @@
+             Expression::In(_, haystack) => {
+                 let mut parts = self.take(haystack.len().checked_add(1).ok_or(StorageError::SizeOverflow)?)?;
+                 let needle = next_expression(&mut parts);
+-                Expression::In(Child::try_new(needle, self.memory)?, self.memory.collect(parts.map(Planned::expression))?)
++                Expression::In(Child::try_new(needle, self.memory)?, self.memory.collect(parts.map(Planned::expression))?.into())
+             }
+             Expression::Coalesce(items) => {
+                 {
+                     let parts = self.take(items.len())?;
+-                    Expression::Coalesce(self.memory.collect(parts.map(Planned::expression))?)
++                    Expression::Coalesce(self.memory.collect(parts.map(Planned::expression))?.into())
+                 }
+             }
+             Expression::FunctionCall(function, args) => {
+                 let parts = self.take(args.len())?;
+                 Expression::FunctionCall(function.clone_with_memory(self.memory)?,
+-                    self.memory.collect(parts.map(Planned::expression))?)
++                    self.memory.collect(parts.map(Planned::expression))?.into())
+             },
+             Expression::NamedNode(_)
+             | Expression::Literal(_)
+--- a/crates/sparql-eval/src/blank_scope.rs
++++ b/crates/sparql-eval/src/blank_scope.rs
+@@ -72,9 +72,8 @@
+ };
+ 
+ #[cfg(test)]
+-use crate::DetHashMap;
+ #[cfg(test)]
+-use purrdf_sparql_algebra::scope::{spine_leaves, visit_leaf_labels, visit_spine_leaves as any_spine_leaf, visit_term_labels};
++use purrdf_sparql_algebra::scope::{spine_leaves, visit_leaf_labels, visit_spine_leaves as any_spine_leaf};
+ use purrdf_lex::allocation::Memory;
+ use crate::workspace::{AdmittedVec, AdmittedMap, LexicalFrame};
+ use crate::property_fn_plan::{PrepResult, PreparationError};
+@@ -119,7 +118,7 @@
+ 
+ pub(crate) fn without_joined_blanks_admitted<I: ViewTermId>(seq: SolutionSeq<I>, workspace: &crate::WorkspaceCapability) -> Result<SolutionSeq<I>, crate::EvalError> {
+     if !seq.schema.vars().iter().any(is_joined_blank) { return Ok(seq); }
+-    let mut keep = crate::workspace::AdmittedVec::new(workspace);
++    let mut keep = AdmittedVec::new(workspace);
+     for (column, variable) in seq.schema.vars().iter().enumerate() {
+         if !is_joined_blank(variable) { keep.push(column)?; }
+     }
+--- a/crates/sparql-eval/src/plan/mod.rs
++++ b/crates/sparql-eval/src/plan/mod.rs
+@@ -139,7 +139,7 @@
+     expr: ExprId,
+     /// The body's prepare-time analysis, built on first use and kept for the life of the
+     /// shape — one evaluation, or every evaluation of a tree a [`PlanCache`] keeps.
+-    prepared: OnceLock<crate::workspace::SharedWorkspace<PreparedExists>>,
++    prepared: OnceLock<SharedWorkspace<PreparedExists>>,
+ }
+ 
+ /// One node's row of the shape: every per-node table the evaluator reads, and the ones
+@@ -307,11 +307,11 @@
+     pub(crate) fn prepared_exists(
+         &self,site:SiteId,workspace:&crate::WorkspaceCapability,
+         build:impl FnOnce()->Result<PreparedExists,crate::EvalError>,
+-    )->Result<crate::workspace::SharedWorkspace<PreparedExists>,crate::EvalError> {
++    )->Result<SharedWorkspace<PreparedExists>,crate::EvalError> {
+         let slot=&self.sites[site.0 as usize].prepared;
+         let transient=self.volatile_sites.get(site.0 as usize).copied()==Some(true) || workspace.is_bounded();
+         if !transient && let Some(existing)=slot.get() { return Ok(existing.clone()); }
+-        let built=crate::workspace::SharedWorkspace::new_admitted(build()?,workspace)?;
++        let built=SharedWorkspace::new_admitted(build()?,workspace)?;
+         if transient { return Ok(built); }
+         Ok(slot.get_or_init(||built).clone())
+     }
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -24,7 +24,7 @@
+ use std::sync::Arc;
+ 
+ use purrdf_core::{
+-    DatasetView, GraphMatch, RdfDataset, TermFactory, TermId, TermValue, TrippedGovernor,
++    DatasetView, GraphMatch, RdfDataset, TermId, TermValue, TrippedGovernor,
+     ViewTermId,
+ };
+ use purrdf_sparql_algebra::{
+@@ -42,7 +42,7 @@
+ use crate::solution::{SolutionSeq, VarSchema};
+ use crate::witness::RelationWitness;
+ use crate::xpath_regex::Selection;
+-use crate::{DetHashMap, DetHashSet};
++use crate::DetHashMap;
+ 
+ /// Tunable evaluation behavior. Every flag defaults to the production-optimal
+ /// value; the benches and differential tests flip individual flags to
+@@ -1009,7 +1009,7 @@
+                 u64::try_from(label.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?
+             )?;
+             let candidate = crate::WorkspaceTerm::new(TermValue::Blank {
+-                label: crate::workspace::string(label.as_str())?,
++                label: crate::workspace::string(label.as_str(), "blank label")?,
+                 scope: purrdf_core::BlankScope::DEFAULT,
+             }, allocation);
+             if self.dataset.term_id_by_value(&candidate)
+@@ -1320,7 +1320,7 @@
+         seed: impl Iterator<Item = &'a TermValue>,
+     ) -> Result<crate::workspace::AdmittedVec<usize>, EvalError> {
+         let mut worklist = crate::workspace::AdmittedVec::new(&self.growth);
+-        let mut visited = crate::workspace::AdmittedVec::new(&self.growth);
++        let mut visited: crate::workspace::AdmittedVec<&TermValue> = crate::workspace::AdmittedVec::new(&self.growth);
+         let mut out = crate::workspace::AdmittedVec::new(&self.growth);
+         if self.constructed.is_empty() {
+             return Ok(out);
+

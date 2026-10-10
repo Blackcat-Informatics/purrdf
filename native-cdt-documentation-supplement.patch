@@ -1,0 +1,203 @@
+diff --git a/crates/lex/src/allocation.rs b/crates/lex/src/allocation.rs
+--- a/crates/lex/src/allocation.rs
++++ b/crates/lex/src/allocation.rs
+@@ -45,21 +45,32 @@
+ }
+ 
+ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
+-    /// Start a native computation with no owned heap capacity.
++    /// Start one native computation with no owned heap capacity.
++    /// All nonempty buffers passed to this memory must have been allocated through
++    /// it, or explicitly included with `add_bytes` under the same original grant.
++    #[must_use]
+     pub fn new(storage: &'a mut S) -> Self {
+         Self { storage, live: 0 }
+     }
+ 
+-    /// Currently admitted native payload and working-buffer bytes.
++    /// The currently admitted requested layouts of payload and working buffers.
++    /// Read the surviving total only after construction scratch has been released.
++    #[must_use]
+     pub const fn live_bytes(&self) -> usize { self.live }
+ 
+-    /// Admission callback, for native factories whose concrete payload lives above this leaf.
++    /// Borrow the original admission for a native payload factory above this leaf.
+     pub fn admission_mut(&mut self) -> &mut S { self.storage }
+ 
+-    /// Admit a native payload's actual Layout before calling its fallible factory.
++    /// Admit a native payload's concrete layout before calling its fallible factory.
++    ///
++    /// # Errors
++    /// Returns checked live-byte overflow or the caller's original refusal marker.
+     pub fn add_bytes(&mut self, bytes: usize) -> Result<(), StorageError> { self.add(bytes) }
+ 
+-    /// Release bytes only after their native allocation has been destroyed.
++    /// Release a concrete layout only after destroying its original allocation.
++    ///
++    /// # Errors
++    /// Returns an unbalanced live-byte invariant or the caller's refusal marker.
+     pub fn release_bytes(&mut self, bytes: usize) -> Result<(), StorageError> {
+         self.remove(bytes)
+     }
+@@ -78,7 +89,12 @@
+         Ok(())
+     }
+ 
+-    /// Replace a vector buffer after admitting both old and new allocations.
++    /// Replace a vector buffer while both old and new layouts remain admitted.
++    /// The old contents survive admission or allocator refusal unchanged. The buffer
++    /// must already belong to this memory's live total if it is nonempty.
++    ///
++    /// # Errors
++    /// Returns checked layout overflow, admission refusal or allocator refusal.
+     pub fn reserve<T>(
+         &mut self, values: &mut Vec<T>, required: usize,
+     ) -> Result<(), StorageError> {
+@@ -98,7 +114,10 @@
+         self.remove(old)
+     }
+ 
+-    /// Append one value, admitting geometric buffer growth when necessary.
++    /// Append one value after admitting and fallibly allocating any buffer growth.
++    ///
++    /// # Errors
++    /// Returns checked layout overflow, admission refusal or allocator refusal.
+     pub fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), StorageError> {
+         let required = values.len().checked_add(1).ok_or(StorageError::SizeOverflow)?;
+         if required > values.capacity() {
+@@ -110,21 +129,33 @@
+         Ok(())
+     }
+ 
+-    /// Destroy a vector's payload before releasing its buffer admission.
++    /// Destroy a vector before releasing its original buffer's admission.
++    /// Independently priced owned element payloads require their matching release;
++    /// this method releases only the vector's concrete backing array layout.
++    ///
++    /// # Errors
++    /// Returns layout overflow, an unbalanced live-byte invariant or refusal.
+     pub fn release_vec<T>(&mut self, values: Vec<T>) -> Result<(), StorageError> {
+         let bytes = Layout::array::<T>(values.capacity()).map_err(|_| StorageError::SizeOverflow)?.size();
+         drop(values);
+         self.remove(bytes)
+     }
+ 
+-    /// Destroy owned UTF-8 storage before shrinking its original live admission.
++    /// Destroy owned UTF-8 storage before releasing its original buffer admission.
++    ///
++    /// # Errors
++    /// Returns an unbalanced live-byte invariant or the caller's refusal marker.
+     pub fn release_string(&mut self, text: String) -> Result<(), StorageError> {
+         let bytes = text.capacity();
+         drop(text);
+         self.remove(bytes)
+     }
+ 
+-    /// Replace a UTF-8 buffer after admitting old and new allocations together.
++    /// Replace UTF-8 storage while old and new allocations both remain admitted.
++    /// The old text survives admission or allocator refusal unchanged.
++    ///
++    /// # Errors
++    /// Returns checked layout overflow, admission refusal or allocator refusal.
+     pub fn reserve_string(&mut self, text: &mut String, required: usize) -> Result<(), StorageError> {
+         if required <= text.capacity() { return Ok(()); }
+         let next = Layout::array::<u8>(required).map_err(|_| StorageError::SizeOverflow)?.size();
+@@ -138,7 +169,10 @@
+         self.remove(old)
+     }
+ 
+-    /// Append one scalar after admitting any UTF-8 buffer growth.
++    /// Append one scalar after admitting any physical UTF-8 buffer growth.
++    ///
++    /// # Errors
++    /// Returns checked layout overflow, admission refusal or allocator refusal.
+     pub fn push_char(&mut self, text: &mut String, ch: char) -> Result<(), StorageError> {
+         let required = text.len().checked_add(ch.len_utf8()).ok_or(StorageError::SizeOverflow)?;
+         if required > text.capacity() {
+@@ -149,7 +183,10 @@
+         Ok(())
+     }
+ 
+-    /// Fallibly copy borrowed text into an admitted UTF-8 destination.
++    /// Copy borrowed text into an admitted, fallibly allocated UTF-8 destination.
++    ///
++    /// # Errors
++    /// Returns checked layout overflow, admission refusal or allocator refusal.
+     pub fn string(&mut self, input: &str) -> Result<String, StorageError> {
+         let mut result = String::new();
+         self.reserve_string(&mut result, input.len())?;
+diff --git a/crates/cdt/src/tree.rs b/crates/cdt/src/tree.rs
+--- a/crates/cdt/src/tree.rs
++++ b/crates/cdt/src/tree.rs
+@@ -1,15 +1,17 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! The owning value tree's `Drop`, `Clone` and `Debug`, each over an explicit heap
+-//! work list rather than the compiler's recursive glue.
++//! The owning value tree's iterative `Drop`, `Clone` and `Debug`.
++//! Destruction threads ancestors through existing slots without allocating;
++//! copying and debugging use explicit work lists instead of recursive glue.
+ //!
+ //! A [`CdtTerm`] owns [`CdtValue`]s and [`CdtTripleTerm`]s, and those own
+ //! [`CdtTerm`]s again, so a value is a tree whose depth only [`crate::MAX_ELEMENTS`]
+ //! and [`crate::MAX_LEXICAL_BYTES`] bound — a level is one element and a few bytes.
+ //! The glue `#[derive]` writes for such a type recurses once per level, and in Rust
+ //! a stack overflow is an `abort` no caller can catch, so every walk that touches the
+-//! whole tree is a loop over a heap stack:
++//! whole tree is iterative; destruction reuses its existing slots and the other
++//! walks use a heap work list:
+ //!
+ //! * **`Drop`** lives on the two owners whose contents are sealed or structural,
+ //!   [`CdtValue`] and [`CdtTripleTerm`]. Each threads ancestors through already evacuated term
+diff --git a/crates/cdt/src/term.rs b/crates/cdt/src/term.rs
+--- a/crates/cdt/src/term.rs
++++ b/crates/cdt/src/term.rs
+@@ -113,7 +113,7 @@
+ /// well-formed RDF is the consumer's question, not this lexical layer's.
+ ///
+ /// The components may nest triple terms and composites without bound, so this type
+-/// implements `Drop` iteratively ([`crate::tree`]); the fields are public to read and
++/// implements allocation-free iterative `Drop` ([`crate::tree`]); the fields are public to read and
+ /// assign, and are moved out with `core::mem::replace` / `take` rather than by
+ /// destructuring the struct by value, which a type with a `Drop` does not allow.
+ #[derive(Debug, Clone)]
+@@ -134,7 +134,8 @@
+ /// [`crate::MAX_ELEMENTS`] and a few bytes of [`crate::MAX_LEXICAL_BYTES`], and those
+ /// two are the only bounds. Its `Drop`, `Clone` and `Debug` are therefore not the
+ /// compiler's recursive glue but the loops in [`crate::tree`], each over an explicit
+-/// heap work list, and equality and ordering are the loops in [`crate::ops`]. The
++/// work lists for copying/debugging and existing evacuated slots for destruction;
++/// equality and ordering are the loops in [`crate::ops`]. The
+ /// variants below are free to be public: an element assembled by hand nests as deep
+ /// as its author likes, costs heap for every level and stack for none, and is
+ /// measured against the two bounds the moment it is offered to [`CdtValue::list`] /
+diff --git a/crates/cdt/src/value.rs b/crates/cdt/src/value.rs
+--- a/crates/cdt/src/value.rs
++++ b/crates/cdt/src/value.rs
+@@ -54,7 +54,8 @@
+ /// of its container, so a value is never deeper than its element count plus one, and
+ /// every walk over the tree — the scanner, the renderer, equality, ordering, and this
+ /// type's own `Drop`, `Clone` and `Debug` — is iterative over a heap worklist, so a
+-/// level costs heap and never stack (see [`crate::tree`]).
++/// level costs heap and never stack (see [`crate::tree`]). Destruction reuses
++/// the existing tree slots and needs neither a worklist allocation nor more stack.
+ ///
+ /// Every value also carries the measure it was built with — its element count at every
+ /// level and the byte length of its canonical form — so a composite that holds it is
+diff --git a/crates/iri/src/parse.rs b/crates/iri/src/parse.rs
+--- a/crates/iri/src/parse.rs
++++ b/crates/iri/src/parse.rs
+@@ -305,8 +305,10 @@
+     })
+ }
+ 
+-/// Absolute/relative/invalid verdict through the same scanner, without owning
+-/// the parsed text or rendering an error which this caller will discard.
++/// The same scanner's allocation-free absolute/relative/invalid verdict.
++/// `Some(true)` is absolute, `Some(false)` is a valid relative reference, and
++/// `None` is malformed. Neither parsed text nor a discarded diagnostic is owned;
++/// public diagnostic-producing parse APIs retain their original messages.
+ #[must_use]
+ pub fn absolute_verdict(s: &str) -> Option<bool> {
+     scan_with(s, Mode::Iri, Diagnostics::Verdict).ok().map(|spans| spans.scheme.is_some())

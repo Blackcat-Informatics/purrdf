@@ -1,0 +1,74 @@
+diff --git a/crates/sparql-eval/src/modifier.rs b/crates/sparql-eval/src/modifier.rs
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -2193,12 +2193,12 @@
+                 Ok(None)
+             }
+             Self::Numeric(fold, _) => {
+-                if let Some(value) = values.first()
+-                    && !xsd_of(value).is_some_and(|value| {
+-                        fold.as_mut().is_some_and(|fold| fold.step_xsd(&value))
+-                    })
+-                {
+-                    *fold = None;
++                if let (Some(value), Some(state)) = (values.first(), fold.as_mut()) {
++                    let accepted = match parse_numeric_fold_value(value, &ctx.growth)? {
++                        Some(value) => state.step_parsed(value, &ctx.growth)?,
++                        None => false,
++                    };
++                    if !accepted { *fold = None; }
+                 }
+                 Ok(None)
+             }
+@@ -2223,13 +2223,13 @@
+                 } = *custom;
+                 crate::agg_fn::finish_contained(accumulator, &iri, absorb).map(|value| value.map(AggregateFinished::Resident))
+             }
+-            Self::Numeric(fold, aggregate) => Ok(fold.and_then(|fold| match aggregate {
+-                NumericAggregate::Sum => fold.finish_sum(),
+-                NumericAggregate::Avg if matches!(fold, NumericFold::Empty) => {
+-                    Some(TermValue::integer(0))
+-                }
+-                NumericAggregate::Avg => fold.finish_avg(division, absorb),
+-            }).map(AggregateFinished::Resident)),
++            Self::Numeric(fold, aggregate) => match fold {
++                None => Ok(None),
++                Some(fold) => match aggregate {
++                    NumericAggregate::Sum => fold.finish_sum_admitted(workspace),
++                    NumericAggregate::Avg => fold.finish_avg_admitted(division, absorb, workspace),
++                }.map(|value| value.map(AggregateFinished::Admitted)),
++            },
+         }
+     }
+ }
+diff --git a/crates/sparql-eval/src/modifier.rs b/crates/sparql-eval/src/modifier.rs
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -2829,20 +2829,22 @@
+             |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+             &capability,
+         )?.map(AggregateFinished::Admitted),
+-        AggregateFunction::Sum => fold_numeric(
++        AggregateFunction::Sum => fold_numeric_admitted(
+             sequential,
+             &survivors,
+             NumericAggregate::Sum,
+             ctx.division,
+             &mut |code| ctx.record_expression_error(Some(code)),
+-        )?.map(AggregateFinished::Resident),
+-        AggregateFunction::Avg => fold_numeric(
++            &capability,
++        )?.map(AggregateFinished::Admitted),
++        AggregateFunction::Avg => fold_numeric_admitted(
+             sequential,
+             &survivors,
+             NumericAggregate::Avg,
+             ctx.division,
+             &mut |code| ctx.record_expression_error(Some(code)),
+-        )?.map(AggregateFinished::Resident),
++            &capability,
++        )?.map(AggregateFinished::Admitted),
+         AggregateFunction::Min => fold_builtin_admitted(
+             sequential,
+             &survivors,
+

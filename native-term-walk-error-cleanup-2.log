@@ -1,0 +1,12 @@
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core/src/ir/term_walk.rs:1342:
+             |_, memory| {
+                 visited += 1;
+                 if visited == 20 {
+-                    assert!(memory.admitted_bytes() > baseline, "the pending walk spilled");
++                    assert!(
++                        memory.admitted_bytes() > baseline,
++                        "the pending walk spilled"
++                    );
+                     retained = Some(memory.string("visitor-owned")?);
+                     return Err(StorageError::AllocationFailed);
+                 }

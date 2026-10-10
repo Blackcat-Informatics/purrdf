@@ -1,0 +1,188 @@
++555304 0 555304 <purrdf_lex::allocation::Memory<purrdf_sparql_eval::workspace::LexicalFrame>>::reserve_string
++277696 0 277696 purrdf_sparql_eval::workspace::string
++277688 0 277688 <purrdf_sparql_eval::workspace::AdmittedVec<purrdf_sparql_eval::solution::RetainedRow>>::push
++277676 0 277676 purrdf_core::ir::term_walk::try_owned_text
+-277668 277668 0 purrdf_core::ir::term_walk::shallow_clone
+-277656 277656 0 purrdf_sparql_eval::convert::literal_to_value
+-246824 246824 0 <purrdf_core::ir::term::TermValue>::typed_literal::<&str, &str> (.llvm.9011082650621420149)
+-246808 246808 0 purrdf_core::ir::term_walk::try_fold_term::<purrdf_shapes::class_membership::ClassMembershipView, purrdf_core::ir::term::TermValue, purrdf_core::dataset_view::TermLookupError, <purrdf_shapes::class_membership::ClassMembershipView as purrdf_core::dataset_view::DatasetView>::term_value::{closure#0}, <purrdf_shapes::class_membership::ClassMembershipView as purrdf_core::dataset_view::DatasetView>::term_value::{closure#1}, purrdf_core::dataset_view::TermLookupError::Read>::{closure#0}
++201674 0 201674 purrdf_sparql_eval::workspace::format_exact::<&str>
+-185120 185120 0 purrdf_sparql_eval::binop::build_index::<purrdf_core::ir::term::TermId>
++154272 0 154272 <purrdf_sparql_eval::workspace::AdmittedVec<usize>>::push
+-139832 139832 0 <alloc::vec::Vec<purrdf_sparql_algebra::ast::Variable> as core::clone::Clone>::clone
+-124245 124245 0 <alloc::raw_vec::RawVec<purrdf_sparql_algebra::ast::Variable>>::grow_one
+-123590 123590 0 <purrdf_sparql_algebra::ast::Literal>::new_typed::<&str>
+-123424 123424 0 purrdf_sparql_eval::convert::ground_term_to_value
++123264 0 123264 <purrdf_sparql_eval::workspace::WorkspaceCapability>::authored_text::<alloc::string::String>
+-119675 119675 0 purrdf_sparql_algebra::substitute::map_core_pattern_mut::<purrdf_sparql_eval::substitute::apply_probes::{closure#1}>
++93063 0 93063 <purrdf_sparql_eval::workspace::AdmittedVec<purrdf_sparql_algebra::ast::Variable>>::push
++93063 0 93063 <purrdf_sparql_eval::solution::SchemaBuilder>::finish
+-93042 93042 0 <purrdf_sparql_algebra::ast::NamedNode>::new::<&str>
+-92560 92560 0 purrdf_sparql_eval::modifier::eval_values::<purrdf_shapes::class_membership::ClassMembershipView>
++92560 0 92560 purrdf_sparql_eval::binop::hash_join::<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#1} (.llvm.3334843315847914981)
++92560 0 92560 <purrdf_sparql_eval::vm::Linked<purrdf_core::ir::term::TermId>>::link_admitted::<purrdf_shapes::class_membership::ClassMembershipView, purrdf_sparql_eval::workspace::SharedWorkspace<purrdf_sparql_eval::vm::compile::ExprProgram>>
++92560 0 92560 <purrdf_sparql_eval::workspace::SharedWorkspace<std::sync::once_lock::OnceLock<purrdf_core::governor::TrippedGovernor>>>::new_admitted
+-92560 92560 0 purrdf_sparql_eval::binop::hash_join::<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#1} (.llvm.10469415265805594226)
+-92560 92560 0 purrdf_sparql_eval::binop::hash_join::<purrdf_shapes::class_membership::ClassMembershipView>
+-92560 92560 0 <purrdf_sparql_eval::eval::EvalCtx<purrdf_shapes::class_membership::ClassMembershipView>>::new
++92560 0 92560 <hashbrown::raw::RawTable<(purrdf_sparql_eval::binop::JoinKey, purrdf_sparql_eval::workspace::AdmittedVec<usize>)>>::reserve_rehash::<purrdf_sparql_eval::binop::build_index<purrdf_core::ir::term::TermId>::{closure#4}>
++88489 0 88489 purrdf_lex::allocation::boxed::try_boxed::<purrdf_sparql_algebra::algebra::GraphPattern>
++78262 0 78262 <purrdf_sparql_eval::workspace::WorkspaceCapability>::authored_text::<&str>
+-61712 61712 0 <alloc::raw_vec::RawVec<purrdf_core::small::SmallVec<[core::option::Option<purrdf_sparql_eval::scratch::SolutionTerm>
++61708 0 61708 <purrdf_sparql_eval::workspace::AdmittedVec<core::option::Option<usize>>>::push
+-61708 61708 0 <alloc::vec::Vec<core::option::Option<usize>> as alloc::vec::spec_from_iter::SpecFromIter<core::option::Option<usize>, core::iter::adapters::map::Map<core::slice::iter::Iter<purrdf_sparql_algebra::ast::Variable>, purrdf_sparql_eval::modifier::eval_project<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#1}>>>::from_iter
+-61708 61708 0 <alloc::raw_vec::RawVec<core::option::Option<purrdf_core::ir::term::TermValue>>>::grow_one
+-61708 61708 0 <hashbrown::raw::RawTable<purrdf_sparql_eval::scratch::ScratchId> as core::clone::Clone>::clone
++61708 0 61708 <purrdf_sparql_eval::workspace::AdmittedVec<core::option::Option<purrdf_core::ir::term::TermValue>>>::with_capacity
++61708 0 61708 <purrdf_sparql_eval::scratch::ScratchInterner as core::clone::Clone>::clone
++61708 0 61708 <purrdf_sparql_eval::workspace::WorkspaceCapability>::reserve_vec_for_append::<core::option::Option<purrdf_core::ir::term::TermValue>>
+-61704 61704 0 purrdf_sparql_eval::bgp::eval_bgp_seeded::<purrdf_shapes::class_membership::ClassMembershipView>
+-61704 61704 0 <purrdf_core::ir::term::TermValue>::try_fold::<purrdf_shapes::term::Term, !, <purrdf_core::ir::term::TermValue>::fold<purrdf_shapes::term::Term, purrdf_shapes::term::term_value_to_native::{closure#0}, purrdf_shapes::term::term_value_to_native::{closure#1}>::{closure#0}, <purrdf_core::ir::term::TermValue>::fold<purrdf_shapes::term::Term, purrdf_shapes::term::term_value_to_native::{closure#0}, purrdf_shapes::term::term_value_to_native::{closure#1}>::{closure#1}>::{closure#0}
+-61704 61704 0 purrdf_sparql_eval::substitute::build_probes_into
++61704 0 61704 purrdf_core::ir::term_walk::try_fold_nested_with_storage::<&purrdf_core::ir::term::TermValue, (), purrdf_shapes::term::Term, !, &mut <purrdf_core::ir::term::TermValue>::try_fold<purrdf_shapes::term::Term, !, <purrdf_core::ir::term::TermValue>::fold<purrdf_shapes::term::Term, purrdf_shapes::term::term_value_to_native::{closure#0}, purrdf_shapes::term::term_value_to_native::{closure#1}>::{closure#0}, <purrdf_core::ir::term::TermValue>::fold<purrdf_shapes::term::Term, purrdf_shapes::term::term_value_to_native::{closure#0}, purrdf_shapes::term::term_value_to_native::{closure#1}>::{closure#1}>::{closure#0}, &mut <purrdf_core::ir::term::TermValue>::try_fold<purrdf_shapes::term::Term, !, <purrdf_core::ir::term::TermValue>::fold<purrdf_shapes::term::Term, purrdf_shapes::term::term_value_to_native::{closure#0}, purrdf_shapes::term::term_value_to_native::{closure#1}>::{closure#0}, <purrdf_core::ir::term::TermValue>::fold<purrdf_shapes::term::Term, purrdf_shapes::term::term_value_to_native::{closure#0}, purrdf_shapes::term::term_value_to_native::{closure#1}>::{closure#1}>::{closure#1}, purrdf_core::ir::term_walk::try_fold_nested<&purrdf_core::ir::term::TermValue, (), purrdf_shapes::term::Term, !, <purrdf_core::ir::term::TermValue>::try_fold<purrdf_shapes::term::Term, !, <purrdf_core::ir::term::TermValue>::fold<purrdf_shapes::term::Term, purrdf_shapes::term::term_value_to_native::{closure#0}, purrdf_shapes::term::term_value_to_native::{closure#1}>::{closure#0}, <purrdf_core::ir::term::TermValue>::fold<purrdf_shapes::term::Term, purrdf_shapes::term::term_value_to_native::{closure#0}, purrdf_shapes::term::term_value_to_native::{closure#1}>::{closure#1}>::{closure#0}, <purrdf_core::ir::term::TermValue>::try_fold<purrdf_shapes::term::Term, !, <purrdf_core::ir::term::TermValue>::fold<purrdf_shapes::term::Term, purrdf_shapes::term::term_value_to_native::{closure#0}, purrdf_shapes::term::term_value_to_native::{closure#1}>::{closure#0}, <purrdf_core::ir::term::TermValue>::fold<purrdf_shapes::term::Term, purrdf_shapes::term::term_value_to_native::{closure#0}, purrdf_shapes::term::term_value_to_native::{closure#1}>::{closure#1}>::{closure#1}>::{closure#0}>::{closure#0}
+-61704 61704 0 purrdf_sparql_eval::expr::eval_extend::<purrdf_shapes::class_membership::ClassMembershipView>
+-49029 49029 0 purrdf_sparql_algebra::owned::assemble
+-47049 47049 0 purrdf_iri::parse::parse_inner (.llvm.13533422030268022162)
+-33298 33298 0 <alloc::vec::Vec<purrdf_sparql_algebra::algebra::Expression> as alloc::vec::spec_from_iter::SpecFromIter<purrdf_sparql_algebra::algebra::Expression, core::iter::adapters::map::Map<core::slice::iter::Iter<purrdf_sparql_algebra::algebra::Expression>, <purrdf_sparql_algebra::owned::Kids>::exprs<core::slice::iter::Iter<purrdf_sparql_algebra::algebra::Expression>>::{closure#0}>>>::from_iter
++33133 0 33133 <purrdf_lex::allocation::Memory<purrdf_lex::allocation::Resident>>::reserve::<purrdf_sparql_algebra::algebra::Expression>
+-30860 30860 0 purrdf_sparql_eval::modifier::eval_project::<purrdf_shapes::class_membership::ClassMembershipView>
+-30856 30856 0 purrdf_sparql_eval::bgp::eval_compiled_bgp::<purrdf_shapes::class_membership::ClassMembershipView>
+-30856 30856 0 purrdf_sparql_eval::bgp::compile_bgp::<purrdf_shapes::class_membership::ClassMembershipView>
+-30856 30856 0 <purrdf_sparql_eval::bgp::BgpProjection>::new
+-30856 30856 0 purrdf_sparql_eval::bgp::compile_predicate::<purrdf_shapes::class_membership::ClassMembershipView>
+-30856 30856 0 purrdf_sparql_eval::convert::ground_term_pattern_to_value
+-30856 30856 0 <alloc::vec::Vec<usize> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<usize, core::iter::adapters::map::Map<core::slice::iter::Iter<purrdf_sparql_algebra::ast::Variable>, purrdf_sparql_eval::binop::right_to_out_map::{closure#0}>>>::from_iter
++30856 0 30856 <alloc::raw_vec::RawVec<purrdf_sparql_eval::solution::RetainedRow>>::grow_one
++30856 0 30856 <purrdf_sparql_eval::workspace::AdmittedVec<purrdf_sparql_eval::bgp::CompiledPattern>>::push
++30852 0 30852 <purrdf_sparql_eval::solution::VarSchema>::push_admitted
++30852 0 30852 <purrdf_lex::allocation::shared::Shared<purrdf_sparql_eval::solution::SchemaData>>::try_new_with_allocator::<<purrdf_lex::allocation::shared::Shared<purrdf_sparql_eval::solution::SchemaData>>::try_new::{closure#0}, <purrdf_lex::allocation::shared::Shared<purrdf_sparql_eval::solution::SchemaData>>::try_new_with<<purrdf_lex::allocation::shared::Shared<purrdf_sparql_eval::solution::SchemaData>>::try_new::{closure#0}>::{closure#0}>
+-29730 92560 62830 <alloc::raw_vec::RawVec<purrdf_sparql_eval::vm::Val<purrdf_core::ir::term::TermId>>>::grow_one
+-24141 24141 0 purrdf_sparql_eval::substitute::probe_term_pattern
++23935 0 23935 <purrdf_lex::allocation::Memory<purrdf_sparql_eval::workspace::LexicalFrame>>::reserve::<alloc::vec::Vec<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>>>
++23935 0 23935 <purrdf_lex::allocation::Memory<purrdf_sparql_eval::workspace::LexicalFrame>>::reserve::<purrdf_sparql_algebra::ast::Variable>
++23935 0 23935 <purrdf_lex::allocation::Memory<purrdf_sparql_eval::workspace::LexicalFrame>>::reserve::<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>>
++23308 495 23803 <(purrdf_sparql_algebra::ast::Variable, purrdf_sparql_algebra::ast::GroundTerm) as <[_]>::to_vec_in::ConvertVec>::to_vec::<alloc::alloc::Global>
+-23308 23308 0 <alloc::vec::Vec<(purrdf_sparql_algebra::ast::Variable, purrdf_sparql_algebra::ast::GroundTerm)> as core::clone::Clone>::clone
++16189 0 16189 <purrdf_lex::allocation::Memory<purrdf_lex::allocation::Resident>>::reserve::<purrdf_sparql_algebra::ast::Variable>
++8410 0 8410 purrdf_lex::allocation::boxed::try_boxed::<purrdf_sparql_algebra::algebra::Expression>
+-8179 8179 0 <alloc::vec::Vec<purrdf_sparql_algebra::ast::TriplePattern> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<purrdf_sparql_algebra::ast::TriplePattern, core::iter::adapters::map::Map<core::slice::iter::Iter<purrdf_sparql_algebra::ast::TriplePattern>, purrdf_sparql_algebra::owned::assemble_pattern::{closure#0}>>>::from_iter
++8113 0 8113 <purrdf_lex::allocation::Memory<purrdf_lex::allocation::Resident>>::reserve::<purrdf_sparql_algebra::ast::TriplePattern>
++8047 0 8047 <purrdf_lex::allocation::Memory<purrdf_sparql_eval::workspace::LexicalFrame>>::reserve::<&purrdf_core::ir::term::TermValue>
++3564 0 3564 <purrdf_sparql_eval::workspace::WorkspaceCapability>::authored_text::<dyn core::fmt::Display>
++1518 0 1518 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::reserve_string
+-1452 1452 0 <core::iter::adapters::map::Map<core::iter::adapters::map::Map<core::slice::iter::Iter<&str>, purrdf_sparql_eval::property_fn_plan::parameter_set::{closure#0}>, <hashbrown::set::HashSet<purrdf_sparql_algebra::ast::Variable, purrdf_hash::fixed::FixedState> as core::iter::traits::collect::Extend<purrdf_sparql_algebra::ast::Variable>>::extend<core::iter::adapters::map::Map<core::slice::iter::Iter<&str>, purrdf_sparql_eval::property_fn_plan::parameter_set::{closure#0}>>::{closure#0}> as core::iter::traits::iterator::Iterator>::fold::<(), core::iter::traits::iterator::Iterator::for_each::call<(purrdf_sparql_algebra::ast::Variable, ()), <hashbrown::map::HashMap<purrdf_sparql_algebra::ast::Variable, (), purrdf_hash::fixed::FixedState> as core::iter::traits::collect::Extend<(purrdf_sparql_algebra::ast::Variable, ())>>::extend<core::iter::adapters::map::Map<core::iter::adapters::map::Map<core::slice::iter::Iter<&str>, purrdf_sparql_eval::property_fn_plan::parameter_set::{closure#0}>, <hashbrown::set::HashSet<purrdf_sparql_algebra::ast::Variable, purrdf_hash::fixed::FixedState> as core::iter::traits::collect::Extend<purrdf_sparql_algebra::ast::Variable>>::extend<core::iter::adapters::map::Map<core::slice::iter::Iter<&str>, purrdf_sparql_eval::property_fn_plan::parameter_set::{closure#0}>>::{closure#0}>>::{closure#0}>::{closure#0}>
+-1122 1122 0 <alloc::raw_vec::RawVec<core::option::Option<purrdf_sparql_eval::path::PathOp>>>::grow_one
++957 0 957 <purrdf_lex::allocation::text::OwnedText as core::convert::From<alloc::string::String>>::from
+-924 924 0 <purrdf_sparql_algebra::parser::Parser<false>>::expect_var
++726 0 726 <purrdf_sparql_eval::workspace::AdmittedVec<(purrdf_sparql_eval::governor::soundness::ChildEdge, core::option::Option<purrdf_sparql_eval::plan::ExprId>)>>::push
+-726 726 0 <&mut core::iter::adapters::map::map_fold<&&str, purrdf_sparql_algebra::ast::Variable, (), <purrdf_sparql_algebra::parser::SparqlParser>::with_prebound_variables<core::iter::adapters::chain::Chain<core::slice::iter::Iter<&str>, core::slice::iter::Iter<&str>>, &&str>::{closure#0}, core::iter::traits::iterator::Iterator::for_each::call<purrdf_sparql_algebra::ast::Variable, <alloc::vec::Vec<purrdf_sparql_algebra::ast::Variable>>::extend_trusted<core::iter::adapters::map::Map<core::iter::adapters::chain::Chain<core::slice::iter::Iter<&str>, core::slice::iter::Iter<&str>>, <purrdf_sparql_algebra::parser::SparqlParser>::with_prebound_variables<core::iter::adapters::chain::Chain<core::slice::iter::Iter<&str>, core::slice::iter::Iter<&str>>, &&str>::{closure#0}>>::{closure#0}>::{closure#0}>::{closure#0} as core::ops::function::FnMut<((), &&str)>>::call_mut
++693 0 693 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::reserve::<purrdf_sparql_algebra::ast::Variable>
+-660 792 132 <purrdf_sparql_eval::plan::Tree>::build
+-501 501 0 purrdf_sparql_eval::prebind_memo::moved_node
++495 0 495 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission> as purrdf_sparql_algebra::lexer::LexerStorage>::push_token
+-495 495 0 <alloc::raw_vec::RawVec<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>>>::grow_one
+-462 462 0 <purrdf_sparql_eval::engine::PlanCache>::prepare_keyed (.llvm.2140479885057702360)
+-462 462 0 <std::thread::local::LocalKey<core::cell::RefCell<(hashbrown::table::HashTable<(alloc::boxed::Box<[purrdf_sparql_algebra::ast::Variable]>, alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>)>, purrdf_sparql_eval::plan_memory::InternerCharge)>>>::with::<<purrdf_sparql_eval::solution::VarSchema>::interned::{closure#0}, alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>
+-462 462 0 <purrdf_sparql_algebra::parser::Parser<false>>::resolve_iri
+-396 396 0 <purrdf_sparql_algebra::parser::Parser<false>>::expect_raw_iriref
+-396 396 0 <purrdf_sparql_algebra::parser::Parser<false>>::parse_prologue
++363 0 363 <hashbrown::map::HashMap<purrdf_sparql_algebra::ast::Variable, (), purrdf_hash::fixed::FixedState> as core::iter::traits::collect::Extend<(purrdf_sparql_algebra::ast::Variable, ())>>::extend::<core::iter::adapters::map::Map<core::iter::adapters::map::Map<core::slice::iter::Iter<&str>, purrdf_sparql_eval::property_fn_plan::parameter_set::{closure#0}>, <hashbrown::set::HashSet<purrdf_sparql_algebra::ast::Variable, purrdf_hash::fixed::FixedState> as core::iter::traits::collect::Extend<purrdf_sparql_algebra::ast::Variable>>::extend<core::iter::adapters::map::Map<core::slice::iter::Iter<&str>, purrdf_sparql_eval::property_fn_plan::parameter_set::{closure#0}>>::{closure#0}>>
++363 0 363 <alloc::raw_vec::RawVec<purrdf_sparql_eval::modifier::MaxAccumulator>>::grow_one
+-363 363 0 <alloc::raw_vec::RawVec<(alloc::vec::Vec<purrdf_sparql_eval::property_fn_eval::Provenance>, core::result::Result<purrdf_sparql_eval::property_fn_eval::OneCall, alloc::string::String>)>>::grow_one
+-363 363 0 <purrdf_sparql_algebra::parser::Parser<false>>::run
++301 689 990 purrdf_sparql_eval::prebind_memo::moved
++297 0 297 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::reserve::<purrdf_sparql_algebra::parser::table::Slot<purrdf_sparql_algebra::ast::Variable, ()>>
++297 0 297 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::reserve::<purrdf_sparql_algebra::parser::table::Slot<purrdf_lex::allocation::text::OwnedText, purrdf_lex::allocation::text::OwnedText>>
++264 0 264 <purrdf_sparql_eval::workspace::AdmittedVec<purrdf_sparql_eval::plan::ExprSlot>>::with_capacity
++264 0 264 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::reserve::<purrdf_sparql_algebra::algebra::Expression>
++264 0 264 <purrdf_sparql_eval::workspace::AdmittedVec<(usize, purrdf_sparql_eval::plan::NodeId)>>::with_capacity
++264 0 264 <std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<alloc::sync::Arc<purrdf_sparql_eval::vm::compile::ExprProgram>>>::initialize<<std::sync::once_lock::OnceLock<alloc::sync::Arc<purrdf_sparql_eval::vm::compile::ExprProgram>>>::get_or_init<<purrdf_sparql_eval::plan::PlanShape>::program::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}
++264 0 264 <purrdf_sparql_eval::workspace::WorkspaceCapability>::reserve_vec_for_append::<(purrdf_sparql_algebra::walk::NodeRef, purrdf_sparql_eval::substitute::ScopeFlags)> (.llvm.15923795865131928298)
++264 0 264 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::push::<purrdf_sparql_algebra::parser::machine::Ctl>
+-264 264 0 <std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<alloc::sync::Arc<purrdf_sparql_eval::vm::compile::ExprProgram>>>::initialize<<std::sync::once_lock::OnceLock<alloc::sync::Arc<purrdf_sparql_eval::vm::compile::ExprProgram>>>::get_or_init<<purrdf_sparql_eval::plan::PlanShape>::program::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0} (.llvm.1339750624980207920)
+-264 264 0 <alloc::raw_vec::RawVec<purrdf_sparql_algebra::algebra::GraphUpdateOperation>>::grow_one
++264 0 264 <purrdf_sparql_eval::workspace::AdmittedVec<core::option::Option<purrdf_sparql_eval::bgp::DpPlan>>>::with_capacity
+-264 264 0 <purrdf_sparql_algebra::algebra::Query>::walk::<true>
++231 0 231 <std::thread::local::LocalKey<core::cell::RefCell<(hashbrown::table::HashTable<(alloc::boxed::Box<[purrdf_sparql_algebra::ast::Variable]>, purrdf_sparql_eval::solution::SharedSchema)>, purrdf_sparql_eval::plan_memory::InternerCharge)>>>::with::<<purrdf_sparql_eval::solution::VarSchema>::interned::{closure#0}, purrdf_sparql_eval::solution::SharedSchema>
+-231 231 0 <alloc::raw_vec::RawVec<purrdf_sparql_algebra::algebra::Expression>>::grow_one
+-231 231 0 <purrdf_sparql_algebra::parser::Parser<false>>::resume_select
+-231 693 462 <std::thread::local::LocalKey<core::cell::RefCell<(std::collections::hash::map::HashMap<alloc::boxed::Box<str>, purrdf_sparql_algebra::ast::Variable, purrdf_hash::fixed::FixedState>, purrdf_sparql_eval::plan_memory::InternerCharge)>>>::with::<purrdf_sparql_eval::substitute::interned_variable::{closure#0}, purrdf_sparql_algebra::ast::Variable>
+-198 198 0 <core::iter::adapters::chain::Chain<core::slice::iter::Iter<&str>, core::slice::iter::Iter<&str>> as core::iter::traits::iterator::Iterator>::fold::<(), core::iter::adapters::map::map_fold<&&str, purrdf_sparql_algebra::ast::Variable, (), <purrdf_sparql_algebra::parser::SparqlParser>::with_prebound_variables<core::iter::adapters::chain::Chain<core::slice::iter::Iter<&str>, core::slice::iter::Iter<&str>>, &&str>::{closure#0}, core::iter::traits::iterator::Iterator::for_each::call<purrdf_sparql_algebra::ast::Variable, <alloc::vec::Vec<purrdf_sparql_algebra::ast::Variable>>::extend_trusted<core::iter::adapters::map::Map<core::iter::adapters::chain::Chain<core::slice::iter::Iter<&str>, core::slice::iter::Iter<&str>>, <purrdf_sparql_algebra::parser::SparqlParser>::with_prebound_variables<core::iter::adapters::chain::Chain<core::slice::iter::Iter<&str>, core::slice::iter::Iter<&str>>, &&str>::{closure#0}>>::{closure#0}>::{closure#0}>::{closure#0}>
+-198 198 0 <hashbrown::raw::RawTable<(alloc::string::String, alloc::string::String)>>::reserve_rehash::<hashbrown::map::make_hasher<alloc::string::String, alloc::string::String, purrdf_hash::fixed::FixedState>::{closure#0}>
+-165 165 0 purrdf_sparql_algebra::parser::collect_vars (.llvm.11671388949150953518)
++165 0 165 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::push::<purrdf_sparql_algebra::parser::VarStep>
+-165 297 132 <hashbrown::raw::RawTable<(purrdf_sparql_algebra::ast::Variable, ())>>::reserve_rehash::<hashbrown::map::make_hasher<purrdf_sparql_algebra::ast::Variable, (), purrdf_hash::fixed::FixedState>::{closure#0}>
+-163 163 0 <purrdf_sparql_algebra::ast::Literal>::new_typed::<alloc::string::String>
+-132 132 0 <hashbrown::raw::RawTable<purrdf_sparql_eval::scratch::ScratchId>>::reserve_rehash::<<purrdf_sparql_eval::scratch::ScratchInterner>::intern_value<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#0}>
++132 0 132 <hashbrown::raw::RawTable<(purrdf_sparql_eval::scratch::ScratchId, u64)>>::reserve_rehash::<<purrdf_sparql_eval::scratch::ScratchInterner>::intern_value_with<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>, purrdf_sparql_eval::error::EvalError, <purrdf_sparql_eval::scratch::ScratchInterner>::try_intern_admitted<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#2}, <purrdf_sparql_eval::scratch::ScratchInterner>::try_intern_admitted<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#3}, <purrdf_sparql_eval::scratch::ScratchInterner>::try_intern_admitted<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#4}, <purrdf_sparql_eval::scratch::ScratchInterner>::try_intern_admitted<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#5}, <purrdf_sparql_eval::scratch::ScratchInterner>::try_intern_admitted<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#0}, <purrdf_sparql_eval::scratch::ScratchInterner>::try_intern_admitted<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#1}>::{closure#0}>
+-132 132 0 <purrdf_sparql_eval::execution::PreparedExecution>::substituted
++132 0 132 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::push::<alloc::vec::Vec<(purrdf_sparql_algebra::ast::Variable, purrdf_sparql_algebra::algebra::AggregateExpression)>>
++132 0 132 <purrdf_sparql_eval::workspace::SharedWorkspace<purrdf_sparql_eval::workspace::AdmittedVec<u8>>>::new_admitted
++132 0 132 <purrdf_lex::allocation::Memory<purrdf_lex::allocation::Resident>>::reserve::<alloc::vec::Vec<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>>>
+-132 132 0 <alloc::collections::btree::map::BTreeMap<purrdf_sparql_algebra::ast::Variable, alloc::collections::btree::set_val::SetValZST>>::insert
+-132 132 0 <alloc::vec::Vec<purrdf_sparql_algebra::ast::Variable> as alloc::vec::spec_extend::SpecExtend<purrdf_sparql_algebra::ast::Variable, core::iter::adapters::map::Map<core::iter::adapters::chain::Chain<core::slice::iter::Iter<&str>, core::slice::iter::Iter<&str>>, <purrdf_sparql_algebra::parser::SparqlParser>::with_prebound_variables<core::iter::adapters::chain::Chain<core::slice::iter::Iter<&str>, core::slice::iter::Iter<&str>>, &&str>::{closure#0}>>>::spec_extend
++132 0 132 <purrdf_sparql_eval::workspace::WorkspaceCapability>::reserve_vec::<(purrdf_sparql_algebra::ast::Variable, purrdf_sparql_algebra::ast::GroundTerm)>
++132 0 132 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::reserve::<core::option::Option<usize>>
++132 0 132 <purrdf_sparql_eval::workspace::SharedWorkspace<purrdf_sparql_eval::plan::PlanShape>>::new_admitted
+-132 132 0 purrdf_sparql_eval::substitute::join_assignments_in
++132 0 132 <purrdf_sparql_eval::workspace::AdmittedVec<u8>>::with_capacity
+-132 132 0 purrdf_sparql_algebra::parser::anon_label_prefix
++132 0 132 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::push::<purrdf_sparql_algebra::parser::ExistsFrame>
++132 0 132 <purrdf_lex::allocation::Memory<purrdf_sparql_eval::workspace::LexicalFrame>>::push::<purrdf_sparql_algebra::walk::NodeRef>
++132 0 132 <purrdf_lex::allocation::Memory<purrdf_lex::allocation::Resident>>::push::<purrdf_sparql_algebra::walk::NodeRef>
+-132 132 0 <alloc::raw_vec::RawVec<purrdf_sparql_algebra::parser::machine::GroupState>>::grow_one
++132 0 132 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::push::<purrdf_sparql_algebra::parser::machine::ModState>
++132 0 132 <purrdf_sparql_eval::execution::PreparedExecution>::substituted_admitted
+-132 132 0 <alloc::vec::Vec<&mut purrdf_sparql_algebra::algebra::Expression> as alloc::vec::spec_from_iter::SpecFromIter<&mut purrdf_sparql_algebra::algebra::Expression, core::array::iter::IntoIter<&mut purrdf_sparql_algebra::algebra::Expression, 1>>>::from_iter
++132 0 132 <alloc::vec::Vec<&str> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<&str, core::iter::adapters::map::Map<std::collections::hash::set::Iter<purrdf_sparql_algebra::ast::Variable>, <purrdf_sparql_algebra::ast::Variable>::as_str>>>::from_iter
++132 0 132 <purrdf_sparql_eval::engine::PlanCache>::prepare_keyed_admitted
++132 0 132 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::push::<purrdf_sparql_algebra::parser::machine::GroupState>
++132 0 132 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::reserve::<core::option::Option<purrdf_sparql_algebra::lexer::Spanned>>
+-132 132 0 <alloc::raw_vec::RawVec<(purrdf_sparql_algebra::ast::Variable, purrdf_sparql_algebra::ast::GroundTerm)>>::grow_one
+-132 132 0 <alloc::vec::Vec<alloc::vec::Vec<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>>> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<alloc::vec::Vec<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>>, core::iter::adapters::map::Map<core::slice::iter::Iter<alloc::vec::Vec<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>>>, purrdf_sparql_algebra::owned::assemble_pattern::{closure#3}>>>::from_iter
+-132 132 0 <alloc::vec::Vec<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>, core::iter::adapters::map::Map<core::slice::iter::Iter<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>>, purrdf_sparql_algebra::owned::assemble_pattern::{closure#3}::{closure#0}>>>::from_iter
++132 0 132 <purrdf_sparql_eval::workspace::AdmittedVec<core::option::Option<usize>>>::with_capacity
++132 0 132 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::reserve::<purrdf_sparql_algebra::parser::table::Slot<purrdf_sparql_algebra::ast::Variable, usize>>
++132 0 132 <purrdf_sparql_eval::workspace::WorkspaceCapability>::reserve_vec::<core::option::Option<purrdf_sparql_eval::workspace::WorkspaceAllocation>>
++132 0 132 <purrdf_lex::allocation::Memory<purrdf_lex::allocation::Resident>>::reserve::<core::option::Option<purrdf_sparql_algebra::ast::GroundTerm>>
+-132 132 0 <alloc::raw_vec::RawVec<purrdf_sparql_algebra::parser::machine::ModState>>::grow_one
+-132 132 0 <alloc::raw_vec::RawVec<purrdf_sparql_algebra::walk::walk_pre_post::Step>>::grow_one
++99 0 99 purrdf_lex::allocation::boxed::try_boxed::<purrdf_sparql_algebra::algebra::Query>
++99 0 99 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::push::<purrdf_sparql_algebra::parser::machine::SelectState>
+-99 99 0 <alloc::raw_vec::RawVec<purrdf_sparql_algebra::parser::machine::SelectState>>::grow_one
+-66 66 0 <alloc::collections::btree::map::entry::Entry<purrdf_sparql_algebra::ast::Variable, alloc::vec::Vec<usize>>>::or_default
++66 0 66 <hashbrown::raw::RawTable<(purrdf_sparql_eval::engine::PreparedCacheKey, purrdf_sparql_eval::plan_cache::Entry<purrdf_sparql_eval::engine::PreparedCacheKey, purrdf_sparql_eval::workspace::SharedWorkspace<purrdf_sparql_eval::engine::PreparedQuery>>)>>::reserve_rehash::<<purrdf_sparql_eval::workspace::AdmittedMap<purrdf_sparql_eval::engine::PreparedCacheKey, purrdf_sparql_eval::plan_cache::Entry<purrdf_sparql_eval::engine::PreparedCacheKey, purrdf_sparql_eval::workspace::SharedWorkspace<purrdf_sparql_eval::engine::PreparedQuery>>>>::insert_admitted::{closure#2}>
+-66 66 0 <hashbrown::raw::RawTable<(alloc::sync::Arc<[u8]>, purrdf_sparql_eval::plan_cache::Entry<alloc::sync::Arc<purrdf_sparql_eval::engine::PreparedQuery>>)>>::reserve_rehash::<hashbrown::map::make_hasher<alloc::sync::Arc<[u8]>, purrdf_sparql_eval::plan_cache::Entry<alloc::sync::Arc<purrdf_sparql_eval::engine::PreparedQuery>>, purrdf_hash::fixed::FixedState>::{closure#0}>
+-66 66 0 <alloc::raw_vec::RawVec<purrdf_sparql_algebra::ast::TriplePattern>>::grow_one
++66 0 66 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::reserve::<purrdf_sparql_algebra::ast::TriplePattern>
+-66 66 0 purrdf_sparql_algebra::walk::push_operands_mut
++66 0 66 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::push::<purrdf_sparql_algebra::parser::triples::TFrame>
+-66 66 0 <alloc::raw_vec::RawVec<purrdf_sparql_algebra::parser::triples::TFrame>>::grow_one
+-66 66 0 <purrdf_sparql_algebra::parser::Parser<false>>::reduce
++66 0 66 <purrdf_sparql_eval::workspace::WorkspaceCapability>::reserve_vec::<u8>
+-66 66 0 <hashbrown::raw::RawTable<(alloc::boxed::Box<[purrdf_sparql_algebra::ast::Variable]>, alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>)>>::reserve_rehash::<<purrdf_sparql_eval::solution::VarSchema>::interned::{closure#0}::{closure#1}>
+-66 66 0 <purrdf_sparql_algebra::ast::NamedNode>::new::<alloc::string::String>
++66 0 66 <hashbrown::raw::RawTable<(alloc::boxed::Box<[purrdf_sparql_algebra::ast::Variable]>, purrdf_sparql_eval::solution::SharedSchema)>>::reserve_rehash::<<purrdf_sparql_eval::solution::VarSchema>::interned::{closure#0}::{closure#1}>
+-33 33 0 <purrdf_sparql_algebra::algebra::Expression>::and
++33 0 33 <purrdf_lex::allocation::Memory<dyn purrdf_sparql_algebra::parser::ParserAdmission>>::push::<(purrdf_sparql_algebra::ast::Variable, purrdf_sparql_algebra::algebra::Expression)>
++33 0 33 <purrdf_shapes::sparql::CURRENT_GOVERNORS::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::RefCell<core::option::Option<alloc::sync::Arc<purrdf_sparql_eval::governor::GovernorState>>>>>,)>>::call_once (.llvm.15594022279276780696)
+-33 33 0 <purrdf_sparql_eval::solution::INTERNED_SCHEMAS::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::RefCell<(hashbrown::table::HashTable<(alloc::boxed::Box<[purrdf_sparql_algebra::ast::Variable]>, alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>)>, purrdf_sparql_eval::plan_memory::InternerCharge)>>>,)>>::call_once (.llvm.4318523829160108197)
+-33 33 0 <purrdf_shapes::sparql::CURRENT_PROPERTY_FUNCTIONS::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::RefCell<core::option::Option<alloc::sync::Arc<purrdf_sparql_eval::property_fn::PropertyFunctionRegistry>>>>>,)>>::call_once (.llvm.324453649823782984)
+-33 33 0 <alloc::raw_vec::RawVec<(purrdf_sparql_algebra::ast::Variable, purrdf_sparql_algebra::algebra::Expression)>>::grow_one
++33 0 33 <purrdf_shapes::sparql::CURRENT_AGGREGATES::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::RefCell<core::option::Option<alloc::sync::Arc<purrdf_sparql_eval::agg_fn::AggregateRegistry>>>>>,)>>::call_once (.llvm.15594022279276780696)
+-33 33 0 <purrdf_sparql_eval::plan_cache::BoundedCache<alloc::sync::Arc<[u8]>, alloc::sync::Arc<purrdf_sparql_eval::engine::PreparedQuery>>>::insert_with_eviction::<<purrdf_sparql_eval::engine::PlanCache>::prepare_keyed::{closure#3}>
+-33 33 0 <purrdf_shapes::sparql::CURRENT_FUNCTIONS::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::RefCell<core::option::Option<alloc::sync::Arc<purrdf_sparql_eval::user_fn::BoundFunctionRegistry>>>>>,)>>::call_once (.llvm.324453649823782984)
+-33 33 0 <purrdf_shapes::sparql::CURRENT_AGGREGATES::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::RefCell<core::option::Option<alloc::sync::Arc<purrdf_sparql_eval::agg_fn::AggregateRegistry>>>>>,)>>::call_once (.llvm.324453649823782984)
+-33 33 0 <purrdf_sparql_eval::engine::NativeSparqlEngine>::new
+-33 33 0 <purrdf_shapes::sparql::CURRENT_GOVERNORS::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::RefCell<core::option::Option<alloc::sync::Arc<purrdf_sparql_eval::governor::GovernorState>>>>>,)>>::call_once (.llvm.324453649823782984)
++33 0 33 <purrdf_sparql_eval::engine::PlanCache>::with_limits
++33 0 33 <purrdf_sparql_eval::solution::INTERNED_SCHEMAS::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::RefCell<(hashbrown::table::HashTable<(alloc::boxed::Box<[purrdf_sparql_algebra::ast::Variable]>, purrdf_sparql_eval::solution::SharedSchema)>, purrdf_sparql_eval::plan_memory::InternerCharge)>>>,)>>::call_once (.llvm.3746452742376739819)
++33 0 33 <purrdf_shapes::sparql::CURRENT_FUNCTIONS::{K#0}::{closure#0} as core::ops::function::FnOnce<(core::option::Option<&mut core::option::Option<core::cell::RefCell<core::option::Option<alloc::sync::Arc<purrdf_sparql_eval::user_fn::BoundFunctionRegistry>>>>>,)>>::call_once (.llvm.15594022279276780696)
++16 0 16 <purrdf_shapes::term::Term as core::clone::Clone>::clone (.llvm.15594022279276780696)
+-16 16 0 <purrdf_shapes::term::Term as core::clone::Clone>::clone
++8 0 8 purrdf_shapes::sparql::project_solutions::<purrdf_shapes::class_membership::ClassMembershipView, alloc::vec::Vec<purrdf_shapes::report::ValidationResult>, purrdf_shapes::sparql::eval_sparql_constraint_view<purrdf_shapes::class_membership::ClassMembershipView>::{closure#1}>
+-8 8 0 purrdf_shapes::sparql::run_cached_select_with_shacl_prebinding_view::<purrdf_shapes::class_membership::ClassMembershipView, alloc::vec::Vec<purrdf_shapes::report::ValidationResult>, purrdf_shapes::sparql::eval_sparql_constraint_view<purrdf_shapes::class_membership::ClassMembershipView>::{closure#0}, purrdf_shapes::sparql::eval_sparql_constraint_view<purrdf_shapes::class_membership::ClassMembershipView>::{closure#1}>::{closure#0}
+-2 2 0 <std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<alloc::sync::Arc<[usize]>>>::initialize<<std::sync::once_lock::OnceLock<alloc::sync::Arc<[usize]>>>::get_or_init<purrdf_sparql_eval::bgp::plan_or_cached_order<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0} (.llvm.9505383171325512710)
++1 0 1 <std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<purrdf_core::ir::term::TermValue>>::initialize<<std::sync::once_lock::OnceLock<purrdf_core::ir::term::TermValue>>::get_or_init<purrdf_sparql_eval::bgp::eval_compiled_bgp<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#3}>::{closure#0}, !>::{closure#0}>::{closure#0} (.llvm.8389829156051480806)
+-1 1 0 <std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<purrdf_core::ir::term::TermValue>>::initialize<<std::sync::once_lock::OnceLock<purrdf_core::ir::term::TermValue>>::get_or_init<purrdf_sparql_eval::bgp::eval_compiled_bgp<alloc::sync::Arc<purrdf_core::ir::dataset::RdfDataset>>::{closure#3}>::{closure#0}, !>::{closure#0}>::{closure#0} (.llvm.9505383171325512710)
+-1 1 0 <std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>>::initialize<<std::sync::once_lock::OnceLock<alloc::sync::Arc<purrdf_sparql_eval::solution::VarSchema>>>::get_or_init<<purrdf_sparql_eval::solution::VarSchema>::empty_shared::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0} (.llvm.1339750624980207920)

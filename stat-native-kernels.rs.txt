@@ -1,0 +1,133 @@
+
+fn parse_stat_value(value: &TermValue, workspace: &crate::WorkspaceCapability) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
+    let TermValue::Literal { lexical_form, datatype, .. } = value else { return Ok(None); };
+    let Some(datatype) = XsdDatatype::from_iri(datatype) else { return Ok(None); };
+    crate::parsed_value::ParsedValue::parse(lexical_form, datatype, false, workspace)
+}
+
+fn scalarval_native(scalarvals: &[(String, TermValue)], name: &str, workspace: &crate::WorkspaceCapability) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
+    let Some((_, term)) = scalarvals.iter().find(|(key, _)| key == name) else { return Ok(None); };
+    Ok(parse_stat_value(term, workspace)?.filter(|value| value.is_numeric()))
+}
+
+fn inline_stat_value(value: XsdValue) -> Result<crate::parsed_value::ParsedValue, EvalError> {
+    crate::parsed_value::ParsedValue::from_admitted(value, None, 0)
+}
+
+fn stat_compare(a: &XsdValue, b: &XsdValue, total: bool, workspace: &crate::WorkspaceCapability) -> Result<Option<Ordering>, EvalError> {
+    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+    let answer = if total && a.is_numeric() && b.is_numeric() {
+        purrdf_xsd::numeric::numeric_total_cmp_admitted(a, b, &mut |layout| frame.admit(layout))
+    } else {
+        purrdf_xsd::ops::value_cmp_admitted(a, b, &mut |layout| frame.admit(layout))
+    };
+    frame.finish_scalar(answer)
+}
+
+fn floor_stat_value(value: &XsdValue, workspace: &crate::WorkspaceCapability) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
+    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+    let answer = purrdf_xsd::numeric::numeric_unary_admitted(value, purrdf_xsd::numeric::NumericUnaryOperator::Floor, &mut |layout| frame.admit(layout));
+    frame.finish_value(answer).map(Result::ok)
+}
+
+fn native_floor_index(value: &XsdValue, workspace: &crate::WorkspaceCapability) -> Result<Option<i128>, EvalError> {
+    Ok(match value {
+        XsdValue::Integer { value, .. } => Some(*value),
+        XsdValue::Decimal(value) => Some(value.whole_part()),
+        XsdValue::Float(value) => Some(*value as i128),
+        XsdValue::Double(value) => Some(*value as i128),
+        XsdValue::BigInteger { value, .. } => Some(if value.is_negative() { i128::MIN } else { i128::MAX }),
+        XsdValue::BigDecimal(decimal) => {
+            let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+            let answer = purrdf_xsd::numeric::numeric_cast_admitted(value, XsdDatatype::Integer, &mut |layout| frame.admit(layout));
+            match frame.finish_cast(answer)? {
+                Some(integer) => match &*integer {
+                    XsdValue::Integer { value, .. } => Some(*value),
+                    XsdValue::BigInteger { value, .. } => Some(value.as_i128().unwrap_or(if decimal.is_negative() { i128::MIN } else { i128::MAX })),
+                    _ => None,
+                },
+                None => None,
+            }
+        }
+        _ => None,
+    })
+}
+
+fn series_order<V: std::borrow::Borrow<XsdValue>>(values: &[V], workspace: &crate::WorkspaceCapability) -> Result<crate::AdmittedVec<usize>, EvalError> {
+    let mut classes = crate::AdmittedVec::with_capacity(values.len(), workspace)?;
+    for value in values { classes.push(ValueClass::of_value(value.borrow()))?; }
+    crate::modifier::order_permutation(values.len(), workspace, |left, right| {
+        let class = classes[left].cmp(&classes[right]);
+        if class != Ordering::Equal { return Ok(class); }
+        Ok(stat_compare(values[left].borrow(), values[right].borrow(), true, workspace)?.unwrap_or(Ordering::Equal))
+    })
+}
+
+#[cfg(test)]
+fn sort_series(values: Vec<XsdValue>) -> Vec<XsdValue> {
+    let order = series_order(&values, &crate::WorkspaceCapability::resident()).expect("resident series ordering");
+    let mut original: Vec<_> = values.into_iter().map(Some).collect();
+    order.iter().map(|index| original[*index].take().expect("one original ordinal")).collect()
+}
+
+fn percentile_native(values: &[crate::parsed_value::ParsedValue], order: &[usize], p: &XsdValue, workspace: &crate::WorkspaceCapability) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
+    use purrdf_xsd::numeric::NumericBinaryOperator::{Add, Multiply, Subtract};
+    let zero = XsdValue::Integer { value: 0, datatype: XsdDatatype::Integer };
+    let one = XsdValue::Integer { value: 1, datatype: XsdDatatype::Integer };
+    let (Some(lower), Some(upper)) = (stat_compare(p, &zero, false, workspace)?, stat_compare(p, &one, false, workspace)?) else { return Ok(None); };
+    if lower == Ordering::Less || upper == Ordering::Greater || order.is_empty() { return Ok(None); }
+    if order.len() == 1 { return Ok(Some(values[order[0]].clone())); }
+    let n = order.len();
+    let Some(count) = i128::try_from(n - 1).ok() else { return Ok(None); };
+    let count_value = XsdValue::Integer { value: count, datatype: XsdDatatype::Integer };
+    let policy = purrdf_xsd::exact::DivisionPolicy::xsd_default();
+    let Ok(rank) = crate::modifier::numeric_fold_binary(p, &count_value, Multiply, policy, workspace)? else { return Ok(None); };
+    let Some(floor) = floor_stat_value(&rank, workspace)? else { return Ok(None); };
+    let Some(index) = native_floor_index(&floor, workspace)? else { return Ok(None); };
+    let Some(lo) = usize::try_from(index.clamp(0, count)).ok() else { return Ok(None); };
+    let hi = (lo + 1).min(n - 1);
+    if lo == hi { return Ok(Some(values[order[lo]].clone())); }
+    let Ok(fraction) = crate::modifier::numeric_fold_binary(&rank, &floor, Subtract, policy, workspace)? else { return Ok(None); };
+    let Ok(diff) = crate::modifier::numeric_fold_binary(&values[order[hi]], &values[order[lo]], Subtract, policy, workspace)? else { return Ok(None); };
+    let Ok(scaled) = crate::modifier::numeric_fold_binary(&diff, &fraction, Multiply, policy, workspace)? else { return Ok(None); };
+    Ok(crate::modifier::numeric_fold_binary(&values[order[lo]], &scaled, Add, policy, workspace)?.ok())
+}
+
+fn native_term_order(left: &TermValue, right: &TermValue, workspace: &crate::WorkspaceCapability) -> Result<Ordering, EvalError> {
+    let left_key = project_admitted(Some(left), workspace)?;
+    let right_key = project_admitted(Some(right), workspace)?;
+    let order = total_order_admitted(&left_key.key, &right_key.key, workspace)?;
+    if order == Ordering::Equal { workspace.terms_cmp(left, right) } else { Ok(order) }
+}
+
+fn insert_bounded(values: &mut crate::AdmittedVec<crate::WorkspaceTerm>, k: usize, value: crate::WorkspaceTerm, workspace: &crate::WorkspaceCapability) -> Result<(), EvalError> {
+    if k == 0 { return Ok(()); }
+    values.push(value)?;
+    if values.len() > k {
+        let mut smallest = 0;
+        for index in 1..values.len() {
+            if native_term_order(&values[index], &values[smallest], workspace)? == Ordering::Less { smallest = index; }
+        }
+        drop(values.remove(smallest));
+    }
+    Ok(())
+}
+
+fn borrowed_lexical(value: &TermValue) -> Option<&str> {
+    match value { TermValue::Iri(text) => Some(text), TermValue::Literal { lexical_form, .. } => Some(lexical_form), _ => None }
+}
+
+struct TopKText<'a> { values: &'a [crate::WorkspaceTerm], order: &'a [usize] }
+impl std::fmt::Display for TopKText<'_> {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (position, index) in self.order.iter().enumerate() {
+            if position > 0 { out.write_str(" ")?; }
+            out.write_str(borrowed_lexical(&self.values[*index]).ok_or(std::fmt::Error)?)?;
+        }
+        Ok(())
+    }
+}
+
+fn native_resident_answer(answer: Result<Option<crate::WorkspaceTerm>, EvalError>) -> Result<Option<TermValue>, EvalError> {
+    answer?.map(|value| value.into_resident().map_err(|_| EvalError::WorkspaceUnpriced("a resident statistical call cannot detach bounded output"))).transpose()
+}

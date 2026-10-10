@@ -1,0 +1,100 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Independent compiler allocation measurements over the real native program.
+
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_core::xsd_regex::xpath::{self, Limits, Profile};
+use purrdf_lex::allocation::{Admission, StorageError};
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+#[derive(Debug)]
+struct Account {
+    limit: usize,
+    live: usize,
+    peak: usize,
+    refused: Option<usize>,
+}
+
+impl Account {
+    const fn new(limit: usize) -> Self {
+        Self { limit, live: 0, peak: 0, refused: None }
+    }
+}
+
+impl Admission for Account {
+    fn resize(&mut self, live_bytes: usize) -> Result<(), StorageError> {
+        if live_bytes > self.limit {
+            if self.refused.is_none() { self.refused = Some(live_bytes); }
+            return Err(StorageError::AdmissionFailed);
+        }
+        self.live = live_bytes;
+        self.peak = self.peak.max(live_bytes);
+        Ok(())
+    }
+}
+
+#[test]
+fn compiler_peak_and_retained_layout_cover_actual_native_buffers() {
+    let source = "(a|b){1,20}[c-z-[d-f]]\\p{Lu}".repeat(48);
+    for flags in ["", "ix", "qsimx"] {
+        let window = CurrentThreadWindow::open();
+        let program = xpath::compile_with_storage(
+            Profile::Xpath31, &source, flags, Limits::new(), Account::new(2_000_000),
+        ).unwrap();
+        let measured = window.close();
+        assert!(
+            usize::try_from(measured.peak_working_bytes).unwrap() <= program.storage().peak,
+            "flags {flags:?}: compiler heap exceeded its physical admission"
+        );
+        assert_eq!(
+            usize::try_from(measured.retained_bytes).unwrap(), program.storage().live,
+            "construction scratch must be destroyed and released before publication"
+        );
+        assert_eq!(
+            program.storage().live,
+            program.pattern().storage_bytes() - size_of::<xpath::CompiledPattern>(),
+            "the program's source, flags, nodes, sets, links and flat tables are retained"
+        );
+        let resident = xpath::compile(Profile::Xpath31, &source, flags, Limits::new()).unwrap();
+        for input in ["", "abc", "ABCD", &source] {
+            assert_eq!(
+                program.pattern().is_match(input, Limits::new()),
+                resident.is_match(input, Limits::new()),
+                "physical admission must preserve the selected native law"
+            );
+        }
+    }
+}
+
+#[test]
+fn compiler_refusal_precedes_unadmitted_allocation_and_preserves_its_owner() {
+    let source = "(a|b){1,20}[c-z-[d-f]]\\p{Lu}".repeat(48);
+    for limit in [0, 32, 1024, 4096] {
+        let window = CurrentThreadWindow::open();
+        let failure = xpath::compile_with_storage(
+            Profile::Xpath31, &source, "ix", Limits::new(), Account::new(limit),
+        ).unwrap_err();
+        let measured = window.close();
+        assert!(matches!(failure.error(), xpath::Error::Storage(StorageError::AdmissionFailed)));
+        assert!(failure.storage().refused.unwrap() > limit);
+        assert!(failure.storage().peak <= limit);
+        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= failure.storage().peak);
+        assert_eq!(measured.retained_bytes, 0, "failed compiler buffers are already destroyed");
+    }
+}
+
+#[test]
+fn owned_program_drop_destroys_all_compiler_storage() {
+    let source = "((ab|cd){2,8}[a-z-[e]]?)+".repeat(32);
+    let window = CurrentThreadWindow::open();
+    let program = xpath::compile_with_storage(
+        Profile::Xpath31, &source, "x", Limits::new(), Account::new(2_000_000),
+    ).unwrap();
+    assert!(program.storage().live > 0);
+    drop(program);
+    let measured = window.close();
+    assert_eq!(measured.retained_bytes, 0);
+}

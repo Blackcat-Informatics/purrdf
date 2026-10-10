@@ -1,0 +1,242 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Proposed core allocation-home implementation; not applied or qualified.
+//! A sized, immutable shared owner with one fallible allocation, no weak owners,
+//! raw extraction, unsizing or mutable payload access. Clone never allocates.
+
+use core::alloc::Layout;
+use core::fmt;
+use core::marker::PhantomData;
+use core::ops::Deref;
+use core::ptr::NonNull;
+use core::sync::atomic::{AtomicUsize, Ordering, fence};
+
+const MAX_STRONG: usize = usize::MAX / 2;
+
+struct Header<T> {
+    strong: AtomicUsize,
+    value: T,
+}
+
+/// Allocation refusal while constructing an immutable shared owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SharedAllocError;
+
+impl fmt::Display for SharedAllocError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("shared owner allocation failed")
+    }
+}
+impl std::error::Error for SharedAllocError {}
+
+/// A checked shared-owner reference count cannot accept another reference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SharedCloneError;
+
+impl fmt::Display for SharedCloneError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("shared owner reference count overflow")
+    }
+}
+impl std::error::Error for SharedCloneError {}
+
+/// Immutable, sized shared ownership. Construction can report allocator refusal.
+pub struct Shared<T> {
+    pointer: NonNull<Header<T>>,
+    // The allocation owns a T; auto-trait and drop-check obligations follow T.
+    _owner: PhantomData<Header<T>>,
+}
+
+// SAFETY: References expose only &T. Ownership may cross threads only when T
+// permits both transfer and shared access. The strong count is atomic.
+unsafe impl<T: Send + Sync> Send for Shared<T> {}
+// SAFETY: Same immutable access and atomic lifetime protocol as Send above.
+unsafe impl<T: Send + Sync> Sync for Shared<T> {}
+
+impl<T> Shared<T> {
+    /// The complete, actual single allocation, including alignment and count.
+    #[must_use]
+    pub const fn allocation_layout() -> Layout {
+        Layout::new::<Header<T>>()
+    }
+
+    /// Allocate one owner after its caller has admitted this concrete layout.
+    ///
+    /// # Errors
+    /// Returns allocation refusal without constructing diagnostic text.
+    pub fn try_new(value: T) -> Result<Self, SharedAllocError> {
+        // SAFETY: alloc supplies null or global-allocator storage for this layout.
+        unsafe { Self::try_new_with(value, |layout| std::alloc::alloc(layout)) }
+    }
+
+    /// Internal allocation boundary, also exercised by the null-allocator test.
+    ///
+    /// # Safety
+    /// The allocator returns null, or fresh global-allocator storage for exactly
+    /// the supplied nonzero layout. It must not return an alias or other storage.
+    unsafe fn try_new_with(
+        value: T,
+        allocate: impl FnOnce(Layout) -> *mut u8,
+    ) -> Result<Self, SharedAllocError> {
+        let layout = Self::allocation_layout();
+        // Header always includes AtomicUsize, even for a zero-sized T.
+        let pointer = NonNull::new(allocate(layout).cast::<Header<T>>()).ok_or(SharedAllocError)?;
+        // SAFETY: the allocation contract provides aligned, fresh storage;
+        // no reference is exposed before this initialization.
+        unsafe {
+            pointer.as_ptr().write(Header {
+                strong: AtomicUsize::new(1),
+                value,
+            })
+        };
+        Ok(Self {
+            pointer,
+            _owner: PhantomData,
+        })
+    }
+
+    /// Retain the existing allocation without allocating or copying its value.
+    ///
+    /// # Errors
+    /// Refuses a count above isize::MAX without changing the existing count.
+    pub fn try_clone(&self) -> Result<Self, SharedCloneError> {
+        // SAFETY: self holds a strong reference, so the header is live.
+        let header = unsafe { self.pointer.as_ref() };
+        header
+            .strong
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                (count < MAX_STRONG).then(|| count + 1)
+            })
+            .map_err(|_| SharedCloneError)?;
+        Ok(Self {
+            pointer: self.pointer,
+            _owner: PhantomData,
+        })
+    }
+}
+
+impl<T> Clone for Shared<T> {
+    fn clone(&self) -> Self {
+        self.try_clone()
+            .expect("shared owner reference count overflow")
+    }
+}
+
+impl<T> Deref for Shared<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        // SAFETY: this strong owner keeps the initialized allocation alive;
+        // mutation and raw pointer extraction are not exposed.
+        unsafe { &self.pointer.as_ref().value }
+    }
+}
+
+impl<T> AsRef<T> for Shared<T> {
+    fn as_ref(&self) -> &T {
+        self
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for Shared<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, formatter)
+    }
+}
+
+impl<T> Drop for Shared<T> {
+    fn drop(&mut self) {
+        // SAFETY: this owner has not yet released its strong reference.
+        let header = unsafe { self.pointer.as_ref() };
+        if header.strong.fetch_sub(1, Ordering::Release) != 1 {
+            return;
+        }
+        // Synchronize with earlier Release decrements before destroying T.
+        fence(Ordering::Acquire);
+        // SAFETY: this was the last owner. The initialized allocation came from
+        // the global allocator with Layout::new::<Header<T>>. Box drops T and
+        // deallocates it, including if T's destructor unwinds.
+        unsafe { drop(Box::from_raw(self.pointer.as_ptr())) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    struct DropProbe(Arc<AtomicUsize>);
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn null_allocator_refusal_drops_input_once() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        // SAFETY: null satisfies the allocation boundary's refusal contract.
+        let result =
+            unsafe { Shared::try_new_with(DropProbe(drops.clone()), |_| core::ptr::null_mut()) };
+        assert!(matches!(result, Err(SharedAllocError)));
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn shallow_clone_keeps_original_payload_live() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let original = Shared::try_new(DropProbe(drops.clone())).expect("test allocation");
+        let survivor = original.clone();
+        assert!(core::ptr::eq(&*original, &*survivor));
+        drop(original);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        drop(survivor);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn last_owner_drops_payload_once_across_threads() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let owner = Shared::try_new(DropProbe(drops.clone())).expect("test allocation");
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let worker = owner.clone();
+                scope.spawn(move || {
+                    for _ in 0..1024 {
+                        drop(worker.clone());
+                    }
+                });
+            }
+        });
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        drop(owner);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn zero_sized_and_overaligned_payloads_keep_valid_layouts() {
+        #[repr(align(256))]
+        struct Aligned(u8);
+        let empty = Shared::try_new(()).expect("zero-sized payload");
+        assert_eq!(*empty, ());
+        assert!(Shared::<()>::allocation_layout().size() >= size_of::<AtomicUsize>());
+        let aligned = Shared::try_new(Aligned(7)).expect("aligned payload");
+        assert_eq!(aligned.0, 7);
+        assert_eq!((&*aligned as *const Aligned).addr() % 256, 0);
+        assert_eq!(Shared::<Aligned>::allocation_layout().align(), 256);
+    }
+
+    #[test]
+    fn checked_clone_refuses_without_wrapping_count() {
+        let owner = Shared::try_new(7u8).expect("test allocation");
+        // SAFETY: test owns the only strong reference; no other thread can use
+        // it. Restore the real count before its destructor executes.
+        let count = unsafe { &owner.pointer.as_ref().strong };
+        count.store(MAX_STRONG, Ordering::Relaxed);
+        let refused = owner.try_clone();
+        assert!(matches!(refused, Err(SharedCloneError)));
+        assert_eq!(count.load(Ordering::Relaxed), MAX_STRONG);
+        count.store(1, Ordering::Relaxed);
+    }
+}

@@ -1,0 +1,417 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+#[derive(Clone, Copy)]
+struct ScopeFlags { on_descent: bool, in_exists: bool, joined: bool }
+
+enum ScopeOperation<'a> {
+    Assign { names: &'a [&'a str], fresh: &'a mut usize },
+    Minus { probes: &'a [(Variable, GroundTerm)], fresh: &'a mut usize },
+}
+
+#[derive(Clone, Copy)]
+enum ScopeStage { Bodies, Children }
+
+struct ScopeFrame {
+    node: GraphPattern,
+    flags: ScopeFlags,
+    stage: ScopeStage,
+    pending: crate::AdmittedVec<GraphPattern>,
+    done: crate::AdmittedVec<GraphPattern>,
+    child_flags: ScopeFlags,
+    skip: usize,
+}
+
+fn take_own_exists_with_memory(
+    node: &mut GraphPattern, memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<crate::AdmittedVec<GraphPattern>> {
+    let mut bodies = crate::AdmittedVec::new(&rewrite_workspace(memory));
+    let roots = own_expressions_with_memory(node, memory)?;
+    for_each_expression_mut_with_memory(roots, memory, |expression, _| {
+        if let Expression::Exists(body) = expression { bodies.push(take_child(body))?; }
+        Ok(())
+    })?;
+    bodies.as_mut_slice().reverse();
+    Ok(bodies)
+}
+
+fn scope_target(node: &mut GraphPattern, skip: usize) -> &mut GraphPattern {
+    let mut target = node;
+    for _ in 0..skip {
+        target = match target {
+            GraphPattern::Extend { inner, .. } | GraphPattern::Filter { inner, .. } => inner,
+            _ => unreachable!("assignment wrappers were just constructed"),
+        };
+    }
+    target
+}
+
+fn scope_begin_children(
+    frame: &mut ScopeFrame, operation: &mut ScopeOperation<'_>, memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Option<(GraphPattern, ScopeFlags)>> {
+    let roots = own_expressions_with_memory(&mut frame.node, memory)?;
+    let done = std::mem::replace(&mut frame.done, crate::AdmittedVec::new(&rewrite_workspace(memory)));
+    replace_exists_bodies_with_memory(roots, done, memory)?;
+    let (flags, skip) = scope_process_node(&mut frame.node, frame.flags, operation, memory)?;
+    frame.child_flags = flags;
+    frame.skip = skip;
+    frame.stage = ScopeStage::Children;
+    frame.pending.clear();
+    push_child_patterns_with_memory(scope_target(&mut frame.node, skip), &mut frame.pending, take_child)?;
+    Ok(frame.pending.pop().map(|child| (child, flags)))
+}
+
+/// The original expression-body-before-node, then reverse-child walk shared by
+/// assignment joining and MINUS seeding, now holding owned frames instead of
+/// recursing through EXISTS levels. Every taken slot stays inside its original box.
+fn scope_walk_with_memory(
+    root: &mut GraphPattern, flags: ScopeFlags, mut operation: ScopeOperation<'_>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let workspace = rewrite_workspace(memory);
+    let mut open = crate::AdmittedVec::new(&workspace);
+    let mut next = (take_child(root), flags);
+    loop {
+        let (mut node, flags) = next;
+        let pending = take_own_exists_with_memory(&mut node, memory)?;
+        let mut frame = ScopeFrame {
+            node, flags, stage: ScopeStage::Bodies, pending,
+            done: crate::AdmittedVec::new(&workspace), child_flags: flags, skip: 0,
+        };
+        if let Some(body) = frame.pending.pop() {
+            next = (body, ScopeFlags { on_descent: true, in_exists: true, joined: false });
+            open.push(frame)?;
+            continue;
+        }
+        if let Some(child) = scope_begin_children(&mut frame, &mut operation, memory)? {
+            next = child;
+            open.push(frame)?;
+            continue;
+        }
+        let mut finished = frame.node;
+        loop {
+            let Some(mut frame) = open.pop() else { *root = finished; return Ok(()); };
+            frame.done.push(finished)?;
+            if let Some(pending) = frame.pending.pop() {
+                next = match frame.stage {
+                    ScopeStage::Bodies => (pending, ScopeFlags { on_descent: true, in_exists: true, joined: false }),
+                    ScopeStage::Children => (pending, frame.child_flags),
+                };
+                open.push(frame)?;
+                break;
+            }
+            match frame.stage {
+                ScopeStage::Bodies => {
+                    if let Some(child) = scope_begin_children(&mut frame, &mut operation, memory)? {
+                        next = child;
+                        open.push(frame)?;
+                        break;
+                    }
+                }
+                ScopeStage::Children => {
+                    // Original child pushes were left-to-right and pops were last
+                    // first; reverse completed children to restore original slots.
+                    frame.done.as_mut_slice().reverse();
+                    let done = std::mem::replace(&mut frame.done, crate::AdmittedVec::new(&workspace));
+                    let mut done = done.into_iter();
+                    for_each_child_pattern_mut(scope_target(&mut frame.node, frame.skip), &mut |slot| {
+                        *slot = done.next().expect("every taken pattern child returns");
+                    });
+                    debug_assert!(done.next().is_none());
+                }
+            }
+            finished = frame.node;
+        }
+    }
+}
+
+struct FreshAssignment<'a> { counter: usize, variable: &'a Variable }
+impl std::fmt::Display for FreshAssignment<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{ASSIGNED_PREFIX}{}_{}", self.counter, self.variable.as_str())
+    }
+}
+
+struct FreshMinus(usize);
+impl std::fmt::Display for FreshMinus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{MINUS_PREFIX}{}", self.0) }
+}
+
+fn compatible_with_binding_with_memory(
+    name: Variable, to: Variable, memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Expression> {
+    let left = Expression::Not(rewrite_child(Expression::Bound(to.clone()), memory)?);
+    let right = Expression::SameTerm(
+        rewrite_child(Expression::Variable(to), memory)?,
+        rewrite_child(Expression::Variable(name), memory)?,
+    );
+    let items = rewrite_vec([left, right], memory)?;
+    Ok(Expression::Or(Chain::try_from(items).unwrap_or_else(|_| unreachable!("two operands"))))
+}
+
+fn scope_process_node(
+    node: &mut GraphPattern, flags: ScopeFlags, operation: &mut ScopeOperation<'_>,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<(ScopeFlags, usize)> {
+    match operation {
+        ScopeOperation::Minus { probes, fresh } => {
+            if let GraphPattern::Minus { left, right } = node {
+                if flags.in_exists {
+                    **fresh = fresh.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+                    let shared = rewrite_variable(&FreshMinus(**fresh), memory)?;
+                    let mark = NamedNode::from_admitted(rewrite_workspace(memory).authored_text(&MINUS_MARK)?);
+                    **left = GraphPattern::Extend {
+                        inner: rewrite_child(take_child(left), memory)?, variable: shared.clone(),
+                        expression: Expression::NamedNode(mark.clone()),
+                    };
+                    let seed = seed_entries_with_memory(probes.iter(), memory)?;
+                    let right_operand = GraphPattern::Extend {
+                        inner: rewrite_child(take_child(right), memory)?, variable: shared,
+                        expression: Expression::NamedNode(mark),
+                    };
+                    **right = rewrite_join(seed, right_operand, memory)?;
+                } else {
+                    for side in [&mut **left, &mut **right] {
+                        let seed = seed_entries_with_memory(probes.iter(), memory)?;
+                        *side = rewrite_join(seed, take_child(side), memory)?;
+                    }
+                }
+            }
+            Ok((flags, 0))
+        }
+        ScopeOperation::Assign { names, fresh } => {
+            let mut moved = crate::AdmittedVec::new(&rewrite_workspace(memory));
+            let mut fresh_for = |variable: &mut Variable, memory: &mut RewriteMemory<'_>| -> RewriteResult<()> {
+                if names.contains(&variable.as_str()) {
+                    **fresh = fresh.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+                    let to = rewrite_variable(&FreshAssignment { counter: **fresh, variable }, memory)?;
+                    moved.push((variable.clone(), to.clone()))?;
+                    *variable = to;
+                }
+                Ok(())
+            };
+            match node {
+                GraphPattern::Extend { variable, .. } => fresh_for(variable, memory)?,
+                GraphPattern::Unfold { element, companion, .. } => {
+                    fresh_for(element, memory)?;
+                    if let Some(companion) = companion { fresh_for(companion, memory)?; }
+                }
+                GraphPattern::Group { aggregates, .. } => {
+                    for (variable, _) in aggregates { fresh_for(variable, memory)?; }
+                }
+                GraphPattern::Values { variables, .. } if !flags.joined => {
+                    for variable in variables { fresh_for(variable, memory)?; }
+                }
+                _ => {}
+            }
+            let wrapper = matches!(node,
+                GraphPattern::Project { .. } | GraphPattern::Distinct { .. } | GraphPattern::Reduced { .. }
+                | GraphPattern::Slice { .. } | GraphPattern::OrderBy { .. } | GraphPattern::Group { .. }
+                | GraphPattern::Extend { .. } | GraphPattern::Filter { .. } | GraphPattern::Unfold { .. });
+            let child_flags = ScopeFlags {
+                on_descent: flags.in_exists || (flags.on_descent && wrapper),
+                in_exists: flags.in_exists,
+                joined: !flags.in_exists && ((flags.on_descent && wrapper)
+                    || (flags.joined && matches!(node, GraphPattern::Join { .. } | GraphPattern::Union { .. } | GraphPattern::Graph { .. }))),
+            };
+            if moved.is_empty() { return Ok((child_flags, 0)); }
+            let mut condition = None;
+            for (name, to) in moved.iter() {
+                let right = compatible_with_binding_with_memory(name.clone(), to.clone(), memory)?;
+                condition = Some(match condition {
+                    None => right,
+                    Some(left) => Expression::And(Chain::try_from(rewrite_vec([left, right], memory)?)
+                        .unwrap_or_else(|_| unreachable!("two compatibility conditions"))),
+                });
+            }
+            let mut joined = GraphPattern::Filter {
+                expr: condition.expect("nonempty moved assignments"), inner: rewrite_child(take_child(node), memory)?,
+            };
+            let extended = if flags.on_descent { 0 } else { moved.len() };
+            if !flags.on_descent {
+                for (name, to) in moved {
+                    let args = rewrite_vec([Expression::Variable(to), Expression::Variable(name.clone())], memory)?;
+                    joined = GraphPattern::Extend {
+                        inner: rewrite_child(joined, memory)?, variable: name,
+                        expression: Expression::Coalesce(args.into()),
+                    };
+                }
+            }
+            *node = joined;
+            Ok((child_flags, extended.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?))
+        }
+    }
+}
+
+fn join_assignments_in_with_memory(
+    root: &mut GraphPattern, on_descent: bool, in_exists: bool, names: &[&str], fresh: &mut usize,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    scope_walk_with_memory(root, ScopeFlags {
+        joined: on_descent && !in_exists, on_descent: on_descent || in_exists, in_exists,
+    }, ScopeOperation::Assign { names, fresh }, memory)
+}
+
+pub(crate) fn join_assignments_with_prebinding_with_memory(
+    query: &mut Query, names: &[&str], memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<bool> {
+    if !needs_assignment_join_with_memory(query, names, memory)? { return Ok(false); }
+    let pattern = query_pattern_mut(query);
+    let mut fresh = highest_index_with_memory(pattern, ASSIGNED_PREFIX, memory)?;
+    join_assignments_in_with_memory(pattern, true, false, names, &mut fresh, memory)?;
+    Ok(true)
+}
+
+pub(crate) fn needs_assignment_join_with_memory(
+    query: &Query, names: &[&str], memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<bool> {
+    use purrdf_sparql_algebra::walk::NodeRef;
+    if names.is_empty() { return Ok(false); }
+    let root = ScopeFlags { on_descent: true, in_exists: false, joined: true };
+    let mut pending = rewrite_scratch([(NodeRef::Pattern(query.pattern()), root)], memory)?;
+    while let Some((node, flags)) = pending.pop() {
+        let child_flags = match node {
+            NodeRef::Pattern(pattern) => {
+                let binds = |variable: &Variable| names.contains(&variable.as_str());
+                let changes = match pattern {
+                    GraphPattern::Extend { variable, .. } => binds(variable),
+                    GraphPattern::Unfold { element, companion, .. } => binds(element) || companion.as_ref().is_some_and(binds),
+                    GraphPattern::Group { aggregates, .. } => aggregates.iter().any(|(variable, _)| binds(variable)),
+                    GraphPattern::Values { variables, .. } if !flags.joined => variables.iter().any(binds),
+                    _ => false,
+                };
+                if changes { return Ok(true); }
+                let wrapper = matches!(pattern, GraphPattern::Project { .. } | GraphPattern::Distinct { .. }
+                    | GraphPattern::Reduced { .. } | GraphPattern::Slice { .. } | GraphPattern::OrderBy { .. }
+                    | GraphPattern::Group { .. } | GraphPattern::Extend { .. } | GraphPattern::Filter { .. }
+                    | GraphPattern::Unfold { .. });
+                ScopeFlags {
+                    on_descent: flags.in_exists || (flags.on_descent && wrapper),
+                    in_exists: flags.in_exists,
+                    joined: !flags.in_exists && ((flags.on_descent && wrapper)
+                        || (flags.joined && matches!(pattern, GraphPattern::Join { .. } | GraphPattern::Union { .. } | GraphPattern::Graph { .. }))),
+                }
+            }
+            NodeRef::Expr(Expression::Exists(_)) => ScopeFlags { on_descent: true, in_exists: true, joined: false },
+            _ => flags,
+        };
+        let mut count = Some(0_usize);
+        node.for_each_child(|_| count = count.and_then(|count| count.checked_add(1)));
+        pending.reserve_additional(count.ok_or(crate::EvalError::WorkspaceBoundOverflow)?)?;
+        node.for_each_child(|child| pending.push_reserved((child, child_flags)));
+    }
+    Ok(false)
+}
+
+fn seed_minus_in_with_memory(
+    root: &mut GraphPattern, probes: &[(Variable, GroundTerm)], in_exists: bool, fresh: &mut usize,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    if probes.is_empty() { return Ok(()); }
+    scope_walk_with_memory(root, ScopeFlags { on_descent: false, in_exists, joined: false },
+        ScopeOperation::Minus { probes, fresh }, memory)
+}
+
+fn seed_both_minus_operands_with_memory(
+    root: &mut GraphPattern, probes: &[(Variable, GroundTerm)], memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let mut fresh = highest_index_with_memory(root, MINUS_PREFIX, memory)?;
+    seed_minus_in_with_memory(root, probes, false, &mut fresh, memory)
+}
+
+fn seed_every_sub_select_with_memory(
+    root: &mut GraphPattern, probes: &[(Variable, GroundTerm)], memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let seeded: *const GraphPattern = core_slot(root);
+    seed_sub_selects_in_with_memory(root, probes, seeded, memory)
+}
+
+fn seed_sub_selects_in_with_memory(
+    root: &mut GraphPattern, probes: &[(Variable, GroundTerm)], seeded: *const GraphPattern,
+    memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    if probes.is_empty() { return Ok(()); }
+    let mut pending = rewrite_scratch([(root, true)], memory)?;
+    while let Some((node, top)) = pending.pop() {
+        if !top && matches!(node, GraphPattern::Project { .. }) {
+            let GraphPattern::Project { inner, .. } = node else { unreachable!("Project matched") };
+            if !std::ptr::eq(core_slot(inner), seeded) {
+                let core = core_slot(inner);
+                let seed = seed_entries_with_memory(probes.iter(), memory)?;
+                *core = rewrite_join(seed, take_child(core), memory)?;
+                let GraphPattern::Join { right, .. } = core else { unreachable!("seed joined here") };
+                pending.push((&mut **right, false))?;
+                continue;
+            }
+            pending.push((&mut **inner, false))?;
+            continue;
+        }
+        let child_top = top && matches!(node, GraphPattern::Distinct { .. } | GraphPattern::Reduced { .. }
+            | GraphPattern::Slice { .. } | GraphPattern::OrderBy { .. });
+        push_child_patterns_with_memory(node, &mut pending, |child| (child, child_top))?;
+    }
+    Ok(())
+}
+
+fn seed_above_a_lone_sub_select_with_memory(
+    pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<()> {
+    let mut core = pattern;
+    let mut projected = false;
+    loop {
+        match core {
+            GraphPattern::Project { .. } if projected => break,
+            GraphPattern::Project { inner, .. } => { projected = true; core = inner; }
+            GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } | GraphPattern::Slice { inner, .. }
+            | GraphPattern::OrderBy { inner, .. } | GraphPattern::Group { inner, .. } | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Filter { inner, .. } | GraphPattern::Unfold { inner, .. } => core = inner,
+            _ => return Ok(()),
+        }
+    }
+    let seed = seed_entries_with_memory(probes.iter(), memory)?;
+    *core = rewrite_join(seed, take_child(core), memory)?;
+    Ok(())
+}
+
+pub(crate) fn apply_shacl_prebinding_with_memory(
+    query: Query, substitutions: Prebindings<'_>, memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Query> {
+    if substitutions.is_empty() { return Ok(query); }
+    let before = memory.live_bytes();
+    let probes = build_probes_with_memory(substitutions, memory)?;
+    let probe_bytes = memory.live_bytes().checked_sub(before)
+        .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+    let query = apply_shacl_probes_with_memory(query, &probes, memory)?;
+    // Probe children were priced before construction. They are scratch once the
+    // rewritten AST has its own admitted clone boxes; lexical owners are intrinsic.
+    drop(probes);
+    let release = memory.release_bytes(probe_bytes);
+    native_storage(memory, release)?;
+    Ok(query)
+}
+
+pub(crate) fn apply_shacl_probes_with_memory(
+    query: Query, probes: &[(Variable, GroundTerm)], memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Query> {
+    if probes.is_empty() { return Ok(query); }
+    if seed_reaches_every_read_with_memory(&query, probes, memory)? {
+        return apply_probes_with_memory(query, probes, memory);
+    }
+    walk_shacl_probes_with_memory(query, probes, memory)
+}
+
+fn walk_shacl_probes_with_memory(
+    mut query: Query, probes: &[(Variable, GroundTerm)], memory: &mut RewriteMemory<'_>,
+) -> RewriteResult<Query> {
+    let names = rewrite_scratch(probes.iter().map(|(variable, _)| variable.as_str()), memory)?;
+    join_assignments_with_prebinding_with_memory(&mut query, &names, memory)?;
+    let expr_subs = ExprSubs(probes);
+    let mut query = apply_probes_with_memory(query, probes, memory)?;
+    let pattern = query_pattern_mut(&mut query);
+    substitute_in_graph_pattern_with_memory(pattern, &expr_subs, WalkScope::Descent, memory)?;
+    seed_above_a_lone_sub_select_with_memory(pattern, probes, memory)?;
+    seed_both_minus_operands_with_memory(pattern, probes, memory)?;
+    seed_every_sub_select_with_memory(pattern, probes, memory)?;
+    Ok(query)
+}
+

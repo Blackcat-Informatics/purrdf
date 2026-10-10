@@ -1,0 +1,227 @@
+--- a/crates/sparql-eval/src/contain.rs
++++ b/crates/sparql-eval/src/contain.rs
+@@ -86,16 +86,22 @@
+ /// [`EvalError::FunctionOperational`] on a caught panic or an opaque caller-returned
+ /// [`EvalError::Function`]; every more specific typed cause propagates unchanged.
+ pub(crate) fn call_contained<T>(
+-    kind: &str,
+-    iri: &str,
+-    what: &str,
+-    call: impl FnOnce() -> Result<T, EvalError>,
++    kind: &str, iri: &str, what: &str, call: impl FnOnce() -> Result<T, EvalError>,
++) -> Result<T, EvalError> {
++    call_contained_admitted(kind,iri,what,call,&crate::WorkspaceCapability::resident())
++}
++
++/// The original host-call and typed-failure law with before-render admission.
++pub(crate) fn call_contained_admitted<T>(
++    kind: &str, iri: &str, what: &str, call: impl FnOnce() -> Result<T, EvalError>,
++    workspace: &crate::WorkspaceCapability,
+ ) -> Result<T, EvalError> {
+     match catch_unwind(AssertUnwindSafe(call)) {
+         Ok(result) => result.map_err(EvalError::preserve_function_failure),
+-        Err(_) => Err(EvalError::function_operational(format!(
+-            "{kind} <{iri}> panicked while {what}"
+-        ))),
++        Err(_) => Err(crate::error::NativeDiagnostic::error(
++            crate::error::NativeDiagnosticKind::FunctionOperational,
++            format_args!("{kind} <{iri}> panicked while {what}"),workspace,
++        )),
+     }
+ }
+ 
+--- a/crates/sparql-eval/src/property_fn.rs
++++ b/crates/sparql-eval/src/property_fn.rs
+@@ -2013,32 +2013,23 @@
+ pub(crate) fn open_with_workspace_contained(
+     relation: &dyn PropertyFunction, iri: &str, args: &PfArgs<'_>, ceiling: Option<u64>, workspace: &crate::WorkspaceCapability,
+ ) -> Result<Box<dyn PfCursor>, EvalError> {
+-    let declared = declaration_contained(iri, "arity", || relation.arity())?;
++    let declared = declaration_contained_admitted(iri,"arity",||relation.arity(),workspace)?;
+     let supplied = args.arity();
+     if declared != supplied {
+-        return Err(EvalError::function(format!(
+-            "property function <{iri}> expects {declared} argument(s), got {supplied}"
+-        )));
+-    }
+-    match catch_unwind(AssertUnwindSafe(|| {
+-        if workspace.is_bounded() { relation.open_admitted(args, ceiling, workspace.clone()) }
+-        else { relation.open(args, ceiling) }
+-    })) {
+-        Ok(opened) => opened.map_err(EvalError::preserve_function_failure),
+-        Err(_) => Err(EvalError::function_operational(format!(
+-            "property function <{iri}> panicked while opening an invocation"
+-        ))),
+-    }
+-}
+-
+-pub(crate) fn next_with_workspace_contained(cursor: &mut dyn PfCursor, iri: &str, bounded: bool)
+-    -> Result<Option<PfRowOwner>, EvalError>
+-{
+-    if !bounded { return next_contained(cursor, iri).map(|row| row.map(PfRowOwner::Resident)); }
+-    match catch_unwind(AssertUnwindSafe(|| cursor.next_admitted())) {
+-        Ok(row) => row.map(|row| row.map(PfRowOwner::Admitted)).map_err(EvalError::preserve_function_failure),
+-        Err(_) => Err(EvalError::function_operational(format!("property function <{iri}> panicked while producing a row"))),
+-    }
++        return Err(crate::error::NativeDiagnostic::error(crate::error::NativeDiagnosticKind::Function,
++            format_args!("property function <{iri}> expects {declared} argument(s), got {supplied}"), workspace));
++    }
++    crate::contain::call_contained_admitted("property function",iri,"opening an invocation",|| {
++        if workspace.is_bounded() { relation.open_admitted(args,ceiling,workspace.clone()) }
++        else { relation.open(args,ceiling) }
++    },workspace)
++}
++
++pub(crate) fn next_with_workspace_contained(cursor: &mut dyn PfCursor, iri: &str,
++    workspace: &crate::WorkspaceCapability) -> Result<Option<PfRowOwner>, EvalError> {
++    if !workspace.is_bounded() { return next_contained(cursor,iri).map(|row|row.map(PfRowOwner::Resident)); }
++    crate::contain::call_contained_admitted("property function",iri,"producing a row",
++        || cursor.next_admitted(),workspace).map(|row|row.map(PfRowOwner::Admitted))
+ }
+ 
+ /// Pull one row from `cursor` with the host call contained.
+@@ -2051,12 +2042,7 @@
+ /// [`EvalError::FunctionOperational`] on a caught panic or opaque caller-returned
+ /// failure. More specific typed causes propagate unchanged.
+ pub fn next_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<Option<PfRow>, EvalError> {
+-    match catch_unwind(AssertUnwindSafe(|| cursor.next())) {
+-        Ok(row) => row.map_err(EvalError::preserve_function_failure),
+-        Err(_) => Err(EvalError::function_operational(format!(
+-            "property function <{iri}> panicked while producing a row"
+-        ))),
+-    }
++    crate::contain::call_contained("property function",iri,"producing a row",||cursor.next())
+ }
+ 
+ /// Take `cursor`'s reported work with the host call contained.
+@@ -2071,12 +2057,11 @@
+ ///
+ /// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of the reported count.
+ pub fn take_work_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<u64, EvalError> {
+-    match catch_unwind(AssertUnwindSafe(|| cursor.take_work())) {
+-        Ok(units) => Ok(units),
+-        Err(_) => Err(EvalError::function_operational(format!(
+-            "property function <{iri}> panicked while reporting its work"
+-        ))),
+-    }
++    take_work_contained_admitted(cursor,iri,&crate::WorkspaceCapability::resident())
++}
++pub(crate) fn take_work_contained_admitted(cursor: &mut dyn PfCursor, iri: &str,
++    workspace: &crate::WorkspaceCapability) -> Result<u64, EvalError> {
++    declaration_contained_admitted(iri,"work",||cursor.take_work(),workspace)
+ }
+ 
+ /// Read `cursor`'s [`PfCursor::generation`] with the host call contained.
+@@ -2099,6 +2084,11 @@
+     declaration_contained(iri, "index generation", || cursor.generation())
+ }
+ 
++pub(crate) fn generation_contained_admitted(cursor: &dyn PfCursor, iri: &str,
++    workspace: &crate::WorkspaceCapability) -> Result<IndexGeneration,EvalError> {
++    declaration_contained_admitted(iri,"index generation",||cursor.generation(),workspace)
++}
++
+ /// Read `cursor`'s [`PfCursor::service_level`] with the host call contained.
+ ///
+ /// The [`generation_contained`] twin, for the other attested fact and the other instant
+@@ -2115,6 +2105,11 @@
+     iri: &str,
+ ) -> Result<ServiceLevel, EvalError> {
+     declaration_contained(iri, "service level", || cursor.service_level())
++}
++
++pub(crate) fn service_level_contained_admitted(cursor: &dyn PfCursor, iri: &str,
++    workspace: &crate::WorkspaceCapability) -> Result<ServiceLevel,EvalError> {
++    declaration_contained_admitted(iri,"service level",||cursor.service_level(),workspace)
+ }
+ 
+ /// Read one of a relation's DECLARATIONS — `arity`, `modes`, `volatility`, or
+@@ -2133,19 +2128,12 @@
+ /// # Errors
+ ///
+ /// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of `read`'s result.
+-pub fn declaration_contained<T>(
+-    iri: &str,
+-    what: &str,
+-    read: impl FnOnce() -> T,
+-) -> Result<T, EvalError> {
+-    // Delegates to the shared containment helper every extension seam uses
+-    // (`crate::contain`) — see that module's docs for why the panic payload is
+-    // never interpolated. Kept as a thin `kind = "property function"` wrapper
+-    // here rather than inlined at call sites, so this function's public
+-    // signature and its message shape (`property function <iri> panicked while
+-    // reporting its {what}`) stay exactly what every existing caller and test
+-    // already depends on.
+-    crate::contain::declaration_contained("property function", iri, what, read)
++pub fn declaration_contained<T>(iri: &str, what: &str, read: impl FnOnce() -> T) -> Result<T,EvalError> {
++    declaration_contained_admitted(iri,what,read,&crate::WorkspaceCapability::resident())
++}
++pub(crate) fn declaration_contained_admitted<T>(iri: &str, what: &str, read: impl FnOnce() -> T,
++    workspace: &crate::WorkspaceCapability) -> Result<T,EvalError> {
++    crate::contain::declaration_contained_admitted("property function",iri,what,read,workspace)
+ }
+ 
+ // ---------------------------------------------------------------------------
+--- a/crates/sparql-eval/src/property_fn_eval.rs
++++ b/crates/sparql-eval/src/property_fn_eval.rs
+@@ -761,7 +761,7 @@
+     let relation = resolve(call, ctx)?;
+     let plan = CallPlan::compile_admitted(call, &input.schema, &ctx.growth)?;
+     let declared =
+-        crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())?;
++        crate::property_fn::declaration_contained_admitted(&call.iri, "arity", || relation.arity(), &ctx.growth)?;
+     let supplied = PfArity::new(plan.subject_len, plan.args.len() - plan.subject_len);
+     if declared != supplied {
+         return Err(crate::error::NativeDiagnostic::error(
+@@ -779,13 +779,13 @@
+     // `modes()`/`admits()` call was repeated, uncontained host-code work for an answer
+     // that could not change. `admit_mode` below checks each row's own access pattern
+     // against this cached list rather than asking the relation again.
+-    let modes = crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
++    let modes = crate::property_fn::declaration_contained_admitted(&call.iri, "declared modes", || {
+         let mut modes = crate::AdmittedVec::new(&ctx.growth);
+         for mode in relation.modes() {
+             modes.push(*mode)?;
+         }
+         Ok::<_, EvalError>(modes)
+-    })??;
++    }, &ctx.growth)??;
+ 
+     let width = plan.schema.len();
+     let left_len = input.schema.len();
+@@ -903,7 +903,7 @@
+         // a value standing in for a question never put would record a declaration the
+         // relation never made.
+         let generation = if ctx.witnessing {
+-            Some(generation_contained(&*cursor, &call.iri)?)
++            Some(crate::property_fn::generation_contained_admitted(&*cursor, &call.iri, &ctx.growth)?)
+         } else {
+             None
+         };
+@@ -930,7 +930,7 @@
+                 break;
+             }
+             let pulled =
+-                next_with_workspace_contained(&mut *cursor, &call.iri, ctx.growth.is_bounded())?;
++                next_with_workspace_contained(&mut *cursor, &call.iri, &ctx.growth)?;
+             // The `property-function-work` charge point. Read after EVERY pull, the
+             // terminating one included, so a cursor that searches lazily on its first
+             // `next` and one that searched eagerly inside `open` are charged the same
+@@ -938,7 +938,7 @@
+             // pays for it. `take_work` resets, so successive reads partition the work
+             // rather than re-charging it, and a relation that never overrides it reports
+             // zero and short-circuits without touching the governor.
+-            let work = take_work_contained(&mut *cursor, &call.iri)?;
++            let work = crate::property_fn::take_work_contained_admitted(&mut *cursor, &call.iri, &ctx.growth)?;
+             if let Err(governor) = ctx.charge_occurrences(ChargePoint::PropertyFunctionWork, work) {
+                 tripped = Some(governor);
+                 stop_input = true;
+@@ -1007,7 +1007,7 @@
+         // relation may know something the engine never can: that the index it just served
+         // from was not whole. `PfCursor::service_level` is read here, and only here, so
+         // that a shortfall discovered late still has a channel.
+-        let service = service_level_contained(&*cursor, &call.iri)?;
++        let service = crate::property_fn::service_level_contained_admitted(&*cursor, &call.iri, &ctx.growth)?;
+         // Witnessed or fatal. An entry point that carries a `RelationWitness` labels the
+         // short bag and hands it back; one that does not cannot, so it refuses rather
+         // than return rows indistinguishable from a complete answer. See

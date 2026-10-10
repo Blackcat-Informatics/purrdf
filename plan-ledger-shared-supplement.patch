@@ -1,0 +1,52 @@
+diff --git a/crates/sparql-eval/src/governor/ledger.rs b/crates/sparql-eval/src/governor/ledger.rs
+--- a/crates/sparql-eval/src/governor/ledger.rs
++++ b/crates/sparql-eval/src/governor/ledger.rs
+@@ -121,7 +121,6 @@
+ 
+ use std::sync::atomic::{AtomicU64, Ordering};
+ 
+-use std::sync::Arc;
+ 
+ use super::{CHARGE_SCHEDULE, ChargePoint};
+ use crate::agg_fn::AggDescriptor;
+@@ -180,7 +179,7 @@
+     nodes: AdmittedVec<LedgerNode>,
+     /// The shape of the tree the ledger lines are the nodes of, which is where a node's
+     /// address resolves to its line.
+-    shape: Arc<PlanShape>,
++    shape: SharedWorkspace<PlanShape>,
+     /// Fuel charged per node, per [`ChargePoint`], in [`CHARGE_SCHEDULE`] order.
+     fuel: AdmittedVec<[AtomicU64; CHARGE_SCHEDULE.len()]>,
+     /// Rows each node committed to its own output.
+@@ -201,13 +200,13 @@
+     /// A ledger over the tree `shape` numbers, with the planner's per-node predictions
+     /// indexed by [`NodeId`] (a missing entry is no prediction).
+     #[cfg(test)]
+-    pub(crate) fn for_plan(shape: &Arc<PlanShape>, estimates: &[Option<PlanEstimate>]) -> Self {
++    pub(crate) fn for_plan(shape: &SharedWorkspace<PlanShape>, estimates: &[Option<PlanEstimate>]) -> Self {
+         Self::allocate_tables(shape, estimates, &crate::WorkspaceCapability::resident())
+             .expect("resident ledger tables")
+     }
+ 
+     fn allocate_tables(
+-        shape: &Arc<PlanShape>,
++        shape: &SharedWorkspace<PlanShape>,
+         estimates: &[Option<PlanEstimate>],
+         workspace: &crate::WorkspaceCapability,
+     ) -> Result<Self, crate::EvalError> {
+@@ -227,13 +226,13 @@
+             rows.push_reserved(AtomicU64::new(0));
+             cells.push_reserved(AtomicU64::new(0));
+         }
+-        Ok(Self { nodes, shape: Arc::clone(shape), fuel, rows, cells })
++        Ok(Self { nodes, shape: shape.clone(), fuel, rows, cells })
+     }
+ 
+     /// Tables, native shared control and terminal output are all admitted before
+     /// measurement. The unique publication permit cannot allocate after refusal.
+     pub(crate) fn for_plan_admitted(
+-        shape: &Arc<PlanShape>,
++        shape: &SharedWorkspace<PlanShape>,
+         estimates: &[Option<PlanEstimate>],
+         workspace: &crate::WorkspaceCapability,
+     ) -> Result<(SharedWorkspace<Self>, LedgerPublication), crate::EvalError> {

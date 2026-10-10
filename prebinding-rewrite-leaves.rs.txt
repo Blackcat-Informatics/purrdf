@@ -1,0 +1,277 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+fn apply_probes_with_memory(
+    mut query: Query, probes: &[(Variable, GroundTerm)], memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<Query> {
+    let pattern = query_pattern_mut(&mut query);
+    let core = core_slot(pattern);
+    push_probe_constants_with_memory(core, probes, memory)?;
+    if has_repeated_variable(probes) {
+        // The original per-variable door only joins one seed after pushdown. Keep
+        // that source order, including incompatible repeated bindings.
+        for entry in probes {
+            let seed = seed_entries_with_memory(std::iter::once(entry), memory)?;
+            *core = rewrite_join(seed, take_child(core), memory)?;
+        }
+    } else {
+        let seed = seed_entries_with_memory(probes.iter(), memory)?;
+        *core = rewrite_join(seed, take_child(core), memory)?;
+    }
+    Ok(query)
+}
+
+fn query_pattern_mut(query: &mut Query) -> &mut GraphPattern {
+    match query {
+        Query::Select { pattern, .. } | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. } | Query::Ask { pattern, .. } => pattern,
+    }
+}
+
+fn probe_term_pattern_with_memory(
+    term: &mut TermPattern, probes: &[(Variable, GroundTerm)],
+    probed: &mut Vec<usize>, memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<()> {
+    let result = probe_positions_with_memory(
+        [ProbePosition::Term(term)], probes, probed, ProbeRule::Pushdown, memory,
+    );
+    native_storage(memory, result)
+}
+
+fn probe_triple_pattern_with_memory(
+    triple: &mut TriplePattern, probes: &[(Variable, GroundTerm)],
+    probed: &mut Vec<usize>, memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<()> {
+    probe_term_pattern_with_memory(&mut triple.subject, probes, probed, memory)?;
+    probe_term_pattern_with_memory(&mut triple.object, probes, probed, memory)
+}
+
+fn probe_call_arguments_with_memory(
+    call: &mut PropertyFunctionCall, probes: &[(Variable, GroundTerm)],
+    memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<Vec<usize>> {
+    let mut probed = Vec::new();
+    for term in call.subject_args.iter_mut().chain(call.object_args.iter_mut()) {
+        probe_term_pattern_with_memory(term, probes, &mut probed, memory)?;
+    }
+    Ok(probed)
+}
+
+fn restore_probed_bindings_with_memory(
+    leaf: &mut GraphPattern, probed: &[usize], probes: &[(Variable, GroundTerm)],
+    at_core_root: bool, memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<()> {
+    if probed.is_empty() || at_core_root { return Ok(()); }
+    let seed = seed_entries_with_memory(probed.iter().map(|&index| &probes[index]), memory)?;
+    *leaf = rewrite_join(take_child(leaf), seed, memory)?;
+    Ok(())
+}
+
+fn complete_shacl_leaf_with_memory(
+    leaf: &mut GraphPattern, probes: &[(Variable, GroundTerm)], scope: WalkScope,
+    memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<()> {
+    let mut bound = Vec::new();
+    match leaf {
+        GraphPattern::Bgp { patterns } => {
+            for triple in patterns {
+                let result = probe_positions_with_memory([
+                    ProbePosition::Term(&mut triple.object),
+                    ProbePosition::Predicate(&mut triple.predicate),
+                    ProbePosition::Term(&mut triple.subject),
+                ], probes, &mut bound, ProbeRule::Shacl, memory);
+                native_storage(memory, result)?;
+            }
+        }
+        GraphPattern::Path { subject, object, .. } => {
+            let result = probe_positions_with_memory([
+                ProbePosition::Term(object), ProbePosition::Term(subject),
+            ], probes, &mut bound, ProbeRule::Shacl, memory);
+            native_storage(memory, result)?;
+        }
+        _ => unreachable!("only matched leaves reach SHACL completion"),
+    }
+    restore_shacl_bindings_with_memory(leaf, &bound, probes, scope, memory)?;
+    let result = memory.release_vec(bound);
+    native_storage(memory, result)
+}
+
+fn restore_shacl_bindings_with_memory(
+    leaf: &mut GraphPattern, bound: &[usize], probes: &[(Variable, GroundTerm)],
+    scope: WalkScope, memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<()> {
+    if bound.is_empty() { return Ok(()); }
+    let kept = if scope == WalkScope::ExistsBody {
+        let exposed = crate::eval::syntactic_schema_admitted(leaf, &rewrite_workspace(memory))?;
+        Some(rewrite_vec(exposed.vars().iter().filter(|variable| {
+            !bound.iter().any(|&index| &probes[index].0 == *variable)
+        }).cloned(), memory)?)
+    } else { None };
+    restore_probed_bindings_with_memory(leaf, bound, probes, false, memory)?;
+    if let Some(variables) = kept {
+        *leaf = GraphPattern::Project {
+            inner: rewrite_child(take_child(leaf), memory)?, variables,
+        };
+    }
+    Ok(())
+}
+
+fn driven_arguments_with_memory(
+    call: &PropertyFunctionCall, probes: &[(Variable, GroundTerm)], rule: Unwritable,
+    already: Option<&GraphPattern>, memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<crate::AdmittedVec<usize>> {
+    let mut driven = crate::AdmittedVec::new(&rewrite_workspace(memory));
+    let mut pending = rewrite_scratch(
+        call.subject_args.iter().chain(call.object_args.iter()).rev(), memory,
+    )?;
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::Variable(variable) => {
+                if let Some(index) = probes.iter().position(|(candidate, _)| candidate == variable)
+                    && !driven.contains(&index)
+                    && !already.is_some_and(|left| drives(left, variable))
+                    && rule.holds_with_memory(&probes[index].1, memory)?
+                {
+                    driven.push(index)?;
+                }
+            }
+            TermPattern::Triple(triple) => {
+                pending.push(&triple.object)?;
+                pending.push(&triple.subject)?;
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+        }
+    }
+    Ok(driven)
+}
+
+fn call_driver_with_memory(
+    call: &PropertyFunctionCall, values: &[(Variable, GroundTerm)], rule: Unwritable,
+    already: Option<&GraphPattern>, memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<Option<GraphPattern>> {
+    let driven = driven_arguments_with_memory(call, values, rule, already, memory)?;
+    if driven.is_empty() { return Ok(None); }
+    Ok(Some(seed_entries_with_memory(driven.iter().map(|&index| &values[index]), memory)?))
+}
+
+fn plant_stand_alone_driver_with_memory(
+    call: &mut GraphPattern, seed: GraphPattern, memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<()> {
+    *call = GraphPattern::Lateral {
+        left: rewrite_child(seed, memory)?, right: rewrite_child(take_child(call), memory)?,
+    };
+    Ok(())
+}
+
+fn plant_left_driver_with_memory(
+    left: &mut GraphPattern, seed: GraphPattern, memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<()> {
+    *left = rewrite_join(seed, take_child(left), memory)?;
+    Ok(())
+}
+
+fn plant_scoped_driver_with_memory(
+    call: &mut GraphPattern, seed: GraphPattern, variables: Vec<Variable>,
+    memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<()> {
+    let lateral = GraphPattern::Lateral {
+        left: rewrite_child(seed, memory)?, right: rewrite_child(take_child(call), memory)?,
+    };
+    *call = GraphPattern::Project { inner: rewrite_child(lateral, memory)?, variables };
+    Ok(())
+}
+
+fn drive_call_arguments_with_memory(
+    pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], rule: Unwritable,
+    memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<()> {
+    match pattern {
+        GraphPattern::PropertyFunction(call) => {
+            if let Some(seed) = call_driver_with_memory(call, probes, rule, None, memory)? {
+                plant_stand_alone_driver_with_memory(pattern, seed, memory)?;
+            }
+        }
+        GraphPattern::Lateral { left, right } => {
+            if let Some(call) = lateral_call(right)
+                && let Some(seed) = call_driver_with_memory(call, probes, rule, Some(left), memory)?
+            {
+                plant_left_driver_with_memory(left, seed, memory)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn undriven_variables_with_memory(
+    call: &PropertyFunctionCall, seed: &GraphPattern, memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<Vec<Variable>> {
+    enum Position<'a> { Term(&'a TermPattern), Predicate(&'a NamedNodePattern) }
+    let driven = match seed { GraphPattern::Values { variables, .. } => &variables[..], _ => &[] };
+    let mut kept = Vec::new();
+    let mut pending = rewrite_scratch(call.subject_args.iter().chain(call.object_args.iter())
+        .rev().map(Position::Term), memory)?;
+    while let Some(position) = pending.pop() {
+        match position {
+            Position::Term(TermPattern::Variable(variable))
+            | Position::Predicate(NamedNodePattern::Variable(variable)) => {
+                if !driven.contains(variable) && !kept.contains(variable) {
+                    let result = memory.push(&mut kept, variable.clone());
+                    native_storage(memory, result)?;
+                }
+            }
+            Position::Term(TermPattern::Triple(triple)) => {
+                pending.push(Position::Term(&triple.object))?;
+                pending.push(Position::Predicate(&triple.predicate))?;
+                pending.push(Position::Term(&triple.subject))?;
+            }
+            Position::Term(TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_))
+            | Position::Predicate(NamedNodePattern::NamedNode(_)) => {}
+        }
+    }
+    Ok(kept)
+}
+
+pub(crate) fn bind_call_arguments_with_memory(
+    call: &mut PropertyFunctionCall, values: &[(Variable, GroundTerm)],
+    already: Option<&GraphPattern>, memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<Option<GraphPattern>> {
+    for term in call.subject_args.iter_mut().chain(call.object_args.iter_mut()) {
+        substitute_in_term_pattern_with_memory(term, values, memory)?;
+    }
+    call_driver_with_memory(call, values, Unwritable::InArgument, already, memory)
+}
+
+fn substitute_in_term_pattern_with_memory(
+    term: &mut TermPattern, values: &[(Variable, GroundTerm)], memory: &mut RewriteMemory<'_, '_>,
+) -> RewriteResult<()> {
+    let mut pending = rewrite_scratch(std::iter::once(term), memory)?;
+    while let Some(term) = pending.pop() {
+        let variable = match term {
+            TermPattern::Variable(variable) => variable,
+            TermPattern::Triple(triple) => {
+                let triple: &mut TriplePattern = triple;
+                pending.push(&mut triple.object)?;
+                pending.push(&mut triple.subject)?;
+                continue;
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => continue,
+        };
+        let Some((_, ground)) = values.iter().find(|(candidate, _)| candidate == variable) else { continue; };
+        *term = match Pushability::of(ground) {
+            Pushability::Iri(node) => TermPattern::NamedNode(node.clone()),
+            Pushability::Literal(literal) => TermPattern::Literal(literal.clone()),
+            Pushability::QuotedTriple(_) | Pushability::SeedOnly => continue,
+        };
+    }
+    Ok(())
+}
+
+fn true_literal_with_memory(memory: &mut RewriteMemory<'_, '_>) -> RewriteResult<Expression> {
+    let workspace = rewrite_workspace(memory);
+    Ok(Expression::Literal(Literal::from_admitted(
+        workspace.authored_text(&"true")?,
+        NamedNode::from_admitted(workspace.authored_text(&purrdf_xsd::datatype::XSD_BOOLEAN)?),
+        None, None,
+    )))
+}

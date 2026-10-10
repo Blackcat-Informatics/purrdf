@@ -1,0 +1,236 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/ed25519)
+error: this looks like a formatting argument but it is not part of a formatting macro
+   --> crates/iri/src/error.rs:340:77
+    |
+340 |             Self::BadScheme(value) => ("iri-bad-scheme", "malformed scheme: {scheme:?}", {
+    |                                                                             ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+    = note: `-D clippy::literal-string-with-formatting-args` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::literal_string_with_formatting_args)]`
+
+error: this looks like a formatting argument but it is not part of a formatting macro
+   --> crates/iri/src/error.rs:350:53
+    |
+350 |                 "malformed percent-encoding at byte {offset}",
+    |                                                     ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: these look like formatting arguments but are not part of a formatting macro
+   --> crates/iri/src/error.rs:362:39
+    |
+362 |                 "disallowed character {character:?} at byte {offset}",
+    |                                       ^^^^^^^^^^^^^         ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: this looks like a formatting argument but it is not part of a formatting macro
+   --> crates/iri/src/error.rs:379:87
+    |
+379 |             Self::BadAuthority(reason) => ("iri-bad-authority", "malformed authority: {reason}", {
+    |                                                                                       ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: this looks like a formatting argument but it is not part of a formatting macro
+   --> crates/iri/src/error.rs:389:56
+    |
+389 |                 "base IRI is not absolute (no scheme): {base:?}",
+    |                                                        ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: this looks like a formatting argument but it is not part of a formatting macro
+   --> crates/iri/src/error.rs:401:41
+    |
+401 |                 "relative IRI reference {reference:?} cannot be resolved: no base IRI is in scope",
+    |                                         ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: this looks like a formatting argument but it is not part of a formatting macro
+   --> crates/iri/src/error.rs:423:49
+    |
+423 |                         "relative IRI reference {reference:?} is not permitted by this syntax (no base IRI is in scope)",
+    |                                                 ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: these look like formatting arguments but are not part of a formatting macro
+   --> crates/iri/src/error.rs:437:57
+    |
+437 | ...   "relative IRI reference {reference:?} is not permitted by this syntax (the caller-supplied base, <{base}>, is in scope but is...
+    |                               ^^^^^^^^^^^^^                                                             ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: these look like formatting arguments but are not part of a formatting macro
+   --> crates/iri/src/error.rs:460:61
+    |
+460 | ...   "relative IRI reference {reference:?} is not permitted by this syntax (the `@base` at line {line} column {column}, <{base}>, ...
+    |                               ^^^^^^^^^^^^^                                                      ^^^^^^        ^^^^^^^^   ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: these look like formatting arguments but are not part of a formatting macro
+   --> crates/iri/src/error.rs:465:57
+    |
+465 | ...   "relative IRI reference {reference:?} is not permitted by this syntax (the enclosing scope's base, <{base}>, is in scope but ...
+    |                               ^^^^^^^^^^^^^                                                               ^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/iri/src/error.rs:704:12
+    |
+704 |     error: purrdf_lex::diagnostic::DiagnosticPresentationError,
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+704 |     error: &purrdf_lex::diagnostic::DiagnosticPresentationError,
+    |            +
+
+error: this lint expectation is unfulfilled
+   --> crates/iri/src/error.rs:311:9
+    |
+311 |         clippy::literal_string_with_formatting_args,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: these templates are interpreted and contract-checked by DiagnosticPresentation
+    = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: could not compile `purrdf-iri` (lib) due to 12 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: items after a test module
+   --> crates/iri/src/error.rs:520:1
+    |
+520 |   mod tests {
+    |   ^^^^^^^^^
+...
+703 | / fn presentation_storage(
+704 | |     error: purrdf_lex::diagnostic::DiagnosticPresentationError,
+705 | | ) -> purrdf_lex::allocation::StorageError {
+    | |_________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#items_after_test_module
+    = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+    = help: move the items to before the test module was defined
+
+error: could not compile `purrdf-iri` (lib test) due to 13 previous errors
+error: this function has too many arguments (8/7)
+    --> crates/xsd/src/exact/decimal.rs:1421:1
+     |
+1421 | / fn div_rounded_parts_admitted_using(
+1422 | |     left: &Integer,
+1423 | |     ls: u32,
+1424 | |     right: &Integer,
+...    |
+1429 | |     admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+1430 | | ) -> Result<Decimal, super::ExactOperationError> {
+     | |________________________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+     = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: unnecessary closure used to substitute value for `Option::None`
+    --> crates/xsd/src/temporal.rs:1173:25
+     |
+1173 |               let whole = seconds.checked_add(decimal.whole_part()).ok_or_else(|| {
+     |  _________________________^
+1174 | |                 TemporalReadError::OutOfRange {
+1175 | |                     datatype: dt,
+1176 | |                     reason: "duration seconds overflow",
+1177 | |                 }
+1178 | |             })?;
+     | |______________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_lazy_evaluations
+     = note: `-D clippy::unnecessary-lazy-evaluations` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::unnecessary_lazy_evaluations)]`
+help: use `ok_or` instead
+     |
+1173 ~             let whole = seconds.checked_add(decimal.whole_part()).ok_or({
+1174 +                 TemporalReadError::OutOfRange {
+1175 +                     datatype: dt,
+1176 +                     reason: "duration seconds overflow",
+1177 +                 }
+1178 ~             })?;
+     |
+
+error: unnecessary closure used to substitute value for `Option::None`
+    --> crates/xsd/src/temporal.rs:1186:20
+     |
+1186 |       let combined = seconds
+     |  ____________________^
+1187 | |         .checked_mul(10i128.pow(u32::from(scale)))
+1188 | |         .and_then(|w| w.checked_add(sec_frac.mantissa()))
+1189 | |         .ok_or_else(|| TemporalReadError::OutOfRange {
+1190 | |             datatype: dt,
+1191 | |             reason: "duration seconds overflow",
+1192 | |         })?;
+     | |__________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_lazy_evaluations
+help: use `ok_or` instead
+     |
+1189 ~         .ok_or(TemporalReadError::OutOfRange {
+1190 +             datatype: dt,
+1191 +             reason: "duration seconds overflow",
+1192 ~         })?;
+     |
+
+error: unnecessary closure used to substitute value for `Option::None`
+    --> crates/xsd/src/temporal.rs:1195:18
+     |
+1195 |           months = months
+     |  __________________^
+1196 | |             .checked_neg()
+1197 | |             .ok_or_else(|| TemporalReadError::OutOfRange {
+1198 | |                 datatype: dt,
+1199 | |                 reason: "duration months overflow",
+1200 | |             })?;
+     | |______________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_lazy_evaluations
+help: use `ok_or` instead
+     |
+1197 ~             .ok_or(TemporalReadError::OutOfRange {
+1198 +                 datatype: dt,
+1199 +                 reason: "duration months overflow",
+1200 ~             })?;
+     |
+
+error: unnecessary closure used to substitute value for `Option::None`
+    --> crates/xsd/src/temporal.rs:1202:13
+     |
+1202 | /             total_secs
+1203 | |                 .mantissa()
+1204 | |                 .checked_neg()
+1205 | |                 .ok_or_else(|| TemporalReadError::OutOfRange {
+1206 | |                     datatype: dt,
+1207 | |                     reason: "duration seconds overflow",
+1208 | |                 })?;
+     | |__________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_lazy_evaluations
+help: use `ok_or` instead
+     |
+1205 ~                 .ok_or(TemporalReadError::OutOfRange {
+1206 +                     datatype: dt,
+1207 +                     reason: "duration seconds overflow",
+1208 ~                 })?;
+     |
+
+error: could not compile `purrdf-xsd` (lib) due to 5 previous errors
+error: could not compile `purrdf-xsd` (lib test) due to 5 previous errors

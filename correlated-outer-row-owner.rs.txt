@@ -1,0 +1,78 @@
+pub(crate) fn outer_bindings_for_substitution<D:DatasetView+Sync>(
+    outer_row:&[Option<SolutionTerm<D::Id>>],outer_schema:&VarSchema,ctx:&mut EvalCtx<'_,D>,
+)->Result<SubstitutionRow,EvalError> {
+    let workspace=ctx.growth.clone();
+    SubstitutionRow::build(&workspace,|expr,term,memory| {
+        for (index,variable) in outer_schema.vars().iter().enumerate() {
+            let Some(cell)=outer_row[index] else { continue; };
+            let value=ctx.scratch.try_owned_value_of(ctx.dataset,cell,&workspace,
+                |error|ctx.workspace.source_error(error))?;
+            let Some(ground)=ground_term_from_term_value_with_memory(&value,memory)? else { continue; };
+            match &ground {
+                purrdf_sparql_algebra::GroundTerm::NamedNode(node)=>{
+                    memory.push(expr,(variable.clone(),Expression::NamedNode(node.clone())))
+                        .map_err(|e|correlated_storage_error(memory,e))?;
+                }
+                purrdf_sparql_algebra::GroundTerm::Literal(literal)=>{
+                    memory.push(expr,(variable.clone(),Expression::Literal(literal.clone())))
+                        .map_err(|e|correlated_storage_error(memory,e))?;
+                }
+                purrdf_sparql_algebra::GroundTerm::BlankNode(_)|purrdf_sparql_algebra::GroundTerm::Triple(_)=>{}
+            }
+            memory.push(term,(variable.clone(),ground)).map_err(|e|correlated_storage_error(memory,e))?;
+        }
+        Ok(())
+    })
+}
+fn ground_term_from_term_value_with_memory(
+    value:&TermValue,memory:&mut CorrelatedMemory<'_>,
+)->Result<Option<purrdf_sparql_algebra::GroundTerm>,EvalError> {
+    use purrdf_sparql_algebra::{GroundTerm,GroundTriple,Literal,NamedNode};
+    enum Step<'a> { Convert(&'a TermValue),Assemble(&'a str) }
+    let workspace=memory.admission_mut().workspace().clone();
+    let mut pending=crate::AdmittedVec::new(&workspace);
+    let mut built=crate::AdmittedVec::new(&workspace);
+    pending.push(Step::Convert(value))?;
+    while let Some(step)=pending.pop() {
+        let term=match step {
+            Step::Convert(TermValue::Iri(iri))=>GroundTerm::NamedNode(NamedNode::from_admitted(workspace.authored_text(&iri.as_str())?)),
+            Step::Convert(TermValue::Literal { lexical_form,datatype,language,direction })=>{
+                // Preserve stored-data spelling; this is not SHACL lexical validation.
+                let lexical=workspace.authored_text(&lexical_form.as_str())?;
+                let (datatype,language,direction)=match language {
+                    Some(language)=>(purrdf_iri::vocab::rdf::language_datatype_iri(direction.is_some()),Some(workspace.authored_text(&language.as_str())?),*direction),
+                    None=>(datatype.as_str(),None,None),
+                };
+                let datatype=NamedNode::from_admitted(workspace.authored_text(&datatype)?);
+                GroundTerm::Literal(Literal::from_admitted(lexical,datatype,language,direction))
+            }
+            Step::Convert(TermValue::Blank { label,scope })=>{
+                GroundTerm::BlankNode(crate::substitute::blank_admitted(label,*scope,&workspace)
+                    .map_err(crate::substitute::GroundFailure::into_eval_error)?)
+            }
+            Step::Convert(TermValue::Triple { s,p,o })=>{
+                // Preserve the total skip law for malformed foreign quoted data.
+                let TermValue::Iri(predicate)=p.as_ref() else { return Ok(None); };
+                pending.push(Step::Assemble(predicate))?;
+                pending.push(Step::Convert(o))?;
+                pending.push(Step::Convert(s))?;
+                continue;
+            }
+            Step::Assemble(predicate)=>{
+                let object=built.pop().expect("object is built before its parent");
+                let subject=built.pop().expect("subject is built before its parent");
+                let predicate=NamedNode::from_admitted(workspace.authored_text(&predicate)?);
+                GroundTerm::Triple(correlated_box(GroundTriple { subject,predicate,object },memory)?.into())
+            }
+        };
+        built.push(term)?;
+    }
+    Ok(built.pop())
+}
+#[cfg(test)]
+fn ground_term_from_term_value(value:&TermValue)->Option<purrdf_sparql_algebra::GroundTerm> {
+    let workspace=crate::WorkspaceCapability::resident();
+    let mut frame=crate::workspace::LexicalFrame::new(&workspace);
+    ground_term_from_term_value_with_memory(value,&mut purrdf_lex::allocation::Memory::new(&mut frame))
+        .expect("resident stored-ground allocation failed")
+}

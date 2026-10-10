@@ -1,0 +1,99 @@
+diff --git a/crates/rdf-core/src/cdt_blank.rs b/crates/rdf-core/src/cdt_blank.rs
+index 8cf17ab32..03224a650 100644
+--- a/crates/rdf-core/src/cdt_blank.rs
++++ b/crates/rdf-core/src/cdt_blank.rs
+@@ -546,34 +546,20 @@ fn splice_with_memory<'a, S: Admission + ?Sized>(
+             continue;
+         };
+         let buf = out.get_or_insert_with(String::new);
+-        append_text(buf, &lexical[cursor..span.start], memory)?;
+-        append_text(buf, &replacement, memory)?;
++        memory.push_str(buf, &lexical[cursor..span.start])?;
++        memory.push_str(buf, &replacement)?;
+         memory.release_string(replacement)?;
+         cursor = span.end;
+     }
+     match out {
+         Some(mut buf) => {
+-            append_text(&mut buf, &lexical[cursor..], memory)?;
++            memory.push_str(&mut buf, &lexical[cursor..])?;
+             Ok(Cow::Owned(buf))
+         }
+         None => Ok(Cow::Borrowed(lexical)),
+     }
+ }
+ 
+-fn append_text<S: Admission + ?Sized>(
+-    text: &mut String,
+-    suffix: &str,
+-    memory: &mut Memory<'_, S>,
+-) -> Result<(), StorageError> {
+-    let required = text
+-        .len()
+-        .checked_add(suffix.len())
+-        .ok_or(StorageError::SizeOverflow)?;
+-    memory.reserve_string(text, required)?;
+-    text.push_str(suffix);
+-    Ok(())
+-}
+-
+ /// Cross-check the byte scanner against the SEP-0009 grammar: both must report
+ /// the same blank-node labels.
+ fn check_scan_agrees(spans: &[TokenSpan], value: &CdtValue) -> Result<(), CdtBlankError> {
+diff --git a/crates/rdf-core/tests/cdt_blank_storage.rs b/crates/rdf-core/tests/cdt_blank_storage.rs
+index 6fa59d48f..98707c82d 100644
+--- a/crates/rdf-core/tests/cdt_blank_storage.rs
++++ b/crates/rdf-core/tests/cdt_blank_storage.rs
+@@ -89,7 +89,6 @@ fn nested_binding_peak_and_surviving_output_use_original_admission() {
+             memory.release_string(text).unwrap();
+         }
+         assert_eq!(memory.live_bytes(), 0);
+-        drop(memory);
+         assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
+         assert_eq!(
+             end.close().retained_bytes,
+@@ -118,7 +117,6 @@ fn plain_and_non_composite_binding_preserve_borrowed_bytes() {
+         assert!(matches!(output, Cow::Borrowed(_)));
+         assert_eq!(memory.live_bytes(), 0);
+         let measured = window.close();
+-        drop(memory);
+         assert_eq!(measured.retained_bytes, 0);
+         assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
+         if datatype == "urn:ordinary" {
+@@ -131,14 +129,18 @@ fn plain_and_non_composite_binding_preserve_borrowed_bytes() {
+ fn physical_refusals_never_become_unmodified_composite_success() {
+     let input = nested_fixture().repeat(16);
+     let mut healthy = Account::new(2_000_000);
++    let mut memory = Memory::new(&mut healthy);
+     let output = bind_cdt_blank_labels_unchecked_with_memory(
+         &input,
+         purrdf_cdt::CDT_LIST,
+         BlankBinding::Ambient(BlankScope(8)),
+-        &mut Memory::new(&mut healthy),
++        &mut memory,
+     )
+     .unwrap();
+-    drop(output);
++    if let Cow::Owned(text) = output {
++        memory.release_string(text).unwrap();
++    }
++    assert_eq!(memory.live_bytes(), 0);
+     for limit in [0, input.len(), input.len() + 128, healthy.peak - 1] {
+         let mut account = Account::new(limit);
+         let window = CurrentThreadWindow::open();
+@@ -187,7 +189,6 @@ fn decoder_image_scratch_dies_before_publication_and_refusal_is_typed() {
+     );
+     memory.release_string(label).unwrap();
+     assert_eq!(memory.live_bytes(), 0);
+-    drop(memory);
+     assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
+     for limit in [0, token.len() / 2, token.len(), account.peak - 1] {
+         let mut account = Account::new(limit);
+@@ -228,7 +229,6 @@ fn malformed_and_non_image_envelopes_keep_identity_and_release_scratch() {
+         assert!(matches!(result.0, Cow::Borrowed(_)));
+         assert_eq!(memory.live_bytes(), 0);
+         let measured = window.close();
+-        drop(memory);
+         assert_eq!(measured.retained_bytes, 0);
+         assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
+     }

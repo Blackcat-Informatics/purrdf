@@ -1,0 +1,69 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error: function `replay_cost_estimate` is never used
+    --> crates/sparql-eval/src/bgp.rs:3312:4
+     |
+3312 | fn replay_cost_estimate<D: DatasetView>(
+     |    ^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: function `replay_cost_estimate_from` is never used
+    --> crates/sparql-eval/src/bgp.rs:3321:4
+     |
+3321 | fn replay_cost_estimate_from<D: DatasetView>(
+     |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `real_var_schema` is never used
+    --> crates/sparql-eval/src/bgp.rs:3401:4
+     |
+3401 | fn real_var_schema(working: &VarSchema) -> VarSchema {
+     |    ^^^^^^^^^^^^^^^
+
+error: method `insert` is never used
+   --> crates/sparql-eval/src/plan_cache.rs:189:19
+    |
+ 86 | impl<K: Clone + Eq + Hash, V: Clone> BoundedCache<K, V> {
+    | ------------------------------------------------------- method in this implementation
+...
+189 |     pub(crate) fn insert(&mut self, key: K, value: V, bytes: usize) {
+    |                   ^^^^^^
+
+error: function `collect_certainly_bound` is never used
+    --> crates/sparql-eval/src/property_fn_plan.rs:2039:15
+     |
+2039 | pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
+     |               ^^^^^^^^^^^^^^^^^^^^^^^
+
+error: function `collect_certainly_bound_in` is never used
+    --> crates/sparql-eval/src/property_fn_plan.rs:2077:15
+     |
+2077 | pub(crate) fn collect_certainly_bound_in(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: associated constant `NOTHING` is never used
+    --> crates/sparql-eval/src/property_fn_plan.rs:2098:11
+     |
+2096 | impl Written<'_> {
+     | ---------------- associated constant in this implementation
+2097 |     /// Nothing is written: the pattern is judged by its own bindings and its context.
+2098 |     const NOTHING: Self = Self { everywhere: None };
+     |           ^^^^^^^
+
+error: could not compile `purrdf-sparql-eval` (lib) due to 7 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: unnecessary qualification
+   --> crates/sparql-eval/src/bgp/positive.rs:971:14
+    |
+971 |             &crate::workspace::QueryWorkspace::resident(),
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+971 -             &crate::workspace::QueryWorkspace::resident(),
+971 +             &QueryWorkspace::resident(),
+    |
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 4 previous errors

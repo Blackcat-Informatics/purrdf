@@ -1,0 +1,43 @@
+from pathlib import Path
+import difflib
+root=Path(__file__).resolve().parents[2];stage=Path(__file__).resolve().parent
+p='crates/sparql-results/tests/results_streaming_is_bounded.rs';s=(root/p).read_text()
+new=s+r'''
+
+#[test]
+fn native_select_decoder_prices_actual_peak_and_retains_only_its_output() {
+    use purrdf_lex::allocation::{Admission, Memory, StorageError};
+    use purrdf_sparql_results::{ReadError, from_json_with_memory};
+    #[derive(Default)]
+    struct Grant { live: usize, peak: usize, limit: usize }
+    impl Admission for Grant {
+        fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+            if next > self.limit { return Err(StorageError::AdmissionFailed); }
+            self.live = next;
+            self.peak = self.peak.max(next);
+            Ok(())
+        }
+    }
+    let bytes = br#"{"head":{"vars":["x","x"]},"results":{"bindings":[{"\u0078":{"type":"triple","value":{"subject":{"type":"uri","value":"http://example.org/s"},"predicate":{"type":"uri","value":"http://example.org/p"},"object":{"type":"literal","value":"a\nb","xml:lang":"en","its:dir":"ltr","dir":"r\u0074l"}}}}]}}"#;
+    for ceiling in [None, Some(2)] {
+        let mut grant = Grant { limit: 1 << 20, ..Grant::default() };
+        let window = CurrentThreadWindow::open();
+        let parsed = from_json_with_memory(bytes, ceiling, &mut Memory::new(&mut grant)).expect("native decode");
+        let measured = window.close();
+        assert_eq!(measured.retained_bytes, i64::try_from(grant.live).unwrap(), "the original grant retains exactly the surviving native payload");
+        assert!(measured.peak_working_bytes <= i64::try_from(grant.peak).unwrap(), "every actual allocation fits before its original birth");
+        assert!(measured.allocations > 0);
+        assert_eq!(parsed.solutions.rows[0][0], parsed.solutions.rows[0][1]);
+        drop(parsed);
+    }
+    let mut zero = Grant::default();
+    let window = CurrentThreadWindow::open();
+    let error = from_json_with_memory(bytes, None, &mut Memory::new(&mut zero)).unwrap_err();
+    let measured = window.close();
+    assert_eq!(error, ReadError::Storage(StorageError::AdmissionFailed));
+    assert_eq!(measured.allocations, 0, "zero capacity refuses before even the JSON nesting stack exists");
+    assert_eq!(measured.retained_bytes, 0);
+    assert_eq!(zero.live, 0);
+}
+'''
+(stage/'native-json-allocator-tests.patch').write_text(''.join(difflib.unified_diff(s.splitlines(True),new.splitlines(True),fromfile='a/'+p,tofile='b/'+p)))

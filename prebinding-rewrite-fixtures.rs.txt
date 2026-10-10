@@ -1,0 +1,191 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Insert inside workspace::owned_row_regressions; reuse its actual account,
+// Reservation, Ledger and non-latching Refusal fixture instead of copying them.
+
+#[test]
+fn native_prebinding_all_four_forms_keep_original_ast_admission_until_drop() {
+    use purrdf_sparql_algebra::SparqlParser;
+    let queries = [
+        "SELECT ?this WHERE { ?this <http://example.org/p> ?o OPTIONAL { ?this <http://example.org/q> ?v } }",
+        "ASK { ?this <http://example.org/p> ?o FILTER(EXISTS { ?this <http://example.org/q> ?v MINUS { ?v <http://example.org/r> ?this } }) }",
+        "CONSTRUCT { ?this <http://example.org/p> ?o } WHERE { { SELECT ?o WHERE { ?this <http://example.org/p> ?o } } }",
+        "DESCRIBE ?this WHERE { ?this <http://example.org/p> ?o }",
+    ];
+    for text in queries {
+        // The authored fixture and its input value are caller-owned, outside the
+        // fresh query workspace. The native AST copy itself uses original Memory.
+        let parsed = SparqlParser::new().with_prebound_variables(["this"])
+            .parse_query(text).expect("original query form");
+        let values = [("this".to_owned(), purrdf_core::TermValue::Blank {
+            label: "focus".to_owned(), scope: None,
+        })];
+        let (workspace, ledger, base) = account(u64::MAX);
+        let capability = workspace.capability();
+        let mut parse_frame = super::LexicalFrame::new(&capability);
+        let (query, original) = {
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut parse_frame);
+            let query = parsed.clone_with_memory(&mut memory).expect("native owned AST copy");
+            (query, memory.live_bytes())
+        };
+        assert!(original > 0);
+        let live_before_adoption = ledger.live.load(Ordering::Relaxed);
+        let original_allocation = parse_frame.into_allocation().expect("original query grant");
+        let mut frame = super::LexicalFrame::from_allocation(&capability, original_allocation, original);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live_before_adoption,
+            "adoption neither recharges nor resets the live AST");
+        let rewritten = {
+            let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, original);
+            let query = crate::substitute::apply_shacl_prebinding_with_memory(
+                query, crate::substitute::Prebindings::Owned(&values), &mut memory,
+            ).expect("complete native prebinding");
+            assert!(memory.live_bytes() >= original);
+            query
+        };
+        assert!(ledger.live.load(Ordering::Relaxed) > base);
+        drop(rewritten);
+        // The explicit ordered query publication still owns the original frame
+        // until payload destruction completes; dropping the frame then frees it.
+        drop(frame);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0, "form {text}");
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+    }
+}
+
+#[test]
+fn native_prebinding_first_buffer_refusal_keeps_exact_original_cause() {
+    let parsed = purrdf_sparql_algebra::SparqlParser::new().parse_query("ASK {}")
+        .expect("caller-owned fixture query");
+    let values = [("this".to_owned(), purrdf_core::TermValue::Iri("http://example.org/focus".to_owned()))];
+    let base = super::QueryWorkspace::<Refusal>::control_bytes().expect("account layout");
+    let (workspace, ledger, _) = account(base);
+    let capability = workspace.capability();
+    let mut frame = super::LexicalFrame::new(&capability);
+    let failure = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        crate::substitute::apply_shacl_prebinding_with_memory(
+            parsed, crate::substitute::Prebindings::Owned(&values), &mut memory,
+        ).expect_err("the first nonempty probe backing array is refused")
+    };
+    assert!(matches!(failure, crate::substitute::GroundFailure::Operational(EvalError::WorkspaceStopped)));
+    let cause = workspace.take_failure().expect("original non-latching cause retained");
+    assert_eq!(cause.identity, 7);
+    assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+    assert!(workspace.take_failure().is_none());
+    drop(cause);
+    drop(frame);
+    drop(capability);
+    drop(workspace);
+    assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn prepared_native_probe_reuse_keeps_spelling_and_clears_refused_cells() {
+    let parameters = [purrdf_sparql_algebra::Variable::new("this")];
+    let mut values = [Some(crate::substitute::ParameterValue::Value(
+        purrdf_core::TermValue::Iri("http://example.org/focus".to_owned()),
+    ))];
+    let (workspace, ledger, base) = account(u64::MAX);
+    let capability = workspace.capability();
+    let mut probes = crate::substitute::PreparedProbes::default();
+    crate::substitute::build_prepared_probes(
+        &mut probes, crate::substitute::Prebindings::Paired(&parameters, &values), &capability,
+    ).expect("first native probe");
+    let spelling = match &probes.entries()[0].1 {
+        purrdf_sparql_algebra::GroundTerm::NamedNode(node) => node.as_str().as_ptr(),
+        _ => unreachable!("IRI input"),
+    };
+    let live = ledger.live.load(Ordering::Relaxed);
+    crate::substitute::build_prepared_probes(
+        &mut probes, crate::substitute::Prebindings::Paired(&parameters, &values), &capability,
+    ).expect("reuse unchanged validated spelling");
+    let after = match &probes.entries()[0].1 {
+        purrdf_sparql_algebra::GroundTerm::NamedNode(node) => node.as_str().as_ptr(),
+        _ => unreachable!("IRI input"),
+    };
+    assert_eq!(after, spelling);
+    assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+    values[0] = Some(crate::substitute::ParameterValue::Value(purrdf_core::TermValue::Iri("relative".to_owned())));
+    let failure = crate::substitute::build_prepared_probes(
+        &mut probes, crate::substitute::Prebindings::Paired(&parameters, &values), &capability,
+    ).expect_err("relative IRI keeps the native lexical refusal");
+    assert!(matches!(failure, crate::substitute::GroundFailure::Diagnostic(_)));
+    assert!(probes.entries().is_empty(), "no previous run's term survives refusal");
+    drop(failure);
+    assert_eq!(ledger.live.load(Ordering::Relaxed), base,
+        "bounded lexical refusal frees cells and both retained metadata arrays");
+    crate::substitute::build_prepared_probes(
+        &mut probes, crate::substitute::Prebindings::Paired(&parameters, &values), &capability,
+    ).expect_err("a repeated lexical refusal retains no hypothetical reuse allocation");
+    assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+    drop(probes);
+    drop(capability);
+    drop(workspace);
+    assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn resident_prepared_probe_lexical_refusal_preserves_original_buffer_reuse() {
+    let parameters = [purrdf_sparql_algebra::Variable::new("this")];
+    let mut values = [Some(crate::substitute::ParameterValue::Value(
+        purrdf_core::TermValue::Iri("http://example.org/focus".to_owned()),
+    ))];
+    let capability = WorkspaceCapability::resident();
+    let mut probes = crate::substitute::PreparedProbes::default();
+    crate::substitute::build_prepared_probes(
+        &mut probes, crate::substitute::Prebindings::Paired(&parameters, &values), &capability,
+    ).expect("resident first probe");
+    let buffer = probes.entries().as_ptr();
+    values[0] = Some(crate::substitute::ParameterValue::Value(
+        purrdf_core::TermValue::Iri("relative".to_owned()),
+    ));
+    let failure = crate::substitute::build_prepared_probes(
+        &mut probes, crate::substitute::Prebindings::Paired(&parameters, &values), &capability,
+    ).expect_err("resident native lexical refusal");
+    assert!(matches!(failure, crate::substitute::GroundFailure::Diagnostic(_)));
+    assert!(probes.entries().is_empty());
+    drop(failure);
+    values[0] = Some(crate::substitute::ParameterValue::Value(
+        purrdf_core::TermValue::Iri("http://example.org/focus".to_owned()),
+    ));
+    crate::substitute::build_prepared_probes(
+        &mut probes, crate::substitute::Prebindings::Paired(&parameters, &values), &capability,
+    ).expect("resident buffer reused after failure");
+    assert_eq!(probes.entries().as_ptr(), buffer);
+}
+
+#[test]
+fn native_assignment_identity_overflow_is_typed_before_name_construction() {
+    use purrdf_sparql_algebra::{Child, Expression, GraphPattern, Query, Variable};
+    let mut query = purrdf_sparql_algebra::SparqlParser::new().parse_query("ASK {}")
+        .expect("caller-owned query shell");
+    let Query::Ask { pattern, .. } = &mut query else { unreachable!("ASK parsed") };
+    *pattern = GraphPattern::Extend {
+        inner: Child::new(GraphPattern::Extend {
+            inner: Child::new(GraphPattern::empty_bgp()),
+            variable: Variable::new(format!("__purrdf_assigned_{}_source", usize::MAX)),
+            expression: Expression::Variable(Variable::new("ordinary")),
+        }),
+        variable: Variable::new("this"),
+        expression: Expression::Variable(Variable::new("ordinary")),
+    };
+    let (workspace, ledger, _) = account(u64::MAX);
+    let capability = workspace.capability();
+    let mut frame = super::LexicalFrame::new(&capability);
+    let failure = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        crate::substitute::join_assignments_with_prebinding_with_memory(&mut query, &["this"], &mut memory)
+            .expect_err("native fresh-name counter cannot wrap")
+    };
+    assert!(matches!(failure, crate::substitute::GroundFailure::Operational(EvalError::WorkspaceBoundOverflow)));
+    assert!(workspace.take_failure().is_none(), "logical overflow is distinct from reservation refusal");
+    drop(query);
+    drop(frame);
+    drop(capability);
+    drop(workspace);
+    assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+}

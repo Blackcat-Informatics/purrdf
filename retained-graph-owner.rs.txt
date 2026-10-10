@@ -1,0 +1,28 @@
+/// An immutable frozen graph whose shared original account survives every
+/// shallow clone and extraction. Borrowed datasets expose no raw Arc escape.
+#[derive(Debug, Clone)]
+pub struct RetainedGraph {
+    result: RetainedSparqlResult,
+}
+
+impl RetainedGraph {
+    pub(crate) fn from_result(result: RetainedSparqlResult) -> Self {
+        assert!(result.graph().is_some(), "graph carrier requires a graph result");
+        Self { result }
+    }
+
+    /// Borrow the immutable dataset while its original admission remains live.
+    #[must_use]
+    pub fn as_dataset(&self) -> &RdfDataset {
+        self.result.graph().expect("graph extraction preserves its query form")
+    }
+
+    /// Move the same original owner into the common result vocabulary.
+    #[must_use]
+    pub fn into_result(self) -> RetainedSparqlResult { self.result }
+}
+
+impl std::ops::Deref for RetainedGraph {
+    type Target = RdfDataset;
+    fn deref(&self) -> &Self::Target { self.as_dataset() }
+}

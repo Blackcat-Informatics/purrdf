@@ -1,0 +1,33 @@
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -587,7 +587,8 @@
+         .try_intern_admitted(ctx.dataset, TermValue::integer(value), &ctx.growth)
+ }
+ 
+-/// Build a typed (no-language) literal value.
++/// Build a test's typed (no-language) literal value.
++#[cfg(test)]
+ fn typed(lexical: &str, datatype: &str) -> TermValue {
+     TermValue::Literal {
+         lexical_form: lexical.to_owned(),
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -6164,15 +6164,6 @@
+     numeric_text_to_term(ctx, text, XSD_STRING)
+ }
+ 
+-/// [`xsd_to_term`]'s value-only half: the canonical typed-literal [`TermValue`] for a
+-/// computed [`XsdValue`], with no interning. Shared with `crate::modifier`'s built-in
+-/// aggregate accumulators, whose [`crate::agg_fn::AggregateAccumulator::finish`] produces
+-/// a plain `TermValue` (interned once, by the caller, exactly as a custom aggregate's own
+-/// `finish` is) rather than an [`EvalCtx`]-bound [`SolutionTerm`].
+-pub(crate) fn xsd_literal_value(v: &XsdValue) -> TermValue {
+-    typed(&v.canonical_lexical(), v.datatype().iri())
+-}
+-
+ /// SPARQL's three-valued `||` over two effective boolean values (`None` is an
+ /// error): `true` if either is `true`, `false` if both are `false`, an error
+ /// otherwise (§17.2).
+

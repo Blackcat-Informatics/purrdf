@@ -1,0 +1,251 @@
+diff --git a/crates/lex/src/allocation.rs b/crates/lex/src/allocation.rs
+--- a/crates/lex/src/allocation.rs
++++ b/crates/lex/src/allocation.rs
+@@ -54,6 +54,18 @@
+ pub trait Admission {
+     /// Admit the next exact total before allocation; shrink only after destruction.
+     fn resize(&mut self, live_bytes: usize) -> Result<(), StorageError>;
++}
++
++/// A zero-size resident callback with no application capacity preset.
++///
++/// Accepts each exact native live layout; Memory still checks the layout and
++/// performs the actual allocation fallibly. This supplies no borrowed external
++/// grant, so resident callers own the returned payload themselves.
++#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
++pub struct Resident;
++
++impl Admission for Resident {
++    fn resize(&mut self, _live_bytes: usize) -> Result<(), StorageError> { Ok(()) }
+ }
+ 
+ /// Exact live-buffer accounting shared by native scanners, compilers and walks.
+@@ -190,18 +202,30 @@
+         self.remove(old)
+     }
+ 
++    /// Append borrowed UTF-8 after admitting any amortized buffer growth.
++    /// The original text survives admission or allocator refusal unchanged.
++    /// Its nonempty buffer must already belong to this memory's live total.
++    ///
++    /// # Errors
++    /// Returns checked layout overflow, admission refusal or allocator refusal.
++    pub fn push_str(&mut self, text: &mut String, suffix: &str) -> Result<(), StorageError> {
++        let required = text.len().checked_add(suffix.len()).ok_or(StorageError::SizeOverflow)?;
++        if required > text.capacity() {
++            let capacity = text.capacity().checked_mul(2)
++                .ok_or(StorageError::SizeOverflow)?.max(required);
++            self.reserve_string(text, capacity)?;
++        }
++        text.push_str(suffix);
++        Ok(())
++    }
++
+     /// Append one scalar after admitting any physical UTF-8 buffer growth.
+     ///
+     /// # Errors
+     /// Returns checked layout overflow, admission refusal or allocator refusal.
+     pub fn push_char(&mut self, text: &mut String, ch: char) -> Result<(), StorageError> {
+-        let required = text.len().checked_add(ch.len_utf8()).ok_or(StorageError::SizeOverflow)?;
+-        if required > text.capacity() {
+-            let capacity = text.capacity().checked_mul(2).ok_or(StorageError::SizeOverflow)?.max(required);
+-            self.reserve_string(text, capacity)?;
+-        }
+-        text.push(ch);
+-        Ok(())
++        let mut utf8 = [0; 4];
++        self.push_str(text, ch.encode_utf8(&mut utf8))
+     }
+ 
+     /// Render borrowed native fields once, admitting each actual UTF-8 growth
+@@ -251,16 +275,7 @@
+ 
+ impl<S: Admission + ?Sized> fmt::Write for FormatSink<'_, '_, S> {
+     fn write_str(&mut self, text: &str) -> fmt::Result {
+-        let result = (|| {
+-            let required = self.text.len().checked_add(text.len()).ok_or(StorageError::SizeOverflow)?;
+-            if required > self.text.capacity() {
+-                let capacity = self.text.capacity().checked_mul(2)
+-                    .ok_or(StorageError::SizeOverflow)?.max(required);
+-                self.memory.reserve_string(self.text, capacity)?;
+-            }
+-            self.text.push_str(text);
+-            Ok(())
+-        })();
++        let result = self.memory.push_str(self.text, text);
+         result.map_err(|failure| {
+             self.failure = Some(failure);
+             fmt::Error
+diff --git a/crates/lex/src/terminals.rs b/crates/lex/src/terminals.rs
+--- a/crates/lex/src/terminals.rs
++++ b/crates/lex/src/terminals.rs
+@@ -1453,11 +1453,34 @@
+ /// ```
+ #[must_use]
+ pub fn expand_uchars(text: &str) -> Cow<'_, str> {
++    let mut resident = crate::allocation::Resident;
++    let mut memory = crate::allocation::Memory::new(&mut resident);
++    expand_uchars_with_memory(text, &mut memory)
++        .expect("resident UCHAR expansion allocation failed")
++}
++
++/// Expand UCHARs through the existing decoder with admitted UTF-8 ownership.
++///
++/// Malformed escapes remain verbatim, exactly as in [`expand_uchars`]. A text
++/// without a backslash is borrowed and acquires no allocation. For owned text,
++/// each valid UCHAR has six or ten ASCII source bytes and produces at most four
++/// UTF-8 bytes: the original source byte length is a certified exact capacity
++/// bound for this single destination, admitted before its fallible allocation.
++/// The caller retains the original memory's grant while the owned Cow lives.
++///
++/// # Errors
++/// Returns native checked-layout, admission or allocator refusal separately
++/// from malformed lexical input; malformed input is never disguised or lost.
++pub fn expand_uchars_with_memory<'a, S: crate::allocation::Admission + ?Sized>(
++    text: &'a str,
++    memory: &mut crate::allocation::Memory<'_, S>,
++) -> Result<Cow<'a, str>, crate::allocation::StorageError> {
+     let bytes = text.as_bytes();
+     let Some(first) = bytes.iter().position(|&b| b == b'\\') else {
+-        return Cow::Borrowed(text);
++        return Ok(Cow::Borrowed(text));
+     };
+-    let mut out = String::with_capacity(text.len());
++    let mut out = String::new();
++    memory.reserve_string(&mut out, text.len())?;
+     let mut copied = 0;
+     let mut at = first;
+     while at < bytes.len() {
+@@ -1473,10 +1496,11 @@
+         }
+     }
+     // Every stop is an ASCII backslash or the end of an ASCII escape, so each
+-    // slice starts and ends on a `char` boundary.
++    // slice starts and ends on a char boundary. Decoding never expands bytes.
+     out.push_str(&text[copied..]);
+-    Cow::Owned(out)
+-}
++    Ok(Cow::Owned(out))
++}
++
+ 
+ /// The scalar an XML character reference names, given its body — the text
+ /// between `&#` and `;`.
+diff --git a/crates/rdf-core/tests/native_regex_storage.rs b/crates/rdf-core/tests/native_regex_storage.rs
+--- a/crates/rdf-core/tests/native_regex_storage.rs
++++ b/crates/rdf-core/tests/native_regex_storage.rs
+@@ -468,3 +468,114 @@
+     assert_eq!(measured.peak_working_bytes, 0);
+     assert!(failure.storage().0.refused.is_some());
+ }
++
++// Append to native_regex_storage.rs, reusing its counting allocator and Account.
++
++#[test]
++fn uchar_expansion_admits_its_real_utf8_capacity_and_preserves_malformed_bytes() {
++    use purrdf_lex::allocation::Memory;
++    use purrdf_lex::terminals::{expand_uchars, expand_uchars_with_memory};
++    for input in ["urn:plain", "urn:é", r"urn:\u00E9", r"urn:\U0001F431", r"urn:\u+041",
++        r"urn:\uD800", r"urn:\U00110000", r"a\u0041\u+041\\u0042", "\\", "é\\u0041é"] {
++        let expected = expand_uchars(input);
++        let mut account = Account::new(input.len());
++        let window = CurrentThreadWindow::open();
++        let mut memory = Memory::new(&mut account);
++        let actual = expand_uchars_with_memory(input, &mut memory).unwrap();
++        let live = memory.live_bytes();
++        let measured = window.close();
++        assert_eq!(actual, expected, "{input}");
++        assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), live);
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= live);
++        match actual {
++            std::borrow::Cow::Borrowed(value) => {
++                assert!(std::ptr::eq(value, input));
++                assert_eq!(live, 0);
++            }
++            std::borrow::Cow::Owned(value) => {
++                assert_eq!(live, value.capacity());
++                assert_eq!(value.capacity(), input.len());
++                memory.release_string(value).unwrap();
++                assert_eq!(memory.live_bytes(), 0);
++            }
++        }
++    }
++}
++
++#[test]
++fn uchar_expansion_refuses_before_allocation_and_borrowed_input_needs_no_grant() {
++    use purrdf_lex::allocation::Memory;
++    use purrdf_lex::terminals::expand_uchars_with_memory;
++    for input in [r"urn:\u0041", r"urn:\u+041", "\\"] {
++        let mut account = Account::new(0);
++        let window = CurrentThreadWindow::open();
++        let mut memory = Memory::new(&mut account);
++        let refused = expand_uchars_with_memory(input, &mut memory).unwrap_err();
++        let measured = window.close();
++        assert_eq!(refused, StorageError::AdmissionFailed);
++        assert_eq!(memory.live_bytes(), 0);
++        assert_eq!(measured.peak_working_bytes, 0);
++        assert_eq!(measured.retained_bytes, 0);
++    }
++    let mut account = Account::new(0);
++    let mut memory = Memory::new(&mut account);
++    assert!(matches!(expand_uchars_with_memory("urn:é", &mut memory).unwrap(),
++        std::borrow::Cow::Borrowed("urn:é")));
++    assert_eq!(memory.live_bytes(), 0);
++}
++
++#[test]
++fn native_string_append_covers_old_and_new_buffers_with_amortized_growth() {
++    use purrdf_lex::allocation::Memory;
++    let mut account = Account::new(16_384);
++    let window = CurrentThreadWindow::open();
++    let mut memory = Memory::new(&mut account);
++    let mut text = String::new();
++    let mut replacements = 0;
++    let mut previous_capacity = 0;
++    for _ in 0..1024 {
++        memory.push_str(&mut text, "é").unwrap();
++        if text.capacity() != previous_capacity {
++            replacements += 1;
++            if previous_capacity != 0 { assert_eq!(text.capacity(), previous_capacity * 2); }
++            previous_capacity = text.capacity();
++        }
++    }
++    memory.push_char(&mut text, '🐱').unwrap();
++    assert!(text.starts_with("éé"));
++    assert!(text.ends_with('🐱'));
++    assert_eq!(text.len(), 2052);
++    assert!(replacements <= 11, "growth must not allocate for every splice fragment");
++    let live = memory.live_bytes();
++    assert_eq!(live, text.capacity());
++    let measured = window.close();
++    memory.release_string(text).unwrap();
++    assert_eq!(memory.live_bytes(), 0);
++    drop(memory);
++    assert_eq!(account.live, 0);
++    assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), live);
++    assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
++    assert!(account.peak > live, "buffer replacement must cover overlapping old and new layouts");
++}
++
++#[test]
++fn native_string_append_refusal_preserves_original_buffer_and_utf8() {
++    use purrdf_lex::allocation::Memory;
++    let mut account = Account::new(5);
++    let window = CurrentThreadWindow::open();
++    let mut memory = Memory::new(&mut account);
++    let mut text = memory.string("é").unwrap();
++    let original = text.as_ptr();
++    assert_eq!(memory.push_str(&mut text, "ab"), Err(StorageError::AdmissionFailed));
++    assert_eq!(text, "é");
++    assert_eq!(text.as_ptr(), original);
++    assert_eq!(text.capacity(), 2);
++    assert_eq!(memory.live_bytes(), 2);
++    let measured = window.close();
++    memory.release_string(text).unwrap();
++    drop(memory);
++    assert_eq!(account.refused, Some(6));
++    assert_eq!(account.peak, 2);
++    assert_eq!(measured.peak_working_bytes, 2);
++    assert_eq!(measured.retained_bytes, 2);
++}

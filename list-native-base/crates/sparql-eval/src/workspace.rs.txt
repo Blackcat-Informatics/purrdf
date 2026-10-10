@@ -1,0 +1,3215 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Execution-owned admission, shared by nested work and retained publication.
+
+use std::sync::{Mutex, MutexGuard};
+
+use purrdf_core::{OwnedWorkspaceReservation, small::Shared};
+
+use crate::EvalError;
+
+/// Shared execution controls keep their actual payload and admission together.
+/// A caller-provided Arc remains caller-owned; native controls use the same
+/// immutable, fallible Shared home as rows and parsed values.
+#[derive(Debug)]
+pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
+
+#[derive(Debug)]
+enum SharedWorkspaceStorage<T> {
+    Caller(std::sync::Arc<T>),
+    Native(Shared<SharedWorkspacePayload<T>>),
+}
+
+#[derive(Debug)]
+struct SharedWorkspacePayload<T> {
+    value: T,
+    // The payload must die before its original grant.
+    _allocation: WorkspaceAllocation,
+}
+
+impl<T> Clone for SharedWorkspace<T> {
+    fn clone(&self) -> Self {
+        Self(match &self.0 {
+            SharedWorkspaceStorage::Caller(value) => SharedWorkspaceStorage::Caller(value.clone()),
+            SharedWorkspaceStorage::Native(value) => SharedWorkspaceStorage::Native(value.clone()),
+        })
+    }
+}
+
+impl<T> std::ops::Deref for SharedWorkspace<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        match &self.0 {
+            SharedWorkspaceStorage::Caller(value) => value,
+            SharedWorkspaceStorage::Native(value) => &value.value,
+        }
+    }
+}
+
+impl<T> AsRef<T> for SharedWorkspace<T> {
+    fn as_ref(&self) -> &T {
+        self
+    }
+}
+
+impl<T> From<std::sync::Arc<T>> for SharedWorkspace<T> {
+    fn from(value: std::sync::Arc<T>) -> Self {
+        Self(SharedWorkspaceStorage::Caller(value))
+    }
+}
+
+impl<T> SharedWorkspace<T> {
+    pub(crate) fn unique_mut(&mut self) -> Option<&mut T> {
+        match &mut self.0 {
+            SharedWorkspaceStorage::Caller(value) => std::sync::Arc::get_mut(value),
+            SharedWorkspaceStorage::Native(value) => {
+                value.get_mut().map(|payload| &mut payload.value)
+            }
+        }
+    }
+
+    /// Only explicitly caller-owned resident controls may be mutated. A native
+    /// shared owner never exposes mutable payload ownership or its admission.
+    pub(crate) fn caller_unique_mut(&mut self) -> Option<&mut T> {
+        match &mut self.0 {
+            SharedWorkspaceStorage::Caller(value) => std::sync::Arc::get_mut(value),
+            SharedWorkspaceStorage::Native(_) => None,
+        }
+    }
+
+    /// Borrow the resident public handle without copying its payload. Native
+    /// controls deliberately expose no Arc conversion or unadmitted copy.
+    pub(crate) fn caller_arc(&self) -> Option<std::sync::Arc<T>> {
+        match &self.0 {
+            SharedWorkspaceStorage::Caller(value) => Some(value.clone()),
+            SharedWorkspaceStorage::Native(_) => None,
+        }
+    }
+
+    pub(crate) fn control_bytes() -> usize {
+        Shared::<SharedWorkspacePayload<T>>::allocation_layout().size()
+    }
+
+    pub(crate) fn new_admitted(
+        value: T,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let bytes = fallible_shared_layout::<SharedWorkspacePayload<T>>()?;
+        let allocation = workspace.charge(bytes)?;
+        let payload = Shared::try_new(SharedWorkspacePayload {
+            value,
+            _allocation: allocation,
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "shared execution control",
+        })?;
+        Ok(Self(SharedWorkspaceStorage::Native(payload)))
+    }
+}
+
+/// One original grant for native lexical buffers and controls. Native Memory
+/// admits every replacement while old buffers remain alive; the frame stores
+/// the first typed evaluator refusal independently of its static leaf marker.
+#[derive(Debug)]
+pub(crate) struct LexicalFrame {
+    workspace: WorkspaceCapability,
+    allocation: Option<WorkspaceAllocation>,
+    live: usize,
+    failure: Option<EvalError>,
+}
+
+impl LexicalFrame {
+    pub(crate) fn new(workspace: &WorkspaceCapability) -> Self {
+        Self {
+            workspace: workspace.clone(),
+            allocation: None,
+            live: 0,
+            failure: None,
+        }
+    }
+
+    /// Adopt the original private query grant without allocating or resizing it.
+    /// `allocation` must belong to `workspace` and cover the exact requested
+    /// layout total `live_bytes` of the still-live query payload. Native callers
+    /// resume Memory with that same total; they never reset a live AST to zero.
+    pub(crate) fn from_allocation(
+        workspace: &WorkspaceCapability,
+        allocation: WorkspaceAllocation,
+        live_bytes: usize,
+    ) -> Self {
+        Self {
+            workspace: workspace.clone(),
+            allocation: Some(allocation),
+            live: live_bytes,
+            failure: None,
+        }
+    }
+
+    pub(crate) const fn live_bytes(&self) -> usize {
+        self.live
+    }
+    pub(crate) const fn workspace(&self) -> &WorkspaceCapability {
+        &self.workspace
+    }
+    pub(crate) fn take_failure(&mut self) -> Option<EvalError> {
+        self.failure.take()
+    }
+
+    pub(crate) fn resize_live(&mut self, live: usize) -> Result<(), EvalError> {
+        if self.failure.is_some() {
+            return Err(EvalError::WorkspaceStopped);
+        }
+        let resized: Result<(), EvalError> = (|| {
+            let bytes = u64::try_from(live).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+            match &mut self.allocation {
+                Some(allocation) => allocation.resize(bytes)?,
+                None if live != 0 => self.allocation = Some(self.workspace.charge(bytes)?),
+                None => {}
+            }
+            self.live = live;
+            Ok(())
+        })();
+        if let Err(error) = &resized {
+            // These resize failures are fixed-layout/static control errors.
+            // The provider's original typed cause remains in QueryWorkspace.
+            self.failure = Some(error.clone());
+        }
+        resized
+    }
+
+    pub(crate) fn storage_error(
+        &mut self,
+        error: purrdf_lex::allocation::StorageError,
+        construct: &'static str,
+    ) -> EvalError {
+        self.take_failure().unwrap_or(match error {
+            purrdf_lex::allocation::StorageError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
+            purrdf_lex::allocation::StorageError::AllocationFailed => {
+                EvalError::AllocationFailed { construct }
+            }
+            purrdf_lex::allocation::StorageError::AdmissionFailed => EvalError::WorkspaceStopped,
+            purrdf_lex::allocation::StorageError::FormattingFailed => {
+                EvalError::UnstableNativeDiagnostic
+            }
+        })
+    }
+
+    /// Preserve a native diagnostic's original payload admission at publication.
+    /// Refusal leaves its text and original grant enclosed by the caller.
+    pub(crate) fn finish_diagnostic(
+        &mut self,
+        diagnostic: &mut Option<purrdf_core::RdfDiagnostic>,
+    ) -> Result<crate::RetainedDiagnostic, EvalError> {
+        if let Some(error) = self.take_failure() {
+            return Err(error);
+        }
+        let total = self
+            .live
+            .checked_add(crate::RetainedDiagnostic::control_bytes())
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        self.resize_live(total)?;
+        let value = diagnostic
+            .take()
+            .expect("native diagnostic publication owns its payload");
+        let allocation = self
+            .allocation
+            .take()
+            .expect("diagnostic control has an original grant");
+        self.live = 0;
+        crate::RetainedDiagnostic::from_admitted(value, allocation)
+    }
+
+    /// Trusted native publications move their buffers without allocating.
+    /// Every refusal is selected before the factory materializes the value.
+    pub(crate) fn finish_term(
+        &mut self,
+        factory: impl FnOnce() -> purrdf_core::TermValue,
+    ) -> Result<WorkspaceTerm, EvalError> {
+        if let Some(error) = self.take_failure() {
+            return Err(error);
+        }
+        if self.allocation.is_none() {
+            self.allocation = Some(self.workspace.charge(0)?);
+        }
+        let allocation = self
+            .allocation
+            .take()
+            .expect("original native grant checked before publication");
+        let value = factory();
+        Ok(WorkspaceTerm::new(value, allocation))
+    }
+
+    /// Publish one originally admitted UTF-8 buffer without copying its bytes.
+    /// Construction scratch must already be destroyed, leaving exactly this
+    /// buffer in the frame. Refusal leaves the enclosing text and grant intact.
+    pub(crate) fn finish_text(
+        &mut self,
+        text: &mut Option<String>,
+    ) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
+        use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
+        if let Some(error) = self.take_failure() {
+            return Err(error);
+        }
+        let Some(capacity) = text.as_ref().map(String::capacity) else {
+            return Err(NativeDiagnostic::error(
+                NativeDiagnosticKind::Internal,
+                &"native text publication has no payload",
+                &self.workspace,
+            ));
+        };
+        if capacity != self.live {
+            return Err(NativeDiagnostic::error(
+                NativeDiagnosticKind::Internal,
+                &"native text publication retains unmatched working storage",
+                &self.workspace,
+            ));
+        }
+        let control =
+            purrdf_lex::allocation::SharedText::allocation_layout::<WorkspaceAllocation>().size();
+        let bytes = capacity
+            .checked_add(control)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        self.resize_live(bytes)?;
+        // Every fallible admission occurs while both original owners remain
+        // enclosing. The native SharedText factory keeps text before its grant
+        // even when the actual control allocator refuses.
+        let allocation = self
+            .allocation
+            .take()
+            .expect("positive shared control has its original grant");
+        let text = text
+            .take()
+            .expect("native text checked before ownership transfer");
+        self.live = 0;
+        purrdf_lex::allocation::SharedText::try_from_admitted(text, allocation).map_err(|_| {
+            let error = EvalError::AllocationFailed {
+                construct: "native text shared control",
+            };
+            self.failure = Some(error.clone());
+            error
+        })
+    }
+
+    /// Transfer the native surviving layout's original grant with its payload.
+    /// No raw public buffer or mutable admitted owner is exposed.
+    pub(crate) fn finish_dataset(
+        &mut self,
+        dataset: &mut Option<purrdf_core::RdfDataset>,
+    ) -> Result<purrdf_core::DatasetHandle, EvalError> {
+        if let Some(error) = self.take_failure() {
+            return Err(error);
+        }
+        let control = purrdf_core::DatasetHandle::allocation_layout::<WorkspaceAllocation>().size();
+        let bytes = self
+            .live
+            .checked_add(control)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        self.resize_live(bytes)?;
+        let value = dataset
+            .take()
+            .expect("native frozen dataset is present before publication");
+        let allocation = self
+            .allocation
+            .take()
+            .expect("native dataset control has original admission");
+        self.live = 0;
+        purrdf_core::DatasetHandle::try_from_admitted(value, allocation).map_err(|_| {
+            EvalError::AllocationFailed {
+                construct: "native dataset shared control",
+            }
+        })
+    }
+
+    /// Transfer the native surviving layout's original grant with its payload.
+    /// No raw public buffer or mutable admitted owner is exposed.
+    pub(crate) fn into_allocation(self) -> Option<WorkspaceAllocation> {
+        self.allocation
+    }
+}
+
+impl purrdf_lex::allocation::Admission for LexicalFrame {
+    fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
+        self.resize_live(live)
+            .map_err(|_| purrdf_lex::allocation::StorageError::AdmissionFailed)
+    }
+}
+
+impl purrdf_sparql_algebra::parser::ParserAdmission for LexicalFrame {
+    fn text(
+        &mut self,
+        text: &dyn core::fmt::Display,
+    ) -> Result<purrdf_lex::allocation::SharedText, purrdf_lex::allocation::StorageError> {
+        if self.failure.is_some() {
+            return Err(purrdf_lex::allocation::StorageError::AdmissionFailed);
+        }
+        self.workspace.authored_text(text).map_err(|error| {
+            self.failure = Some(error);
+            purrdf_lex::allocation::StorageError::AdmissionFailed
+        })
+    }
+}
+
+trait GrowthAdmission: std::fmt::Debug + Send + Sync {
+    fn has_failed(&self) -> bool;
+    fn charge(&self, bytes: u64) -> Result<WorkspaceAllocation, EvalError>;
+    fn retain(&self, bytes: u64) -> Result<(), EvalError>;
+}
+
+trait AllocationOwner: std::fmt::Debug + Send + Sync {
+    fn resize(&mut self, bytes: u64) -> Result<(), EvalError>;
+}
+
+/// Immutable report records retain the actual arrays and each record's native
+/// payload grant. Moving records into a receipt never sheds those owners.
+#[derive(Debug)]
+pub(crate) struct AdmittedRecords<T> {
+    values: AdmittedVec<T>,
+    // Values and their buffers die before either payload or owner-array grants.
+    allocations: AdmittedVec<WorkspaceAllocation>,
+}
+
+impl<T> std::ops::Deref for AdmittedRecords<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.values
+    }
+}
+
+impl<T> AdmittedRecords<T> {
+    pub(crate) fn with_capacity(
+        capacity: usize,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Ok(Self {
+            values: AdmittedVec::with_capacity(capacity, workspace)?,
+            allocations: if workspace.is_bounded() {
+                AdmittedVec::with_capacity(capacity, workspace)?
+            } else {
+                AdmittedVec::new(workspace)
+            },
+        })
+    }
+
+    pub(crate) fn new(workspace: &WorkspaceCapability) -> Self {
+        Self {
+            values: AdmittedVec::new(workspace),
+            allocations: AdmittedVec::new(workspace),
+        }
+    }
+
+    pub(crate) fn resident(values: Vec<T>) -> Self {
+        let workspace = WorkspaceCapability::resident();
+        Self {
+            values: AdmittedVec::from_parts(values, None, &workspace),
+            allocations: AdmittedVec::new(&workspace),
+        }
+    }
+
+    pub(crate) fn push(
+        &mut self,
+        value: T,
+        allocation: WorkspaceAllocation,
+    ) -> Result<(), EvalError> {
+        // The tuple drops its payload before its original grant on either refusal.
+        let record = (value, allocation);
+        self.values.reserve_next()?;
+        if record.1.is_bounded() {
+            self.allocations.reserve_next()?;
+        }
+        let (value, allocation) = record;
+        self.values.push_reserved(value);
+        if allocation.is_bounded() {
+            self.allocations.push_reserved(allocation);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn try_into_resident(self) -> Result<Vec<T>, Self> {
+        if self.values.workspace.is_bounded() {
+            return Err(self);
+        }
+        Ok(self.values.into_parts().0)
+    }
+
+    pub(crate) fn as_mut_slice(&mut self) -> &mut [T] {
+        self.values.as_mut_slice()
+    }
+}
+
+/// An internal vector whose immutable borrowed view cannot shed its owner.
+/// Growth constructs a replacement while the original buffer stays covered,
+/// so an allocator failure leaves the original allocation and grant intact.
+#[derive(Debug)]
+pub struct AdmittedVec<T> {
+    values: Vec<T>,
+    allocation: Option<WorkspaceAllocation>,
+    workspace: WorkspaceCapability,
+}
+
+impl<T> std::ops::Deref for AdmittedVec<T> {
+    type Target = [T];
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
+
+impl<'a, T> IntoIterator for &'a AdmittedVec<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.iter()
+    }
+}
+
+impl<T> AdmittedVec<T> {
+    /// A known array layout, admitted before its fallible allocation.
+    /// # Errors
+    /// Returns layout overflow, admission refusal or allocator failure.
+    pub fn with_capacity(
+        capacity: usize,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let layout = std::alloc::Layout::array::<T>(capacity)
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        let allocation = if layout.size() == 0 {
+            None
+        } else {
+            Some(workspace.charge(
+                u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+            )?)
+        };
+        let values = vector::<T>(capacity, "admitted vector")?;
+        Ok(Self {
+            values,
+            allocation,
+            workspace: workspace.clone(),
+        })
+    }
+
+    /// Mutating existing elements cannot grow or detach the covered buffer.
+    pub fn as_mut_slice(&mut self) -> &mut [T] {
+        &mut self.values
+    }
+
+    /// Empty native storage sharing its execution's growth capability.
+    #[must_use]
+    pub fn new(workspace: &WorkspaceCapability) -> Self {
+        Self {
+            values: Vec::new(),
+            allocation: None,
+            workspace: workspace.clone(),
+        }
+    }
+
+    /// Transfer a buffer and its existing admission together after an in-place
+    /// representation change. Callers must retain the original allocation grant.
+    pub(crate) fn from_parts(
+        values: Vec<T>,
+        allocation: Option<WorkspaceAllocation>,
+        workspace: &WorkspaceCapability,
+    ) -> Self {
+        Self {
+            values,
+            allocation,
+            workspace: workspace.clone(),
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<T>, Option<WorkspaceAllocation>) {
+        (self.values, self.allocation)
+    }
+
+    /// Move resident storage without copying its elements. A bounded vector
+    /// returns its complete unchanged owner rather than shedding admission.
+    ///
+    /// # Errors
+    /// Returns the original admitted owner for a bounded execution.
+    pub fn try_into_resident(self) -> Result<Vec<T>, Self> {
+        if self.workspace.is_bounded() {
+            return Err(self);
+        }
+        Ok(self.values)
+    }
+
+    /// Retain a subset in place without growing or detaching the original array.
+    pub(crate) fn retain(&mut self, keep: impl FnMut(&T) -> bool) {
+        self.values.retain(keep);
+    }
+
+    /// Drop all values while retaining the existing metadata buffer admission.
+    pub fn clear(&mut self) {
+        self.values.clear();
+    }
+    /// Drop values after a prefix, retaining the existing buffer admission.
+    pub fn truncate(&mut self, length: usize) {
+        self.values.truncate(length);
+    }
+
+    /// Move the last element while retaining its vector metadata admission.
+    pub fn pop(&mut self) -> Option<T> {
+        self.values.pop()
+    }
+
+    /// Remove one ordered element while keeping the original array admitted.
+    pub(crate) fn remove(&mut self, index: usize) -> T {
+        self.values.remove(index)
+    }
+
+    /// Drain a suffix while borrowing the original admitted metadata owner.
+    pub fn drain_from(&mut self, start: usize) -> std::vec::Drain<'_, T> {
+        self.values.drain(start..)
+    }
+
+    /// Append after admitting and fallibly allocating replacement capacity.
+    ///
+    /// # Errors
+    /// Returns layout overflow, admission refusal or allocator failure.
+    pub fn push(&mut self, value: T) -> Result<(), EvalError> {
+        self.reserve_next()?;
+        self.values.push(value);
+        Ok(())
+    }
+
+    pub(crate) fn try_extend(
+        &mut self,
+        values: impl IntoIterator<Item = T>,
+    ) -> Result<(), EvalError> {
+        for value in values {
+            self.push(value)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn from_resident(values: Vec<T>) -> Self {
+        Self {
+            values,
+            allocation: None,
+            workspace: WorkspaceCapability::resident(),
+        }
+    }
+
+    pub(crate) fn reserve_additional(&mut self, additional: usize) -> Result<(), EvalError> {
+        let required = self
+            .values
+            .len()
+            .checked_add(additional)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        if required > self.values.capacity() {
+            let capacity = self
+                .values
+                .capacity()
+                .checked_mul(2)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?
+                .max(required);
+            self.workspace
+                .reserve_vec(&mut self.values, &mut self.allocation, capacity)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reserve_next(&mut self) -> Result<(), EvalError> {
+        if self.values.len() == self.values.capacity() {
+            let needed = self
+                .values
+                .len()
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let capacity = self
+                .values
+                .capacity()
+                .checked_mul(2)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?
+                .max(needed);
+            let layout = std::alloc::Layout::array::<T>(capacity)
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+            let allocation = self.workspace.charge(
+                u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+            )?;
+            let mut replacement = vector::<T>(capacity, "admitted vector")?;
+            replacement.append(&mut self.values);
+            self.values = replacement;
+            self.allocation = Some(allocation);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn push_reserved(&mut self, value: T) {
+        assert!(
+            self.values.len() < self.values.capacity(),
+            "native destination reserved before ownership transfer"
+        );
+        self.values.push(value);
+    }
+}
+
+/// A fixed-key native table retaining its actual hashbrown array admission.
+/// Returned references borrow the table; replacement moves each entry once.
+#[derive(Debug)]
+pub struct AdmittedMap<K, V> {
+    entries: hashbrown::HashTable<(K, V)>,
+    allocation: Option<WorkspaceAllocation>,
+}
+
+impl<K, V> Default for AdmittedMap<K, V> {
+    fn default() -> Self {
+        Self {
+            entries: hashbrown::HashTable::new(),
+            allocation: None,
+        }
+    }
+}
+
+impl<K, V> AdmittedMap<K, V> {
+    pub(crate) fn into_parts(self) -> (hashbrown::HashTable<(K, V)>, Option<WorkspaceAllocation>) {
+        (self.entries, self.allocation)
+    }
+}
+
+impl<K: Eq + std::hash::Hash, V> AdmittedMap<K, V> {
+    /// Destroy entries while retaining the admitted reusable table buffer.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Borrow an entry under the table's existing hash and equality law.
+    pub(crate) fn get_with_hash(&self, hash: u64, matches: impl FnMut(&K) -> bool) -> Option<&V> {
+        let mut matches = matches;
+        self.entries
+            .find(hash, |(key, _)| matches(key))
+            .map(|(_, value)| value)
+    }
+
+    /// The live entry count; retained spare capacity remains admitted.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn capacity(&self) -> usize {
+        self.entries.capacity()
+    }
+
+    /// Whether there are no live entries.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Copy table metadata through the same admitted insert home. The callback
+    /// carries each original payload owner or admits its actual independent copy.
+    pub(crate) fn clone_entries_admitted(
+        &self,
+        workspace: &WorkspaceCapability,
+        mut copy: impl FnMut(&K, &V) -> Result<(K, V), EvalError>,
+    ) -> Result<Self, EvalError> {
+        let mut output = Self::default();
+        for (key, value) in self.iter() {
+            let (key, value) = copy(key, value)?;
+            output.insert_admitted(key, value, workspace)?;
+        }
+        Ok(output)
+    }
+
+    /// Borrow membership without cloning a key or allocating a table.
+    #[must_use]
+    pub fn contains_key<Q: ?Sized + Eq + std::hash::Hash>(&self, key: &Q) -> bool
+    where
+        K: std::borrow::Borrow<Q>,
+    {
+        self.get(key).is_some()
+    }
+
+    /// Borrow payloads without a copied iterator buffer.
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.iter().map(|(_, value)| value)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.insert_admitted(key, value, &WorkspaceCapability::resident())
+            .expect("resident table allocation failed")
+    }
+
+    /// Borrow each existing key and value without an iterator allocation.
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.entries.iter().map(|entry| (&entry.0, &entry.1))
+    }
+
+    /// Borrow existing keys and mutable values without growing the table.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&K, &mut V)> {
+        self.entries
+            .iter_mut()
+            .map(|entry| (&entry.0, &mut entry.1))
+    }
+
+    /// Borrow a value using the same fixed hash and a borrowed key identity.
+    #[must_use]
+    pub fn get<Q: ?Sized + Eq + std::hash::Hash>(&self, key: &Q) -> Option<&V>
+    where
+        K: std::borrow::Borrow<Q>,
+    {
+        self.get_key_value(key).map(|(_, value)| value)
+    }
+
+    /// Borrow the original key and value without copying either owner.
+    #[must_use]
+    pub fn get_key_value<Q: ?Sized + Eq + std::hash::Hash>(&self, key: &Q) -> Option<(&K, &V)>
+    where
+        K: std::borrow::Borrow<Q>,
+    {
+        self.entries
+            .find(purrdf_hash::fixed::hash_one(key), |entry| {
+                <K as std::borrow::Borrow<Q>>::borrow(&entry.0) == key
+            })
+            .map(|entry| (&entry.0, &entry.1))
+    }
+
+    /// Mutate a value while its original table and payload owners remain alive.
+    #[must_use]
+    pub fn get_mut<Q: ?Sized + Eq + std::hash::Hash>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: std::borrow::Borrow<Q>,
+    {
+        self.entries
+            .find_mut(purrdf_hash::fixed::hash_one(key), |entry| {
+                <K as std::borrow::Borrow<Q>>::borrow(&entry.0) == key
+            })
+            .map(|entry| &mut entry.1)
+    }
+
+    /// Move a value out without allocating or releasing the live table buffer.
+    pub fn remove<Q: ?Sized + Eq + std::hash::Hash>(&mut self, key: &Q) -> Option<V>
+    where
+        K: std::borrow::Borrow<Q>,
+    {
+        let entry = self
+            .entries
+            .find_entry(purrdf_hash::fixed::hash_one(key), |entry| {
+                <K as std::borrow::Borrow<Q>>::borrow(&entry.0) == key
+            })
+            .ok()?;
+        Some(entry.remove().0.1)
+    }
+
+    /// Insert or replace after admitting any concrete replacement table.
+    /// # Errors
+    /// Returns layout overflow, admission refusal or allocator failure.
+    pub fn insert_admitted(
+        &mut self,
+        key: K,
+        value: V,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Option<V>, EvalError> {
+        let hash = purrdf_hash::fixed::hash_one(&key);
+        if let Some(entry) = self.entries.find_mut(hash, |entry| entry.0 == key) {
+            return Ok(Some(std::mem::replace(&mut entry.1, value)));
+        }
+        let needed = self
+            .entries
+            .len()
+            .checked_add(1)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        if needed > self.entries.capacity() {
+            let capacity = self
+                .entries
+                .capacity()
+                .checked_mul(2)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?
+                .max(needed);
+            let bytes = purrdf_core::hash::hash_table_allocation_bound::<(K, V)>(capacity)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let allocation = workspace
+                .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+            let mut entries = hashbrown::HashTable::new();
+            entries
+                .try_reserve(capacity, |entry: &(K, V)| {
+                    purrdf_hash::fixed::hash_one(&entry.0)
+                })
+                .map_err(|_| EvalError::AllocationFailed {
+                    construct: "admitted native table",
+                })?;
+            // Draining moves payloads and does not allocate a temporary buffer.
+            // The old table stays admitted until assignment destroys its array.
+            for entry in self.entries.drain() {
+                entries.insert_unique(purrdf_hash::fixed::hash_one(&entry.0), entry, |entry| {
+                    purrdf_hash::fixed::hash_one(&entry.0)
+                });
+            }
+            self.entries = entries;
+            self.allocation = Some(allocation);
+        }
+        self.entries.insert_unique(hash, (key, value), |entry| {
+            purrdf_hash::fixed::hash_one(&entry.0)
+        });
+        Ok(None)
+    }
+}
+
+/// A native binary heap whose capacity and sorted output retain admission.
+/// Growth reserves a replacement before moving the original heap buffer.
+#[derive(Debug)]
+pub struct AdmittedHeap<T: Ord> {
+    values: std::collections::BinaryHeap<T>,
+    allocation: Option<WorkspaceAllocation>,
+    workspace: WorkspaceCapability,
+}
+
+impl<T: Ord> AdmittedHeap<T> {
+    /// An empty heap associated with this execution.
+    #[must_use]
+    pub fn new(workspace: &WorkspaceCapability) -> Self {
+        Self {
+            values: std::collections::BinaryHeap::new(),
+            allocation: None,
+            workspace: workspace.clone(),
+        }
+    }
+
+    /// A concrete element array admitted before allocation.
+    /// # Errors
+    /// Returns layout overflow, admission refusal or allocator failure.
+    pub fn with_capacity(
+        capacity: usize,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let (values, allocation) =
+            AdmittedVec::<T>::with_capacity(capacity, workspace)?.into_parts();
+        Ok(Self {
+            values: std::collections::BinaryHeap::from(values),
+            allocation,
+            workspace: workspace.clone(),
+        })
+    }
+
+    /// Append after fallibly acquiring any required replacement buffer.
+    /// # Errors
+    /// Returns layout overflow, admission refusal or allocator failure.
+    pub fn push(&mut self, value: T) -> Result<(), EvalError> {
+        if self.values.len() == self.values.capacity() {
+            let needed = self
+                .values
+                .len()
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let capacity = self
+                .values
+                .capacity()
+                .checked_mul(2)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?
+                .max(needed);
+            let replacement = AdmittedVec::<T>::with_capacity(capacity, &self.workspace)?;
+            let (mut values, allocation) = replacement.into_parts();
+            // Both old and replacement arrays remain admitted during transfer.
+            // These operations move elements; none clones an element payload.
+            let mut old = std::mem::take(&mut self.values).into_vec();
+            values.append(&mut old);
+            self.values = std::collections::BinaryHeap::from(values);
+            drop(old);
+            self.allocation = allocation;
+        }
+        self.values.push(value);
+        Ok(())
+    }
+
+    /// Remove the greatest item without growing or detaching storage.
+    pub fn pop(&mut self) -> Option<T> {
+        self.values.pop()
+    }
+
+    /// Borrow the greatest item.
+    #[must_use]
+    pub fn peek(&self) -> Option<&T> {
+        self.values.peek()
+    }
+
+    /// The number of retained items.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// Whether the heap contains no items.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// Sort in place and transfer the same array together with its grant.
+    #[must_use]
+    pub fn into_sorted_vec(self) -> AdmittedVec<T> {
+        AdmittedVec::from_parts(
+            self.values.into_sorted_vec(),
+            self.allocation,
+            &self.workspace,
+        )
+    }
+}
+
+/// A consuming iterator retaining its original metadata buffer admission.
+#[derive(Debug)]
+pub struct AdmittedVecIntoIter<T> {
+    values: std::vec::IntoIter<T>,
+    _allocation: Option<WorkspaceAllocation>,
+}
+impl<T> Iterator for AdmittedVecIntoIter<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        self.values.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.values.size_hint()
+    }
+}
+impl<T> IntoIterator for AdmittedVec<T> {
+    type Item = T;
+    type IntoIter = AdmittedVecIntoIter<T>;
+    fn into_iter(self) -> Self::IntoIter {
+        AdmittedVecIntoIter {
+            values: self.values.into_iter(),
+            _allocation: self.allocation,
+        }
+    }
+}
+
+impl<E: Clone + std::error::Error + Send + Sync + 'static> AllocationOwner
+    for [WorkspaceCharge<E>; 1]
+{
+    fn resize(&mut self, bytes: u64) -> Result<(), EvalError> {
+        self[0].resize(bytes)
+    }
+}
+
+/// Shared execution admission lent to native producers and nested evaluation.
+/// Each granted owner retains the original typed account without changing its
+/// error type or promoting a borrowed provider to a static lifetime.
+#[derive(Debug, Clone, Default)]
+pub struct WorkspaceCapability {
+    owner: Option<Shared<Box<dyn GrowthAdmission>>>,
+}
+
+/// Admission for one allocation owner. Declare it after the payload it covers so
+/// the payload dies before the capacity is released. It deliberately cannot be
+/// cloned independently of that payload.
+#[derive(Debug)]
+pub struct WorkspaceAllocation {
+    _owner: Option<Box<dyn AllocationOwner>>,
+}
+
+/// A copied native term that keeps its allocation admitted while borrowed.
+#[derive(Debug)]
+pub struct WorkspaceTerm {
+    value: purrdf_core::TermValue,
+    layout: Option<crate::retained::TermLayout>,
+    allocation: WorkspaceAllocation,
+}
+impl std::ops::Deref for WorkspaceTerm {
+    type Target = purrdf_core::TermValue;
+    fn deref(&self) -> &Self::Target {
+        &self.value
+    }
+}
+impl WorkspaceTerm {
+    pub(crate) const fn resident(value: purrdf_core::TermValue) -> Self {
+        Self::new(value, WorkspaceAllocation { _owner: None })
+    }
+    /// Enclose a native term built under the supplied pre-acquired admission.
+    /// Producers must acquire that admission before constructing the payload.
+    #[must_use]
+    pub const fn new(value: purrdf_core::TermValue, allocation: WorkspaceAllocation) -> Self {
+        Self {
+            value,
+            layout: None,
+            allocation,
+        }
+    }
+    pub(crate) const fn with_layout(
+        value: purrdf_core::TermValue,
+        allocation: WorkspaceAllocation,
+        layout: crate::retained::TermLayout,
+    ) -> Self {
+        Self {
+            value,
+            layout: Some(layout),
+            allocation,
+        }
+    }
+
+    pub(crate) fn layout(
+        &self,
+        workspace: &WorkspaceCapability,
+    ) -> Result<crate::retained::TermLayout, EvalError> {
+        self.layout
+            .map_or_else(|| crate::retained::term_layout(&self.value, workspace), Ok)
+    }
+    pub(crate) fn into_parts(self) -> (purrdf_core::TermValue, WorkspaceAllocation) {
+        (self.value, self.allocation)
+    }
+    pub(crate) fn into_resident(self) -> Result<purrdf_core::TermValue, Self> {
+        if self.allocation.is_bounded() {
+            Err(self)
+        } else {
+            Ok(self.value)
+        }
+    }
+
+    /// Assemble already admitted components without duplicating their payloads.
+    /// All native boxes are acquired before the original component owners drop.
+    pub(crate) fn triple(
+        s: Self,
+        p: Self,
+        o: Self,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let mut bytes = 0u64;
+        let mut nodes = 1usize;
+        for value in [&s, &p, &o] {
+            let layout = value.layout(workspace)?;
+            bytes = bytes
+                .checked_add(layout.bytes)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            nodes = nodes
+                .checked_add(layout.nodes)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        }
+        let boxes = std::alloc::Layout::array::<purrdf_core::TermValue>(3)
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?
+            .size();
+        bytes = bytes
+            .checked_add(u64::try_from(boxes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        struct Components {
+            s: Option<purrdf_core::TermValue>,
+            p: Option<purrdf_core::TermValue>,
+            o: Option<purrdf_core::TermValue>,
+            _s_owner: WorkspaceAllocation,
+            _p_owner: WorkspaceAllocation,
+            admission: WorkspaceAllocation,
+        }
+        let (s, s_owner) = s.into_parts();
+        let (p, p_owner) = p.into_parts();
+        let (o, admission) = o.into_parts();
+        let mut components = Components {
+            s: Some(s),
+            p: Some(p),
+            o: Some(o),
+            _s_owner: s_owner,
+            _p_owner: p_owner,
+            admission,
+        };
+        components.admission.resize(bytes)?;
+        let s = purrdf_core::small::try_boxed(components.s.take().expect("owned subject"))
+            .map_err(|_| EvalError::AllocationFailed {
+                construct: "TRIPLE subject box",
+            })?;
+        let p = purrdf_core::small::try_boxed(components.p.take().expect("owned predicate"))
+            .map_err(|_| EvalError::AllocationFailed {
+                construct: "TRIPLE predicate box",
+            })?;
+        let o = purrdf_core::small::try_boxed(components.o.take().expect("owned object")).map_err(
+            |_| EvalError::AllocationFailed {
+                construct: "TRIPLE object box",
+            },
+        )?;
+        let value = purrdf_core::TermValue::Triple {
+            s: s.into(),
+            p: p.into(),
+            o: o.into(),
+        };
+        let value = Self::with_layout(
+            value,
+            components.admission,
+            crate::retained::TermLayout { bytes, nodes },
+        );
+        Ok(value)
+    }
+}
+
+impl WorkspaceAllocation {
+    /// Whether a live operational account owns this allocation grant.
+    #[must_use]
+    pub const fn is_bounded(&self) -> bool {
+        self._owner.is_some()
+    }
+    /// Admit a replacement capacity before growth, or settle a temporary peak
+    /// to the actual surviving payload. A refused resize preserves the previous
+    /// charge and the account's first typed operational failure.
+    ///
+    /// # Errors
+    /// Returns checked-layout overflow or the original admission refusal.
+    pub fn resize(&mut self, bytes: u64) -> Result<(), EvalError> {
+        self._owner
+            .as_mut()
+            .map_or(Ok(()), |owner| owner.resize(bytes))
+    }
+}
+
+impl WorkspaceCapability {
+    /// Publish native-authored algebra text with its original immutable owner.
+    pub(crate) fn authored_text(
+        &self,
+        value: &(impl std::fmt::Display + ?Sized),
+    ) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
+        let length = display_len(value)?;
+        let control =
+            purrdf_lex::allocation::SharedText::allocation_layout::<WorkspaceAllocation>().size();
+        let bytes = length
+            .checked_add(control)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let admission =
+            self.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let text = format_exact(value, length, "authored algebra text")?;
+        purrdf_lex::allocation::SharedText::try_from_admitted(text, admission).map_err(|_| {
+            EvalError::AllocationFailed {
+                construct: "authored algebra text owner",
+            }
+        })
+    }
+
+    /// Compute the fixed RDF identity hash under its native traversal admission.
+    ///
+    /// # Errors
+    /// Returns layout overflow, admission refusal or native allocation failure.
+    pub fn term_hash(&self, value: &purrdf_core::TermValue) -> Result<u64, EvalError> {
+        use std::hash::Hasher;
+        let nodes = crate::retained::term_layout(value, self)?.nodes;
+        let bytes = purrdf_core::TermValue::hash_workspace_bound(nodes)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let _working =
+            self.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
+        value
+            .try_hash(&mut hasher)
+            .map_err(|_| EvalError::AllocationFailed {
+                construct: "native term hash",
+            })?;
+        Ok(hasher.finish())
+    }
+    /// Whether allocations admitted by this capability retain an operational account.
+    #[must_use]
+    pub const fn is_bounded(&self) -> bool {
+        self.owner.is_some()
+    }
+
+    /// Construct a literal from stable borrowed formatting under one payload grant.
+    /// This calls the existing term constructor with owned strings, avoiding
+    /// a rendered temporary followed by a second lexical copy.
+    /// # Errors
+    /// Returns typed checked-layout, admission, allocation or formatting failure.
+    pub fn literal(
+        &self,
+        lexical: impl core::fmt::Display,
+        datatype: &str,
+    ) -> Result<WorkspaceTerm, EvalError> {
+        let length = display_len(&lexical)?;
+        let bytes = length
+            .checked_add(datatype.len())
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let allocation =
+            self.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let lexical = format_exact(&lexical, length, "native literal lexical text")?;
+        let datatype = string(datatype, "native literal datatype")?;
+        Ok(WorkspaceTerm::new(
+            purrdf_core::TermValue::typed_literal(lexical, datatype),
+            allocation,
+        ))
+    }
+    /// An allocation-free capability for resident execution.
+    #[must_use]
+    pub const fn resident() -> Self {
+        Self { owner: None }
+    }
+
+    /// Compare RDF identity while admitting the native comparison work-list.
+    ///
+    /// # Errors
+    /// Returns physical overflow, admission refusal or native allocator refusal.
+    pub fn terms_equal(
+        &self,
+        left: &purrdf_core::TermValue,
+        right: &purrdf_core::TermValue,
+    ) -> Result<bool, EvalError> {
+        self.terms_cmp_inner(left, right, true)
+            .map(|order| order == std::cmp::Ordering::Equal)
+    }
+
+    /// Compare the total RDF order under the same native work-list admission.
+    ///
+    /// # Errors
+    /// Returns physical overflow, admission refusal or native allocator refusal.
+    pub fn terms_cmp(
+        &self,
+        left: &purrdf_core::TermValue,
+        right: &purrdf_core::TermValue,
+    ) -> Result<std::cmp::Ordering, EvalError> {
+        self.terms_cmp_inner(left, right, false)
+    }
+
+    fn terms_cmp_inner(
+        &self,
+        left: &purrdf_core::TermValue,
+        right: &purrdf_core::TermValue,
+        equality: bool,
+    ) -> Result<std::cmp::Ordering, EvalError> {
+        let left_nodes = crate::retained::term_layout(left, self)?.nodes;
+        let right_nodes = crate::retained::term_layout(right, self)?.nodes;
+        let bytes = purrdf_core::TermValue::comparison_workspace_bound(left_nodes.min(right_nodes))
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let _temporary =
+            self.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let order = if equality {
+            left.try_eq(right).map(|equal| {
+                if equal {
+                    std::cmp::Ordering::Equal
+                } else {
+                    std::cmp::Ordering::Less
+                }
+            })
+        } else {
+            left.try_cmp(right)
+        };
+        order.map_err(|_| EvalError::AllocationFailed {
+            construct: "native term comparison",
+        })
+    }
+    /// Admit and fallibly replace a native producer's vector capacity. Producer
+    /// fields retain `allocation` after the vector they cover and never detach it.
+    ///
+    /// # Errors
+    /// Returns layout overflow, admission refusal or allocator failure before growth.
+    pub fn reserve_vec<T>(
+        &self,
+        values: &mut Vec<T>,
+        allocation: &mut Option<WorkspaceAllocation>,
+        required: usize,
+    ) -> Result<(), EvalError> {
+        if required <= values.capacity() {
+            return Ok(());
+        }
+        let layout = std::alloc::Layout::array::<T>(required)
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        let next = self
+            .charge(u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let mut replacement = vector(required, "native producer vector")?;
+        replacement.append(values);
+        *values = replacement;
+        *allocation = Some(next);
+        Ok(())
+    }
+
+    /// Admit and fallibly replace a native producer's UTF-8 storage capacity.
+    ///
+    /// # Errors
+    /// Returns admission refusal or allocator failure before any buffer growth.
+    pub fn reserve_string(
+        &self,
+        value: &mut String,
+        allocation: &mut Option<WorkspaceAllocation>,
+        required: usize,
+    ) -> Result<(), EvalError> {
+        if required <= value.capacity() {
+            return Ok(());
+        }
+        let layout = std::alloc::Layout::array::<u8>(required)
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        let next = self
+            .charge(u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let mut replacement = String::new();
+        replacement
+            .try_reserve_exact(required)
+            .map_err(|_| EvalError::AllocationFailed {
+                construct: "native producer string",
+            })?;
+        replacement.push_str(value);
+        *value = replacement;
+        *allocation = Some(next);
+        Ok(())
+    }
+    /// Copy a term through the first-party fallible native clone. Its immutable
+    /// carrier preserves RDF identity and retains payload admission after return.
+    ///
+    /// # Errors
+    /// Returns checked physical overflow, admission refusal or allocator failure.
+    pub fn clone_term(&self, value: &purrdf_core::TermValue) -> Result<WorkspaceTerm, EvalError> {
+        let layout = crate::retained::term_layout(value, self)?;
+        let temporary = purrdf_core::TermValue::clone_workspace_bound(layout.nodes)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let temporary =
+            self.charge(u64::try_from(temporary).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let allocation = self.charge(layout.bytes)?;
+        let value = value.try_clone().map_err(|_| EvalError::AllocationFailed {
+            construct: "native term clone",
+        })?;
+        drop(temporary);
+        Ok(WorkspaceTerm::with_layout(value, allocation, layout))
+    }
+    pub(crate) fn has_failed(&self) -> bool {
+        self.owner.as_ref().is_some_and(|owner| owner.has_failed())
+    }
+    /// Admit output staged across context destruction. The final publication
+    /// settles its actual retained layout before it releases execution capacity.
+    pub(crate) fn retain(&self, bytes: u64) -> Result<(), EvalError> {
+        self.owner
+            .as_ref()
+            .map_or(Ok(()), |owner| owner.retain(bytes))
+    }
+    /// Reserve capacity before constructing or growing a native owner.
+    ///
+    /// # Errors
+    /// Returns overflow or the first operational refusal, before allocation.
+    pub fn charge(&self, bytes: u64) -> Result<WorkspaceAllocation, EvalError> {
+        if self.has_failed() {
+            return Err(EvalError::WorkspaceStopped);
+        }
+        match &self.owner {
+            Some(owner) => owner.charge(bytes),
+            None => Ok(WorkspaceAllocation { _owner: None }),
+        }
+    }
+}
+
+impl<E> std::fmt::Debug for Account<E> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkspaceAccount")
+            .finish_non_exhaustive()
+    }
+}
+
+struct GrowthOwner<E> {
+    account: Shared<Mutex<Account<E>>>,
+}
+impl<E> std::fmt::Debug for GrowthOwner<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GrowthOwner").finish_non_exhaustive()
+    }
+}
+impl<E: Clone + std::error::Error + Send + Sync + 'static> GrowthAdmission for [GrowthOwner<E>; 1] {
+    fn has_failed(&self) -> bool {
+        self[0].has_failed()
+    }
+    fn charge(&self, bytes: u64) -> Result<WorkspaceAllocation, EvalError> {
+        self[0].charge(bytes)
+    }
+    fn retain(&self, bytes: u64) -> Result<(), EvalError> {
+        self[0].retain(bytes)
+    }
+}
+
+impl<E: Clone + std::error::Error + Send + Sync + 'static> GrowthAdmission for GrowthOwner<E> {
+    fn has_failed(&self) -> bool {
+        lock(&self.account).failed
+    }
+    fn retain(&self, bytes: u64) -> Result<(), EvalError> {
+        let mut account = lock(&self.account);
+        if account.failed {
+            return Err(EvalError::WorkspaceStopped);
+        }
+        let base = account
+            .base
+            .checked_add(bytes)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let total = base
+            .checked_add(account.children)
+            .and_then(|bytes| bytes.checked_add(account.control))
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        if let Err(error) = account.reservation.resize(total) {
+            account.failure = Some(error);
+            account.failed = true;
+            return Err(EvalError::WorkspaceStopped);
+        }
+        account.base = base;
+        Ok(())
+    }
+    fn charge(&self, bytes: u64) -> Result<WorkspaceAllocation, EvalError> {
+        let owner_bytes = u64::try_from(size_of::<WorkspaceCharge<E>>())
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        let bytes = bytes
+            .checked_add(owner_bytes)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let workspace = QueryWorkspace {
+            account: Some(self.account.clone()),
+            capability: WorkspaceCapability::default(),
+        };
+        let charge = workspace.charge(bytes)?;
+        // The concrete box layout was admitted along with the payload above.
+        let charge =
+            purrdf_core::small::try_boxed_one(charge).map_err(|_| EvalError::AllocationFailed {
+                construct: "workspace allocation owner",
+            })?;
+        Ok(WorkspaceAllocation {
+            _owner: Some(charge),
+        })
+    }
+}
+
+struct Account<E> {
+    reservation: OwnedWorkspaceReservation<E>,
+    base: u64,
+    control: u64,
+    children: u64,
+    failure: Option<E>,
+    failed: bool,
+}
+
+/// Resident execution has no account; operational execution shares its actual
+/// owned reservation, including the first failure a non-latching adapter returns.
+pub(crate) struct QueryWorkspace<E> {
+    account: Option<Shared<Mutex<Account<E>>>>,
+    capability: WorkspaceCapability,
+}
+
+impl<E> Clone for QueryWorkspace<E> {
+    fn clone(&self) -> Self {
+        Self {
+            account: self.account.clone(),
+            capability: self.capability.clone(),
+        }
+    }
+}
+
+impl<E> std::fmt::Debug for QueryWorkspace<E> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QueryWorkspace")
+            .field("bounded", &self.account.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+fn lock<E>(account: &Mutex<Account<E>>) -> MutexGuard<'_, Account<E>> {
+    account
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl<E> QueryWorkspace<E> {
+    pub(crate) fn control_bytes() -> Result<u64, EvalError> {
+        fallible_shared_layout::<Mutex<Account<E>>>()?
+            .checked_add(fallible_shared_layout::<Box<dyn GrowthAdmission>>()?)
+            .and_then(|bytes| bytes.checked_add(u64::try_from(size_of::<GrowthOwner<E>>()).ok()?))
+            .ok_or(EvalError::WorkspaceBoundOverflow)
+    }
+    pub(crate) const fn resident() -> Self {
+        Self {
+            account: None,
+            capability: WorkspaceCapability { owner: None },
+        }
+    }
+
+    pub(crate) fn owned(
+        reservation: OwnedWorkspaceReservation<E>,
+        bytes: u64,
+    ) -> Result<Self, EvalError>
+    where
+        E: Clone + std::error::Error + Send + Sync + 'static,
+    {
+        let control = Self::control_bytes()?;
+        // The factory caller reserves this complete layout before construction;
+        // control is fixed across base resizing and belongs to the final account.
+        let account = Shared::try_new(Mutex::new(Account {
+            reservation,
+            base: bytes,
+            control,
+            children: 0,
+            failure: None,
+            failed: false,
+        }))
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "workspace account",
+        })?;
+        let owner = purrdf_core::small::try_boxed_one(GrowthOwner {
+            account: account.clone(),
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "workspace capability owner",
+        })?;
+        let owner: Box<dyn GrowthAdmission> = owner;
+        let owner = Shared::try_new(owner).map_err(|_| EvalError::AllocationFailed {
+            construct: "workspace capability",
+        })?;
+        Ok(Self {
+            account: Some(account),
+            capability: WorkspaceCapability { owner: Some(owner) },
+        })
+    }
+
+    pub(crate) const fn is_bounded(&self) -> bool {
+        self.account.is_some()
+    }
+}
+
+/// Actual first-party shared header and payload, including alignment.
+pub(crate) fn fallible_shared_layout<T>() -> Result<u64, EvalError> {
+    u64::try_from(Shared::<T>::allocation_layout().size())
+        .map_err(|_| EvalError::WorkspaceBoundOverflow)
+}
+
+/// Actual std Arc layout for resident/shared owners not yet at the fallible home.
+pub(crate) fn shared_layout<T>() -> Result<u64, EvalError> {
+    let (layout, _) = std::alloc::Layout::new::<[usize; 2]>()
+        .extend(std::alloc::Layout::new::<T>())
+        .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+    u64::try_from(layout.pad_to_align().size()).map_err(|_| EvalError::WorkspaceBoundOverflow)
+}
+
+impl<E: Clone> QueryWorkspace<E> {
+    pub(crate) fn source_error(&self, error: E) -> EvalError
+    where
+        E: std::fmt::Display,
+    {
+        if let Some(account) = &self.account {
+            let mut account = lock(account);
+            if !account.failed {
+                account.failure = Some(error);
+                account.failed = true;
+            }
+            EvalError::WorkspaceStopped
+        } else {
+            EvalError::source_read(error)
+        }
+    }
+
+    pub(crate) fn take_failure(&self) -> Option<E> {
+        self.account
+            .as_ref()
+            .and_then(|account| lock(account).failure.take())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_failed(&self) -> bool {
+        self.account
+            .as_ref()
+            .is_some_and(|account| lock(account).failed)
+    }
+
+    /// Admit a new owner before it allocates. Its charge cannot be released before
+    /// the allocation itself: callers place the charge after the covered payload.
+    pub(crate) fn charge(&self, bytes: u64) -> Result<WorkspaceCharge<E>, EvalError>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        if let Some(account) = &self.account {
+            let mut account = lock(account);
+            if account.failed {
+                return Err(EvalError::WorkspaceStopped);
+            }
+            let children = account
+                .children
+                .checked_add(bytes)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let total = account
+                .base
+                .checked_add(children)
+                .and_then(|bytes| bytes.checked_add(account.control))
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            if let Err(error) = account.reservation.resize(total) {
+                account.failure = Some(error);
+                account.failed = true;
+                return Err(EvalError::WorkspaceStopped);
+            }
+            account.children = children;
+        }
+        Ok(WorkspaceCharge {
+            workspace: self.clone(),
+            bytes,
+        })
+    }
+}
+
+impl<E: Clone + std::error::Error + Send + Sync + 'static> QueryWorkspace<E> {
+    pub(crate) fn capability(&self) -> WorkspaceCapability {
+        self.capability.clone()
+    }
+    /// Resize the execution's certified base while preserving independently
+    /// admitted child owners. Logical overflow is distinct from a backend refusal.
+    pub(crate) fn set_base(&mut self, bytes: u64) -> Result<(), EvalError> {
+        if let Some(account) = &self.account {
+            let mut account = lock(account);
+            if account.failed {
+                return Err(EvalError::WorkspaceStopped);
+            }
+            let total = bytes
+                .checked_add(account.children)
+                .and_then(|bytes| bytes.checked_add(account.control))
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            if let Err(error) = account.reservation.resize(total) {
+                account.failure = Some(error);
+                account.failed = true;
+                return Err(EvalError::WorkspaceStopped);
+            }
+            account.base = bytes;
+        }
+        Ok(())
+    }
+}
+
+/// One engine-owned allocation's admission. Clone the enclosing payload owner,
+/// never this individual charge: sharing one allocation shares one reservation.
+pub(crate) struct WorkspaceCharge<E: Clone> {
+    workspace: QueryWorkspace<E>,
+    bytes: u64,
+}
+
+impl<E: Clone> std::fmt::Debug for WorkspaceCharge<E> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkspaceCharge")
+            .field("bytes", &self.bytes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<E: Clone + std::error::Error + Send + Sync + 'static> AllocationOwner for WorkspaceCharge<E> {
+    fn resize(&mut self, bytes: u64) -> Result<(), EvalError> {
+        let bytes = bytes
+            .checked_add(
+                u64::try_from(size_of::<Self>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+            )
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        if let Some(account) = &self.workspace.account {
+            let mut account = lock(account);
+            if account.failed {
+                return Err(EvalError::WorkspaceStopped);
+            }
+            let children = account
+                .children
+                .checked_sub(self.bytes)
+                .expect("an owner resizes only its own charge")
+                .checked_add(bytes)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let total = account
+                .base
+                .checked_add(children)
+                .and_then(|bytes| bytes.checked_add(account.control))
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            if let Err(error) = account.reservation.resize(total) {
+                account.failure = Some(error);
+                account.failed = true;
+                return Err(EvalError::WorkspaceStopped);
+            }
+            account.children = children;
+        }
+        self.bytes = bytes;
+        Ok(())
+    }
+}
+
+impl<E: Clone> Drop for WorkspaceCharge<E> {
+    fn drop(&mut self) {
+        if let Some(account) = &self.workspace.account {
+            let mut account = lock(account);
+            let children = account
+                .children
+                .checked_sub(self.bytes)
+                .expect("workspace owner releases only its own charge");
+            let bytes = account
+                .base
+                .checked_add(children)
+                .and_then(|bytes| bytes.checked_add(account.control))
+                .expect("shrinking child capacity cannot overflow");
+            match account.reservation.resize(bytes) {
+                Ok(()) => account.children = children,
+                Err(error) => {
+                    if !account.failed {
+                        account.failure = Some(error);
+                        account.failed = true;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Fallible vector capacity creation, after the owner has admitted its layout.
+pub(crate) fn vector<T>(capacity: usize, construct: &'static str) -> Result<Vec<T>, EvalError> {
+    let mut vector = Vec::new();
+    vector
+        .try_reserve_exact(capacity)
+        .map_err(|_| EvalError::AllocationFailed { construct })?;
+    Ok(vector)
+}
+
+pub(crate) fn string(value: &str, construct: &'static str) -> Result<String, EvalError> {
+    let mut string = String::new();
+    string
+        .try_reserve_exact(value.len())
+        .map_err(|_| EvalError::AllocationFailed { construct })?;
+    string.push_str(value);
+    Ok(string)
+}
+
+/// Measure a Display value without an output allocation, then admit and render
+/// into one fallibly reserved buffer. Display implementations used here render
+/// borrowed diagnostic fields; the two passes must have identical output.
+pub(crate) fn display_len(value: &(impl core::fmt::Display + ?Sized)) -> Result<usize, EvalError> {
+    use core::fmt::Write;
+    struct Counter(usize);
+    impl Write for Counter {
+        fn write_str(&mut self, text: &str) -> core::fmt::Result {
+            self.0 = self.0.checked_add(text.len()).ok_or(core::fmt::Error)?;
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    write!(&mut counter, "{value}").map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+    Ok(counter.0)
+}
+
+pub(crate) fn format_exact(
+    value: &(impl core::fmt::Display + ?Sized),
+    length: usize,
+    construct: &'static str,
+) -> Result<String, EvalError> {
+    use core::fmt::Write;
+    let mut text = String::new();
+    text.try_reserve_exact(length)
+        .map_err(|_| EvalError::AllocationFailed { construct })?;
+    struct Bounded<'a> {
+        text: &'a mut String,
+        length: usize,
+    }
+    impl Write for Bounded<'_> {
+        fn write_str(&mut self, text: &str) -> core::fmt::Result {
+            if self
+                .text
+                .len()
+                .checked_add(text.len())
+                .is_none_or(|n| n > self.length)
+            {
+                return Err(core::fmt::Error);
+            }
+            self.text.push_str(text);
+            Ok(())
+        }
+    }
+    write!(
+        &mut Bounded {
+            text: &mut text,
+            length
+        },
+        "{value}"
+    )
+    .map_err(|_| EvalError::UnstableNativeDiagnostic)?;
+    if text.len() != length {
+        return Err(EvalError::UnstableNativeDiagnostic);
+    }
+    Ok(text)
+}
+
+pub(crate) fn render(
+    workspace: &WorkspaceCapability,
+    value: &EvalError,
+    construct: &'static str,
+) -> Result<(String, WorkspaceAllocation), EvalError> {
+    let length = display_len(value)?;
+    let admission =
+        workspace.charge(u64::try_from(length).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    let text = format_exact(value, length, construct)?;
+    Ok((text, admission))
+}
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+#[cfg(test)]
+mod owned_row_regressions {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
+    use super::QueryWorkspace;
+    use crate::{
+        EvalError,
+        solution::{RowBag, RowsBuilder, Solution},
+    };
+    use purrdf_core::{TermId, WorkspaceReservation};
+
+    #[derive(Debug)]
+    struct Ledger {
+        live: AtomicU64,
+        clones: Arc<AtomicUsize>,
+        limit: u64,
+    }
+
+    #[derive(Debug)]
+    struct Refusal {
+        identity: u64,
+        clones: Arc<AtomicUsize>,
+    }
+    impl Clone for Refusal {
+        fn clone(&self) -> Self {
+            self.clones.fetch_add(1, Ordering::Relaxed);
+            Self {
+                identity: self.identity,
+                clones: self.clones.clone(),
+            }
+        }
+    }
+    impl std::fmt::Display for Refusal {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("non-latching reservation refusal")
+        }
+    }
+    impl std::error::Error for Refusal {}
+
+    #[derive(Debug)]
+    struct Reservation {
+        ledger: Arc<Ledger>,
+    }
+    impl WorkspaceReservation for Reservation {
+        type Error = Refusal;
+        fn resize(&mut self, bytes: u64) -> Result<(), Refusal> {
+            if bytes > self.ledger.limit {
+                return Err(Refusal {
+                    identity: 7,
+                    clones: self.ledger.clones.clone(),
+                });
+            }
+            self.ledger.live.store(bytes, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+    impl Drop for Reservation {
+        fn drop(&mut self) {
+            self.ledger.live.store(0, Ordering::Relaxed);
+        }
+    }
+
+    fn account(limit: u64) -> (QueryWorkspace<Refusal>, Arc<Ledger>, u64) {
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("concrete account layout");
+        assert!(base <= limit);
+        let ledger = Arc::new(Ledger {
+            live: AtomicU64::new(base),
+            clones: Arc::new(AtomicUsize::new(0)),
+            limit,
+        });
+        // This test fixture is constructed before exercising engine allocations.
+        let reservation: purrdf_core::OwnedWorkspaceReservation<Refusal> = Box::new(Reservation {
+            ledger: ledger.clone(),
+        });
+        (
+            QueryWorkspace::owned(reservation, 0).expect("pre-admitted account controls"),
+            ledger,
+            base,
+        )
+    }
+
+    #[test]
+    fn witness_clone_retains_original_arrays_and_shared_mutation_preserves_receipt() {
+        use crate::property_fn::{IndexGeneration, ServiceLevel};
+        let generation = IndexGeneration::Declared(Arc::from("generation-seven"));
+        let service = ServiceLevel::Incomplete {
+            reason: "shard three is rebuilding".to_owned(),
+        };
+        let (workspace, ledger, base) = account(65_536);
+        let capability = workspace.capability();
+        let mut witness = crate::RelationWitness::default();
+        witness
+            .try_record(
+                "http://example.org/first",
+                &generation,
+                &service,
+                &capability,
+            )
+            .expect("native receipt");
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert!(retained > base);
+        let old_receipt = witness.clone();
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            retained,
+            "clone shares the original buffer and payload grants"
+        );
+        witness
+            .try_record(
+                "http://example.org/second",
+                &generation,
+                &ServiceLevel::Undeclared,
+                &capability,
+            )
+            .expect("native shared mutation");
+        assert_eq!(witness.len(), 2);
+        assert_eq!(old_receipt.len(), 1);
+        assert!(old_receipt.get("http://example.org/second").is_none());
+        assert_eq!(
+            old_receipt
+                .get("http://example.org/first")
+                .expect("original attestation")
+                .incompleteness
+                .first()
+                .map(String::as_str),
+            Some("shard three is rebuilding")
+        );
+        drop(witness);
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            retained,
+            "the prior receipt still owns exactly its original allocations"
+        );
+        drop(old_receipt);
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            base,
+            "last receipt owner releases every original payload and array grant"
+        );
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_witness_refusal_preserves_original_provider_failure_before_copying_iri() {
+        use crate::property_fn::{IndexGeneration, ServiceLevel};
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("original account layout");
+        let (workspace, ledger, _) = account(base + 1);
+        let mut witness = crate::RelationWitness::default();
+        let refused = witness.try_record(
+            "http://example.org/long-iri-must-not-be-copied",
+            &IndexGeneration::Undeclared,
+            &ServiceLevel::Undeclared,
+            &workspace.capability(),
+        );
+        assert!(refused.is_err());
+        assert!(witness.is_empty());
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            base,
+            "the original account is the only live allocation"
+        );
+        assert_eq!(
+            workspace
+                .take_failure()
+                .expect("original typed provider refusal")
+                .identity,
+            7
+        );
+        drop(witness);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn consuming_resident_iterator_moves_spilled_cells() {
+        let mut cells = Solution::<TermId>::new();
+        cells.try_reserve_exact(10).expect("resident test row");
+        cells.resize(10, None);
+        let original_buffer = cells.as_ptr();
+        let bag = RowBag::from(vec![cells]);
+        let mut rows = bag.into_iter();
+        let row = rows.next().expect("resident row");
+        assert_eq!(
+            row.as_ptr(),
+            original_buffer,
+            "consumption moves the original buffer"
+        );
+        drop(rows);
+        assert_eq!(row.len(), 10);
+        assert!(row.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn resident_reordering_moves_each_original_spill() {
+        let input: [Solution<TermId>; 4] = std::array::from_fn(|_| {
+            let mut cells = Solution::new();
+            cells.try_reserve_exact(10).expect("resident fixture cells");
+            cells.resize(10, None);
+            cells
+        });
+        let pointers = input.each_ref().map(|cells| cells.as_ptr());
+        let capability = crate::WorkspaceCapability::default();
+        let mut order = super::AdmittedVec::new(&capability);
+        for ordinal in [2, 0, 3, 1] {
+            order.push(ordinal).expect("resident permutation");
+        }
+        let reordered = RowBag::from(Vec::from(input))
+            .ordered_admitted(order, &capability)
+            .expect("row permutation");
+        for (row, original) in reordered.iter().zip([2, 0, 3, 1]) {
+            assert_eq!(
+                row.as_ptr(),
+                pointers[original],
+                "permutation moves the original spill"
+            );
+            assert_eq!(row.len(), 10);
+        }
+    }
+
+    #[test]
+    fn consuming_iterator_drop_keeps_extracted_spilled_row_admitted() {
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let mut builder = RowsBuilder::<TermId>::new(&capability);
+        // Cross the SmallVec inline capacity, exercising a real row-cell buffer.
+        for _ in 0..2 {
+            builder
+                .push_cells(10, std::iter::repeat_n(None, 10))
+                .expect("admitted row");
+        }
+        let bag = builder.finish().expect("admitted bag");
+        let all_rows = ledger.live.load(Ordering::Relaxed);
+        assert!(all_rows > base);
+        let shared = bag.clone();
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            all_rows,
+            "bag clone shares payload"
+        );
+        drop(bag);
+        let mut rows = shared.into_iter();
+        let first = rows.next().expect("first row");
+        drop(rows);
+        let extracted = ledger.live.load(Ordering::Relaxed);
+        assert!(extracted > base, "extracted row keeps its cell admission");
+        assert!(
+            extracted < all_rows,
+            "other row and bag storage are released"
+        );
+        assert_eq!(first.len(), 10);
+        assert!(first.iter().all(Option::is_none));
+        let clone = first.clone();
+        drop(first);
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            extracted,
+            "row clone keeps one payload"
+        );
+        drop(clone);
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            base,
+            "last row releases cell ownership"
+        );
+        drop(capability);
+        drop(workspace);
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            0,
+            "last account releases provider reservation"
+        );
+    }
+
+    #[test]
+    fn first_owned_refusal_moves_without_clone_and_account_stays_failed() {
+        let (workspace, ledger, _) = account(4096);
+        let capability = workspace.capability();
+        assert!(matches!(
+            capability.charge(4097),
+            Err(EvalError::WorkspaceStopped)
+        ));
+        assert!(workspace.has_failed());
+        let refusal = workspace.take_failure().expect("owned first cause");
+        assert_eq!(refusal.identity, 7);
+        assert_eq!(
+            ledger.clones.load(Ordering::Relaxed),
+            0,
+            "generic E was never cloned"
+        );
+        assert!(workspace.has_failed());
+        assert!(workspace.take_failure().is_none(), "cause moves once");
+        assert!(
+            matches!(capability.charge(0), Err(EvalError::WorkspaceStopped)),
+            "taking the cause cannot reopen a failed account"
+        );
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+    #[test]
+    fn certainty_schema_keeps_original_grant_after_workspace_and_shallow_clone() {
+        use purrdf_sparql_algebra::{GraphPattern, Variable};
+        let variables: Vec<_> = (0..128)
+            .map(|ordinal| Variable::new(format!("v{ordinal}")))
+            .collect();
+        let pattern = GraphPattern::Values {
+            variables: variables.clone(),
+            bindings: Vec::new(),
+        };
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let bound =
+            crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability)
+                .expect("empty VALUES certainly binds each declared column");
+        assert_eq!(bound.vars(), variables);
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert!(retained > base);
+        let kept = bound.clone();
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        drop(bound);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        assert!(variables.iter().all(|variable| kept.contains(variable)));
+        drop(kept);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn certainty_refusal_releases_all_native_worklists_and_preserves_first_typed_cause() {
+        use purrdf_sparql_algebra::{GraphPattern, Variable};
+        let pattern = GraphPattern::Values {
+            variables: (0..512)
+                .map(|ordinal| Variable::new(format!("v{ordinal}")))
+                .collect(),
+            bindings: Vec::new(),
+        };
+        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        for extra in [0, 1, 128, 512] {
+            let (workspace, ledger, _) = account(base + extra);
+            let capability = workspace.capability();
+            assert!(matches!(
+                crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability),
+                Err(EvalError::WorkspaceStopped)
+            ));
+            assert_eq!(
+                ledger.live.load(Ordering::Relaxed),
+                base,
+                "every partial owner is released"
+            );
+            let cause = workspace
+                .take_failure()
+                .expect("first original reservation failure");
+            assert_eq!(cause.identity, 7);
+            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+            assert!(matches!(
+                crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability),
+                Err(EvalError::WorkspaceStopped)
+            ));
+            assert!(workspace.take_failure().is_none());
+            drop(capability);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn certainty_lateral_context_and_filter_requirements_use_original_admitted_home() {
+        use purrdf_sparql_algebra::{Child, Expression, GraphPattern, Variable};
+        let driver = Variable::new("driver");
+        let output = Variable::new("output");
+        let required = Variable::new("required");
+        let pattern = GraphPattern::Lateral {
+            left: Child::new(GraphPattern::Values {
+                variables: vec![driver.clone()],
+                bindings: Vec::new(),
+            }),
+            right: Child::new(GraphPattern::Filter {
+                inner: Child::new(GraphPattern::Extend {
+                    inner: Child::new(GraphPattern::empty_bgp()),
+                    variable: output.clone(),
+                    expression: Expression::Variable(driver.clone()),
+                }),
+                expr: Expression::Bound(required.clone()),
+            }),
+        };
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let bound =
+            crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability)
+                .unwrap();
+        assert_eq!(bound.len(), 3);
+        assert!(bound.contains(&driver) && bound.contains(&output) && bound.contains(&required));
+        drop(bound);
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            base,
+            "context and expression scratch is gone"
+        );
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+    fn native_grounding_input(depth: usize) -> purrdf_core::TermValue {
+        use purrdf_core::{BlankScope, TermBox, TermValue};
+        let mut term = TermValue::Blank {
+            label: "purrdfesc7_δ space".to_owned(),
+            scope: BlankScope(41),
+        };
+        for _ in 0..depth {
+            term = TermValue::Triple {
+                s: TermBox::new(TermValue::iri("http://example.org/subject")),
+                p: TermBox::new(TermValue::iri("http://example.org/predicate")),
+                o: TermBox::new(term),
+            };
+        }
+        term
+    }
+
+    #[test]
+    fn ground_owner_keeps_original_boxes_and_lexical_leaves_after_workspace() {
+        let input = native_grounding_input(8);
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let grounded = crate::substitute::ground_term_from_value_admitted(&input, &capability)
+            .expect("all native ground shapes admitted");
+        assert!(
+            grounded
+                .allocation
+                .as_ref()
+                .is_some_and(super::WorkspaceAllocation::is_bounded)
+        );
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert!(retained > base);
+        drop(input);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        assert!(matches!(
+            &grounded.term,
+            purrdf_sparql_algebra::GroundTerm::Triple(_)
+        ));
+        drop(grounded);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn ground_and_paired_clone_join_enclosing_original_memory_without_owner_array() {
+        use purrdf_lex::allocation::Memory;
+        use purrdf_sparql_algebra::GroundTriple;
+        let input = native_grounding_input(8);
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let mut frame = super::LexicalFrame::new(&capability);
+        let (text, ground, clone) = {
+            let mut memory = Memory::new(&mut frame);
+            let text = memory.string("original authored query payload").unwrap();
+            let initial = memory.live_bytes();
+            let ground =
+                crate::substitute::ground_term_from_value_with_memory(&input, &mut memory).unwrap();
+            assert_eq!(memory.live_bytes(), initial + 8 * size_of::<GroundTriple>());
+            let clone = crate::substitute::clone_ground_with_memory(&ground, &mut memory).unwrap();
+            assert_eq!(
+                memory.live_bytes(),
+                initial + 16 * size_of::<GroundTriple>()
+            );
+            (text, ground, clone)
+        };
+        let original = (text, ground, clone, frame.into_allocation());
+        assert!(ledger.live.load(Ordering::Relaxed) > base);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        drop(original);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn grounding_refusal_destroys_partial_children_and_moves_first_cause_once() {
+        let input = native_grounding_input(128);
+        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        for extra in [0, 1, 128, 1024, 4096] {
+            let (workspace, ledger, _) = account(base + extra);
+            let capability = workspace.capability();
+            assert!(matches!(
+                crate::substitute::ground_term_from_value_admitted(&input, &capability),
+                Err(crate::substitute::GroundFailure::Operational(
+                    EvalError::WorkspaceStopped
+                ))
+            ));
+            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+            let cause = workspace.take_failure().expect("original admission cause");
+            assert_eq!(cause.identity, 7);
+            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+            assert!(workspace.take_failure().is_none());
+            drop(capability);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn native_text_publication_shares_original_buffer_and_survives_enclosing_frame() {
+        use purrdf_lex::allocation::Memory;
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let mut frame = super::LexicalFrame::new(&capability);
+        let text = {
+            let mut memory = Memory::new(&mut frame);
+            memory.string("the original native UTF-8 payload").unwrap()
+        };
+        let pointer = text.as_ptr();
+        let mut text = Some(text);
+        let published = frame.finish_text(&mut text).unwrap();
+        assert!(text.is_none());
+        assert_eq!(published.as_str().as_ptr(), pointer);
+        let kept = published.clone();
+        drop(published);
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert!(retained > base);
+        drop(frame);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        assert_eq!(kept.as_str(), "the original native UTF-8 payload");
+        drop(kept);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn grounding_first_predicate_refusal_precedes_unvisited_bad_object() {
+        use purrdf_core::{TermBox, TermValue};
+        let value = TermValue::Triple {
+            s: TermBox::new(native_grounding_input(8)),
+            p: TermBox::new(TermValue::simple_literal("not an IRI")),
+            o: TermBox::new(TermValue::iri("relative-object")),
+        };
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let failure =
+            crate::substitute::ground_term_from_value_admitted(&value, &capability).unwrap_err();
+        let crate::substitute::GroundFailure::Diagnostic(diagnostic) = failure else {
+            panic!("an admitted non-IRI predicate remains a lexical diagnostic")
+        };
+        assert!(
+            diagnostic
+                .diagnostic()
+                .to_string()
+                .contains("a quoted-triple predicate must be an IRI")
+        );
+        assert!(!workspace.has_failed());
+        drop(diagnostic);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_text_control_refusal_keeps_original_string_before_extraction() {
+        use purrdf_lex::allocation::Memory;
+        const TEXT: &str = "the original native UTF-8 payload";
+        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        let limit = base
+            + u64::try_from(TEXT.len() + size_of::<super::WorkspaceCharge<Refusal>>()).unwrap();
+        let (workspace, ledger, _) = account(limit);
+        let capability = workspace.capability();
+        let mut frame = super::LexicalFrame::new(&capability);
+        let text = {
+            let mut memory = Memory::new(&mut frame);
+            memory
+                .string(TEXT)
+                .expect("the actual string fits before its shared header")
+        };
+        let pointer = text.as_ptr();
+        let mut text = Some(text);
+        assert!(matches!(
+            frame.finish_text(&mut text),
+            Err(EvalError::WorkspaceStopped)
+        ));
+        assert_eq!(text.as_ref().unwrap().as_ptr(), pointer);
+        assert_eq!(text.as_deref(), Some(TEXT));
+        let cause = workspace
+            .take_failure()
+            .expect("original header admission refusal");
+        assert_eq!(cause.identity, 7);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        drop(text);
+        drop(frame);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    /// Deliberately non-latching backing failure: the engine must retain the
+    /// original typed cause without cloning or formatting it.
+    struct GroundFaultView<'a> {
+        inner: &'a purrdf_core::RdfDataset,
+        failed_id: TermId,
+        clones: Arc<AtomicUsize>,
+    }
+
+    impl purrdf_core::DatasetView for GroundFaultView<'_> {
+        type Id = TermId;
+        type ReadError = Refusal;
+        type TermGuard<'a>
+            = purrdf_core::TermRef<'a>
+        where
+            Self: 'a;
+        type ProbePlan = purrdf_core::QuadProbePlan;
+
+        fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+            purrdf_core::DatasetView::quads(self.inner)
+        }
+        fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Refusal> {
+            if id == self.failed_id {
+                Err(Refusal {
+                    identity: 41,
+                    clones: self.clones.clone(),
+                })
+            } else {
+                Ok(self.inner.resolve(id))
+            }
+        }
+        fn term_id_by_value(
+            &self,
+            value: &purrdf_core::TermValue,
+        ) -> Result<Option<TermId>, Refusal> {
+            Ok(self.inner.term_id_by_value(value))
+        }
+        fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+            purrdf_core::DatasetView::capabilities(self.inner)
+        }
+        fn probe_plan(
+            &self,
+            s: bool,
+            p: bool,
+            o: bool,
+            g: purrdf_core::GraphMatch,
+        ) -> Self::ProbePlan {
+            purrdf_core::DatasetView::probe_plan(self.inner, s, p, o, g)
+        }
+        fn quads_for_pattern_with_plan(
+            &self,
+            plan: &Self::ProbePlan,
+            s: Option<TermId>,
+            p: Option<TermId>,
+            o: Option<TermId>,
+            g: purrdf_core::GraphMatch,
+        ) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+            purrdf_core::DatasetView::quads_for_pattern_with_plan(self.inner, plan, s, p, o, g)
+        }
+        fn term_count(&self) -> u64 {
+            purrdf_core::DatasetView::term_count(self.inner)
+        }
+    }
+
+    #[test]
+    fn borrowed_id_grounding_moves_exact_source_cause_and_releases_partial_triple() {
+        use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/s");
+        let predicate = builder.intern_iri("http://example.org/p");
+        let object = builder.intern_iri("http://example.org/o");
+        let completed_subject = builder.intern_triple(subject, predicate, object);
+        let datatype = builder.intern_iri(purrdf_xsd::datatype::XSD_STRING);
+        let literal = builder.intern_literal(RdfLiteral::simple("literal"));
+        let root = builder.intern_triple(completed_subject, predicate, literal);
+        builder.push_quad(subject, predicate, root, None);
+        let dataset = builder.freeze().expect("a valid shallow dataset");
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let view = GroundFaultView {
+            inner: dataset.as_ref(),
+            failed_id: datatype,
+            clones: ledger.clones.clone(),
+        };
+        let failure =
+            crate::substitute::ground_term_from_id_admitted(&view, root, &capability, |cause| {
+                crate::substitute::GroundFailure::Operational(workspace.source_error(cause))
+            });
+        assert!(matches!(
+            failure,
+            Err(crate::substitute::GroundFailure::Operational(
+                EvalError::WorkspaceStopped
+            ))
+        ));
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        let cause = workspace
+            .take_failure()
+            .expect("original source cause moves once");
+        assert_eq!(cause.identity, 41);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        assert!(workspace.take_failure().is_none());
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_prebinding_all_four_forms_keep_original_ast_admission_until_drop() {
+        use purrdf_sparql_algebra::SparqlParser;
+        let queries = [
+            "SELECT ?this WHERE { ?this <http://example.org/p> ?o OPTIONAL { ?this <http://example.org/q> ?v } }",
+            "ASK { ?this <http://example.org/p> ?o FILTER(EXISTS { ?this <http://example.org/q> ?v MINUS { ?v <http://example.org/r> ?this } }) }",
+            "CONSTRUCT { ?this <http://example.org/p> ?o } WHERE { { SELECT ?o WHERE { ?this <http://example.org/p> ?o } } }",
+            "DESCRIBE ?this WHERE { ?this <http://example.org/p> ?o }",
+        ];
+        for text in queries {
+            // The authored fixture and its input value are caller-owned, outside the
+            // fresh query workspace. The native AST copy itself uses original Memory.
+            let parsed = SparqlParser::new()
+                .with_prebound_variables(["this"])
+                .parse_query(text)
+                .expect("original query form");
+            let values = [(
+                "this".to_owned(),
+                purrdf_core::TermValue::Blank {
+                    label: "focus".to_owned(),
+                    scope: purrdf_core::BlankScope::DEFAULT,
+                },
+            )];
+            let (workspace, ledger, base) = account(u64::MAX);
+            let capability = workspace.capability();
+            let mut parse_frame = super::LexicalFrame::new(&capability);
+            let (query, original) = {
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut parse_frame);
+                let query = parsed
+                    .clone_with_memory(&mut memory)
+                    .expect("native owned AST copy");
+                (query, memory.live_bytes())
+            };
+            assert!(original > 0);
+            let live_before_adoption = ledger.live.load(Ordering::Relaxed);
+            let original_allocation = parse_frame.into_allocation().expect("original query grant");
+            let mut frame =
+                super::LexicalFrame::from_allocation(&capability, original_allocation, original);
+            assert_eq!(
+                ledger.live.load(Ordering::Relaxed),
+                live_before_adoption,
+                "adoption neither recharges nor resets the live AST"
+            );
+            let rewritten = {
+                let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, original);
+                let query = crate::substitute::apply_shacl_prebinding_with_memory(
+                    query,
+                    crate::substitute::Prebindings::Owned(&values),
+                    &mut memory,
+                )
+                .expect("complete native prebinding");
+                assert!(memory.live_bytes() >= original);
+                query
+            };
+            assert!(ledger.live.load(Ordering::Relaxed) > base);
+            drop(rewritten);
+            // The explicit ordered query publication still owns the original frame
+            // until payload destruction completes; dropping the frame then frees it.
+            drop(frame);
+            drop(capability);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0, "form {text}");
+            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn native_prebinding_first_buffer_refusal_keeps_exact_original_cause() {
+        let parsed = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query("ASK {}")
+            .expect("caller-owned fixture query");
+        let values = [(
+            "this".to_owned(),
+            purrdf_core::TermValue::Iri("http://example.org/focus".to_owned()),
+        )];
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("account layout");
+        let (workspace, ledger, _) = account(base);
+        let capability = workspace.capability();
+        let mut frame = super::LexicalFrame::new(&capability);
+        let failure = {
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+            crate::substitute::apply_shacl_prebinding_with_memory(
+                parsed,
+                crate::substitute::Prebindings::Owned(&values),
+                &mut memory,
+            )
+            .expect_err("the first nonempty probe backing array is refused")
+        };
+        assert!(matches!(
+            failure,
+            crate::substitute::GroundFailure::Operational(EvalError::WorkspaceStopped)
+        ));
+        let cause = workspace
+            .take_failure()
+            .expect("original non-latching cause retained");
+        assert_eq!(cause.identity, 7);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        assert!(workspace.take_failure().is_none());
+        drop(cause);
+        drop(frame);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn prepared_native_probe_reuse_keeps_spelling_and_clears_refused_cells() {
+        let parameters = [purrdf_sparql_algebra::Variable::new("this")];
+        let mut values = [Some(crate::substitute::ParameterValue::Value(
+            purrdf_core::TermValue::Iri("http://example.org/focus".to_owned()),
+        ))];
+        let (workspace, ledger, base) = account(u64::MAX);
+        let capability = workspace.capability();
+        let mut probes = crate::substitute::PreparedProbes::default();
+        crate::substitute::build_prepared_probes(
+            &mut probes,
+            crate::substitute::Prebindings::Paired(&parameters, &values),
+            &capability,
+        )
+        .expect("first native probe");
+        let spelling = match &probes.entries()[0].1 {
+            purrdf_sparql_algebra::GroundTerm::NamedNode(node) => node.as_str().as_ptr(),
+            _ => unreachable!("IRI input"),
+        };
+        let live = ledger.live.load(Ordering::Relaxed);
+        crate::substitute::build_prepared_probes(
+            &mut probes,
+            crate::substitute::Prebindings::Paired(&parameters, &values),
+            &capability,
+        )
+        .expect("reuse unchanged validated spelling");
+        let after = match &probes.entries()[0].1 {
+            purrdf_sparql_algebra::GroundTerm::NamedNode(node) => node.as_str().as_ptr(),
+            _ => unreachable!("IRI input"),
+        };
+        assert_eq!(after, spelling);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        values[0] = Some(crate::substitute::ParameterValue::Value(
+            purrdf_core::TermValue::Iri("relative".to_owned()),
+        ));
+        let failure = crate::substitute::build_prepared_probes(
+            &mut probes,
+            crate::substitute::Prebindings::Paired(&parameters, &values),
+            &capability,
+        )
+        .expect_err("relative IRI keeps the native lexical refusal");
+        assert!(matches!(
+            failure,
+            crate::substitute::GroundFailure::Diagnostic(_)
+        ));
+        assert!(
+            probes.entries().is_empty(),
+            "no previous run's term survives refusal"
+        );
+        drop(failure);
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            base,
+            "bounded lexical refusal frees cells and both retained metadata arrays"
+        );
+        crate::substitute::build_prepared_probes(
+            &mut probes,
+            crate::substitute::Prebindings::Paired(&parameters, &values),
+            &capability,
+        )
+        .expect_err("a repeated lexical refusal retains no hypothetical reuse allocation");
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(probes);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn resident_prepared_probe_lexical_refusal_preserves_original_buffer_reuse() {
+        let parameters = [purrdf_sparql_algebra::Variable::new("this")];
+        let mut values = [Some(crate::substitute::ParameterValue::Value(
+            purrdf_core::TermValue::Iri("http://example.org/focus".to_owned()),
+        ))];
+        let capability = super::WorkspaceCapability::resident();
+        let mut probes = crate::substitute::PreparedProbes::default();
+        crate::substitute::build_prepared_probes(
+            &mut probes,
+            crate::substitute::Prebindings::Paired(&parameters, &values),
+            &capability,
+        )
+        .expect("resident first probe");
+        let buffer = probes.entries().as_ptr();
+        values[0] = Some(crate::substitute::ParameterValue::Value(
+            purrdf_core::TermValue::Iri("relative".to_owned()),
+        ));
+        let failure = crate::substitute::build_prepared_probes(
+            &mut probes,
+            crate::substitute::Prebindings::Paired(&parameters, &values),
+            &capability,
+        )
+        .expect_err("resident native lexical refusal");
+        assert!(matches!(
+            failure,
+            crate::substitute::GroundFailure::Diagnostic(_)
+        ));
+        assert!(probes.entries().is_empty());
+        drop(failure);
+        values[0] = Some(crate::substitute::ParameterValue::Value(
+            purrdf_core::TermValue::Iri("http://example.org/focus".to_owned()),
+        ));
+        crate::substitute::build_prepared_probes(
+            &mut probes,
+            crate::substitute::Prebindings::Paired(&parameters, &values),
+            &capability,
+        )
+        .expect("resident buffer reused after failure");
+        assert_eq!(probes.entries().as_ptr(), buffer);
+    }
+
+    #[test]
+    fn native_assignment_identity_overflow_is_typed_before_name_construction() {
+        use purrdf_sparql_algebra::{Child, Expression, GraphPattern, Query, Variable};
+        let mut query = purrdf_sparql_algebra::SparqlParser::new()
+            .parse_query("ASK {}")
+            .expect("caller-owned query shell");
+        let Query::Ask { pattern, .. } = &mut query else {
+            unreachable!("ASK parsed")
+        };
+        *pattern = GraphPattern::Extend {
+            inner: Child::new(GraphPattern::Extend {
+                inner: Child::new(GraphPattern::empty_bgp()),
+                variable: Variable::new(format!("__purrdf_assigned_{}_source", usize::MAX)),
+                expression: Expression::Variable(Variable::new("ordinary")),
+            }),
+            variable: Variable::new("this"),
+            expression: Expression::Variable(Variable::new("ordinary")),
+        };
+        let (workspace, ledger, _) = account(u64::MAX);
+        let capability = workspace.capability();
+        let mut frame = super::LexicalFrame::new(&capability);
+        let failure = {
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+            crate::substitute::join_assignments_with_prebinding_with_memory(
+                &mut query,
+                &["this"],
+                &mut memory,
+            )
+            .expect_err("native fresh-name counter cannot wrap")
+        };
+        assert!(matches!(
+            failure,
+            crate::substitute::GroundFailure::Operational(EvalError::WorkspaceBoundOverflow)
+        ));
+        assert!(
+            workspace.take_failure().is_none(),
+            "logical overflow is distinct from reservation refusal"
+        );
+        drop(query);
+        drop(frame);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_soundness_analysis_keeps_original_immutable_owners_after_context_drop() {
+        use crate::governor::soundness::{
+            NodeAnalysisTable, RowCollisionIntro, analyze_pattern_admitted,
+            exists_row_collision_admitted, probe_admissible_admitted,
+        };
+        use purrdf_sparql_algebra::{Query, SparqlParser, Variable};
+        let query = SparqlParser::new()
+            .parse_query("ASK { ?s <http://example.org/p> ?o BIND(?o AS ?v) FILTER(BOUND(?s)) }")
+            .expect("caller-owned soundness fixture");
+        let Query::Ask { pattern, .. } = &query else {
+            unreachable!("ASK fixture");
+        };
+        let (workspace, ledger, base) = account(u64::MAX);
+        let capability = workspace.capability();
+        let mut table = NodeAnalysisTable::default();
+        let root = analyze_pattern_admitted(pattern, &mut table, &capability)
+            .expect("native complete synthesis");
+        assert_eq!(root.free_vars.len(), 3);
+        assert_eq!(root.certainly_bound.len(), 3);
+        for name in ["s", "o", "v"] {
+            assert!(root.free_vars.contains(&Variable::new(name)));
+            assert!(root.certainly_bound.contains(&Variable::new(name)));
+        }
+        assert!(!root.has_stateful_builtin);
+        assert!(!root.can_hard_error);
+        let schema = crate::VarSchema::from_vars_admitted([Variable::new("s")], &capability)
+            .expect("original outer-schema owner");
+        assert!(
+            probe_admissible_admitted(pattern, &table, &schema, &capability).expect("native probe")
+        );
+        assert!(
+            exists_row_collision_admitted(pattern, &schema, &capability)
+                .expect("native fresh-target walk")
+                .is_none()
+        );
+        let bound = crate::VarSchema::from_vars_admitted([Variable::new("v")], &capability)
+            .expect("actual row scope");
+        let collision =
+            exists_row_collision_admitted(pattern, &bound, &capability).expect("native collision");
+        assert_eq!(
+            collision.map(|(variable, intro)| (variable.as_str(), intro)),
+            Some(("v", RowCollisionIntro::Bind))
+        );
+        let live = ledger.live.load(Ordering::Relaxed);
+        assert!(live > base);
+        let copy = root.clone();
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            live,
+            "immutable analyses share their original schema allocations"
+        );
+        drop(schema);
+        drop(bound);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        drop(table);
+        drop(root);
+        assert!(
+            ledger.live.load(Ordering::Relaxed) > 0,
+            "the extracted shallow analysis still owns the original grants"
+        );
+        drop(copy);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_cap_plan_and_spilled_edges_keep_original_grants_until_payload_drop() {
+        use crate::governor::soundness::{child_edges_admitted, plan_cap_pushdown_admitted};
+        use purrdf_sparql_algebra::{Query, SparqlParser};
+        let query = SparqlParser::new().parse_query(
+            "ASK { { ?s <http://example.org/p> ?o } UNION { ?s <http://example.org/q> ?o } UNION { ?s <http://example.org/r> ?o } UNION { ?s <http://example.org/t> ?o } UNION { ?s <http://example.org/u> ?o } UNION { ?s <http://example.org/v> ?o } }",
+        ).expect("caller-owned wide UNION");
+        let Query::Ask { pattern, .. } = &query else {
+            unreachable!("ASK fixture");
+        };
+        let (workspace, ledger, base) = account(u64::MAX);
+        let capability = workspace.capability();
+        let edges =
+            child_edges_admitted(pattern, &capability).expect("actual classified edge spill");
+        let pushdown =
+            plan_cap_pushdown_admitted(pattern, Some(3), &capability).expect("native pushdown");
+        assert_eq!(pushdown.ceiling_of(pattern), Some(3));
+        assert!(ledger.live.load(Ordering::Relaxed) > base);
+        drop(capability);
+        drop(workspace);
+        drop(pushdown);
+        assert!(
+            ledger.live.load(Ordering::Relaxed) > 0,
+            "the wide edge payload retains the original spill admission"
+        );
+        drop(edges);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_soundness_refusal_is_typed_and_shallow_edges_need_no_heap() {
+        use crate::governor::soundness::{
+            NodeAnalysisTable, analyze_pattern_admitted, child_edges_admitted,
+            plan_cap_pushdown_admitted,
+        };
+        use purrdf_sparql_algebra::{Query, SparqlParser};
+        let query = SparqlParser::new()
+            .parse_query("ASK { ?s <http://example.org/p> ?o FILTER(BOUND(?s)) }")
+            .expect("caller-owned shallow fixture");
+        let Query::Ask { pattern, .. } = &query else {
+            unreachable!("ASK fixture");
+        };
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("actual account control");
+        let (workspace, ledger, _) = account(base);
+        let capability = workspace.capability();
+        let edges = child_edges_admitted(pattern, &capability)
+            .expect("one classified child stays in the original inline edge slots");
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        let mut table = NodeAnalysisTable::default();
+        let failure = analyze_pattern_admitted(pattern, &mut table, &capability)
+            .expect_err("first native analysis backing storage is refused before growth");
+        assert!(matches!(failure, EvalError::WorkspaceStopped));
+        assert!(table.is_empty());
+        assert_eq!(
+            workspace
+                .take_failure()
+                .expect("original source refusal")
+                .identity,
+            7
+        );
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(edges);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+
+        let (workspace, ledger, _) = account(base);
+        let capability = workspace.capability();
+        let failure = plan_cap_pushdown_admitted(pattern, Some(3), &capability)
+            .expect_err("the original cap worklist is refused before its first allocation");
+        assert!(matches!(failure, EvalError::WorkspaceStopped));
+        assert_eq!(
+            workspace
+                .take_failure()
+                .expect("same first refusal")
+                .identity,
+            7
+        );
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_correlated_rows_and_maps_keep_original_grants_until_last_owner() {
+        use purrdf_sparql_algebra::{
+            Child, Expression, GraphPattern, GroundTerm, NamedNode, Variable,
+        };
+        let pattern = GraphPattern::Filter {
+            expr: Expression::Exists(Child::new(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            })),
+            inner: Child::new(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            }),
+        };
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let copied = crate::expr::CorrelatedPattern::copy(&pattern, &capability)
+            .expect("native original copy");
+        let row = crate::expr::SubstitutionRow::build(&capability, |expr, term, memory| {
+            let variable = Variable::from_admitted(capability.authored_text("outer")?);
+            let iri = NamedNode::from_admitted(
+                capability.authored_text("http://example.org/native-original")?,
+            );
+            memory
+                .push(expr, (variable.clone(), Expression::NamedNode(iri.clone())))
+                .map_err(|error| crate::expr::correlated_storage_error(memory, error))?;
+            memory
+                .push(term, (variable, GroundTerm::NamedNode(iri)))
+                .map_err(|error| crate::expr::correlated_storage_error(memory, error))
+        })
+        .expect("native immutable row");
+        let after_row = ledger.live.load(Ordering::Relaxed);
+        let retained = row.clone();
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            after_row,
+            "ordinary row clone retains the original payload and child grant"
+        );
+        let wrapped = copied
+            .first()
+            .expect("move beneath original first-witness wrapper");
+        let mut map = crate::expr::SubstitutionSourceMap::default();
+        crate::enf::map_clone_admitted(
+            &pattern,
+            match wrapped.as_ref() {
+                GraphPattern::Slice { inner, .. } => inner,
+                _ => panic!("wrapper"),
+            },
+            &mut map,
+            &capability,
+        )
+        .expect("actual native source mapping");
+        let original_address = std::ptr::from_ref(&pattern) as usize;
+        assert!(
+            map.iter()
+                .any(|(_, entry)| entry.source == original_address)
+        );
+        let map =
+            super::SharedWorkspace::new_admitted(map, &capability).expect("original map control");
+        let mut stack = crate::expr::CorrelatedMaps::default();
+        stack.push(map, &capability).expect("original window");
+        let fork = stack.clone();
+        drop(stack);
+        assert_eq!(fork.iter().count(), 1);
+        assert!(!retained.term.is_empty());
+        drop(wrapped);
+        drop(row);
+        assert!(ledger.live.load(Ordering::Relaxed) > base);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        drop(retained);
+        drop(fork);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_correlated_preparation_refusal_moves_first_cause_and_releases_partial_tree() {
+        use purrdf_sparql_algebra::{Child, Expression, GraphPattern, Literal, Variable};
+        let mut pattern = GraphPattern::Bgp {
+            patterns: Vec::new(),
+        };
+        for index in 0..64 {
+            pattern = GraphPattern::Extend {
+                inner: Child::new(pattern),
+                variable: Variable::new(format!("column{index}")),
+                expression: Expression::Literal(Literal::new_simple("original lexical leaf")),
+            };
+        }
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("account layout");
+        for extra in [0, 1, 64, 256, 1024] {
+            let (workspace, ledger, _) = account(base + extra);
+            let capability = workspace.capability();
+            let error = crate::eval::PreparedExists::build_admitted(&pattern, &capability)
+                .err()
+                .expect("the actual native AST cannot fit this original account");
+            assert!(matches!(error, EvalError::WorkspaceStopped));
+            drop(error);
+            assert_eq!(
+                ledger.live.load(Ordering::Relaxed),
+                base,
+                "partial native trees, source tables and analysis owners die on failure"
+            );
+            let cause = workspace
+                .take_failure()
+                .expect("original typed source refusal");
+            assert_eq!(cause.identity, 7);
+            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+            assert!(
+                workspace.take_failure().is_none(),
+                "no copied or replaced provider cause"
+            );
+            drop(capability);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn native_scope_preflight_failure_leaves_flags_maps_and_placeholders_unmodified() {
+        let dataset = purrdf_core::RdfDatasetBuilder::new()
+            .freeze()
+            .expect("empty source");
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("account layout");
+        let (workspace, ledger, _) = account(base + 1);
+        let capability = workspace.capability();
+        let mut ctx = crate::EvalCtx::new(dataset.as_ref());
+        ctx.growth = capability.clone();
+        let refused =
+            ctx.enter_substituted_exists(Some(crate::expr::SubstitutionSourceMap::default()), None);
+        assert!(matches!(refused, Err(EvalError::WorkspaceStopped)));
+        drop(refused);
+        assert!(!ctx.in_substituted_exists);
+        assert!(ctx.correlated_node_maps.last().is_none());
+        assert!(ctx.deferred_exists.is_none());
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        assert_eq!(
+            workspace.take_failure().expect("original cause").identity,
+            7
+        );
+        drop(ctx);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn template_ordinal_and_native_term_keep_original_account_until_last_payload() {
+        use purrdf_sparql_algebra::{
+            Child, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
+        };
+        let mut term = TermPattern::BlankNode(purrdf_sparql_algebra::BlankNode::new("deep"));
+        for _ in 0..256 {
+            term = TermPattern::Triple(Child::new(TriplePattern {
+                subject: TermPattern::NamedNode(NamedNode::new_unchecked("http://example.org/s")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                    "http://example.org/p",
+                )),
+                object: term,
+            }));
+        }
+        let (workspace, ledger, base) = account(u64::MAX);
+        let cap = workspace.capability();
+        let ordinal =
+            crate::template::resolve_term_admitted(&term, &crate::VarSchema::default(), &cap)
+                .expect("native nested ordinals");
+        let mut blanks = crate::template::TemplateBlanks::default();
+        let mut counter = 0;
+        let value = crate::template::instantiate_ground_term_admitted(
+            &term,
+            &mut blanks,
+            &mut counter,
+            Some("fresh_"),
+            &cap,
+        )
+        .expect("native nested term")
+        .expect("ground template");
+        let mut leaf = &*value;
+        let mut depth = 0;
+        while let purrdf_core::TermValue::Triple { o, .. } = leaf {
+            depth += 1;
+            leaf = o;
+        }
+        assert_eq!(depth, 256);
+        assert!(matches!(leaf, purrdf_core::TermValue::Blank { label, .. } if label == "fresh_c1"));
+        assert_eq!(counter, 1);
+        drop(blanks);
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert!(retained > base);
+        drop(cap);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        drop(value);
+        assert!(
+            ledger.live.load(Ordering::Relaxed) > 0,
+            "the ordinal still owns its boxes"
+        );
+        drop(ordinal);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_blank_reservations_share_fork_snapshot_and_keep_scope_collision_law() {
+        let (workspace, ledger, _) = account(u64::MAX);
+        let cap = workspace.capability();
+        let mut parent = crate::ScratchInterner::default();
+        parent
+            .reserve_blank_identity_admitted("c1", purrdf_core::BlankScope::DEFAULT, &cap)
+            .expect("default blank reservation");
+        parent
+            .reserve_blank_identity_admitted("other", purrdf_core::BlankScope(17), &cap)
+            .expect("foreign scopes are unchanged");
+        assert!(
+            !parent
+                .blank_label_is_reserved_admitted("other", &cap)
+                .expect("native membership")
+        );
+        let before = ledger.live.load(Ordering::Relaxed);
+        let mut fork = parent
+            .fresh_for_user_function_admitted(&cap)
+            .expect("shared blank snapshot");
+        assert_eq!(
+            ledger.live.load(Ordering::Relaxed),
+            before,
+            "snapshot clone allocates no table or label"
+        );
+        fork.reserve_blank_identity_admitted("c2", purrdf_core::BlankScope::DEFAULT, &cap)
+            .expect("native copy on mutation");
+        assert!(
+            fork.blank_label_is_reserved_admitted("c1", &cap)
+                .expect("old identity")
+        );
+        assert!(
+            fork.blank_label_is_reserved_admitted("c2", &cap)
+                .expect("new identity")
+        );
+        assert!(
+            !parent
+                .blank_label_is_reserved_admitted("c2", &cap)
+                .expect("independent parent")
+        );
+        drop(parent);
+        assert!(
+            fork.blank_label_is_reserved_admitted("c1", &cap)
+                .expect("shared original spelling")
+        );
+        drop(cap);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        drop(fork);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_template_initial_refusal_retains_original_typed_cause_without_minting() {
+        use purrdf_sparql_algebra::{BlankNode, TermPattern};
+        let term = TermPattern::BlankNode(BlankNode::new("never_minted"));
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("account layout");
+        let (workspace, ledger, _) = account(base);
+        let cap = workspace.capability();
+        let mut blanks = crate::template::TemplateBlanks::default();
+        let mut counter = 0;
+        let failure = crate::template::instantiate_ground_term_admitted(
+            &term,
+            &mut blanks,
+            &mut counter,
+            None,
+            &cap,
+        )
+        .expect_err("first actual work array must be admitted before construction");
+        assert!(matches!(failure, EvalError::WorkspaceStopped));
+        assert!(blanks.is_empty());
+        assert_eq!(counter, 0);
+        assert_eq!(
+            workspace
+                .take_failure()
+                .expect("original typed refusal")
+                .identity,
+            7
+        );
+        drop(blanks);
+        drop(cap);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+}

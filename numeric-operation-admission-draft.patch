@@ -1,0 +1,271 @@
+diff --git a/crates/xsd/src/exact/cost.rs b/crates/xsd/src/exact/cost.rs
+--- a/crates/xsd/src/exact/cost.rs
++++ b/crates/xsd/src/exact/cost.rs
+@@ -126,6 +126,16 @@
+         Ok(Self { peak_bytes, retained_bytes })
+     }
+ 
++    /// Include surviving new intermediates around a fresh destination kernel.
++    /// Already-admitted borrowed input owners are excluded by the caller.
++    /// # Errors
++    /// Refuses checked byte/address-space overflow before allocation.
++    pub fn with_live(self, live_bytes: usize) -> Result<Self, crate::bigint::LimbScratchError> {
++        let peak = live_bytes.checked_add(self.peak_bytes)
++            .ok_or(crate::bigint::LimbScratchError::SizeOverflow)?;
++        Self::bytes(peak, self.retained_bytes)
++    }
++
+     pub(crate) fn words(peak: u64, retained: u64) -> Result<Self, crate::bigint::LimbScratchError> {
+         use crate::bigint::LimbScratchError::SizeOverflow;
+         let checked = |words: u64| -> Result<usize, crate::bigint::LimbScratchError> {
+@@ -175,6 +185,13 @@
+     }
+ }
+ 
++pub(crate) fn live_integer_bytes(values: &[&super::Integer]) -> Result<usize, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    values.iter().try_fold(0_usize, |sum, value| {
++        sum.checked_add(usize::try_from(value.heap_bytes()).map_err(|_| SizeOverflow)?).ok_or(SizeOverflow)
++    })
++}
++
+ fn checked_sum_words(values: &[u64]) -> Result<u64, crate::bigint::LimbScratchError> {
+     values.iter().try_fold(0_u64, |sum, value| sum.checked_add(*value)
+         .ok_or(crate::bigint::LimbScratchError::SizeOverflow))
+@@ -196,6 +213,17 @@
+     }
+ }
+ 
++/// Complete destination family of the existing quotient/remainder kernel.
++/// Inputs are borrowed and already owned by the calling frame.
++/// # Errors
++/// Refuses machine byte overflow before any normalized destination allocation.
++pub fn integer_division_layout(
++    numerator_limbs: u64, denominator_limbs: u64,
++) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
++    let destinations = division_words(numerator_limbs, denominator_limbs)?;
++    NumericOperationLayout::words(destinations, destinations)
++}
++
+ /// Initial exact-division storage before the actual reduced factor/exponent
+ /// is known. Final coefficient and scale growth are admitted separately.
+ pub(crate) fn decimal_exact_initial_layout(
+diff --git a/crates/xsd/src/exact/decimal.rs b/crates/xsd/src/exact/decimal.rs
+--- a/crates/xsd/src/exact/decimal.rs
++++ b/crates/xsd/src/exact/decimal.rs
+@@ -184,24 +184,81 @@
+         self.sub_using(rhs, &crate::bigint::scratch::Fallible)
+     }
+ 
++    /// Add using staged checked native allocation admission.
++    /// The callback covers only new live payload; input owners stay admitted.
++    /// # Errors
++    /// Returns admission or physical storage refusal before allocation.
++    pub fn try_add_admitted(
++        &self, rhs: &Self,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.add_admitted_using(rhs, &crate::bigint::scratch::Fallible, admit)
++    }
++
++    /// Subtract using staged checked native allocation admission.
++    /// # Errors
++    /// Returns admission or physical storage refusal before allocation.
++    pub fn try_sub_admitted(
++        &self, rhs: &Self,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.sub_admitted_using(rhs, &crate::bigint::scratch::Fallible, admit)
++    }
++
+     fn add_using(
+         &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
+     ) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.add_admitted_using(rhs, storage, &mut |_| Ok(()))
++    }
++
++    fn sub_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.sub_admitted_using(rhs, storage, &mut |_| Ok(()))
++    }
++
++    fn add_admitted_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
+         if let Some((a, b, scale)) = self.aligned_small(rhs)
+             && let Some(sum) = a.checked_add(b) { return Ok(Self::from_small(sum, scale)); }
++        admit(self.aligned_layout(rhs)?)?;
+         let (a, b, scale) = self.aligned_using(rhs, storage)?;
+-        Self::new_using(a.add_using(&b, storage)?, scale, storage)
++        let live = cost::live_integer_bytes(&[&a, &b])?;
++        admit(a.operation_layout(&b, cost::IntegerOperation::Add)?.with_live(live)?)?;
++        let sum = a.add_using(&b, storage)?;
++        drop(a); drop(b);
++        admit(cost::normalize_layout(&sum, scale)?)?;
++        Self::new_using(sum, scale, storage)
+     }
+ 
+-    fn sub_using(
++    fn sub_admitted_using(
+         &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
+     ) -> Result<Self, crate::bigint::LimbScratchError> {
+         if let Some((a, b, scale)) = self.aligned_small(rhs)
+             && let Some(value) = a.checked_sub(b) { return Ok(Self::from_small(value, scale)); }
++        admit(self.aligned_layout(rhs)?)?;
+         let (a, b, scale) = self.aligned_using(rhs, storage)?;
+-        Self::new_using(a.sub_using(&b, storage)?, scale, storage)
++        let live = cost::live_integer_bytes(&[&a, &b])?;
++        admit(a.operation_layout(&b, cost::IntegerOperation::Subtract)?.with_live(live)?)?;
++        let value = a.sub_using(&b, storage)?;
++        drop(a); drop(b);
++        admit(cost::normalize_layout(&value, scale)?)?;
++        Self::new_using(value, scale, storage)
+     }
+ 
++    fn aligned_layout(&self, rhs: &Self) -> Result<cost::NumericOperationLayout, crate::bigint::LimbScratchError> {
++        use crate::bigint::LimbScratchError::SizeOverflow;
++        let scale = self.scale.max(rhs.scale);
++        let a = cost::scale_up_layout(&self.unscaled, scale - self.scale)?;
++        let b = cost::scale_up_layout(&rhs.unscaled, scale - rhs.scale)?;
++        let peak = a.peak_bytes().max(a.retained_bytes().checked_add(b.peak_bytes()).ok_or(SizeOverflow)?);
++        let retained = a.retained_bytes().checked_add(b.retained_bytes()).ok_or(SizeOverflow)?;
++        cost::NumericOperationLayout::bytes(peak, retained)
++    }
++
+     pub(crate) fn copy_using(
+         &self, storage: &impl crate::bigint::scratch::Allocate,
+     ) -> Result<Self, crate::bigint::LimbScratchError> {
+@@ -515,12 +572,32 @@
+     pub(crate) fn mul_using(
+         &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
+     ) -> Result<Self, super::ExactOperationError> {
++        self.mul_admitted_using(rhs, storage, &mut |_| Ok(()))
++    }
++
++    /// Multiply using the existing exact kernel and staged result normalization.
++    /// # Errors
++    /// Distinguishes scale overflow from admission or physical storage refusal.
++    pub fn try_mul_admitted(
++        &self, rhs: &Self,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
++        self.mul_admitted_using(rhs, &crate::bigint::scratch::Fallible, admit)
++    }
++
++    fn mul_admitted_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
+         let scale = self.scale.checked_add(rhs.scale).ok_or(ExactError::ScaleOverflow)?;
+         if let (Some(a), Some(b)) = (self.unscaled.as_i128(), rhs.unscaled.as_i128())
+             && let Some(product) = a.checked_mul(b) {
+                 return Ok(Self::from_small(product, scale));
+             }
+-        Ok(Self::new_using(self.unscaled.mul_using(&rhs.unscaled, storage)?, scale, storage)?)
++        admit(self.unscaled.operation_layout(&rhs.unscaled, cost::IntegerOperation::Multiply)?)?;
++        let product = self.unscaled.mul_using(&rhs.unscaled, storage)?;
++        admit(cost::normalize_layout(&product, scale)?)?;
++        Ok(Self::new_using(product, scale, storage)?)
+     }
+ 
+     /// The canonical decimal `value × 10^-scale` for an inline coefficient: no
+@@ -613,6 +690,23 @@
+         self.div_using(rhs, policy, &crate::bigint::scratch::Fallible)
+     }
+ 
++    /// Rounded or exact division with checked native admission at each live phase.
++    /// # Errors
++    /// Preserves all value-space refusals; admission and allocation stay operational.
++    pub fn try_div_admitted(
++        &self, rhs: &Self, policy: DivisionPolicy,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
++        if rhs.is_zero() { return Err(ExactError::DivisionByZero.into()); }
++        if self.is_zero() { return Ok(Self::ZERO); }
++        match policy {
++            DivisionPolicy::Exact => self.try_div_exact_admitted(rhs, admit),
++            DivisionPolicy::Scale { scale, rounding } => {
++                self.div_rounded_admitted_using(rhs, scale, rounding, &crate::bigint::scratch::Fallible, admit)
++            }
++        }
++    }
++
+     fn div_using(
+         &self, rhs: &Self, policy: DivisionPolicy, storage: &impl crate::bigint::scratch::Allocate,
+     ) -> Result<Self, super::ExactOperationError> {
+@@ -631,18 +725,43 @@
+         &self, rhs: &Self, scale: u32, rounding: Rounding,
+         storage: &impl crate::bigint::scratch::Allocate,
+     ) -> Result<Self, super::ExactOperationError> {
++        self.div_rounded_admitted_using(rhs, scale, rounding, storage, &mut |_| Ok(()))
++    }
++
++    fn div_rounded_admitted_using(
++        &self, rhs: &Self, scale: u32, rounding: Rounding,
++        storage: &impl crate::bigint::scratch::Allocate,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
+         let negative = self.is_negative() != rhs.is_negative();
+         let shift = i64::from(scale) + i64::from(rhs.scale) - i64::from(self.scale);
+         let digits = u32::try_from(shift.unsigned_abs()).map_err(|_| ExactError::ScaleOverflow)?;
+         if let Some(quotient) = self.div_rounded_small(rhs, shift, rounding, negative) {
+             return Ok(Self::from_small(quotient, scale));
+         }
++        let copied = cost::live_integer_bytes(&[&self.unscaled, &rhs.unscaled])?;
++        admit(cost::NumericOperationLayout::bytes(copied, copied)?)?;
+         let (a, b) = (self.unscaled.abs_using(storage)?, rhs.unscaled.abs_using(storage)?);
++        let copied = cost::live_integer_bytes(&[&a, &b])?;
++        let selected = if shift >= 0 { &a } else { &b };
++        admit(cost::scale_up_layout(selected, digits)?.with_live(copied)?)?;
+         let (numerator, denominator) = if shift >= 0 {
+-            (scale_up_using(&a, digits, storage)?, b)
+-        } else { (a, scale_up_using(&b, digits, storage)?) };
+-        let quotient = round_quotient_using(&numerator, &denominator, rounding, negative, storage)?;
++            let numerator = scale_up_using(&a, digits, storage)?;
++            drop(a);
++            (numerator, b)
++        } else {
++            let denominator = scale_up_using(&b, digits, storage)?;
++            drop(b);
++            (a, denominator)
++        };
++        let live = cost::live_integer_bytes(&[&numerator, &denominator])?;
++        let quotient = round_quotient_admitted_using(
++            &numerator, &denominator, rounding, negative, storage,
++            &mut |layout| admit(layout.with_live(live)?),
++        )?;
++        drop(numerator); drop(denominator);
+         let signed = if negative { quotient.negated_owned() } else { quotient };
++        admit(cost::normalize_layout(&signed, scale)?)?;
+         Ok(Self::new_using(signed, scale, storage)?)
+     }
+ 
+@@ -1043,11 +1162,25 @@
+     numerator: &Integer, denominator: &Integer, rounding: Rounding, negative: bool,
+     storage: &impl crate::bigint::scratch::Allocate,
+ ) -> Result<Integer, super::ExactOperationError> {
++    round_quotient_admitted_using(numerator, denominator, rounding, negative, storage, &mut |_| Ok(()))
++}
++
++fn round_quotient_admitted_using(
++    numerator: &Integer, denominator: &Integer, rounding: Rounding, negative: bool,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Integer, super::ExactOperationError> {
++    admit(cost::integer_division_layout(numerator.limb_len(), denominator.limb_len())?)?;
+     let (quotient, remainder) = numerator.div_rem_using(denominator, storage)?;
+     if remainder.is_zero() { return Ok(quotient); }
++    let live = cost::live_integer_bytes(&[&quotient, &remainder])?;
++    admit(remainder.operation_layout(&remainder, cost::IntegerOperation::Add)?.with_live(live)?)?;
+     let twice = remainder.add_using(&remainder, storage)?;
+     let half = twice.cmp(denominator);
++    drop(twice); drop(remainder);
+     if rounding.increments(negative, quotient.is_odd(), half, true) {
++        let live = cost::live_integer_bytes(&[&quotient])?;
++        admit(quotient.operation_layout(&Integer::ONE, cost::IntegerOperation::Add)?.with_live(live)?)?;
+         Ok(quotient.add_using(&Integer::ONE, storage)?)
+     } else { Ok(quotient) }
+ }

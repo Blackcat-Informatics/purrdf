@@ -1,0 +1,116 @@
+#[cfg(test)]
+mod custom_owner_regressions {
+    use super::*;
+    use crate::agg_fn::{AggregateAccumulator, CustomAggregate, WorkspaceAccumulator};
+    use crate::workspace::QueryWorkspace;
+    use purrdf_core::{RdfDatasetBuilder, WorkspaceReservation};
+    use purrdf_sparql_algebra::{Child, GroundTerm, Literal, NamedNode};
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    struct Reservation(Arc<AtomicU64>);
+    impl WorkspaceReservation for Reservation {
+        type Error = std::convert::Infallible;
+        fn resize(&mut self, bytes: u64) -> Result<(), Self::Error> {
+            self.0.store(bytes, AtomicOrdering::Relaxed);
+            Ok(())
+        }
+    }
+    impl Drop for Reservation {
+        fn drop(&mut self) { self.0.store(0, AtomicOrdering::Relaxed); }
+    }
+
+    struct PairCount {
+        count: u64,
+        workspace: crate::WorkspaceCapability,
+    }
+    impl AggregateAccumulator for PairCount {
+        fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> { Some(&self.workspace) }
+        fn step(&mut self, _: &[TermValue]) -> Result<(), EvalError> {
+            self.count += 1;
+            Ok(())
+        }
+        fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+            let other = other.into_any().downcast::<Self>().map_err(|_| {
+                crate::NativeDiagnostic::error(crate::NativeDiagnosticKind::Internal,
+                    "pair-count fixture partial type differs", &self.workspace)
+            })?;
+            self.count += other.count;
+            Ok(())
+        }
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> { self }
+        fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+            Ok(Some(TermValue::typed_literal(self.count.to_string(), purrdf_xsd::datatype::XSD_INTEGER)))
+        }
+        fn finish_admitted(self: Box<Self>, workspace: &crate::WorkspaceCapability) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+            workspace.literal(self.count, purrdf_xsd::datatype::XSD_INTEGER).map(Some)
+        }
+    }
+
+    struct PairCountAggregate;
+    impl CustomAggregate for PairCountAggregate {
+        fn arity(&self) -> crate::user_fn::Arity { crate::user_fn::Arity::Exact(2) }
+        fn volatility(&self) -> Volatility { Volatility::Volatile }
+        fn algebraic_class(&self) -> crate::agg_fn::AlgebraicClass { crate::agg_fn::AlgebraicClass::Commutative }
+        fn state_bound(&self) -> u64 { 0 }
+        fn init(&self, _: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+            Box::new(PairCount { count: 0, workspace: crate::WorkspaceCapability::resident() })
+        }
+        fn init_admitted(&self, _: &[(String, TermValue)], _: DivisionPolicy,
+            workspace: &crate::WorkspaceCapability) -> Result<WorkspaceAccumulator, EvalError> {
+            WorkspaceAccumulator::new(PairCount { count: 0, workspace: workspace.clone() }, workspace)
+        }
+        fn exact_numeric_cost_admitted(&self, _: &[Vec<TermValue>], _: &[(String, TermValue)], _: DivisionPolicy,
+            _: &crate::WorkspaceCapability) -> Result<purrdf_xsd::exact::Cost, EvalError> {
+            Ok(purrdf_xsd::exact::Cost::ZERO)
+        }
+    }
+
+    #[test]
+    fn contextual_custom_fold_releases_original_control_tuple_and_visibility_owners() {
+        const IRI: &str = "http://example.org/custom-contextual/pair-count";
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
+        registry.register(IRI, Arc::new(PairCountAggregate));
+        let (a, b) = (Variable::new("a"), Variable::new("b"));
+        let literal = |value| GroundTerm::Literal(Literal::new_simple(value));
+        let inner = GraphPattern::Values {
+            variables: vec![a.clone(), b.clone()],
+            bindings: vec![
+                vec![Some(literal("a")), Some(literal("1"))],
+                vec![Some(literal("a")), Some(literal("1"))],
+                vec![Some(literal("a")), Some(literal("2"))],
+                vec![Some(literal("b")), None],
+            ],
+        };
+        let aggregate = AggregateExpression::new(
+            AggregateFunction::Custom(NamedNode::new_unchecked(IRI)),
+            vec![Expression::Variable(a.clone()), Expression::Variable(b.clone())],
+            Vec::new(), Vec::new(), true,
+        ).unwrap();
+        let node = GraphPattern::Group {
+            inner: Child::new(inner), variables: Vec::new(),
+            aggregates: vec![(Variable::new("n"), aggregate)],
+        };
+        let GraphPattern::Group { inner, variables, aggregates } = &node else { unreachable!() };
+        let domain = [a, b];
+        let live = Arc::new(AtomicU64::new(0));
+        let workspace = QueryWorkspace::owned(Box::new(Reservation(live.clone())), 0).unwrap();
+        let baseline = live.load(AtomicOrdering::Relaxed);
+        let mut ctx = EvalCtx::new(&dataset).with_aggregates(&registry);
+        ctx.growth = workspace.capability();
+        let result = eval_group_with(&node, inner, variables, aggregates, domain.as_slice(), &mut ctx)
+            .unwrap().into_complete().unwrap();
+        assert_eq!(result.rows.len(), 1);
+        let value = ctx.scratch.try_owned_value_of(&dataset, result.rows[0][0].unwrap(), &ctx.growth,
+            |error| match error {}).unwrap();
+        assert_eq!(&*value, &TermValue::typed_literal("2", purrdf_xsd::datatype::XSD_INTEGER));
+        assert!(live.load(AtomicOrdering::Relaxed) > baseline);
+        drop(value);
+        drop(result);
+        drop(ctx);
+        assert_eq!(live.load(AtomicOrdering::Relaxed), baseline,
+            "contextual fold boxes, native tuples, witnesses and visibility arrays are destroyed before their original grants");
+        drop(workspace);
+        assert_eq!(live.load(AtomicOrdering::Relaxed), 0);
+    }
+}

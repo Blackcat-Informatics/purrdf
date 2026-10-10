@@ -1,0 +1,91 @@
+--- a/crates/cdt/src/limits.rs
++++ b/crates/cdt/src/limits.rs
+@@ -139,7 +139,6 @@
+ /// The elements one element contributes to its container: none for a leaf, the
+ /// value's whole element count for a nested composite, and the sum over its
+ /// components for a triple term. Iterative, with an explicit worklist.
+-
+ pub(crate) fn try_term_elements(
+     term: &CdtTerm,
+     memory: &mut Memory<'_>,
+--- a/crates/cdt/src/ops.rs
++++ b/crates/cdt/src/ops.rs
+@@ -281,10 +281,10 @@
+ ) -> Result<(), StorageError> {
+     match (a.contents(), b.contents()) {
+         (CdtContents::List(_), CdtContents::Map(_)) => {
+-            memory.push(jobs, CmpJob::Decided(Ordering::Less))?
++            memory.push(jobs, CmpJob::Decided(Ordering::Less))?;
+         }
+         (CdtContents::Map(_), CdtContents::List(_)) => {
+-            memory.push(jobs, CmpJob::Decided(Ordering::Greater))?
++            memory.push(jobs, CmpJob::Decided(Ordering::Greater))?;
+         }
+         (CdtContents::List(left), CdtContents::List(right)) => {
+             memory.push(jobs, CmpJob::Decided(left.len().cmp(&right.len())))?;
+@@ -913,7 +913,6 @@
+ /// The distinction applies to the top-level pair only. A blank node buried inside two
+ /// nested composites is compared by [`term_equal`]'s rule, because at that depth the
+ /// question is again one of value equality; no corpus test reaches that case.
+-
+ pub(crate) fn membership_equal_with_memory(
+     item: &CdtTerm,
+     term: &CdtTerm,
+--- a/crates/cdt/src/render.rs
++++ b/crates/cdt/src/render.rs
+@@ -281,7 +281,6 @@
+ /// The byte length one element occupies in a canonical form, without allocating it.
+ /// A nested composite answers from its carried measure, so this costs the element's
+ /// own leaves and nothing below a composite.
+-
+ pub(crate) fn try_term_lexical_len(
+     term: &CdtTerm,
+     memory: &mut Memory<'_>,
+--- a/crates/cdt/src/functions.rs
++++ b/crates/cdt/src/functions.rs
+@@ -1997,7 +1997,10 @@
+     mut keyed: Vec<(CdtKey, usize)>,
+     memory: &mut Memory<'_>,
+ ) -> Result<(), StorageError> {
+-    for (key, _) in keyed.drain(..) {
++    // Preserve original key order and the admitted backing allocation until
++    // release_vec destroys it. Empty replacement leaves own no allocation.
++    for (key, _) in &mut keyed {
++        let key = core::mem::replace(key, CdtKey::Iri(alloc::string::String::new()));
+         key.release_with_memory(memory)?;
+     }
+     memory.release_vec(keyed)
+@@ -2040,8 +2043,11 @@
+     }
+     let mut entries = Vec::new();
+     memory.reserve(&mut entries, keyed.len())?;
+-    for (key, index) in keyed.drain(..) {
+-        let value = pairs[index].1.clone_with_memory(memory)?;
++    // Move each original key only after its copied value exists. The key
++    // table's backing allocation stays covered until release_vec destroys it.
++    for (key, index) in &mut keyed {
++        let value = pairs[*index].1.clone_with_memory(memory)?;
++        let key = core::mem::replace(key, CdtKey::Iri(alloc::string::String::new()));
+         entries.push(CdtEntry { key, value });
+     }
+     memory.release_vec(keyed)?;
+@@ -2156,7 +2162,7 @@
+     }
+     let mut built = Vec::new();
+     memory.reserve(&mut built, pairs.len())?;
+-    for (key, value) in pairs.iter().copied() {
++    for (key, value) in &pairs {
+         built.push(CdtEntry {
+             key: key.clone_with_memory(memory)?,
+             value: value.clone_with_memory(memory)?,
+--- a/crates/cdt/src/tree.rs
++++ b/crates/cdt/src/tree.rs
+@@ -97,7 +97,7 @@
+             Self::Composite(value) => match value.dismantling_parts() {
+                 CdtParts::List(items) => *items.last_mut().expect("removed a child") = parent,
+                 CdtParts::Map(entries) => {
+-                    entries.last_mut().expect("removed a child").value = parent
++                    entries.last_mut().expect("removed a child").value = parent;
+                 }
+             },
+             Self::TripleTerm(triple) => triple.object = parent,

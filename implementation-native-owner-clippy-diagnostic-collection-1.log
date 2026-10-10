@@ -1,0 +1,707 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/stack)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/alloc-probe)
+    Checking wasm-link v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/wasm-link)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/testkit)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/deflate)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/ed25519)
+    Checking purrdf-hash-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash-conformance)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/helper-census)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+    Checking purrdf-shex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shex)
+    Checking purrdf-json v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/json)
+    Checking purrdf-markdown v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/markdown)
+    Checking purrdf-columnar v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/columnar)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Checking purrdf-conformance-kit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/conformance-kit)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/entail)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+    Checking purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+    Checking purrdf-geo v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/geo)
+warning: used `assert!` to check that a value is empty
+  --> crates/sparql-eval/tests/fallible_query.rs:71:5
+   |
+71 |     assert!(empty.result.solutions().expect("SELECT shape").1.is_empty());
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+   = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+   = note: the `clippy::assert_is_empty` lint ignores `-D warnings`
+help: use `assert_eq!` to show the value on failure
+   |
+71 -     assert!(empty.result.solutions().expect("SELECT shape").1.is_empty());
+71 +     assert_eq!(empty.result.solutions().expect("SELECT shape").1, []);
+   |
+
+warning: it is more idiomatic to use `Option<&T>` instead of `&Option<T>`
+  --> crates/sparql-eval/tests/expr_vm_owned_strings.rs:74:1
+   |
+74 | / fn literal(
+75 | |     value: &Option<TermValue>,
+76 | |     lexical: &str,
+77 | |     language: Option<&str>,
+...  |
+91 | |     assert_eq!(*actual_direction, direction);
+92 | | }
+   | |_^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ref_option
+   = note: `-D clippy::ref-option` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::ref_option)]`
+   = note: the `clippy::ref_option` lint ignores `-D warnings`
+help: change this to
+   |
+75 -     value: &Option<TermValue>,
+75 +     value: Option<&TermValue>,
+   |
+
+warning: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-eval/tests/expr_vm_owned_strings.rs:406:9
+    |
+406 |         assert_eq!(result.boolean(), Some(true))
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `assert_eq!(result.boolean(), Some(true));`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+    = note: the `clippy::semicolon_if_nothing_returned` lint ignores `-D warnings`
+
+warning: `purrdf-sparql-eval` (test "fallible_query") generated 1 warning (run `cargo clippy --fix --test "fallible_query" -p purrdf-sparql-eval -- --cap-lints warn` to apply 1 suggestion)
+warning: `purrdf-sparql-eval` (test "expr_vm_owned_strings") generated 2 warnings (run `cargo clippy --fix --test "expr_vm_owned_strings" -p purrdf-sparql-eval -- --cap-lints warn` to apply 1 suggestion)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/retrieval)
+warning: used `assert!` to check that a value is not empty
+  --> crates/sparql-eval/tests/diagnostic_owned_admission.rs:43:9
+   |
+43 |         assert!(!failure.diagnostic_code().is_empty());
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+   = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+   = note: the `clippy::assert_is_empty` lint ignores `-D warnings`
+help: use `assert_ne!` to show the value on failure
+   |
+43 -         assert!(!failure.diagnostic_code().is_empty());
+43 +         assert_ne!(failure.diagnostic_code(), "");
+   |
+
+warning: `purrdf-sparql-eval` (test "diagnostic_owned_admission") generated 1 warning (run `cargo clippy --fix --test "diagnostic_owned_admission" -p purrdf-sparql-eval -- --cap-lints warn` to apply 1 suggestion)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/slice)
+    Checking purrdf-bench v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/bench)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shapes)
+warning: the `Err`-variant returned from this closure is very large
+   --> crates/sparql-eval/tests/construct_builder.rs:352:65
+    |
+352 |       let result = purrdf_stack::on_stack_scoped(4 * 1024 * 1024, || {
+    |  _________________________________________________________________^
+353 | |         NativeSparqlEngine::new().construct_prepared_in_operation_into_view(
+354 | |             data.as_ref(),
+355 | |             &prepared,
+...   |
+361 | |     })
+    | |_____^ the `Err`-variant is at least 320 bytes
+    |
+    = help: try reducing the size of `purrdf_sparql_eval::GraphBuildError`, for example by boxing large elements or replacing it with `Box<purrdf_sparql_eval::GraphBuildError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+    = note: the `clippy::result_large_err` lint ignores `-D warnings`
+
+warning: unnecessary hashes around raw string literal
+  --> crates/sparql-eval/tests/correlated_owned_admission.rs:46:9
+   |
+46 | /         r#"SELECT ?s ?label WHERE {
+47 | |             ?s <https://example.org/p> ?label
+48 | |             FILTER EXISTS {
+49 | |                 ?s <https://example.org/q> ?label
+...  |
+52 | |         }"#,
+   | |___________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_raw_string_hashes
+   = note: `-D clippy::needless-raw-string-hashes` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_raw_string_hashes)]`
+   = note: the `clippy::needless_raw_string_hashes` lint ignores `-D warnings`
+help: remove all the hashes around the string literal
+   |
+46 ~         r"SELECT ?s ?label WHERE {
+47 |             ?s <https://example.org/p> ?label
+...
+51 |             }
+52 ~         }",
+   |
+
+warning: unnecessary hashes around raw string literal
+  --> crates/sparql-eval/tests/correlated_owned_admission.rs:53:9
+   |
+53 | /         r#"SELECT ?s ?label WHERE {
+54 | |             ?s <https://example.org/p> ?label
+55 | |             FILTER EXISTS {
+56 | |                 { SELECT ?s ?label WHERE {
+...  |
+62 | |         }"#,
+   | |___________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_raw_string_hashes
+help: remove all the hashes around the string literal
+   |
+53 ~         r"SELECT ?s ?label WHERE {
+54 |             ?s <https://example.org/p> ?label
+...
+61 |             }
+62 ~         }",
+   |
+
+warning: unnecessary hashes around raw string literal
+  --> crates/sparql-eval/tests/correlated_owned_admission.rs:63:9
+   |
+63 | /         r#"SELECT ?label WHERE {
+64 | |             VALUES ?s { <https://example.org/target> <https://example.org/target> }
+65 | |             LATERAL {
+66 | |                 ?s <https://example.org/p> ?label
+...  |
+69 | |         }"#,
+   | |___________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_raw_string_hashes
+help: remove all the hashes around the string literal
+   |
+63 ~         r"SELECT ?label WHERE {
+64 |             VALUES ?s { <https://example.org/target> <https://example.org/target> }
+...
+68 |             }
+69 ~         }",
+   |
+
+warning: unnecessary hashes around raw string literal
+  --> crates/sparql-eval/tests/correlated_owned_admission.rs:79:9
+   |
+79 | /         r#"ASK WHERE {
+80 | |             <https://example.org/target> <https://example.org/p> ?label
+81 | |             FILTER EXISTS { <https://example.org/target> <https://example.org/q> ?label }
+82 | |         }"#,
+   | |___________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_raw_string_hashes
+help: remove all the hashes around the string literal
+   |
+79 ~         r"ASK WHERE {
+80 |             <https://example.org/target> <https://example.org/p> ?label
+81 |             FILTER EXISTS { <https://example.org/target> <https://example.org/q> ?label }
+82 ~         }",
+   |
+
+warning: unnecessary hashes around raw string literal
+  --> crates/sparql-eval/tests/correlated_owned_admission.rs:83:9
+   |
+83 | /         r#"CONSTRUCT {
+84 | |             <https://example.org/target> <https://example.org/copied> ?label
+85 | |         } WHERE {
+86 | |             <https://example.org/target> <https://example.org/p> ?label
+87 | |             FILTER EXISTS { <https://example.org/target> <https://example.org/q> ?label }
+88 | |         }"#,
+   | |___________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_raw_string_hashes
+help: remove all the hashes around the string literal
+   |
+83 ~         r"CONSTRUCT {
+84 |             <https://example.org/target> <https://example.org/copied> ?label
+...
+87 |             FILTER EXISTS { <https://example.org/target> <https://example.org/q> ?label }
+88 ~         }",
+   |
+
+warning: unnecessary hashes around raw string literal
+  --> crates/sparql-eval/tests/correlated_owned_admission.rs:89:9
+   |
+89 | /         r#"DESCRIBE ?s WHERE {
+90 | |             VALUES ?s { <https://example.org/target> }
+91 | |             FILTER EXISTS { ?s <https://example.org/q> ?label }
+92 | |         }"#,
+   | |___________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_raw_string_hashes
+help: remove all the hashes around the string literal
+   |
+89 ~         r"DESCRIBE ?s WHERE {
+90 |             VALUES ?s { <https://example.org/target> }
+91 |             FILTER EXISTS { ?s <https://example.org/q> ?label }
+92 ~         }",
+   |
+
+warning: unnecessary hashes around raw string literal
+   --> crates/sparql-eval/tests/correlated_owned_admission.rs:191:9
+    |
+191 |         r#"ASK WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?x {1}} }"#,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_raw_string_hashes
+help: remove all the hashes around the string literal
+    |
+191 -         r#"ASK WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?x {1}} }"#,
+191 +         r"ASK WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?x {1}} }",
+    |
+
+warning: unnecessary hashes around raw string literal
+   --> crates/sparql-eval/tests/correlated_owned_admission.rs:193:9
+    |
+193 |         r#"DESCRIBE ?s WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?s {<https://example.org/target>}} }"#,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_raw_string_hashes
+help: remove all the hashes around the string literal
+    |
+193 -         r#"DESCRIBE ?s WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?s {<https://example.org/target>}} }"#,
+193 +         r"DESCRIBE ?s WHERE { VALUES ?e {<https://example.org/service>} SERVICE ?e {VALUES ?s {<https://example.org/target>}} }",
+    |
+
+warning: unnecessary hashes around raw string literal
+   --> crates/sparql-eval/tests/correlated_owned_admission.rs:195:9
+    |
+195 | ...   r#"SELECT ?s ?label WHERE {SERVICE <https://example.org/service> {VALUES ?s {<https://example.org/target> <https://example.org/target>} ?s <https://example.org/p> ?label}}"#,
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_raw_string_hashes
+help: remove all the hashes around the string literal
+    |
+195 -         r#"SELECT ?s ?label WHERE {SERVICE <https://example.org/service> {VALUES ?s {<https://example.org/target> <https://example.org/target>} ?s <https://example.org/p> ?label}}"#,
+195 +         r"SELECT ?s ?label WHERE {SERVICE <https://example.org/service> {VALUES ?s {<https://example.org/target> <https://example.org/target>} ?s <https://example.org/p> ?label}}",
+    |
+
+warning: unnecessary hashes around raw string literal
+   --> crates/sparql-eval/tests/correlated_owned_admission.rs:196:9
+    |
+196 |         r#"ASK WHERE {SERVICE <https://example.org/service> {VALUES ?x {1}}}"#,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_raw_string_hashes
+help: remove all the hashes around the string literal
+    |
+196 -         r#"ASK WHERE {SERVICE <https://example.org/service> {VALUES ?x {1}}}"#,
+196 +         r"ASK WHERE {SERVICE <https://example.org/service> {VALUES ?x {1}}}",
+    |
+
+warning: unnecessary hashes around raw string literal
+   --> crates/sparql-eval/tests/correlated_owned_admission.rs:198:9
+    |
+198 |         r#"DESCRIBE ?s WHERE {SERVICE <https://example.org/service> {VALUES ?s {<https://example.org/target>}}}"#,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_raw_string_hashes
+help: remove all the hashes around the string literal
+    |
+198 -         r#"DESCRIBE ?s WHERE {SERVICE <https://example.org/service> {VALUES ?s {<https://example.org/target>}}}"#,
+198 +         r"DESCRIBE ?s WHERE {SERVICE <https://example.org/service> {VALUES ?s {<https://example.org/target>}}}",
+    |
+
+warning: `purrdf-sparql-eval` (test "construct_builder") generated 1 warning
+warning: `purrdf-sparql-eval` (test "correlated_owned_admission") generated 11 warnings (run `cargo clippy --fix --test "correlated_owned_admission" -p purrdf-sparql-eval -- --cap-lints warn` to apply 11 suggestions)
+warning: used `assert!` to check that a value is empty
+   --> crates/sparql-eval/tests/cdt_owned_admission.rs:256:5
+    |
+256 |     assert!(values.is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+    = note: the `clippy::assert_is_empty` lint ignores `-D warnings`
+help: use `assert_eq!` to show the value on failure
+    |
+256 -     assert!(values.is_empty());
+256 +     assert_eq!(values, [] as [u64; 0]);
+    |
+
+warning: `purrdf-sparql-eval` (test "cdt_owned_admission") generated 1 warning (run `cargo clippy --fix --test "cdt_owned_admission" -p purrdf-sparql-eval -- --cap-lints warn` to apply 1 suggestion)
+warning: used `assert!` to check that a value is empty
+   --> crates/sparql-eval/tests/segmented_query.rs:654:13
+    |
+654 |             assert!(variables.is_empty());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+    = note: the `clippy::assert_is_empty` lint ignores `-D warnings`
+help: use `assert_eq!` to show the value on failure
+    |
+654 -             assert!(variables.is_empty());
+654 +             assert_eq!(variables, []);
+    |
+
+warning: used `assert!` to check that a value is empty
+    --> crates/sparql-eval/tests/segmented_query.rs:1549:21
+     |
+1549 |                     assert!(rows.is_empty());
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+help: use `assert_eq!` to show the value on failure
+     |
+1549 -                     assert!(rows.is_empty());
+1549 +                     assert_eq!(rows, []);
+     |
+
+warning: `purrdf-sparql-eval` (test "segmented_query") generated 2 warnings (run `cargo clippy --fix --test "segmented_query" -p purrdf-sparql-eval -- --cap-lints warn` to apply 2 suggestions)
+warning: this argument is passed by value, but not consumed in the function body
+  --> crates/sparql-eval/tests/prepared_operations.rs:48:24
+   |
+48 | fn equal_results(left: impl support::ResultView, right: impl support::ResultView) {
+   |                        ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+   = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+   = note: the `clippy::needless_pass_by_value` lint ignores `-D warnings`
+help: consider taking a reference instead
+   |
+48 | fn equal_results(left: &impl support::ResultView, right: impl support::ResultView) {
+   |                        +
+
+warning: this argument is passed by value, but not consumed in the function body
+  --> crates/sparql-eval/tests/prepared_operations.rs:48:57
+   |
+48 | fn equal_results(left: impl support::ResultView, right: impl support::ResultView) {
+   |                                                         ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+   |
+48 | fn equal_results(left: impl support::ResultView, right: &impl support::ResultView) {
+   |                                                         +
+
+warning: used `assert!` with an equality comparison
+   --> crates/sparql-eval/tests/prepared_operations.rs:375:5
+    |
+375 | /     assert!(
+376 | |         partial
+377 | |             .result()
+378 | |             .unwrap()
+...   |
+384 | |             == 2
+385 | |     );
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#manual_assert_eq
+    = note: `-D clippy::manual-assert-eq` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::manual_assert_eq)]`
+    = note: the `clippy::manual_assert_eq` lint ignores `-D warnings`
+help: replace it with `assert_eq!(..)`
+    |
+375 ~     assert_eq!(
+376 |         partial
+...
+382 |             .1
+383 ~             .len(), 2
+    |
+
+warning: `purrdf-sparql-eval` (test "prepared_operations") generated 3 warnings (run `cargo clippy --fix --test "prepared_operations" -p purrdf-sparql-eval -- --cap-lints warn` to apply 1 suggestion)
+warning: this argument is passed by value, but not consumed in the function body
+  --> crates/sparql-eval/tests/paged_stack_query.rs:66:13
+   |
+66 |     actual: impl support::ResultView,
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+   = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+   = note: the `clippy::needless_pass_by_value` lint ignores `-D warnings`
+help: consider taking a reference instead
+   |
+66 |     actual: &impl support::ResultView,
+   |             +
+
+warning: this argument is passed by value, but not consumed in the function body
+  --> crates/sparql-eval/tests/paged_stack_query.rs:67:15
+   |
+67 |     expected: impl support::ResultView,
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+help: consider taking a reference instead
+   |
+67 |     expected: &impl support::ResultView,
+   |               +
+
+warning: `purrdf-sparql-eval` (test "paged_stack_query") generated 2 warnings
+warning: empty line after doc comment
+   --> crates/text/src/score.rs:931:1
+    |
+931 | / /// stops reading its own output early.
+932 | |
+    | |_^
+933 |   #[cfg(test)]
+934 |   mod tests {
+    |   --------- the comment documents this module
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = note: `-D clippy::empty-line-after-doc-comments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_doc_comments)]`
+    = note: the `clippy::empty_line_after_doc_comments` lint ignores `-D warnings`
+    = help: if the empty line is unintentional, remove it
+
+warning: items after a test module
+   --> crates/text/src/fixed.rs:417:1
+    |
+417 | mod tests {
+    | ^^^^^^^^^
+...
+563 | pub(crate) struct DecimalDisplay(Fixed);
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+564 | impl core::fmt::Display for DecimalDisplay {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+574 | impl Fixed {
+    | ^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#items_after_test_module
+    = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+    = note: the `clippy::items_after_test_module` lint ignores `-D warnings`
+    = help: move the items to before the test module was defined
+
+warning: `purrdf-text` (lib test) generated 2 warnings (run `cargo clippy --fix --lib -p purrdf-text --tests -- --cap-lints warn` to apply 1 suggestion)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/validate)
+    Checking purrdf-envelope-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/envelope-probe)
+    Checking purrdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/purrdf)
+    Checking purrdf-cli v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cli)
+    Checking purrdf-sparql-conformance v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-conformance)
+    Checking purrdf-capi v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-capi)
+    Checking purrdf-wasm v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-wasm)
+error[E0308]: mismatched types
+   --> crates/rdf-capi/src/query.rs:319:61
+    |
+319 |                 *out_graph = into_handle(PurrdfDataset::new(graph));
+    |                                          ------------------ ^^^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+    |                                          |
+    |                                          arguments to this function are incorrect
+    |
+    = note: expected struct `std::sync::Arc<purrdf_core::RdfDataset>`
+               found struct `purrdf_core::DatasetHandle`
+note: associated function defined here
+   --> crates/rdf-capi/src/handles.rs:35:25
+    |
+ 35 |     pub(crate) const fn new(dataset: Arc<RdfDataset>) -> Self {
+    |                         ^^^ ------------------------
+
+error[E0308]: mismatched types
+   --> crates/rdf-capi/src/query.rs:529:61
+    |
+529 |                 *out_graph = into_handle(PurrdfDataset::new(graph));
+    |                                          ------------------ ^^^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+    |                                          |
+    |                                          arguments to this function are incorrect
+    |
+    = note: expected struct `std::sync::Arc<purrdf_core::RdfDataset>`
+               found struct `purrdf_core::DatasetHandle`
+note: associated function defined here
+   --> crates/rdf-capi/src/handles.rs:35:25
+    |
+ 35 |     pub(crate) const fn new(dataset: Arc<RdfDataset>) -> Self {
+    |                         ^^^ ------------------------
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-capi` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+    --> crates/rdf-wasm/src/query.rs:2001:69
+     |
+2001 |         SparqlResult::Graph(graph) => serialize_frozen_with_options(&graph, format, options, None),
+     |                                       ----------------------------- ^^^^^^ expected `&Arc<RdfDataset>`, found `&DatasetHandle`
+     |                                       |
+     |                                       arguments to this function are incorrect
+     |
+     = note: expected reference `&std::sync::Arc<purrdf::RdfDataset>`
+                found reference `&purrdf_core::DatasetHandle`
+note: function defined here
+    --> crates/rdf-wasm/src/dataset.rs:980:15
+     |
+ 980 | pub(crate) fn serialize_frozen_with_options(
+     |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 981 |     frozen: &Arc<RdfDataset>,
+     |     ------------------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-wasm/src/query.rs:2092:17
+     |
+2091 |             value: Some(QueryResultValue::Graph(Box::new(Dataset::from_frozen(
+     |                                                          -------------------- arguments to this function are incorrect
+2092 |                 graph,
+     |                 ^^^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+     |
+     = note: expected struct `std::sync::Arc<purrdf::RdfDataset>`
+                found struct `purrdf_core::DatasetHandle`
+note: associated function defined here
+    --> crates/rdf-wasm/src/dataset.rs:407:19
+     |
+ 407 |     pub(crate) fn from_frozen(frozen: Arc<RdfDataset>) -> Result<Self, JsError> {
+     |                   ^^^^^^^^^^^ -----------------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-wasm/src/query.rs:2112:60
+     |
+2112 |         SparqlResult::Graph(graph) => Dataset::from_frozen(graph),
+     |                                       -------------------- ^^^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+     |                                       |
+     |                                       arguments to this function are incorrect
+     |
+     = note: expected struct `std::sync::Arc<purrdf::RdfDataset>`
+                found struct `purrdf_core::DatasetHandle`
+note: associated function defined here
+    --> crates/rdf-wasm/src/dataset.rs:407:19
+     |
+ 407 |     pub(crate) fn from_frozen(frozen: Arc<RdfDataset>) -> Result<Self, JsError> {
+     |                   ^^^^^^^^^^^ -----------------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-wasm/src/query.rs:2291:89
+     |
+2291 |             serialize_graph_result(graph, format.unwrap_or_else(|| default_graph_format(graph)))
+     |                                                                    -------------------- ^^^^^ expected `&Arc<RdfDataset>`, found `&DatasetHandle`
+     |                                                                    |
+     |                                                                    arguments to this function are incorrect
+     |
+     = note: expected reference `&std::sync::Arc<purrdf::RdfDataset>`
+                found reference `&purrdf_core::DatasetHandle`
+note: function defined here
+    --> crates/rdf-wasm/src/query.rs:2352:4
+     |
+2352 | fn default_graph_format(graph: &Arc<purrdf::RdfDataset>) -> &'static str {
+     |    ^^^^^^^^^^^^^^^^^^^^ -------------------------------
+
+error[E0308]: mismatched types
+    --> crates/rdf-wasm/src/query.rs:2291:36
+     |
+2291 |             serialize_graph_result(graph, format.unwrap_or_else(|| default_graph_format(graph)))
+     |             ---------------------- ^^^^^ expected `&Arc<RdfDataset>`, found `&DatasetHandle`
+     |             |
+     |             arguments to this function are incorrect
+     |
+     = note: expected reference `&std::sync::Arc<purrdf::RdfDataset>`
+                found reference `&purrdf_core::DatasetHandle`
+note: function defined here
+    --> crates/rdf-wasm/src/query.rs:2416:4
+     |
+2416 | fn serialize_graph_result(graph: &Arc<purrdf::RdfDataset>, format: &str) -> Result<String, String> {
+     |    ^^^^^^^^^^^^^^^^^^^^^^ -------------------------------
+
+error: could not compile `purrdf-wasm` (lib) due to 5 previous errors
+    Checking purrdf-python v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/bindings/python)
+error: could not compile `purrdf-capi` (lib test) due to 2 previous errors
+error: could not compile `purrdf-wasm` (lib test) due to 5 previous errors
+error[E0308]: mismatched types
+   --> bindings/python/src/attestation.rs:132:48
+    |
+132 |                     ServiceLevel::Incomplete { reason }
+    |                                                ^^^^^^ expected `SharedText`, found `String`
+
+error[E0308]: mismatched types
+   --> bindings/python/src/py_store/prepared.rs:424:86
+    |
+424 |         InternedOutcome::Graph(graph) => purrdf_core::SparqlResult::Graph(Arc::clone(graph)),
+    |                                                                           ---------- ^^^^^ expected `&Arc<_, _>`, found `&InternedGraph<'_>`
+    |                                                                           |
+    |                                                                           arguments to this function are incorrect
+    |
+    = note: expected reference `&std::sync::Arc<_, _>`
+               found reference `&purrdf_sparql_eval::InternedGraph<'_>`
+note: method defined here
+   --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/clone.rs:236:8
+    |
+236 |     fn clone(&self) -> Self;
+    |        ^^^^^
+
+error[E0308]: mismatched types
+   --> bindings/python/src/py_store/prepared.rs:424:75
+    |
+424 |         InternedOutcome::Graph(graph) => purrdf_core::SparqlResult::Graph(Arc::clone(graph)),
+    |                                          -------------------------------- ^^^^^^^^^^^^^^^^^ expected `DatasetHandle`, found `Arc<_, _>`
+    |                                          |
+    |                                          arguments to this enum variant are incorrect
+    |
+    = note: expected struct `purrdf_core::DatasetHandle`
+               found struct `std::sync::Arc<_, _>`
+note: tuple variant defined here
+   --> crates/rdf-core/src/backend.rs:225:5
+    |
+225 |     Graph(DatasetHandle),
+    |     ^^^^^
+help: call `Into::into` on this expression to convert `std::sync::Arc<_, _>` into `purrdf_core::DatasetHandle`
+    |
+424 |         InternedOutcome::Graph(graph) => purrdf_core::SparqlResult::Graph(Arc::clone(graph).into()),
+    |                                                                                            +++++++
+
+error[E0308]: mismatched types
+   --> bindings/python/src/py_store/prepared.rs:443:22
+    |
+443 |                 aux: solutions.constructed_dataset(),
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `DatasetHandle`, found `RetainedGraph`
+
+error[E0277]: expected an `FnMut(&purrdf_core::small::shared::SharedText)` closure, found `for<'a> fn(&'a std::string::String) -> &'a str {std::string::String::as_str}`
+    --> bindings/python/src/py_store/query.rs:2032:48
+     |
+2032 |             attested.incompleteness.iter().map(String::as_str).collect();
+     |                                            --- ^^^^^^^^^^^^^^ expected an `FnMut(&purrdf_core::small::shared::SharedText)` closure, found `for<'a> fn(&'a std::string::String) -> &'a str {std::string::String::as_str}`
+     |                                            |
+     |                                            required by a bound introduced by this call
+     |
+     = help: the trait `FnMut(&purrdf_core::small::shared::SharedText)` is not implemented for fn item `for<'a> fn(&'a std::string::String) -> &'a str {std::string::String::as_str}`
+     = note: expected a closure with signature `fn(&purrdf_core::small::shared::SharedText)`
+                found a closure with signature `fn(&std::string::String)`
+note: required by a bound in `std::iter::Iterator::map`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:834:12
+     |
+ 831 |     fn map<B, F>(self, f: F) -> Map<Self, F>
+     |        --- required by a bound in this associated function
+...
+ 834 |         F: FnMut(Self::Item) -> B,
+     |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::map`
+
+error[E0599]: the method `collect` exists for struct `Map<_, _>`, but its trait bounds were not satisfied
+    --> bindings/python/src/py_store/query.rs:2032:64
+     |
+2032 |             attested.incompleteness.iter().map(String::as_str).collect();
+     |                                                                ^^^^^^^ method cannot be called on `Map<_, _>` due to unsatisfied trait bounds
+     |
+    ::: /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/adapters/map.rs:61:1
+     |
+  61 | pub struct Map<I, F> {
+     | -------------------- doesn't satisfy `_: Iterator`
+     |
+     = note: the following trait bounds were not satisfied:
+             `for<'a> fn(&'a std::string::String) -> &'a str {std::string::String::as_str}: std::ops::FnOnce<(&purrdf_core::small::shared::SharedText,)>`
+             which is required by `std::iter::Map<impl std::iter::DoubleEndedIterator + std::iter::Iterator<Item = &purrdf_core::small::shared::SharedText> + std::iter::ExactSizeIterator, for<'a> fn(&'a std::string::String) -> &'a str {std::string::String::as_str}>: std::iter::Iterator`
+             `for<'a> fn(&'a std::string::String) -> &'a str {std::string::String::as_str}: std::ops::FnOnce<(&purrdf_core::small::shared::SharedText,)>`
+             which is required by `&mut std::iter::Map<impl std::iter::DoubleEndedIterator + std::iter::Iterator<Item = &purrdf_core::small::shared::SharedText> + std::iter::ExactSizeIterator, for<'a> fn(&'a std::string::String) -> &'a str {std::string::String::as_str}>: std::iter::Iterator`
+     = note: the full name for the type has been written to '/opt/purrdf-508-qualification/build/debug/build/purrdf-python/37ab269156498134/out/purrdf_native-37ab269156498134.long-type-14950832016404405403.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0308]: mismatched types
+   --> bindings/python/src/py_store/results.rs:113:9
+    |
+113 |         aux,
+    |         ^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |
+    = note: expected struct `purrdf_core::DatasetHandle`
+               found struct `std::sync::Arc<purrdf::RdfDataset>`
+help: call `Into::into` on this expression to convert `std::sync::Arc<purrdf::RdfDataset>` into `purrdf_core::DatasetHandle`
+    |
+113 |         aux: aux.into(),
+    |         ++++    +++++++
+
+Some errors have detailed explanations: E0277, E0308, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-python` (lib) due to 7 previous errors

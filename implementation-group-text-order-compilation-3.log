@@ -1,0 +1,52 @@
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+error[E0432]: unresolved import `purrdf_sparql_eval::AdmittedPfRow`
+  --> crates/text/src/relation.rs:43:39
+   |
+43 | use purrdf_sparql_eval::{AdmittedVec, AdmittedPfRow, WorkspaceTerm, WorkspaceAllocation, WorkspaceCapability, NativeDiagnostic, Nati...
+   |                                       ^^^^^^^^^^^^^ no `AdmittedPfRow` in the root
+   |
+   = help: consider importing this struct instead:
+           purrdf_sparql_eval::property_fn::AdmittedPfRow
+
+error: unnecessary qualification
+    --> crates/text/src/index.rs:1048:22
+     |
+1048 |         let stride = core::mem::size_of::<(PartitionKey, PartitionStats)>();
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1048 -         let stride = core::mem::size_of::<(PartitionKey, PartitionStats)>();
+1048 +         let stride = size_of::<(PartitionKey, PartitionStats)>();
+     |
+
+error[E0117]: only traits defined in the current crate can be implemented for arbitrary types
+    --> crates/text/src/relation.rs:1395:1
+     |
+1395 | impl PfCursor for [SearchCursor; 1] {
+     | ^^^^^^^^^^^^^^^^^^-----------------
+     |                   |
+     |                   this is not defined in the current crate because arrays are always foreign
+     |
+     = note: impl doesn't have any local type before any uncovered type parameters
+     = note: for more information see https://doc.rust-lang.org/reference/items/implementations.html#orphan-rules
+     = note: define and implement a trait or new type instead
+
+error[E0117]: only traits defined in the current crate can be implemented for arbitrary types
+    --> crates/text/src/relation.rs:1772:1
+     |
+1772 | impl PfCursor for [OccurrenceCursor; 1] {
+     | ^^^^^^^^^^^^^^^^^^---------------------
+     |                   |
+     |                   this is not defined in the current crate because arrays are always foreign
+     |
+     = note: impl doesn't have any local type before any uncovered type parameters
+     = note: for more information see https://doc.rust-lang.org/reference/items/implementations.html#orphan-rules
+     = note: define and implement a trait or new type instead
+
+Some errors have detailed explanations: E0117, E0432.
+For more information about an error, try `rustc --explain E0117`.
+error: could not compile `purrdf-text` (lib) due to 4 previous errors

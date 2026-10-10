@@ -1,0 +1,103 @@
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -1970,7 +1970,7 @@
+     let native_positive = correlated
+         && !stateful
+         && !matches!(normalized.as_ref(), GraphPattern::Bgp { patterns } if patterns.len() <= 1)
+-        && crate::bgp::PositivePlan::seed_eligible(normalized, schema);
++        && crate::bgp::PositivePlan::seed_eligible_admitted(normalized, schema, &ctx.growth)?;
+     #[cfg(test)]
+     let native_positive =
+         native_positive && FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get).is_none();
+@@ -2207,13 +2207,14 @@
+     let mut seed_rows = RowsBuilder::new(&ctx.growth);
+     seed_rows.push_cells(seed_schema.len(), seed_columns.iter().map(|column| row[*column]))?;
+     let input = SolutionSeq { schema: seed_schema.shared_admitted(&ctx.growth)?, rows: seed_rows.finish()? };
+-    let seed = crate::bgp::SeedEstimate::from_rows(&input);
+-    let Some(plan) = crate::bgp::PositivePlan::build_seeded(
++    let seed = crate::bgp::SeedEstimate::from_rows_admitted(&input, &ctx.growth)?;
++    let Some(plan) = crate::bgp::PositivePlan::build_seeded_admitted(
+         ctx.dataset,
+         &ctx.active_dataset,
+         ctx.active_graph,
+         normalized,
+         &seed,
++        &ctx.workspace,
+     )?
+     else {
+         return Ok(None);
+diff --git a/crates/sparql-eval/src/binop.rs b/crates/sparql-eval/src/binop.rs
+--- a/crates/sparql-eval/src/binop.rs
++++ b/crates/sparql-eval/src/binop.rs
+@@ -76,11 +76,12 @@
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+     let positive = ctx.positive_region(node).unwrap_or(false);
+     if positive
+-        && let Some(plan) = crate::bgp::PositivePlan::build(
++        && let Some(plan) = crate::bgp::PositivePlan::build_admitted(
+             ctx.dataset,
+             &ctx.active_dataset,
+             ctx.active_graph,
+             node,
++            &ctx.workspace,
+         )?
+     {
+         return eval_positive_join(node, left, right, None, &plan, ctx).map(|evaluated| {
+@@ -213,14 +214,15 @@
+     right: &GraphPattern,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+-    if crate::bgp::PositivePlan::seed_eligible(right, &l.schema) {
+-        let seed = crate::bgp::SeedEstimate::from_rows(&l);
+-        let plan = crate::bgp::PositivePlan::build_seeded(
++    if crate::bgp::PositivePlan::seed_eligible_admitted(right, &l.schema, &ctx.growth)? {
++        let seed = crate::bgp::SeedEstimate::from_rows_admitted(&l, &ctx.growth)?;
++        let plan = crate::bgp::PositivePlan::build_seeded_admitted(
+             ctx.dataset,
+             &ctx.active_dataset,
+             ctx.active_graph,
+             right,
+             &seed,
++            &ctx.workspace,
+         )?
+         .expect("the right relation was certified seed eligible");
+         let out = l.schema.union_admitted(plan.root_schema(), &ctx.growth)?;
+@@ -1907,18 +1909,19 @@
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+     if let Evaluated::Complete(rows) = &evaluated
+-        && crate::bgp::PositivePlan::seed_eligible(right, &rows.schema)
++        && crate::bgp::PositivePlan::seed_eligible_admitted(right, &rows.schema, &ctx.growth)?
+     {
+-        let mut seed = crate::bgp::SeedEstimate::from_rows(rows);
++        let mut seed = crate::bgp::SeedEstimate::from_rows_admitted(rows, &ctx.growth)?;
+         // OPTIONAL commits one driver occurrence at a time. Its working bag
+         // therefore has one incoming row, even when the outer bag is large.
+         seed.rows = 1;
+-        if let Some(plan) = crate::bgp::PositivePlan::build_seeded(
++        if let Some(plan) = crate::bgp::PositivePlan::build_seeded_admitted(
+             ctx.dataset,
+             &ctx.active_dataset,
+             ctx.active_graph,
+             right,
+             &seed,
++            &ctx.workspace,
+         )? {
+             let Evaluated::Complete(rows) = evaluated else {
+                 unreachable!("the inspected left arm was complete")
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -2914,9 +2914,9 @@
+         )?;
+         let tree = crate::plan::Tree::build_admitted(query_pattern(query), &capability)?;
+         let mut survey = crate::bgp::PlanSurvey::for_shape_admitted(tree.shape(), &capability)?;
+-        crate::bgp::survey_pattern_plans(
++        crate::bgp::survey_pattern_plans_admitted(
+             dataset, &active_dataset, GraphMatch::Default, query_pattern(query),
+-            relations, &mut survey,
++            relations, &mut survey, workspace,
+         )?;
+         Ok(survey)
+ 

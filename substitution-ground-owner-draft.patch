@@ -1,0 +1,1037 @@
+--- a/crates/sparql-eval/src/substitute.rs
++++ b/crates/sparql-eval/src/substitute.rs
+@@ -3338,106 +3338,184 @@
+     ))
+ }
+ 
+-/// Convert a dataset-independent [`TermValue`] to the algebra's [`GroundTerm`].
+-///
+-/// A quoted triple is built from the bottom up over a frame per open triple — its
+-/// subject, then its predicate, then its object ([`ground_term_over`]) — so a term of
+-/// any depth is converted without a machine-stack frame per level, and the first
+-/// component that cannot be converted is the error reported.
+-///
+-/// # Errors
+-///
+-/// An IRI a [`NamedNode`] would refuse, a language tag this profile does not lex, or a
+-/// quoted triple whose predicate is not an IRI.
++/// Convert a caller-owned term through the same native grounding body.
++/// The resident allocation contract is unchanged; bounded callers use the typed door.
+ fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic> {
+-    ground_term_over(value, |value| {
+-        Ok(match value {
+-            TermValue::Iri(iri) => GroundComponent::Term(GroundTerm::NamedNode(node(iri)?)),
+-            // The algebra's `BlankNode` has ONE string slot, so a `(label, scope)`
+-            // pair is carried in it the way every other single-slot blank surface
+-            // carries one: as the scope-qualified rendering. `ground_term_to_value`
+-            // decodes it back, so an injected blank focus node still denotes the
+-            // dataset node it was resolved from rather than a fresh, unrelated one.
+-            TermValue::Blank { label, scope } => GroundComponent::Term(GroundTerm::BlankNode(
+-                BlankNode::new(scope.qualify_label(label).into_owned()),
+-            )),
+-            TermValue::Literal {
+-                lexical_form,
+-                datatype,
+-                language,
+-                direction,
+-            } => GroundComponent::Term(GroundTerm::Literal(literal_from_value(
+-                lexical_form,
+-                datatype,
+-                language.as_deref(),
+-                *direction,
+-            )?)),
+-            TermValue::Triple { s, p, o } => GroundComponent::Triple([&**s, &**p, &**o]),
+-        })
+-    })
+-}
+-
+-/// Convert a dataset's own term id straight to the algebra's [`GroundTerm`],
+-/// without spelling the term out as a [`TermValue`] on the way.
+-///
+-/// # What this saves, and why it is not merely a shortcut
+-///
+-/// The value door's route from an interned term to the algebra is
+-/// `TermId` → [`TermValue`] → [`GroundTerm`]: the first step owns a `String` per
+-/// component (one for an IRI, up to three for a literal, a whole tree for a quoted
+-/// triple), and the second immediately re-owns the same bytes into the `Arc<str>`
+-/// the algebra holds — after which `crate::bgp`'s `compile_term` hashes the result
+-/// back to the id it started from. This route drops the middle allocation entirely:
+-/// [`DatasetView::resolve`] hands back a borrowed [`TermRef`], and the algebra term
+-/// is built from that borrow. A caller with an id in hand pays ONE materialization
+-/// instead of two.
+-///
+-/// It is a strictly narrower door, not a looser one: every component still goes
+-/// through the same [`node`] and [`lang`] admission the value door uses, so a
+-/// dataset holding a term the algebra would refuse is refused here identically
+-/// rather than admitted because it came from "inside". A quoted triple is built the
+-/// way [`ground_term_from_value`] builds one ([`ground_term_over`]).
+-///
+-/// # Errors
+-///
+-/// As [`ground_term_from_value`]: an IRI a [`NamedNode`] would refuse, a language tag
+-/// this profile does not lex, or a quoted triple whose predicate position is not an
+-/// IRI.
++    ground_term_from_value_admitted(value, &crate::WorkspaceCapability::default())
++        .map(|ground| ground.try_into_resident().expect("resident grounding has no external lease"))
++        .map_err(GroundFailure::into_resident_diagnostic)
++}
++
++/// Resolve directly into the same grounding body, without materializing TermValue.
+ pub(crate) fn ground_term_from_id<D: DatasetView>(
+     dataset: &D,
+     id: D::Id,
+ ) -> Result<GroundTerm, RdfDiagnostic> {
+-    ground_term_over(id, |id| {
+-        let guard = dataset.resolve(id).map_err(|error| {
+-            RdfDiagnostic::error("native-sparql-source-read", error.to_string())
+-        })?;
++    let workspace = crate::WorkspaceCapability::default();
++    ground_term_from_id_admitted(dataset, id, &workspace, |error| {
++        GroundFailure::diagnostic("native-sparql-source-read", &error, &workspace)
++    })
++    .map(|ground| ground.try_into_resident().expect("resident grounding has no external lease"))
++    .map_err(GroundFailure::into_resident_diagnostic)
++}
++
++/// Resident reference fixtures share the production literal-facet admission law.
++#[cfg(test)]
++fn literal_from_value(
++    lexical_form: &str,
++    datatype: &str,
++    language: Option<&str>,
++    direction: Option<RdfTextDirection>,
++) -> Result<Literal, RdfDiagnostic> {
++    literal_from_value_admitted(
++        lexical_form, datatype, language, direction, &crate::WorkspaceCapability::default(),
++    ).map_err(GroundFailure::into_resident_diagnostic)
++}
++
++/// Resident reference fixtures share the same borrowed IRI recognition body.
++#[cfg(test)]
++fn node(iri: &str) -> Result<NamedNode, RdfDiagnostic> {
++    node_admitted(iri, &crate::WorkspaceCapability::default())
++        .map_err(GroundFailure::into_resident_diagnostic)
++}
++
++
++/// A grounded input whose original child-box admission survives its term.
++/// Leaf text already carries its own intrinsic SharedText grant. This private
++/// carrier is not cloned; trusted query rewrites move both ordered fields.
++pub(crate) struct AdmittedGroundTerm {
++    pub(crate) term: GroundTerm,
++    pub(crate) allocation: Option<crate::WorkspaceAllocation>,
++}
++
++impl std::fmt::Debug for AdmittedGroundTerm {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("AdmittedGroundTerm").finish_non_exhaustive()
++    }
++}
++
++impl AdmittedGroundTerm {
++    /// A resident caller may take a term only when no external child lease exists.
++    fn try_into_resident(self) -> Result<GroundTerm, Self> {
++        if self.allocation.as_ref().is_some_and(crate::WorkspaceAllocation::is_bounded) {
++            return Err(self);
++        }
++        Ok(self.term)
++    }
++}
++
++/// Exact lexical diagnostics and allocation/source refusal are separate ingress
++/// outcomes. Neither a refused allocation nor a failed read becomes an unbound cell.
++#[derive(Debug)]
++pub(crate) enum GroundFailure {
++    Diagnostic(crate::RetainedDiagnostic),
++    Operational(crate::EvalError),
++}
++
++impl From<crate::EvalError> for GroundFailure {
++    fn from(error: crate::EvalError) -> Self { Self::Operational(error) }
++}
++
++impl GroundFailure {
++    fn diagnostic(
++        code: &str,
++        message: &(impl std::fmt::Display + ?Sized),
++        workspace: &crate::WorkspaceCapability,
++    ) -> Self {
++        match crate::RetainedDiagnostic::render(code, message, workspace) {
++            Ok(diagnostic) => Self::Diagnostic(diagnostic),
++            Err(error) => Self::Operational(error),
++        }
++    }
++
++    /// The legacy resident boundary keeps its infallible allocation contract.
++    /// Bounded execution never takes this door or allocates after a refusal.
++    fn into_resident_diagnostic(self) -> RdfDiagnostic {
++        match self {
++            Self::Diagnostic(diagnostic) => diagnostic.diagnostic().clone(),
++            Self::Operational(_) => panic!("resident prebinding allocation failed"),
++        }
++    }
++}
++
++/// Convert a caller-owned value without re-owning intermediate TermValue trees.
++pub(crate) fn ground_term_from_value_admitted(
++    value: &TermValue,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<AdmittedGroundTerm, GroundFailure> {
++    let mut frame = crate::workspace::LexicalFrame::new(workspace);
++    let term = {
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
++        ground_term_from_value_with_memory(value, &mut memory)?
++    };
++    Ok(AdmittedGroundTerm { term, allocation: frame.into_allocation() })
++}
++
++/// Add grounded child boxes to an enclosing query's original native grant.
++/// Published lexical leaves retain their own intrinsic immutable text owners.
++pub(crate) fn ground_term_from_value_with_memory(
++    value: &TermValue,
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++) -> Result<GroundTerm, GroundFailure> {
++    let workspace = memory.admission_mut().workspace().clone();
++    ground_term_over(value, memory, |value| {
++        Ok(match value {
++            TermValue::Iri(iri) => GroundComponent::Term(GroundTerm::NamedNode(node_admitted(iri, &workspace)?)),
++            TermValue::Blank { label, scope } => GroundComponent::Term(GroundTerm::BlankNode(
++                blank_admitted(label, *scope, &workspace)?,
++            )),
++            TermValue::Literal { lexical_form, datatype, language, direction } => {
++                GroundComponent::Term(GroundTerm::Literal(literal_from_value_admitted(
++                    lexical_form, datatype, language.as_deref(), *direction, &workspace,
++                )?))
++            }
++            TermValue::Triple { s, p, o } => GroundComponent::Triple([&**s, &**p, &**o]),
++        })
++    })
++}
++
++/// The borrowed-id door resolves directly into the same admitted ground body.
++/// The caller moves a bounded source error into its typed account; it must not
++/// render an opaque D::ReadError before that account selects the original cause.
++pub(crate) fn ground_term_from_id_admitted<D: DatasetView>(
++    dataset: &D,
++    id: D::Id,
++    workspace: &crate::WorkspaceCapability,
++    source_error: impl FnMut(D::ReadError) -> GroundFailure,
++) -> Result<AdmittedGroundTerm, GroundFailure> {
++    let mut frame = crate::workspace::LexicalFrame::new(workspace);
++    let term = {
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
++        ground_term_from_id_with_memory(dataset, id, &mut memory, source_error)?
++    };
++    Ok(AdmittedGroundTerm { term, allocation: frame.into_allocation() })
++}
++
++/// Resolve directly into an enclosing query's original native child-box grant.
++pub(crate) fn ground_term_from_id_with_memory<D: DatasetView>(
++    dataset: &D,
++    id: D::Id,
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++    mut source_error: impl FnMut(D::ReadError) -> GroundFailure,
++) -> Result<GroundTerm, GroundFailure> {
++    let workspace = memory.admission_mut().workspace().clone();
++    ground_term_over(id, memory, |id| {
++        let guard = dataset.resolve(id).map_err(&mut source_error)?;
+         Ok(match purrdf_core::TermGuard::term(&guard) {
+-            TermRef::Iri(iri) => GroundComponent::Term(GroundTerm::NamedNode(node(iri)?)),
+-            // Qualified exactly as `ground_term_from_value` qualifies a `TermValue::Blank`,
+-            // because the two doors must produce the same algebra term for the same
+-            // dataset node — the algebra's `BlankNode` has one string slot, and the
+-            // scope-qualified rendering is how every single-slot blank surface carries a
+-            // `(label, scope)` pair.
++            TermRef::Iri(iri) => GroundComponent::Term(GroundTerm::NamedNode(node_admitted(iri, &workspace)?)),
+             TermRef::Blank { label, scope } => GroundComponent::Term(GroundTerm::BlankNode(
+-                BlankNode::new(scope.qualify_label(label).into_owned()),
++                blank_admitted(label, scope, &workspace)?,
+             )),
+-            TermRef::Literal {
+-                lexical,
+-                datatype,
+-                language,
+-                direction,
+-            } => {
+-                let datatype_guard = dataset.resolve(datatype).map_err(|error| {
+-                    RdfDiagnostic::error("native-sparql-source-read", error.to_string())
+-                })?;
++            TermRef::Literal { lexical, datatype, language, direction } => {
++                let datatype_guard = dataset.resolve(datatype).map_err(&mut source_error)?;
+                 let TermRef::Iri(datatype) = purrdf_core::TermGuard::term(&datatype_guard) else {
+-                    return Err(RdfDiagnostic::error(
++                    return Err(GroundFailure::diagnostic(
+                         "native-sparql-subst-literal-datatype",
+-                        "a literal's datatype must be an IRI".to_owned(),
++                        &"a literal's datatype must be an IRI", &workspace,
+                     ));
+                 };
+-                GroundComponent::Term(GroundTerm::Literal(literal_from_value(
+-                    lexical, datatype, language, direction,
++                GroundComponent::Term(GroundTerm::Literal(literal_from_value_admitted(
++                    lexical, datatype, language, direction, &workspace,
+                 )?))
+             }
+             TermRef::Triple { s, p, o } => GroundComponent::Triple([s, p, o]),
+@@ -3445,63 +3523,67 @@
+     })
+ }
+ 
+-/// What one component of a term converts to: a ground term, or a quoted triple's
+-/// three components, each still to convert.
++/// Clone a grounded parameter through the original grounding walk. Only child
++/// boxes are fresh; every borrowed leaf's existing immutable text owner is shared.
++pub(crate) fn clone_ground_with_memory(
++    root: &GroundTerm,
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++) -> Result<GroundTerm, GroundFailure> {
++    #[derive(Clone, Copy)]
++    enum Component<'a> { Term(&'a GroundTerm), Predicate(&'a NamedNode) }
++    ground_term_over(Component::Term(root), memory, |component| {
++        Ok(match component {
++            Component::Predicate(predicate) => GroundComponent::Term(GroundTerm::NamedNode(predicate.clone())),
++            Component::Term(GroundTerm::NamedNode(node)) => GroundComponent::Term(GroundTerm::NamedNode(node.clone())),
++            Component::Term(GroundTerm::BlankNode(node)) => GroundComponent::Term(GroundTerm::BlankNode(node.clone())),
++            Component::Term(GroundTerm::Literal(literal)) => GroundComponent::Term(GroundTerm::Literal(literal.clone())),
++            Component::Term(GroundTerm::Triple(triple)) => GroundComponent::Triple([
++                Component::Term(&triple.subject), Component::Predicate(&triple.predicate), Component::Term(&triple.object),
++            ]),
++        })
++    })
++}
++
++/// What one component converts to, or the three components still to convert.
+ enum GroundComponent<C> {
+     Term(GroundTerm),
+     Triple([C; 3]),
+ }
+ 
+-/// A quoted triple being converted: the components not yet entered, and what has come
+-/// back so far.
+ struct OpenGroundTriple<C> {
+     predicate: C,
+     object: C,
+     stage: GroundTripleStage,
+ }
+ 
+-/// How far a quoted triple's conversion has come.
+ enum GroundTripleStage {
+-    /// The subject is being converted.
+     Subject,
+-    /// The predicate is being converted.
+     Predicate { subject: GroundTerm },
+-    /// The object is being converted.
+-    Object {
+-        subject: GroundTerm,
+-        predicate: NamedNode,
+-    },
+-}
+-
+-/// Convert the term named by `root` to a [`GroundTerm`], where `convert` converts one
+-/// component: a leaf to its term, a quoted triple to its components. A quoted triple is
+-/// built from the bottom up over a frame per open triple — subject, then predicate, then
+-/// object — so a term of any depth is converted without a machine-stack frame per
+-/// level. The first component `convert` refuses is the error reported, and a converted
+-/// predicate that is not an IRI is refused when it comes back, before its object is
+-/// entered.
++    Object { subject: GroundTerm, predicate: NamedNode },
++}
++
++/// The original subject/predicate/object postorder walk. A non-IRI predicate is
++/// refused before its object is entered; the first refused component wins.
+ fn ground_term_over<C: Copy>(
+     root: C,
+-    mut convert: impl FnMut(C) -> Result<GroundComponent<C>, RdfDiagnostic>,
+-) -> Result<GroundTerm, RdfDiagnostic> {
+-    let mut open: Vec<OpenGroundTriple<C>> = Vec::new();
++    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
++    mut convert: impl FnMut(C) -> Result<GroundComponent<C>, GroundFailure>,
++) -> Result<GroundTerm, GroundFailure> {
++    let baseline = memory.live_bytes();
++    let workspace = memory.admission_mut().workspace().clone();
++    let mut open = Vec::<OpenGroundTriple<C>>::new();
+     let mut next = root;
++    let result: Result<GroundTerm, GroundFailure> = (|| {
+     loop {
+         let mut built = match convert(next)? {
+             GroundComponent::Term(term) => term,
+             GroundComponent::Triple([subject, predicate, object]) => {
+-                open.push(OpenGroundTriple {
+-                    predicate,
+-                    object,
+-                    stage: GroundTripleStage::Subject,
+-                });
++                memory.push(&mut open, OpenGroundTriple { predicate, object, stage: GroundTripleStage::Subject })
++                    .map_err(|error| memory.admission_mut().storage_error(error, "prebound ground worklist"))?;
+                 next = subject;
+                 continue;
+             }
+         };
+-        // Hand the converted component up: it is the open triple's subject or
+-        // predicate, whose next component is entered, or its object, which closes the
+-        // triple.
+         loop {
+             let Some(top) = open.pop() else {
+                 return Ok(built);
+@@ -3513,85 +3595,143 @@
+                 }
+                 GroundTripleStage::Predicate { subject } => {
+                     let GroundTerm::NamedNode(predicate) = built else {
+-                        return Err(RdfDiagnostic::error(
++                        return Err(GroundFailure::diagnostic(
+                             "native-sparql-subst-triple-predicate",
+-                            "a quoted-triple predicate must be an IRI".to_owned(),
++                            &"a quoted-triple predicate must be an IRI", &workspace,
+                         ));
+                     };
+                     next = top.object;
+                     GroundTripleStage::Object { subject, predicate }
+                 }
+                 GroundTripleStage::Object { subject, predicate } => {
+-                    built = GroundTerm::Triple(Child::new(GroundTriple {
+-                        subject,
+-                        predicate,
+-                        object: built,
+-                    }));
++                    memory.add_bytes(size_of::<GroundTriple>())
++                        .map_err(|error| memory.admission_mut().storage_error(error, "prebound ground triple"))?;
++                    let triple = purrdf_lex::allocation::try_boxed(GroundTriple {
++                        subject, predicate, object: built,
++                    }).map_err(|_| crate::EvalError::AllocationFailed { construct: "prebound ground triple" })?;
++                    built = GroundTerm::Triple(Child::from(triple));
+                     continue;
+                 }
+             };
+-            open.push(OpenGroundTriple {
+-                predicate: top.predicate,
+-                object: top.object,
+-                stage,
+-            });
++            memory.push(&mut open, OpenGroundTriple { predicate: top.predicate, object: top.object, stage })
++                .map_err(|error| memory.admission_mut().storage_error(error, "prebound ground worklist"))?;
+             break;
+         }
+     }
+-}
+-
+-/// Build an algebra [`Literal`] from a value's components, choosing the plain /
+-/// typed / lang / dir-lang constructor that matches its shape.
+-///
+-/// Both component doors refuse rather than build: a datatype IRI goes through
+-/// [`node`], and a language tag through [`lang`]. This is the pre-binding
+-/// INGRESS — the one place a caller-supplied [`TermValue`] becomes algebra — and
+-/// a caller that hands over a malformed component has to learn that it did.
+-fn literal_from_value(
++    })();
++    match result {
++        Ok(term) => {
++            memory.release_vec(open)
++                .map_err(|error| memory.admission_mut().storage_error(error, "prebound ground worklist release"))?;
++            Ok(term)
++        }
++        Err(error) => {
++            // All completed children in both local and pending stages die before
++            // shrinking. This includes a failed reserve's admitted replacement
++            // layout, even when that actual allocator never produced a buffer.
++            drop(open);
++            let bytes = memory.live_bytes().checked_sub(baseline)
++                .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
++            memory.release_bytes(bytes)
++                .map_err(|release| memory.admission_mut().storage_error(release, "prebound ground unwind"))?;
++            Err(error)
++        }
++    }
++}
++
++/// Scope qualification uses the existing native canonical blank-label encoder.
++fn blank_admitted(
++    label: &str,
++    scope: purrdf_core::BlankScope,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<BlankNode, GroundFailure> {
++    let mut frame = crate::workspace::LexicalFrame::new(workspace);
++    let encoded = {
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
++        purrdf_core::blank_label::encode_blank_label_with_memory(
++            label, scope, purrdf_core::blank_label::LabelAlphabet::Unconstrained, &mut memory,
++        )
++    }.map_err(|error| frame.storage_error(error, "prebound blank qualification"))?;
++    let text = match encoded {
++        std::borrow::Cow::Borrowed(label) => workspace.authored_text(&label)?,
++        std::borrow::Cow::Owned(text) => {
++            let mut text = Some(text);
++            frame.finish_text(&mut text)?
++        }
++    };
++    Ok(BlankNode::from_admitted(text))
++}
++
++/// The original plain/typed/lang/directional choice, with validated facets and
++/// intrinsic text owners. An absent language still discards a stray direction,
++/// and a present language chooses its standard datatype rather than the supplied
++/// datatype, exactly as the resident constructor did.
++fn literal_from_value_admitted(
+     lexical_form: &str,
+     datatype: &str,
+     language: Option<&str>,
+     direction: Option<RdfTextDirection>,
+-) -> Result<Literal, RdfDiagnostic> {
+-    match (language, direction) {
+-        (Some(language), dir) => Ok(Literal::new_lang(lexical_form, lang(language)?, dir)),
+-        (None, _) => Ok(Literal::new_typed(lexical_form, node(datatype)?)),
+-    }
+-}
+-
+-/// Validate-and-wrap an IRI, surfacing a malformed IRI as a diagnostic.
+-fn node(iri: &str) -> Result<NamedNode, RdfDiagnostic> {
+-    NamedNode::new(iri).map_err(|e| RdfDiagnostic::error("native-sparql-subst-iri", e.to_string()))
+-}
+-
+-/// Validate a pre-bound literal's language tag, surfacing an ungrammatical one
+-/// as a diagnostic exactly the way [`node`] surfaces a malformed datatype IRI.
+-///
+-/// The tag is judged on [`crate::scratch::LANGTAG_PROFILE`], the profile the
+-/// SPARQL parser holds query text to and the profile `RdfLiteral` holds a
+-/// dataset term to, so a pre-binding is admitted on precisely the terms a term
+-/// written in the query itself would have been.
+-///
+-/// # Why this is an ERROR and not an unbound binding
+-///
+-/// [`Query::substitute_variable`] injects the pre-binding as a single-row
+-/// `VALUES` join, and an unbound cell in a `VALUES` row is `UNDEF` — compatible
+-/// with every solution. So degrading a refused pre-binding to "unbound" would
+-/// not cost the caller a binding, it would delete the CONSTRAINT: the query
+-/// would return the whole unrestricted relation, more rows than the caller asked
+-/// for, with nothing anywhere saying why. A pre-binding is an instruction to
+-/// narrow, and an instruction that cannot be carried out is reported, not
+-/// quietly dropped.
+-fn lang(tag: &str) -> Result<&str, RdfDiagnostic> {
++    workspace: &crate::WorkspaceCapability,
++) -> Result<Literal, GroundFailure> {
++    match language {
++        Some(language) => {
++            let language = lang_admitted(language, workspace)?;
++            let datatype = NamedNode::from_admitted(workspace.authored_text(
++                &purrdf_iri::vocab::language_datatype_iri(direction.is_some()),
++            )?);
++            let value = workspace.authored_text(&lexical_form)?;
++            let language = workspace.authored_text(&language)?;
++            Ok(Literal::from_admitted(value, datatype, Some(language), direction))
++        }
++        None => {
++            let datatype = node_admitted(datatype, workspace)?;
++            let value = workspace.authored_text(&lexical_form)?;
++            Ok(Literal::from_admitted(value, datatype, None, None))
++        }
++    }
++}
++
++/// Validate using the existing scanner and retain its original lexical error
++/// through exact NamedNode diagnostic rendering. No generic IRI reason replaces it.
++fn node_admitted(
++    iri: &str, workspace: &crate::WorkspaceCapability,
++) -> Result<NamedNode, GroundFailure> {
++    let mut frame = crate::workspace::LexicalFrame::new(workspace);
++    let verdict = {
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
++        purrdf_iri::is_absolute_with_memory(iri, &mut memory)
++    };
++    match verdict {
++        Ok(true) => Ok(NamedNode::from_admitted(workspace.authored_text(&iri)?)),
++        Ok(false) => Err(GroundFailure::diagnostic(
++            "native-sparql-subst-iri",
++            &purrdf_sparql_algebra::error::IriTermDisplay::new(
++                iri, &"relative IRI reference in term position (no scheme)",
++            ), workspace,
++        )),
++        Err(purrdf_iri::IriReadError::Lexical(error)) => Err(GroundFailure::diagnostic(
++            "native-sparql-subst-iri",
++            &purrdf_sparql_algebra::error::IriTermDisplay::new(iri, &error), workspace,
++        )),
++        Err(purrdf_iri::IriReadError::Storage(error)) => Err(
++            frame.storage_error(error, "prebound IRI recognition").into(),
++        ),
++    }
++}
++
++/// The borrowing LANGTAG parser owns no storage and preserves input spelling.
++/// Its Copy error renders only borrowed tag/debug text and static reason/code.
++fn lang_admitted<'a>(
++    tag: &'a str, workspace: &crate::WorkspaceCapability,
++) -> Result<&'a str, GroundFailure> {
+     match purrdf_iri::langtag::parse_with(tag, crate::scratch::LANGTAG_PROFILE) {
+         Ok(_) => Ok(tag),
+-        Err(error) => Err(RdfDiagnostic::error(
++        Err(error) => Err(GroundFailure::diagnostic(
+             "native-sparql-subst-langtag",
+-            format!(
++            &format_args!(
+                 "a pre-bound literal's language tag {tag:?} is not one this profile lexes: \
+-                 {error} [{code}]",
+-                code = error.diagnostic_code()
+-            ),
++                 {error} [{code}]", code = error.diagnostic_code(),
++            ), workspace,
+         )),
+     }
+ }
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -168,6 +168,44 @@
+             .expect("original native grant checked before publication");
+         let value = factory();
+         Ok(WorkspaceTerm::new(value, allocation))
++    }
++
++    /// Publish one originally admitted UTF-8 buffer without copying its bytes.
++    /// Construction scratch must already be destroyed, leaving exactly this
++    /// buffer in the frame. Refusal leaves the enclosing text and grant intact.
++    pub(crate) fn finish_text(
++        &mut self,
++        text: &mut Option<String>,
++    ) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
++        use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
++        if let Some(error) = self.take_failure() { return Err(error); }
++        let Some(capacity) = text.as_ref().map(String::capacity) else {
++            return Err(NativeDiagnostic::error(
++                NativeDiagnosticKind::Internal,
++                &"native text publication has no payload", &self.workspace,
++            ));
++        };
++        if capacity != self.live {
++            return Err(NativeDiagnostic::error(
++                NativeDiagnosticKind::Internal,
++                &"native text publication retains unmatched working storage", &self.workspace,
++            ));
++        }
++        let control = purrdf_lex::allocation::SharedText::allocation_layout::<WorkspaceAllocation>().size();
++        let bytes = capacity.checked_add(control).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        self.resize_live(bytes)?;
++        // Every fallible admission occurs while both original owners remain
++        // enclosing. The native SharedText factory keeps text before its grant
++        // even when the actual control allocator refuses.
++        let allocation = self.allocation.take().expect("positive shared control has its original grant");
++        let text = text.take().expect("native text checked before ownership transfer");
++        self.live = 0;
++        purrdf_lex::allocation::SharedText::try_from_admitted(text, allocation)
++            .map_err(|_| {
++                let error = EvalError::AllocationFailed { construct: "native text shared control" };
++                self.failure = Some(error.clone());
++                error
++            })
+     }
+ 
+     /// Transfer the native surviving layout's original grant with its payload.
+@@ -1864,4 +1902,242 @@
+         drop(workspace);
+         assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+     }
+-}
++    fn native_grounding_input(depth: usize) -> purrdf_core::TermValue {
++        use purrdf_core::{BlankScope, TermBox, TermValue};
++        let mut term = TermValue::Blank {
++            label: "purrdfesc7_δ space".to_owned(), scope: BlankScope(41),
++        };
++        for _ in 0..depth {
++            term = TermValue::Triple {
++                s: TermBox::new(TermValue::iri("http://example.org/subject")),
++                p: TermBox::new(TermValue::iri("http://example.org/predicate")),
++                o: TermBox::new(term),
++            };
++        }
++        term
++    }
++
++    #[test]
++    fn ground_owner_keeps_original_boxes_and_lexical_leaves_after_workspace() {
++        let input = native_grounding_input(8);
++        let (workspace, ledger, base) = account(1_000_000);
++        let capability = workspace.capability();
++        let grounded = crate::substitute::ground_term_from_value_admitted(&input, &capability)
++            .expect("all native ground shapes admitted");
++        assert!(grounded.allocation.as_ref().is_some_and(super::WorkspaceAllocation::is_bounded));
++        let retained = ledger.live.load(Ordering::Relaxed);
++        assert!(retained > base);
++        drop(input);
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
++        assert!(matches!(&grounded.term, purrdf_sparql_algebra::GroundTerm::Triple(_)));
++        drop(grounded);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn ground_and_paired_clone_join_enclosing_original_memory_without_owner_array() {
++        use purrdf_lex::allocation::Memory;
++        use purrdf_sparql_algebra::GroundTriple;
++        let input = native_grounding_input(8);
++        let (workspace, ledger, base) = account(1_000_000);
++        let capability = workspace.capability();
++        let mut frame = super::LexicalFrame::new(&capability);
++        let (text, ground, clone) = {
++            let mut memory = Memory::new(&mut frame);
++            let text = memory.string("original authored query payload").unwrap();
++            let initial = memory.live_bytes();
++            let ground = crate::substitute::ground_term_from_value_with_memory(&input, &mut memory).unwrap();
++            assert_eq!(memory.live_bytes(), initial + 8 * size_of::<GroundTriple>());
++            let clone = crate::substitute::clone_ground_with_memory(&ground, &mut memory).unwrap();
++            assert_eq!(memory.live_bytes(), initial + 16 * size_of::<GroundTriple>());
++            (text, ground, clone)
++        };
++        let original = (text, ground, clone, frame.into_allocation());
++        assert!(ledger.live.load(Ordering::Relaxed) > base);
++        drop(capability);
++        drop(workspace);
++        assert!(ledger.live.load(Ordering::Relaxed) > 0);
++        drop(original);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn grounding_refusal_destroys_partial_children_and_moves_first_cause_once() {
++        let input = native_grounding_input(128);
++        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
++        for extra in [0, 1, 128, 1024, 4096] {
++            let (workspace, ledger, _) = account(base + extra);
++            let capability = workspace.capability();
++            assert!(matches!(
++                crate::substitute::ground_term_from_value_admitted(&input, &capability),
++                Err(crate::substitute::GroundFailure::Operational(EvalError::WorkspaceStopped))
++            ));
++            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
++            let cause = workspace.take_failure().expect("original admission cause");
++            assert_eq!(cause.identity, 7);
++            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++            assert!(workspace.take_failure().is_none());
++            drop(capability);
++            drop(workspace);
++            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++        }
++    }
++
++    #[test]
++    fn native_text_publication_shares_original_buffer_and_survives_enclosing_frame() {
++        use purrdf_lex::allocation::Memory;
++        let (workspace, ledger, base) = account(1_000_000);
++        let capability = workspace.capability();
++        let mut frame = super::LexicalFrame::new(&capability);
++        let text = {
++            let mut memory = Memory::new(&mut frame);
++            memory.string("the original native UTF-8 payload").unwrap()
++        };
++        let pointer = text.as_ptr();
++        let mut text = Some(text);
++        let published = frame.finish_text(&mut text).unwrap();
++        assert!(text.is_none());
++        assert_eq!(published.as_str().as_ptr(), pointer);
++        let kept = published.clone();
++        drop(published);
++        let retained = ledger.live.load(Ordering::Relaxed);
++        assert!(retained > base);
++        drop(frame);
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
++        assert_eq!(kept.as_str(), "the original native UTF-8 payload");
++        drop(kept);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn grounding_first_predicate_refusal_precedes_unvisited_bad_object() {
++        use purrdf_core::{TermBox, TermValue};
++        let value = TermValue::Triple {
++            s: TermBox::new(native_grounding_input(8)),
++            p: TermBox::new(TermValue::simple_literal("not an IRI")),
++            o: TermBox::new(TermValue::iri("relative-object")),
++        };
++        let (workspace, ledger, base) = account(1_000_000);
++        let capability = workspace.capability();
++        let failure = crate::substitute::ground_term_from_value_admitted(&value, &capability).unwrap_err();
++        let crate::substitute::GroundFailure::Diagnostic(diagnostic) = failure else {
++            panic!("an admitted non-IRI predicate remains a lexical diagnostic")
++        };
++        assert!(diagnostic.diagnostic().to_string().contains("a quoted-triple predicate must be an IRI"));
++        assert!(!workspace.has_failed());
++        drop(diagnostic);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn native_text_control_refusal_keeps_original_string_before_extraction() {
++        use purrdf_lex::allocation::Memory;
++        const TEXT: &str = "the original native UTF-8 payload";
++        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
++        let limit = base + u64::try_from(TEXT.len() + size_of::<super::WorkspaceCharge<Refusal>>()).unwrap();
++        let (workspace, ledger, _) = account(limit);
++        let capability = workspace.capability();
++        let mut frame = super::LexicalFrame::new(&capability);
++        let text = {
++            let mut memory = Memory::new(&mut frame);
++            memory.string(TEXT).expect("the actual string fits before its shared header")
++        };
++        let pointer = text.as_ptr();
++        let mut text = Some(text);
++        assert!(matches!(frame.finish_text(&mut text), Err(EvalError::WorkspaceStopped)));
++        assert_eq!(text.as_ref().unwrap().as_ptr(), pointer);
++        assert_eq!(text.as_deref(), Some(TEXT));
++        let cause = workspace.take_failure().expect("original header admission refusal");
++        assert_eq!(cause.identity, 7);
++        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++        drop(text);
++        drop(frame);
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    /// Deliberately non-latching backing failure: the engine must retain the
++    /// original typed cause without cloning or formatting it.
++    struct GroundFaultView<'a> {
++        inner: &'a purrdf_core::RdfDataset,
++        failed_id: TermId,
++        clones: Arc<AtomicUsize>,
++    }
++
++    impl purrdf_core::DatasetView for GroundFaultView<'_> {
++        type Id = TermId;
++        type ReadError = Refusal;
++        type TermGuard<'a> = purrdf_core::TermRef<'a> where Self: 'a;
++        type ProbePlan = purrdf_core::QuadProbePlan;
++
++        fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
++            purrdf_core::DatasetView::quads(self.inner)
++        }
++        fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Refusal> {
++            if id == self.failed_id {
++                Err(Refusal { identity: 41, clones: self.clones.clone() })
++            } else {
++                Ok(self.inner.resolve(id))
++            }
++        }
++        fn term_id_by_value(&self, value: &purrdf_core::TermValue) -> Result<Option<TermId>, Refusal> {
++            Ok(self.inner.term_id_by_value(value))
++        }
++        fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
++            purrdf_core::DatasetView::capabilities(self.inner)
++        }
++        fn probe_plan(&self, s: bool, p: bool, o: bool, g: purrdf_core::GraphMatch) -> Self::ProbePlan {
++            purrdf_core::DatasetView::probe_plan(self.inner, s, p, o, g)
++        }
++        fn quads_for_pattern_with_plan(
++            &self, plan: &Self::ProbePlan, s: Option<TermId>, p: Option<TermId>,
++            o: Option<TermId>, g: purrdf_core::GraphMatch,
++        ) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
++            purrdf_core::DatasetView::quads_for_pattern_with_plan(self.inner, plan, s, p, o, g)
++        }
++        fn term_count(&self) -> u64 { purrdf_core::DatasetView::term_count(self.inner) }
++    }
++
++    #[test]
++    fn borrowed_id_grounding_moves_exact_source_cause_and_releases_partial_triple() {
++        use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
++        let mut builder = RdfDatasetBuilder::new();
++        let subject = builder.intern_iri("http://example.org/s");
++        let predicate = builder.intern_iri("http://example.org/p");
++        let object = builder.intern_iri("http://example.org/o");
++        let completed_subject = builder.intern_triple(subject, predicate, object);
++        let datatype = builder.intern_iri(purrdf_xsd::datatype::XSD_STRING);
++        let literal = builder.intern_literal(RdfLiteral::simple("literal"));
++        let root = builder.intern_triple(completed_subject, predicate, literal);
++        builder.push_quad(subject, predicate, root, None);
++        let dataset = builder.freeze().expect("a valid shallow dataset");
++        let (workspace, ledger, base) = account(1_000_000);
++        let capability = workspace.capability();
++        let view = GroundFaultView {
++            inner: dataset.as_ref(), failed_id: datatype, clones: ledger.clones.clone(),
++        };
++        let failure = crate::substitute::ground_term_from_id_admitted(
++            &view, root, &capability,
++            |cause| crate::substitute::GroundFailure::Operational(workspace.source_error(cause)),
++        );
++        assert!(matches!(failure, Err(crate::substitute::GroundFailure::Operational(EvalError::WorkspaceStopped))));
++        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
++        let cause = workspace.take_failure().expect("original source cause moves once");
++        assert_eq!(cause.identity, 41);
++        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++        assert!(workspace.take_failure().is_none());
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++}
+--- a/crates/sparql-algebra/src/error.rs
++++ b/crates/sparql-algebra/src/error.rs
+@@ -256,6 +256,35 @@
+     .find(renders)
+ }
+ 
++/// Borrowed term-position IRI diagnostic fields, without lexical or reason copies.
++/// The caller retains any native reason's original owner while this view renders.
++#[derive(Clone, Copy)]
++pub struct IriTermDisplay<'a> {
++    lexical: &'a str,
++    reason: &'a dyn fmt::Display,
++}
++
++impl<'a> IriTermDisplay<'a> {
++    /// Borrow the original lexical spelling and its precise refusal reason.
++    #[must_use]
++    pub fn new(lexical: &'a str, reason: &'a dyn fmt::Display) -> Self {
++        Self { lexical, reason }
++    }
++}
++
++impl fmt::Debug for IriTermDisplay<'_> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("IriTermDisplay").field("lexical", &self.lexical).finish_non_exhaustive()
++    }
++}
++
++impl fmt::Display for IriTermDisplay<'_> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(f, "invalid IRI {lexical:?} in term position: {reason}",
++            lexical = self.lexical, reason = self.reason)
++    }
++}
++
+ impl fmt::Display for ParseError {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         match self {
+@@ -267,7 +296,7 @@
+                 "unsupported SPARQL construct: {feature} is outside the SPARQL 1.2 query language this processor implements"
+             ),
+             Self::Iri { lexical, reason } => {
+-                write!(f, "invalid IRI {lexical:?} in term position: {reason}")
++                fmt::Display::fmt(&IriTermDisplay::new(lexical, reason), f)
+             }
+             Self::CdtArity {
+                 iri,
+--- a/crates/sparql-algebra/src/tree.rs
++++ b/crates/sparql-algebra/src/tree.rs
+@@ -23,7 +23,9 @@
+ //! dismantles that list in a loop, moving each node's own children onto the list
+ //! before letting the node go. Every node the loop drops has already given up its
+ //! children, so no drop recurses more than a fixed number of frames, however deep
+-//! the tree.
++//! the tree. Quoted ground and pattern triples instead rotate their original child
++//! slots through the shared allocation-free dismantling body; their drop needs no
++//! work-list allocation, including after admission failure.
+ //!
+ //! The drop lives on the edges and not on the node enums on purpose: a type that
+ //! implements [`Drop`] cannot be destructured by value, and matching a node by value
+@@ -99,13 +101,50 @@
+     )+};
+ }
+ 
+-child_node!(
+-    crate::GraphPattern,
+-    crate::Expression,
+-    crate::PropertyPathExpression,
+-    crate::TriplePattern,
+-    crate::GroundTriple,
+-);
++child_node!(crate::GraphPattern, crate::Expression, crate::PropertyPathExpression);
++
++impl purrdf_lex::walk::Dismantle for crate::GroundTriple {
++    fn dismantle(node: Box<Self>) { purrdf_lex::walk::dismantle_tree(node); }
++}
++
++impl purrdf_lex::walk::DismantleTree for crate::GroundTriple {
++    fn next_child(&mut self) -> Option<&mut Child<Self>> {
++        if let crate::GroundTerm::Triple(child) = &mut self.subject
++            && !child.is_taken() { return Some(child); }
++        if let crate::GroundTerm::Triple(child) = &mut self.object
++            && !child.is_taken() { return Some(child); }
++        None
++    }
++    fn last_child(&mut self) -> Option<&mut Child<Self>> {
++        if let crate::GroundTerm::Triple(child) = &mut self.object
++            && child.is_taken() { return Some(child); }
++        if let crate::GroundTerm::Triple(child) = &mut self.subject
++            && child.is_taken() { return Some(child); }
++        None
++    }
++}
++
++impl purrdf_lex::walk::Dismantle for crate::TriplePattern {
++    fn dismantle(node: Box<Self>) { purrdf_lex::walk::dismantle_tree(node); }
++}
++
++impl purrdf_lex::walk::DismantleTree for crate::TriplePattern {
++    fn next_child(&mut self) -> Option<&mut Child<Self>> {
++        if let crate::TermPattern::Triple(child) = &mut self.subject
++            && !child.is_taken() { return Some(child); }
++        if let crate::TermPattern::Triple(child) = &mut self.object
++            && !child.is_taken() { return Some(child); }
++        None
++    }
++    fn last_child(&mut self) -> Option<&mut Child<Self>> {
++        if let crate::TermPattern::Triple(child) = &mut self.object
++            && child.is_taken() { return Some(child); }
++        if let crate::TermPattern::Triple(child) = &mut self.subject
++            && child.is_taken() { return Some(child); }
++        None
++    }
++}
++
+ 
+ /// Release every node of `nodes` and dismantle what they own.
+ fn release_all<T: Subtree>(nodes: Vec<T>) {
+@@ -124,7 +163,7 @@
+ /// The workspace's one iteratively dropped box, [`purrdf_lex::walk::Nested`]: it
+ /// reads like a `Box<T>` — it dereferences to `T` — is built with `Child::new` or
+ /// `T::into()`, and is taken apart with `Child::into_inner`. Its [`Drop`] hands the
+-/// node to [`Subtree`]'s iterative release (see the [module docs](self)).
++/// node to its shared iterative dismantling law (see the [module docs](self)).
+ pub type Child<T> = purrdf_lex::walk::Nested<T>;
+ 
+ /// Implements the traits the three list edges share: iteration, conversion back to
+--- a/crates/sparql-algebra/tests/deep_trees.rs
++++ b/crates/sparql-algebra/tests/deep_trees.rs
+@@ -262,3 +262,39 @@
+     nested_triple_terms_are_walked_without_recursion => nested_triple_terms;
+     nested_ground_triple_terms_are_walked_without_recursion => nested_ground_triple_terms;
+ }
++
++/// Releasing either quoted child shape needs no new buffer after refusal.
++#[test]
++fn quoted_ground_and_pattern_children_drop_without_allocations() {
++    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
++    purrdf_stack::on_stack(STACK, || {
++        let mut ground = GroundTerm::NamedNode(iri("leaf"));
++        let mut pattern = TermPattern::Variable(var("leaf"));
++        for _ in 0..100_000 {
++            ground = GroundTerm::Triple(Child::new(GroundTriple {
++                subject: ground,
++                predicate: iri("p"),
++                object: GroundTerm::Triple(Child::new(GroundTriple {
++                    subject: GroundTerm::NamedNode(iri("s")),
++                    predicate: iri("p"),
++                    object: GroundTerm::Literal(Literal::new_simple("o")),
++                })),
++            }));
++            pattern = TermPattern::Triple(Child::new(TriplePattern {
++                subject: pattern,
++                predicate: NamedNodePattern::NamedNode(iri("p")),
++                object: TermPattern::Triple(Child::new(TriplePattern {
++                    subject: TermPattern::Variable(var("s")),
++                    predicate: NamedNodePattern::NamedNode(iri("p")),
++                    object: TermPattern::Variable(var("o")),
++                })),
++            }));
++        }
++        let window = CurrentThreadWindow::open();
++        drop(ground);
++        drop(pattern);
++        let released = window.close();
++        assert_eq!(released.allocations, 0);
++        assert!(released.retained_bytes < 0, "all original trees were freed");
++    }).expect("the native small-stack thread starts");
++}

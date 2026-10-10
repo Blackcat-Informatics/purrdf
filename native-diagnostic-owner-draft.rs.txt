@@ -1,0 +1,97 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Stage proposal; insert at sparql-eval/src/error.rs. Not applied or compiled.
+// Uses the one workspace display_len / format_exact home supplied by its patch.
+
+/// Existing request/error meanings with immutable, admission-carrying text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NativeDiagnosticKind {
+    /// The relation received an invalid invocation.
+    Function,
+    /// The relation failed operationally while executing its invocation.
+    FunctionOperational,
+    /// The requested data violated the native producer's input contract.
+    Data,
+    /// The supplied native configuration was invalid.
+    Config,
+    /// A native evaluator invariant failed.
+    Internal,
+}
+
+#[derive(Debug)]
+struct NativeDiagnosticPayload {
+    // Payload dies before its string+Shared-header admission is released.
+    text: String,
+    _allocation: crate::WorkspaceAllocation,
+}
+
+/// An engine-supplied diagnostic clones its immutable allocation and lease.
+#[derive(Debug, Clone)]
+pub struct NativeDiagnostic {
+    kind: NativeDiagnosticKind,
+    payload: purrdf_core::small::Shared<NativeDiagnosticPayload>,
+}
+
+impl NativeDiagnostic {
+    /// Stable, allocation-free sizing followed by fallible admitted rendering.
+    /// `message` must render borrowed fields without private heap allocation;
+    /// a term Debug walker must acquire its own actual work-list grant first.
+    pub fn render(
+        kind: NativeDiagnosticKind,
+        message: impl core::fmt::Display,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let length = crate::workspace::display_len(&message)?;
+        let control = purrdf_core::small::Shared::<NativeDiagnosticPayload>::allocation_layout().size();
+        let bytes = length.checked_add(control).ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let allocation = workspace.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let text = crate::workspace::format_exact(&message, length, "native diagnostic text")?;
+        let payload = purrdf_core::small::Shared::try_new(NativeDiagnosticPayload { text, _allocation: allocation })
+            .map_err(|_| EvalError::AllocationFailed { construct: "native diagnostic owner" })?;
+        Ok(Self { kind, payload })
+    }
+
+    /// Stable typed classification, independent of its English message.
+    pub const fn kind(&self) -> NativeDiagnosticKind { self.kind }
+    /// Borrow the immutable body while retaining its shared owner.
+    pub fn message(&self) -> &str { &self.payload.text }
+    /// One native diagnostic adaptation for `ok_or_else` and `map_err` callers.
+    /// A refused render returns its original static operational failure.
+    pub fn error(
+        kind: NativeDiagnosticKind, message: impl core::fmt::Display,
+        workspace: &crate::WorkspaceCapability,
+    ) -> EvalError {
+        match Self::render(kind, message, workspace) {
+            Ok(diagnostic) => EvalError::NativeDiagnostic(diagnostic),
+            Err(error) => error,
+        }
+    }
+    fn preserve_function_failure(mut self) -> Self {
+        if self.kind == NativeDiagnosticKind::Function { self.kind = NativeDiagnosticKind::FunctionOperational; }
+        self
+    }
+}
+
+impl PartialEq for NativeDiagnostic {
+    fn eq(&self, other: &Self) -> bool { self.kind == other.kind && self.message() == other.message() }
+}
+impl Eq for NativeDiagnostic {}
+impl core::hash::Hash for NativeDiagnostic {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        core::hash::Hash::hash(&self.kind, state);
+        core::hash::Hash::hash(self.message(), state);
+    }
+}
+impl core::fmt::Display for NativeDiagnostic {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let prefix = match self.kind {
+            NativeDiagnosticKind::Function | NativeDiagnosticKind::FunctionOperational => "host function error",
+            NativeDiagnosticKind::Data => "malformed RDF input",
+            NativeDiagnosticKind::Config => "invalid evaluation configuration",
+            NativeDiagnosticKind::Internal => "internal evaluator error",
+        };
+        write!(f, "{prefix}: {}", self.message())
+    }
+}
+impl std::error::Error for NativeDiagnostic {}

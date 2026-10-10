@@ -1,0 +1,148 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Certified workspace admission for a bounded operational read session.
+//!
+//! Plan preparation belongs to its caller's bounded plan cache. This admission
+//! covers execution, simultaneous intermediate bags, and owned result staging.
+//! The returned guard must stay alive through the engine's complete result drain.
+
+use purrdf_core::{DatasetView, RdfDiagnostic, WorkspaceReservation};
+use purrdf_sparql_algebra::Query;
+
+use crate::EvalError;
+use crate::workspace::QueryWorkspace;
+
+fn diagnostic(error: &EvalError) -> RdfDiagnostic {
+    RdfDiagnostic::error(
+        super::eval_diagnostic_code(error, "native-sparql-query-eval"),
+        error.to_string(),
+    )
+}
+
+/// Admission keeps operational causes typed until the caller selects its egress.
+pub(super) enum AdmissionError<E> {
+    Query(RdfDiagnostic),
+    Evaluation(EvalError),
+    Operational(E),
+    AllocationFailed(&'static str),
+}
+
+type AdmissionResult<D, T> = Result<T, AdmissionError<<D as DatasetView>::ReadError>>;
+
+impl<E> From<EvalError> for AdmissionError<E> {
+    fn from(error: EvalError) -> Self {
+        match error {
+            EvalError::AllocationFailed { construct } => Self::AllocationFailed(construct),
+            error => Self::Evaluation(error),
+        }
+    }
+}
+
+impl<E: std::fmt::Display> AdmissionError<E> {
+    /// Project either cause into the resident diagnostic boundary; operational
+    /// callers keep the typed variant instead of using this lossy projection.
+    pub(super) fn into_diagnostic(self) -> RdfDiagnostic {
+        match self {
+            Self::Query(error) => error,
+            Self::Evaluation(error) => diagnostic(&error),
+            Self::Operational(error) => diagnostic(&EvalError::source_read(error)),
+            Self::AllocationFailed(construct) => {
+                diagnostic(&EvalError::AllocationFailed { construct })
+            }
+        }
+    }
+}
+
+/// Fixed governor/report scaffolding is admitted before constructing its heap
+/// owner. Resident monomorphs retain the same zero-sized no-op reservation.
+pub(crate) enum ReportingWorkspace<R, E> {
+    Resident { _reservation: R },
+    Bounded(QueryWorkspace<E>),
+}
+
+impl<R, E: Clone + std::error::Error + Send + Sync + 'static> ReportingWorkspace<R, E> {
+    pub(super) fn capability(&self) -> crate::WorkspaceCapability {
+        match self {
+            Self::Resident { .. } => crate::WorkspaceCapability::default(),
+            Self::Bounded(owner) => owner.capability(),
+        }
+    }
+    /// Reporting and execution charge the same account and latch the same
+    /// first typed source refusal. The borrowed resident guard stays at ingress.
+    pub(crate) fn execution(&self) -> QueryWorkspace<E> {
+        match self {
+            Self::Resident { .. } => QueryWorkspace::resident(),
+            Self::Bounded(owner) => owner.clone(),
+        }
+    }
+    pub(super) fn failure(&self) -> Option<E> {
+        match self {
+            Self::Resident { .. } => None,
+            Self::Bounded(owner) => owner.take_failure(),
+        }
+    }
+}
+
+pub(super) fn reserve_reporting<D: DatasetView>(
+    view: &D,
+) -> AdmissionResult<
+    D,
+    ReportingWorkspace<impl WorkspaceReservation<Error = D::ReadError> + '_, D::ReadError>,
+> {
+    if view.storage_live_budget().is_none() {
+        return view
+            .reserve_workspace(0)
+            .map(|reservation| ReportingWorkspace::Resident {
+                _reservation: reservation,
+            })
+            .map_err(AdmissionError::Operational);
+    }
+    // Only concrete engine controls belong to this initial certificate. The
+    // provider's owned factory self-accounts its erased reservation box. Variable
+    // request metadata and invocation records use child grants before growth.
+    let total = QueryWorkspace::<D::ReadError>::control_bytes()?;
+    let reservation = view
+        .reserve_owned_workspace(total)
+        .ok_or(EvalError::WorkspaceUnpriced(
+            "a view without owned reporting admission",
+        ))?
+        .map_err(AdmissionError::Operational)?;
+    Ok(ReportingWorkspace::Bounded(QueryWorkspace::owned(
+        reservation,
+        0,
+    )?))
+}
+
+/// Admit before converting even a query constant to an owned lookup key. Every
+/// subsequent execution allocation is covered by the grown reservation.
+/// Resident views retain their zero-sized reservation and ordinary fast path.
+pub(super) fn reserve<'a, D: DatasetView>(
+    view: &'a D,
+    query: &Query,
+    has_substitutions: bool,
+    options: super::QueryOptions<'_>,
+) -> Result<QueryWorkspace<D::ReadError>, RdfDiagnostic> {
+    reserve_with_error(view, query, has_substitutions, options)
+        .map_err(AdmissionError::into_diagnostic)
+}
+
+/// The shared admission path before an operational caller publishes its receipt.
+pub(super) fn reserve_with_error<'a, D: DatasetView>(
+    view: &'a D,
+    _query: &Query,
+    _has_substitutions: bool,
+    _options: super::QueryOptions<'_>,
+) -> AdmissionResult<D, QueryWorkspace<D::ReadError>> {
+    if view.storage_live_budget().is_none() {
+        return Ok(QueryWorkspace::resident());
+    }
+    let controls = QueryWorkspace::<D::ReadError>::control_bytes()?;
+    let reservation = view
+        .reserve_owned_workspace(controls)
+        .ok_or(EvalError::WorkspaceUnpriced(
+            "a view without owned workspace admission",
+        ))?
+        .map_err(AdmissionError::Operational)?;
+    Ok(QueryWorkspace::owned(reservation, 0)?)
+}

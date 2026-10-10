@@ -1,0 +1,144 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [optimized] target(s) in 0.09s
+     Running tests/change_path_alloc.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e)
+
+running 12 tests
+test admit_allocation_is_independent_of_dataset_size ... ok
+test bind_allocation_is_independent_of_dataset_size_beyond_the_catalog ... ok
+test change_expansion_allocation_matches_its_pinned_closed_form ... ok
+test change_expansion_with_no_chain_to_walk_costs_no_path_probe ... ok
+test conforming_change_path_allocation_has_no_growth_term_in_focus_count ... ok
+test change_path_report_bytes_match_pinned_golden ... ok
+test every_allocation_exclusion_names_a_real_case ... ok
+test every_constraint_kind_is_covered_by_an_allocation_case ... ok
+test every_sibling_file_coverage_entry_names_a_real_case ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold ... ok
+test violating_change_path_allocation_scales_with_violations_not_focus_count ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.42s
+
+     Running tests/sparql_path_alloc.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/155cf37ddfa95d1b/out/sparql_path_alloc-155cf37ddfa95d1b)
+
+running 8 tests
+test every_sparql_surface_costs_a_constant_per_conforming_focus_node ... FAILED
+test every_registered_prose_site_quotes_the_measured_figures ... ok
+test ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node ... FAILED
+test every_sparql_surface_costs_a_constant_per_governed_change_focus_node ... FAILED
+test every_sparql_surface_still_reports_its_violations ... ok
+test every_sparql_surface_still_reports_its_violations_when_governed ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test the_fixture_gives_every_focus_node_two_value_nodes ... ok
+
+failures:
+
+---- every_sparql_surface_costs_a_constant_per_conforming_focus_node stdout ----
+
+thread 'every_sparql_surface_costs_a_constant_per_conforming_focus_node' (2779321) panicked at crates/shapes/tests/sparql_path_alloc.rs:957:5:
+the SPARQL-bearing surfaces' cost moved:
+  sh:sparql at N = 1280 conforming focus nodes: allocated 64006, not the pinned 6 + 40 * 1280 = 51206
+    Measurement { allocations: 64006, requested_bytes: 5679844, retained_bytes: -14, peak_working_bytes: 144556 }
+  sh:sparql at 2N = 2560 conforming focus nodes: allocated 128006, not the pinned 6 + 40 * 2560 = 102406
+    Measurement { allocations: 128006, requested_bytes: 11366244, retained_bytes: 18, peak_working_bytes: 276018 }
+  sh:ask component at N = 1280 conforming focus nodes: allocated 106246, not the pinned 6 + 78 * 1280 = 99846
+    Measurement { allocations: 106246, requested_bytes: 10604084, retained_bytes: -51, peak_working_bytes: 171500 }
+  sh:ask component at 2N = 2560 conforming focus nodes: allocated 212486, not the pinned 6 + 78 * 2560 = 199686
+    Measurement { allocations: 212486, requested_bytes: 21223604, retained_bytes: 63, peak_working_bytes: 315734 }
+  sh:select component at N = 1280 conforming focus nodes: allocated 75526, not the pinned 6 + 48 * 1280 = 61446
+    Measurement { allocations: 75526, requested_bytes: 6163854, retained_bytes: -11, peak_working_bytes: 149997 }
+  sh:select component at 2N = 2560 conforming focus nodes: allocated 151046, not the pinned 6 + 48 * 2560 = 122886
+    Measurement { allocations: 151046, requested_bytes: 12335374, retained_bytes: 13, peak_working_bytes: 281412 }
+  sh:expression call at N = 1280 conforming focus nodes: allocated 106246, not the pinned 6 + 85 * 1280 = 108806
+    Measurement { allocations: 106246, requested_bytes: 7159094, retained_bytes: -20, peak_working_bytes: 144005 }
+  sh:expression call at 2N = 2560 conforming focus nodes: allocated 212486, not the pinned 6 + 85 * 2560 = 217606
+    Measurement { allocations: 212486, requested_bytes: 14330294, retained_bytes: 30, peak_working_bytes: 273402 }
+
+all measurements:
+  sh:sparql: N = 64006, 2N = 128006, marginal = 50 allocations and 4442 requested bytes per focus node, entry = 6
+  sh:ask component: N = 106246, 2N = 212486, marginal = 83 allocations and 8296 requested bytes per focus node, entry = 6
+  sh:select component: N = 75526, 2N = 151046, marginal = 59 allocations and 4821 requested bytes per focus node, entry = 6
+  sh:expression call: N = 106246, 2N = 212486, marginal = 83 allocations and 5602 requested bytes per focus node, entry = 6
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node stdout ----
+
+thread 'ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node' (2779319) panicked at crates/shapes/tests/sparql_path_alloc.rs:1537:5:
+the fallback lane's cost moved:
+fallback lane at N = 1280 conforming focus nodes: allocated 299526, not the pinned 6 + 200 * 1280 = 256006
+    Measurement { allocations: 299526, requested_bytes: 36849616, retained_bytes: 0, peak_working_bytes: 286476 }
+fallback lane at 2N = 2560 conforming focus nodes: allocated 599046, not the pinned 6 + 200 * 2560 = 512006
+    Measurement { allocations: 599046, requested_bytes: 73716816, retained_bytes: 0, peak_working_bytes: 493565 }
+
+
+---- every_sparql_surface_costs_a_constant_per_governed_change_focus_node stdout ----
+governed change path, measured:
+  sh:sparql at 1280: 84509 allocations, 11453128 requested bytes
+  sh:sparql at 2560: 168992 allocations, 22912232 requested bytes
+  sh:sparql at 5120: 337955 allocations, 45830408 requested bytes
+  sh:ask component at 1280: 131869 allocations, 19797528 requested bytes
+  sh:ask component at 2560: 263712 allocations, 39609912 requested bytes
+  sh:ask component at 5120: 527395 allocations, 79234648 requested bytes
+  sh:select component at 1280: 96029 allocations, 12418418 requested bytes
+  sh:select component at 2560: 192032 allocations, 24843922 requested bytes
+  sh:select component at 5120: 384035 allocations, 49694898 requested bytes
+  sh:expression call at 1280: 138281 allocations, 17092514 requested bytes
+  sh:expression call at 2560: 276524 allocations, 34197682 requested bytes
+  sh:expression call at 5120: 553007 allocations, 68408002 requested bytes
+
+
+thread 'every_sparql_surface_costs_a_constant_per_governed_change_focus_node' (2779322) panicked at crates/shapes/tests/sparql_path_alloc.rs:1239:5:
+the GOVERNED SPARQL-bearing surfaces' cost moved:
+  sh:sparql at 1280 conforming focus nodes: allocated 84509, not the pinned 29 + 58 * 1280 + 3 * log2(1280/1280) = 74269
+    Measurement { allocations: 84509, requested_bytes: 11453128, retained_bytes: 0, peak_working_bytes: 210816 }
+  sh:sparql at 2560 conforming focus nodes: allocated 168992, not the pinned 29 + 58 * 2560 + 3 * log2(2560/1280) = 148512
+    Measurement { allocations: 168992, requested_bytes: 22912232, retained_bytes: 0, peak_working_bytes: 419712 }
+  sh:sparql at 5120 conforming focus nodes: allocated 337955, not the pinned 29 + 58 * 5120 + 3 * log2(5120/1280) = 296995
+    Measurement { allocations: 337955, requested_bytes: 45830408, retained_bytes: 0, peak_working_bytes: 837504 }
+  sh:ask component at 1280 conforming focus nodes: allocated 131869, not the pinned 29 + 98 * 1280 + 3 * log2(1280/1280) = 125469
+    Measurement { allocations: 131869, requested_bytes: 19797528, retained_bytes: 0, peak_working_bytes: 210816 }
+  sh:ask component at 2560 conforming focus nodes: allocated 263712, not the pinned 29 + 98 * 2560 + 3 * log2(2560/1280) = 250912
+    Measurement { allocations: 263712, requested_bytes: 39609912, retained_bytes: 0, peak_working_bytes: 419712 }
+  sh:ask component at 5120 conforming focus nodes: allocated 527395, not the pinned 29 + 98 * 5120 + 3 * log2(5120/1280) = 501795
+    Measurement { allocations: 527395, requested_bytes: 79234648, retained_bytes: 0, peak_working_bytes: 837504 }
+  sh:select component at 1280 conforming focus nodes: allocated 96029, not the pinned 29 + 66 * 1280 + 3 * log2(1280/1280) = 84509
+    Measurement { allocations: 96029, requested_bytes: 12418418, retained_bytes: 0, peak_working_bytes: 210816 }
+  sh:select component at 2560 conforming focus nodes: allocated 192032, not the pinned 29 + 66 * 2560 + 3 * log2(2560/1280) = 168992
+    Measurement { allocations: 192032, requested_bytes: 24843922, retained_bytes: 0, peak_working_bytes: 419712 }
+  sh:select component at 5120 conforming focus nodes: allocated 384035, not the pinned 29 + 66 * 5120 + 3 * log2(5120/1280) = 337955
+    Measurement { allocations: 384035, requested_bytes: 49694898, retained_bytes: 0, peak_working_bytes: 837504 }
+  sh:expression call at 1280 conforming focus nodes: allocated 138281, not the pinned 41 + 110 * 1280 + 3 * log2(1280/1280) = 140841
+    Measurement { allocations: 138281, requested_bytes: 17092514, retained_bytes: 0, peak_working_bytes: 149152 }
+  sh:expression call at 2560 conforming focus nodes: allocated 276524, not the pinned 41 + 110 * 2560 + 3 * log2(2560/1280) = 281644
+    Measurement { allocations: 276524, requested_bytes: 34197682, retained_bytes: 0, peak_working_bytes: 294560 }
+  sh:expression call at 5120 conforming focus nodes: allocated 553007, not the pinned 41 + 110 * 5120 + 3 * log2(5120/1280) = 563247
+    Measurement { allocations: 553007, requested_bytes: 68408002, retained_bytes: 0, peak_working_bytes: 585376 }
+
+all measurements:
+  sh:sparql at 1280: 84509 allocations, 11453128 requested bytes
+  sh:sparql at 2560: 168992 allocations, 22912232 requested bytes
+  sh:sparql at 5120: 337955 allocations, 45830408 requested bytes
+  sh:ask component at 1280: 131869 allocations, 19797528 requested bytes
+  sh:ask component at 2560: 263712 allocations, 39609912 requested bytes
+  sh:ask component at 5120: 527395 allocations, 79234648 requested bytes
+  sh:select component at 1280: 96029 allocations, 12418418 requested bytes
+  sh:select component at 2560: 192032 allocations, 24843922 requested bytes
+  sh:select component at 5120: 384035 allocations, 49694898 requested bytes
+  sh:expression call at 1280: 138281 allocations, 17092514 requested bytes
+  sh:expression call at 2560: 276524 allocations, 34197682 requested bytes
+  sh:expression call at 5120: 553007 allocations, 68408002 requested bytes
+
+
+
+failures:
+    ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node
+    every_sparql_surface_costs_a_constant_per_conforming_focus_node
+    every_sparql_surface_costs_a_constant_per_governed_change_focus_node
+
+test result: FAILED. 5 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.45s
+
+error: test failed, to rerun pass `-p purrdf-shapes --test sparql_path_alloc`
+error: 1 target failed:
+    `-p purrdf-shapes --test sparql_path_alloc`

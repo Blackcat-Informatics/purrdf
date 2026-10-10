@@ -1,0 +1,34 @@
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -8922,7 +8922,12 @@
+         };
+         let domain = [a, b];
+         let live = Arc::new(AtomicU64::new(0));
+-        let workspace = QueryWorkspace::owned(Box::new(Reservation(live.clone())), 0).unwrap();
++        let mut reservation = Reservation(live.clone());
++        purrdf_core::WorkspaceReservation::resize(
++            &mut reservation,
++            QueryWorkspace::<std::convert::Infallible>::control_bytes().unwrap(),
++        ).unwrap();
++        let workspace = QueryWorkspace::owned(Box::new(reservation), 0).unwrap();
+         let baseline = live.load(AtomicOrdering::Relaxed);
+         let mut ctx = EvalCtx::new(&dataset).with_aggregates(&registry);
+         ctx.growth = workspace.capability();
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -2650,10 +2650,13 @@
+         let subject = builder.intern_iri("http://example.org/s");
+         let predicate = builder.intern_iri("http://example.org/p");
+         let object = builder.intern_iri("http://example.org/o");
+-        let completed_subject = builder.intern_triple(subject, predicate, object);
+         let datatype = builder.intern_iri(purrdf_xsd::datatype::XSD_STRING);
+         let literal = builder.intern_literal(RdfLiteral::simple("literal"));
+-        let root = builder.intern_triple(completed_subject, predicate, literal);
++        // RDF 1.2 nests a triple term in OBJECT, never in subject. Resolution
++        // still completes outer and nested subject/predicate leaves before the
++        // literal's datatype read fails under the same original source cause.
++        let nested_object = builder.intern_triple(subject, predicate, literal);
++        let root = builder.intern_triple(object, predicate, nested_object);
+         builder.push_quad(subject, predicate, root, None);
+         let dataset = builder.freeze().expect("a valid shallow dataset");
+         let (workspace, ledger, base) = account(1_000_000);

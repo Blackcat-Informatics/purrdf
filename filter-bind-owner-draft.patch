@@ -1,0 +1,212 @@
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -58,7 +58,7 @@
+ use crate::eval::{EvalCtx, LanguageStringEquality, eval_evaluated};
+ use crate::governor::lift::{Evaluated, Lift, Truncation};
+ use crate::scratch::SolutionTerm;
++use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
+-use crate::solution::{Solution, SolutionSeq, VarSchema};
+ 
+ use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+ use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+@@ -177,11 +177,12 @@
+     // commits them in source order after the join, so both paths charge the same
+     // sequence and trip at the same row.
+     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
++    let forked = !ctx.growth.is_bounded()
++        && ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
+-    let forked = ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
+     let mut checkpoint =
+         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
+     let program = crate::vm::program_at(ctx, node, expr);
++    let mut linked = crate::vm::Linked::link_admitted(program, expr, &schema, ctx)?;
+-    let mut linked = crate::vm::Linked::link(program, expr, &schema, ctx);
+     let rows = if forked {
+         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
+         // Harvesting, not plain: a predicate can reach a property function through an
+@@ -207,7 +208,7 @@
+                     return Ok(());
+                 }
+                 if linked.ebv(row, &schema, child)? == Some(true) {
++                    acc.push(row.clone_admitted(&child.growth)?);
+-                    acc.push(Solution::from_slice(row));
+                     checkpoint.keep();
+                 }
+                 checkpoint.settle(child);
+@@ -236,22 +237,26 @@
+                     break;
+                 }
+                 if linked.ebv(row, &schema, ctx)? == Some(true) {
++                    rows.push(row.clone_admitted(&ctx.growth)?);
+-                    rows.push(row.clone());
+                 }
+             }
+         }
++        // This branch is resident-only; preserve the scheduler's actual metadata
++        // buffer without copying its retained row cells or losing their owners.
++        RowsBuilder::from_storage(
++            crate::AdmittedVec::from_parts(rows, None, &ctx.growth), &ctx.growth,
++        ).finish()?
+-        rows
+     } else {
++        let mut rows = RowsBuilder::new(&ctx.growth);
+-        let mut rows = Vec::new();
+         for row in seq.rows {
+             if checkpoint.pass(ctx).is_err() {
+                 break;
+             }
+             if linked.ebv(&row, &schema, ctx)? == Some(true) {
++                rows.push_row(row)?;
+-                rows.push(row);
+             }
+         }
++        rows.finish()?
+-        rows
+     };
+     if let Some(tripped) = ctx.expression_barrier.observed() {
+         return Ok(Evaluated::Truncated(Truncation::barred_at(
+@@ -288,8 +293,8 @@
+             || (*crate::eval::syntactic_schema(inner)).clone(),
+             |s| (*s).clone(),
+         );
++        schema.push_admitted(var.clone(), &ctx.growth)?;
++        return Ok(lift.finish(SolutionSeq::empty(schema.shared_admitted(&ctx.growth)?)));
+-        schema.push(var.clone());
+-        return Ok(lift.finish(SolutionSeq::empty(Arc::new(schema))));
+     };
+     eval_extend_sequence(node, var, expr, seq, lift, ctx)
+ }
+@@ -334,17 +339,18 @@
+     // expression runs rather than after, and how a forked loop's admissions are
+     // committed.
+     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
++    let growth = ctx.growth.clone();
++    let forked = !growth.is_bounded() && ctx.may_fork_row_loop(expr)
+-    let forked = ctx.may_fork_row_loop(expr)
+         && ctx.may_fork_governed_loop()
+         && crate::parallel::should_parallelize(ctx.sequential_operation_required(), seq.rows.len());
+     let mut checkpoint =
+         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
+     let mut schema = (*seq.schema).clone();
++    let col = schema.push_admitted(var.clone(), &growth)?;
+-    let col = schema.push(var.clone());
+     let width = schema.len();
++    let schema = schema.shared_admitted(&growth)?;
+-    let schema = Arc::new(schema);
+     let program = crate::vm::program_at(ctx, node, expr);
++    let mut linked = crate::vm::Linked::link_admitted(program, expr, &schema, ctx)?;
+-    let mut linked = crate::vm::Linked::link(program, expr, &schema, ctx);
+ 
+     let rows = if forked {
+         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
+@@ -373,7 +379,9 @@
+                 {
+                     return Ok(());
+                 }
++                let mut row = Solution::new();
++                row.try_reserve_exact(width)
++                    .map_err(|_| EvalError::AllocationFailed { construct: "BIND worker row cells" })?;
+-                let mut row = Solution::with_capacity(width);
+                 row.extend_from_slice(in_row);
+                 row.resize(width, None);
+                 let value = linked.term(&row, &schema, child)?;
+@@ -397,6 +405,7 @@
+         // order, charging the growth at its row.
+         let admit_row = |ctx: &mut EvalCtx<'_, D>, row| {
+             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
++                .map(RetainedRow::from_resident)
+         };
+         let (mut rows, resume) = if ctx.governor_state().is_none() {
+             // Workers have finished reading the input. Plain BIND preserves one
+@@ -405,7 +414,8 @@
+                 ctx,
+                 minted,
+                 chunks,
++                core::mem::take(&mut seq.rows).into_resident_rows()
++                    .map_err(|_| EvalError::WorkspaceUnpriced("resident BIND input metadata extraction"))?,
+-                core::mem::take(&mut seq.rows),
+                 admit_row,
+             )?
+         } else {
+@@ -422,32 +432,36 @@
+                 if checkpoint.pass(ctx).is_err() {
+                     break;
+                 }
++                let row = RetainedRow::try_build(width, &growth, |row| {
++                    row[..in_row.len()].copy_from_slice(in_row);
++                    row[col] = linked.term(row, &schema, ctx)?;
++                    Ok(())
++                })?;
+-                let mut row = Solution::with_capacity(width);
+-                row.extend_from_slice(in_row);
+-                row.resize(width, None);
+-                let value = linked.term(&row, &schema, ctx)?;
+-                row[col] = value;
+                 rows.push(row);
+             }
+         }
++        RowsBuilder::from_storage(
++            crate::AdmittedVec::from_parts(rows, None, &growth), &growth,
++        ).finish()?
+-        rows
+     } else {
++        let mut rows = RowsBuilder::new(&growth);
++        for (idx, in_row) in seq.rows.into_iter().enumerate() {
+-        let mut rows = Vec::with_capacity(seq.rows.len());
+-        for (idx, mut row) in seq.rows.into_iter().enumerate() {
+             if checkpoint.pass(ctx).is_err() {
+                 break;
+             }
+-            row.resize(width, None);
+             // §17.4.2.9: BNODE(strExpr) memoizes per solution — see `ctx.current_row`'s
+             // doc. This Extend maps `seq`'s rows 1:1 in order, so the row's position
+             // here matches its position in every other Extend of the same chain. A
+             // BNODE-bearing `expr` is exactly what forces this sequential branch.
+             ctx.current_row = idx as u64;
++            let row = RetainedRow::try_build(width, &growth, |row| {
++                row[..in_row.len()].copy_from_slice(&in_row);
++                row[col] = linked.term(row, &schema, ctx)?;
++                Ok(())
++            })?;
++            rows.push_row(row)?;
+-            let value = linked.term(&row, &schema, ctx)?;
+-            row[col] = value;
+-            rows.push(row);
+         }
++        rows.finish()?
+-        rows
+     };
+     // An `EXISTS` inside the bound expression is an opaque edge; see `eval_filter`.
+     if let Some(tripped) = ctx.expression_barrier.observed() {
+diff --git a/crates/sparql-eval/src/solution.rs b/crates/sparql-eval/src/solution.rs
+--- a/crates/sparql-eval/src/solution.rs
++++ b/crates/sparql-eval/src/solution.rs
+@@ -314,6 +314,11 @@
+ }
+ 
+ impl<I: ViewTermId> RetainedRow<I> {
++    /// Move an already-owned resident cell buffer without cloning its spill.
++    pub(crate) fn from_resident(cells: Solution<I>) -> Self {
++        Self { storage: RowStorage::Resident(cells) }
++    }
++
+     /// Share an admitted cell owner, or admit a fresh exact cell copy before
+     /// cloning a resident row. Internal clones must preserve this distinction.
+     pub(crate) fn clone_admitted(&self, workspace: &crate::WorkspaceCapability) -> Result<Self, crate::EvalError> {
+@@ -399,5 +404,14 @@
+ }
+ impl<I: ViewTermId> RowBag<I> {
++    /// Move the existing resident metadata buffer for an unbounded worker commit.
++    /// A bounded bag returns its unchanged owner instead of shedding admission.
++    pub(crate) fn into_resident_rows(self) -> Result<Vec<RetainedRow<I>>, Self> {
++        match self.storage {
++            BagStorage::Resident(rows) => Ok(rows),
++            storage @ BagStorage::Shared { .. } => Err(Self { storage }),
++        }
++    }
++
+     /// Narrow an immutable operational bag without allocating after a governor
+     /// stop. The shared original allocation remains fully charged until its
+     /// final owner dies; no discarded cells escape through the narrowed view.
+

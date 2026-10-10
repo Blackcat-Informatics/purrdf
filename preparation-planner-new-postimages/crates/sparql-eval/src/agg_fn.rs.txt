@@ -1,0 +1,1160 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Host-injected **custom aggregates** — the fold algebra `AGG(<iri>, args…)`
+//! dispatches against.
+//!
+//! `AggregateFunction::Custom(iri)`
+//! ([`purrdf_sparql_algebra::AggregateFunction::Custom`]) names a `GROUP BY`
+//! reduction the closed SPARQL 1.1 built-in set (`COUNT`/`SUM`/`AVG`/`MIN`/`MAX`/
+//! `SAMPLE`/`GROUP_CONCAT`) does not cover, resolved at evaluation time against a
+//! caller-injected [`AggregateRegistry`]. Where [`crate::property_fn`] injects a
+//! *relation* (a row source in graph-pattern position) and [`crate::user_fn`]
+//! injects a *scalar function* (one value per call, in expression position), this
+//! module injects a **fold**: a `GROUP BY` group's rows reduce to one value through
+//! a caller-supplied accumulator, exactly as a built-in aggregate does.
+//!
+//! # The fold shape, shared with the built-ins — literally, not just in prose
+//!
+//! Every aggregate — built-in or custom — is `init` (an aggregate's answer over the
+//! empty group, `finish(init())`, is never absent: `COUNT` → `0`, `SUM` → `0`,
+//! `AVG`/`MIN`/`MAX`/`SAMPLE` → unbound, `GROUP_CONCAT` → `""`), `step` (fold one
+//! row's already-evaluated argument tuple in), and `finish` (produce the group's
+//! answer, or `None` for unbound) — exactly [`AggregateAccumulator`]'s three
+//! methods. Every built-in aggregate but `SUM`/`AVG` (`crate::modifier`'s
+//! `CountAccumulator`/`MinAccumulator`/`MaxAccumulator`/`SampleAccumulator`/
+//! `GroupConcatAccumulator`) is a genuine `impl AggregateAccumulator`, the SAME
+//! trait a [`CustomAggregate::init`] call
+//! produces from a HOST registration — one fold algebra, not two. (`SUM`/`AVG`
+//! fold SPARQL's left-to-right `op:numeric-add` chain through
+//! `crate::modifier::fold_numeric` instead: a `combine` of two partial sums is
+//! a different expression from that chain, so they cannot honour the
+//! `combine` law below.) Only the
+//! DISPATCH differs: a built-in's concrete accumulator type is known at compile
+//! time, so `crate::modifier::fold_builtin` drives it by generic monomorphization
+//! (an ordinary, inlinable call on every `step`, no vtable); a registered
+//! aggregate's concrete type is not known until [`AggregateRegistry::resolve`]
+//! looks up an IRI at RUN time, so it is necessarily driven through
+//! `Box<dyn AggregateAccumulator>` — the one place this module's own dynamic
+//! dispatch earns its cost. See `crate::modifier::eval_aggregate`'s doc comment
+//! for the one dispatch SITE both paths share, and `crate::modifier::fold_builtin`'s
+//! for why the static path never pays a per-row cost for implementing the
+//! identical trait a dynamically dispatched aggregate uses.
+//!
+//! # The trust boundary
+//!
+//! A registered aggregate is arbitrary host Rust. As with [`crate::property_fn`],
+//! every invariant the evaluator needs from it is either checked before host code
+//! runs (arity, at prepare time — see `crate::property_fn_plan::plan_query`'s
+//! walk), contained when host code panics (every one of `init`/`step`/`combine`/
+//! `finish` and every declaration read, via the `crate::contain` helpers this
+//! module shares with [`crate::property_fn`]), or applied to what host code
+//! returns. A host aggregate that misbehaves cannot make the engine unsound; it can
+//! only make its own call fail.
+//!
+//! # `combine` and determinism
+//!
+//! [`AggregateAccumulator::combine`] merges one accumulator's state into another's,
+//! **in the chunk order the caller presents them** — never reordered, never run
+//! concurrently on the same accumulator. That is what lets a non-commutative,
+//! order-sensitive custom aggregate (a running median with a tie-break rule, a
+//! last-write-wins accumulator) stay deterministic even when its group's rows were
+//! folded by more than one worker: the merge order is fixed by source order, not by
+//! which worker finished first. [`CustomAggregate::algebraic_class`] documents which
+//! algebraic law a given aggregate satisfies, for a caller that wants to reason
+//! about it; the evaluator itself does not need the classification to fold correctly,
+//! since `combine`'s fixed chunk-order contract already makes the fixed-order reduce
+//! safe for every class. `crate::modifier::eval_custom_aggregate` is the caller that
+//! actually drives this: for a large enough group whose aggregate declares
+//! [`Volatility::Stable`], it folds the group's rows in chunks (one accumulator per
+//! chunk, via `crate::parallel::par_chunk_reduce_init`) and reduces the partial
+//! accumulators through `combine`, strictly in chunk-index order — a `Volatile`
+//! aggregate stays on the single-accumulator sequential fold this module always
+//! supported, exactly as `crate::eval::EvalCtx::may_fork_aggregate`'s per-GROUP fork
+//! gate excludes it there too.
+//!
+//! # Merging structural state through `into_any`
+//!
+//! `combine` receives `other` as a fully type-erased `Box<dyn
+//! AggregateAccumulator>` — reachable, naively, through only the trait's own
+//! object-safe surface. For an aggregate whose finished, single-term answer IS
+//! sufficient mergeable state (`SUM`'s running total, `GROUP_CONCAT`'s joined
+//! string), `other.finish()` is all `combine` ever needs — the shape this
+//! module's own `SumAccumulator` test fixture and `crate::modifier`'s
+//! `ListCollector` use. For an aggregate whose finished answer throws away
+//! information a correct merge needs — a running median's whole value list, a
+//! running mode's per-value counts, a running variance's `(n, Σx, Σx²)` — the
+//! finish-only path is not merely inconvenient, it is WRONG, because it would
+//! fold the finished, already-reduced answer back in as if it were one more
+//! row rather than merging the aggregate's actual state.
+//! [`AggregateAccumulator::into_any`] is the escape hatch for exactly this
+//! case: it recovers `other`'s original concrete type, so `combine` can merge
+//! the SAME structural state `step` builds. The downcast is same-type BY
+//! CONSTRUCTION — every partial accumulator a single `combine` chain ever
+//! merges was created by the SAME [`CustomAggregate::init`] factory
+//! (`crate::parallel::par_chunk_reduce_init` never mixes accumulators from two
+//! different registrations) — so a mismatch can only mean a host bug, never a
+//! state this crate's own evaluator can produce. Consume the recovered type with
+//! `other.into_any().downcast::<Self>()`, mapping the `Err(Box<dyn Any + Send>)`
+//! case (the impossible-by-construction mismatch above) to an [`EvalError`] and
+//! propagating it with `?` — that is the ordinary, public way to consume
+//! [`into_any`](AggregateAccumulator::into_any)'s result from OUTSIDE this crate,
+//! and it is what returns `Err(EvalError::Function)` on a mismatch rather than
+//! panicking — `combine`'s own `Result` return type (not `()`) is what makes that
+//! a plain propagated error instead of a panic `combine_contained`'s
+//! `crate::contain` containment would otherwise have to catch, which matters
+//! because that containment cannot run at all under `panic = "abort"` (see the
+//! wasm32 note below). This crate's OWN accumulators (`crate::stat_agg`'s
+//! `MEDIAN`/`PERCENTILE`/`STDDEV`-family/`MODE`/`TOPK` members) happen to share a
+//! private `downcast_combine_partial` helper for identical error text across all
+//! five, but that helper is `pub(crate)` and not part of this crate's public API
+//! — an external implementation reaches for the plain `downcast::<Self>()` call
+//! above instead, exactly as shown in the book's custom-aggregate walkthrough.
+//!
+//! # wasm32 note
+//!
+//! `combine_contained` still wraps every `combine` call in `crate::contain`'s
+//! `catch_unwind`-based containment, for an implementation that panics for a
+//! reason of its own outside the downcast — that containment still requires
+//! `panic = "unwind"` and is unavailable under `panic = "abort"` exactly as every
+//! other extension seam's is (see `crate::contain`'s module docs). The
+//! same-type-by-construction downcast above no longer depends on it: reported
+//! through a typed `Err`, not a panic, it degrades cleanly on every target
+//! regardless of panic strategy.
+
+use purrdf_hash::Domain;
+use std::sync::Arc;
+
+use purrdf_core::{ContentDigest, TermValue};
+
+use crate::DetHashMap;
+use crate::error::EvalError;
+use crate::registry_id::append_framed_part_with_memory;
+use crate::user_fn::{Arity, Volatility};
+
+// ---------------------------------------------------------------------------
+// The algebraic shape
+// ---------------------------------------------------------------------------
+
+/// The algebraic law a custom aggregate's fold satisfies — informational, read by a
+/// caller (or a future planner) that wants to reason about reordering or
+/// parallelizing a fold, never by the evaluator to change what it computes.
+///
+/// `#[non_exhaustive]`: a finer class is addable without a breaking change.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
+pub enum AlgebraicClass {
+    /// `step(a); step(b)` and `step(b); step(a)` yield the same [`finish`](AggregateAccumulator::finish)
+    /// (`SUM`, `COUNT`, `AVG`'s two running totals): order-independent, so a
+    /// group's rows may be folded, or partial folds combined, in ANY order.
+    Commutative,
+    /// Order-independent only under [`AggregateAccumulator::combine`]'s fixed
+    /// merge rule — reassociating the fold is safe, but the input order still
+    /// matters for a single `step` sequence (a running min/max under a
+    /// non-total order, say). Weaker than [`Self::Commutative`], stronger than
+    /// [`Self::OrderDependent`].
+    Associative,
+    /// The fold's answer depends on row order (`SAMPLE`-like "first value wins",
+    /// `GROUP_CONCAT`-like ordered concatenation): `step` must see rows in the
+    /// query's row order, and [`AggregateAccumulator::combine`]'s chunk-order
+    /// contract is what keeps this deterministic when a group was folded by more
+    /// than one worker.
+    OrderDependent,
+}
+
+impl AlgebraicClass {
+    /// A stable diagnostic label — used by `registry_fingerprint`, mirroring
+    /// [`Volatility::label`].
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Commutative => "commutative",
+            Self::Associative => "associative",
+            Self::OrderDependent => "order-dependent",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Named scalar-value parameters
+// ---------------------------------------------------------------------------
+
+/// The value kind a [`ScalarvalSpec`] admits — checked at PREPARE time
+/// (`crate::property_fn_plan::plan_aggregate`) against the LITERAL's datatype
+/// the query text supplied for a `; NAME=value` scalarval clause (see
+/// [`purrdf_sparql_algebra::AggregateExpression::scalarvals`]'s docs), never
+/// against a runtime-evaluated value — a scalarval is never per-row.
+///
+/// `#[non_exhaustive]`: a finer kind (e.g. a specific numeric sub-tower) is
+/// addable without a breaking change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ScalarvalKind {
+    /// Any member of the SPARQL numeric tower (`xsd:integer`/`xsd:decimal`/
+    /// `xsd:float`/`xsd:double`).
+    Numeric,
+    /// A plain string (`xsd:string`, no language tag).
+    String,
+}
+
+impl ScalarvalKind {
+    /// A stable diagnostic label — used by `registry_fingerprint` and prepare-time
+    /// error messages, mirroring [`AlgebraicClass::label`].
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Numeric => "numeric",
+            Self::String => "string",
+        }
+    }
+}
+
+/// One named scalar-value parameter a [`CustomAggregate`] declares accepting —
+/// the `AGG(<iri>, …; NAME=value)` surface's per-aggregate contract (see
+/// [`CustomAggregate::scalarvals`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScalarvalSpec {
+    /// The canonical, upper-cased name — matched against the parser's own
+    /// upper-cased `NAME` (see `purrdf_sparql_algebra`'s `parse_agg_scalarvals`
+    /// docs), so a declaration should itself be written upper-case.
+    pub name: &'static str,
+    /// The value kind this parameter admits.
+    pub kind: ScalarvalKind,
+}
+
+impl ScalarvalSpec {
+    /// Declare a named scalarval parameter.
+    #[must_use]
+    pub const fn new(name: &'static str, kind: ScalarvalKind) -> Self {
+        Self { name, kind }
+    }
+}
+
+/// The per-invocation folding state a [`CustomAggregate`] hands out from
+/// [`CustomAggregate::init`].
+///
+/// Object-safe and boxed: one instance per `GROUP BY` group (or, for an implicit
+/// single-group aggregate with no `GROUP BY` at all, one instance for the query),
+/// created by `init_contained`, driven by `step_contained`/`combine_contained`,
+/// and consumed exactly once by `finish_contained`. Never shared across groups and
+/// never read after `finish` — the accumulator is the aggregate's entire mutable
+/// state, and the trait's three methods are the entire lifecycle.
+///
+/// `Send` (not `Sync`): an accumulator is driven by exactly one thread through its
+/// whole lifetime the way this crate's evaluation currently folds a group (see the
+/// module docs), but `combine` accepting a `Box<dyn AggregateAccumulator>` built by
+/// ANOTHER thread's partial fold requires the type to be movable across threads —
+/// `Send` is what that requires, without also claiming (falsely) that two threads
+/// may drive the SAME accumulator concurrently.
+///
+/// `'static`: required for [`into_any`](Self::into_any)'s downcast —
+/// [`std::any::Any`] requires it — and not a new restriction in practice: every
+/// accumulator this crate has ever boxed holds only owned data, never a borrow,
+/// so every existing and future implementor already satisfies it.
+pub trait AggregateAccumulator: Send + 'static {
+    /// Fold one row's already-evaluated, positional argument tuple into this
+    /// accumulator's state.
+    ///
+    /// `args` is exactly the tuple [`CustomAggregate::arity`] admits — checked
+    /// before evaluation ever reaches here (see `crate::property_fn_plan::plan_query`'s
+    /// prepare-time walk) — and every position is **already bound**: a row with
+    /// an unbound positional argument never reaches `step` at all, mirroring
+    /// `crate::user_fn::eval_native_function`'s "no per-parameter optionality"
+    /// contract for a native scalar function's arguments. An expression that
+    /// raised an evaluation error is likewise never folded — the row is skipped
+    /// upstream, exactly as a built-in aggregate's argument expression is.
+    ///
+    /// # Errors
+    ///
+    /// Any [`EvalError`] the aggregate raises to refuse an argument tuple it
+    /// cannot fold. Per the hard-fail doctrine this aborts the query rather than
+    /// silently dropping the row, which would be indistinguishable from an
+    /// honest omission.
+    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError>;
+
+    /// Fold borrowed inputs using the operation's physical allocation capability.
+    /// Native implementations admit all state growth before allocation.
+    ///
+    /// # Errors
+    /// Returns native failures or refuses an opaque bounded implementation before
+    /// its body runs when it provides no physical ownership contract.
+    fn step_admitted(&mut self, args: &[TermValue], workspace: &crate::WorkspaceCapability) -> Result<(), EvalError> {
+        if workspace.is_bounded() {
+            return Err(EvalError::WorkspaceUnpriced("an aggregate without admitted state growth"));
+        }
+        self.step(args)
+    }
+
+    /// Merge `other`'s folded state into `self`, **in the order the caller
+    /// presents accumulators** — i.e. `self` holds the earlier (in source/chunk
+    /// order) partial fold and `other` the later one. See the module docs' note
+    /// on [`AlgebraicClass`] for why this fixed order is what keeps a
+    /// non-commutative fold deterministic under a parallel partial-fold split.
+    ///
+    /// `other.finish()` is enough to merge correctly when the aggregate's
+    /// finished answer IS its whole mergeable state; when it is not, recover
+    /// `other`'s concrete type via [`into_any`](Self::into_any) (see the module
+    /// docs' "Merging structural state" section) and merge the real state
+    /// `step` built instead.
+    ///
+    /// Called by `crate::modifier::eval_custom_aggregate`'s within-group chunked
+    /// fold whenever the aggregate declares [`Volatility::Stable`] and the group
+    /// is large enough to chunk (see `crate::parallel::par_chunk_reduce_init`) —
+    /// part of the algebra from the start, so an aggregate registered before
+    /// that caller existed was already correct under it, needing no later,
+    /// breaking addition.
+    ///
+    /// # Errors
+    ///
+    /// Any [`EvalError`] the aggregate raises to refuse a merge — in particular,
+    /// the typed refusal an implementation reaching for
+    /// [`into_any`](Self::into_any)'s escape hatch gets back from
+    /// `other.into_any().downcast::<Self>()` when `other`'s concrete type does
+    /// not match `Self`, mapped to an [`EvalError`] and propagated with `?`
+    /// rather than discarded. `Result` here (not `()`) is what lets that mismatch —
+    /// a host contract violation this crate cannot rule out at compile time, only
+    /// by construction (see [`into_any`](Self::into_any)'s docs) — surface as an
+    /// ordinary refusal on every target, including `wasm32-unknown-unknown` under
+    /// `panic = "abort"`, where `crate::contain`'s panic containment cannot run
+    /// at all: a `Result` return needs no unwind to report the violation, so this
+    /// seam degrades to a clean error instead of aborting the whole module on
+    /// that target.
+    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError>;
+
+    /// Recover this accumulator's original concrete type from behind the trait
+    /// object — [`combine`](Self::combine)'s escape hatch for a merge that needs
+    /// more than `finish()`'s single answer (see the module docs' "Merging
+    /// structural state" section). `self: Box<Self>` (consuming, not `&mut
+    /// self`) because `combine` always consumes `other` too, and
+    /// `other.into_any().downcast::<Self>()` — mapping a mismatched `Err` to an
+    /// [`EvalError`] — is the standard way to consume the result from outside
+    /// this crate.
+    ///
+    /// No default body: a default here would need to type-check against a
+    /// fully generic, possibly-unsized `Self`, which the `Box<Self> -> Box<dyn
+    /// Any + Send>` unsizing coercion cannot do (it needs a concretely `Sized`
+    /// `Self`, known only inside each `impl` block, not inside the trait
+    /// definition). Every implementor's body is therefore the same one line —
+    /// `self` — [`std::any::Any`]'s ordinary upcast; an aggregate that always
+    /// merges through `finish()` (a `SUM`-alike, a list collector) never calls
+    /// it but must still supply the line.
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send>;
+
+    /// Produce this group's answer and consume the accumulator.
+    ///
+    /// `None` is an explicit unbound answer — the aggregate's own choice, and
+    /// legitimate for any group including the empty one (an aggregate whose
+    /// `finish(init())` is `None` is declaring "unbound over the empty group",
+    /// exactly as the built-in `AVG`/`MIN`/`MAX`/`SAMPLE` do).
+    ///
+    /// # Errors
+    ///
+    /// Any [`EvalError`] the aggregate raises while producing its answer.
+    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError>;
+
+    /// Publish an answer together with its original physical payload ownership.
+    ///
+    /// # Errors
+    /// Returns native failures or refuses an opaque bounded output before its body.
+    fn finish_admitted(self: Box<Self>, workspace: &crate::WorkspaceCapability) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        if workspace.is_bounded() {
+            return Err(EvalError::WorkspaceUnpriced("an aggregate without admitted output ownership"));
+        }
+        self.finish()?.map(|value| workspace.charge(0).map(|allocation| crate::WorkspaceTerm::new(value, allocation))).transpose()
+    }
+
+    /// [`Self::finish`], handing each SPARQL expression error the answer absorbed into
+    /// an unbound value to `absorb` by its XPath F&O code — so a governed query
+    /// counts it in [`GovernorEvidence::expression_errors`](purrdf_core::GovernorEvidence::expression_errors),
+    /// as it counts the errors `/` and `AVG` absorb. The evaluator calls this one.
+    /// Default: [`Self::finish`], absorbing nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::finish`].
+    fn finish_absorbing(
+        self: Box<Self>,
+        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+    ) -> Result<Option<TermValue>, EvalError> {
+        let _ = absorb;
+        self.finish()
+    }
+}
+
+/// A host-injected custom aggregate: the registered FACTORY [`AggregateRegistry`]
+/// resolves an `AGG(<iri>, …)` call's IRI to.
+///
+/// Object-safe and shared behind an [`Arc`] across the whole evaluation, hence
+/// `Send + Sync`. Works entirely in dataset-independent [`TermValue`] space — an
+/// aggregate never sees a dataset-local [`purrdf_core::TermId`] — so a registry
+/// built once is valid against any dataset, exactly like [`crate::property_fn::PropertyFunction`].
+pub trait CustomAggregate: Send + Sync {
+    /// The declared positional arity of `AGG(<iri>, args…)`'s argument list.
+    /// Checked against the call site's supplied expression count **before any
+    /// host code runs** — at prepare time (see the module docs), the same
+    /// fail-fast doctrine [`crate::property_fn::PfArity`] and
+    /// [`Arity`] apply to their own seams.
+    fn arity(&self) -> Arity;
+
+    /// This aggregate's determinism class. Read by the fork-join per-GROUP
+    /// parallel gate exactly as [`crate::user_fn::NativeFunction`]'s is: only
+    /// [`Volatility::Stable`] may have its groups folded across workers, and an
+    /// aggregate that misdeclares itself diverges silently under parallel
+    /// evaluation.
+    fn volatility(&self) -> Volatility;
+
+    /// The algebraic law this aggregate's fold satisfies — see [`AlgebraicClass`].
+    fn algebraic_class(&self) -> AlgebraicClass;
+
+    /// A declared upper bound, in bytes, on the retained state ONE accumulator
+    /// (one `GROUP BY` group) may grow to hold across its whole `step` sequence.
+    ///
+    /// Charged once per accumulator, at admission (see
+    /// `crate::modifier::eval_custom_aggregate`), against the evaluator's
+    /// scratch-arena resource ceiling (`ResourceDimension::ScratchBytes`) — the
+    /// same dimension `crate::eval::EvalCtx::charge_scratch_growth` meters a
+    /// built-in's minted values against. A custom accumulator's internal state is
+    /// opaque host Rust the evaluator cannot observe mid-fold (unlike a minted
+    /// [`TermValue`], which the scratch interner sees the instant it is
+    /// produced), so this declared bound is what stands in for a live
+    /// measurement: the honesty contract is the one
+    /// [`purrdf_core::DatasetView::cardinality_estimate`] states for its own
+    /// declared bound — an upper bound the aggregate actually respects, not a
+    /// guess, because an under-statement here lets a query mint unbounded memory
+    /// a ceiling was supposed to catch. A stateless accumulator (most `Commutative`
+    /// folds: a running sum, a running count) declares `0`.
+    fn state_bound(&self) -> u64;
+
+    /// The named scalar-value parameters this aggregate accepts on the
+    /// `AGG(<iri>, …; NAME=value)` surface (see
+    /// [`purrdf_sparql_algebra::AggregateExpression::scalarvals`]'s docs).
+    ///
+    /// Checked at PREPARE time (`crate::property_fn_plan::plan_aggregate`),
+    /// the same fail-fast doctrine [`Self::arity`] applies to its own seam: an
+    /// unrecognized name, a duplicate, a missing REQUIRED name (every declared
+    /// name is required — there is no optional-scalarval declaration, mirroring
+    /// how every declared positional argument is required), or a supplied
+    /// value whose [`ScalarvalKind`] does not match is refused before any
+    /// governor charge.
+    ///
+    /// Default: none — most custom aggregates take no named scalar parameter
+    /// at all, exactly as most take a fixed, purely positional arity.
+    fn scalarvals(&self) -> &[ScalarvalSpec] {
+        &[]
+    }
+
+    /// Begin one invocation — one fresh accumulator for one `GROUP BY` group (or
+    /// for the query's single implicit group, when there is no `GROUP BY` at
+    /// all).
+    ///
+    /// `scalarvals` is the call site's `; NAME=value` clauses, already resolved
+    /// to [`TermValue`] and ALREADY VALIDATED against [`Self::scalarvals`]'s
+    /// declaration at prepare time (name known, no duplicate, right kind, every
+    /// declared name present) — never per-row, never re-evaluated: the SAME
+    /// slice for every row this accumulator, and every accumulator a chunked
+    /// fold creates alongside it, ever folds (see the module docs' "`combine`
+    /// and determinism" section for why every partial accumulator in one
+    /// `combine` chain shares one `init` factory call site). An aggregate that
+    /// declares [`Self::scalarvals`] empty may ignore this parameter entirely;
+    /// one that declares names reads them back by [`ScalarvalSpec::name`]
+    /// (e.g. `scalarvals.iter().find(|(k, _)| k == "P")`).
+    fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator>;
+
+    /// The arbitrary-precision arithmetic that folding `survivors` (one argument
+    /// tuple per row, in fold order) into one accumulator and finishing it will do,
+    /// in [`purrdf_xsd::exact::Cost`] units — charged by the evaluator against the
+    /// fuel and scratch-byte ceilings BEFORE the fold runs (see
+    /// `crate::modifier::eval_custom_aggregate`), because the fold itself runs with
+    /// no access to the governor. An aggregate whose arithmetic leaves the
+    /// machine-word numbers prices it from the operands' sizes alone
+    /// ([`purrdf_xsd::exact::cost::Shape::of_lexical`] and the chain estimates
+    /// beside it), never by computing it.
+    ///
+    /// The honesty contract is [`Self::state_bound`]'s: an upper bound the fold
+    /// respects. Default: [`purrdf_xsd::exact::Cost::ZERO`], for an aggregate that
+    /// does no arbitrary-precision arithmetic.
+    fn exact_numeric_cost(
+        &self,
+        survivors: &[Vec<TermValue>],
+        scalarvals: &[(String, TermValue)],
+    ) -> purrdf_xsd::exact::Cost {
+        let _ = (survivors, scalarvals);
+        purrdf_xsd::exact::Cost::ZERO
+    }
+
+    /// [`Self::init`] for a query that divides under `division`
+    /// ([`QueryOptions::division`](crate::QueryOptions::division)), the policy every
+    /// `xsd:integer`/`xsd:decimal` quotient of the fold must take — so an aggregate that
+    /// divides (a mean, a variance) agrees with `/` and `AVG` in the same query. The
+    /// evaluator calls this one. Default: [`Self::init`], for an aggregate that never
+    /// divides.
+    fn init_under(
+        &self,
+        scalarvals: &[(String, TermValue)],
+        division: purrdf_xsd::exact::DivisionPolicy,
+    ) -> Box<dyn AggregateAccumulator> {
+        let _ = division;
+        self.init(scalarvals)
+    }
+
+    /// [`Self::exact_numeric_cost`] for a fold that divides under `division`, as
+    /// [`Self::init_under`] states. The evaluator calls this one. Default:
+    /// [`Self::exact_numeric_cost`].
+    fn exact_numeric_cost_under(
+        &self,
+        survivors: &[Vec<TermValue>],
+        scalarvals: &[(String, TermValue)],
+        division: purrdf_xsd::exact::DivisionPolicy,
+    ) -> purrdf_xsd::exact::Cost {
+        let _ = division;
+        self.exact_numeric_cost(survivors, scalarvals)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Panic containment
+// ---------------------------------------------------------------------------
+
+/// The fixed diagnostic label every containment message and the registry
+/// fingerprint use to name this seam — the `kind` argument every
+/// `crate::contain` call below supplies.
+const KIND: &str = "custom aggregate";
+
+/// Begin one invocation of `agg` with the host call contained — the
+/// [`crate::property_fn::open_contained`] twin for this seam.
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of the boxed
+/// accumulator.
+pub(crate) fn init_contained(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+    scalarvals: &[(String, TermValue)],
+    division: purrdf_xsd::exact::DivisionPolicy,
+) -> Result<Box<dyn AggregateAccumulator>, EvalError> {
+    crate::contain::declaration_contained(KIND, iri, "initial accumulator", || {
+        agg.init_under(scalarvals, division)
+    })
+}
+
+/// Fold one row's argument tuple into `accumulator` with the host call contained.
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
+/// failure. More specific typed causes propagate unchanged.
+pub(crate) fn step_contained(
+    accumulator: &mut dyn AggregateAccumulator,
+    iri: &str,
+    args: &[TermValue],
+) -> Result<(), EvalError> {
+    crate::contain::call_contained(KIND, iri, "folding a row", || accumulator.step(args))
+}
+
+/// Merge `other` into `accumulator` with the host call contained. See
+/// [`AggregateAccumulator::combine`]'s docs for the chunk-order contract this
+/// wraps rather than changes.
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
+/// failure. More specific typed causes propagate unchanged.
+pub(crate) fn combine_contained(
+    accumulator: &mut dyn AggregateAccumulator,
+    iri: &str,
+    other: Box<dyn AggregateAccumulator>,
+) -> Result<(), EvalError> {
+    crate::contain::call_contained(KIND, iri, "combining partial state", || {
+        accumulator.combine(other)
+    })
+}
+
+/// Recover `other`'s original concrete type — the standard way for an
+/// [`AggregateAccumulator::combine`] implementation to consume
+/// [`AggregateAccumulator::into_any`]'s escape hatch. See the module docs'
+/// "Merging structural state" section for why the downcast is same-type by
+/// construction; the `Err` this returns on a mismatch is a defense-in-depth
+/// refusal for a case that should never arise, not an expected outcome.
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] if `other`'s concrete type is not `T` — never true
+/// when `other` was created by the SAME [`CustomAggregate::init`] factory as the
+/// accumulator calling this, which is the only way
+/// `crate::modifier::eval_custom_aggregate`'s chunked fold ever calls `combine`.
+/// A host mixing accumulator types is a bug, but — unlike the panic this used to
+/// raise — reporting it is now a plain typed refusal an implementation propagates
+/// with `?`, needing no [`catch_unwind`](std::panic::catch_unwind)-based
+/// containment to keep it from aborting the call: the seam degrades the same way
+/// on every target, `wasm32-unknown-unknown` under `panic = "abort"` included,
+/// where [`crate::contain`]'s containment cannot run at all.
+pub(crate) fn downcast_combine_partial<T: 'static>(
+    other: Box<dyn AggregateAccumulator>,
+) -> Result<T, EvalError> {
+    other
+        .into_any()
+        .downcast::<T>()
+        .map(|boxed| *boxed)
+        .map_err(|_| {
+            EvalError::function_operational(
+                "AggregateAccumulator::combine received a partial accumulator of a different \
+             concrete type than Self — every partial combine merges was created by the SAME \
+             CustomAggregate::init factory, so a mismatch here is a host bug in how partial \
+             accumulators were constructed, not a state this crate's own evaluator can produce",
+            )
+        })
+}
+
+/// Consume `accumulator` and produce its group's answer with the host call
+/// contained.
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
+/// failure. More specific typed causes propagate unchanged.
+pub(crate) fn finish_contained(
+    accumulator: Box<dyn AggregateAccumulator>,
+    iri: &str,
+    absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+) -> Result<Option<TermValue>, EvalError> {
+    crate::contain::call_contained(KIND, iri, "finishing", || {
+        accumulator.finish_absorbing(absorb)
+    })
+}
+
+/// Read one of `agg`'s DECLARATIONS (`arity`/`volatility`/`algebraic_class`/
+/// `state_bound`) with the panic contained — the
+/// [`crate::property_fn::declaration_contained`] twin for this seam.
+///
+/// Four dedicated entry points (one per declaration) rather than one generic
+/// combinator taking a `fn(&dyn CustomAggregate) -> T` read: passing a trait
+/// method path (`CustomAggregate::arity`) as a value fixes its implicit `&self`
+/// lifetime to one concrete lifetime rather than the higher-ranked `for<'a>` a
+/// generic combinator's `impl FnOnce(&dyn CustomAggregate) -> T` parameter
+/// needs, so each wraps its own `|| agg.method()` closure instead.
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] on a caught panic.
+pub(crate) fn arity_contained(agg: &dyn CustomAggregate, iri: &str) -> Result<Arity, EvalError> {
+    crate::contain::declaration_contained(KIND, iri, "arity", || agg.arity())
+}
+
+/// [`arity_contained`]'s twin for [`CustomAggregate::volatility`].
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] on a caught panic.
+pub(crate) fn volatility_contained(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+) -> Result<Volatility, EvalError> {
+    crate::contain::declaration_contained(KIND, iri, "determinism class", || agg.volatility())
+}
+
+/// [`arity_contained`]'s twin for [`CustomAggregate::algebraic_class`].
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] on a caught panic.
+pub(crate) fn algebraic_class_contained(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+) -> Result<AlgebraicClass, EvalError> {
+    crate::contain::declaration_contained(KIND, iri, "algebraic class", || agg.algebraic_class())
+}
+
+/// Read `agg`'s declared per-accumulator [`CustomAggregate::state_bound`] with
+/// the panic contained — the one declaration `crate::modifier::eval_custom_aggregate`
+/// reads directly (to meter it), so it gets its own named entry point rather
+/// than only being reachable through [`AggregateRegistry::describe`].
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] on a caught panic.
+pub(crate) fn state_bound_contained(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+) -> Result<u64, EvalError> {
+    crate::contain::declaration_contained(KIND, iri, "state bound", || agg.state_bound())
+}
+
+/// [`CustomAggregate::exact_numeric_cost`] with the host call contained.
+///
+/// # Errors
+///
+/// [`EvalError::Function`] on a caught panic.
+pub(crate) fn exact_numeric_cost_contained(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+    survivors: &[Vec<TermValue>],
+    scalarvals: &[(String, TermValue)],
+    division: purrdf_xsd::exact::DivisionPolicy,
+) -> Result<purrdf_xsd::exact::Cost, EvalError> {
+    crate::contain::declaration_contained(KIND, iri, "exact numeric cost", || {
+        agg.exact_numeric_cost_under(survivors, scalarvals, division)
+    })
+}
+
+/// [`arity_contained`]'s twin for [`CustomAggregate::scalarvals`] — read by
+/// `crate::property_fn_plan::plan_aggregate` (prepare-time scalarval
+/// validation) and by [`AggregateRegistry::describe`]/`registry_fingerprint`.
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] on a caught panic.
+pub(crate) fn scalarvals_contained(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+) -> Result<Vec<ScalarvalSpec>, EvalError> {
+    scalarvals_borrowed(agg, iri).map(<[ScalarvalSpec]>::to_vec)
+}
+
+fn scalarvals_borrowed<'a>(
+    agg: &'a dyn CustomAggregate,
+    iri: &str,
+) -> Result<&'a [ScalarvalSpec], EvalError> {
+    crate::contain::declaration_contained(KIND, iri, "scalarval declaration", || agg.scalarvals())
+}
+
+// ---------------------------------------------------------------------------
+// The registry
+// ---------------------------------------------------------------------------
+
+/// A registered aggregate's self-description — the channel through which a
+/// diagnostic or the plan cache's fingerprint reads what a registry actually
+/// contains without holding a `dyn` reference to each aggregate. Mirrors
+/// [`crate::property_fn::PfDescriptor`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AggDescriptor {
+    /// The IRI the aggregate is registered under, byte-exact.
+    pub iri: String,
+    /// The declared positional arity.
+    pub arity: Arity,
+    /// The declared determinism class.
+    pub volatility: Volatility,
+    /// The declared algebraic class.
+    pub algebraic_class: AlgebraicClass,
+    /// The declared per-accumulator state bound, in bytes.
+    pub state_bound: u64,
+    /// The declared named scalar-value parameters.
+    pub scalarvals: Vec<ScalarvalSpec>,
+}
+
+/// A caller-injected table of custom aggregates, keyed by the `AGG(<iri>, …)`
+/// IRI.
+///
+/// Built once per host configuration and borrowed into evaluation via
+/// [`crate::eval::EvalCtx::with_aggregates`] or threaded through
+/// [`crate::engine::QueryOptions::aggregates`]. Deterministic by construction:
+/// the map is the crate's fixed-key deterministic hash map, and every ordered
+/// surface ([`describe`](Self::describe), [`Debug`]) sorts by IRI rather than
+/// reading iteration order — the exact shape [`crate::property_fn::PropertyFunctionRegistry`]
+/// uses, for the same reasons.
+///
+/// # Registration is fail-fast on a duplicate
+///
+/// [`register`](Self::register) **panics** when an IRI is already registered —
+/// mirroring [`crate::property_fn::PropertyFunctionRegistry::register`], not
+/// [`crate::user_fn::UserFunctionRegistry`]'s "last write wins": a shadowed
+/// aggregate silently changes a `GROUP BY` group's computed value under an IRI a
+/// query already spelled one way, with no textual difference between the two
+/// registrations to reveal it. That is a host misconfiguration, caught where it
+/// is committed.
+///
+/// # Instance identity, not just declared contents
+///
+/// `id` is a `RegistryId` (`crate::registry_id::RegistryId`) minted fresh by
+/// [`Default`] — see that type's docs for why a counter, why a
+/// counter is enough, and why [`Clone`] inherits rather than re-mints it. It
+/// exists because DECLARED metadata (arity, volatility, algebraic class, state
+/// bound) cannot distinguish two independently built registries that happen to
+/// register the SAME IRI to two DIFFERENT [`CustomAggregate`] implementations
+/// with identical declarations — `registry_fingerprint` folds this id in ahead
+/// of the declaration digest so those two registries can never be mistaken for
+/// each other by a prepared plan's identity.
+#[derive(Default, Clone)]
+pub struct AggregateRegistry {
+    id: crate::registry_id::RegistryId,
+    aggregates: DetHashMap<String, Arc<dyn CustomAggregate>>,
+}
+
+impl core::fmt::Debug for AggregateRegistry {
+    /// A `dyn CustomAggregate` has no `Debug` impl, so this lists the registered
+    /// IRIs, sorted for deterministic output, rather than deriving. The instance
+    /// id rides along too, since it is exactly the thing that can make two
+    /// otherwise-identical-looking registries diagnostically distinguishable.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut iris: Vec<&str> = self.aggregates.keys().map(String::as_str).collect();
+        iris.sort_unstable();
+        f.debug_struct("AggregateRegistry")
+            .field("id", &self.id)
+            .field("aggregates", &iris)
+            .finish()
+    }
+}
+
+impl AggregateRegistry {
+    /// The canonical empty registry — the non-optional "no aggregates
+    /// registered" value every registry-carrying seam
+    /// ([`crate::engine::QueryOptions::aggregates`],
+    /// [`crate::eval::EvalCtx::aggregates`](crate::eval::EvalCtx),
+    /// `crate::parallel::SafetyRegistries::aggregates`) now uses in place of the
+    /// old `Option::None` spelling, so "no registry" and "an empty registry" are
+    /// the same value rather than two spellings of one state.
+    ///
+    /// A `const`, not merely a fresh `Self::default()` call per use: every one of
+    /// those seams can borrow the SAME `'static` value, and — see
+    /// `RegistryId::EMPTY`'s (`crate::registry_id::RegistryId::EMPTY`) docs —
+    /// sharing one fixed instance id across every `EMPTY` reference is the
+    /// correct semantics here, not a weakening of the plan-identity guard: an
+    /// empty registry can never resolve any IRI, so no plan's admitted behavior
+    /// can depend on WHICH empty registry it was prepared against.
+    pub const EMPTY: Self = Self {
+        id: crate::registry_id::RegistryId::EMPTY,
+        aggregates: DetHashMap::with_hasher(crate::DetHasher::new()),
+    };
+
+    /// Register `aggregate` under `iri`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `iri` is already registered — see the type's docs for why an
+    /// aggregate may not be silently shadowed.
+    ///
+    /// # Examples
+    ///
+    /// A running-total aggregate, registered under
+    /// `https://example.org/agg#total` and called from query text as
+    /// `AGG(<https://example.org/agg#total>, ?x)` — the compiled twin of the book's
+    /// "Extending the evaluator: custom aggregates" walkthrough, so the seam it
+    /// teaches (in particular [`crate::engine::QueryOptions::aggregates`] taking the registry
+    /// directly, not an `Option`, and [`AggregateAccumulator::into_any`]'s
+    /// `other.into_any().downcast::<Self>()` merge pattern) cannot drift from what
+    /// actually compiles:
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use purrdf_core::{RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue};
+    /// use purrdf_sparql_eval::{
+    ///     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, CustomAggregate,
+    ///     EvalError, ExtensionEnv, NativeSparqlEngine, QueryOptions, Volatility,
+    /// };
+    ///
+    /// struct TotalAccumulator {
+    ///     sum: i64,
+    /// }
+    ///
+    /// impl AggregateAccumulator for TotalAccumulator {
+    ///     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+    ///         if let Some(TermValue::Literal { lexical_form, .. }) = args.first()
+    ///             && let Ok(n) = lexical_form.parse::<i64>()
+    ///         {
+    ///             self.sum += n;
+    ///         }
+    ///         Ok(())
+    ///     }
+    ///
+    ///     fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+    ///         // The public, outside-this-crate way to recover `other`'s real state
+    ///         // through `into_any` — see `AggregateAccumulator::combine`'s docs.
+    ///         let other = other.into_any().downcast::<Self>().map_err(|_| {
+    ///             EvalError::function(
+    ///                 "combine received a partial accumulator of a different concrete type",
+    ///             )
+    ///         })?;
+    ///         self.sum += other.sum;
+    ///         Ok(())
+    ///     }
+    ///
+    ///     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+    ///         self
+    ///     }
+    ///
+    ///     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+    ///         Ok(Some(TermValue::typed_literal(
+    ///             self.sum.to_string(),
+    ///             "http://www.w3.org/2001/XMLSchema#integer",
+    ///         )))
+    ///     }
+    /// }
+    ///
+    /// struct TotalAggregate;
+    ///
+    /// impl CustomAggregate for TotalAggregate {
+    ///     fn arity(&self) -> Arity {
+    ///         Arity::Exact(1)
+    ///     }
+    ///     fn volatility(&self) -> Volatility {
+    ///         Volatility::Stable
+    ///     }
+    ///     fn algebraic_class(&self) -> AlgebraicClass {
+    ///         AlgebraicClass::Commutative
+    ///     }
+    ///     fn state_bound(&self) -> u64 {
+    ///         0
+    ///     }
+    ///     fn init(&self, _scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+    ///         Box::new(TotalAccumulator { sum: 0 })
+    ///     }
+    /// }
+    ///
+    /// let mut registry = AggregateRegistry::default();
+    /// registry.register("https://example.org/agg#total", Arc::new(TotalAggregate));
+    ///
+    /// let mut b = RdfDatasetBuilder::new();
+    /// let s = b.intern_iri("https://example.org/s");
+    /// let n = b.intern_iri("https://example.org/n");
+    /// let v1 = b.intern_literal(RdfLiteral::typed("3", "http://www.w3.org/2001/XMLSchema#integer"));
+    /// let v2 = b.intern_literal(RdfLiteral::typed("4", "http://www.w3.org/2001/XMLSchema#integer"));
+    /// b.push_quad(s, n, v1, None);
+    /// b.push_quad(s, n, v2, None);
+    /// let ds = b.freeze().expect("freeze");
+    ///
+    /// let engine = NativeSparqlEngine::new();
+    /// let result = engine
+    ///     .query_with_options_view(
+    ///         &ds,
+    ///         SparqlRequest {
+    ///             query: "SELECT (AGG(<https://example.org/agg#total>, ?x) AS ?t) \
+    ///                     WHERE { ?s <https://example.org/n> ?x }",
+    ///             base_iri: None,
+    ///             substitutions: &[],
+    ///         },
+    ///         QueryOptions::new().with_env(
+    ///             &ExtensionEnv::over_aggregates(registry)
+    ///                 .expect("a registered aggregate declares cleanly"),
+    ///         ),
+    ///     )
+    ///     .expect("evaluates");
+    ///
+    /// if let SparqlResult::Solutions { rows, .. } = result {
+    ///     assert_eq!(rows.len(), 1);
+    /// }
+    /// ```
+    pub fn register(&mut self, iri: impl Into<String>, aggregate: Arc<dyn CustomAggregate>) {
+        let iri = iri.into();
+        assert!(
+            !self.aggregates.contains_key(&iri),
+            "IRI <{iri}> is already registered as a custom aggregate; an aggregate may not be \
+             silently shadowed, because both spellings of the call are identical and the only \
+             observable difference is the value a GROUP BY group computes"
+        );
+        self.aggregates.insert(iri, aggregate);
+    }
+
+    /// Resolve an `AGG(<iri>, …)` IRI to its registered aggregate, if any.
+    #[must_use]
+    pub fn resolve(&self, iri: &str) -> Option<&Arc<dyn CustomAggregate>> {
+        self.aggregates.get(iri)
+    }
+
+    /// Whether the registry holds no aggregates — the common case, in which
+    /// evaluation carries no registry at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.aggregates.is_empty()
+    }
+
+    /// The number of registered aggregates.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.aggregates.len()
+    }
+
+    /// Describe every registered aggregate, sorted by IRI — see the type's docs
+    /// for why the sort makes this a pure function of contents, not construction
+    /// order.
+    ///
+    /// Every declaration read goes through its dedicated `*_contained` entry
+    /// point, because this feeds the plan cache's fingerprint (see
+    /// `registry_fingerprint`) — an aggregate whose declaration methods panic
+    /// must fail that prepare cleanly, not abort it.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::FunctionOperational`] if any registered aggregate's declaration methods
+    /// panic.
+    pub fn describe(&self) -> Result<Vec<AggDescriptor>, EvalError> {
+        self.describe_admitted(&crate::WorkspaceCapability::resident())?
+            .try_into_resident().map_err(|_| EvalError::WorkspaceBoundOverflow)
+    }
+
+    pub(crate) fn describe_admitted(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<crate::workspace::AdmittedRecords<AggDescriptor>, EvalError> {
+        let mut out = crate::workspace::AdmittedRecords::with_capacity(self.aggregates.len(), workspace)?;
+        for (iri, aggregate) in &self.aggregates {
+            let aggregate = aggregate.as_ref();
+            let arity = crate::contain::declaration_contained_admitted(KIND, iri, "arity", || aggregate.arity(), workspace)?;
+            let volatility = crate::contain::declaration_contained_admitted(KIND, iri, "determinism class", || aggregate.volatility(), workspace)?;
+            let algebraic_class = crate::contain::declaration_contained_admitted(KIND, iri, "algebraic class", || aggregate.algebraic_class(), workspace)?;
+            let state_bound = crate::contain::declaration_contained_admitted(KIND, iri, "state bound", || aggregate.state_bound(), workspace)?;
+            let scalarvals = crate::contain::declaration_contained_admitted(KIND, iri, "scalarval declaration", || aggregate.scalarvals(), workspace)?;
+            let bytes = std::alloc::Layout::array::<ScalarvalSpec>(scalarvals.len())
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)?.size()
+                .checked_add(iri.len()).ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let allocation = workspace.charge(u64::try_from(bytes)
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+            let mut owned_scalarvals = crate::workspace::vector::<ScalarvalSpec>(scalarvals.len(), "EXPLAIN aggregate scalar declarations")?;
+            owned_scalarvals.extend_from_slice(scalarvals);
+            out.push(AggDescriptor {
+                iri: crate::workspace::string(iri, "EXPLAIN aggregate IRI")?,
+                arity,
+                volatility,
+                algebraic_class,
+                state_bound,
+                scalarvals: owned_scalarvals,
+            }, allocation)?;
+        }
+        out.as_mut_slice().sort_unstable_by(|a, b| a.iri.cmp(&b.iri));
+        Ok(out)
+
+}
+}
+
+/// A deterministic fingerprint of everything about `aggregates` that can change
+/// either the prepare-time admission of an `AGG(<iri>, …)` call OR the
+/// answer/parallel-safety of the execution that runs it: the registry's own
+/// [`RegistryId`](crate::registry_id::RegistryId), followed by every registered
+/// IRI's declared arity, volatility, algebraic class, and state bound, IRI-sorted.
+///
+/// # The instance id comes first, and is load-bearing
+///
+/// Declared metadata alone cannot tell two registries apart when they happen to
+/// agree on every declaration for a shared IRI while resolving it to two
+/// DIFFERENT [`CustomAggregate`] implementations — a SUM and a PRODUCT can both
+/// declare `Arity::Exact(1)`, [`Volatility::Stable`], [`AlgebraicClass::Commutative`],
+/// and `state_bound() == 0`, and compute entirely different answers. The
+/// [`RegistryId`](crate::registry_id::RegistryId) each registry mints at
+/// construction closes that hole: two registries can never share a fingerprint
+/// unless they are the SAME instance (or a [`Clone`] of it, which shares the
+/// identical `Arc<dyn CustomAggregate>` implementations — see that type's docs),
+/// regardless of how identical their declarations read.
+///
+/// The exact twin of `crate::property_fn_plan::registry_fingerprint`, for the
+/// exact same reason: it belongs in the plan cache's key and in the identity a
+/// prepared plan is validated against before evaluation (see
+/// `crate::engine::check_plan_matches_relations`), because two differently
+/// configured — or merely differently CONSTRUCTED — registries can admit, or
+/// evaluate, the same query text differently, and a plan admitted under one must
+/// never silently run under another.
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] if a registered aggregate's declaration methods panic
+/// — [`AggregateRegistry::describe`]'s own failure, propagated unchanged. Never
+/// raised when `aggregates` is empty (which [`AggregateRegistry::EMPTY`] — the
+/// canonical "no registry" value — always is).
+pub(crate) fn registry_fingerprint(aggregates: &AggregateRegistry) -> Result<String, EvalError> {
+    let capability = crate::WorkspaceCapability::resident();
+    let mut frame = crate::workspace::LexicalFrame::new(&capability);
+    registry_fingerprint_with_memory(aggregates, &mut purrdf_lex::allocation::Memory::new(&mut frame))
+}
+
+/// The original live metadata fold with one admitted borrowed-field formatter.
+pub(crate) fn registry_fingerprint_with_memory(
+    aggregates: &AggregateRegistry,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<String, EvalError> {
+    if aggregates.is_empty() { return Ok(String::new()); }
+    struct Identity<'a> {
+        id: u64,
+        descriptors: &'a [AggDescriptor],
+    }
+    impl core::fmt::Display for Identity<'_> {
+        fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(out, "{}\u{5}", self.id)?;
+            for descriptor in self.descriptors {
+                write!(out, "{}\u{2}{}\u{2}{}\u{2}{}\u{2}{}\u{2}",
+                    descriptor.iri, descriptor.arity.stable_display(),
+                    descriptor.volatility.label(), descriptor.algebraic_class.label(),
+                    descriptor.state_bound)?;
+                for spec in &descriptor.scalarvals {
+                    write!(out, "{}\u{3}{}\u{3}", spec.name, spec.kind.label())?;
+                }
+                out.write_str("\u{4}")?;
+            }
+            Ok(())
+        }
+    }
+    let capability = memory.admission_mut().workspace().clone();
+    let descriptors = aggregates.describe_admitted(&capability)?;
+    memory.format(&Identity { id: aggregates.id.stable_encoding(), descriptors: &descriptors })
+        .map_err(|error| memory.admission_mut().storage_error(error, "aggregate fingerprint"))
+}
+
+/// The domain separator every custom-aggregate content fingerprint opens with — see
+/// `crate::property_fn_plan`'s constant of the same name for why each registry kind
+/// needs its own.
+const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/aggregate-registry");
+
+/// A **content-only** fingerprint of `aggregates`: the identical declared descriptor
+/// fields `registry_fingerprint` folds — every registered IRI's declared arity,
+/// volatility, algebraic class, state bound and named scalarval parameters,
+/// IRI-sorted — with the registry's instance id **omitted**, digested as a
+/// [`ContentDigest`].
+///
+/// The exact twin of `crate::property_fn_plan::content_fingerprint`, for the exact
+/// same reason: `registry_fingerprint` leads with a process-lifetime counter, and
+/// an artifact that must name the registries it requires and have that requirement
+/// checked in ANOTHER process cannot use a counter that restarted at `1` there. See
+/// that function's doc comment for the full register — what this binds
+/// (declarations, never implementations), and why persisting the instance id was
+/// rejected rather than merely unhelpful.
+///
+/// Scalarvals fold in here exactly as they do in `registry_fingerprint`, and for
+/// the same reason: a declared `; NAME=value` parameter set is what prepare-time
+/// admission checks a call against, so two registries declaring the same IRI with
+/// different accepted names or kinds admit different queries and must not share a
+/// fingerprint of any tier.
+///
+/// # Errors
+///
+/// [`EvalError::FunctionOperational`] if a registered aggregate's declaration methods panic —
+/// [`AggregateRegistry::describe`]'s own failure, propagated unchanged.
+pub fn content_fingerprint(aggregates: &AggregateRegistry) -> Result<ContentDigest, EvalError> {
+    let capability = crate::WorkspaceCapability::resident();
+    let mut frame = crate::workspace::LexicalFrame::new(&capability);
+    content_fingerprint_with_memory(aggregates, &mut purrdf_lex::allocation::Memory::new(&mut frame))
+}
+
+fn content_fingerprint_with_memory(
+    aggregates: &AggregateRegistry,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<ContentDigest, EvalError> {
+    let capability = memory.admission_mut().workspace().clone();
+    let descriptors = aggregates.describe_admitted(&capability)?;
+    let result = (|| -> Result<ContentDigest, purrdf_lex::allocation::StorageError> {
+        let mut bytes = Vec::new();
+        append_framed_part_with_memory(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes(), memory)?;
+        for descriptor in descriptors.iter() {
+            append_framed_part_with_memory(&mut bytes, "iri", descriptor.iri.as_bytes(), memory)?;
+            let arity = memory.format(&descriptor.arity.stable_display())?;
+            append_framed_part_with_memory(&mut bytes, "arity", arity.as_bytes(), memory)?;
+            memory.release_string(arity)?;
+            append_framed_part_with_memory(&mut bytes, "volatility",
+                descriptor.volatility.label().as_bytes(), memory)?;
+            append_framed_part_with_memory(&mut bytes, "algebraic-class",
+                descriptor.algebraic_class.label().as_bytes(), memory)?;
+            append_framed_part_with_memory(&mut bytes, "state-bound",
+                &descriptor.state_bound.to_be_bytes(), memory)?;
+            append_framed_part_with_memory(&mut bytes, "scalarval-count",
+                &(descriptor.scalarvals.len() as u64).to_be_bytes(), memory)?;
+            for spec in &descriptor.scalarvals {
+                append_framed_part_with_memory(&mut bytes, "scalarval-name", spec.name.as_bytes(), memory)?;
+                append_framed_part_with_memory(&mut bytes, "scalarval-kind", spec.kind.label().as_bytes(), memory)?;
+            }
+        }
+        let digest = ContentDigest::of(&bytes);
+        memory.release_vec(bytes)?;
+        Ok(digest)
+    })();
+    result.map_err(|error| memory.admission_mut().storage_error(error, "aggregate fingerprint"))
+}
+
+#[cfg(test)]
+mod tests {

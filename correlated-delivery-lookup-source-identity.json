@@ -1,0 +1,32 @@
+[
+  {
+    "path": "crates/sparql-eval/src/eval.rs",
+    "source_sha256": "a94b22aec40ead2ec6a2192cfd1034e7f0f4d5f7498ad6e969b0e568ef955ec2",
+    "post_sha256": "069bede815a67885d2bce02b55f82b5ee77923c0c4176cc84b4bb89471c0b869",
+    "diff_lines": 321
+  },
+  {
+    "path": "crates/sparql-eval/src/binop.rs",
+    "source_sha256": "dca6ec5234416abc3f6fe4a92511537fac903d4078123f73b725ecd1d8b864d3",
+    "post_sha256": "44e88c5bae537a936480b0816b6d53cca4a9d1a3cb93d538fc46e67c9494f2e1",
+    "diff_lines": 118
+  },
+  {
+    "path": "crates/sparql-eval/src/bgp.rs",
+    "source_sha256": "5b9789a04cb5d478f2727bc25dbde11b66c95fd5d0507710dd957cb572f70a88",
+    "post_sha256": "dba3f4c3c0d70a9e597dce3ced52088c01b712130f259c4c8021eacf3fabce2f",
+    "diff_lines": 230
+  },
+  {
+    "path": "crates/sparql-eval/src/scratch.rs",
+    "source_sha256": "7355b062153ec7e39fedd5c456b469fbae618b6711b164d31a58cebf86660e94",
+    "post_sha256": "3b00911599ac1c15ec73ff7e7bc17b25800486980a8418131205fad6bccc8739",
+    "diff_lines": 60
+  },
+  {
+    "path": "crates/sparql-eval/src/expr.rs",
+    "source_sha256": "d25ef8e78debe6a0e9bd32b3a47534e765c8f3eee5294f067397cc3d3d625e1a",
+    "post_sha256": "ca7375711bed53ca969c225938957f59ba0f0f3b29ebc1112c920b37be9c3086",
+    "diff_lines": 12
+  }
+]

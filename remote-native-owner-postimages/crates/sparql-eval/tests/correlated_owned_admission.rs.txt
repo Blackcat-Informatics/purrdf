@@ -1,0 +1,251 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Public correlated entries, real allocator peaks, exact bags and retained clones.
+
+mod support;
+
+use purrdf_core::{SparqlRequest, SparqlResult};
+use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions};
+use support::segmented::{CEILING, fixture, open_with_evidence};
+
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+fn compare(found: &purrdf_sparql_eval::RetainedSparqlResult, expected: &SparqlResult) {
+    match expected {
+        SparqlResult::Solutions { .. } => assert_eq!(
+            support::sorted_rows(found, support::render_cell),
+            support::sorted_rows(expected, support::render_cell)
+        ),
+        SparqlResult::Boolean(answer) => assert_eq!(found.boolean(), Some(*answer)),
+        SparqlResult::Graph(expected) => {
+            let actual = found.graph().expect("complete retained graph");
+            // Native interner identity differs across the source doors; compare
+            // the original RDF terms and exact quad multiplicity.
+            let mut actual: Vec<_> = actual
+                .owned_quads()
+                .map(|quad| purrdf_core::turtle::emit_quad(&quad))
+                .collect();
+            let mut expected: Vec<_> = expected
+                .owned_quads()
+                .map(|quad| purrdf_core::turtle::emit_quad(&quad))
+                .collect();
+            actual.sort();
+            expected.sort();
+            assert_eq!(actual, expected);
+        }
+    }
+}
+
+#[test]
+fn all_public_forms_and_routes_share_native_correlated_scopes_and_owned_outputs() {
+    let (image, resident) = fixture();
+    let queries = [
+        r#"SELECT ?s ?label WHERE {
+            ?s <https://example.org/p> ?label
+            FILTER EXISTS {
+                ?s <https://example.org/q> ?label
+                FILTER NOT EXISTS { ?s <https://example.org/absent> ?missing }
+            }
+        }"#,
+        r#"SELECT ?s ?label WHERE {
+            ?s <https://example.org/p> ?label
+            FILTER EXISTS {
+                { SELECT ?s ?label WHERE {
+                    ?s <https://example.org/q> ?label
+                    OPTIONAL { ?s <https://example.org/absent> ?missing }
+                    MINUS { ?s <https://example.org/also-absent> ?minus }
+                } ORDER BY ?label LIMIT 1 }
+            }
+        }"#,
+        r#"SELECT ?label WHERE {
+            VALUES ?s { <https://example.org/target> <https://example.org/target> }
+            LATERAL {
+                ?s <https://example.org/p> ?label
+                FILTER EXISTS { ?s <https://example.org/q> ?label }
+            }
+        }"#,
+        r#"SELECT ?s WHERE {
+            ?s <https://example.org/p> ?label
+            FILTER EXISTS {
+                { ?s <https://example.org/q> ?label }
+                UNION { ?s <https://example.org/absent> ?other }
+                BIND(CONCAT(STR(?label)," computed") AS ?derived)
+                FILTER (STRLEN(?derived)>0)
+            }
+        }"#,
+        r#"ASK WHERE {
+            <https://example.org/target> <https://example.org/p> ?label
+            FILTER EXISTS { <https://example.org/target> <https://example.org/q> ?label }
+        }"#,
+        r#"CONSTRUCT {
+            <https://example.org/target> <https://example.org/copied> ?label
+        } WHERE {
+            <https://example.org/target> <https://example.org/p> ?label
+            FILTER EXISTS { <https://example.org/target> <https://example.org/q> ?label }
+        }"#,
+        r#"DESCRIBE ?s WHERE {
+            VALUES ?s { <https://example.org/target> }
+            FILTER EXISTS { ?s <https://example.org/q> ?label }
+        }"#,
+    ];
+    for query in queries {
+        let engine = NativeSparqlEngine::new();
+        let prepared = engine
+            .prepare_query(query, None)
+            .expect("original admitted syntax");
+        let expected = engine
+            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .expect("independent resident production result");
+        for route in 0..4 {
+            let source = open_with_evidence(&image, CEILING, 2, 16_384);
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let request = || SparqlRequest {
+                query,
+                base_iri: None,
+                substitutions: &[],
+            };
+            let found = match route {
+                0 => {
+                    engine
+                        .query_fallible_view(&source, request(), QueryOptions::EMPTY)
+                        .expect("complete direct correlated entry")
+                        .result
+                }
+                1 => {
+                    engine
+                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .expect("complete prepared correlated entry")
+                        .result
+                }
+                2 => {
+                    engine
+                        .query_governed_fallible_view(
+                            &source,
+                            request(),
+                            QueryOptions::EMPTY,
+                            &QueryGovernors::METERED,
+                        )
+                        .expect("complete governed correlated entry")
+                        .result
+                }
+                _ => {
+                    engine
+                        .query_prepared_governed_fallible_view(
+                            &source,
+                            &prepared,
+                            &[],
+                            QueryOptions::EMPTY,
+                            &QueryGovernors::METERED,
+                        )
+                        .expect("complete prepared governed correlated entry")
+                        .result
+                }
+            };
+            let measurement = window.close();
+            assert!(
+                u64::try_from(measurement.peak_working_bytes).unwrap()
+                    <= source.evidence().peak_bytes(),
+                "route {route} must price original working owners before actual allocation"
+            );
+            assert!(source.evidence().peak_bytes() <= CEILING);
+            assert!(source.read_error().is_none());
+            compare(&found, &expected);
+            let original_live = source.evidence().live_bytes();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let retained = found.clone();
+            drop(found);
+            assert_eq!(
+                window.close().allocations,
+                0,
+                "ordinary native clones share original payload owners"
+            );
+            assert_eq!(source.evidence().live_bytes(), original_live);
+            compare(&retained, &expected);
+            drop(retained);
+            assert!(
+                source.evidence().live_bytes() < original_live,
+                "the final retained output releases its original allocation grant"
+            );
+        }
+    }
+}
+
+#[test]
+fn service_public_forms_direct_prepared_and_governed_price_the_real_native_producers() {
+    let (image,resident)=fixture();
+    let remote=purrdf_sparql_eval::InProcessServiceResolver::new().with_endpoint("https://example.org/service",resident.clone());
+    let options=QueryOptions::EMPTY.with_remote(Some(&remote));
+    let queries=[
+        r#"SELECT ?x WHERE {SERVICE <https://example.org/service> {VALUES ?x {"same" "same"}}}"#,
+        r#"SELECT ?s ?label WHERE {SERVICE <https://example.org/service> {VALUES ?s {<https://example.org/target> <https://example.org/target>} ?s <https://example.org/p> ?label}}"#,
+        r#"ASK WHERE {SERVICE <https://example.org/service> {VALUES ?x {1}}}"#,
+        r#"CONSTRUCT {<https://example.org/target> <https://example.org/copied> ?x} WHERE {SERVICE <https://example.org/service> {VALUES ?x {"same" "same"}}}"#,
+        r#"DESCRIBE ?s WHERE {SERVICE <https://example.org/service> {VALUES ?s {<https://example.org/target>}}}"#,
+    ];
+    for query in queries {
+        let engine=NativeSparqlEngine::new();
+        let prepared=engine.prepare_query(query,None).unwrap();
+        let expected=engine.query_prepared(&resident,&prepared,&[],options).unwrap();
+        for route in 0..4 {
+            let source=open_with_evidence(&image,CEILING,2,16_384);
+            let window=purrdf_alloc_probe::CurrentThreadWindow::open();
+            let request=||SparqlRequest{query,base_iri:None,substitutions:&[]};
+            let result=match route {
+                0=>engine.query_fallible_view(&source,request(),options).unwrap().result,
+                1=>engine.query_prepared_fallible_view(&source,&prepared,&[],options).unwrap().result,
+                2=>engine.query_governed_fallible_view(&source,request(),options,&QueryGovernors::METERED).unwrap().result,
+                _=>engine.query_prepared_governed_fallible_view(&source,&prepared,&[],options,&QueryGovernors::METERED).unwrap().result,
+            };
+            let measurement=window.close();
+            assert!(u64::try_from(measurement.peak_working_bytes).unwrap()<=source.evidence().peak_bytes(),"native SERVICE route {route} must price every actual allocation before birth");
+            assert!(source.evidence().peak_bytes()<=CEILING);
+            assert!(source.read_error().is_none());
+            compare(&result,&expected);
+            let live=source.evidence().live_bytes();
+            let window=purrdf_alloc_probe::CurrentThreadWindow::open();
+            let copy=result.clone();
+            drop(result);
+            assert_eq!(window.close().allocations,0);
+            assert_eq!(source.evidence().live_bytes(),live);
+            drop(copy);
+            assert!(source.evidence().live_bytes()<live);
+        }
+    }
+}
+
+#[test]
+fn http_native_decode_and_blank_ingest_preserve_duplicates_and_physical_refusal_beats_silent() {
+    use purrdf_sparql_eval::{AdmittedHttpBody,HttpRequest,HttpTransport,HttpRemoteQuerySource,RemoteError,ServiceResolutionError,WorkspaceCapability};
+    struct Native {refuse:bool}
+    impl HttpTransport for Native {
+        fn post(&self,_:HttpRequest<'_>)->Result<Vec<u8>,RemoteError>{panic!("bounded route cannot enter the opaque resident producer")}
+        fn post_admitted(&self,_:HttpRequest<'_>,workspace:WorkspaceCapability)->Result<AdmittedHttpBody,ServiceResolutionError>{
+            AdmittedHttpBody::try_build(&workspace,|memory|{
+                if self.refuse {
+                    let mut bytes=Vec::<u8>::new();
+                    memory.reserve(&mut bytes,usize::MAX)?;
+                    return Ok(bytes);
+                }
+                memory.collect(br#"{"head":{"vars":["b","x"]},"results":{"bindings":[{"b":{"type":"bnode","value":"shared"},"x":{"type":"literal","value":"same"}},{"b":{"type":"bnode","value":"shared"},"x":{"type":"literal","value":"same"}}]}}"#.iter().copied()).map_err(Into::into)
+            })
+        }
+    }
+    let (image,_)=fixture();
+    let source=open_with_evidence(&image,CEILING,2,16_384);
+    let remote=HttpRemoteQuerySource::new(Native{refuse:false});
+    let engine=NativeSparqlEngine::new();
+    let window=purrdf_alloc_probe::CurrentThreadWindow::open();
+    let result=engine.query_fallible_view(&source,SparqlRequest{query:"SELECT ?b ?x WHERE {SERVICE <https://example.org/service> {?b ?p ?x}}",base_iri:None,substitutions:&[]},QueryOptions::EMPTY.with_remote(Some(&remote))).unwrap().result;
+    let measurement=window.close();
+    assert!(u64::try_from(measurement.peak_working_bytes).unwrap()<=source.evidence().peak_bytes());
+    let rows=support::sorted_rows(&result,support::render_cell);
+    assert_eq!(rows.len(),2);
+    assert_eq!(rows[0],rows[1],"one response identity is shared and bag duplicates survive");
+    drop(result);
+    let source=open_with_evidence(&image,CEILING,2,16_384);
+    let remote=HttpRemoteQuerySource::new(Native{refuse:true});
+    let error=engine.query_fallible_view(&source,SparqlRequest{query:"SELECT ?x WHERE {SERVICE SILENT <https://example.org/service> {?x ?p ?o}}",base_iri:None,substitutions:&[]},QueryOptions::EMPTY.with_remote(Some(&remote))).expect_err("physical layout refusal is never an invocation failure SILENT can swallow");
+    assert_eq!(error.diagnostic().expect("typed physical refusal").code,"native-sparql-workspace-bound-overflow");
+}

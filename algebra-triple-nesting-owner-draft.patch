@@ -1,0 +1,71 @@
+diff --git a/crates/sparql-algebra/src/validate.rs b/crates/sparql-algebra/src/validate.rs
+--- a/crates/sparql-algebra/src/validate.rs
++++ b/crates/sparql-algebra/src/validate.rs
+@@ -43,20 +43,27 @@
+ /// triple term, so it needs no more stack however deep the term nests and does
+ /// not allocate unless a subject nests.
+ fn triple_term_nesting<T: TripleTermSlot>(root: &T) -> usize {
+-    let mut deepest = 0;
+-    let mut pending: Vec<(&T, usize)> = Vec::new();
+-    let mut next = Some((root, 0));
++    let mut admission = purrdf_lex::allocation::Resident;
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut admission);
++    triple_term_nesting_with_memory(root, &mut memory).expect("resident triple nesting census")
++}
++
++fn triple_term_nesting_with_memory<T: TripleTermSlot, S: purrdf_lex::allocation::Admission + ?Sized>(
++    root: &T, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
++    let mut deepest = 0_usize;
++    let mut pending = purrdf_lex::walk::WorkList::<(&T, usize), 8>::new();
++    let mut next = Some((root, 0_usize));
+     while let Some((term, above)) = next.take().or_else(|| pending.pop()) {
+         if let Some((subject, object)) = term.subject_and_object() {
+-            let depth = above + 1;
++            let depth = above.checked_add(1).ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+             deepest = deepest.max(depth);
+-            if subject.subject_and_object().is_some() {
+-                pending.push((subject, depth));
+-            }
++            if subject.subject_and_object().is_some() { pending.try_push_admitted((subject, depth), memory)?; }
+             next = Some((object, depth));
+         }
+     }
+-    deepest
++    pending.release_admitted(memory)?;
++    Ok(deepest)
+ }
+ 
+ impl TermPattern {
+@@ -71,6 +78,15 @@
+         triple_term_nesting(self)
+     }
+ 
++    /// Count nesting through the same native body under concrete work-list admission.
++    /// # Errors
++    /// Returns checked depth overflow, admission refusal or native allocator failure.
++    pub fn triple_term_nesting_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++        &self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
++        triple_term_nesting_with_memory(self, memory)
++    }
++
+     /// Call `visit` on every variable this term mentions, a quoted triple term's own
+     /// positions included — subject, predicate and object, at every depth. A
+     /// variable mentioned twice is visited twice.
+@@ -134,6 +150,15 @@
+     pub fn triple_term_nesting(&self) -> usize {
+         triple_term_nesting(self)
+     }
++
++    /// Count nesting through the same native body under concrete work-list admission.
++    /// # Errors
++    /// Returns checked depth overflow, admission refusal or native allocator failure.
++    pub fn triple_term_nesting_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++        &self, memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> std::result::Result<usize, purrdf_lex::allocation::StorageError> {
++        triple_term_nesting_with_memory(self, memory)
++    }
+ }
+ 
+ impl GraphPattern {

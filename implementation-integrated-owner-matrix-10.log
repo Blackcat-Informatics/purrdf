@@ -1,0 +1,21 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+error[E0609]: no field `peak_bytes` on type `Measurement`
+  --> crates/sparql-algebra/tests/lexer_owned_admission.rs:54:22
+   |
+54 |     assert!(measured.peak_bytes <= i64::try_from(account.peak).unwrap());
+   |                      ^^^^^^^^^^ unknown field
+   |
+   = note: available fields are: `allocations`, `requested_bytes`, `retained_bytes`, `peak_working_bytes`
+
+error[E0609]: no field `peak_bytes` on type `Measurement`
+  --> crates/sparql-algebra/tests/lexer_owned_admission.rs:97:22
+   |
+97 |     assert!(measured.peak_bytes <= i64::try_from(account.peak).unwrap());
+   |                      ^^^^^^^^^^ unknown field
+   |
+   = note: available fields are: `allocations`, `requested_bytes`, `retained_bytes`, `peak_working_bytes`
+
+For more information about this error, try `rustc --explain E0609`.
+error: could not compile `purrdf-sparql-algebra` (test "lexer_owned_admission") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

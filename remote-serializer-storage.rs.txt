@@ -1,0 +1,73 @@
+/// The carrier's one borrowed native account. A failed emitter discards later
+/// fragments but retains the first physical failure for the outer loop.
+struct RenderStorage<'m, 'a, S: Admission + ?Sized> {
+    memory: core::cell::RefCell<&'m mut Memory<'a, S>>,
+    failure: core::cell::Cell<Option<StorageError>>,
+}
+impl<'m, 'a, S: Admission + ?Sized> RenderStorage<'m, 'a, S> {
+    fn new(memory: &'m mut Memory<'a, S>) -> Self {
+        Self { memory: core::cell::RefCell::new(memory), failure: core::cell::Cell::new(None) }
+    }
+    fn run<T>(&self, body: impl FnOnce(&mut Memory<'a, S>) -> Result<T, StorageError>) -> Option<T> {
+        if self.failure.get().is_some() { return None; }
+        match body(&mut self.memory.borrow_mut()) {
+            Ok(value) => Some(value),
+            Err(error) => { self.failure.set(Some(error)); None }
+        }
+    }
+    fn cleanup(&self, body: impl FnOnce(&mut Memory<'a, S>) -> Result<(), StorageError>) {
+        if let Err(error) = body(&mut self.memory.borrow_mut()) {
+            if self.failure.get().is_none() { self.failure.set(Some(error)); }
+        }
+    }
+    fn check(&self) -> Result<(), StorageError> { self.failure.get().map_or(Ok(()), Err) }
+}
+
+/// TextOut retains its original failure while the shared native emitters run.
+struct Surface<'c, 'm, 'a, S: Admission + ?Sized> {
+    text: &'c mut String,
+    storage: &'c RenderStorage<'m, 'a, S>,
+}
+impl<S: Admission + ?Sized> core::fmt::Write for Surface<'_, '_, '_, S> {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        self.storage.run(|memory| memory.push_str(self.text, text)).ok_or(core::fmt::Error)
+    }
+}
+impl<S: Admission + ?Sized> purrdf_lex::text_out::TextOut for Surface<'_, '_, '_, S> {
+    fn push_str(&mut self, text: &str) { let _ = self.write_str(text); }
+    fn push(&mut self, ch: char) {
+        let mut utf8 = [0; 4];
+        let _ = self.write_str(ch.encode_utf8(&mut utf8));
+    }
+    fn failed(&self) -> bool { self.storage.failure.get().is_some() }
+}
+impl<S: Admission + ?Sized> Surface<'_, '_, '_, S> {
+    fn push_str(&mut self, text: &str) { purrdf_lex::text_out::TextOut::push_str(self, text); }
+    fn push(&mut self, ch: char) { purrdf_lex::text_out::TextOut::push(self, ch); }
+}
+
+/// The existing item work list, with admission at its actual spill boundary.
+struct Items<'i, 'c, 'm, 'a, S: Admission + ?Sized> {
+    work: Option<WorkList<Item<'i>, 32>>,
+    storage: &'c RenderStorage<'m, 'a, S>,
+}
+impl<'i, 'c, 'm, 'a, S: Admission + ?Sized> Items<'i, 'c, 'm, 'a, S> {
+    fn with(first: Item<'i>, storage: &'c RenderStorage<'m, 'a, S>) -> Self {
+        Self { work: Some(WorkList::with(first)), storage }
+    }
+    fn push(&mut self, value: Item<'i>) {
+        let work = self.work.as_mut().expect("live carrier work list");
+        self.storage.run(|memory| work.try_push_admitted(value, memory));
+    }
+    fn extend(&mut self, values: impl IntoIterator<Item = Item<'i>>) {
+        for value in values { if self.storage.failure.get().is_some() { break; } self.push(value); }
+    }
+    fn pop(&mut self) -> Option<Item<'i>> { self.work.as_mut().expect("live carrier work list").pop() }
+    fn len(&self) -> usize { self.work.as_ref().expect("live carrier work list").len() }
+    fn reverse_top(&mut self, count: usize) { self.work.as_mut().expect("live carrier work list").reverse_top(count); }
+}
+impl<S: Admission + ?Sized> Drop for Items<'_, '_, '_, '_, S> {
+    fn drop(&mut self) {
+        if let Some(work) = self.work.take() { self.storage.cleanup(|memory| work.release_admitted(memory)); }
+    }
+}

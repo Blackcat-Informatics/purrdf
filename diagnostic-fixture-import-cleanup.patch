@@ -1,0 +1,11 @@
+--- a/crates/sparql-eval/tests/diagnostic_owned_admission.rs
++++ b/crates/sparql-eval/tests/diagnostic_owned_admission.rs
+@@ -6,7 +6,7 @@
+ mod support;
+ 
+ use purrdf_alloc_probe::CurrentThreadWindow;
+-use purrdf_core::{DatasetView, SparqlRequest};
++use purrdf_core::SparqlRequest;
+ use purrdf_sparql_eval::{
+     FallibleSparqlError, NativeDiagnostic, NativeDiagnosticKind, NativeSparqlEngine,
+     QueryControlFailure, QueryGovernors, QueryOptions, RetainedDiagnostic,

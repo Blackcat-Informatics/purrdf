@@ -1,0 +1,34 @@
+--- a/crates/sparql-eval/src/remote.rs
++++ b/crates/sparql-eval/src/remote.rs
+@@ -2231,12 +2231,11 @@
+                         let value = match cell {
+                             None => None,
+                             Some(term) => {
+-                                let workspace_source = ctx.workspace.clone();
+                                 let value = ctx.scratch.try_owned_value_of(
+                                     ctx.dataset,
+                                     *term,
+                                     workspace,
+-                                    |error| workspace_source.source_error(error),
++                                    |error| match error {},
+                                 )?;
+                                 owners.reserve_next()?;
+                                 let (value, allocation) = value.into_parts();
+@@ -2410,7 +2409,7 @@
+         Ok(match outcome {
+             Outcome::Solutions(seq) => {
+                 let (variables, rows) = materialize_solutions(&seq, &ctx)?;
+-                let aux = ctx.constructed_dataset(&rows);
++                let aux = ctx.constructed_dataset(&rows)?;
+                 SparqlResult::Solutions {
+                     variables,
+                     rows,
+@@ -2445,7 +2444,7 @@
+             Ok(match outcome {
+                 Outcome::Solutions(seq) => {
+                     let (variables, rows) = materialize_solutions(&seq, &ctx)?;
+-                    let aux = ctx.constructed_dataset(&rows);
++                    let aux = ctx.constructed_dataset(&rows)?;
+                     SparqlResult::Solutions {
+                         variables,
+                         rows,

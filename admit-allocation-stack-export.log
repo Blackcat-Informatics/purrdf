@@ -1,0 +1,10 @@
+reading file ".stage/sparql-eval-complete-bounded-workspace/admit-allocation-trace.zst" - please wait, this might take some time...
+Debuggee command was: /opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e --exact admit_allocation_is_independent_of_dataset_size --nocapture --test-threads=1
+finished reading file, now analyzing data:
+
+total runtime: 0.120000s.
+calls to allocation functions: 103930 (866083/s)
+temporary memory allocations: 75107 (625891/s)
+peak heap memory consumption: 6.54M
+peak RSS (including heaptrack overhead): 42.31M
+total memory leaked: 277.32K

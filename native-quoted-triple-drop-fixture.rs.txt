@@ -1,0 +1,35 @@
+/// Releasing either quoted child shape needs no new buffer after refusal.
+#[test]
+fn quoted_ground_and_pattern_children_drop_without_allocations() {
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    purrdf_stack::on_stack(STACK, || {
+        let mut ground = GroundTerm::NamedNode(iri("leaf"));
+        let mut pattern = TermPattern::Variable(var("leaf"));
+        for _ in 0..100_000 {
+            ground = GroundTerm::Triple(Child::new(GroundTriple {
+                subject: ground,
+                predicate: iri("p"),
+                object: GroundTerm::Triple(Child::new(GroundTriple {
+                    subject: GroundTerm::NamedNode(iri("s")),
+                    predicate: iri("p"),
+                    object: GroundTerm::Literal(Literal::new_simple("o")),
+                })),
+            }));
+            pattern = TermPattern::Triple(Child::new(TriplePattern {
+                subject: pattern,
+                predicate: NamedNodePattern::NamedNode(iri("p")),
+                object: TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::Variable(var("s")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: TermPattern::Variable(var("o")),
+                })),
+            }));
+        }
+        let window = CurrentThreadWindow::open();
+        drop(ground);
+        drop(pattern);
+        let released = window.close();
+        assert_eq!(released.allocations, 0);
+        assert!(released.retained_bytes < 0, "all original trees were freed");
+    }).expect("the native small-stack thread starts");
+}

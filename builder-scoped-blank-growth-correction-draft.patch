@@ -1,0 +1,113 @@
+--- a/crates/rdf-core/src/ir/builder.rs
++++ b/crates/rdf-core/src/ir/builder.rs
+@@ -920,13 +920,15 @@
+                 .len()
+                 .checked_add(1)
+                 .ok_or(StorageError::SizeOverflow)?;
+-            let capacity = required.max(
+-                self.used_scopes
+-                    .capacity()
+-                    .checked_mul(2)
+-                    .ok_or(StorageError::SizeOverflow)?,
+-            );
+-            memory.reserve(&mut self.used_scopes, capacity)?;
++            if required > self.used_scopes.capacity() {
++                let capacity = required.max(
++                    self.used_scopes
++                        .capacity()
++                        .checked_mul(2)
++                        .ok_or(StorageError::SizeOverflow)?,
++                );
++                memory.reserve(&mut self.used_scopes, capacity)?;
++            }
+             self.used_scopes.insert(position, scope);
+         }
+         Ok(())
+--- a/crates/rdf-core/tests/native_regex_storage.rs
++++ b/crates/rdf-core/tests/native_regex_storage.rs
+@@ -1060,6 +1060,85 @@
+ }
+ 
+ #[test]
++fn native_scoped_blank_ingress_preserves_identity_refusal_and_original_admission() {
++    use purrdf_core::{BlankScope, RdfDatasetBuilder, TermRef};
++    use purrdf_lex::allocation::Memory;
++
++    let mut builder = RdfDatasetBuilder::new();
++    let mut account = Account::new(64 * 1024);
++    let mut memory = Memory::new(&mut account);
++    let mut identities = [None; 128];
++    let window = CurrentThreadWindow::open();
++    for scope in (1..=128_u32).rev() {
++        let id = builder
++            .intern_blank_with_memory("same", BlankScope(scope), &mut memory)
++            .unwrap();
++        identities[usize::try_from(scope - 1).unwrap()] = Some(id);
++    }
++    let measured = window.close();
++    assert_eq!(builder.term_count(), 128);
++    assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= memory.admission_mut().peak);
++    assert!(usize::try_from(measured.retained_bytes).unwrap() <= memory.live_bytes());
++
++    let window = CurrentThreadWindow::open();
++    for (index, id) in identities.iter().enumerate() {
++        let scope = BlankScope(u32::try_from(index + 1).unwrap());
++        let id = id.expect("every scope was interned");
++        assert_eq!(
++            builder.intern_blank_with_memory("same", scope, &mut memory),
++            Ok(id)
++        );
++        assert!(matches!(
++            builder.resolve(id),
++            TermRef::Blank { label: "same", scope: actual } if actual == scope
++        ));
++    }
++    assert_eq!(window.close().allocations, 0);
++
++    // The next distinct scope needs physical growth. Deny additional storage,
++    // while preserving all original identities and their retained admission.
++    let original = memory.live_bytes();
++    memory.admission_mut().limit = original;
++    let window = CurrentThreadWindow::open();
++    assert_eq!(
++        builder.intern_blank_with_memory("same", BlankScope(129), &mut memory),
++        Err(StorageError::AdmissionFailed)
++    );
++    assert_eq!(window.close().allocations, 0);
++    assert_eq!(memory.live_bytes(), original);
++    assert_eq!(builder.term_count(), 128);
++    assert_eq!(builder.blank_identities().count(), 128);
++
++    memory.admission_mut().limit = 64 * 1024;
++    let next = builder
++        .intern_blank_with_memory("same", BlankScope(129), &mut memory)
++        .unwrap();
++    assert!(matches!(
++        builder.resolve(next),
++        TermRef::Blank {
++            label: "same",
++            scope: BlankScope(129)
++        }
++    ));
++    assert_eq!(builder.term_count(), 129);
++
++    let retained = memory.live_bytes();
++    let window = CurrentThreadWindow::open();
++    drop(builder);
++    let destroyed = window.close();
++    assert_eq!(destroyed.allocations, 0);
++    assert!(destroyed.retained_bytes < 0);
++    assert_eq!(
++        memory.live_bytes(),
++        retained,
++        "grant survives payload destruction"
++    );
++    memory.release_bytes(retained).unwrap();
++    assert_eq!(memory.live_bytes(), 0);
++    assert_eq!(memory.admission_mut().live, 0);
++}
++
++#[test]
+ fn native_graph_append_refuses_transactionally_before_copying_the_destination() {
+     use purrdf_core::{RdfDatasetBuilder, TermRef};
+     use purrdf_lex::allocation::Memory;

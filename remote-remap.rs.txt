@@ -1,0 +1,71 @@
+type ResponseBlanks = crate::AdmittedMap<purrdf_core::BlankScope, crate::AdmittedMap<purrdf_lex::allocation::SharedText, purrdf_lex::allocation::SharedText>>;
+
+/// Carry the original copied cell plus every new remap allocation to scratch.
+fn response_blank_value_admitted<D: DatasetView + Sync>(
+    value: crate::WorkspaceTerm, blanks: &mut ResponseBlanks, ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+    let workspace = ctx.growth.clone();
+    let mut frame = crate::workspace::LexicalFrame::new(&workspace);
+    let mut has_blanks = false;
+    let visited = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        value.visit_blank_identities_with_memory(|label, scope, _| {
+            has_blanks = true;
+            let answer = (|| {
+                if blanks.get(&scope).is_none() { blanks.insert_admitted(scope, crate::AdmittedMap::default(), &workspace)?; }
+                let labels = blanks.get_mut(&scope).expect("response scope inserted");
+                if !labels.contains_key(label) {
+                    let Some(fresh) = ctx.try_mint_blank_text("service")? else { return Ok(false); };
+                    let key = workspace.authored_text(&label)?;
+                    labels.insert_admitted(key, fresh, &workspace)?;
+                }
+                Ok::<_, EvalError>(true)
+            })();
+            match answer { Ok(true) => core::ops::ControlFlow::Continue(()), Ok(false) => core::ops::ControlFlow::Break(Ok(())), Err(error) => core::ops::ControlFlow::Break(Err(error)) }
+        }, &mut memory).map_err(|error| memory.admission_mut().storage_error(error, "remote blank identity walk"))?
+    };
+    if let core::ops::ControlFlow::Break(aborted) = visited { aborted?; return Ok(None); }
+    if !has_blanks { return Ok(Some(value)); }
+    let original_bytes = value.layout(&workspace)?.bytes;
+    let (value, mut original) = value.into_parts();
+    let mapped = {
+        let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, 0);
+        value.try_fold_owned_with_memory(
+            |term, memory| Ok::<_, EvalError>(match term {
+                TermValue::Blank { label, scope } => {
+                    let fresh = blanks.get(&scope).and_then(|labels| labels.get(label.as_str())).expect("identity visitor registered each response blank");
+                    let label = memory.string(fresh.as_str()).map_err(|error| memory.admission_mut().storage_error(error, "remote remapped blank label"))?;
+                    TermValue::Blank { label, scope: purrdf_core::BlankScope::DEFAULT }
+                }
+                TermValue::Literal { lexical_form, datatype, language, direction } => {
+                    let rewritten = purrdf_core::cdt_blank::rewrite_cdt_blank_terms_with_memory(&lexical_form, &datatype, &mut |token, memory| {
+                        use purrdf_core::blank_label::{LabelAlphabet, decode_blank_label_with_memory, encode_blank_label_with_memory};
+                        let (label, scope) = decode_blank_label_with_memory(token, LabelAlphabet::BlankNodeLabel, memory)?;
+                        let fresh = blanks.get(&scope).and_then(|labels| labels.get(label.as_ref())).expect("identity visitor registered each embedded response blank");
+                        let encoded = encode_blank_label_with_memory(fresh.as_str(), purrdf_core::BlankScope::DEFAULT, LabelAlphabet::BlankNodeLabel, memory)?;
+                        let replacement = memory.format(&format_args!("_:{encoded}"))?;
+                        if let std::borrow::Cow::Owned(encoded) = encoded { memory.release_string(encoded)?; }
+                        if let std::borrow::Cow::Owned(label) = label { memory.release_string(label)?; }
+                        Ok(Some(replacement))
+                    }, memory).map_err(|error| memory.admission_mut().storage_error(error, "remote composite blank remapping"))?;
+                    let lexical_form = match rewritten { std::borrow::Cow::Borrowed(_) => lexical_form, std::borrow::Cow::Owned(rewritten) => rewritten };
+                    TermValue::Literal { lexical_form, datatype, language, direction }
+                }
+                term => term,
+            }),
+            |s, p, o, memory| {
+                let mut boxed = |term| {
+                    memory.add_bytes(std::alloc::Layout::new::<TermValue>().size()).map_err(|error| memory.admission_mut().storage_error(error, "remote triple component"))?;
+                    purrdf_core::small::try_boxed(term).map(purrdf_core::TermBox::from).map_err(|_| EvalError::AllocationFailed { construct: "remote remapped triple component" })
+                };
+                Ok(TermValue::Triple { s: boxed(s)?, p: boxed(p)?, o: boxed(o)? })
+            }, &mut memory,
+        ).map_err(|error| match error { purrdf_core::OwnedTermFoldError::Visitor(error) => error, purrdf_core::OwnedTermFoldError::Storage(error) => memory.admission_mut().storage_error(error, "remote owned term fold") })?
+    };
+    // Every new byte was admitted by frame before allocation. Transfer its
+    // original live total while the mapped payload and both old grants survive.
+    let total = original_bytes.checked_add(u64::try_from(frame.live_bytes()).map_err(|_| EvalError::WorkspaceBoundOverflow)?).ok_or(EvalError::WorkspaceBoundOverflow)?;
+    original.resize(total)?;
+    drop(frame);
+    Ok(Some(crate::WorkspaceTerm::new(mapped, original)))
+}

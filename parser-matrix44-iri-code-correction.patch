@@ -1,0 +1,64 @@
+diff --git a/crates/sparql-algebra/src/parser.rs b/crates/sparql-algebra/src/parser.rs
+--- a/crates/sparql-algebra/src/parser.rs
++++ b/crates/sparql-algebra/src/parser.rs
+@@ -634,10 +634,7 @@
+                 Ok(base) => base,
+                 Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
+                 Err(purrdf_iri::IriReadError::Lexical(error)) => {
+-                    return Err(ParseError::Iri {
+-                        lexical: String::new(),
+-                        reason: memory.format(&error)?,
+-                    });
++                    return Err(iri_error_with_memory("", error, memory)?);
+                 }
+             },
+             Err(error) => return Err(error.clone()),
+@@ -725,7 +722,7 @@
+     error: IriError,
+     memory: &mut Memory<'_, dyn ParserAdmission + '_>,
+ ) -> Result<ParseError> {
+-    let reason = memory.format(&error)?;
++    let reason = memory.format(&format_args!("{}: {error}", error.diagnostic_code()))?;
+     let lexical = memory.string(lexical)?;
+     let bytes = error.owned_text_bytes();
+     drop(error);
+@@ -1021,10 +1018,7 @@
+             Ok(base) => base,
+             Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error.into()),
+             Err(purrdf_iri::IriReadError::Lexical(error)) => {
+-                return Err(ParseError::Iri {
+-                    lexical: String::new(),
+-                    reason: self.memory.format(&error)?,
+-                });
++                return Err(iri_error_with_memory("", error, self.memory)?);
+             }
+         };
+         let anon_prefix = self.memory.string(&self.anon_prefix)?;
+@@ -1514,12 +1508,7 @@
+             Ok(iri) => Ok(iri.into_text()),
+             Err(purrdf_iri::IriReadError::Storage(error)) => Err(error.into()),
+             Err(purrdf_iri::IriReadError::Lexical(error)) => {
+-                let reason = self.memory.format(&error)?;
+-                let lexical = self.memory.string(s)?;
+-                let bytes = error.owned_text_bytes();
+-                drop(error);
+-                self.memory.release_bytes(bytes)?;
+-                Err(ParseError::Iri { lexical, reason })
++                Err(iri_error_with_memory(s, error, self.memory)?)
+             }
+         }
+     }
+@@ -1563,12 +1552,7 @@
+             }),
+             Err(purrdf_iri::IriReadError::Storage(error)) => Err(error.into()),
+             Err(purrdf_iri::IriReadError::Lexical(error)) => {
+-                let reason = self.memory.format(&error)?;
+-                let lexical = self.memory.string(text)?;
+-                let bytes = error.owned_text_bytes();
+-                drop(error);
+-                self.memory.release_bytes(bytes)?;
+-                Err(ParseError::Iri { lexical, reason })
++                Err(iri_error_with_memory(text, error, self.memory)?)
+             }
+         }
+     }

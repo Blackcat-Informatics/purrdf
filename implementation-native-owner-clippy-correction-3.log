@@ -1,0 +1,742 @@
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+    Checking helper-census v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/helper-census)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+error: this looks like a formatting argument but it is not part of a formatting macro
+   --> crates/sparql-algebra/src/error.rs:216:85
+    |
+216 |             Self::Storage(error) => ("sparql-parse-storage", "SPARQL storage error: {reason}", {
+    |                                                                                     ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+    = note: `-D clippy::literal-string-with-formatting-args` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::literal_string_with_formatting_args)]`
+
+error: these look like formatting arguments but are not part of a formatting macro
+   --> crates/sparql-algebra/src/error.rs:226:43
+    |
+226 |                 "SPARQL lex error at byte {at}: {reason}",
+    |                                           ^^^^  ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: these look like formatting arguments but are not part of a formatting macro
+   --> crates/sparql-algebra/src/error.rs:245:46
+    |
+245 |                 "SPARQL syntax error at byte {at}: {reason}",
+    |                                              ^^^^  ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: this looks like a formatting argument but it is not part of a formatting macro
+   --> crates/sparql-algebra/src/error.rs:264:48
+    |
+264 |                 "unsupported SPARQL construct: {feature} is outside the SPARQL 1.2 \
+    |                                                ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: these look like formatting arguments but are not part of a formatting macro
+   --> crates/sparql-algebra/src/error.rs:277:30
+    |
+277 |                 "invalid IRI {lexical:?} in term position: {reason}",
+    |                              ^^^^^^^^^^^                   ^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: these look like formatting arguments but are not part of a formatting macro
+   --> crates/sparql-algebra/src/error.rs:301:46
+    |
+301 |                 "SPARQL syntax error at byte {at}: <{iri}> takes {expected}, not {found}",
+    |                                              ^^^^   ^^^^^        ^^^^^^^^^^      ^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: this argument is passed by value, but not consumed in the function body
+   --> crates/sparql-algebra/src/error.rs:737:12
+    |
+737 |     error: purrdf_lex::diagnostic::DiagnosticPresentationError,
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_pass_by_value
+    = note: `-D clippy::needless-pass-by-value` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::needless_pass_by_value)]`
+help: consider taking a reference instead
+    |
+737 |     error: &purrdf_lex::diagnostic::DiagnosticPresentationError,
+    |            +
+
+error: the following explicit lifetimes could be elided: 'a
+   --> crates/sparql-algebra/src/lexer.rs:146:6
+    |
+146 | impl<'a> Spanned<'a> {
+    |      ^^          ^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#elidable_lifetime_names
+    = note: `-D clippy::elidable-lifetime-names` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::elidable_lifetime_names)]`
+help: elide the lifetimes
+    |
+146 - impl<'a> Spanned<'a> {
+146 + impl Spanned<'_> {
+    |
+
+error: this `if` statement can be collapsed
+  --> crates/sparql-algebra/src/parser/machine.rs:78:17
+   |
+78 | /                 if failure.is_none() {
+79 | |                     if let Err(error) = memory.push(&mut pending, child) {
+80 | |                         failure = Some(error);
+81 | |                     }
+82 | |                 }
+   | |_________________^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+   = note: `-D clippy::collapsible-if` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+   |
+78 ~                 if failure.is_none()
+79 ~                     && let Err(error) = memory.push(&mut pending, child) {
+80 |                         failure = Some(error);
+81 ~                     }
+   |
+
+error: large size difference between variants
+   --> crates/sparql-algebra/src/parser/machine.rs:395:1
+    |
+395 | / enum Val {
+396 | |     /// An expression, with the aggregates it lifted (empty unless its sink lifts).
+397 | |     Expr(Expression, Vec<Lifted>),
+    | |     ----------------------------- the second-largest variant contains at least 152 bytes
+398 | |     /// A group graph pattern.
+399 | |     Group(GroupValue),
+    | |     ----------------- the largest variant contains at least 424 bytes
+...   |
+404 | |     Modifiers(Modifiers, Vec<Lifted>),
+405 | | }
+    | |_^ the entire enum is at least 424 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+    = note: `-D clippy::large-enum-variant` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::large_enum_variant)]`
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+399 -     Group(GroupValue),
+399 +     Group(Box<GroupValue>),
+    |
+
+error: large size difference between variants
+   --> crates/sparql-algebra/src/parser/machine.rs:424:1
+    |
+424 | / enum Step {
+425 | |     /// Read an operand of the innermost expression.
+426 | |     Operand,
+427 | |     /// An operand of the innermost expression is complete; read the operator after it.
+...   |
+430 | |     Operator(Expression, bool),
+    | |     -------------------------- the second-largest variant contains at least 129 bytes
+431 | |     /// A production finished: hand its value to the top of [`Ctl`].
+432 | |     Return(Val),
+    | |     ----------- the largest variant contains at least 424 bytes
+...   |
+440 | |     Group,
+441 | | }
+    | |_^ the entire enum is at least 424 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+432 -     Return(Val),
+432 +     Return(Box<Val>),
+    |
+
+error: `drain(..)` used on a `Vec`
+    --> crates/sparql-algebra/src/parser/machine.rs:2517:47
+     |
+2517 |                 for pending in pending_checks.drain(..) {
+     |                                               ^^^^^^^^^ help: try: `into_iter()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_with_drain
+     = note: `-D clippy::iter-with-drain` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::iter_with_drain)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-algebra/src/parser/machine.rs:2718:33
+     |
+2718 | ...                   order_has_aggregates |= lifted.contains(name)
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `order_has_aggregates |= lifted.contains(name);`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+     = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: called `expect` on `entry.right` after checking its variant with `is_some`
+   --> crates/sparql-algebra/src/parser/table.rs:357:33
+    |
+356 |         if entry.left.is_some() && entry.right.is_some() {
+    |                                    --------------------- the check is happening here
+357 |             let mut successor = entry.right.expect("checked nonempty right subtree");
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try using `if let` or `match`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_unwrap
+    = note: `-D clippy::unnecessary-unwrap` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_unwrap)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+  --> crates/sparql-algebra/src/parser/triples.rs:79:17
+   |
+79 |                 pending.try_push_admitted((inner, !inverse), memory)?
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `pending.try_push_admitted((inner, !inverse), memory)?;`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: large size difference between variants
+   --> crates/sparql-algebra/src/parser/triples.rs:121:1
+    |
+121 | / enum PathTranslation<'a> {
+122 | |     Path(&'a PropertyPathExpression, bool, TermPattern, TermPattern),
+    | |     ---------------------------------------------------------------- the largest variant contains at least 265 bytes
+123 | |     Sequence(usize),
+    | |     --------------- the second-largest variant contains at least 8 bytes
+124 | |     Alternative(usize),
+125 | | }
+    | |_^ the entire enum is at least 272 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+122 -     Path(&'a PropertyPathExpression, bool, TermPattern, TermPattern),
+122 +     Path(&'a PropertyPathExpression, bool, TermPattern, Box<TermPattern>),
+    |
+
+error: large size difference between variants
+   --> crates/sparql-algebra/src/parser/triples.rs:136:1
+    |
+136 | /  pub(super) enum TFrame {
+137 | |      /// A predicate-object list, waiting for the object of its current verb.
+138 | |      Object(PolState),
+139 | |      /// A predicate-object list, waiting for the list of an annotation block `{| … |}`
+140 | |      /// that annotates `TriplePattern`.
+141 | |      Annotation(PolState, TriplePattern),
+    | |      ----------------------------------- the largest variant contains at least 496 bytes
+...   |
+146 | |/     Collection {
+147 | ||         head: TermPattern,
+148 | ||         cell: TermPattern,
+149 | ||     },
+    | ||_____- the second-largest variant contains at least 256 bytes
+...   |
+155 | |      },
+156 | |  }
+    | |__^ the entire enum is at least 496 bytes
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#large_enum_variant
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+    |
+141 -     Annotation(PolState, TriplePattern),
+141 +     Annotation(PolState, Box<TriplePattern>),
+    |
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-algebra/src/parser.rs:608:9
+    |
+608 | /         if let Err(error) = &outcome {
+609 | |             if !matches!(error, ParseError::Storage(_)) {
+...   |
+621 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+608 ~         if let Err(error) = &outcome
+609 ~             && !matches!(error, ParseError::Storage(_)) {
+610 |                 // The closure has destroyed the parser and every partial AST.
+...
+619 |                 memory.release_bytes(scratch)?;
+620 ~             }
+    |
+
+error: `drain(..)` used on a `Vec`
+   --> crates/sparql-algebra/src/parser.rs:659:31
+    |
+659 |         tokens.extend(lexemes.drain(..).map(Some));
+    |                               ^^^^^^^^^ help: try: `into_iter()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_with_drain
+
+error: the following explicit lifetimes could be elided: 'm
+   --> crates/sparql-algebra/src/parser.rs:891:14
+    |
+891 | impl<'a, 'o, 'm, 's, const RDFLIB: bool> Parser<'a, 'o, 'm, 's, RDFLIB> {
+    |              ^^                                         ^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#elidable_lifetime_names
+help: elide the lifetimes
+    |
+891 - impl<'a, 'o, 'm, 's, const RDFLIB: bool> Parser<'a, 'o, 'm, 's, RDFLIB> {
+891 + impl<'a, 'o, 's, const RDFLIB: bool> Parser<'a, 'o, '_, 's, RDFLIB> {
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-algebra/src/parser.rs:912:21
+    |
+912 |                     self.memory.release_string(text)?
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `self.memory.release_string(text)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-algebra/src/parser.rs:994:21
+    |
+994 |                     depth = depth.checked_add(1).ok_or(StorageError::SizeOverflow)?
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `depth = depth.checked_add(1).ok_or(StorageError::SizeOverflow)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+    --> crates/sparql-algebra/src/parser.rs:3594:21
+     |
+3594 |                     memory.extend(&mut patterns, [&mut **left, &mut **right])?
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `memory.extend(&mut patterns, [&mut **left, &mut **right])?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-algebra/src/scope.rs:701:17
+    |
+701 | /                 if let Some(label) = variable.source_blank_label() {
+702 | |                     if visit(label, memory)? {
+703 | |                         found = true;
+704 | |                         break;
+705 | |                     }
+706 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+701 ~                 if let Some(label) = variable.source_blank_label()
+702 ~                     && visit(label, memory)? {
+703 |                         found = true;
+704 |                         break;
+705 ~                     }
+    |
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-algebra/src/serialize.rs:103:9
+    |
+103 | /         if let Err(error) = body(&mut self.memory.borrow_mut()) {
+104 | |             if self.failure.get().is_none() {
+105 | |                 self.failure.set(Some(error));
+106 | |             }
+107 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+103 ~         if let Err(error) = body(&mut self.memory.borrow_mut())
+104 ~             && self.failure.get().is_none() {
+105 |                 self.failure.set(Some(error));
+106 ~             }
+    |
+
+error: matching over `()` is more explicit
+   --> crates/sparql-algebra/src/serialize.rs:641:42
+    |
+641 |             &ordinary.iter().map(|(name, _)| name.as_str()),
+    |                                          ^ help: use `()` instead of `_`: `()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ignored_unit_patterns
+    = note: `-D clippy::ignored-unit-patterns` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::ignored_unit_patterns)]`
+
+error: matching over `()` is more explicit
+   --> crates/sparql-algebra/src/serialize.rs:645:72
+    |
+645 |         let mut ordered = memory.collect(hidden.iter().map(|(variable, _)| variable.clone()))?;
+    |                                                                        ^ help: use `()` instead of `_`: `()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ignored_unit_patterns
+
+error: matching over `()` is more explicit
+   --> crates/sparql-algebra/src/serialize.rs:662:76
+    |
+662 |         let string_bytes = ordinary.iter().try_fold(0usize, |total, (name, _)| {
+    |                                                                            ^ help: use `()` instead of `_`: `()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#ignored_unit_patterns
+
+error: consider using `sort_unstable_by_key`
+   --> crates/sparql-algebra/src/serialize.rs:697:9
+    |
+697 |         groups.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_sort_by
+    = note: `-D clippy::unnecessary-sort-by` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_sort_by)]`
+help: try
+    |
+697 -         groups.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+697 +         groups.sort_unstable_by_key(|(a, _)| *a);
+    |
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-algebra/src/traits.rs:614:17
+    |
+614 | /                 if failure.is_none() {
+615 | |                     if let Err(error) = stack.try_push_admitted(token, memory) {
+616 | |                         failure = Some(error);
+617 | |                     }
+618 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+614 ~                 if failure.is_none()
+615 ~                     && let Err(error) = stack.try_push_admitted(token, memory) {
+616 |                         failure = Some(error);
+617 ~                     }
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/sparql-algebra/src/validate.rs:136:21
+    |
+136 |                     visit(variable, memory).map_err(MutationError::Visitor)?
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `visit(variable, memory).map_err(MutationError::Visitor)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: this `if` statement can be collapsed
+   --> crates/sparql-algebra/src/walk.rs:619:21
+    |
+619 | /                     if failure.is_none() {
+620 | |                         if let Err(error) = stack.try_push_admitted(Step::Enter(child), memory) {
+621 | |                             failure = Some(error);
+622 | |                         }
+623 | |                     }
+    | |_____________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+help: collapse nested if block
+    |
+619 ~                     if failure.is_none()
+620 ~                         && let Err(error) = stack.try_push_admitted(Step::Enter(child), memory) {
+621 |                             failure = Some(error);
+622 ~                         }
+    |
+
+error: this lint expectation is unfulfilled
+   --> crates/sparql-algebra/src/error.rs:200:9
+    |
+200 |         clippy::literal_string_with_formatting_args,
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: these templates are validated and rendered by DiagnosticPresentation
+    = note: `-D unfulfilled-lint-expectations` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unfulfilled_lint_expectations)]`
+
+error: could not compile `purrdf-sparql-algebra` (lib) due to 33 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: items after a test module
+   --> crates/sparql-algebra/src/error.rs:493:1
+    |
+493 |   mod tests {
+    |   ^^^^^^^^^
+...
+736 | / fn presentation_storage(
+737 | |     error: purrdf_lex::diagnostic::DiagnosticPresentationError,
+738 | | ) -> purrdf_lex::allocation::StorageError {
+    | |_________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#items_after_test_module
+    = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+    = help: move the items to before the test module was defined
+
+error: unnecessary use of `clone` to create a slice from a reference
+    --> crates/sparql-algebra/src/parser.rs:9662:9
+     |
+9662 |         assert_eq!(scopes.trail, [a.clone()]);
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#cloned_ref_to_slice_refs
+     = note: `-D clippy::cloned-ref-to-slice-refs` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::cloned_ref_to_slice_refs)]`
+
+error: unnecessary use of `clone` to create a slice from a reference
+    --> crates/sparql-algebra/src/parser.rs:9667:9
+     |
+9667 | /         assert_eq!(
+9668 | |             scopes.top(),
+9669 | |             [a.clone()],
+9670 | |             "the enclosing frame still sees its original identity"
+9671 | |         );
+     | |_________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#cloned_ref_to_slice_refs
+
+error: could not compile `purrdf-sparql-algebra` (lib test) due to 36 previous errors
+error: empty line after doc comment
+   --> crates/rdf-core/src/ir/validate.rs:170:1
+    |
+170 | / /// one diagnostic at every consumer that formats `{diagnostic}`.
+171 | |
+    | |_^
+...
+176 |   enum VisitState {
+    |   --------------- the comment documents this enum
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = note: `-D clippy::empty-line-after-doc-comments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_doc_comments)]`
+    = help: if the empty line is unintentional, remove it
+help: if the documentation should include the empty line include it in the comment
+    |
+171 | ///
+    |
+
+error: empty lines after doc comment
+   --> crates/rdf-core/src/ir/validate.rs:199:1
+    |
+199 | / /// [`MAX_TERM_NESTING_DEPTH`].
+200 | |
+201 | | /// Reject an out-of-range term id (orphan reference) with a precise diagnostic.
+...   |
+221 | | ///   document the readers refuse.
+222 | |
+    | |_^
+223 |   fn require_subject_kind(
+    |   ----------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = help: if the empty lines are unintentional, remove them
+
+error: empty line after doc comment
+   --> crates/rdf-core/src/ir/validate.rs:243:1
+    |
+243 | / /// A predicate MUST be an IRI.
+244 | |
+    | |_^
+245 |   fn require_predicate_kind(kind: Kind, ctx: impl FnOnce() -> String) -> Result<(), RdfDiagnostic> {
+    |   ------------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = help: if the empty line is unintentional, remove it
+
+error: empty line after doc comment
+   --> crates/rdf-core/src/ir/validate.rs:253:1
+    |
+253 | / /// A graph name MUST be an IRI or a blank node (never a literal or triple term).
+254 | |
+    | |_^
+255 |   fn require_graph_kind(kind: Kind, ctx: impl FnOnce() -> String) -> Result<(), RdfDiagnostic> {
+    |   --------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = help: if the empty line is unintentional, remove it
+
+error: parameter of type `HashMap` should be generalized over different hashers
+   --> crates/rdf-core/src/describe.rs:437:17
+    |
+437 |     remap: &mut FastMap<D::Id, TermId>,
+    |                 ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#implicit_hasher
+    = note: `-D clippy::implicit-hasher` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::implicit_hasher)]`
+help: add a type parameter for `BuildHasher`
+    |
+434 ~ pub fn intern_view_term_with_memory<D: DatasetView, S: Admission + ?Sized, S: ::std::hash::BuildHasher>(
+435 |     dataset: &D,
+436 |     builder: &mut RdfDatasetBuilder,
+437 ~     remap: &mut HashMap<D::Id, TermId, S>,
+    |
+
+error: parameter of type `HashMap` should be generalized over different hashers
+   --> crates/rdf-core/src/hash.rs:296:15
+    |
+296 |     map: &mut FastMap<K, V>,
+    |               ^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#implicit_hasher
+help: add a type parameter for `BuildHasher`
+    |
+291 | pub fn reserve_map_with_memory<
+...
+294 |     S: purrdf_lex::allocation::Admission + ?Sized,
+295 ~ , S: ::std::hash::BuildHasher>(
+296 ~     map: &mut HashMap<K, V, S>,
+    |
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+   --> crates/rdf-core/src/ir/builder.rs:143:16
+    |
+143 |     for &id in source.iter() {
+    |                ^^^^^^^^^^^^^ help: to write this more concisely, try: `source`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+    = note: `-D clippy::explicit-iter-loop` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::explicit_iter_loop)]`
+
+error: it is more concise to loop over references to containers instead of using explicit iteration methods
+    --> crates/rdf-core/src/ir/builder.rs:1536:20
+     |
+1536 |         for &id in self.interner.index.iter() {
+     |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: to write this more concisely, try: `&self.interner.index`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#explicit_iter_loop
+
+error: called `map(<f>).unwrap_or(<a>)` on an `Option` value
+   --> crates/rdf-core/src/ir/dataset.rs:889:13
+    |
+889 | /             self.try_statement_graph_rows()
+890 | |                 .expect("a resident statement histogram can be allocated")
+891 | |                 .find(crate::hash::hash_of(&graph), |&(key, _)| key == graph)
+892 | |                 .map(|&(_, count)| count)
+893 | |                 .unwrap_or(0)
+    | |_____________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#map_unwrap_or
+    = note: `-D clippy::map-unwrap-or` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::map_unwrap_or)]`
+help: use `map_or(<a>, <f>)` instead
+    |
+892 -                 .map(|&(_, count)| count)
+893 -                 .unwrap_or(0)
+892 +                 .map_or(0, |&(_, count)| count)
+    |
+
+error: redundant closure
+    --> crates/rdf-core/src/ir/dataset.rs:2153:17
+     |
+2153 |                 |memory, values, required| memory.reserve(values, required),
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_lex::allocation::Memory::reserve`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+     = note: `-D clippy::redundant-closure-for-method-calls` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::redundant_closure_for_method_calls)]`
+
+error: redundant closure
+    --> crates/rdf-core/src/ir/dataset.rs:2154:17
+     |
+2154 |                 |memory, values| memory.boxed_slice(values),
+     |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: replace the closure with the method itself: `purrdf_lex::allocation::Memory::boxed_slice`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#redundant_closure_for_method_calls
+
+error: used underscore-prefixed binding
+    --> crates/rdf-core/src/ir/segmented/session.rs:1013:30
+     |
+1013 |                 .map(|entry| entry.block._reservation.bytes())
+     |                              ^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: binding is defined here
+    --> crates/rdf-core/src/ir/segmented/session.rs:194:5
+     |
+ 194 |     _reservation: SegmentedReservation,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#used_underscore_binding
+     = note: `-D clippy::used-underscore-binding` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::used_underscore_binding)]`
+
+error: variables can be used directly in the `format!` string
+   --> crates/rdf-core/src/ir/validate.rs:647:13
+    |
+647 |             format_args!("{} must not be a literal", ctx),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#uninlined_format_args
+    = note: `-D clippy::uninlined-format-args` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::uninlined_format_args)]`
+help: change this to
+    |
+647 -             format_args!("{} must not be a literal", ctx),
+647 +             format_args!("{ctx} must not be a literal"),
+    |
+
+error: variables can be used directly in the `format!` string
+   --> crates/rdf-core/src/ir/validate.rs:652:13
+    |
+652 |             format_args!("{} must be an IRI or blank node; {triple_reason}", ctx),
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#uninlined_format_args
+help: change this to
+    |
+652 -             format_args!("{} must be an IRI or blank node; {triple_reason}", ctx),
+652 +             format_args!("{ctx} must be an IRI or blank node; {triple_reason}"),
+    |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/rdf-core/src/xsd_regex/xpath/compile.rs:728:29
+    |
+728 | ...                   self.budget.release_string(found)?
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `self.budget.release_string(found)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/rdf-core/src/xsd_regex/xpath/compile.rs:731:29
+    |
+731 | ...                   self.budget.release_string(reference)?
+    |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `self.budget.release_string(reference)?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: could not compile `purrdf-core` (lib) due to 16 previous errors
+error: items after a test module
+   --> crates/rdf-core/src/hash.rs:194:1
+    |
+194 |   mod tests {
+    |   ^^^^^^^^^
+...
+262 | / pub fn reserve_table_with_memory<T, S: purrdf_lex::allocation::Admission + ?Sized>(
+263 | |     table: &mut hashbrown::HashTable<T>,
+264 | |     required: usize,
+265 | |     hash: impl Fn(&T) -> u64,
+266 | |     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+267 | | ) -> Result<(), purrdf_lex::allocation::StorageError> {
+    | |_____________________________________________________^
+...
+291 | / pub fn reserve_map_with_memory<
+292 | |     K: Eq + core::hash::Hash,
+293 | |     V,
+294 | |     S: purrdf_lex::allocation::Admission + ?Sized,
+...   |
+298 | |     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+299 | | ) -> Result<(), purrdf_lex::allocation::StorageError> {
+    | |_____________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#items_after_test_module
+    = note: `-D clippy::items-after-test-module` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::items_after_test_module)]`
+    = help: move the items to before the test module was defined
+
+error: items after a test module
+   --> crates/rdf-core/src/term_fixture.rs:424:1
+    |
+424 |   mod tests {
+    |   ^^^^^^^^^
+...
+446 | / pub fn intern_value_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+447 | |     builder: &mut RdfDatasetBuilder,
+448 | |     value: &TermValue,
+449 | |     memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+450 | | ) -> Result<TermId, purrdf_lex::allocation::StorageError> {
+    | |_________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#items_after_test_module
+    = help: move the items to before the test module was defined
+
+error: could not compile `purrdf-core` (lib test) due to 18 previous errors

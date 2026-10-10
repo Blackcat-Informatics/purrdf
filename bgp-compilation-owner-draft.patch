@@ -1,0 +1,576 @@
+diff --git a/crates/sparql-eval/src/bgp.rs b/crates/sparql-eval/src/bgp.rs
+--- a/crates/sparql-eval/src/bgp.rs
++++ b/crates/sparql-eval/src/bgp.rs
+@@ -41,7 +41,7 @@
+ use purrdf_xsd::ieee::{Binary64, Binary64Scope};
+ use purrdf_lex::text_out::TextOut;
+ 
+-use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
++use crate::convert::named_node_to_value;
+ use crate::dataset_spec::{ActiveDataset, GraphScope};
+ use crate::error::EvalError;
+ use crate::eval::EvalCtx;
+@@ -120,40 +120,89 @@
+     /// one variable (a fully-ground quoted triple resolves to a single [`Pos::Bound`]
+     /// id instead). Binding descends into the candidate row's triple-term value,
+     /// unifying the inner positions and enforcing repeated-variable consistency.
+-    Triple(Box<TriplePos<I>>),
++    Triple(OwnedTriplePos<I>),
+ }
+ 
+-/// Release a position without descending into it: a nested quoted triple's components
+-/// are moved onto a work list and released from there, so a position nested to any
+-/// depth is dropped on constant machine stack.
+-impl<I: ViewTermId> Drop for Pos<I> {
+-    fn drop(&mut self) {
+-        let Self::Triple(triple) = self else {
+-            return;
+-        };
+-        if !matches!(triple.s, Self::Triple(_))
+-            && !matches!(triple.p, Self::Triple(_))
+-            && !matches!(triple.o, Self::Triple(_))
+-        {
+-            return;
++/// One compiled box and its original admission. The grant follows the box,
++/// so it covers physical deallocation as well as the node's child payloads.
++struct OwnedTriplePos<I: ViewTermId> {
++    node: Option<Box<TriplePos<I>>>,
++    allocation: Option<crate::workspace::WorkspaceAllocation>,
++    parent: Option<Box<TriplePos<I>>>,
++    parent_allocation: Option<crate::workspace::WorkspaceAllocation>,
++}
++
++struct DetachedTriplePos<I: ViewTermId> {
++    node: Box<TriplePos<I>>,
++    _allocation: Option<crate::workspace::WorkspaceAllocation>,
++}
++
++impl<I: ViewTermId> OwnedTriplePos<I> {
++    fn new_admitted(value: TriplePos<I>, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
++        let allocation = workspace.charge(u64::try_from(size_of::<TriplePos<I>>())
++            .map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++        let node = purrdf_core::small::try_boxed(value)
++            .map_err(|_| EvalError::AllocationFailed { construct: "compiled triple position" })?;
++        Ok(Self { node: Some(node), allocation: Some(allocation), parent: None, parent_allocation: None })
++    }
++
++    fn take(&mut self) -> Option<DetachedTriplePos<I>> {
++        self.node.take().map(|node| DetachedTriplePos { node, _allocation: self.allocation.take() })
++    }
++}
++
++impl<I: ViewTermId> From<Box<TriplePos<I>>> for OwnedTriplePos<I> {
++    fn from(node: Box<TriplePos<I>>) -> Self {
++        Self { node: Some(node), allocation: None, parent: None, parent_allocation: None }
++    }
++}
++
++impl<I: ViewTermId> std::ops::Deref for OwnedTriplePos<I> {
++    type Target = TriplePos<I>;
++    fn deref(&self) -> &Self::Target { self.node.as_deref().expect("live compiled position") }
++}
++
++impl<I: ViewTermId> purrdf_lex::walk::DismantleOwned for DetachedTriplePos<I> {
++    fn take_child(&mut self) -> Option<Self> {
++        for position in [&mut self.node.s, &mut self.node.p, &mut self.node.o] {
++            if let Pos::Triple(child) = position
++                && let Some(node) = child.take() { return Some(node); }
+         }
+-        let mut pending: Vec<Self> = vec![
+-            std::mem::replace(&mut triple.s, Self::Slot(0)),
+-            std::mem::replace(&mut triple.p, Self::Slot(0)),
+-            std::mem::replace(&mut triple.o, Self::Slot(0)),
+-        ];
+-        while let Some(mut position) = pending.pop() {
+-            if let Self::Triple(inner) = &mut position {
+-                pending.extend([
+-                    std::mem::replace(&mut inner.s, Self::Slot(0)),
+-                    std::mem::replace(&mut inner.p, Self::Slot(0)),
+-                    std::mem::replace(&mut inner.o, Self::Slot(0)),
+-                ]);
+-            }
++        None
++    }
++
++    fn store_parent(&mut self, parent: Option<Self>) {
++        let child = self.node.last_taken_child().expect("the selected child slot is vacant");
++        if let Some(parent) = parent {
++            child.parent = Some(parent.node);
++            child.parent_allocation = parent._allocation;
+         }
+     }
++
++    fn take_parent(&mut self) -> Option<Self> {
++        let child = self.node.last_taken_child().expect("the resumed parent has a vacant child");
++        child.parent.take().map(|node| Self { node, _allocation: child.parent_allocation.take() })
++    }
+ }
+ 
++impl<I: ViewTermId> TriplePos<I> {
++    fn last_taken_child(&mut self) -> Option<&mut OwnedTriplePos<I>> {
++        for position in [&mut self.o, &mut self.p, &mut self.s] {
++            if let Pos::Triple(child) = position
++                && child.node.is_none() { return Some(child); }
++        }
++        None
++    }
++}
++
++impl<I: ViewTermId> Drop for OwnedTriplePos<I> {
++    fn drop(&mut self) {
++        assert!(self.parent.is_none() && self.parent_allocation.is_none(),
++            "a compiled dismantling continuation is removed before ordinary drop");
++        if let Some(node) = self.take() { purrdf_lex::walk::dismantle_owned(node); }
++    }
++}
++
+ /// A compiled nested quoted-triple position: its three component positions, each
+ /// itself a [`Pos`] (so quoted triples may nest, and any component may be a variable,
+ /// a ground constant, or a further nested triple).
+@@ -273,9 +322,7 @@
+     // (subject, predicate, object) order — the working column layout.
+     let mut working = input.cloned().unwrap_or_default();
+     for pattern in patterns {
+-        for key in slot_keys(pattern) {
+-            working.push_admitted(key, &ctx.growth)?;
+-        }
++        register_slots_admitted(pattern, &mut working, &ctx.growth)?;
+     }
+ 
+     let projection = retain_projection.then(|| BgpProjection::new_admitted(&working, &ctx.growth)).transpose()?;
+@@ -284,7 +331,7 @@
+     // the whole BGP empty.
+     let mut compiled = AdmittedVec::new(&ctx.growth);
+     for pattern in patterns {
+-        match compile_pattern(pattern, &working, ctx.dataset)? {
++        match compile_pattern_admitted(pattern, &working, ctx.dataset, &ctx.growth, &|error| ctx.workspace.source_error(error))? {
+             Some(cp) => compiled.push(cp)?,
+             None => {
+                 return Ok(CompiledBgp {
+@@ -1379,17 +1426,48 @@
+ 
+ /// Read every slot without cloning variables or constructing blank identities.
+ /// The same iterative walk supplies the indexed kernel's owning slot census.
+-pub(crate) fn visit_triple_slots<'a>(pattern: &'a TriplePattern, visit: impl FnMut(SlotKey<'a>)) {
+-    visit_slot_keys(
+-        purrdf_core::smallvec![
+-            SlotPosition::Term(&pattern.object),
+-            SlotPosition::Predicate(&pattern.predicate),
+-            SlotPosition::Term(&pattern.subject),
+-        ],
+-        visit,
+-    );
++pub(crate) fn visit_triple_slots<'a>(pattern: &'a TriplePattern, mut visit: impl FnMut(SlotKey<'a>)) {
++    visit_triple_slots_admitted(pattern, &crate::WorkspaceCapability::resident(), |slot| { visit(slot); Ok(()) })
++        .expect("resident triple slot walk");
+ }
+ 
++pub(crate) fn visit_triple_slots_admitted<'a>(
++    pattern: &'a TriplePattern, workspace: &crate::WorkspaceCapability,
++    mut visit: impl FnMut(SlotKey<'a>) -> Result<(), EvalError>,
++) -> Result<(), EvalError> {
++    let mut storage = crate::workspace::LexicalFrame::new(workspace);
++    let mut pending = purrdf_lex::walk::WorkList::<SlotPosition<'a>, 8>::new();
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++    for position in [
++        SlotPosition::Term(&pattern.object), SlotPosition::Predicate(&pattern.predicate),
++        SlotPosition::Term(&pattern.subject),
++    ] {
++        pending.try_push_admitted(position, &mut memory)
++            .map_err(|error| memory.admission_mut().storage_error(error, "triple slot walk"))?;
++    }
++    while let Some(position) = pending.pop() {
++        match position {
++            SlotPosition::Predicate(NamedNodePattern::Variable(variable))
++            | SlotPosition::Term(TermPattern::Variable(variable)) => visit(SlotKey::Variable(variable))?,
++            SlotPosition::Term(TermPattern::BlankNode(blank)) => visit(SlotKey::Blank(blank.as_str()))?,
++            SlotPosition::Term(TermPattern::Triple(triple)) => {
++                for position in [
++                    SlotPosition::Term(&triple.object), SlotPosition::Predicate(&triple.predicate),
++                    SlotPosition::Term(&triple.subject),
++                ] {
++                    pending.try_push_admitted(position, &mut memory)
++                        .map_err(|error| memory.admission_mut().storage_error(error, "triple slot walk"))?;
++                }
++            }
++            SlotPosition::Predicate(NamedNodePattern::NamedNode(_))
++            | SlotPosition::Term(TermPattern::NamedNode(_) | TermPattern::Literal(_)) => {}
++        }
++    }
++    pending.release_admitted(&mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "triple slot walk"))?;
++    Ok(())
++}
++
+ /// One position of a triple pattern still to be read for its slot variables.
+ enum SlotPosition<'a> {
+     Term(&'a TermPattern),
+@@ -1398,28 +1476,26 @@
+ 
+ /// Visit the borrowed slots on `pending`, with its top next in `(s, p, o)`
+ /// order. Nested quoted triples use that same order; ground terms yield nothing.
+-fn visit_slot_keys<'a>(
+-    mut pending: purrdf_core::SmallVec<[SlotPosition<'a>; 8]>,
+-    mut visit: impl FnMut(SlotKey<'a>),
+-) {
+-    while let Some(position) = pending.pop() {
+-        match position {
+-            SlotPosition::Predicate(NamedNodePattern::Variable(v))
+-            | SlotPosition::Term(TermPattern::Variable(v)) => visit(SlotKey::Variable(v)),
+-            SlotPosition::Term(TermPattern::BlankNode(b)) => {
+-                visit(SlotKey::Blank(b.as_str()));
++fn register_slots_admitted(
++    pattern: &TriplePattern, schema: &mut VarSchema, workspace: &crate::WorkspaceCapability,
++) -> Result<(), EvalError> {
++    visit_triple_slots_admitted(pattern, workspace, |slot| {
++        let variable = match slot {
++            SlotKey::Variable(variable) => variable.clone(),
++            SlotKey::Blank(label) => {
++                if blank_slot_col(schema, label).is_some() { return Ok(()); }
++                blank_var_admitted(label, workspace)?
+             }
+-            SlotPosition::Term(TermPattern::Triple(t)) => pending.extend([
+-                SlotPosition::Term(&t.object),
+-                SlotPosition::Predicate(&t.predicate),
+-                SlotPosition::Term(&t.subject),
+-            ]),
+-            SlotPosition::Predicate(NamedNodePattern::NamedNode(_))
+-            | SlotPosition::Term(TermPattern::NamedNode(_) | TermPattern::Literal(_)) => {}
+-        }
+-    }
++        };
++        schema.push_admitted(variable, workspace).map(|_| ())
++    })
+ }
+ 
++fn blank_slot_col(schema: &VarSchema, label: &str) -> Option<usize> {
++    schema.vars().iter().position(|variable|
++        variable.as_str().strip_prefix(BLANK_VAR_PREFIX) == Some(label))
++}
++
+ /// The synthetic slot variable for a blank-node label (NUL-prefixed; cannot collide
+ /// with a parser-produced `?var`).
+ ///
+@@ -1453,67 +1529,69 @@
+ /// compiled and bound over work lists, so a term of any depth costs no more machine
+ /// stack.
+ fn compile_pattern<D: DatasetView>(
+-    pattern: &TriplePattern,
+-    schema: &VarSchema,
+-    dataset: &D,
++    pattern: &TriplePattern, schema: &VarSchema, dataset: &D,
+ ) -> Result<Option<CompiledPattern<D::Id>>, EvalError> {
++    compile_pattern_admitted(pattern, schema, dataset, &crate::WorkspaceCapability::resident(), &EvalError::source_read)
++}
++
++fn term_nesting_admitted(term: &TermPattern, workspace: &crate::WorkspaceCapability) -> Result<usize, EvalError> {
++    let mut storage = crate::workspace::LexicalFrame::new(workspace);
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++    term.triple_term_nesting_with_memory(&mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "triple nesting census"))
++}
++
++fn compile_pattern_admitted<D: DatasetView>(
++    pattern: &TriplePattern, schema: &VarSchema, dataset: &D,
++    workspace: &crate::WorkspaceCapability, source_error: &impl Fn(D::ReadError) -> EvalError,
++) -> Result<Option<CompiledPattern<D::Id>>, EvalError> {
+     if let Some(bound) = dataset.triple_term_nesting_bound()
+-        && (pattern.subject.triple_term_nesting() > bound
+-            || pattern.object.triple_term_nesting() > bound)
+-    {
+-        return Ok(None);
+-    }
+-    let Some(s) = compile_term(&pattern.subject, schema, dataset)? else {
+-        return Ok(None);
+-    };
+-    let Some(p) = compile_predicate(&pattern.predicate, schema, dataset) else {
+-        return Ok(None);
+-    };
+-    let Some(o) = compile_term(&pattern.object, schema, dataset)? else {
+-        return Ok(None);
+-    };
++        && (term_nesting_admitted(&pattern.subject, workspace)? > bound
++            || term_nesting_admitted(&pattern.object, workspace)? > bound)
++    { return Ok(None); }
++    let Some(s) = compile_term_admitted(&pattern.subject, schema, dataset, workspace, source_error)? else { return Ok(None); };
++    let Some(p) = compile_predicate_admitted(&pattern.predicate, schema, dataset, workspace)? else { return Ok(None); };
++    let Some(o) = compile_term_admitted(&pattern.object, schema, dataset, workspace, source_error)? else { return Ok(None); };
+     Ok(Some(CompiledPattern { s, p, o }))
+ }
+ 
+ /// Compile a subject/object term position. `Ok(None)` = an absent ground constant
+ /// (the pattern — and hence the BGP — cannot match).
++#[cfg(test)]
+ fn compile_term<D: DatasetView>(
+-    term: &TermPattern,
+-    schema: &VarSchema,
+-    dataset: &D,
++    term: &TermPattern, schema: &VarSchema, dataset: &D,
+ ) -> Result<Option<Pos<D::Id>>, EvalError> {
++    compile_term_admitted(term, schema, dataset, &crate::WorkspaceCapability::resident(), &EvalError::source_read)
++}
++
++fn compile_term_admitted<D: DatasetView>(
++    term: &TermPattern, schema: &VarSchema, dataset: &D,
++    workspace: &crate::WorkspaceCapability, source_error: &impl Fn(D::ReadError) -> EvalError,
++) -> Result<Option<Pos<D::Id>>, EvalError> {
+     match term {
+-        TermPattern::Variable(v) => Ok(Some(Pos::Slot(slot_col(schema, v)))),
+-        TermPattern::BlankNode(b) => Ok(Some(Pos::Slot(slot_col(schema, &blank_var(b.as_str()))))),
+-        // A quoted-triple position: if it contains a variable it is a STRUCTURAL match
+-        // that binds inner columns (`Pos::Triple`); a fully-ground quoted triple
+-        // resolves to a single interned id (`Pos::Bound`) exactly like any constant.
+-        TermPattern::Triple(t) => {
+-            let nested = index_nested_triples(t);
++        TermPattern::Variable(variable) => Ok(Some(Pos::Slot(slot_col(schema, variable)))),
++        TermPattern::BlankNode(blank) => Ok(Some(Pos::Slot(blank_slot_col(schema, blank.as_str())
++            .expect("every blank slot is registered")))),
++        TermPattern::Triple(triple) => {
++            let nested = index_nested_triples_admitted(triple, workspace)?;
+             if nested[0].has_variable {
+-                match compile_triple_pos(&nested, schema, dataset)? {
+-                    Some(tp) => Ok(Some(Pos::Triple(Box::new(tp)))),
++                match compile_triple_pos_admitted(&nested, schema, dataset, workspace, source_error)? {
++                    Some(triple) => Ok(Some(Pos::Triple(OwnedTriplePos::new_admitted(triple, workspace)?))),
+                     None => Ok(None),
+                 }
+             } else {
+-                let value = ground_term_pattern_to_value(term, "a BGP")?;
+-                Ok(dataset
+-                    .term_id_by_value(&value)
+-                    .map_err(EvalError::source_read)?
+-                    .map(Pos::Bound))
++                let value = crate::convert::ground_term_pattern_to_workspace_value(term, "a BGP", workspace)?;
++                Ok(dataset.term_id_by_value(&value).map_err(source_error)?.map(Pos::Bound))
+             }
+         }
+         TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
+-            let value = ground_term_pattern_to_value(term, "a BGP")?;
+-            Ok(dataset
+-                .term_id_by_value(&value)
+-                .map_err(EvalError::source_read)?
+-                .map(Pos::Bound))
++            let value = crate::convert::ground_term_pattern_to_workspace_value(term, "a BGP", workspace)?;
++            Ok(dataset.term_id_by_value(&value).map_err(source_error)?.map(Pos::Bound))
+         }
+     }
+ }
+ 
+-/// One quoted-triple pattern of a nested position, indexed by [`index_nested_triples`]:
++/// One quoted-triple pattern of a nested position, indexed by [`index_nested_triples_admitted`]:
+ /// where its subject and object quoted triples sit in the same index, and whether a
+ /// variable (or blank node) occurs anywhere inside it.
+ struct NestedTriple<'a> {
+@@ -1526,7 +1604,7 @@
+ /// Index every quoted-triple pattern reachable from `root` — `root` itself at index 0,
+ /// each triple before the triples nested inside it — and mark which of them contain a
+ /// variable, in two passes over the index rather than a descent per triple.
+-fn index_nested_triples(root: &TriplePattern) -> Vec<NestedTriple<'_>> {
++fn index_nested_triples_admitted<'a>(root: &'a TriplePattern, workspace: &crate::WorkspaceCapability) -> Result<AdmittedVec<NestedTriple<'a>>, EvalError> {
+     // The position a pending triple fills in its parent, so the parent's index entry
+     // can name it once the pending triple's own index is known.
+     enum Under {
+@@ -1534,26 +1612,27 @@
+         Subject(usize),
+         Object(usize),
+     }
+-    let mut nested: Vec<NestedTriple<'_>> = Vec::new();
+-    let mut pending = vec![(root, Under::Root)];
++    let mut nested = AdmittedVec::<NestedTriple<'a>>::new(workspace);
++    let mut pending = AdmittedVec::new(workspace);
++    pending.push((root, Under::Root))?;
+     while let Some((triple, under)) = pending.pop() {
+         let index = nested.len();
+         match under {
+             Under::Root => {}
+-            Under::Subject(parent) => nested[parent].subject = Some(index),
+-            Under::Object(parent) => nested[parent].object = Some(index),
++            Under::Subject(parent) => nested.as_mut_slice()[parent].subject = Some(index),
++            Under::Object(parent) => nested.as_mut_slice()[parent].object = Some(index),
+         }
+         nested.push(NestedTriple {
+             triple,
+             subject: None,
+             object: None,
+             has_variable: false,
+-        });
++        })?;
+         if let TermPattern::Triple(object) = &triple.object {
+-            pending.push((object, Under::Object(index)));
++            pending.push((object, Under::Object(index)))?;
+         }
+         if let TermPattern::Triple(subject) = &triple.subject {
+-            pending.push((subject, Under::Subject(index)));
++            pending.push((subject, Under::Subject(index)))?;
+         }
+     }
+     // Every nested triple is indexed after the triple holding it, so reading the index
+@@ -1570,9 +1649,9 @@
+         let has_variable = position_has_variable(&entry.triple.subject, entry.subject)
+             || matches!(entry.triple.predicate, NamedNodePattern::Variable(_))
+             || position_has_variable(&entry.triple.object, entry.object);
+-        nested[index].has_variable = has_variable;
++        nested.as_mut_slice()[index].has_variable = has_variable;
+     }
+-    nested
++    Ok(nested)
+ }
+ 
+ /// Compile the variable-carrying quoted-triple pattern at index 0 of `nested` — the
+@@ -1584,10 +1663,11 @@
+ /// One frame per quoted triple still being compiled lives on an explicit stack, so a
+ /// position nested to any depth compiles on constant machine stack; the dataset is
+ /// consulted in exactly the order a descent would consult it.
+-fn compile_triple_pos<D: DatasetView>(
++fn compile_triple_pos_admitted<D: DatasetView>(
+     nested: &[NestedTriple<'_>],
+     schema: &VarSchema,
+     dataset: &D,
++    workspace: &crate::WorkspaceCapability, source_error: &impl Fn(D::ReadError) -> EvalError,
+ ) -> Result<Option<TriplePos<D::Id>>, EvalError> {
+     /// A quoted triple being compiled: the positions compiled so far.
+     struct Frame<I: ViewTermId> {
+@@ -1595,20 +1675,21 @@
+         s: Option<Pos<I>>,
+         p: Option<Pos<I>>,
+     }
+-    let mut frames: Vec<Frame<D::Id>> = vec![Frame {
++    let mut frames = AdmittedVec::new(workspace);
++    frames.push(Frame {
+         at: 0,
+         s: None,
+         p: None,
+-    }];
++    })?;
+     // A quoted triple compiled in full, on its way to the position that holds it.
+     let mut completed: Option<TriplePos<D::Id>> = None;
+     loop {
+-        let frame = frames
++        let frame = frames.as_mut_slice()
+             .last_mut()
+             .expect("a frame is open until the root completes");
+         let entry = &nested[frame.at];
+         let position = if let Some(completed) = completed.take() {
+-            Pos::Triple(Box::new(completed))
++            Pos::Triple(OwnedTriplePos::new_admitted(completed, workspace)?)
+         } else if frame.s.is_none() || frame.p.is_some() {
+             // The next term position: the subject first, the object once the predicate
+             // is compiled.
+@@ -1619,7 +1700,7 @@
+             };
+             match term {
+                 TermPattern::Variable(v) => Pos::Slot(slot_col(schema, v)),
+-                TermPattern::BlankNode(b) => Pos::Slot(slot_col(schema, &blank_var(b.as_str()))),
++                TermPattern::BlankNode(b) => Pos::Slot(blank_slot_col(schema, b.as_str()).expect("registered blank slot")),
+                 TermPattern::Triple(_) => {
+                     let at = nested_at.expect("a nested triple is indexed");
+                     if nested[at].has_variable {
+@@ -1627,23 +1708,23 @@
+                             at,
+                             s: None,
+                             p: None,
+-                        });
++                        })?;
+                         continue;
+                     }
+-                    let value = ground_term_pattern_to_value(term, "a BGP")?;
++                    let value = crate::convert::ground_term_pattern_to_workspace_value(term, "a BGP", workspace)?;
+                     match dataset
+                         .term_id_by_value(&value)
+-                        .map_err(EvalError::source_read)?
++                        .map_err(source_error)?
+                     {
+                         Some(id) => Pos::Bound(id),
+                         None => return Ok(None),
+                     }
+                 }
+                 TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
+-                    let value = ground_term_pattern_to_value(term, "a BGP")?;
++                    let value = crate::convert::ground_term_pattern_to_workspace_value(term, "a BGP", workspace)?;
+                     match dataset
+                         .term_id_by_value(&value)
+-                        .map_err(EvalError::source_read)?
++                        .map_err(source_error)?
+                     {
+                         Some(id) => Pos::Bound(id),
+                         None => return Ok(None),
+@@ -1651,7 +1732,7 @@
+                 }
+             }
+         } else {
+-            let Some(p) = compile_predicate(&entry.triple.predicate, schema, dataset) else {
++            let Some(p) = compile_predicate_admitted(&entry.triple.predicate, schema, dataset, workspace)? else {
+                 return Ok(None);
+             };
+             frame.p = Some(p);
+@@ -1682,20 +1763,23 @@
+ }
+ 
+ /// Compile a predicate position (IRI or variable). `None` = an absent ground IRI.
++#[cfg(test)]
+ fn compile_predicate<D: DatasetView>(
+-    predicate: &NamedNodePattern,
+-    schema: &VarSchema,
+-    dataset: &D,
++    predicate: &NamedNodePattern, schema: &VarSchema, dataset: &D,
+ ) -> Option<Pos<D::Id>> {
++    compile_predicate_admitted(predicate, schema, dataset, &crate::WorkspaceCapability::resident())
++        .expect("resident predicate compilation")
++}
++
++fn compile_predicate_admitted<D: DatasetView>(
++    predicate: &NamedNodePattern, schema: &VarSchema, dataset: &D, workspace: &crate::WorkspaceCapability,
++) -> Result<Option<Pos<D::Id>>, EvalError> {
+     match predicate {
+-        NamedNodePattern::Variable(v) => Some(Pos::Slot(
+-            schema
+-                .index_of(v)
+-                .expect("every slot key was registered in pass 1"),
+-        )),
+-        NamedNodePattern::NamedNode(n) => dataset
+-            .term_id_if_ready(&named_node_to_value(n))
+-            .map(Pos::Bound),
++        NamedNodePattern::Variable(variable) => Ok(Some(Pos::Slot(slot_col(schema, variable)))),
++        NamedNodePattern::NamedNode(node) => {
++            let value = crate::convert::named_node_to_workspace_value(node, workspace)?;
++            Ok(dataset.term_id_if_ready(&value).map(Pos::Bound))
++        }
+     }
+ }
+ 
+@@ -3800,7 +3884,7 @@
+             TermPattern::Triple(t) => {
+                 if reference_triple_has_variable(t) {
+                     match reference_compile_triple_pos(t, schema, dataset)? {
+-                        Some(tp) => Ok(Some(Pos::Triple(Box::new(tp)))),
++                        Some(tp) => Ok(Some(Pos::Triple(Box::new(tp).into()))),
+                         None => Ok(None),
+                     }
+                 } else {
+@@ -4115,7 +4199,7 @@
+                     Pos::Bound(ids[choices.choose(ids.len())])
+                 },
+                 o: position(choices, ids),
+-            })),
++            }).into()),
+         }
+     }
+ 
+@@ -4135,7 +4219,7 @@
+                         Pos::Bound(p)
+                     },
+                     o: mirroring(choices, dataset, o),
+-                })),
++                }).into()),
+                 _ => Pos::Bound(id),
+             },
+         }
+@@ -4214,7 +4298,7 @@
+                 s: Pos::Bound(leaf),
+                 p: Pos::Slot(0),
+                 o: pos,
+-            }));
++            }).into());
+         }
+         pos
+     }

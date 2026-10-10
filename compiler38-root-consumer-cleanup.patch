@@ -1,0 +1,78 @@
+--- a/crates/sparql-eval/src/witness.rs
++++ b/crates/sparql-eval/src/witness.rs
+@@ -292,6 +292,13 @@
+         self.iter().eq(other.iter())
+     }
+ }
++impl PartialEq<BTreeSet<String>> for WitnessSet<purrdf_lex::allocation::SharedText> {
++    fn eq(&self, other: &BTreeSet<String>) -> bool {
++        self.iter()
++            .map(|value| value.as_str())
++            .eq(other.iter().map(String::as_str))
++    }
++}
+ impl<T: Ord> WitnessSet<T> {
+     /// Whether this exact declaration was recorded.
+     #[must_use]
+--- a/crates/sparql-eval/tests/numeric_aggregate_ownership.rs
++++ b/crates/sparql-eval/tests/numeric_aggregate_ownership.rs
+@@ -254,14 +254,16 @@
+         let result = match door {
+             0 => engine
+                 .query_fallible_view(&source, request, options)
+-                .map(|complete| complete.result),
++                .map(|complete| complete.result)
++                .map_err(|failure| format!("{failure:?}")),
+             1 => engine
+                 .query_prepared_fallible_view(&source, &prepared, &[], options)
+-                .map(|complete| complete.result),
++                .map(|complete| complete.result)
++                .map_err(|failure| format!("{failure:?}")),
+             2 => engine
+                 .query_governed_fallible_view(&source, request, options, &QueryGovernors::METERED)
+                 .map(|complete| complete.result)
+-                .map_err(|failure| failure.map_evidence(|evidence| evidence.view)),
++                .map_err(|failure| format!("{failure:?}")),
+             _ => engine
+                 .query_prepared_governed_fallible_view(
+                     &source,
+@@ -271,7 +273,7 @@
+                     &QueryGovernors::METERED,
+                 )
+                 .map(|complete| complete.result)
+-                .map_err(|failure| failure.map_evidence(|evidence| evidence.view)),
++                .map_err(|failure| format!("{failure:?}")),
+         }
+         .expect("every native statistical door is supported");
+         let measured = window.close();
+--- a/crates/sparql-eval/tests/relation_witness.rs
++++ b/crates/sparql-eval/tests/relation_witness.rs
+@@ -720,8 +720,12 @@
+             .map(|(iri, attested)| {
+                 (
+                     iri.to_owned(),
+-                    attested.generations.clone(),
+-                    attested.incompleteness.clone(),
++                    attested.generations.iter().cloned().collect(),
++                    attested
++                        .incompleteness
++                        .iter()
++                        .map(|value| value.as_str().to_owned())
++                        .collect(),
+                 )
+             })
+             .collect()
+--- a/crates/sparql-eval/tests/ranked_declaration.rs
++++ b/crates/sparql-eval/tests/ranked_declaration.rs
+@@ -169,9 +169,9 @@
+             .find(|d| d.iri == iri)
+             .expect("described")
+             .ranked
+-            .clone()
++            .as_deref()
+     };
+-    assert_eq!(ranked_for(EX_REL), Some(declaration()));
++    assert_eq!(ranked_for(EX_REL), Some(&declaration()));
+     assert_eq!(ranked_for(EX_OTHER), None);
+ }
+ 

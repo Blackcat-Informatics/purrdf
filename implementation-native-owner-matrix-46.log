@@ -1,0 +1,42 @@
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+error: unnecessary qualification
+   --> crates/sparql-eval/tests/query_completion.rs:292:41
+    |
+292 |             let control = u64::try_from(std::mem::size_of::<OwnedReservation>())
+    |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+292 -             let control = u64::try_from(std::mem::size_of::<OwnedReservation>())
+292 +             let control = u64::try_from(size_of::<OwnedReservation>())
+    |
+
+error[E0277]: the trait bound `[OwnedReservation; 1]: WorkspaceReservation` is not satisfied in `[OwnedReservation; 1]`
+   --> crates/sparql-eval/tests/query_completion.rs:310:16
+    |
+310 |             Ok(boxed as OwnedWorkspaceReservation<RefusedRead>)
+    |                ^^^^^ within `[OwnedReservation; 1]`, the trait `WorkspaceReservation` is not implemented for `[OwnedReservation; 1]`
+    |
+help: the trait `WorkspaceReservation` is implemented for `[SegmentedReservation; 1]`
+   --> crates/rdf-core/src/ir/segmented/session.rs:178:1
+    |
+178 | impl crate::WorkspaceReservation for [SegmentedReservation; 1] {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: required because it appears within the type `[OwnedReservation; 1]`
+    = note: required for `Box<[OwnedReservation; 1]>` to implement `CoerceUnsized<Box<dyn WorkspaceReservation<Error = RefusedRead> + Send + Sync>>`
+    = note: required for the cast from `Box<[OwnedReservation; 1]>` to `Box<(dyn WorkspaceReservation<Error = RefusedRead> + Send + Sync + 'static)>`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (test "query_completion") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

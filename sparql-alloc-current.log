@@ -1,0 +1,50 @@
+heaptrack output will be written to "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/sparql-alloc-current.zst"
+starting application, this might take some time...
+
+running 1 test
+test every_sparql_surface_costs_a_constant_per_conforming_focus_node ... NOTE: heaptrack detected DEBUGINFOD_URLS but will disable it to prevent 
+unintended network delays during recording
+If you really want to use DEBUGINFOD, export HEAPTRACK_ENABLE_DEBUGINFOD=1
+
+thread 'every_sparql_surface_costs_a_constant_per_conforming_focus_node' (2740139) panicked at crates/shapes/tests/sparql_path_alloc.rs:957:5:
+the SPARQL-bearing surfaces' cost moved:
+  sh:sparql at N = 1280 conforming focus nodes: allocated 64006, not the pinned 6 + 40 * 1280 = 51206
+    Measurement { allocations: 64006, requested_bytes: 5679844, retained_bytes: -14, peak_working_bytes: 145243 }
+  sh:sparql at 2N = 2560 conforming focus nodes: allocated 128006, not the pinned 6 + 40 * 2560 = 102406
+    Measurement { allocations: 128006, requested_bytes: 11366244, retained_bytes: 13, peak_working_bytes: 276846 }
+  sh:ask component at N = 1280 conforming focus nodes: allocated 106246, not the pinned 6 + 78 * 1280 = 99846
+    Measurement { allocations: 106246, requested_bytes: 10604084, retained_bytes: -33, peak_working_bytes: 172942 }
+  sh:ask component at 2N = 2560 conforming focus nodes: allocated 212486, not the pinned 6 + 78 * 2560 = 199686
+    Measurement { allocations: 212486, requested_bytes: 21223604, retained_bytes: 48, peak_working_bytes: 314043 }
+  sh:select component at N = 1280 conforming focus nodes: allocated 75526, not the pinned 6 + 48 * 1280 = 61446
+    Measurement { allocations: 75526, requested_bytes: 6163854, retained_bytes: -13, peak_working_bytes: 150100 }
+  sh:select component at 2N = 2560 conforming focus nodes: allocated 151046, not the pinned 6 + 48 * 2560 = 122886
+    Measurement { allocations: 151046, requested_bytes: 12335374, retained_bytes: 16, peak_working_bytes: 285420 }
+  sh:expression call at N = 1280 conforming focus nodes: allocated 106246, not the pinned 6 + 85 * 1280 = 108806
+    Measurement { allocations: 106246, requested_bytes: 7159094, retained_bytes: -20, peak_working_bytes: 142990 }
+  sh:expression call at 2N = 2560 conforming focus nodes: allocated 212486, not the pinned 6 + 85 * 2560 = 217606
+    Measurement { allocations: 212486, requested_bytes: 14330294, retained_bytes: 30, peak_working_bytes: 270689 }
+
+all measurements:
+  sh:sparql: N = 64006, 2N = 128006, marginal = 50 allocations and 4442 requested bytes per focus node, entry = 6
+  sh:ask component: N = 106246, 2N = 212486, marginal = 83 allocations and 8296 requested bytes per focus node, entry = 6
+  sh:select component: N = 75526, 2N = 151046, marginal = 59 allocations and 4821 requested bytes per focus node, entry = 6
+  sh:expression call: N = 106246, 2N = 212486, marginal = 83 allocations and 5602 requested bytes per focus node, entry = 6
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    every_sparql_surface_costs_a_constant_per_conforming_focus_node
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 7.03s
+
+heaptrack stats:
+	allocations:          	4573554
+	leaked allocations:   	9580
+	temporary allocations:	117119
+Heaptrack finished! Now run the following to investigate the data:
+
+  heaptrack --analyze "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/sparql-alloc-current.zst"

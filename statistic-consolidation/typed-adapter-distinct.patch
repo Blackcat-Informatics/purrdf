@@ -1,0 +1,55 @@
+--- a/helpers-ledger.toml
++++ b/helpers-ledger.toml
+@@ -2750,3 +2750,52 @@
+ criterion = "b"
+ anchor = "purrdf_shapes::sparql::AmbientContext"
+ reason = "Two independently owned typed SHACL request/cause slots: dated query admission retains exact source occurrences and invocation refusals, while native XPath execution retains its profile, finite limits, pattern cache and selected cause. AmbientContext swaps both private CURRENT slots to preserve each owner's admission and exact failure through suspension and nested restoration. Each wrapper forwards to std::RefCell::replace on its own slot; no second admission, regex, executor, cache or context-swap implementation is sanctioned."
++
++[[distinct]]
++members = ["purrdf_sparql_algebra::parser::table::ScopeTable::entry", "purrdf_sparql_algebra::parser::table::ScopeTable::entry_mut"]
++kind = "body"
++criterion = "b"
++anchor = "purrdf_sparql_algebra::parser::table::ScopeTable"
++reason = "The same arena invariant is read through an immutable reference for lookup or an exclusive mutable reference for AVL edits; distinct borrow signatures prevent mutation through lookup and retain Rust aliasing guarantees."
++
++[[distinct]]
++members = ["purrdf_sparql_eval::agg_fn::AggregateRegistry::describe", "purrdf_sparql_eval::property_fn::PropertyFunctionRegistry::describe"]
++kind = "body"
++criterion = "b"
++anchor = "purrdf_sparql_eval::agg_fn::AggregateRegistry::describe"
++reason = "Required resident publication adapters return their own typed aggregate or property-function descriptors; actual declaration discovery and admitted records remain in each describe_admitted producer, with no duplicated discovery algorithm."
++
++[[distinct]]
++members = ["purrdf_sparql_eval::agg_fn::WorkspaceAccumulator::into_resident", "purrdf_sparql_eval::workspace::WorkspaceTerm::into_resident"]
++kind = "body"
++criterion = "b"
++anchor = "purrdf_sparql_eval::agg_fn::WorkspaceAccumulator"
++reason = "One returns the original boxed dynamic accumulator and the other the original RDF term; each refuses to detach its bounded physical grant and returns its concrete original owner on refusal, without erasing payload types or copying storage."
++
++[[distinct]]
++members = ["purrdf_sparql_eval::path::PathSet::from_iter", "purrdf_sparql_eval::path::PathVec::from_iter"]
++kind = "body"
++criterion = "b"
++anchor = "purrdf_sparql_eval::path::PathSet"
++reason = "The set delegates insertion to its sorted unique endpoint protocol; the vector delegates append to its ordered bag protocol. Their constructor spelling is shared but the called extend operations deliberately preserve different path-machine multiplicities."
++
++[[distinct]]
++members = ["purrdf_core::ir::term::TermValue::dismantle", "purrdf_sparql_eval::modifier::TripleParts::dismantle", "purrdf_sparql_eval::property_fn_eval::Arg::dismantle"]
++kind = "shim"
++criterion = "a"
++anchor = "purrdf_lex::walk::dismantle_tree"
++reason = "Required Dismantle trait implementations for RDF terms, sort keys and compiled arguments forward to the one allocation-free dismantle_tree home; each tree supplies its own typed child traversal and no destruction algorithm is duplicated."
++
++[[distinct]]
++members = ["purrdf_sparql_eval::stat_agg::FirstAggregate::exact_numeric_cost_admitted", "purrdf_sparql_eval::stat_agg::LastAggregate::exact_numeric_cost_admitted", "purrdf_sparql_eval::test_crate::custom_aggregate_ownership::LastPairAggregate::exact_numeric_cost_admitted"]
++kind = "shim"
++criterion = "a"
++anchor = "purrdf_sparql_eval::agg_fn::CustomAggregate::exact_numeric_cost_admitted"
++reason = "These required provider declarations explicitly attest that selecting first, last or the ownership fixture performs no exact arithmetic. The default refuses opaque bounded cost analysis, so each priced native provider must override it; zero is a declaration, not a second arithmetic implementation."
++
++[[distinct]]
++members = ["purrdf_sparql_eval::retained::RetainedQueryExplanation::new", "purrdf_sparql_eval::retained::RetainedSparqlResult::new"]
++kind = "shim"
++criterion = "b"
++anchor = "purrdf_sparql_eval::retained::RetainedQueryExplanation"
++reason = "Typed public explanation and result carriers wrap different payload values through the single payload admission and lease home; the concrete return types preserve public interfaces without a second allocation or lease implementation."

@@ -1,0 +1,326 @@
+--- a/crates/sparql-eval/src/composite_value.rs
++++ b/crates/sparql-eval/src/composite_value.rs
+@@ -140,3 +140,78 @@
+         StorageError::AdmissionFailed => EvalError::WorkspaceStopped,
+     }
+ }
++
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++// Append to the existing composite_value.rs native owner home as its unit module.
++// This uses the actual segmented reservation factory, not a second fake account.
++// Proposal only: not compiled or run.
++#[cfg(test)]
++mod owned_composite_fixtures {
++    use std::sync::Arc;
++    use purrdf_core::{
++        DatasetView, SegmentedBuildLimits, SegmentedBuilder, SegmentedError,
++        SegmentedReadLimits, SegmentedSession,
++    };
++    use crate::workspace::QueryWorkspace;
++    use super::CompositeValue;
++
++    fn account() -> (SegmentedSession, QueryWorkspace<SegmentedError>, u64) {
++        let limits = SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap();
++        let image = SegmentedBuilder::new(limits).seal().unwrap();
++        let source = SegmentedSession::open(
++            Arc::new(image.provider()), image.receipt(),
++            SegmentedReadLimits::new(1_000_000, 2, 2048, 20_000_000, 8),
++        ).unwrap();
++        let baseline = source.evidence().live_bytes();
++        let control = QueryWorkspace::<SegmentedError>::control_bytes().unwrap();
++        let reservation = source.reserve_owned_workspace(control).unwrap().unwrap();
++        let workspace = QueryWorkspace::owned(reservation, 0).unwrap();
++        (source, workspace, baseline)
++    }
++
++    #[test]
++    fn original_payload_and_grant_survive_all_ordinary_clones() {
++        let (source, workspace, baseline) = account();
++        let capability = workspace.capability();
++        let first = CompositeValue::parse(
++            "[{'a':[1,'é'@fr--rtl]}]", purrdf_cdt::CDT_LIST, &capability,
++        ).unwrap().unwrap();
++        let loaded = source.evidence().live_bytes();
++        let cloned = first.clone();
++        assert!(std::ptr::eq(&*first, &*cloned));
++        assert_eq!(source.evidence().live_bytes(), loaded);
++        drop(first);
++        drop(capability);
++        drop(workspace);
++        assert_eq!(source.evidence().live_bytes(), loaded);
++        assert_eq!(cloned.as_list().unwrap().len(), 1);
++        drop(cloned);
++        assert_eq!(source.evidence().live_bytes(), baseline);
++    }
++
++    #[test]
++    fn malformed_native_diagnostics_die_before_the_original_grant() {
++        let (source, workspace, _) = account();
++        let capability = workspace.capability();
++        let baseline = source.evidence().live_bytes();
++        for lexical in ["[<http://[invalid]>]", "[<relative>]", "[{'a':1,'a':2}]", "[[1],"] {
++            assert!(CompositeValue::parse(lexical, purrdf_cdt::CDT_LIST, &capability).unwrap().is_none());
++            assert_eq!(source.evidence().live_bytes(), baseline);
++            assert!(workspace.take_failure().is_none());
++        }
++    }
++
++    #[test]
++    fn comparator_work_is_released_while_original_inputs_remain_live() {
++        let (source, workspace, _) = account();
++        let capability = workspace.capability();
++        let a = CompositeValue::parse("[[1,2],3]", purrdf_cdt::CDT_LIST, &capability).unwrap().unwrap();
++        let b = CompositeValue::parse("[[1,2],4]", purrdf_cdt::CDT_LIST, &capability).unwrap().unwrap();
++        let baseline = source.evidence().live_bytes();
++        assert_eq!(a.total_cmp(&b, &capability).unwrap(), std::cmp::Ordering::Less);
++        assert_eq!(source.evidence().live_bytes(), baseline);
++        assert!(workspace.take_failure().is_none());
++    }
++}
+--- /dev/null
++++ b/crates/sparql-eval/tests/cdt_owned_admission.rs
+@@ -0,0 +1,242 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Proposed `crates/sparql-eval/tests/cdt_owned_admission.rs`.
++//! Reuses existing test support and alloc-probe dependency. Not compiled or run.
++
++mod support;
++
++use std::alloc::Layout;
++use std::cmp::Ordering;
++use purrdf_alloc_probe::CurrentThreadWindow;
++use purrdf_cdt::{CdtDatatype, CdtError, CdtParts, CdtTerm, CdtTripleTerm, CdtValue};
++use purrdf_cdt::memory::{Admission, ReadError, Storage, StorageError};
++use purrdf_core::{SparqlEngine, SparqlRequest, TermValue};
++use purrdf_sparql_eval::{NativeSparqlEngine, QueryGovernors, QueryOptions};
++use support::segmented::{CEILING, fixture, open};
++
++#[global_allocator]
++static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
++
++/// Real native allocation adapter with deterministic pre-allocation refusals.
++#[derive(Default)]
++struct TraceStorage {
++    live: usize,
++    peak: usize,
++    growths: usize,
++    refuse_growth: Option<usize>,
++    boxes: usize,
++    refuse_box: Option<usize>,
++}
++
++impl Admission for TraceStorage {
++    fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
++        if bytes > self.live {
++            self.growths += 1;
++            if self.refuse_growth == Some(self.growths) { return Err(StorageError::AdmissionFailed); }
++        }
++        self.live = bytes;
++        self.peak = self.peak.max(bytes);
++        Ok(())
++    }
++}
++
++impl TraceStorage {
++    fn box_admitted(&mut self) -> Result<(), StorageError> {
++        self.boxes += 1;
++        if self.refuse_box == Some(self.boxes) { Err(StorageError::AllocationFailed) } else { Ok(()) }
++    }
++}
++
++impl Storage for TraceStorage {
++    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
++        self.box_admitted()?;
++        Ok(Box::new(value))
++    }
++    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
++        self.box_admitted()?;
++        Ok(Box::new(value))
++    }
++}
++
++#[test]
++fn native_retained_bytes_are_actual_surviving_layouts() {
++    let mut storage = TraceStorage::default();
++    let (value, bytes) = purrdf_cdt::parse::try_parse_cdt("['abcdef']", CdtDatatype::List, &mut storage).unwrap();
++    assert_eq!(storage.live, bytes);
++    assert!(storage.peak > bytes, "open frames and measuring work die before publication");
++    let CdtParts::List(items) = value.into_parts() else { panic!("list fixture") };
++    let CdtTerm::Literal(literal) = &items[0] else { panic!("literal fixture") };
++    let actual = Layout::array::<CdtTerm>(items.capacity()).unwrap().size()
++        + literal.lexical.capacity() + literal.datatype.capacity();
++    assert_eq!(bytes, actual);
++    drop(items);
++    storage.resize(0).unwrap();
++
++    let (value, bytes) = purrdf_cdt::parse::try_parse_cdt("[[null]]", CdtDatatype::List, &mut storage).unwrap();
++    let CdtParts::List(items) = value.into_parts() else { panic!("list fixture") };
++    let CdtTerm::Composite(inner) = &items[0] else { panic!("nested fixture") };
++    // Both lists have one exact requested cell in the native constructor.
++    assert_eq!(inner.as_list().unwrap().len(), 1);
++    assert_eq!(bytes, Layout::array::<CdtTerm>(items.capacity()).unwrap().size()
++        + Layout::new::<CdtValue>().size() + Layout::array::<CdtTerm>(1).unwrap().size());
++    drop(items);
++    storage.resize(0).unwrap();
++}
++
++#[test]
++fn every_native_growth_refusal_stays_physical() {
++    let lexical = "[{'b':[1,2], 'a':<<(<http://example.org/s> <http://example.org/p> ['é'@fr--rtl])>>}]";
++    let mut complete = TraceStorage::default();
++    let (value, _) = purrdf_cdt::parse::try_parse_cdt(lexical, CdtDatatype::List, &mut complete).unwrap();
++    drop(value);
++    for ordinal in 1..=complete.growths {
++        let mut refused = TraceStorage { refuse_growth: Some(ordinal), ..TraceStorage::default() };
++        let error = purrdf_cdt::parse::try_parse_cdt(lexical, CdtDatatype::List, &mut refused).unwrap_err();
++        assert!(matches!(error, ReadError::Storage(StorageError::AdmissionFailed)));
++        assert_eq!(refused.growths, ordinal, "no allocation/resize after first refusal");
++    }
++}
++
++#[test]
++fn nested_box_allocator_refusal_is_not_malformed_lexical() {
++    let mut storage = TraceStorage { refuse_box: Some(2), ..TraceStorage::default() };
++    let error = purrdf_cdt::parse::try_parse_cdt("[[[null]]]", CdtDatatype::List, &mut storage).unwrap_err();
++    assert!(matches!(error, ReadError::Storage(StorageError::AllocationFailed)));
++    assert_eq!(storage.boxes, 2);
++}
++
++#[test]
++fn malformed_lexical_diagnostics_keep_offset_and_key_bytes() {
++    for (datatype, lexical) in [
++        (CdtDatatype::Map, "{1:0,1:1,1:2}"),
++        (CdtDatatype::List, "[<http://[invalid]>]"),
++        (CdtDatatype::List, "[<relative>]"),
++        (CdtDatatype::List, "['é'@fr--RTL]"),
++        (CdtDatatype::List, "['\\uD800']"),
++        (CdtDatatype::List, "[[1],"),
++    ] {
++        let expected = purrdf_cdt::parse_cdt(lexical, datatype).unwrap_err();
++        let mut storage = TraceStorage::default();
++        let ReadError::Lexical(actual) = purrdf_cdt::parse::try_parse_cdt(lexical, datatype, &mut storage).unwrap_err()
++            else { panic!("lexical refusal with sufficient capacity") };
++        assert_eq!(actual, expected);
++    }
++    let mut storage = TraceStorage::default();
++    let ReadError::Lexical(CdtError::DuplicateMapKey { offset, key }) =
++        purrdf_cdt::parse::try_parse_cdt("{1:0,1:1,1:2}", CdtDatatype::Map, &mut storage).unwrap_err()
++        else { panic!("duplicate fixture") };
++    assert_eq!(offset, 5);
++    assert_eq!(key, format!("\"1\"^^<{}>", purrdf_cdt::XSD_INTEGER));
++}
++
++#[test]
++fn admitted_total_order_keeps_syntax_and_releases_work() {
++    let pairs = [
++        ("[1]", "[01]", Ordering::Greater),
++        ("[ 1 ]", "[1]", Ordering::Equal),
++        ("[null]", "[[]]", Ordering::Less),
++        ("[<<(null null [1])>>]", "[<<(null null [2])>>]", Ordering::Less),
++        ("[{'b':2,'a':1}]", "[{'a':1,'b':2}]", Ordering::Equal),
++        ("['a'@en--ltr]", "['a'@en--rtl]", Ordering::Less),
++    ];
++    for (a, b, expected) in pairs {
++        let a = purrdf_cdt::parse_list(a).unwrap();
++        let b = purrdf_cdt::parse_list(b).unwrap();
++        let mut storage = TraceStorage::default();
++        let actual = purrdf_cdt::ops::try_total_value_cmp(&a, &b, &mut storage).unwrap();
++        assert_eq!(actual, expected);
++        assert_eq!(actual, purrdf_cdt::total_value_cmp(&a, &b));
++        assert_eq!(storage.live, 0, "no comparator work survives the scalar result");
++        let mut refused = TraceStorage { refuse_growth: Some(1), ..TraceStorage::default() };
++        assert_eq!(purrdf_cdt::ops::try_total_value_cmp(&a, &b, &mut refused), Err(StorageError::AdmissionFailed));
++    }
++}
++
++#[test]
++fn quiet_iri_verdict_matches_owned_parser_on_invalid_hosts_and_neighbours() {
++    for iri in ["http://example.org/a", "http://[::1]/", "relative/a", "http://[v1.x]/",
++        "http://[v.x]/", "http://[v1.]/", "http://[xyz]/", "http://[::1]extra/", "http://[::1/", "a b"] {
++        let expected = purrdf_iri::parse(iri).ok().map(|value| value.has_scheme());
++        let window = CurrentThreadWindow::open();
++        let actual = purrdf_iri::absolute_verdict(iri);
++        let measured = window.close();
++        assert_eq!(actual, expected);
++        assert_eq!(measured.allocations, 0, "verdict materializes neither text nor discarded error");
++    }
++}
++
++#[test]
++fn unrepresentable_destination_layout_refuses_before_admission() {
++    let mut storage = TraceStorage::default();
++    let mut values = Vec::<u64>::new();
++    {
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++        assert_eq!(memory.reserve(&mut values, usize::MAX), Err(StorageError::SizeOverflow));
++        assert_eq!(memory.live_bytes(), 0);
++    }
++    assert!(values.is_empty());
++    assert_eq!(storage.growths, 0);
++}
++
++#[test]
++fn destruction_of_deep_heterogeneous_boxes_allocates_nothing() {
++    let lexical = format!("{}null{}", "[<<(null null ".repeat(1024), ")>>]".repeat(1024));
++    let value = purrdf_cdt::parse_list(&lexical).unwrap();
++    let window = CurrentThreadWindow::open();
++    drop(value);
++    let measured = window.close();
++    assert_eq!(measured.allocations, 0);
++}
++
++/// Read a result using only borrowed access; copies here belong to test assertions.
++fn ids(result: &purrdf_sparql_eval::RetainedSparqlResult) -> Vec<String> {
++    let (_, rows) = result.solutions().unwrap();
++    rows.iter().map(|row| match &row[0] {
++        Some(TermValue::Literal { lexical_form, .. }) => lexical_form.clone(),
++        _ => panic!("fixture id"),
++    }).collect()
++}
++
++#[test]
++fn complete_bounded_text_prepared_and_governed_entries_preserve_bag_and_ties() {
++    let query = format!(
++        "SELECT ?id ?v WHERE {{ VALUES (?id ?v) {{ \
++         (0 \"[1]\"^^<{dt}>) (1 \"[ 1 ]\"^^<{dt}>) \
++         (1 \"[ 1 ]\"^^<{dt}>) (2 \"[2]\"^^<{dt}>) \
++         (9 \"[1,\"^^<{dt}>) }} }} ORDER BY ?v",
++        dt = purrdf_cdt::CDT_LIST,
++    );
++    let (image, resident) = fixture();
++    let engine = NativeSparqlEngine::new();
++    let request = || SparqlRequest { query: &query, base_iri: None, substitutions: &[] };
++    let expected = engine.query(&resident, request()).unwrap();
++    let (_, expected_rows) = expected.solutions().unwrap();
++    assert_eq!(expected_rows.len(), 5);
++    let prepared = engine.prepare_query(&query, None).unwrap();
++    for entry in 0..4 {
++        let source = open(&image, CEILING);
++        let output = match entry {
++            0 => engine.query_fallible_view(&source, request(), QueryOptions::EMPTY).unwrap().result,
++            1 => engine.query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY).unwrap().result,
++            2 => engine.query_governed_fallible_view(&source, request(), QueryOptions::EMPTY,
++                &QueryGovernors::METERED).unwrap().result,
++            _ => engine.query_prepared_governed_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY,
++                &QueryGovernors::METERED).unwrap().result,
++        };
++        assert_eq!(output.solutions().unwrap().1, expected_rows);
++        assert_eq!(ids(&output), ["9", "0", "1", "1", "2"]);
++        let before_clone = source.evidence().live_bytes();
++        let window = CurrentThreadWindow::open();
++        let cloned = output.clone();
++        let measured = window.close();
++        assert_eq!(measured.allocations, 0);
++        assert_eq!(source.evidence().live_bytes(), before_clone);
++        assert!(std::ptr::eq(output.solutions().unwrap().1.as_ptr(), cloned.solutions().unwrap().1.as_ptr()));
++        drop(output);
++        assert_eq!(source.evidence().live_bytes(), before_clone);
++        assert_eq!(ids(&cloned), ["9", "0", "1", "1", "2"]);
++        drop(cloned);
++        assert!(source.evidence().live_bytes() < before_clone);
++    }
++}

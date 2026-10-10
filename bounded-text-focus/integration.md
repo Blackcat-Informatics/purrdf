@@ -1,0 +1,9 @@
+# Bounded native TEXT and focus acceptance
+
+The proposed fixture is an actual native segmented-storage query consumer in the text crate, whose existing core/evaluator dependencies admit that direction. It does not change production or dependencies. Apply bounded-text-focus.patch after frozen full8 reaches terminal.
+
+The same caller-owned resident corpus builds both the persistent image and registered TextIndex. Ranked search and repeated term occurrences correlate against an actual NOTE RDF graph pattern, with a supplied one-quad focus graph different from the three-quad query source. Expected resident rows pin score/rank/position/bag exactly and independent counts are two/three; the admitted function must report focus count one. All four public direct/prepared/governed/prepared-governed routes run under the original 8MB/16384 trace bounds, assert actual request advancement, actual heap peak against provider grant, shallow zero-allocation clone, continued payload validity after cache/engine destruction and exact non-cache original baseline after last owner. Independent zero-headroom neighbors preserve typed Residency before any query read and exact original baseline.
+
+Ordinary git apply --check and rustfmt syntax passed. Compilation, strict lint and runtime are NOT RUN. This is the missing completion evidence family, not an existing qualification claim.
+
+Existing independent physical cases remain: cdt_owned_admission unrepresentable_destination_layout_refuses_before_admission, nested_box_allocator_refusal_is_not_malformed_lexical and every_native_growth_refusal_stays_physical; segmented_query provider-fault-over-fired-stop and zero-headroom govern/EXPLAIN; query_completion final checkpoint and stopped-receipt precedence. The final current-tree full8 log captures their actual execution rather than relying on names alone.

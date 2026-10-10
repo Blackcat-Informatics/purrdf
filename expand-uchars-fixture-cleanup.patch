@@ -1,0 +1,28 @@
+diff --git a/crates/rdf-core/tests/native_regex_storage.rs b/crates/rdf-core/tests/native_regex_storage.rs
+--- a/crates/rdf-core/tests/native_regex_storage.rs
++++ b/crates/rdf-core/tests/native_regex_storage.rs
+@@ -469,8 +469,6 @@
+     assert!(failure.storage().0.refused.is_some());
+ }
+ 
+-// Append to native_regex_storage.rs, reusing its counting allocator and Account.
+-
+ #[test]
+ fn uchar_expansion_admits_its_real_utf8_capacity_and_preserves_malformed_bytes() {
+     use purrdf_lex::allocation::Memory;
+@@ -551,7 +549,6 @@
+     let measured = window.close();
+     memory.release_string(text).unwrap();
+     assert_eq!(memory.live_bytes(), 0);
+-    drop(memory);
+     assert_eq!(account.live, 0);
+     assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), live);
+     assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
+@@ -573,7 +570,6 @@
+     assert_eq!(memory.live_bytes(), 2);
+     let measured = window.close();
+     memory.release_string(text).unwrap();
+-    drop(memory);
+     assert_eq!(account.refused, Some(6));
+     assert_eq!(account.peak, 2);
+     assert_eq!(measured.peak_working_bytes, 2);

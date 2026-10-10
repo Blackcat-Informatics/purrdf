@@ -1,0 +1,564 @@
+diff --git a/crates/sparql-eval/src/bgp.rs b/crates/sparql-eval/src/bgp.rs
+--- a/crates/sparql-eval/src/bgp.rs
++++ b/crates/sparql-eval/src/bgp.rs
+@@ -921,35 +921,61 @@
+     scope: &GraphScope<D::Id>,
+     initial: &[bool],
+ ) -> Vec<usize> {
++
++    cost_based_order_from_admitted(compiled, dataset, scope, initial, &crate::WorkspaceCapability::resident())
++        .expect("resident cost order").try_into_resident().expect("resident cost order ownership")
++}
++
++fn cost_based_order_from_admitted<D: DatasetView>(
++    compiled: &[CompiledPattern<D::Id>],
++    dataset: &D,
++    scope: &GraphScope<D::Id>,
++    initial: &[bool],
++    workspace: &crate::WorkspaceCapability,
++) -> Result<AdmittedVec<usize>, EvalError> {
+     let n = compiled.len();
+     if n <= 1 {
+-        return (0..n).collect();
++        let mut order = AdmittedVec::with_capacity(n, workspace)?;
++        for index in 0..n { order.push_reserved(index); }
++        return Ok(order);
+     }
++    let base = cost_base(compiled, dataset, scope, workspace)?;
++    let terms = dataset.term_count().max(1) as f64;
++    let columns = cost_columns(compiled, workspace)?;
++    if n <= COST_DP_MAX_PATTERNS {
++        cost_order_dp_admitted(compiled, &base, terms, columns, initial, workspace)
++    } else {
++        cost_order_greedy_admitted(compiled, &base, terms, columns, initial, workspace)
++    }
++}
+ 
+-    // Per-pattern base cardinality (constants only — slots/quoted-triples are free),
+-    // the exact stat a structural heuristic ignores. `f64` so the multiplicative join
+-    // selectivities never truncate to zero mid-estimate.
+-    let base: Vec<f64> = compiled
+-        .iter()
+-        .map(|cp| base_cardinality(dataset, cp, scope) as f64)
+-        .collect();
+-    // Distinct-term count as the equality-join domain size (`1/T` per join axis).
+-    let t = dataset.term_count().max(1) as f64;
++fn cost_base<D: DatasetView>(
++    compiled: &[CompiledPattern<D::Id>], dataset: &D, scope: &GraphScope<D::Id>,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<AdmittedVec<f64>, EvalError> {
++    let mut base = AdmittedVec::with_capacity(compiled.len(), workspace)?;
++    for pattern in compiled { base.push_reserved(base_cardinality(dataset, pattern, scope) as f64); }
++    Ok(base)
++}
+ 
+-    // The dense bound-mask width: the highest slot column across all patterns. A
+-    // position may be a nested triple, so descend through it to find every slot.
+-    let mut n_cols = 0usize;
+-    for cp in compiled {
+-        for pos in [&cp.s, &cp.p, &cp.o] {
+-            for_each_slot(pos, &mut |c| n_cols = n_cols.max(c + 1));
++fn cost_columns<I: ViewTermId>(compiled: &[CompiledPattern<I>], workspace: &crate::WorkspaceCapability) -> Result<usize, EvalError> {
++    let mut columns = 0_usize;
++    for pattern in compiled {
++        for position in [&pattern.s, &pattern.p, &pattern.o] {
++            for_each_slot_admitted(position, workspace, &mut |column| {
++                columns = columns.max(column.checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?);
++                Ok(())
++            })?;
+         }
+     }
++    Ok(columns)
++}
+ 
+-    if n <= COST_DP_MAX_PATTERNS {
+-        cost_order_dp_from(compiled, &base, t, n_cols, initial)
+-    } else {
+-        cost_order_greedy_from(compiled, &base, t, n_cols, initial)
+-    }
++fn cost_bound_mask(initial: &[bool], columns: usize, workspace: &crate::WorkspaceCapability) -> Result<AdmittedVec<bool>, EvalError> {
++    let mut bound = AdmittedVec::with_capacity(columns, workspace)?;
++    for column in 0..columns { bound.push_reserved(initial.get(column).copied().unwrap_or(false)); }
++    Ok(bound)
++
+ }
+ 
+ /// The constants-only cardinality of a compiled pattern under `scope`: pass each
+@@ -986,13 +1012,23 @@
+ /// earlier-scheduled pattern — each is an equality-join axis (selectivity ~`1/T`).
+ /// Ground constants are excluded: their selectivity is already folded into the
+ /// pattern's base cardinality.
++#[cfg(test)]
+ fn join_positions<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &[bool]) -> usize {
+-    [&cp.s, &cp.p, &cp.o]
+-        .into_iter()
+-        .filter(|pos| pos_has_bound_slot(pos, bound))
+-        .count()
++
++    join_positions_admitted(cp, bound, &crate::WorkspaceCapability::resident()).expect("resident join positions")
+ }
+ 
++fn join_positions_admitted<I: ViewTermId>(
++    pattern: &CompiledPattern<I>, bound: &[bool], workspace: &crate::WorkspaceCapability,
++) -> Result<usize, EvalError> {
++    let mut count = 0;
++    for position in [&pattern.s, &pattern.p, &pattern.o] {
++        count += usize::from(pos_has_bound_slot_admitted(position, bound, workspace)?);
++    }
++    Ok(count)
++
++}
++
+ /// The running intermediate-size estimate after appending a pattern: scale by its
+ /// base size, divide by `T` for each already-bound join axis.
+ ///
+@@ -1035,6 +1071,7 @@
+     cost_order_greedy_from(compiled, base, t, n_cols, &[])
+ }
+ 
++#[cfg(test)]
+ fn cost_order_greedy_from<I: ViewTermId>(
+     compiled: &[CompiledPattern<I>],
+     base: &[f64],
+@@ -1042,45 +1079,48 @@
+     n_cols: usize,
+     initial: &[bool],
+ ) -> Vec<usize> {
++
++    cost_order_greedy_admitted(compiled, base, t, n_cols, initial, &crate::WorkspaceCapability::resident())
++        .expect("resident greedy order").try_into_resident().expect("resident greedy order ownership")
++}
++
++fn cost_order_greedy_admitted<I: ViewTermId>(
++    compiled: &[CompiledPattern<I>], base: &[f64], t: f64, n_cols: usize,
++    initial: &[bool], workspace: &crate::WorkspaceCapability,
++) -> Result<AdmittedVec<usize>, EvalError> {
+     let n = compiled.len();
+     let precision = Binary64Scope::enter();
+     let ops = precision.ops();
+-    let mut bound = initial.to_vec();
+-    bound.resize(n_cols, false);
+-    let mut scheduled = vec![false; n];
+-    let mut order = Vec::with_capacity(n);
+-    let mut running = 1.0f64;
+-
++    let mut bound = cost_bound_mask(initial, n_cols, workspace)?;
++    let mut scheduled = AdmittedVec::with_capacity(n, workspace)?;
++    for _ in 0..n { scheduled.push_reserved(false); }
++    let mut order = AdmittedVec::with_capacity(n, workspace)?;
++    let mut running = 1.0_f64;
+     for _ in 0..n {
+-        // While a connected pattern remains, only such patterns are eligible — never
+-        // force a Cartesian product. (Round 1: nothing bound, nothing connected, so
+-        // every pattern is eligible and the lowest-cardinality one seeds the join.)
+-        let any_connected =
+-            (0..n).any(|i| !scheduled[i] && pattern_connected(&compiled[i], &bound));
+-        let mut best: Option<usize> = None;
+-        let mut best_size = f64::INFINITY;
+-        for i in 0..n {
+-            if scheduled[i] {
+-                continue;
+-            }
+-            if any_connected && !pattern_connected(&compiled[i], &bound) {
+-                continue;
+-            }
+-            let joins = join_positions(&compiled[i], &bound);
+-            let size = step_size(ops, running, base[i], joins, t);
+-            // Strict `<` over an index-order scan ⇒ lowest original index wins ties.
+-            if best.is_none() || size < best_size {
+-                best = Some(i);
+-                best_size = size;
++        let mut any_connected = false;
++        for index in 0..n {
++            if !scheduled[index] && pattern_connected_admitted(&compiled[index], &bound, workspace)? {
++                any_connected = true;
++                break;
+             }
+         }
+-        let chosen = best.expect("an unscheduled pattern always remains");
+-        scheduled[chosen] = true;
+-        mark_bound(&compiled[chosen], &mut bound);
++        let mut best = None;
++        let mut best_size = f64::INFINITY;
++        for index in 0..n {
++            if scheduled[index] { continue; }
++            if any_connected && !pattern_connected_admitted(&compiled[index], &bound, workspace)? { continue; }
++            let joins = join_positions_admitted(&compiled[index], &bound, workspace)?;
++            let size = step_size(ops, running, base[index], joins, t);
++            if best.is_none() || size < best_size { best = Some(index); best_size = size; }
++        }
++        let chosen = best.expect("an unscheduled pattern remains");
++        scheduled.as_mut_slice()[chosen] = true;
++        mark_bound_admitted(&compiled[chosen], bound.as_mut_slice(), workspace)?;
+         running = best_size;
+-        order.push(chosen);
++        order.push_reserved(chosen);
+     }
+-    order
++    Ok(order)
++
+ }
+ 
+ /// One left-deep plan in the subset DP: its accumulated cost (sum of intermediate
+@@ -1140,6 +1180,7 @@
+     cost_order_dp_from(compiled, base, t, n_cols, &[])
+ }
+ 
++#[cfg(test)]
+ fn cost_order_dp_from<I: ViewTermId>(
+     compiled: &[CompiledPattern<I>],
+     base: &[f64],
+@@ -1147,146 +1188,163 @@
+     n_cols: usize,
+     initial: &[bool],
+ ) -> Vec<usize> {
+-    let n = compiled.len();
+-    // Safety invariant: each pattern index must fit in a 4-bit nibble (values 1–15
+-    // after the 1-based offset). COST_DP_MAX_PATTERNS == 8 satisfies this with margin.
+-    debug_assert!(
+-        n <= COST_DP_MAX_PATTERNS,
+-        "cost_order_dp called with n={n} > COST_DP_MAX_PATTERNS={COST_DP_MAX_PATTERNS}"
+-    );
+-    const {
+-        assert!(
+-            COST_DP_MAX_PATTERNS <= 15,
+-            "COST_DP_MAX_PATTERNS must be ≤ 15 so every index fits in a 4-bit nibble"
+-        );
+-    };
+ 
+-    let full: usize = (1usize << n) - 1;
++    cost_order_dp_admitted(compiled, base, t, n_cols, initial, &crate::WorkspaceCapability::resident())
++        .expect("resident subset order").try_into_resident().expect("resident subset order ownership")
++}
++
++fn cost_order_dp_admitted<I: ViewTermId>(
++    compiled: &[CompiledPattern<I>], base: &[f64], t: f64, n_cols: usize,
++    initial: &[bool], workspace: &crate::WorkspaceCapability,
++) -> Result<AdmittedVec<usize>, EvalError> {
++    let n = compiled.len();
++    debug_assert!(n <= COST_DP_MAX_PATTERNS);
++    const { assert!(COST_DP_MAX_PATTERNS <= 15); }
++    let states = 1_usize.checked_shl(u32::try_from(n).map_err(|_| EvalError::WorkspaceBoundOverflow)?)
++        .ok_or(EvalError::WorkspaceBoundOverflow)?;
++    let full = states - 1;
+     let precision = Binary64Scope::enter();
+     let ops = precision.ops();
+-    let mut dp: Vec<Option<DpPlan>> = vec![None; full + 1];
+-    dp[0] = Some(DpPlan {
+-        cost: 0.0,
+-        size: 1.0,
+-        order_bits: 0,
+-        len: 0,
+-    });
+-
+-    // Masks ascend, and every transition sets one more bit (a strictly larger mask),
+-    // so `dp[mask]` is final by the time the loop reaches it.
++    let mut dp = AdmittedVec::<Option<DpPlan>>::with_capacity(states, workspace)?;
++    for _ in 0..states { dp.push_reserved(None); }
++    dp.as_mut_slice()[0] = Some(DpPlan { cost: 0.0, size: 1.0, order_bits: 0, len: 0 });
+     for mask in 0..=full {
+-        let Some(plan) = dp[mask] else {
+-            continue;
+-        };
+-        // The slots bound after this prefix (the union of the set's slots).
+-        // Decode order_bits MSB→LSB to recover the scheduled indices.
+-        let mut bound = initial.to_vec();
+-        bound.resize(n_cols, false);
+-        for k in 0..plan.len {
+-            let nibble_pos = plan.len - 1 - k; // 0 = least-significant occupied nibble
+-            let idx = ((plan.order_bits >> (4 * nibble_pos)) & 0xF) as usize - 1;
+-            mark_bound(&compiled[idx], &mut bound);
++        let Some(plan) = dp[mask] else { continue; };
++        let mut bound = cost_bound_mask(initial, n_cols, workspace)?;
++        for position in 0..plan.len {
++            let nibble = plan.len - 1 - position;
++            let index = ((plan.order_bits >> (4 * nibble)) & 0xF) as usize - 1;
++            mark_bound_admitted(&compiled[index], bound.as_mut_slice(), workspace)?;
+         }
+-        let any_connected =
+-            (0..n).any(|i| mask & (1usize << i) == 0 && pattern_connected(&compiled[i], &bound));
+-
+-        for i in 0..n {
+-            if mask & (1usize << i) != 0 {
+-                continue;
+-            }
+-            // Seed (mask == 0) is free; afterwards prefer a connected pattern while one
+-            // exists (no Cartesian product unless the BGP is genuinely disconnected).
+-            if any_connected && !pattern_connected(&compiled[i], &bound) {
+-                continue;
++        let mut any_connected = false;
++        for index in 0..n {
++            if mask & (1_usize << index) == 0 && pattern_connected_admitted(&compiled[index], &bound, workspace)? {
++                any_connected = true;
++                break;
+             }
+-            let joins = join_positions(&compiled[i], &bound);
+-            let size = step_size(ops, plan.size, base[i], joins, t);
++        }
++        for index in 0..n {
++            if mask & (1_usize << index) != 0 { continue; }
++            if any_connected && !pattern_connected_admitted(&compiled[index], &bound, workspace)? { continue; }
++            let joins = join_positions_admitted(&compiled[index], &bound, workspace)?;
++            let size = step_size(ops, plan.size, base[index], joins, t);
+             let cost = ops.add(plan.cost, size);
+-            // Append pattern index `i` as a new LSB nibble (1-based so index 0 ≠ empty).
+-            let order_bits = (plan.order_bits << 4) | (i as u64 + 1);
++            let order_bits = (plan.order_bits << 4) | (index as u64 + 1);
+             let len = plan.len + 1;
+-            let next = mask | (1usize << i);
+-            let better = match &dp[next] {
++            let next = mask | (1_usize << index);
++            let better = match dp[next] {
+                 None => true,
+-                // `total_cmp` is a deterministic total order (and avoids comparing
+-                // floats with `==`); ties fall through to the nibble-packed order
+-                // comparison. Both candidates have the same `len` (identical popcount
+-                // of `next`), so their packed words are the same width and `u64`
+-                // comparison reads them left-to-right — exactly lexicographic order
+-                // on the pattern-index sequence, lowest-index first.
+-                Some(cur) => match cost.total_cmp(&cur.cost) {
++                Some(current) => match cost.total_cmp(&current.cost) {
+                     std::cmp::Ordering::Less => true,
+                     std::cmp::Ordering::Greater => false,
+-                    std::cmp::Ordering::Equal => order_bits < cur.order_bits,
++                    std::cmp::Ordering::Equal => order_bits < current.order_bits,
+                 },
+             };
+-            if better {
+-                dp[next] = Some(DpPlan {
+-                    cost,
+-                    size,
+-                    order_bits,
+-                    len,
+-                });
+-            }
++            if better { dp.as_mut_slice()[next] = Some(DpPlan { cost, size, order_bits, len }); }
+         }
+     }
++    let best = dp[full].expect("the subset DP reaches the full set");
++    let mut order = AdmittedVec::with_capacity(usize::from(best.len), workspace)?;
++    for position in 0..best.len {
++        let nibble = best.len - 1 - position;
++        order.push_reserved(((best.order_bits >> (4 * nibble)) & 0xF) as usize - 1);
++    }
++    Ok(order)
+ 
+-    let best = dp[full].expect("the DP always reaches the full set");
+-    // Decode MSB→LSB: the first-scheduled pattern is in the most-significant nibble.
+-    (0..best.len)
+-        .map(|k| {
+-            let nibble_pos = best.len - 1 - k;
+-            ((best.order_bits >> (4 * nibble_pos)) & 0xF) as usize - 1
+-        })
+-        .collect()
+ }
+ 
+ /// Whether a pattern shares at least one already-bound variable with the bindings
+ /// produced so far (so joining it cannot be a Cartesian product). Descends into nested
+ /// quoted triples: a triple position is connected if any of its inner slots is bound.
+ fn pattern_connected<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &[bool]) -> bool {
+-    [&cp.s, &cp.p, &cp.o]
+-        .into_iter()
+-        .any(|pos| pos_has_bound_slot(pos, bound))
++
++    pattern_connected_admitted(cp, bound, &crate::WorkspaceCapability::resident()).expect("resident connectivity")
+ }
+ 
++fn pattern_connected_admitted<I: ViewTermId>(
++    pattern: &CompiledPattern<I>, bound: &[bool], workspace: &crate::WorkspaceCapability,
++) -> Result<bool, EvalError> {
++    for position in [&pattern.s, &pattern.p, &pattern.o] {
++        if pos_has_bound_slot_admitted(position, bound, workspace)? { return Ok(true); }
++    }
++    Ok(false)
++
++}
++
+ /// Whether a position contains an already-bound slot anywhere, over a work list of
+ /// the nested positions in `(s, p, o)` order, stopping at the first bound slot.
++#[cfg(test)]
+ fn pos_has_bound_slot<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
+-    let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
+-    while let Some(pos) = pending.pop() {
+-        match pos {
+-            Pos::Bound(_) => {}
+-            Pos::Slot(c) => {
+-                if bound[*c] {
+-                    return true;
+-                }
+-            }
+-            Pos::Triple(t) => pending.extend([&t.o, &t.p, &t.s]),
+-        }
+-    }
+-    false
++
++    pos_has_bound_slot_admitted(pos, bound, &crate::WorkspaceCapability::resident()).expect("resident bound slot")
+ }
+ 
++fn pos_has_bound_slot_admitted<I: ViewTermId>(
++    position: &Pos<I>, bound: &[bool], workspace: &crate::WorkspaceCapability,
++) -> Result<bool, EvalError> {
++    visit_slots_admitted(position, workspace, &mut |column| Ok(bound[column]))
++
++}
++
+ /// Record a scheduled pattern's slot columns as now-bound (descending into nested
+ /// quoted triples).
+ fn mark_bound<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &mut [bool]) {
+-    for pos in [&cp.s, &cp.p, &cp.o] {
+-        for_each_slot(pos, &mut |c| bound[c] = true);
++
++    mark_bound_admitted(cp, bound, &crate::WorkspaceCapability::resident()).expect("resident bound mask")
++}
++
++fn mark_bound_admitted<I: ViewTermId>(
++    pattern: &CompiledPattern<I>, bound: &mut [bool], workspace: &crate::WorkspaceCapability,
++) -> Result<(), EvalError> {
++    for position in [&pattern.s, &pattern.p, &pattern.o] {
++        for_each_slot_admitted(position, workspace, &mut |column| { bound[column] = true; Ok(()) })?;
+     }
++    Ok(())
++
+ }
+ 
+ /// Visit every slot column reachable from a position (itself, or the inner positions
+ /// of a nested quoted triple), in `(s, p, o)` pre-order over a work list.
+ fn for_each_slot<I: ViewTermId>(pos: &Pos<I>, f: &mut impl FnMut(usize)) {
+-    let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
+-    while let Some(pos) = pending.pop() {
+-        match pos {
++
++    for_each_slot_admitted(pos, &crate::WorkspaceCapability::resident(), &mut |column| { f(column); Ok(()) })
++        .expect("resident slot walk")
++}
++
++fn for_each_slot_admitted<I: ViewTermId>(
++    position: &Pos<I>, workspace: &crate::WorkspaceCapability,
++    visit: &mut impl FnMut(usize) -> Result<(), EvalError>,
++) -> Result<(), EvalError> {
++    visit_slots_admitted(position, workspace, &mut |column| { visit(column)?; Ok(false) })?;
++    Ok(())
++}
++
++fn visit_slots_admitted<I: ViewTermId>(
++    position: &Pos<I>, workspace: &crate::WorkspaceCapability,
++    visit: &mut impl FnMut(usize) -> Result<bool, EvalError>,
++) -> Result<bool, EvalError> {
++    let mut storage = crate::workspace::LexicalFrame::new(workspace);
++    let mut pending = purrdf_lex::walk::WorkList::<&Pos<I>, 8>::new();
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++    pending.try_push_admitted(position, &mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "BGP slot walk"))?;
++    let mut stopped = false;
++    while let Some(position) = pending.pop() {
++        match position {
+             Pos::Bound(_) => {}
+-            Pos::Slot(c) => f(*c),
+-            Pos::Triple(t) => pending.extend([&t.o, &t.p, &t.s]),
++            Pos::Slot(column) => if visit(*column)? { stopped = true; break; },
++            Pos::Triple(triple) => {
++                for child in [&triple.o, &triple.p, &triple.s] {
++                    pending.try_push_admitted(child, &mut memory)
++                        .map_err(|error| memory.admission_mut().storage_error(error, "BGP slot walk"))?;
++                }
++            }
+         }
+     }
++    pending.release_admitted(&mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "BGP slot walk"))?;
++    Ok(stopped)
++
+ }
+ 
+ /// The slot variables a triple pattern introduces, in `(s, p, o)` order — descending
+@@ -2601,57 +2659,49 @@
+     initial: &[bool],
+     driving_rows: u64,
+ ) -> (u64, u64) {
+-    let base: Vec<f64> = compiled
+-        .iter()
+-        .map(|cp| base_cardinality(dataset, cp, scope) as f64)
+-        .collect();
+-    let t = dataset.term_count().max(1) as f64;
+-    let mut n_cols = 0usize;
+-    for cp in compiled {
+-        for pos in [&cp.s, &cp.p, &cp.o] {
+-            for_each_slot(pos, &mut |c| n_cols = n_cols.max(c + 1));
+-        }
+-    }
+ 
++    replay_cost_estimate_from_admitted(compiled, dataset, scope, order, initial, driving_rows, &crate::WorkspaceCapability::resident())
++        .expect("resident cost replay")
++}
++
++fn replay_cost_estimate_from_admitted<D: DatasetView>(
++    compiled: &[CompiledPattern<D::Id>], dataset: &D, scope: &GraphScope<D::Id>,
++    order: &[usize], initial: &[bool], driving_rows: u64, workspace: &crate::WorkspaceCapability,
++) -> Result<(u64, u64), EvalError> {
++    let base = cost_base(compiled, dataset, scope, workspace)?;
++    let t = dataset.term_count().max(1) as f64;
++    let columns = cost_columns(compiled, workspace)?;
+     let precision = Binary64Scope::enter();
+     let ops = precision.ops();
+-    let mut bound = initial.to_vec();
+-    bound.resize(n_cols, false);
+-    // A join variable ranges over the relation that introduced it, rather than
+-    // every term in unrelated dataset regions. The constants-only relation size
+-    // is a cheap upper bound on that domain. Keeping a domain per slot also
+-    // preserves disconnected factors through later connected stages.
+-    let mut domains = vec![t; n_cols];
++    let mut bound = cost_bound_mask(initial, columns, workspace)?;
++    let mut domains = AdmittedVec::with_capacity(columns, workspace)?;
++    for _ in 0..columns { domains.push_reserved(t); }
+     let mut running = driving_rows as f64;
+-    let mut peak = if compiled.is_empty() { running } else { 0.0f64 };
+-    for &i in order {
++    let mut peak = if compiled.is_empty() { running } else { 0.0_f64 };
++    for &index in order {
+         let mut divisor = 1.0_f64;
+-        let current_domain = base[i].min(t).max(1.0);
+-        for position in [&compiled[i].s, &compiled[i].p, &compiled[i].o] {
++        let current_domain = base[index].min(t).max(1.0);
++        for position in [&compiled[index].s, &compiled[index].p, &compiled[index].o] {
+             let mut previous_domain = 0.0_f64;
+-            for_each_slot(position, &mut |column| {
+-                if bound[column] {
+-                    previous_domain = previous_domain.max(domains[column]);
+-                }
+-            });
+-            if previous_domain > 0.0 {
+-                divisor = ops.mul(divisor, previous_domain.max(current_domain));
+-            }
++            for_each_slot_admitted(position, workspace, &mut |column| {
++                if bound[column] { previous_domain = previous_domain.max(domains[column]); }
++                Ok(())
++            })?;
++            if previous_domain > 0.0 { divisor = ops.mul(divisor, previous_domain.max(current_domain)); }
+         }
+-        running = ops.div(ops.mul(running, base[i]), divisor);
++        running = ops.div(ops.mul(running, base[index]), divisor);
+         peak = peak.max(running);
+-        for position in [&compiled[i].s, &compiled[i].p, &compiled[i].o] {
+-            for_each_slot(position, &mut |column| {
+-                domains[column] = if bound[column] {
+-                    domains[column].min(current_domain)
+-                } else {
+-                    current_domain
+-                };
+-            });
++        for position in [&compiled[index].s, &compiled[index].p, &compiled[index].o] {
++            for_each_slot_admitted(position, workspace, &mut |column| {
++                let domain = if bound[column] { domains[column].min(current_domain) } else { current_domain };
++                domains.as_mut_slice()[column] = domain;
++                Ok(())
++            })?;
+         }
+-        mark_bound(&compiled[i], &mut bound);
++        mark_bound_admitted(&compiled[index], bound.as_mut_slice(), workspace)?;
+     }
+-    (running as u64, peak as u64)
++    Ok((running as u64, peak as u64))
++
+ }
+ 
+ /// An empty solution sequence over only the real (non-blank) variables of `working`.

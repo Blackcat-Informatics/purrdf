@@ -1,0 +1,13 @@
+Recorded resolution for 'crates/rdf-core/src/dataset_view.rs'.
+Recorded resolution for 'crates/rdf-core/src/lib.rs'.
+Recorded resolution for 'crates/retrieval/tests/candidate_union.rs'.
+Recorded resolution for 'crates/sparql-eval/src/bgp.rs'.
+Recorded resolution for 'crates/sparql-eval/src/expr.rs'.
+Recorded resolution for 'crates/text/src/fixed.rs'.
+Recorded resolution for 'crates/text/src/index.rs'.
+Recorded resolution for 'crates/text/src/ranking.rs'.
+Recorded resolution for 'crates/text/src/relation.rs'.
+Recorded resolution for 'crates/text/src/score.rs'.
+Recorded resolution for 'crates/text/tests/determinism.rs'.
+Recorded resolution for 'crates/xsd/src/temporal.rs'.
+[paudley/508-sparql-eval-complete-bounded-workspace 2085e8647] Synchronize evaluated main contracts into bounded SPARQL

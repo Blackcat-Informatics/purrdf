@@ -1,0 +1,700 @@
+diff --git a/crates/xsd/src/binary.rs b/crates/xsd/src/binary.rs
+--- a/crates/xsd/src/binary.rs
++++ b/crates/xsd/src/binary.rs
+@@ -100,28 +100,43 @@
+ 
+ /// Encode a byte slice to XSD canonical base64Binary form (standard base64, `=` padding, no whitespace).
+ pub fn canonical_base64(bytes: &[u8]) -> String {
++    let full_groups = bytes.len() / 3;
++    let remainder = bytes.len() % 3;
++    let length = (full_groups + usize::from(remainder > 0)) * 4;
++    let mut output = String::with_capacity(length);
++    write_base64(bytes, &mut output).expect("resident String formatting");
++    output
++}
++
++
++/// Borrowed canonical RFC 4648 text through the existing native encoder.
++#[derive(Debug, Clone, Copy)]
++pub struct Base64<'a>(pub &'a [u8]);
++impl core::fmt::Display for Base64<'_> {
++    fn fmt(&self, output: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        write_base64(self.0, output)
++    }
++}
++
++fn write_base64(bytes: &[u8], out: &mut impl core::fmt::Write) -> core::fmt::Result {
+     if bytes.is_empty() {
+-        return String::new();
++        return Ok(());
+     }
+ 
+     let full_groups = bytes.len() / 3;
+     let remainder = bytes.len() % 3;
+-    let out_len = (full_groups + usize::from(remainder > 0)) * 4;
+-    // Build directly as a String — all output bytes are valid ASCII (BASE64_ALPHABET
+-    // + '='), so char::from is safe and no from_utf8 conversion is needed.
+-    let mut out = String::with_capacity(out_len);
+ 
+     for g in 0..full_groups {
+         let base = g * 3;
+         let (a, b, c) = (bytes[base], bytes[base + 1], bytes[base + 2]);
+-        out.push(char::from(BASE64_ALPHABET[(a >> 2) as usize]));
+-        out.push(char::from(
++        out.write_char(char::from(BASE64_ALPHABET[(a >> 2) as usize]))?;
++        out.write_char(char::from(
+             BASE64_ALPHABET[((a & 0x03) << 4 | b >> 4) as usize],
+-        ));
+-        out.push(char::from(
++        ))?;
++        out.write_char(char::from(
+             BASE64_ALPHABET[((b & 0x0F) << 2 | c >> 6) as usize],
+-        ));
+-        out.push(char::from(BASE64_ALPHABET[(c & 0x3F) as usize]));
++        ))?;
++        out.write_char(char::from(BASE64_ALPHABET[(c & 0x3F) as usize]))?;
+     }
+ 
+     if remainder > 0 {
+@@ -130,24 +145,24 @@
+         // the entire `if` block). Both arms are explicit; no wildcard is needed.
+         if remainder == 1 {
+             let a = bytes[base];
+-            out.push(char::from(BASE64_ALPHABET[(a >> 2) as usize]));
+-            out.push(char::from(BASE64_ALPHABET[((a & 0x03) << 4) as usize]));
+-            out.push('=');
++            out.write_char(char::from(BASE64_ALPHABET[(a >> 2) as usize]))?;
++            out.write_char(char::from(BASE64_ALPHABET[((a & 0x03) << 4) as usize]))?;
++            out.write_char('=')?;
+         } else {
+             // remainder == 2
+             let (a, b) = (bytes[base], bytes[base + 1]);
+-            out.push(char::from(BASE64_ALPHABET[(a >> 2) as usize]));
+-            out.push(char::from(
++            out.write_char(char::from(BASE64_ALPHABET[(a >> 2) as usize]))?;
++            out.write_char(char::from(
+                 BASE64_ALPHABET[((a & 0x03) << 4 | b >> 4) as usize],
+-            ));
+-            out.push(char::from(BASE64_ALPHABET[((b & 0x0F) << 2) as usize]));
++            ))?;
++            out.write_char(char::from(BASE64_ALPHABET[((b & 0x0F) << 2) as usize]))?;
+         }
+         // Both remainder arms end with one shared padding '='; remainder == 1 adds
+         // its second '=' above, keeping the emitted bytes identical.
+-        out.push('=');
++        out.write_char('=')?;
+     }
+ 
+-    out
++    Ok(())
+ }
+ 
+ /// Borrowed native parse failures. No lexical String is constructed here.
+diff --git a/crates/xsd/src/value.rs b/crates/xsd/src/value.rs
+--- a/crates/xsd/src/value.rs
++++ b/crates/xsd/src/value.rs
+@@ -253,6 +253,41 @@
+     }
+ }
+ 
++
++#[derive(Debug, Clone, Copy)]
++/// Borrowed canonical nonnumeric text whose formatter creates no intermediate
++/// String/Vec. Numeric exact text uses its separately admitted prepared groups.
++pub struct CanonicalNonNumeric<'a> {
++    value: &'a XsdValue,
++}
++
++/// Select the native nonnumeric formatter while keeping the caller's value owner.
++/// # Returns
++/// None for a numeric family, whose rendering has native group scratch.
++#[must_use]
++pub fn canonical_non_numeric(value: &XsdValue) -> Option<CanonicalNonNumeric<'_>> {
++    (!value.is_numeric()).then_some(CanonicalNonNumeric { value })
++}
++
++impl core::fmt::Display for CanonicalNonNumeric<'_> {
++    fn fmt(&self, output: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self.value {
++            XsdValue::Boolean(value) => output.write_str(if *value { "true" } else { "false" }),
++            XsdValue::String(value) => output.write_str(value),
++            XsdValue::DateTime(value) => core::fmt::Display::fmt(value, output),
++            XsdValue::Date(value) => core::fmt::Display::fmt(value, output),
++            XsdValue::Time(value) => core::fmt::Display::fmt(value, output),
++            XsdValue::Duration(value) => core::fmt::Display::fmt(value, output),
++            XsdValue::Gregorian(value) => core::fmt::Display::fmt(value, output),
++            XsdValue::Binary { bytes, datatype } if *datatype == XsdDatatype::Base64Binary =>
++                core::fmt::Display::fmt(&crate::binary::Base64(bytes), output),
++            XsdValue::Binary { bytes, .. } =>
++                core::fmt::Display::fmt(&purrdf_hash::hex::Upper(bytes), output),
++            _ => unreachable!("numeric families do not construct this view"),
++        }
++    }
++}
++
+ /// Parse a lexical form into the XSD value space for a known [`XsdDatatype`].
+ ///
+ /// Hard-fails on malformed input. This is the interning entry point: a consumer
+diff --git a/crates/xsd/src/temporal.rs b/crates/xsd/src/temporal.rs
+--- a/crates/xsd/src/temporal.rs
++++ b/crates/xsd/src/temporal.rs
+@@ -251,68 +251,45 @@
+     pub fn canonical_lexical(&self) -> String {
+-        // `Duration::new` refuses to construct a mixed-sign (months, seconds) pair
+-        // (XSD 1.1 Part 2 §3.3.6 puts such pairs outside the lexical mapping's
+-        // range), so this function may assume sign coherence rather than needing to
+-        // guard against it — the invariant is load-bearing for the `neg` line below.
++        self.to_string()
++}
++}
++
++
++impl core::fmt::Display for Duration {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+         debug_assert!(
+             i128::from(self.months.signum()) * self.seconds.mantissa().signum() != -1,
+             "Duration::new must enforce sign coherence: months and seconds may not have strictly opposite signs"
+         );
+-        let neg = self.months < 0 || self.seconds.mantissa() < 0;
++        let negative = self.months < 0 || self.seconds.mantissa() < 0;
+         let months = self.months.unsigned_abs();
+         let years = months / 12;
+         let rem_months = months % 12;
+         let total_secs = self.seconds.whole_part().unsigned_abs();
+-        let frac = self.seconds.frac_part();
++        let fraction = self.seconds.frac_part();
+         let days = total_secs / 86_400;
+-        let rem = total_secs % 86_400;
+-        let hours = rem / 3600;
+-        let mins = (rem % 3600) / 60;
+-        let secs = rem % 60;
+-
+-        use std::fmt::Write as _;
+-        let mut out = String::new();
+-        if neg {
+-            out.push('-');
+-        }
+-        out.push('P');
+-        if years > 0 {
+-            let _ = write!(out, "{years}Y");
+-        }
+-        if rem_months > 0 {
+-            let _ = write!(out, "{rem_months}M");
+-        }
+-        if days > 0 {
+-            let _ = write!(out, "{days}D");
+-        }
+-        let has_time = hours > 0 || mins > 0 || secs > 0 || !frac.is_zero();
++        let remaining = total_secs % 86_400;
++        let hours = remaining / 3600;
++        let minutes = (remaining % 3600) / 60;
++        let seconds = remaining % 60;
++        if negative { out.write_str("-")?; }
++        out.write_str("P")?;
++        if years > 0 { write!(out, "{years}Y")?; }
++        if rem_months > 0 { write!(out, "{rem_months}M")?; }
++        if days > 0 { write!(out, "{days}D")?; }
++        let has_time = hours > 0 || minutes > 0 || seconds > 0 || !fraction.is_zero();
+         if has_time {
+-            out.push('T');
+-            if hours > 0 {
+-                let _ = write!(out, "{hours}H");
+-            }
+-            if mins > 0 {
+-                let _ = write!(out, "{mins}M");
+-            }
+-            if secs > 0 || !frac.is_zero() {
+-                if frac.is_zero() {
+-                    let _ = write!(out, "{secs}S");
+-                } else {
+-                    let canon = frac.canonical_lexical();
+-                    let digits = canon.split_once('.').map_or("", |(_, f)| f);
+-                    let _ = write!(out, "{secs}.{digits}S");
+-                }
++            out.write_str("T")?;
++            if hours > 0 { write!(out, "{hours}H")?; }
++            if minutes > 0 { write!(out, "{minutes}M")?; }
++            if seconds > 0 || !fraction.is_zero() {
++                if fraction.is_zero() { write!(out, "{seconds}S")?; }
++                else { write!(out, "{seconds}.{}S", FractionText(&fraction))?; }
+             }
+         }
+-        // The zero duration canonicalizes to "PT0S" — except for
+-        // `yearMonthDuration`, whose pattern facet ([^DT]*, XSD 1.1 Part 2
+-        // §3.4.27) forbids both 'D' and 'T', so its zero canonicalizes to "P0M".
+-        if out == "P" || out == "-P" {
+-            out.push_str(match self.datatype {
+-                XsdDatatype::YearMonthDuration => "0M",
+-                _ => "T0S",
+-            });
++        if self.months == 0 && self.seconds.is_zero() {
++            out.write_str(if self.datatype == XsdDatatype::YearMonthDuration { "0M" } else { "T0S" })?;
+         }
+-        out
++        Ok(())
+     }
+ }
+ 
+diff --git a/crates/xsd/src/temporal.rs b/crates/xsd/src/temporal.rs
+--- a/crates/xsd/src/temporal.rs
++++ b/crates/xsd/src/temporal.rs
+@@ -3501,58 +3501,96 @@
+-fn fmt_year(year: i64) -> String {
+-    if year < 0 {
+-        // `unsigned_abs` (not unary negation) so this is total for every `i64`,
+-        // including `i64::MIN` — defense in depth: the narrowing sites that build
+-        // `year` fields reject `i64::MIN` as non-representable in the lexical
+-        // space, but this formatter must never panic or wrap even if that
+-        // invariant is ever violated by a future caller.
+-        format!("-{:04}", year.unsigned_abs())
+-    } else {
+-        format!("{year:04}")
++struct YearText(i64);
++impl core::fmt::Display for YearText {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        if self.0 < 0 { write!(out, "-{:04}", self.0.unsigned_abs()) }
++        else { write!(out, "{:04}", self.0) }
+     }
+ }
+ 
+-fn fmt_tz(tz: Option<i32>) -> String {
+-    match tz {
+-        None => String::new(),
+-        Some(0) => "Z".to_string(),
+-        Some(off) => {
+-            let sign = if off < 0 { '-' } else { '+' };
+-            let a = off.abs();
+-            format!("{sign}{:02}:{:02}", a / 60, a % 60)
++#[cfg(test)]
++fn fmt_year(year: i64) -> String { YearText(year).to_string() }
++
++struct TimezoneText(Option<i32>);
++impl core::fmt::Display for TimezoneText {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self.0 {
++            None => Ok(()),
++            Some(0) => out.write_str("Z"),
++            Some(offset) => {
++                let sign = if offset < 0 { '-' } else { '+' };
++                let absolute = offset.unsigned_abs();
++                write!(out, "{sign}{:02}:{:02}", absolute / 60, absolute % 60)
++            }
+         }
+     }
+ }
+ 
+-/// Canonical seconds field: two integer digits, fractional part trimmed of trailing
+-/// zeros (and dropped entirely if zero).
+-fn fmt_seconds(sec: &Decimal) -> String {
+-    let whole = sec.whole_part();
+-    let frac = sec.frac_part();
+-    if frac.is_zero() {
+-        format!("{whole:02}")
+-    } else {
+-        // `canonical_lexical` yields e.g. "0.5"; take the fractional digits.
+-        let canon = frac.canonical_lexical();
+-        let digits = canon.split_once('.').map_or("", |(_, f)| f);
+-        format!("{whole:02}.{digits}")
++/// Writes the suffix after the decimal point using the sole native decimal
++/// formatter. The prefix/sign never becomes a temporary String.
++struct FractionText<'a>(&'a Decimal);
++impl core::fmt::Display for FractionText<'_> {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        struct Suffix<'a, 'b> { out: &'a mut core::fmt::Formatter<'b>, found: bool }
++        impl core::fmt::Write for Suffix<'_, '_> {
++            fn write_str(&mut self, text: &str) -> core::fmt::Result {
++                if self.found { return self.out.write_str(text); }
++                if let Some(point) = text.find('.') {
++                    self.found = true;
++                    self.out.write_str(&text[point + 1..])?;
++                }
++                Ok(())
++            }
++        }
++        use core::fmt::Write;
++        write!(&mut Suffix { out, found: false }, "{}", self.0)
+     }
+ }
+ 
++struct SecondsText<'a>(&'a Decimal);
++impl core::fmt::Display for SecondsText<'_> {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        let whole = self.0.whole_part();
++        let fraction = self.0.frac_part();
++        if fraction.is_zero() { write!(out, "{whole:02}") }
++        else { write!(out, "{whole:02}.{}", FractionText(&fraction)) }
++    }
++}
++
++impl core::fmt::Display for DateTime {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        write!(out, "{}-{:02}-{:02}T{:02}:{:02}:{}{}", YearText(self.year),
++            self.month, self.day, self.hour, self.minute, SecondsText(&self.second), TimezoneText(self.tz))
++    }
++}
++impl core::fmt::Display for Date {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        write!(out, "{}-{:02}-{:02}{}", YearText(self.year), self.month, self.day, TimezoneText(self.tz))
++    }
++}
++impl core::fmt::Display for Time {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        write!(out, "{:02}:{:02}:{}{}", self.hour, self.minute, SecondsText(&self.second), TimezoneText(self.tz))
++    }
++}
++impl core::fmt::Display for Gregorian {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        let timezone = TimezoneText(self.tz);
++        match self.datatype {
++            XsdDatatype::GYear => write!(out, "{}{timezone}", YearText(self.year.unwrap_or(0))),
++            XsdDatatype::GMonth => write!(out, "--{:02}{timezone}", self.month.unwrap_or(1)),
++            XsdDatatype::GDay => write!(out, "---{:02}{timezone}", self.day.unwrap_or(1)),
++            XsdDatatype::GYearMonth => write!(out, "{}-{:02}{timezone}", YearText(self.year.unwrap_or(0)), self.month.unwrap_or(1)),
++            XsdDatatype::GMonthDay => write!(out, "--{:02}-{:02}{timezone}", self.month.unwrap_or(1), self.day.unwrap_or(1)),
++            _ => Ok(()), // The existing resident canonical law for an invalid tag.
++        }
++    }
++}
++
+ impl DateTime {
+     /// XSD canonical lexical form.
+     #[must_use]
+     pub fn canonical_lexical(&self) -> String {
+-        format!(
+-            "{}-{:02}-{:02}T{:02}:{:02}:{}{}",
+-            fmt_year(self.year),
+-            self.month,
+-            self.day,
+-            self.hour,
+-            self.minute,
+-            fmt_seconds(&self.second),
+-            fmt_tz(self.tz),
+-        )
+-    }
++        self.to_string()
++}
+ 
+     /// Gregorian year component.
+     #[must_use]
+@@ -3601,14 +3639,8 @@
+     /// XSD canonical lexical form.
+     #[must_use]
+     pub fn canonical_lexical(&self) -> String {
+-        format!(
+-            "{}-{:02}-{:02}{}",
+-            fmt_year(self.year),
+-            self.month,
+-            self.day,
+-            fmt_tz(self.tz)
+-        )
+-    }
++        self.to_string()
++}
+ 
+     /// Gregorian year component.
+     #[must_use]
+@@ -3639,14 +3671,8 @@
+     /// XSD canonical lexical form.
+     #[must_use]
+     pub fn canonical_lexical(&self) -> String {
+-        format!(
+-            "{:02}:{:02}:{}{}",
+-            self.hour,
+-            self.minute,
+-            fmt_seconds(&self.second),
+-            fmt_tz(self.tz)
+-        )
+-    }
++        self.to_string()
++}
+ 
+     /// Hour component (0–24).
+     #[must_use]
+@@ -3677,35 +3703,9 @@
+     /// XSD canonical lexical form.
+     #[must_use]
+     pub fn canonical_lexical(&self) -> String {
+-        let tz = fmt_tz(self.tz);
+-        match self.datatype {
+-            XsdDatatype::GYear => {
+-                format!("{}{tz}", fmt_year(self.year.unwrap_or(0)))
+-            }
+-            XsdDatatype::GMonth => {
+-                format!("--{:02}{tz}", self.month.unwrap_or(1))
+-            }
+-            XsdDatatype::GDay => {
+-                format!("---{:02}{tz}", self.day.unwrap_or(1))
+-            }
+-            XsdDatatype::GYearMonth => {
+-                format!(
+-                    "{}-{:02}{tz}",
+-                    fmt_year(self.year.unwrap_or(0)),
+-                    self.month.unwrap_or(1)
+-                )
+-            }
+-            XsdDatatype::GMonthDay => {
+-                format!(
+-                    "--{:02}-{:02}{tz}",
+-                    self.month.unwrap_or(1),
+-                    self.day.unwrap_or(1)
+-                )
+-            }
+-            _ => String::new(), // unreachable for well-formed Gregorian values
+-        }
+-    }
++        self.to_string()
+ }
++}
+ 
+ #[cfg(test)]
+ mod tests {
+diff --git a/crates/xsd/src/numeric.rs b/crates/xsd/src/numeric.rs
+--- a/crates/xsd/src/numeric.rs
++++ b/crates/xsd/src/numeric.rs
+@@ -392,43 +392,17 @@
+     /// zeros trimmed (`2.50` → `"2.5"`, `-0.250` → `"-0.25"`).
+     #[must_use]
+     pub fn canonical_lexical(&self) -> String {
+-        // Two allocations (the digit string and the exact-fit output) where the
+-        // split/pad/format form built three to four intermediate `String`s; the
+-        // integer and fraction parts are slices of `digits`, and the zero padding
+-        // is pushed directly. Byte-identical to the reference form in the tests.
+-        let neg = self.mantissa < 0;
+-        let digits = self.mantissa.unsigned_abs().to_string();
+-        let scale = usize::from(self.scale);
+-        let mut out = String::with_capacity(digits.len() + scale + 3);
+-        if neg {
+-            out.push('-');
+-        }
+-        if scale == 0 {
+-            out.push_str(&digits);
+-            return out;
+-        }
++        self.to_string()
++}
++}
+ 
+-        let (int_part, frac_digits, pad) = if digits.len() > scale {
+-            let split = digits.len() - scale;
+-            (&digits[..split], &digits[split..], 0)
+-        } else {
+-            // value magnitude < 1: pad leading zeros in the fractional part.
+-            ("0", digits.as_str(), scale - digits.len())
+-        };
+ 
+-        // XSD 1.1 §E.1 `decimalCanonicalMap`: an integer-valued decimal (an empty
+-        // fractional part after trimming trailing zeros) has NO decimal point at all. The pad is
+-        // all zeros, so the padded fraction trims to empty iff `frac_digits` does.
+-        let frac_trimmed = frac_digits.trim_end_matches('0');
+-        out.push_str(int_part);
+-        if !frac_trimmed.is_empty() {
+-            out.push('.');
+-            for _ in 0..pad {
+-                out.push('0');
+-            }
+-            out.push_str(frac_trimmed);
+-        }
+-        out
++impl core::fmt::Display for Decimal {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        // A bounded coefficient has at most two binary limbs and three base-ten
++        // groups: the native Mag inline capacity covers every preparation buffer.
++        crate::exact::Decimal::from_bounded(self).prepare_text()
++            .map_err(|_| core::fmt::Error)?.write_fmt(out)
+     }
+ }
+ 
+diff --git a/crates/xsd/src/exact/decimal.rs b/crates/xsd/src/exact/decimal.rs
+--- a/crates/xsd/src/exact/decimal.rs
++++ b/crates/xsd/src/exact/decimal.rs
+@@ -64,7 +64,7 @@
+     #[must_use]
+     pub fn temporary_bytes(&self) -> usize { self.digits.heap_bytes() }
+ 
+-    fn write_fmt<W: fmt::Write + ?Sized>(&self, out: &mut W) -> fmt::Result {
++    pub(crate) fn write_fmt<W: fmt::Write + ?Sized>(&self, out: &mut W) -> fmt::Result {
+         if self.digits.is_negative() { out.write_str("-")?; }
+         if self.scale == 0 { return self.digits.write_unsigned(out); }
+         if self.digits.digits_len() > self.scale {
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -4797,7 +4797,7 @@
+     };
+     let parsed_source = match source_datatype {
+-        Some(datatype) => crate::parsed_value::ParsedValue::parse(lexical, datatype, false, &ctx.growth)?,
+-        None => None,
++        Some(datatype) if datatype.is_numeric() || datatype == XsdDatatype::Boolean => crate::parsed_value::ParsedValue::parse(lexical, datatype, false, &ctx.growth)?,
++        _ => None,
+     };
+     if let Some(value) = parsed_source.filter(|value| is_numeric_or_boolean(value)) {
+         if target == XsdDatatype::String {
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -4847,8 +4847,8 @@
+             CalendarSource::Refused => return Ok(None),
+         }
+     }
+-    if let ValueCast::Cast(cast) = cast_duration_or_binary(source, target) {
+-        return cast.map(|value| xsd_to_term(ctx, &value)).transpose();
++    if let ValueCast::Cast(cast) = cast_duration_or_binary(ctx, source, target)? {
++        return Ok(cast);
+     }
+     // A string cast to any other type is first normalized by the target's
+     // `whiteSpace` facet (XPath F&O 3.1 §19.2): `collapse` for every non-string
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -4976,8 +4976,8 @@
+-enum ValueCast {
++enum ValueCast<I> {
+     /// The source is not a calendar, duration or binary literal.
+     NotApplicable,
+     /// The cast's value, or `None` for a cast error.
+-    Cast(Option<XsdValue>),
++    Cast(Option<SolutionTerm<I>>),
+ }
+ 
+ /// The cast of a calendar, duration or binary literal to a target other than a
+@@ -4997,70 +4997,48 @@
+ ///   only its own component (months, or seconds).
+ /// * `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes.
+ /// * A value casts to its own datatype unchanged; every other pair is refused.
+-#[inline(never)] // Out of the evaluator's frame; see `term_is_nan`.
+-fn cast_duration_or_binary(source: &TermValue, target: XsdDatatype) -> ValueCast {
+-    value_cast(source, target).map_or(ValueCast::NotApplicable, ValueCast::Cast)
+-}
+ 
+-/// [`cast_duration_or_binary`] with `None` for a source it does not apply to.
+-#[allow(
+-    clippy::option_option,
+-    reason = "the outer layer is \"not this family\", the inner one the cast error; the \
+-              public face is `ValueCast`"
+-)]
+-fn value_cast(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue>> {
++#[inline(never)]
++fn cast_duration_or_binary<D: DatasetView + Sync>(
++    ctx: &mut EvalCtx<'_, D>, source: &TermValue, target: XsdDatatype,
++) -> Result<ValueCast<D::Id>, EvalError> {
+     use XsdDatatype as T;
+-    let TermValue::Literal {
+-        datatype,
+-        language: None,
+-        ..
+-    } = source
+-    else {
+-        return None;
++    let TermValue::Literal { lexical_form, datatype, language: None, .. } = source else {
++        return Ok(ValueCast::NotApplicable);
+     };
+-    let from = XsdDatatype::from_iri(datatype)?;
+-    let in_family = from.is_calendar()
+-        || matches!(
+-            from,
+-            T::Duration
+-                | T::DayTimeDuration
+-                | T::YearMonthDuration
+-                | T::HexBinary
+-                | T::Base64Binary
+-        );
+-    if !in_family || target == T::String || target.is_calendar() {
+-        return None;
+-    }
+-    let Some(value) = xsd_of(source) else {
+-        return Some(None);
++    let Some(from) = T::from_iri(datatype) else { return Ok(ValueCast::NotApplicable); };
++    let in_family = from.is_calendar() || matches!(from,
++        T::Duration | T::DayTimeDuration | T::YearMonthDuration | T::HexBinary | T::Base64Binary);
++    if !in_family || target == T::String || target.is_calendar() { return Ok(ValueCast::NotApplicable); }
++    let Some(value) = crate::parsed_value::ParsedValue::parse(lexical_form, from, false, &ctx.growth)? else {
++        return Ok(ValueCast::Cast(None));
+     };
+-    if from == target {
+-        return Some(Some(value));
+-    }
+-    Some(match &value {
+-        XsdValue::Duration(dur) => {
+-            let zero = || match purrdf_xsd::parse("0", T::Decimal) {
+-                Ok(XsdValue::Decimal(zero)) => Some(zero),
+-                _ => None,
+-            };
++    if from == target { return xsd_to_term(ctx, &value).map(|value| ValueCast::Cast(Some(value))); }
++    let result = match &*value {
++        XsdValue::Duration(duration) => {
+             let (months, seconds) = match target {
+-                T::Duration => (dur.months(), dur.seconds()),
+-                T::YearMonthDuration => (dur.months(), zero()?),
+-                T::DayTimeDuration => (0, dur.seconds()),
+-                _ => return Some(None),
++                T::Duration => (duration.months(), duration.seconds()),
++                T::YearMonthDuration => (duration.months(), purrdf_xsd::Decimal::from_integer(0)),
++                T::DayTimeDuration => (0, duration.seconds()),
++                _ => return Ok(ValueCast::Cast(None)),
+             };
+-            purrdf_xsd::temporal::Duration::new(months, seconds, target)
+-                .ok()
+-                .map(XsdValue::Duration)
++            match purrdf_xsd::temporal::Duration::new(months, seconds, target) {
++                Ok(duration) => Some(xsd_to_term(ctx, &XsdValue::Duration(duration))?),
++                Err(_) => None,
++            }
+         }
+         XsdValue::Binary { bytes, .. } if matches!(target, T::HexBinary | T::Base64Binary) => {
+-            Some(XsdValue::Binary {
+-                bytes: bytes.clone(),
+-                datatype: target,
+-            })
++            // Both encoders borrow the immutable original parsed bytes. The cast
++            // allocates only its admitted final lexical/datatype destination.
++            if target == T::Base64Binary {
++                borrowed_xsd_text_to_term(ctx, &purrdf_xsd::binary::Base64(bytes), target.iri())?
++            } else {
++                borrowed_xsd_text_to_term(ctx, &purrdf_hash::hex::Upper(bytes), target.iri())?
++            }
+         }
+         _ => None,
+-    })
++    };
++    Ok(ValueCast::Cast(result))
+ }
+ 
+ /// Whether the casting table (SPARQL §17.5, over XPath F&O §19.1 "Casting from
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -6122,12 +6122,32 @@
+     let mut frame = crate::native_numeric::NumericFrame::new(&capability);
+     let prepared = purrdf_xsd::numeric::prepare_numeric_text(v, &mut |layout| frame.admit(layout));
+     let Some(text) = frame.finish_text(prepared)? else {
+-        return typed_term(ctx, &v.canonical_lexical(), v.datatype().iri());
++        let text = purrdf_xsd::value::canonical_non_numeric(v).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        return borrowed_xsd_text_to_term(ctx, &text, v.datatype().iri())?
++            .ok_or(EvalError::WorkspaceBoundOverflow);
+     };
+     numeric_text_to_term(ctx, text, v.datatype().iri())?.ok_or(EvalError::WorkspaceBoundOverflow)
+ }
+ 
+ 
++
++fn borrowed_xsd_text_to_term<D: DatasetView + Sync>(
++    ctx: &mut EvalCtx<'_, D>, text: &impl core::fmt::Display, datatype: &str,
++) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
++    let length = crate::workspace::display_len(text)?;
++    let bytes = length.checked_add(datatype.len()).ok_or(EvalError::WorkspaceBoundOverflow)?;
++    // Physical destination arithmetic is checked before its admission/allocation.
++    std::alloc::Layout::array::<u8>(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++    let admission = ctx.growth.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++    let lexical = crate::workspace::format_exact(text, length, "XSD canonical lexical destination")?;
++    let value = TermValue::Literal {
++        lexical_form: lexical,
++        datatype: crate::workspace::string(datatype, "XSD canonical datatype")?,
++        language: None, direction: None,
++    };
++    ctx.intern_workspace_term(crate::WorkspaceTerm::new(value, admission))
++}
++
+ /// Final lexical output consumes its original producer grant on interning.
+ fn numeric_text_to_term<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>, text: crate::native_numeric::NumericText, datatype: &str,
+

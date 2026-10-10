@@ -1,0 +1,104 @@
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema)
+error: empty line after doc comment
+   --> crates/cdt/src/limits.rs:141:1
+    |
+141 | / /// components for a triple term. Iterative, with an explicit worklist.
+142 | |
+    | |_^
+143 |   pub(crate) fn try_term_elements(
+    |   ------------------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = note: `-D clippy::empty-line-after-doc-comments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_doc_comments)]`
+    = help: if the empty line is unintentional, remove it
+
+error: empty line after doc comment
+   --> crates/cdt/src/ops.rs:915:1
+    |
+915 | / /// question is again one of value equality; no corpus test reaches that case.
+916 | |
+    | |_^
+917 |   pub(crate) fn membership_equal_with_memory(
+    |   ------------------------------------------ the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = help: if the empty line is unintentional, remove it
+
+error: empty line after doc comment
+   --> crates/cdt/src/render.rs:283:1
+    |
+283 | / /// own leaves and nothing below a composite.
+284 | |
+    | |_^
+285 |   pub(crate) fn try_term_lexical_len(
+    |   ---------------------------------- the comment documents this function
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#empty_line_after_doc_comments
+    = help: if the empty line is unintentional, remove it
+
+error: `drain(..)` used on a `Vec`
+    --> crates/cdt/src/functions.rs:2000:27
+     |
+2000 |     for (key, _) in keyed.drain(..) {
+     |                           ^^^^^^^^^ help: try: `into_iter()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_with_drain
+     = note: `-D clippy::iter-with-drain` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::iter_with_drain)]`
+
+error: `drain(..)` used on a `Vec`
+    --> crates/cdt/src/functions.rs:2043:31
+     |
+2043 |     for (key, index) in keyed.drain(..) {
+     |                               ^^^^^^^^^ help: try: `into_iter()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#iter_with_drain
+
+error: unnecessary use of `copied`
+    --> crates/cdt/src/functions.rs:2159:25
+     |
+2159 |     for (key, value) in pairs.iter().copied() {
+     |                         ^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#unnecessary_to_owned
+     = note: `-D clippy::unnecessary-to-owned` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::unnecessary_to_owned)]`
+help: remove any references to the binding
+     |
+2159 -     for (key, value) in pairs.iter().copied() {
+2159 +     for (key, value) in pairs.iter() {
+     |
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/cdt/src/ops.rs:284:13
+    |
+284 |             memory.push(jobs, CmpJob::Decided(Ordering::Less))?
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `memory.push(jobs, CmpJob::Decided(Ordering::Less))?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+    = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/cdt/src/ops.rs:287:13
+    |
+287 |             memory.push(jobs, CmpJob::Decided(Ordering::Greater))?
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `memory.push(jobs, CmpJob::Decided(Ordering::Greater))?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: consider adding a `;` to the last statement for consistent formatting
+   --> crates/cdt/src/tree.rs:100:21
+    |
+100 |                     entries.last_mut().expect("removed a child").value = parent
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: add a `;` here: `entries.last_mut().expect("removed a child").value = parent;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+error: could not compile `purrdf-cdt` (lib) due to 9 previous errors
+warning: build failed, waiting for other jobs to finish...

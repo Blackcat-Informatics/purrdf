@@ -1,0 +1,64 @@
+    Blocking waiting for file lock on build directory
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+   Compiling purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/slice)
+   Compiling purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/shapes)
+    Finished `test` profile [optimized] target(s) in 6m 37s
+     Running tests/change_path_alloc.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/f19b7d493307776e/out/change_path_alloc-f19b7d493307776e)
+
+running 12 tests
+test admit_allocation_is_independent_of_dataset_size ... ok
+test bind_allocation_is_independent_of_dataset_size_beyond_the_catalog ... ok
+test change_expansion_allocation_matches_its_pinned_closed_form ... ok
+test change_expansion_with_no_chain_to_walk_costs_no_path_probe ... ok
+test change_path_report_bytes_match_pinned_golden ... ok
+test conforming_change_path_allocation_has_no_growth_term_in_focus_count ... ok
+test every_allocation_exclusion_names_a_real_case ... ok
+test every_constraint_kind_is_covered_by_an_allocation_case ... ok
+test every_sibling_file_coverage_entry_names_a_real_case ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test pattern_change_path_allocation_has_no_growth_term_below_the_parallel_threshold ... ok
+test violating_change_path_allocation_scales_with_violations_not_focus_count ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.37s
+
+     Running tests/sparql_path_alloc.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-shapes/155cf37ddfa95d1b/out/sparql_path_alloc-155cf37ddfa95d1b)
+
+running 8 tests
+test ask_component_fallback_lane_costs_a_constant_per_conforming_focus_node ... ok
+test every_registered_prose_site_quotes_the_measured_figures ... ok
+test every_sparql_surface_still_reports_its_violations ... ok
+test every_sparql_surface_costs_a_constant_per_conforming_focus_node ... ok
+test every_sparql_surface_costs_a_constant_per_governed_change_focus_node ... ok
+test every_test_in_this_binary_takes_the_measure_lock_first ... ok
+test every_sparql_surface_still_reports_its_violations_when_governed ... ok
+test the_fixture_gives_every_focus_node_two_value_nodes ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.42s
+
+     Running tests/prepared_execution.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/dfb497cce083cf1d/out/prepared_execution-dfb497cce083cf1d)
+
+running 17 tests
+test declaring_one_parameter_twice_is_refused ... ok
+test binding_a_name_that_was_not_declared_is_refused ... ok
+test a_repeated_pre_bound_name_answers_the_empty_solution ... ok
+test a_duplicate_declaration_is_refused_before_either_door_exists ... ok
+test a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle ... ok
+test a_prepared_execution_answers_each_binding_from_one_plan ... ok
+test evaluating_an_admitted_plan_costs_a_pinned_constant_per_call ... ok
+test executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does ... ok
+test executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test running_with_a_parameter_unbound_is_refused ... ok
+test re_running_a_prepared_execution_costs_a_pinned_constant ... ok
+test the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does ... ok
+test the_two_doors_are_interchangeable_within_one_execution ... ok
+test the_third_run_costs_measurably_less_because_the_memo_is_reused ... ok
+test unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_value ... ok
+test a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

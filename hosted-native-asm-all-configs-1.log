@@ -1,0 +1,7 @@
+python3 scripts/check-simd-asm.py --doc --write-doc
+== x86_64: 2 Cargo jobs
+== x86_64-v3: 2 Cargo jobs
+== x86_64-v3 graph 0: /opt/purrdf-508-qualification/target/simd-asm/contexts/8a67d59f1b1ca3622f58f8f22da441deef6a9b75804fae9c09455c712d807b25/cargo.graph-0.stderr.log
+== x86_64 graph 0: /opt/purrdf-508-qualification/target/simd-asm/contexts/1089511c75e91132eada57a24af97b16e554d29f74e05ee36c6e4f9547d125c6/cargo.graph-0.stderr.log
+FAIL: assembly run interrupted
+make: *** [Makefile:683: simd-asm] Error 130

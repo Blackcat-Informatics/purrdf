@@ -1,0 +1,81 @@
+    #[test]
+    fn certainty_schema_keeps_original_grant_after_workspace_and_shallow_clone() {
+        use purrdf_sparql_algebra::{GraphPattern, Variable};
+        let variables: Vec<_> = (0..128).map(|ordinal| Variable::new(format!("v{ordinal}"))).collect();
+        let pattern = GraphPattern::Values { variables: variables.clone(), bindings: Vec::new() };
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let bound = crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability)
+            .expect("empty VALUES certainly binds each declared column");
+        assert_eq!(bound.vars(), variables);
+        let retained = ledger.live.load(Ordering::Relaxed);
+        assert!(retained > base);
+        let kept = bound.clone();
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        drop(bound);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), retained);
+        assert!(variables.iter().all(|variable| kept.contains(variable)));
+        drop(kept);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn certainty_refusal_releases_all_native_worklists_and_preserves_first_typed_cause() {
+        use purrdf_sparql_algebra::{GraphPattern, Variable};
+        let pattern = GraphPattern::Values {
+            variables: (0..512).map(|ordinal| Variable::new(format!("v{ordinal}"))).collect(),
+            bindings: Vec::new(),
+        };
+        let base = QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        for extra in [0, 1, 128, 512] {
+            let (workspace, ledger, _) = account(base + extra);
+            let capability = workspace.capability();
+            assert!(matches!(
+                crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability),
+                Err(EvalError::WorkspaceStopped)
+            ));
+            assert_eq!(ledger.live.load(Ordering::Relaxed), base, "every partial owner is released");
+            let cause = workspace.take_failure().expect("first original reservation failure");
+            assert_eq!(cause.identity, 7);
+            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+            assert!(matches!(
+                crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability),
+                Err(EvalError::WorkspaceStopped)
+            ));
+            assert!(workspace.take_failure().is_none());
+            drop(capability);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn certainty_lateral_context_and_filter_requirements_use_original_admitted_home() {
+        use purrdf_sparql_algebra::{Child, Expression, GraphPattern, Variable};
+        let driver = Variable::new("driver");
+        let output = Variable::new("output");
+        let required = Variable::new("required");
+        let pattern = GraphPattern::Lateral {
+            left: Child::new(GraphPattern::Values { variables: vec![driver.clone()], bindings: Vec::new() }),
+            right: Child::new(GraphPattern::Filter {
+                inner: Child::new(GraphPattern::Extend {
+                    inner: Child::new(GraphPattern::empty_bgp()),
+                    variable: output.clone(),
+                    expression: Expression::Variable(driver.clone()),
+                }),
+                expr: Expression::Bound(required.clone()),
+            }),
+        };
+        let (workspace, ledger, base) = account(1_000_000);
+        let capability = workspace.capability();
+        let bound = crate::property_fn_plan::collect_certainly_bound_admitted(&pattern, &capability).unwrap();
+        assert_eq!(bound.len(), 3);
+        assert!(bound.contains(&driver) && bound.contains(&output) && bound.contains(&required));
+        drop(bound);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base, "context and expression scratch is gone");
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }

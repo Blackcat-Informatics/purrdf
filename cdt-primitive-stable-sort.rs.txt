@@ -1,0 +1,32 @@
+    /// Stably sort admitted payload slots through native admitted index buffers.
+    /// Original indices break comparison ties; the unstable index sorter itself
+    /// allocates nothing. Payloads stay in their original array throughout.
+    ///
+    /// # Errors
+    /// Returns checked index layout, allocator or original admission refusal.
+    pub fn sort_by<T>(
+        &mut self,
+        values: &mut [T],
+        mut compare: impl FnMut(&T, &T) -> core::cmp::Ordering,
+    ) -> Result<(), StorageError> {
+        if values.len() < 2 { return Ok(()); }
+        let mut order = Vec::new();
+        self.reserve(&mut order, values.len())?;
+        order.extend(0..values.len());
+        order.sort_unstable_by(|a, b| compare(&values[*a], &values[*b]).then(a.cmp(b)));
+        let mut destinations = Vec::new();
+        self.reserve(&mut destinations, values.len())?;
+        destinations.resize(values.len(), 0);
+        for (destination, original) in order.iter().copied().enumerate() {
+            destinations[original] = destination;
+        }
+        self.release_vec(order)?;
+        for first in 0..values.len() {
+            while destinations[first] != first {
+                let next = destinations[first];
+                values.swap(first, next);
+                destinations.swap(first, next);
+            }
+        }
+        self.release_vec(destinations)
+    }

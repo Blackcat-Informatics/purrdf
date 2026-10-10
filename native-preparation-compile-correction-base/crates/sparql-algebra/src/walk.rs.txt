@@ -1,0 +1,752 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Walking the algebra tree without recursion.
+//!
+//! [`NodeRef`] is the one view every walk over a finished tree shares: a borrowed node
+//! of any of the algebra's recursive kinds, and [`NodeRef::for_each_child`], the one
+//! enumeration of what each kind of node owns. Every whole-tree operation of this
+//! crate — `Clone`, `==`, `Hash`, `Debug`, the drop, validation, the retained-size
+//! count — reads the tree through it, over an explicit work list, so none of them
+//! needs more machine stack for a taller tree.
+//!
+//! [`walk_pre_post`] and [`fold_post_order`] are the two walks built on it, for
+//! analyses outside this crate: the first visits every node before and after its
+//! children, the second computes one value per node from its children's values.
+
+use crate::algebra::{AggregateExpression, Expression, GraphPattern, OrderExpression, Query};
+use crate::algebra::{Function, PropertyPathExpression};
+use crate::ast::{GroundTerm, NamedNodePattern, TermPattern, TriplePattern, Variable};
+use crate::worklist::WorkList;
+
+/// A borrowed node of the algebra tree, of any of its recursive kinds.
+///
+/// A node's children are the nodes it owns, in the order its fields are declared
+/// ([`NodeRef::for_each_child`]). Everything else a node holds — variables, IRIs,
+/// literals, operators, flags — is a leaf of that node, not a child.
+#[derive(Clone, Copy, Debug)]
+pub enum NodeRef<'a> {
+    /// A graph pattern.
+    Pattern(&'a GraphPattern),
+    /// An expression.
+    Expr(&'a Expression),
+    /// A property path.
+    Path(&'a PropertyPathExpression),
+    /// A triple pattern: a basic graph pattern's element, or a quoted triple term's
+    /// triple. Its children are its subject and object terms.
+    Triple(&'a TriplePattern),
+    /// A term in a pattern. Only a quoted triple term has a child, its triple.
+    Term(&'a TermPattern),
+    /// A `VALUES` cell. Only a quoted triple term has children, its subject and
+    /// object.
+    Ground(&'a GroundTerm),
+    /// An `ORDER BY` key: its child is its expression.
+    Order(&'a OrderExpression),
+    /// A `GROUP BY` aggregate: its children are its arguments, then its own `ORDER BY`
+    /// keys.
+    Aggregate(&'a AggregateExpression),
+}
+
+impl NodeRef<'_> {
+    /// Visit the variable leaves this node owns directly. Recursive children are
+    /// visited separately by the shared walk, so a complete variable census stays
+    /// stack safe and includes bindings, graph names and expression-only references.
+    pub fn for_each_variable(self, mut visit: impl FnMut(&Variable)) {
+        let named = |name: &NamedNodePattern, visit: &mut dyn FnMut(&Variable)| {
+            if let NamedNodePattern::Variable(variable) = name {
+                visit(variable);
+            }
+        };
+        match self {
+            Self::Pattern(pattern) => match pattern {
+                GraphPattern::Apply { policy, .. } => {
+                    if let Some(domain) = &policy.group_domain {
+                        for name in domain {
+                            visit(name);
+                        }
+                    }
+                    for (input, driver) in &policy.inputs {
+                        visit(input);
+                        visit(driver);
+                    }
+                    if let Some(optional) = &policy.optional {
+                        visit(&optional.forget_marker);
+                        for (input, driver) in &optional.retry_inputs {
+                            visit(input);
+                            visit(driver);
+                        }
+                    }
+                }
+                GraphPattern::Graph { name, .. } | GraphPattern::Service { name, .. } => {
+                    named(name, &mut visit);
+                }
+                GraphPattern::Extend { variable, .. } => visit(variable),
+                GraphPattern::Unfold {
+                    element, companion, ..
+                } => {
+                    visit(element);
+                    if let Some(variable) = companion {
+                        visit(variable);
+                    }
+                }
+                GraphPattern::Values { variables, .. }
+                | GraphPattern::Project { variables, .. } => {
+                    variables.iter().for_each(&mut visit);
+                }
+                GraphPattern::Group {
+                    variables,
+                    aggregates,
+                    ..
+                } => {
+                    variables.iter().for_each(&mut visit);
+                    for (variable, _) in aggregates {
+                        visit(variable);
+                    }
+                }
+                GraphPattern::Bgp { .. }
+                | GraphPattern::Path { .. }
+                | GraphPattern::Join { .. }
+                | GraphPattern::Lateral { .. }
+                | GraphPattern::Minus { .. }
+                | GraphPattern::Union { .. }
+                | GraphPattern::LeftJoin { .. }
+                | GraphPattern::Filter { .. }
+                | GraphPattern::OrderBy { .. }
+                | GraphPattern::Distinct { .. }
+                | GraphPattern::Reduced { .. }
+                | GraphPattern::Slice { .. }
+                | GraphPattern::PropertyFunction(_) => {}
+            },
+            Self::Expr(Expression::Variable(variable) | Expression::Bound(variable))
+            | Self::Term(TermPattern::Variable(variable)) => visit(variable),
+            Self::Triple(triple) => named(&triple.predicate, &mut visit),
+            Self::Expr(
+                Expression::NamedNode(_)
+                | Expression::Literal(_)
+                | Expression::Or(_)
+                | Expression::And(_)
+                | Expression::Coalesce(_)
+                | Expression::Arithmetic(..)
+                | Expression::Equal(..)
+                | Expression::SameTerm(..)
+                | Expression::Greater(..)
+                | Expression::GreaterOrEqual(..)
+                | Expression::Less(..)
+                | Expression::LessOrEqual(..)
+                | Expression::Not(_)
+                | Expression::UnaryPlus(_)
+                | Expression::UnaryMinus(_)
+                | Expression::In(..)
+                | Expression::If(..)
+                | Expression::FunctionCall(..)
+                | Expression::Exists(_),
+            )
+            | Self::Term(
+                TermPattern::NamedNode(_)
+                | TermPattern::BlankNode(_)
+                | TermPattern::Literal(_)
+                | TermPattern::Triple(_),
+            )
+            | Self::Path(_)
+            | Self::Ground(_)
+            | Self::Order(_)
+            | Self::Aggregate(_) => {}
+        }
+    }
+
+    /// Call `visit` with each child of this node, in the order the node's fields are
+    /// declared.
+    ///
+    /// The enumeration is exhaustive over every variant of every kind, with no
+    /// wildcard arm: a variant added later does not compile until its children are
+    /// named here, and every walk built on this function then sees them.
+    pub fn for_each_child(self, mut visit: impl FnMut(Self)) {
+        use Expression as E;
+        use GraphPattern as G;
+        use PropertyPathExpression as P;
+        match self {
+            Self::Pattern(pattern) => match pattern {
+                G::Bgp { patterns } => patterns.iter().for_each(|t| visit(Self::Triple(t))),
+                G::Path {
+                    subject,
+                    path,
+                    object,
+                } => {
+                    visit(Self::Term(subject));
+                    visit(Self::Path(path));
+                    visit(Self::Term(object));
+                }
+                G::Join { left, right } | G::Lateral { left, right } | G::Minus { left, right } => {
+                    visit(Self::Pattern(left));
+                    visit(Self::Pattern(right));
+                }
+                G::Apply {
+                    left,
+                    right,
+                    policy: _,
+                } => {
+                    visit(Self::Pattern(left));
+                    visit(Self::Pattern(right));
+                }
+                G::LeftJoin {
+                    left,
+                    right,
+                    expression,
+                } => {
+                    visit(Self::Pattern(left));
+                    visit(Self::Pattern(right));
+                    if let Some(expression) = expression {
+                        visit(Self::Expr(expression));
+                    }
+                }
+                G::Filter { expr, inner } => {
+                    visit(Self::Expr(expr));
+                    visit(Self::Pattern(inner));
+                }
+                G::Union { arms } => arms.iter().for_each(|arm| visit(Self::Pattern(arm))),
+                G::Extend {
+                    inner, expression, ..
+                }
+                | G::Unfold {
+                    inner, expression, ..
+                } => {
+                    visit(Self::Pattern(inner));
+                    visit(Self::Expr(expression));
+                }
+                G::Values { bindings, .. } => bindings
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .for_each(|cell| visit(Self::Ground(cell))),
+                G::OrderBy { inner, expression } => {
+                    visit(Self::Pattern(inner));
+                    for key in expression {
+                        visit(Self::Order(key));
+                    }
+                }
+                G::Graph { inner, .. }
+                | G::Service { inner, .. }
+                | G::Project { inner, .. }
+                | G::Distinct { inner }
+                | G::Reduced { inner }
+                | G::Slice { inner, .. } => visit(Self::Pattern(inner)),
+                G::Group {
+                    inner, aggregates, ..
+                } => {
+                    visit(Self::Pattern(inner));
+                    for (_, aggregate) in aggregates {
+                        visit(Self::Aggregate(aggregate));
+                    }
+                }
+                G::PropertyFunction(call) => call
+                    .subject_args
+                    .iter()
+                    .chain(&call.object_args)
+                    .for_each(|term| visit(Self::Term(term))),
+            },
+            Self::Expr(expr) => match expr {
+                E::NamedNode(_) | E::Literal(_) | E::Variable(_) | E::Bound(_) => {}
+                E::Or(operands) | E::And(operands) => {
+                    operands.iter().for_each(|e| visit(Self::Expr(e)));
+                }
+                E::Coalesce(operands) | E::FunctionCall(_, operands) => {
+                    operands.iter().for_each(|e| visit(Self::Expr(e)));
+                }
+                E::Arithmetic(first, steps) => {
+                    visit(Self::Expr(first));
+                    steps.iter().for_each(|(_, e)| visit(Self::Expr(e)));
+                }
+                E::Equal(a, b)
+                | E::SameTerm(a, b)
+                | E::Greater(a, b)
+                | E::GreaterOrEqual(a, b)
+                | E::Less(a, b)
+                | E::LessOrEqual(a, b) => {
+                    visit(Self::Expr(a));
+                    visit(Self::Expr(b));
+                }
+                E::UnaryPlus(x) | E::UnaryMinus(x) | E::Not(x) => visit(Self::Expr(x)),
+                E::In(x, list) => {
+                    visit(Self::Expr(x));
+                    list.iter().for_each(|e| visit(Self::Expr(e)));
+                }
+                E::If(a, b, c) => {
+                    visit(Self::Expr(a));
+                    visit(Self::Expr(b));
+                    visit(Self::Expr(c));
+                }
+                E::Exists(pattern) => visit(Self::Pattern(pattern)),
+            },
+            Self::Path(path) => match path {
+                P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => {}
+                P::Reverse(x)
+                | P::ZeroOrMore(x)
+                | P::OneOrMore(x)
+                | P::ZeroOrOne(x)
+                | P::Range { inner: x, .. } => visit(Self::Path(x)),
+                P::Sequence(elements) | P::Alternative(elements) => {
+                    elements.iter().for_each(|e| visit(Self::Path(e)));
+                }
+            },
+            Self::Triple(triple) => {
+                visit(Self::Term(&triple.subject));
+                visit(Self::Term(&triple.object));
+            }
+            Self::Term(term) => match term {
+                TermPattern::NamedNode(_)
+                | TermPattern::BlankNode(_)
+                | TermPattern::Literal(_)
+                | TermPattern::Variable(_) => {}
+                TermPattern::Triple(triple) => visit(Self::Triple(triple)),
+            },
+            Self::Ground(term) => match term {
+                GroundTerm::NamedNode(_) | GroundTerm::Literal(_) | GroundTerm::BlankNode(_) => {}
+                GroundTerm::Triple(triple) => {
+                    visit(Self::Ground(&triple.subject));
+                    visit(Self::Ground(&triple.object));
+                }
+            },
+            Self::Order(OrderExpression::Asc(expr) | OrderExpression::Desc(expr)) => {
+                visit(Self::Expr(expr));
+            }
+            Self::Aggregate(aggregate) => {
+                aggregate.args().iter().for_each(|e| visit(Self::Expr(e)));
+                aggregate
+                    .order_by()
+                    .iter()
+                    .for_each(|key| visit(Self::Order(key)));
+            }
+        }
+    }
+
+    /// Whether this node owns no other node.
+    #[must_use]
+    pub fn is_leaf(self) -> bool {
+        let mut leaf = true;
+        self.for_each_child(|_| leaf = false);
+        leaf
+    }
+
+    /// Whether this node is a quoted triple term: a pattern or `VALUES` triple term,
+    /// or a `TRIPLE(…)` call, which builds one around its arguments.
+    #[must_use]
+    pub fn is_triple_term(self) -> bool {
+        matches!(
+            self,
+            Self::Term(TermPattern::Triple(_))
+                | Self::Ground(GroundTerm::Triple(_))
+                | Self::Expr(Expression::FunctionCall(Function::Triple, _))
+        )
+    }
+}
+
+impl Query {
+    /// Call `visit` on every variable this query mentions: each variable of its
+    /// `CONSTRUCT` template (quoted triple terms and graph names included), each
+    /// variable `DESCRIBE` target, then every variable leaf of its graph pattern —
+    /// projections, `GROUP BY` keys and aggregate outputs, `BIND` and `VALUES`
+    /// targets, graph and `SERVICE` names, expression reads (inside `EXISTS` too),
+    /// property-function arguments and every triple and path term. A variable
+    /// mentioned twice is visited twice.
+    ///
+    /// The census reads [`NodeRef::for_each_variable`] over the shared walk, so it
+    /// needs no more machine stack for a taller query.
+    pub fn for_each_variable(&self, mut visit: impl FnMut(&Variable)) {
+        match self {
+            Self::Construct { template, .. } => {
+                for quad in template {
+                    crate::scope::for_each_quad_variable(quad, &mut visit);
+                }
+            }
+            Self::Describe { targets, .. } => {
+                for target in targets {
+                    if let NamedNodePattern::Variable(variable) = target {
+                        visit(variable);
+                    }
+                }
+            }
+            Self::Select { .. } | Self::Ask { .. } => {}
+        }
+        walk_pre_post(NodeRef::Pattern(self.pattern()), |phase, node| {
+            if phase == Visit::Enter {
+                node.for_each_variable(&mut visit);
+            }
+            Flow::Descend
+        });
+    }
+}
+
+/// Which side of a node [`walk_pre_post`] is visiting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Visit {
+    /// Before any of the node's children.
+    Enter,
+    /// After all of the node's children.
+    Exit,
+}
+
+/// What a [`walk_pre_post`] visitor asks of the walk after entering a node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flow {
+    /// Walk into the node's children.
+    Descend,
+    /// Skip the node's children; the node is still exited.
+    Skip,
+    /// End the whole walk here; no further node is entered or exited.
+    Stop,
+}
+
+/// Visit every node under `root`, depth first, children in declaration order: each
+/// node once on [`Visit::Enter`] before its children and once on [`Visit::Exit`] after
+/// them.
+///
+/// The visitor's answer on [`Visit::Enter`] steers the walk ([`Flow`]); its answer on
+/// [`Visit::Exit`] is read only for [`Flow::Stop`]. The walk keeps its own work list,
+/// so it needs no more machine stack for a taller tree. Returns `false` when the
+/// visitor stopped it.
+pub fn walk_pre_post<'a>(
+    root: NodeRef<'a>,
+    mut visit: impl FnMut(Visit, NodeRef<'a>) -> Flow,
+) -> bool {
+    try_walk_pre_post(
+        root,
+        |phase, node| Ok::<_, std::convert::Infallible>(visit(phase, node)),
+        |_| Ok(()),
+    )
+    .expect("a resident algebra walk can allocate its work list")
+}
+
+/// Why an admitted algebra walk could not proceed.
+#[derive(Debug)]
+pub enum WalkError<E> {
+    /// The visitor or its owner refused admission.
+    Visitor(E),
+    /// The work list's actual fallible allocation failed.
+    Allocation(std::collections::TryReserveError),
+    /// A work-list layout exceeded the local address space.
+    LayoutOverflow,
+}
+
+/// The shared pre/post traversal with before-growth work-list admission.
+/// `admit` receives the complete replacement spill allocation in bytes and
+/// returns its lifetime owner. The old owner remains live through replacement;
+/// the work list dies before its final owner. This traverses the same exhaustive
+/// [`NodeRef::for_each_child`] law as [`walk_pre_post`].
+///
+/// # Errors
+/// Reports admission, visitor, layout and actual allocation failures before a
+/// refused work-list growth occurs.
+enum WalkStep<'a> {
+    Enter(NodeRef<'a>),
+    Exit(NodeRef<'a>),
+}
+
+/// One traversal law; the caller supplies only physical storage and visitor effects.
+fn pre_post<'a, C, E>(
+    root: NodeRef<'a>,
+    context: &mut C,
+    mut visit: impl FnMut(Visit, NodeRef<'a>, &mut C) -> Result<Flow, E>,
+    mut grow: impl FnMut(&mut WorkList<WalkStep<'a>, 32>, usize, &mut C) -> Result<(), E>,
+    mut release: impl FnMut(WorkList<WalkStep<'a>, 32>, &mut C) -> Result<(), E>,
+    overflow: impl Fn() -> E,
+) -> Result<bool, E> {
+    let mut stack = WorkList::with(WalkStep::Enter(root));
+    let result = (|| {
+        while let Some(step) = stack.pop() {
+            match step {
+                WalkStep::Enter(node) => {
+                    let flow = visit(Visit::Enter, node, context)?;
+                    if flow == Flow::Stop {
+                        return Ok(false);
+                    }
+                    let mut children = Some(0usize);
+                    if flow == Flow::Descend {
+                        node.for_each_child(|_| children = children.and_then(|n| n.checked_add(1)));
+                    }
+                    let total = stack.len().checked_add(children.ok_or_else(&overflow)?)
+                        .and_then(|n| n.checked_add(1)).ok_or_else(&overflow)?;
+                    let needed = total.saturating_sub(32);
+                    if needed > stack.heap_capacity() {
+                        let capacity = stack.heap_capacity().checked_mul(2)
+                            .ok_or_else(&overflow)?.max(needed);
+                        grow(&mut stack, capacity, context)?;
+                    }
+                    stack.push(WalkStep::Exit(node));
+                    if flow == Flow::Descend {
+                        let first = stack.len();
+                        node.for_each_child(|child| stack.push(WalkStep::Enter(child)));
+                        stack.reverse_top(stack.len() - first);
+                    }
+                }
+                WalkStep::Exit(node) => {
+                    if visit(Visit::Exit, node, context)? == Flow::Stop {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(true)
+    })();
+    let released = release(stack, context);
+    match result {
+        Ok(complete) => { released?; Ok(complete) }
+        Err(error) => Err(error),
+    }
+}
+
+pub fn try_walk_pre_post<'a, E: std::fmt::Debug, A>(
+    root: NodeRef<'a>,
+    mut visit: impl FnMut(Visit, NodeRef<'a>) -> Result<Flow, E>,
+    mut admit: impl FnMut(usize) -> Result<A, E>,
+) -> Result<bool, WalkError<E>> {
+    let mut admission = None;
+    pre_post(
+        root, &mut admission,
+        |phase, node, _| visit(phase, node).map_err(WalkError::Visitor),
+        |stack, capacity, admission| {
+            let bytes = capacity.checked_mul(size_of::<WalkStep<'a>>())
+                .ok_or(WalkError::LayoutOverflow)?;
+            let next = admit(bytes).map_err(WalkError::Visitor)?;
+            stack.try_reserve_heap_exact(capacity).map_err(WalkError::Allocation)?;
+            *admission = Some(next);
+            Ok(())
+        },
+        |stack, admission| { drop(stack); *admission = None; Ok(()) },
+        || WalkError::LayoutOverflow,
+    )
+}
+
+/// Traverse the same pre/post law with original native storage admission.
+///
+/// The visitor may construct native payloads in the same memory. Walk spill
+/// is destroyed and released before any successful return, including a stop.
+///
+/// # Errors
+/// Returns the visitor's original failure or checked physical storage refusal.
+pub fn walk_pre_post_with_memory<'a, S, E>(
+    root: NodeRef<'a>,
+    mut visit: impl FnMut(Visit, NodeRef<'a>, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<Flow, E>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<bool, E>
+where
+    S: purrdf_lex::allocation::Admission + ?Sized,
+    E: From<purrdf_lex::allocation::StorageError>,
+{
+    pre_post(
+        root, memory,
+        |phase, node, memory| visit(phase, node, memory),
+        |stack, capacity, memory| stack.try_reserve_heap_admitted(capacity, memory).map_err(E::from),
+        |stack, memory| stack.release_admitted(memory).map_err(E::from),
+        || purrdf_lex::allocation::StorageError::SizeOverflow.into(),
+    )
+}
+
+/// Compute one value per node, children in declaration order.
+pub fn fold_post_order<'a, R>(
+    root: NodeRef<'a>,
+    mut combine: impl FnMut(NodeRef<'a>, &mut dyn Iterator<Item = R>) -> R,
+) -> R {
+    let mut resident = purrdf_lex::allocation::Resident;
+    fold_post_order_with_memory(
+        root,
+        |node, children, _| Ok::<_, purrdf_lex::allocation::StorageError>(combine(node, children)),
+        &mut purrdf_lex::allocation::Memory::new(&mut resident),
+    ).expect("resident postorder storage")
+}
+
+/// The original bottom-up fold with physical admission for both work lists.
+///
+/// # Errors
+/// Returns original visitor errors or checked native storage refusal.
+pub fn fold_post_order_with_memory<'a, R, S, E>(
+    root: NodeRef<'a>,
+    mut combine: impl FnMut(NodeRef<'a>, &mut dyn Iterator<Item = R>, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<R, E>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<R, E>
+where
+    S: purrdf_lex::allocation::Admission + ?Sized,
+    E: From<purrdf_lex::allocation::StorageError>,
+{
+    enum Step<'a> { Enter(NodeRef<'a>), Exit(NodeRef<'a>, usize) }
+    let mut stack: WorkList<Step<'a>, 32> = WorkList::with(Step::Enter(root));
+    let mut values: WorkList<R, 16> = WorkList::new();
+    while let Some(step) = stack.pop() {
+        match step {
+            Step::Enter(node) => {
+                let exit = stack.len();
+                stack.try_push_admitted(Step::Exit(node, 0), memory)?;
+                let mut failure = None;
+                node.for_each_child(|child| {
+                    if failure.is_none() {
+                        if let Err(error) = stack.try_push_admitted(Step::Enter(child), memory) {
+                            failure = Some(error);
+                        }
+                    }
+                });
+                if let Some(error) = failure { return Err(error.into()); }
+                let count = stack.len() - exit - 1;
+                stack.set(exit, Step::Exit(node, count));
+                stack.reverse_top(count);
+            }
+            Step::Exit(node, count) => {
+                values.reverse_top(count);
+                let mut left = count;
+                let mut kids = core::iter::from_fn(|| {
+                    (left > 0).then(|| {
+                        left -= 1;
+                        values.pop().expect("a child's value is computed")
+                    })
+                });
+                let value = combine(node, &mut kids, memory)?;
+                kids.for_each(drop);
+                values.try_push_admitted(value, memory)?;
+            }
+        }
+    }
+    let value = values.pop().expect("the root's value is computed last");
+    stack.release_admitted(memory)?;
+    values.release_admitted(memory)?;
+    Ok(value)
+}
+
+/// Visit each expression for rewriting, without entering `EXISTS` bodies. `visit`
+/// sees each expression before the walk reads what it holds, so an expression it
+/// replaces is walked as replaced.
+pub fn for_each_expression_mut<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    mut visit: impl FnMut(&mut Expression),
+) {
+    let mut storage = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    for_each_expression_mut_with_memory(roots, &mut memory, |expression, _| {
+        visit(expression);
+        Ok::<(), core::convert::Infallible>(())
+    }).expect("resident mutable expression walk allocation failed");
+}
+
+/// A mutable visitor failure remains separate from physical native walk refusal.
+#[derive(Debug)]
+pub enum MutationError<E> {
+    /// The original visitor failure, retained unchanged.
+    Visitor(E),
+    /// Checked layout, original admission or allocator refusal.
+    Storage(purrdf_lex::allocation::StorageError),
+}
+
+/// Visit the same native expression slots with fallible working-list storage.
+/// The visitor runs before reading the possibly rewritten operands. EXISTS bodies
+/// remain graph-pattern boundaries and are never traversed as expressions.
+///
+/// # Errors
+/// Returns the first visitor failure or physical work-list refusal unchanged.
+pub fn for_each_expression_mut_with_memory<'e, S, E>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    mut visit: impl FnMut(&mut Expression, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+) -> Result<(), MutationError<E>>
+where S: purrdf_lex::allocation::Admission + ?Sized,
+{
+    let mut pending: purrdf_lex::walk::WorkList<&'e mut Expression, 16> =
+        purrdf_lex::walk::WorkList::new();
+    for root in roots {
+        pending.try_push_admitted(root, memory).map_err(MutationError::Storage)?;
+    }
+    pending.reverse_top(pending.len());
+    while let Some(expression) = pending.pop() {
+        visit(expression, memory).map_err(MutationError::Visitor)?;
+        push_operands_mut_with_memory(expression, &mut pending, memory)
+            .map_err(MutationError::Storage)?;
+    }
+    pending.release_admitted(memory).map_err(MutationError::Storage)
+}
+
+
+/// Rewrite expressions with the same traversal and admitted working storage.
+///
+/// # Errors
+/// Returns visitor errors or physical working-storage refusal.
+pub fn for_each_expression_mut_with_memory<'e, S, E>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    mut visit: impl FnMut(&mut Expression, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<(), E>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), E>
+where
+    S: purrdf_lex::allocation::Admission + ?Sized,
+    E: From<purrdf_lex::allocation::StorageError>,
+{
+    let mut pending = memory.collect(roots)?;
+    pending.reverse();
+    while let Some(expr) = pending.pop() {
+        visit(expr, memory)?;
+        let mut failure = None;
+        push_operands_mut(expr, |operand| {
+            if failure.is_none() {
+                if let Err(error) = memory.push(&mut pending, operand) {
+                    failure = Some(error);
+                }
+            }
+        });
+        if let Some(error) = failure {
+            return Err(error.into());
+        }
+    }
+    memory.release_vec(pending)?;
+    Ok(())
+}
+
+/// Push the rewritten expression operands in reverse source order.
+fn push_operands_mut_with_memory<'e, S: purrdf_lex::allocation::Admission + ?Sized>(
+    expr: &'e mut Expression,
+    pending: &mut purrdf_lex::walk::WorkList<&'e mut Expression, 16>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    match expr {
+        Expression::Variable(_)
+        | Expression::Bound(_)
+        | Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Exists(_) => {}
+        Expression::Or(operands) | Expression::And(operands) => {
+            for operand in operands.iter_mut().rev() {
+                push(operand);
+            }
+        }
+        Expression::Arithmetic(first, steps) => {
+            for (_, operand) in steps.iter_mut().rev() {
+                push(operand);
+            }
+            push(first);
+        }
+        Expression::Equal(left, right)
+        | Expression::SameTerm(left, right)
+        | Expression::Greater(left, right)
+        | Expression::GreaterOrEqual(left, right)
+        | Expression::Less(left, right)
+        | Expression::LessOrEqual(left, right) => {
+            push(right);
+            push(left);
+        }
+        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
+            push(inner);
+        }
+        Expression::In(target, list) => {
+            for operand in list.iter_mut().rev() {
+                push(operand);
+            }
+            push(target);
+        }
+        Expression::If(cond, then_expr, else_expr) => {
+            push(else_expr);
+            push(then_expr);
+            push(cond);
+        }
+        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+            for operand in list.iter_mut().rev() {
+                push(operand);
+            }
+        }
+    }
+
+    Ok(())
+}
+

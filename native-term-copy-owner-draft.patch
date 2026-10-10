@@ -1,0 +1,674 @@
+--- a/crates/rdf-core/src/ir/term_walk.rs
++++ b/crates/rdf-core/src/ir/term_walk.rs
+@@ -573,30 +573,110 @@
+ ///
+ /// # Errors
+ /// Returns the first visitor or working-buffer allocation failure.
+-fn try_fold_nested_with_storage<N: Copy, C: ?Sized, T, E>(
++/// The original term-fold kernel's concrete scratch operations. Payload
++/// factories receive the same storage object, so native payload and work-list
++/// admission cannot borrow two independent accounts for one live allocation.
++trait FoldBuffers<N, T, E> {
++    fn push_step(
++        &mut self,
++        steps: &mut WorkList<FoldStep<N>, 32>,
++        step: FoldStep<N>,
++    ) -> Result<(), E>;
++    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E>;
++    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E>;
++    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E>;
++}
++
++struct ResidentFold<F>(F);
++
++impl<N, T, E, F: FnMut(std::collections::TryReserveError) -> E> FoldBuffers<N, T, E>
++    for ResidentFold<F>
++{
++    fn push_step(
++        &mut self,
++        steps: &mut WorkList<FoldStep<N>, 32>,
++        step: FoldStep<N>,
++    ) -> Result<(), E> {
++        steps.try_push(step).map_err(&mut self.0)
++    }
++    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E> {
++        answers.try_reserve_exact(required).map_err(&mut self.0)
++    }
++    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E> {
++        answers.try_reserve(1).map_err(&mut self.0)?;
++        answers.push(answer);
++        Ok(())
++    }
++    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E> {
++        drop(steps);
++        drop(answers);
++        Ok(())
++    }
++}
++
++struct NativeFold<'memory, 'storage, S: purrdf_lex::allocation::Admission + ?Sized, F> {
++    memory: &'memory mut purrdf_lex::allocation::Memory<'storage, S>,
++    storage_error: F,
++}
++
++impl<N, T, E, S, F> FoldBuffers<N, T, E> for NativeFold<'_, '_, S, F>
++where
++    S: purrdf_lex::allocation::Admission + ?Sized,
++    F: FnMut(purrdf_lex::allocation::StorageError, &mut purrdf_lex::allocation::Memory<'_, S>) -> E,
++{
++    fn push_step(
++        &mut self,
++        steps: &mut WorkList<FoldStep<N>, 32>,
++        step: FoldStep<N>,
++    ) -> Result<(), E> {
++        steps
++            .try_push_admitted(step, self.memory)
++            .map_err(|error| (self.storage_error)(error, self.memory))
++    }
++    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E> {
++        self.memory
++            .reserve(answers, required)
++            .map_err(|error| (self.storage_error)(error, self.memory))
++    }
++    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E> {
++        self.memory
++            .push(answers, answer)
++            .map_err(|error| (self.storage_error)(error, self.memory))
++    }
++    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E> {
++        steps
++            .release_admitted(self.memory)
++            .map_err(|error| (self.storage_error)(error, self.memory))?;
++        self.memory
++            .release_vec(answers)
++            .map_err(|error| (self.storage_error)(error, self.memory))
++    }
++}
++
++/// The sole original bottom-up traversal, shared by resident fallible and native
++/// admitted folds. The callbacks own returned payloads; scratch is destroyed
++/// before its original native grant is refunded.
++fn try_fold_nested_buffered<N: Copy, C: ?Sized, T, E, B: FoldBuffers<N, T, E>>(
+     root: N,
+     ctx: &mut C,
+-    mut enter: impl FnMut(&mut C, N) -> Result<Nested<N, T>, E>,
+-    mut triple: impl FnMut(&mut C, N, T, T, T) -> Result<T, E>,
+-    mut storage_error: impl FnMut(std::collections::TryReserveError) -> E,
++    mut enter: impl FnMut(&mut C, N, &mut B) -> Result<Nested<N, T>, E>,
++    mut triple: impl FnMut(&mut C, N, T, T, T, &mut B) -> Result<T, E>,
++    buffers: &mut B,
+ ) -> Result<T, E> {
+-    let (s, p, o) = match enter(ctx, root)? {
++    let (s, p, o) = match enter(ctx, root, buffers)? {
+         Nested::Leaf(answer) => return Ok(answer),
+         Nested::Triple(s, p, o) => (s, p, o),
+     };
+-    let mut steps: WorkList<FoldStep<N>, 32> = WorkList::with(FoldStep::Assemble(root));
++    let mut steps = WorkList::with(FoldStep::Assemble(root));
+     for step in [FoldStep::Enter(o), FoldStep::Enter(p), FoldStep::Enter(s)] {
+-        steps.try_push(step).map_err(&mut storage_error)?;
+-    }
+-    let mut answers: Vec<T> = Vec::new();
+-    answers.try_reserve_exact(3).map_err(&mut storage_error)?;
++        buffers.push_step(&mut steps, step)?;
++    }
++    let mut answers = Vec::new();
++    buffers.reserve_answers(&mut answers, 3)?;
+     while let Some(step) = steps.pop() {
+         match step {
+-            FoldStep::Enter(node) => match enter(ctx, node)? {
+-                Nested::Leaf(answer) => {
+-                    answers.try_reserve(1).map_err(&mut storage_error)?;
+-                    answers.push(answer);
+-                }
++            FoldStep::Enter(node) => match enter(ctx, node, buffers)? {
++                Nested::Leaf(answer) => buffers.push_answer(&mut answers, answer)?,
+                 Nested::Triple(s, p, o) => {
+                     for step in [
+                         FoldStep::Assemble(node),
+@@ -604,7 +684,7 @@
+                         FoldStep::Enter(p),
+                         FoldStep::Enter(s),
+                     ] {
+-                        steps.try_push(step).map_err(&mut storage_error)?;
++                        buffers.push_step(&mut steps, step)?;
+                     }
+                 }
+             },
+@@ -612,13 +692,132 @@
+                 let o = answers.pop().expect("a triple's object is folded");
+                 let p = answers.pop().expect("a triple's predicate is folded");
+                 let s = answers.pop().expect("a triple's subject is folded");
+-                answers.push(triple(ctx, node, s, p, o)?);
+-            }
+-        }
+-    }
+-    Ok(answers
++                let answer = triple(ctx, node, s, p, o, buffers)?;
++                buffers.push_answer(&mut answers, answer)?;
++            }
++        }
++    }
++    let answer = answers
+         .pop()
+-        .expect("the root's answer is the last one assembled"))
++        .expect("the root's answer is the last one assembled");
++    buffers.finish(steps, answers)?;
++    Ok(answer)
++}
++
++fn try_fold_nested_with_storage<N: Copy, C: ?Sized, T, E>(
++    root: N,
++    ctx: &mut C,
++    mut enter: impl FnMut(&mut C, N) -> Result<Nested<N, T>, E>,
++    mut triple: impl FnMut(&mut C, N, T, T, T) -> Result<T, E>,
++    storage_error: impl FnMut(std::collections::TryReserveError) -> E,
++) -> Result<T, E> {
++    try_fold_nested_buffered(
++        root,
++        ctx,
++        |ctx, node, _| enter(ctx, node),
++        |ctx, node, s, p, o, _| triple(ctx, node, s, p, o),
++        &mut ResidentFold(storage_error),
++    )
++}
++
++/// Fold the same original nested structure under actual native live-capacity admission.
++///
++/// Payload callbacks receive this memory to admit their actual strings and
++/// boxes before construction. The work list and answer array use it too. A
++/// failed fold destroys every partial answer before refunding its original delta;
++/// the first typed read, callback or physical error remains authoritative.
++///
++/// # Errors
++/// Returns the first original visitor or physical allocation failure.
++pub fn try_fold_nested_with_memory<
++    N: Copy,
++    C: ?Sized,
++    T,
++    E,
++    S: purrdf_lex::allocation::Admission + ?Sized,
++>(
++    root: N,
++    ctx: &mut C,
++    mut enter: impl FnMut(
++        &mut C,
++        N,
++        &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> Result<Nested<N, T>, E>,
++    mut triple: impl FnMut(
++        &mut C,
++        N,
++        T,
++        T,
++        T,
++        &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> Result<T, E>,
++    storage_error: impl FnMut(
++        purrdf_lex::allocation::StorageError,
++        &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> E,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<T, E> {
++    let baseline = memory.live_bytes();
++    let result = try_fold_nested_buffered(
++        root,
++        ctx,
++        |ctx, node, buffers: &mut NativeFold<'_, '_, S, _>| enter(ctx, node, buffers.memory),
++        |ctx, node, s, p, o, buffers| triple(ctx, node, s, p, o, buffers.memory),
++        &mut NativeFold {
++            memory,
++            storage_error,
++        },
++    );
++    if result.is_err()
++        && let Some(released) = memory.live_bytes().checked_sub(baseline)
++    {
++        // The kernel's owned locals have died. A refund refusal cannot replace
++        // the original error or release any still-live enclosing payload.
++        let _ = memory.release_bytes(released);
++    }
++    result
++}
++
++/// Fold a DatasetView's original typed term under native payload and work admission.
++///
++/// # Errors
++/// Returns the first backing read, callback or physical failure; no whole-view
++/// maximum or dictionary census is needed to copy a supported term.
++pub fn try_fold_term_with_memory<
++    D: DatasetView + ?Sized,
++    T,
++    E,
++    S: purrdf_lex::allocation::Admission + ?Sized,
++>(
++    view: &D,
++    id: D::Id,
++    mut leaf: impl FnMut(
++        D::Id,
++        TermRef<'_, D::Id>,
++        &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> Result<T, E>,
++    mut triple: impl FnMut(D::Id, T, T, T, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
++    mut read_error: impl FnMut(D::ReadError) -> E,
++    storage_error: impl FnMut(
++        purrdf_lex::allocation::StorageError,
++        &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> E,
++    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++) -> Result<T, E> {
++    try_fold_nested_with_memory(
++        id,
++        &mut (),
++        |(), id, memory| {
++            let guard = view.resolve(id).map_err(&mut read_error)?;
++            match guard.term() {
++                TermRef::Triple { s, p, o } => Ok(Nested::Triple(s, p, o)),
++                resolved => leaf(id, resolved, memory).map(Nested::Leaf),
++            }
++        },
++        |(), id, s, p, o, memory| triple(id, s, p, o, memory),
++        storage_error,
++        memory,
++    )
+ }
+ 
+ /// Visit the nested structure at `root` in pre-order over a work list: a triple term
+--- a/crates/rdf-core/src/dataset_view.rs
++++ b/crates/rdf-core/src/dataset_view.rs
+@@ -31,6 +31,58 @@
+     state
+         .lock()
+         .unwrap_or_else(std::sync::PoisonError::into_inner)
++}
++
++/// The sole typed leaf-conversion body. The storage factory determines physical
++/// ownership; view resolution and lexical/type semantics remain shared.
++fn owned_term_leaf<D: DatasetView + ?Sized, C: ?Sized, E>(
++    view: &D,
++    term: TermRef<'_, D::Id>,
++    ctx: &mut C,
++    mut text: impl FnMut(&mut C, &str) -> Result<String, E>,
++    lookup_error: impl Fn(TermLookupError<D::ReadError>) -> E,
++) -> Result<TermValue, E> {
++    Ok(match term {
++        TermRef::Iri(iri) => TermValue::Iri(text(ctx, iri)?),
++        TermRef::Blank { label, scope } => TermValue::Blank {
++            label: text(ctx, label)?,
++            scope,
++        },
++        TermRef::Literal {
++            lexical,
++            datatype,
++            language,
++            direction,
++        } => {
++            let guard = view
++                .resolve(datatype)
++                .map_err(|error| lookup_error(TermLookupError::Read(error)))?;
++            let TermRef::Iri(datatype) = guard.term() else {
++                return Err(lookup_error(TermLookupError::ForeignId));
++            };
++            TermValue::Literal {
++                lexical_form: text(ctx, lexical)?,
++                datatype: text(ctx, datatype)?,
++                language: language.map(|language| text(ctx, language)).transpose()?,
++                direction,
++            }
++        }
++        TermRef::Triple { .. } => unreachable!("a triple term is assembled from its components"),
++    })
++}
++
++/// One original component assembly; each concrete box factory admits before birth.
++fn owned_term_triple<E>(
++    s: TermValue,
++    p: TermValue,
++    o: TermValue,
++    mut boxed: impl FnMut(TermValue) -> Result<crate::ir::TermBox, E>,
++) -> Result<TermValue, E> {
++    Ok(TermValue::Triple {
++        s: boxed(s)?,
++        p: boxed(p)?,
++        o: boxed(o)?,
++    })
+ }
+ 
+ mod sealed {
+@@ -576,50 +628,78 @@
+         lookup_error: impl Fn(TermLookupError<Self::ReadError>) -> E,
+         storage_error: impl Fn(std::collections::TryReserveError) -> E,
+     ) -> Result<TermValue, E> {
+-        use crate::ir::try_owned_text as text;
+         crate::ir::try_fold_term_with_storage(
+             self,
+             id,
+             |_, term| {
+-                Ok(match term {
+-                    TermRef::Iri(iri) => TermValue::Iri(text(iri).map_err(&storage_error)?),
+-                    TermRef::Blank { label, scope } => TermValue::Blank {
+-                        label: text(label).map_err(&storage_error)?,
+-                        scope,
+-                    },
+-                    TermRef::Literal {
+-                        lexical,
+-                        datatype,
+-                        language,
+-                        direction,
+-                    } => {
+-                        let guard = self
+-                            .resolve(datatype)
+-                            .map_err(|error| lookup_error(TermLookupError::Read(error)))?;
+-                        let TermRef::Iri(datatype) = guard.term() else {
+-                            return Err(lookup_error(TermLookupError::ForeignId));
+-                        };
+-                        TermValue::Literal {
+-                            lexical_form: text(lexical).map_err(&storage_error)?,
+-                            datatype: text(datatype).map_err(&storage_error)?,
+-                            language: language.map(text).transpose().map_err(&storage_error)?,
+-                            direction,
+-                        }
+-                    }
+-                    TermRef::Triple { .. } => {
+-                        unreachable!("a triple term is assembled from its components")
+-                    }
+-                })
++                owned_term_leaf(
++                    self,
++                    term,
++                    &mut (),
++                    |(), source| crate::ir::try_owned_text(source).map_err(&storage_error),
++                    &lookup_error,
++                )
+             },
+             |_, s, p, o| {
+-                Ok(TermValue::Triple {
+-                    s: crate::small::try_boxed(s).map_err(&storage_error)?.into(),
+-                    p: crate::small::try_boxed(p).map_err(&storage_error)?.into(),
+-                    o: crate::small::try_boxed(o).map_err(&storage_error)?.into(),
++                owned_term_triple(s, p, o, |value| {
++                    crate::small::try_boxed(value)
++                        .map(Into::into)
++                        .map_err(&storage_error)
+                 })
+             },
+             |error| lookup_error(TermLookupError::Read(error)),
+             &storage_error,
++        )
++    }
++
++    /// Resolve the same original owned term under actual native live-capacity admission.
++    ///
++    /// Every copied string, child box and fold buffer is admitted before its
++    /// fallible construction. Construction scratch dies before its grant is
++    /// released. The caller retains this memory's surviving original payload
++    /// grant with the returned value; no whole-view maximum is required.
++    ///
++    /// # Errors
++    /// Preserves malformed-id and backing failures through `lookup_error`, and
++    /// checked layout/admission/allocator failure through `storage_error`. A failed
++    /// copy destroys all partial children before releasing its original delta.
++    fn term_value_with_memory<S: purrdf_lex::allocation::Admission + ?Sized, E>(
++        &self,
++        id: Self::Id,
++        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++        lookup_error: impl Fn(TermLookupError<Self::ReadError>) -> E,
++        storage_error: impl Fn(
++            purrdf_lex::allocation::StorageError,
++            &mut purrdf_lex::allocation::Memory<'_, S>,
++        ) -> E,
++    ) -> Result<TermValue, E> {
++        crate::ir::try_fold_term_with_memory(
++            self,
++            id,
++            |_, term, memory| {
++                owned_term_leaf(
++                    self,
++                    term,
++                    memory,
++                    |memory, source| {
++                        memory
++                            .string(source)
++                            .map_err(|error| storage_error(error, memory))
++                    },
++                    &lookup_error,
++                )
++            },
++            |_, s, p, o, memory| {
++                owned_term_triple(s, p, o, |value| {
++                    memory
++                        .boxed(value)
++                        .map(Into::into)
++                        .map_err(|error| storage_error(error, memory))
++                })
++            },
++            |error| lookup_error(TermLookupError::Read(error)),
++            &storage_error,
++            memory,
+         )
+     }
+ 
+--- a/crates/rdf-core/src/ir/mod.rs
++++ b/crates/rdf-core/src/ir/mod.rs
+@@ -117,7 +117,8 @@
+ pub(crate) use term_walk::try_owned_text;
+ pub use term_walk::{
+     Nested, OwnedTermFoldError, TermBox, TermVisit, fold_term, fold_workspace_bound,
+-    try_fold_nested, try_fold_term, try_fold_term_with_storage, visit_nested,
++    try_fold_nested, try_fold_nested_with_memory, try_fold_term, try_fold_term_with_memory,
++    try_fold_term_with_storage, visit_nested,
+ };
+ 
+ pub use composite::{
+--- a/crates/sparql-eval/src/scratch.rs
++++ b/crates/sparql-eval/src/scratch.rs
+@@ -1039,51 +1039,40 @@
+         let SolutionTerm::Existing(id) = term else {
+             unreachable!("computed terms returned above")
+         };
+-        if !workspace.is_bounded() {
+-            let value = dataset.term_value_with_storage(
++        let mut frame = crate::workspace::LexicalFrame::new(workspace);
++        // This ordered carrier keeps the actual payload alive beneath its
++        // original frame until every fallible publication step has succeeded.
++        let mut value = {
++            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
++            Some(dataset.term_value_with_memory(
+                 id,
++                &mut memory,
+                 |error| match error {
+                     purrdf_core::TermLookupError::Read(error) => source_error(error),
+                     purrdf_core::TermLookupError::ForeignId => {
+-                        crate::EvalError::source_read("foreign dataset term id")
++                        if workspace.is_bounded() {
++                            crate::NativeDiagnostic::error(
++                                crate::NativeDiagnosticKind::Internal,
++                                &"foreign dataset term id",
++                                workspace,
++                            )
++                        } else {
++                            crate::EvalError::source_read("foreign dataset term id")
++                        }
+                     }
+                 },
+-                |_| crate::EvalError::AllocationFailed {
+-                    construct: "resolved term value",
++                |error, memory| {
++                    memory
++                        .admission_mut()
++                        .storage_error(error, "resolved term value")
+                 },
+-            )?;
+-            return Ok(crate::WorkspaceTerm::new(value, workspace.charge(0)?));
+-        }
+-        let bytes = dataset
+-            .max_owned_term_bytes()
+-            .ok_or(crate::EvalError::WorkspaceUnpriced(
+-                "a view without an owned term certificate",
+-            ))?;
+-        let nodes = usize::try_from(bytes / size_of::<TermValue>() as u64)
+-            .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?
+-            .checked_add(1)
+-            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+-        let working = purrdf_core::ir::fold_workspace_bound::<D::Id, TermValue>(nodes)
+-            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+-        let _working = workspace.charge(
+-            u64::try_from(working).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+-        )?;
+-        let allocation = workspace.charge(bytes)?;
+-        let value = dataset.term_value_with_storage(
+-            id,
+-            |error| match error {
+-                purrdf_core::TermLookupError::Read(error) => source_error(error),
+-                purrdf_core::TermLookupError::ForeignId => crate::NativeDiagnostic::error(
+-                    crate::NativeDiagnosticKind::Internal,
+-                    "foreign dataset term id",
+-                    workspace,
+-                ),
+-            },
+-            |_| crate::EvalError::AllocationFailed {
+-                construct: "resolved term value",
+-            },
+-        )?;
+-        Ok(crate::WorkspaceTerm::new(value, allocation))
++            )?)
++        };
++        frame.finish_term(|| {
++            value
++                .take()
++                .expect("original term checked before publication")
++        })
+     }
+ 
+     pub(crate) fn try_value_of_admitted<D: DatasetView>(
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -3739,4 +3739,127 @@
+         drop(workspace);
+         assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+     }
+-}
++
++    #[test]
++    fn resident_view_native_copy_needs_no_dictionary_certificate_and_keeps_original_payload_grant()
++    {
++        let mut builder = purrdf_core::RdfDatasetBuilder::new();
++        let subject = builder.intern_iri("http://example.org/s");
++        let predicate = builder.intern_iri("http://example.org/p");
++        let literal =
++            builder.intern_literal(purrdf_core::RdfLiteral::simple("original lexical value"));
++        let nested = builder.intern_triple(subject, predicate, literal);
++        let root = builder.intern_triple(subject, predicate, nested);
++        builder.push_quad(subject, predicate, root, None);
++        let dataset = builder.freeze().expect("valid RDF 1.2 object nesting");
++        assert!(purrdf_core::DatasetView::max_owned_term_bytes(dataset.as_ref()).is_none());
++        let expected = purrdf_core::DatasetView::term_value(dataset.as_ref(), root).unwrap();
++        let (workspace, ledger, base) = account(262_144);
++        let capability = workspace.capability();
++        let scratch = crate::scratch::ScratchInterner::default();
++        let value = scratch
++            .try_owned_value_of(
++                dataset.as_ref(),
++                crate::scratch::SolutionTerm::Existing(root),
++                &capability,
++                |error| match error {},
++            )
++            .expect("native source copy uses actual owners");
++        assert_eq!(&*value, &expected);
++        assert!(ledger.live.load(Ordering::Relaxed) > base);
++        drop(capability);
++        drop(workspace);
++        assert!(ledger.live.load(Ordering::Relaxed) > 0);
++        assert_eq!(&*value, &expected);
++        drop(value);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn native_term_copy_refusal_destroys_partial_strings_boxes_and_work_before_refund() {
++        let mut builder = purrdf_core::RdfDatasetBuilder::new();
++        let subject = builder.intern_iri("http://example.org/s");
++        let predicate = builder.intern_iri("http://example.org/p");
++        let literal = builder.intern_literal(purrdf_core::RdfLiteral::simple(
++            "large original lexical value".repeat(8192),
++        ));
++        let nested = builder.intern_triple(subject, predicate, literal);
++        let root = builder.intern_triple(subject, predicate, nested);
++        builder.push_quad(subject, predicate, root, None);
++        let dataset = builder.freeze().expect("valid RDF 1.2 object nesting");
++        let base = QueryWorkspace::<Refusal>::control_bytes().expect("original account layout");
++        for extra in [0, 1, 64, 512, 1024] {
++            let (workspace, ledger, _) = account(base + extra);
++            let capability = workspace.capability();
++            let scratch = crate::scratch::ScratchInterner::default();
++            let error = scratch
++                .try_owned_value_of(
++                    dataset.as_ref(),
++                    crate::scratch::SolutionTerm::Existing(root),
++                    &capability,
++                    |error| match error {},
++                )
++                .err()
++                .expect("actual payload cannot fit this original account");
++            assert!(matches!(error, EvalError::WorkspaceStopped));
++            drop(error);
++            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
++            assert_eq!(
++                workspace
++                    .take_failure()
++                    .expect("exact first cause")
++                    .identity,
++                7
++            );
++            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++            assert!(workspace.take_failure().is_none());
++            drop(capability);
++            drop(workspace);
++            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++        }
++    }
++
++    #[test]
++    fn native_existing_copy_preserves_typed_datatype_read_failure_without_a_view_maximum() {
++        let mut builder = purrdf_core::RdfDatasetBuilder::new();
++        let subject = builder.intern_iri("http://example.org/s");
++        let predicate = builder.intern_iri("http://example.org/p");
++        let datatype = builder.intern_iri(purrdf_xsd::datatype::XSD_STRING);
++        let literal = builder.intern_literal(purrdf_core::RdfLiteral::simple("original lexical"));
++        let root = builder.intern_triple(subject, predicate, literal);
++        builder.push_quad(subject, predicate, root, None);
++        let dataset = builder.freeze().expect("valid RDF 1.2 terms");
++        let (workspace, ledger, base) = account(262_144);
++        let capability = workspace.capability();
++        let view = GroundFaultView {
++            inner: dataset.as_ref(),
++            failed_id: datatype,
++            clones: ledger.clones.clone(),
++        };
++        assert!(purrdf_core::DatasetView::max_owned_term_bytes(&view).is_none());
++        let scratch = crate::scratch::ScratchInterner::default();
++        let error = scratch
++            .try_owned_value_of(
++                &view,
++                crate::scratch::SolutionTerm::Existing(root),
++                &capability,
++                |error| workspace.source_error(error),
++            )
++            .err()
++            .expect("exact datatype read fails after completed leaves");
++        assert!(matches!(error, EvalError::WorkspaceStopped));
++        drop(error);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
++        assert_eq!(
++            workspace
++                .take_failure()
++                .expect("original source cause")
++                .identity,
++            41
++        );
++        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++}

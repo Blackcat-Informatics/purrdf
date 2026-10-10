@@ -1,0 +1,84 @@
+#[derive(Debug)]
+enum HttpStorage { Native(crate::workspace::LexicalFrame), Certified(crate::WorkspaceAllocation) }
+
+/// Immutable response bytes retaining the transport's original allocation grant.
+#[derive(Debug)]
+pub struct AdmittedHttpBody { body: Vec<u8>, _storage: HttpStorage }
+impl AdmittedHttpBody {
+    /// Borrow the original bytes while their grant remains live.
+    #[must_use]
+    pub fn bytes(&self)->&[u8] {&self.body}
+    /// Construct transport buffers through their original native allocation owner.
+    /// All fresh buffers and dynamic errors must use `memory` or an independent
+    /// admitted owner. Input configuration owned by the caller is borrowed.
+    /// # Errors
+    /// Preserves the first physical refusal or retained invocation failure.
+    pub fn try_build(workspace:&crate::WorkspaceCapability,build:impl FnOnce(&mut purrdf_lex::allocation::Memory<'_,dyn purrdf_lex::allocation::Admission>)->Result<Vec<u8>,crate::remote::ServiceBuildError>)->Result<Self,crate::remote::ServiceResolutionError> {
+        let mut frame=crate::workspace::LexicalFrame::new(workspace);
+        let result={let admission:&mut dyn purrdf_lex::allocation::Admission=&mut frame;build(&mut purrdf_lex::allocation::Memory::new(admission))};
+        if let Some(error)=frame.take_failure(){return Err(error.into());}
+        match result {Ok(body)=>Ok(Self{body,_storage:HttpStorage::Native(frame)}),Err(error)=>Err(crate::remote::build_error(error,frame))}
+    }
+}
+
+impl<T:HttpTransport> HttpRemoteQuerySource<T> {
+    fn resolve_native(&self,request:ServiceRequest<'_>,workspace:crate::WorkspaceCapability)->Result<crate::remote::AdmittedResolvedBindings,crate::remote::ServiceResolutionError> {
+        use crate::remote::{AdmittedResolvedBindings,AdmittedRemoteError,ServiceBuildError,ServiceResolutionError};
+        use purrdf_lex::allocation::Memory;
+        if let Some(trip)=request.stop_trip(){return Err(crate::remote::invocation_error(trip,&workspace)?);}
+        let ServiceRequest{endpoint,query_text,stop,max_intermediate_cells,..}=request;
+        struct Headers { values:Vec<(String,String)>, _frame:crate::workspace::LexicalFrame }
+        let mut frame=crate::workspace::LexicalFrame::new(&workspace);
+        let profile={
+            let mut memory=Memory::new(&mut frame);
+            match &self.catalog {Some(catalog)=>catalog.authorize_with_memory(endpoint,ServiceCapabilities::granting([ServiceCapability::Query,ServiceCapability::Network]),&mut memory).map(Some),None=>Ok(None)}
+        };
+        let profile=match profile{Ok(profile)=>profile,Err(error)=>return Err(crate::remote::build_error(error,frame))};
+        let headers={
+            let live=frame.live_bytes();
+            let mut memory=Memory::resume(&mut frame,live);
+            match profile{Some(profile)=>profile.request_headers_with_memory(&mut memory).map_err(|error|memory.admission_mut().storage_error(error,"SERVICE HTTP headers"))?,None=>Vec::new()}
+        };
+        let headers=Headers{values:headers,_frame:frame};
+        let body=self.transport.post_admitted(HttpRequest{endpoint,query_text,user_agent:profile.and_then(ServiceProfile::user_agent).unwrap_or(&self.user_agent),timeout:profile.and_then(ServiceProfile::timeout).unwrap_or(self.timeout),content_type:"application/sparql-query",accept:"application/sparql-results+json",headers:&headers.values,stop:stop.map(|signal|&**signal)},workspace.clone())?;
+        if let Some(cause)=stop.and_then(|signal|signal.poll()) {return Err(crate::remote::invocation_error(RemoteError::GovernedAfterCompletion(TrippedGovernor::Stopped{cause}),&workspace)?);}
+        // Decode under its ORIGINAL producer frame, holding the original HTTP
+        // body and request headers until every decoder-owned value has settled.
+        let mut frame=crate::workspace::LexicalFrame::new(&workspace);
+        let parsed={
+            let mut memory=Memory::new(&mut frame);
+            purrdf_sparql_results::from_json_with_memory(body.bytes(),max_intermediate_cells,&mut memory)
+        };
+        let parsed=match parsed {
+            Ok(parsed)=>parsed,
+            Err(purrdf_sparql_results::ReadError::Storage(error))=>return Err(ServiceResolutionError::Operational(frame.storage_error(error,"SERVICE results JSON"))),
+            Err(purrdf_sparql_results::ReadError::Lexical(error))=>{
+                let live=frame.live_bytes();
+                let text=Memory::resume(&mut frame,live).format(&format_args!("SPARQL-results JSON from <{endpoint}>: {error}")).map_err(|error|frame.storage_error(error,"SERVICE JSON diagnostic"))?;
+                drop(error);
+                // Decoder error scratch has died; a conservative original
+                // grant remains until the retained invocation diagnostic dies.
+                return Err(ServiceResolutionError::Invocation(AdmittedRemoteError::native(RemoteError::Decode(text),frame)?));
+            }
+        };
+        let attempted=if parsed.truncated {
+            let rows=u64::try_from(parsed.solutions.rows.len()).map_err(|_|crate::EvalError::WorkspaceBoundOverflow)?;
+            let columns=u64::try_from(parsed.solutions.variables.len().max(1)).map_err(|_|crate::EvalError::WorkspaceBoundOverflow)?;
+            Some(rows.checked_add(1).and_then(|rows|rows.checked_mul(columns)).ok_or(crate::EvalError::WorkspaceBoundOverflow)?)
+        } else {None};
+        let live=frame.live_bytes();
+        let bindings={
+            let mut memory=Memory::resume(&mut frame,live);
+            let mut variables=Vec::new();
+            for name in &parsed.solutions.variables {
+                let name=workspace.authored_text(name)?;
+                memory.push(&mut variables,Variable::from_admitted(name)).map_err(|error|memory.admission_mut().storage_error(error,"SERVICE result variables"))?;
+            }
+            for name in parsed.solutions.variables {memory.release_string(name).map_err(|error|memory.admission_mut().storage_error(error,"SERVICE decoded variable release"))?;}
+            // The original outer variable-vector capacity remains conservatively
+            // charged until this response is destroyed. No census fee occurs.
+            ResolvedBindings{variables,rows:parsed.solutions.rows,cell_limit_exceeded_at:attempted}
+        };
+        Ok(AdmittedResolvedBindings::from_native(bindings,frame,&workspace))
+    }
+}

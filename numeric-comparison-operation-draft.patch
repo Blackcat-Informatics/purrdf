@@ -1,0 +1,633 @@
+diff --git a/crates/xsd/src/bigint.rs b/crates/xsd/src/bigint.rs
+--- a/crates/xsd/src/bigint.rs
++++ b/crates/xsd/src/bigint.rs
+@@ -1311,6 +1311,12 @@
+         &self.magnitude
+     }
+ 
++    /// Compare only the two borrowed canonical magnitudes, without sign copies.
++    #[must_use]
++    pub fn cmp_abs(&self, other: &Self) -> Ordering {
++        mag_cmp(&self.magnitude, &other.magnitude)
++    }
++
+     /// Heap bytes owned by this value, excluding its three inline limbs.
+     #[must_use]
+     pub fn allocated_bytes(&self) -> usize {
+diff --git a/crates/xsd/src/exact/decimal.rs b/crates/xsd/src/exact/decimal.rs
+--- a/crates/xsd/src/exact/decimal.rs
++++ b/crates/xsd/src/exact/decimal.rs
+@@ -250,13 +250,7 @@
+     }
+ 
+     fn aligned_layout(&self, rhs: &Self) -> Result<cost::NumericOperationLayout, crate::bigint::LimbScratchError> {
+-        use crate::bigint::LimbScratchError::SizeOverflow;
+-        let scale = self.scale.max(rhs.scale);
+-        let a = cost::scale_up_layout(&self.unscaled, scale - self.scale)?;
+-        let b = cost::scale_up_layout(&rhs.unscaled, scale - rhs.scale)?;
+-        let peak = a.peak_bytes().max(a.retained_bytes().checked_add(b.peak_bytes()).ok_or(SizeOverflow)?);
+-        let retained = a.retained_bytes().checked_add(b.retained_bytes()).ok_or(SizeOverflow)?;
+-        cost::NumericOperationLayout::bytes(peak, retained)
++        aligned_parts_layout(&self.unscaled, self.scale, &rhs.unscaled, rhs.scale)
+     }
+ 
+     pub(crate) fn copy_using(
+@@ -979,31 +973,10 @@
+     }
+ 
+     /// Both coefficients at the larger scale.
+-    fn aligned(&self, rhs: &Self) -> (Integer, Integer, u32) {
+-        self.aligned_using(rhs, &crate::bigint::scratch::Unbounded)
+-            .expect("unbounded integer storage")
+-    }
+-
+     fn aligned_using(
+         &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
+     ) -> Result<(Integer, Integer, u32), crate::bigint::LimbScratchError> {
+-        match self.scale.cmp(&rhs.scale) {
+-            Ordering::Equal => Ok((self.unscaled.copy_using(storage)?, rhs.unscaled.copy_using(storage)?, self.scale)),
+-            Ordering::Less => Ok((
+-                scale_up_using(&self.unscaled, rhs.scale - self.scale, storage)?,
+-                rhs.unscaled.copy_using(storage)?, rhs.scale,
+-            )),
+-            Ordering::Greater => Ok((
+-                self.unscaled.copy_using(storage)?,
+-                scale_up_using(&rhs.unscaled, self.scale - rhs.scale, storage)?, self.scale,
+-            )),
+-        }
+-    }
+-
+-    /// The position of the leading digit: `|value| ∈ [10^(e−1), 10^e)` for the
+-    /// returned `e` (a nonzero value only).
+-    fn magnitude_exponent(&self) -> i64 {
+-        i64::try_from(self.unscaled.decimal_digits()).unwrap_or(i64::MAX) - i64::from(self.scale)
++        aligned_parts_using(&self.unscaled, self.scale, &rhs.unscaled, rhs.scale, storage)
+     }
+ 
+     // ----- resource governance ---------------------------------------------
+@@ -1121,6 +1094,27 @@
+         cost::render_shape(self.shape())
+     }
+ 
++    /// Compare canonical decimal parts by the existing exact leading-position law.
++    /// Borrowing the coefficient avoids numeric promotion copies.
++    /// # Errors
++    /// Returns physical admission/allocation refusal before conversion or alignment.
++    pub fn try_cmp_parts_admitted(
++        left: &Integer, left_scale: u32, right: &Integer, right_scale: u32,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Ordering, crate::bigint::LimbScratchError> {
++        cmp_parts_admitted_using(left, left_scale, right, right_scale, &crate::bigint::scratch::Fallible, admit)
++    }
++
++    /// Exact comparison with a finite/infinite IEEE value through admitted native work.
++    /// # Errors
++    /// Returns physical admission/allocation refusal, distinct from NaN incomparability.
++    pub fn try_cmp_f64_admitted(
++        &self, value: f64,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
++        cmp_scaled_f64_admitted_using(&self.unscaled, self.scale, value, &crate::bigint::scratch::Fallible, admit)
++    }
++
+     /// The exact order of the value against `value`; `None` only for `NaN`, and an
+     /// infinity is past every decimal. The signs or the two magnitudes' leading
+     /// positions decide most pairs outright; reading those positions includes
+@@ -1135,69 +1129,123 @@
+ 
+ /// `unscaled × 10^-scale` against `value`, exactly; see [`Decimal::cmp_f64`].
+ pub(crate) fn cmp_scaled_f64(unscaled: &Integer, scale: u32, value: f64) -> Option<Ordering> {
+-    if value.is_nan() {
+-        return None;
+-    }
++    cmp_scaled_f64_admitted_using(unscaled, scale, value, &crate::bigint::scratch::Unbounded, &mut |_| Ok(()))
++        .expect("unbounded integer storage")
++}
++
++pub(crate) fn cmp_scaled_f64_admitted_using(
++    unscaled: &Integer, scale: u32, value: f64,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
++    if value.is_nan() { return Ok(None); }
+     if value.is_infinite() {
+-        return Some(if value > 0.0 {
+-            Ordering::Less
+-        } else {
+-            Ordering::Greater
+-        });
++        return Ok(Some(if value > 0.0 { Ordering::Less } else { Ordering::Greater }));
+     }
+     let (negative, significand, exponent) = decompose_f64(value).expect("finite was checked");
+-    let other = if significand == 0 {
+-        0
+-    } else if negative {
+-        -1
+-    } else {
+-        1
+-    };
++    let other = if significand == 0 { 0 } else if negative { -1 } else { 1 };
+     let sign = unscaled.signum();
+-    if sign != other {
+-        return Some(sign.cmp(&other));
+-    }
+-    if sign == 0 {
+-        return Some(Ordering::Equal);
+-    }
+-    let magnitude = cmp_magnitude_binary(unscaled, scale, significand, exponent);
+-    Some(if sign < 0 {
+-        magnitude.reverse()
++    if sign != other { return Ok(Some(sign.cmp(&other))); }
++    if sign == 0 { return Ok(Some(Ordering::Equal)); }
++    let magnitude = cmp_magnitude_binary_admitted_using(unscaled, scale, significand, exponent, storage, admit)?;
++    Ok(Some(if sign < 0 { magnitude.reverse() } else { magnitude }))
++}
++
++fn shape_parts(coefficient: &Integer, scale: u32) -> cost::Shape {
++    let mut shape = coefficient.shape();
++    shape.scale = u64::from(scale);
++    shape
++}
++
++fn exact_exponent_admitted(
++    coefficient: &Integer, scale: u32,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<i64, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    let digits = if let Some(value) = coefficient.as_i128() {
++        u64::from(value.unsigned_abs().ilog10()) + 1
+     } else {
+-        magnitude
+-    })
++        let layout = coefficient.render_layout(0)?;
++        admit(cost::NumericOperationLayout::bytes(layout.temporary_bytes(), 0)?)?;
++        let groups = coefficient.prepare_decimal_digits()?;
++        u64::try_from(groups.digits_len()).map_err(|_| SizeOverflow)?
++    };
++    Ok(i64::try_from(digits).map_err(|_| SizeOverflow)? - i64::from(scale))
+ }
+ 
++fn aligned_parts_layout(
++    left: &Integer, ls: u32, right: &Integer, rs: u32,
++) -> Result<cost::NumericOperationLayout, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    let scale = ls.max(rs);
++    let a = cost::scale_up_layout(left, scale - ls)?;
++    let b = cost::scale_up_layout(right, scale - rs)?;
++    let peak = a.peak_bytes().max(a.retained_bytes().checked_add(b.peak_bytes()).ok_or(SizeOverflow)?);
++    let retained = a.retained_bytes().checked_add(b.retained_bytes()).ok_or(SizeOverflow)?;
++    cost::NumericOperationLayout::bytes(peak, retained)
++}
++
++fn aligned_parts_using(
++    left: &Integer, ls: u32, right: &Integer, rs: u32,
++    storage: &impl crate::bigint::scratch::Allocate,
++) -> Result<(Integer, Integer, u32), crate::bigint::LimbScratchError> {
++    let scale = ls.max(rs);
++    Ok((scale_up_using(left, scale - ls, storage)?, scale_up_using(right, scale - rs, storage)?, scale))
++}
++
++fn cmp_parts_admitted_using(
++    left: &Integer, ls: u32, right: &Integer, rs: u32,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Ordering, crate::bigint::LimbScratchError> {
++    let (sa, sb) = (left.signum(), right.signum());
++    if sa != sb { return Ok(sa.cmp(&sb)); }
++    if sa == 0 { return Ok(Ordering::Equal); }
++    if ls == rs { return Ok(left.cmp(right)); }
++    let (al, ah) = shape_parts(left, ls).comparison_exponents();
++    let (bl, bh) = shape_parts(right, rs).comparison_exponents();
++    let magnitude = if al > bh { Ordering::Greater } else if bl > ah { Ordering::Less } else {
++        let a = exact_exponent_admitted(left, ls, admit)?;
++        let b = exact_exponent_admitted(right, rs, admit)?;
++        match a.cmp(&b) {
++            Ordering::Equal => {
++                admit(aligned_parts_layout(left, ls, right, rs)?)?;
++                let (a, b, _) = aligned_parts_using(left, ls, right, rs, storage)?;
++                // The aligned coefficients keep their original signs, so this
++                // comparison already has the correct signed order.
++                return Ok(a.cmp(&b));
++            }
++            unequal => unequal,
++        }
++    };
++    Ok(if sa < 0 { magnitude.reverse() } else { magnitude })
++}
++
+ /// `|unscaled| × 10^-scale` against `significand × 2^exponent` (both nonzero).
+-fn cmp_magnitude_binary(
+-    unscaled: &Integer,
+-    scale: u32,
+-    significand: u64,
+-    exponent: i32,
+-) -> Ordering {
+-    // |decimal| ∈ [10^(e−1), 10^e) and binary ∈ [2^b, 2^(b+1)).
+-    let decimal_exponent =
+-        i64::try_from(unscaled.decimal_digits()).unwrap_or(i64::MAX / 4) - i64::from(scale);
++fn cmp_magnitude_binary_admitted_using(
++    unscaled: &Integer, scale: u32, significand: u64, exponent: i32,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Ordering, crate::bigint::LimbScratchError> {
++    let decimal_exponent = exact_exponent_admitted(unscaled, scale, admit)?;
+     let binade = i64::from(significand.ilog2()) + i64::from(exponent);
+-    // `log2_of_pow10(x)` is within one unit of `⌊x·log2(10)⌋`, so
+-    // `x·log2(10) ∈ [L − 1, L + 2)`. 10^e < 2^b: decimal < binary.
+-    if super::binary::log2_of_pow10(decimal_exponent) + 2 <= binade {
+-        return Ordering::Less;
+-    }
+-    // 10^(e−1) ≥ 2^(b+1): decimal ≥ 2^(b+1) > binary.
+-    if super::binary::log2_of_pow10(decimal_exponent - 1) > binade + 1 {
+-        return Ordering::Greater;
+-    }
+-    // Close magnitudes: |unscaled| × 2^max(0, −exponent) against
+-    // significand × 2^max(0, exponent) × 10^scale, both integers.
+-    let mut left = unscaled.abs().to_bigint();
+-    let mut right = BigInt::from_u128(u128::from(significand));
+-    if exponent < 0 {
+-        left = left.mul_pow2(exponent.unsigned_abs());
+-    } else {
+-        right = right.mul_pow2(exponent.unsigned_abs());
+-    }
+-    left.cmp(&right.mul_pow10(scale))
++    if super::binary::log2_of_pow10(decimal_exponent) + 2 <= binade { return Ok(Ordering::Less); }
++    if super::binary::log2_of_pow10(decimal_exponent - 1) > binade + 1 { return Ok(Ordering::Greater); }
++    let shifted_left = if exponent < 0 {
++        admit(cost::binary_shift_layout(unscaled.binary_bits(), exponent.unsigned_abs(), 0)?)?;
++        Some(Integer::from_bigint(unscaled.with_bigint(|big| big.shl_using(exponent.unsigned_abs(), storage))?))
++    } else { None };
++    let left_live = shifted_left.as_ref().map_or(Ok(0), |value| cost::live_integer_bytes(&[value]))?;
++    let shift = if exponent >= 0 { exponent.unsigned_abs() } else { 0 };
++    let bits = u64::from(significand.ilog2()) + 1;
++    admit(cost::binary_shift_layout(bits, shift, 0)?.with_live(left_live)?)?;
++    let right = Integer::from_bigint(BigInt::from_u64(significand).shl_using(shift, storage)?);
++    let live = left_live.checked_add(cost::live_integer_bytes(&[&right])?)
++        .ok_or(crate::bigint::LimbScratchError::SizeOverflow)?;
++    admit(cost::scale_up_layout(&right, scale)?.with_live(live)?)?;
++    let scaled_right = scale_up_using(&right, scale, storage)?;
++    let left = shifted_left.as_ref().unwrap_or(unscaled);
++    Ok(left.with_bigint(|a| scaled_right.with_bigint(|b| a.cmp_abs(b))))
+ }
+ 
+ /// `10^k` for `k ≤ 38`, every power of ten a `u128` holds.
+@@ -1263,7 +1311,7 @@
+         .expect("unbounded integer storage")
+ }
+ 
+-fn scale_up_using(
++pub(crate) fn scale_up_using(
+     value: &Integer, digits: u32, storage: &impl crate::bigint::scratch::Allocate,
+ ) -> Result<Integer, crate::bigint::LimbScratchError> {
+     if digits == 0 || value.is_zero() { return value.copy_using(storage); }
+@@ -1486,38 +1534,10 @@
+ 
+ impl Ord for Decimal {
+     fn cmp(&self, other: &Self) -> Ordering {
+-        let (sa, sb) = (self.signum(), other.signum());
+-        if sa != sb {
+-            return sa.cmp(&sb);
+-        }
+-        if sa == 0 {
+-            return Ordering::Equal;
+-        }
+-        // Same sign, both nonzero: the leading-digit position decides first, so
+-        // two values of wildly different scale compare without aligning.
+-        let (a_low, a_high) = self.shape().comparison_exponents();
+-        let (b_low, b_high) = other.shape().comparison_exponents();
+-        let separated = if a_low > b_high {
+-            Some(Ordering::Greater)
+-        } else if b_low > a_high {
+-            Some(Ordering::Less)
+-        } else {
+-            None
+-        };
+-        let magnitude = match separated
+-            .unwrap_or_else(|| self.magnitude_exponent().cmp(&other.magnitude_exponent()))
+-        {
+-            Ordering::Equal => {
+-                let (a, b, _) = self.aligned(other);
+-                a.abs().cmp(&b.abs())
+-            }
+-            unequal => unequal,
+-        };
+-        if sa < 0 {
+-            magnitude.reverse()
+-        } else {
+-            magnitude
+-        }
++        cmp_parts_admitted_using(
++            &self.unscaled, self.scale, &other.unscaled, other.scale,
++            &crate::bigint::scratch::Unbounded, &mut |_| Ok(()),
++        ).expect("unbounded integer storage")
+     }
+ }
+ 
+diff --git a/crates/xsd/src/exact/integer.rs b/crates/xsd/src/exact/integer.rs
+--- a/crates/xsd/src/exact/integer.rs
++++ b/crates/xsd/src/exact/integer.rs
+@@ -559,6 +559,16 @@
+         super::decimal::cmp_scaled_f64(self, 0, value)
+     }
+ 
++    /// Compare exactly against IEEE while borrowing the admitted coefficient.
++    /// # Errors
++    /// Returns physical admission/allocation refusal, distinct from NaN.
++    pub fn try_cmp_f64_admitted(
++        &self, value: f64,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
++        super::decimal::cmp_scaled_f64_admitted_using(self, 0, value, &crate::bigint::scratch::Fallible, admit)
++    }
++
+     /// The cost of [`Self::div_rem`].
+     #[must_use]
+     pub fn div_rem_cost(&self, divisor: &Self) -> Cost {
+diff --git a/crates/xsd/src/exact/mod.rs b/crates/xsd/src/exact/mod.rs
+--- a/crates/xsd/src/exact/mod.rs
++++ b/crates/xsd/src/exact/mod.rs
+@@ -94,7 +94,7 @@
+ pub mod cost;
+ 
+ pub(crate) mod binary;
+-mod decimal;
++pub(crate) mod decimal;
+ mod error;
+ mod integer;
+ mod rational;
+diff --git a/crates/xsd/src/numeric.rs b/crates/xsd/src/numeric.rs
+--- a/crates/xsd/src/numeric.rs
++++ b/crates/xsd/src/numeric.rs
+@@ -860,8 +860,26 @@
+ /// ```
+ #[must_use]
+ pub fn numeric_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
++    numeric_total_cmp_using(a, b, &crate::bigint::scratch::Unbounded, &mut |_| Ok(()))
++        .expect("unbounded integer storage")
++}
++
++/// Exact numeric total order with physical admission before every native destination.
++/// # Errors
++/// Returns admission/allocation refusal separately from NaN incomparability.
++pub fn numeric_total_cmp_admitted(
++    a: &XsdValue, b: &XsdValue,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
++    numeric_total_cmp_using(a, b, &crate::bigint::scratch::Fallible, admit)
++}
++
++fn numeric_total_cmp_using(
++    a: &XsdValue, b: &XsdValue, storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
+     use XsdValue::{Decimal as Dec, Double, Float, Integer};
+-    match (a, b) {
++    Ok(match (a, b) {
+         // ── Pairs the promotion lattice already decides exactly ──────────────
+         // Integer-vs-integer ignores the subtype, exactly as `numeric_cmp` does.
+         (Integer { value: x, .. }, Integer { value: y, .. }) => Some(x.cmp(y)),
+@@ -876,32 +894,32 @@
+         (Double(x), Float(y)) => x.partial_cmp(&f64::from(*y)),
+         // ── The exact-vs-IEEE pairs, the only lossy ones ─────────────────────
+         (Integer { value, .. }, Float(y)) => {
+-            exact_vs_ieee(&Decimal::from_parts(*value, 0), f64::from(*y))
++            exact_vs_ieee_using(&Decimal::from_parts(*value, 0), f64::from(*y), storage, admit)?
+         }
+-        (Integer { value, .. }, Double(y)) => exact_vs_ieee(&Decimal::from_parts(*value, 0), *y),
+-        (Dec(x), Float(y)) => exact_vs_ieee(x, f64::from(*y)),
+-        (Dec(x), Double(y)) => exact_vs_ieee(x, *y),
++        (Integer { value, .. }, Double(y)) => exact_vs_ieee_using(&Decimal::from_parts(*value, 0), *y, storage, admit)?,
++        (Dec(x), Float(y)) => exact_vs_ieee_using(x, f64::from(*y), storage, admit)?,
++        (Dec(x), Double(y)) => exact_vs_ieee_using(x, *y, storage, admit)?,
+         (Float(x), Integer { value, .. }) => {
+-            exact_vs_ieee(&Decimal::from_parts(*value, 0), f64::from(*x)).map(Ordering::reverse)
++            exact_vs_ieee_using(&Decimal::from_parts(*value, 0), f64::from(*x), storage, admit)?.map(Ordering::reverse)
+         }
+         (Double(x), Integer { value, .. }) => {
+-            exact_vs_ieee(&Decimal::from_parts(*value, 0), *x).map(Ordering::reverse)
++            exact_vs_ieee_using(&Decimal::from_parts(*value, 0), *x, storage, admit)?.map(Ordering::reverse)
+         }
+-        (Float(x), Dec(y)) => exact_vs_ieee(y, f64::from(*x)).map(Ordering::reverse),
+-        (Double(x), Dec(y)) => exact_vs_ieee(y, *x).map(Ordering::reverse),
++        (Float(x), Dec(y)) => exact_vs_ieee_using(y, f64::from(*x), storage, admit)?.map(Ordering::reverse),
++        (Double(x), Dec(y)) => exact_vs_ieee_using(y, *x, storage, admit)?.map(Ordering::reverse),
+         // ── An integer or decimal past the bounded variants ──────────────────
+-        _ if a.is_exact_numeric() && b.is_exact_numeric() => Some(exact_path::cmp(a, b)),
+-        (_, Float(y)) if a.is_exact_numeric() => exact_path::cmp_ieee(a, f64::from(*y)),
+-        (_, Double(y)) if a.is_exact_numeric() => exact_path::cmp_ieee(a, *y),
++        _ if a.is_exact_numeric() && b.is_exact_numeric() => Some(exact_path::cmp_admitted(a, b, admit)?),
++        (_, Float(y)) if a.is_exact_numeric() => exact_path::cmp_ieee_admitted_using(a, f64::from(*y), storage, admit)?,
++        (_, Double(y)) if a.is_exact_numeric() => exact_path::cmp_ieee_admitted_using(a, *y, storage, admit)?,
+         (Float(x), _) if b.is_exact_numeric() => {
+-            exact_path::cmp_ieee(b, f64::from(*x)).map(Ordering::reverse)
++            exact_path::cmp_ieee_admitted_using(b, f64::from(*x), storage, admit)?.map(Ordering::reverse)
+         }
+         (Double(x), _) if b.is_exact_numeric() => {
+-            exact_path::cmp_ieee(b, *x).map(Ordering::reverse)
++            exact_path::cmp_ieee_admitted_using(b, *x, storage, admit)?.map(Ordering::reverse)
+         }
+         // At least one operand is non-numeric.
+         _ => None,
+-    }
++    })
+ }
+ 
+ /// `|value| = significand × 2^exponent` with an ODD `significand` — the exact dyadic
+@@ -910,7 +928,7 @@
+ ///
+ /// Normalizing matters for more than tidiness: it is what keeps the exponent small
+ /// for the values that actually have short binary expansions, which is what keeps
+-/// [`exact_vs_ieee`]'s `u128` fast path reachable instead of pushed onto
++/// [`exact_vs_ieee_using`]'s `u128` fast path reachable instead of pushed onto
+ /// [`crate::BigInt`] by 52 trailing zero bits nobody needs.
+ fn dyadic_magnitude(value: f64) -> (u64, i32) {
+     const SIGNIFICAND_BITS: u32 = 52;
+@@ -941,41 +959,18 @@
+ /// The `f64` carries the IEEE side for BOTH `xsd:float` and `xsd:double`, because
+ /// widening `f32 → f64` is lossless; the integer branch of the tower arrives as a
+ /// scale-0 [`Decimal`]. `None` only for `NaN`.
+-fn exact_vs_ieee(exact: &Decimal, ieee: f64) -> Option<Ordering> {
+-    if ieee.is_nan() {
+-        return None;
+-    }
+-    if ieee.is_infinite() {
+-        // Every exact value is finite, so it is strictly inside the infinities.
+-        return Some(if ieee.is_sign_positive() {
+-            Ordering::Less
+-        } else {
+-            Ordering::Greater
+-        });
+-    }
++fn exact_vs_ieee_using(
++    exact: &Decimal, ieee: f64, storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
++    if ieee.is_nan() { return Ok(None); }
++    if ieee.is_infinite() { return Ok(Some(if ieee.is_sign_positive() { Ordering::Less } else { Ordering::Greater })); }
+     let exact_sign = exact.mantissa().signum();
+-    // `-0.0 == 0.0` in IEEE and in the XSD value space, so both zeros take sign 0
+-    // and compare equal to an exact zero — which is what keeps the order transitive
+-    // across the two spellings.
+-    let ieee_sign = if ieee == 0.0 {
+-        0
+-    } else if ieee < 0.0 {
+-        -1
+-    } else {
+-        1
+-    };
+-    if exact_sign != ieee_sign {
+-        return Some(exact_sign.cmp(&ieee_sign));
+-    }
+-    if exact_sign == 0 {
+-        return Some(Ordering::Equal);
+-    }
+-    let magnitude = magnitude_cmp(exact.mantissa().unsigned_abs(), exact.scale(), ieee);
+-    Some(if exact_sign > 0 {
+-        magnitude
+-    } else {
+-        magnitude.reverse()
+-    })
++    let ieee_sign = if ieee == 0.0 { 0 } else if ieee < 0.0 { -1 } else { 1 };
++    if exact_sign != ieee_sign { return Ok(Some(exact_sign.cmp(&ieee_sign))); }
++    if exact_sign == 0 { return Ok(Some(Ordering::Equal)); }
++    let magnitude = magnitude_cmp_using(exact.mantissa().unsigned_abs(), exact.scale(), ieee, storage, admit)?;
++    Ok(Some(if exact_sign > 0 { magnitude } else { magnitude.reverse() }))
+ }
+ 
+ /// Compare the strictly-positive magnitudes `mantissa / 10^scale` and `|ieee|`.
+@@ -1000,18 +995,21 @@
+ /// 3. **[`crate::BigInt`], only then.** The fallback is reached only when a product
+ ///    genuinely exceeds 128 bits, which needs the two magnitudes to differ by
+ ///    enough that step 1 nearly caught them.
+-fn magnitude_cmp(mantissa: u128, scale: u8, ieee: f64) -> Ordering {
++fn magnitude_cmp_using(
++    mantissa: u128, scale: u8, ieee: f64, storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Ordering, crate::bigint::LimbScratchError> {
+     let (significand, exponent) = dyadic_magnitude(ieee);
+     // `2^(high - 1) <= |ieee| < 2^high`.
+     let high = exponent + bit_length(significand);
+     if high >= 129 {
+         // `|ieee| >= 2^128 > 2^127 >= mantissa >= mantissa / 10^scale`.
+-        return Ordering::Less;
++        return Ok(Ordering::Less);
+     }
+     if high <= -60 {
+         // `|ieee| < 2^-60 < 10^-18 <= mantissa / 10^scale`, the smallest magnitude
+         // a non-zero decimal at this crate's maximum scale can denote.
+-        return Ordering::Greater;
++        return Ok(Ordering::Greater);
+     }
+     // Inside the window: `exponent` is in [-112, 127] and the shifts below are small.
+     let ten_pow = 10u128.checked_pow(u32::from(scale));
+@@ -1031,7 +1029,9 @@
+             left.cmp(&(significand * pow))
+         })
+     };
+-    decided.unwrap_or_else(|| big_magnitude_cmp(mantissa, scale, significand, exponent))
++    if let Some(decided) = decided { Ok(decided) } else {
++        big_magnitude_cmp_using(mantissa, scale, significand, exponent, storage, admit)
++    }
+ }
+ 
+ /// `value << shift`, or `None` when that would discard a high bit.
+@@ -1044,17 +1044,30 @@
+ }
+ 
+ /// The exact cross-multiplication once a product has outgrown `u128`.
+-fn big_magnitude_cmp(mantissa: u128, scale: u8, significand: u128, exponent: i32) -> Ordering {
+-    use crate::bigint::BigInt;
+-
+-    let left = BigInt::from_u128(mantissa);
+-    let right = BigInt::from_u128(significand);
+-    let shift = exponent.unsigned_abs();
+-    if exponent >= 0 {
+-        left.cmp(&right.mul_pow2(shift).mul_pow10(u32::from(scale)))
+-    } else {
+-        left.mul_pow2(shift).cmp(&right.mul_pow10(u32::from(scale)))
+-    }
++fn big_magnitude_cmp_using(
++    mantissa: u128, scale: u8, significand: u128, exponent: i32,
++    storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(crate::exact::cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Ordering, crate::bigint::LimbScratchError> {
++    use crate::exact::{Integer, cost};
++    let left = Integer::from(mantissa);
++    let right = Integer::from(significand);
++    let shifted_left = if exponent < 0 {
++        let bits = u64::from(mantissa.ilog2()) + 1;
++        admit(cost::binary_shift_layout(bits, exponent.unsigned_abs(), 0)?)?;
++        Some(Integer::from_bigint(left.with_bigint(|big| big.shl_using(exponent.unsigned_abs(), storage))?))
++    } else { None };
++    let left_live = shifted_left.as_ref().map_or(Ok(0), |value| cost::live_integer_bytes(&[value]))?;
++    let shifted_right = if exponent >= 0 {
++        let bits = u64::from(significand.ilog2()) + 1;
++        admit(cost::binary_shift_layout(bits, exponent.unsigned_abs(), 0)?.with_live(left_live)?)?;
++        Integer::from_bigint(right.with_bigint(|big| big.shl_using(exponent.unsigned_abs(), storage))?)
++    } else { right };
++    let live = left_live.checked_add(cost::live_integer_bytes(&[&shifted_right])?)
++        .ok_or(crate::bigint::LimbScratchError::SizeOverflow)?;
++    admit(cost::scale_up_layout(&shifted_right, u32::from(scale))?.with_live(live)?)?;
++    let scaled = crate::exact::decimal::scale_up_using(&shifted_right, u32::from(scale), storage)?;
++    Ok(shifted_left.as_ref().unwrap_or(&left).cmp(&scaled))
+ }
+ 
+ /// The number of bits in `value`'s binary representation (`0` for zero).
+diff --git a/crates/xsd/src/numeric/exact_path.rs b/crates/xsd/src/numeric/exact_path.rs
+--- a/crates/xsd/src/numeric/exact_path.rs
++++ b/crates/xsd/src/numeric/exact_path.rs
+@@ -104,6 +104,34 @@
+         })
+ }
+ 
++fn with_coefficient<T>(value: &XsdValue, use_value: impl FnOnce(&exact::Integer, u32) -> T) -> T {
++    match value {
++        XsdValue::BigInteger { value, .. } => use_value(value, 0),
++        XsdValue::BigDecimal(value) => use_value(value.unscaled(), value.scale()),
++        XsdValue::Integer { value, .. } => use_value(&exact::Integer::from_i128(*value), 0),
++        XsdValue::Decimal(value) => use_value(&exact::Integer::from_i128(value.mantissa()), u32::from(value.scale())),
++        _ => unreachable!("exact-branch operands were checked before dispatch"),
++    }
++}
++
++pub(crate) fn cmp_admitted(
++    a: &XsdValue, b: &XsdValue,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Ordering, crate::bigint::LimbScratchError> {
++    with_coefficient(a, |left, ls| with_coefficient(b, |right, rs| {
++        exact::Decimal::try_cmp_parts_admitted(left, ls, right, rs, admit)
++    }))
++}
++
++pub(crate) fn cmp_ieee_admitted_using(
++    exact: &XsdValue, ieee: f64, storage: &impl crate::bigint::scratch::Allocate,
++    admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
++    with_coefficient(exact, |coefficient, scale| {
++        crate::exact::decimal::cmp_scaled_f64_admitted_using(coefficient, scale, ieee, storage, admit)
++    })
++}
++
+ /// The exact order of two exact-branch operands.
+ #[cold]
+ #[inline(never)]
+@@ -114,19 +142,6 @@
+     decimal_of(a).cmp(&decimal_of(b))
+ }
+ 
+-/// The exact order of an exact-branch operand against a finite or infinite IEEE
+-/// value; `None` only for `NaN`. Linear in the operand, with no reduction to lowest
+-/// terms ([`exact::Decimal::cmp_f64`]).
+-#[cold]
+-#[inline(never)]
+-pub(crate) fn cmp_ieee(exact: &XsdValue, ieee: f64) -> Option<Ordering> {
+-    match exact {
+-        XsdValue::BigInteger { value, .. } => value.cmp_f64(ieee),
+-        XsdValue::BigDecimal(decimal) => decimal.cmp_f64(ieee),
+-        _ => decimal_of(exact).cmp_f64(ieee),
+-    }
+-}
+-
+ /// The correctly rounded `f64` of an exact-branch operand.
+ #[cold]
+ #[inline(never)]

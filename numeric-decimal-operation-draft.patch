@@ -1,0 +1,937 @@
+diff --git a/crates/xsd/src/bigint.rs b/crates/xsd/src/bigint.rs
+--- a/crates/xsd/src/bigint.rs
++++ b/crates/xsd/src/bigint.rs
+@@ -1487,6 +1487,12 @@
+         self.mul(&Self::pow10(exp))
+     }
+ 
++    pub(crate) fn mul_pow10_using(
++        &self, exp: u32, storage: &impl Allocate,
++    ) -> Result<Self, LimbScratchError> {
++        self.mul_using(&Self::pow10_using(exp, storage)?, storage)
++    }
++
+     /// Exact power-of-ten product with bounded reusable storage.
+     /// # Errors
+     /// Refuses scratch limb/destination exhaustion without allocating.
+diff --git a/crates/xsd/src/bigint/compat.rs b/crates/xsd/src/bigint/compat.rs
+--- a/crates/xsd/src/bigint/compat.rs
++++ b/crates/xsd/src/bigint/compat.rs
+@@ -52,19 +52,16 @@
+     /// Exact number of factors of ten, zero for zero.
+     #[must_use]
+     pub fn trailing_decimal_zeros(&self) -> u64 {
+-        let Some(limit) = self.trailing_zeros() else {
+-            return 0;
+-        };
++        self.trailing_decimal_zeros_using(&super::Unbounded).expect("unbounded integer storage")
++    }
++
++    pub(crate) fn trailing_decimal_zeros_using(
++        &self, storage: &impl super::Allocate,
++    ) -> Result<u64, super::LimbScratchError> {
++        let Some(limit) = self.trailing_zeros() else { return Ok(0); };
+         if let Ok(limit) = u32::try_from(limit) {
+-            let (_, removed) = self
+-                .strip_fives_using(limit, &super::Unbounded)
+-                .expect("unbounded integer storage");
+-            u64::from(removed)
+-        } else {
+-            self.strip_fives_wide_using(limit, &super::Unbounded)
+-                .expect("unbounded integer storage")
+-                .1
+-        }
++            self.strip_fives_using(limit, storage).map(|(_, removed)| u64::from(removed))
++        } else { self.strip_fives_wide_using(limit, storage).map(|(_, removed)| removed) }
+     }
+ 
+     /// Parse an optionally signed decimal integer.
+@@ -107,14 +104,18 @@
+     /// Exact finite decimal representation of a dyadic value.
+     #[must_use]
+     pub fn from_binary(numerator: i128, exponent: i32) -> (Self, u32) {
++        Self::from_binary_using(numerator, exponent, &super::Unbounded)
++            .expect("unbounded integer storage")
++    }
++
++    pub(crate) fn from_binary_using(
++        numerator: i128, exponent: i32, storage: &impl super::Allocate,
++    ) -> Result<(Self, u32), super::LimbScratchError> {
+         let value = Self::from_i128(numerator);
+         if exponent >= 0 {
+-            (value.mul_pow2(exponent.unsigned_abs()), 0)
++            Ok((value.shl_using(exponent.unsigned_abs(), storage)?, 0))
+         } else {
+-            (
+-                value.mul_pow5(exponent.unsigned_abs()),
+-                exponent.unsigned_abs(),
+-            )
++            Ok((value.mul_pow5_using(exponent.unsigned_abs(), storage)?, exponent.unsigned_abs()))
+         }
+     }
+ 
+@@ -163,16 +164,22 @@
+     /// Exact quotient and remainder of a decimal shift.
+     #[must_use]
+     pub fn div_rem_pow10(&self, exponent: u64) -> (Self, Self) {
+-        if exponent == 0 {
+-            return (self.clone(), Self::zero());
+-        }
+-        if exponent >= self.decimal_digits() {
+-            return (Self::zero(), self.clone());
++        self.div_rem_pow10_using(exponent, &super::Unbounded).expect("unbounded integer storage")
++    }
++
++    pub(crate) fn div_rem_pow10_using(
++        &self, exponent: u64, storage: &impl super::Allocate,
++    ) -> Result<(Self, Self), super::LimbScratchError> {
++        if exponent == 0 { return Ok((self.copy_using(storage)?, Self::zero())); }
++        // Certified digit upper bound avoids an unpriced decimal_digits render.
++        // The close-boundary case performs the same exact division, at most one
++        // extra power digit; huge padding returns zero before forming its power.
++        if exponent >= crate::exact::cost::digits_for_bits(self.bit_len()) {
++            return Ok((Self::zero(), self.copy_using(storage)?));
+         }
+-        self.div_rem(&Self::pow10(
+-            u32::try_from(exponent).expect("decimal exponent fits u32"),
+-        ))
+-        .expect("power of ten is nonzero")
++        let power = Self::pow10_using(u32::try_from(exponent)
++            .map_err(|_| super::LimbScratchError::SizeOverflow)?, storage)?;
++        Ok(self.div_rem_using(&power, storage)?.expect("power of ten is nonzero"))
+     }
+ 
+     /// Square-and-multiply exact power, including zero to power zero.
+diff --git a/crates/xsd/src/exact/integer.rs b/crates/xsd/src/exact/integer.rs
+--- a/crates/xsd/src/exact/integer.rs
++++ b/crates/xsd/src/exact/integer.rs
+@@ -56,7 +56,7 @@
+     }
+ 
+     /// Borrow a spilled magnitude; machine coefficients construct only inline limbs.
+-    fn with_bigint<T>(&self, use_value: impl FnOnce(&BigInt) -> T) -> T {
++    pub(crate) fn with_bigint<T>(&self, use_value: impl FnOnce(&BigInt) -> T) -> T {
+         match &self.0 {
+             Repr::Small(value) => use_value(&BigInt::from_i128(*value)),
+             Repr::Big(value) => use_value(value),
+@@ -72,6 +72,20 @@
+         }
+     }
+ 
++    /// Negate a fresh owned coefficient without a limb copy.
++    pub(crate) fn negated_owned(self) -> Self {
++        match self.0 {
++            Repr::Small(value) => value.checked_neg().map_or_else(
++                || Self::from_bigint(BigInt::from_i128(value).with_sign(value >= 0)),
++                Self::from_i128,
++            ),
++            Repr::Big(value) => {
++                let negative = !value.is_negative();
++                Self::from_bigint(value.with_sign(negative))
++            }
++        }
++    }
++
+     pub(crate) fn abs_using(
+         &self, storage: &impl crate::bigint::scratch::Allocate,
+     ) -> Result<Self, crate::bigint::LimbScratchError> {
+@@ -255,19 +269,28 @@
+     ///
+     /// [`ExactError::DivisionByZero`] (`err:FOAR0001`) for a zero divisor.
+     pub fn div_rem(&self, divisor: &Self) -> Result<(Self, Self), ExactError> {
+-        if divisor.is_zero() {
+-            return Err(ExactError::DivisionByZero);
+-        }
+-        if let (Repr::Small(a), Repr::Small(b)) = (&self.0, &divisor.0)
+-            && let (Some(quotient), Some(remainder)) = (a.checked_div(*b), a.checked_rem(*b))
+-        {
+-            return Ok((Self::from_i128(quotient), Self::from_i128(remainder)));
+-        }
+-        let (quotient, remainder) = self
+-            .to_bigint()
+-            .div_rem(&divisor.to_bigint())
++        self.div_rem_using(divisor, &crate::bigint::scratch::Unbounded)
++            .map_err(|error| error.into_value_error().expect("unbounded integer storage"))
++    }
++
++    /// Truncating quotient/remainder through fallible native destinations.
++    /// # Errors
++    /// Preserves division-by-zero separately from physical allocation refusal.
++    pub fn try_div_rem(&self, divisor: &Self) -> Result<(Self, Self), super::ExactOperationError> {
++        self.div_rem_using(divisor, &crate::bigint::scratch::Fallible)
++    }
++
++    pub(crate) fn div_rem_using(
++        &self, divisor: &Self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<(Self, Self), super::ExactOperationError> {
++        if divisor.is_zero() { return Err(ExactError::DivisionByZero.into()); }
++        if let (Some(a), Some(b)) = (self.as_i128(), divisor.as_i128())
++            && let (Some(q), Some(r)) = (a.checked_div(b), a.checked_rem(b)) {
++                return Ok((Self::from_i128(q), Self::from_i128(r)));
++            }
++        let (q, r) = self.with_bigint(|a| divisor.with_bigint(|b| a.div_rem_using(b, storage)))?
+             .ok_or(ExactError::DivisionByZero)?;
+-        Ok((Self::from_bigint(quotient), Self::from_bigint(remainder)))
++        Ok((Self::from_bigint(q), Self::from_bigint(r)))
+     }
+ 
+     /// `self^exp`, exactly (`0^0 = 1`). The result has up to
+@@ -348,17 +371,27 @@
+     ///
+     /// [`ExactError::NotFinite`] (`err:FOCA0002`) for `NaN` and the infinities.
+     pub fn from_f64_truncated(value: f64) -> Result<Self, ExactError> {
+-        let (negative, significand, exponent) =
+-            decompose_f64(value).ok_or(ExactError::NotFinite)?;
++        Self::from_f64_truncated_using(value, &crate::bigint::scratch::Unbounded)
++            .map_err(|error| error.into_value_error().expect("unbounded integer storage"))
++    }
++
++    /// Exact IEEE truncation through the same native shift implementation.
++    /// # Errors
++    /// Preserves non-finite F&O error separately from physical destination refusal.
++    pub fn try_from_f64_truncated(value: f64) -> Result<Self, super::ExactOperationError> {
++        Self::from_f64_truncated_using(value, &crate::bigint::scratch::Fallible)
++    }
++
++    fn from_f64_truncated_using(
++        value: f64, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, super::ExactOperationError> {
++        let (negative, significand, exponent) = decompose_f64(value).ok_or(ExactError::NotFinite)?;
+         let magnitude = if exponent >= 0 {
+-            BigInt::from_u128(u128::from(significand)).mul_pow2(exponent.unsigned_abs())
+-        } else if exponent <= -64 {
+-            BigInt::zero()
+-        } else {
++            BigInt::from_u128(u128::from(significand)).shl_using(exponent.unsigned_abs(), storage)?
++        } else if exponent <= -64 { BigInt::zero() } else {
+             BigInt::from_u128(u128::from(significand >> exponent.unsigned_abs()))
+         };
+-        let value = Self::from_bigint(magnitude);
+-        Ok(if negative { -value } else { value })
++        Ok(Self::from_bigint(magnitude.with_sign(negative)))
+     }
+ 
+     // ----- resource governance ---------------------------------------------
+diff --git a/crates/xsd/src/exact/decimal.rs b/crates/xsd/src/exact/decimal.rs
+--- a/crates/xsd/src/exact/decimal.rs
++++ b/crates/xsd/src/exact/decimal.rs
+@@ -135,27 +135,26 @@
+     /// The value `unscaled × 10^-scale`, canonicalized.
+     #[must_use]
+     pub fn new(unscaled: Integer, scale: u32) -> Self {
+-        if unscaled.is_zero() {
+-            return Self::ZERO;
+-        }
+-        if scale == 0 {
+-            return Self { unscaled, scale };
+-        }
+-        if let Some(value) = unscaled.as_i128() {
+-            return Self::from_small(value, scale);
+-        }
+-        let big = unscaled.to_bigint();
+-        let zeros = u32::try_from(big.trailing_decimal_zeros().min(u64::from(scale)))
+-            .expect("bounded by a u32 scale");
+-        if zeros == 0 {
+-            return Self { unscaled, scale };
+-        }
+-        Self {
+-            unscaled: Integer::from_bigint(big.div_rem_pow10(u64::from(zeros)).0),
+-            scale: scale - zeros,
+-        }
++        Self::new_using(unscaled, scale, &crate::bigint::scratch::Unbounded)
++            .expect("unbounded integer storage")
+     }
+ 
++    pub(crate) fn new_using(
++        unscaled: Integer, scale: u32, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        if unscaled.is_zero() { return Ok(Self::ZERO); }
++        if scale == 0 { return Ok(Self { unscaled, scale }); }
++        if let Some(value) = unscaled.as_i128() { return Ok(Self::from_small(value, scale)); }
++        let zeros = unscaled.with_bigint(|big| big.trailing_decimal_zeros_using(storage))?
++            .min(u64::from(scale));
++        if zeros == 0 { return Ok(Self { unscaled, scale }); }
++        let quotient = unscaled.with_bigint(|big| big.div_rem_pow10_using(zeros, storage))?.0;
++        Ok(Self {
++            unscaled: Integer::from_bigint(quotient),
++            scale: scale - u32::try_from(zeros).expect("bounded by the original scale"),
++        })
++    }
++
+     /// The integer `value` as a decimal.
+     #[must_use]
+     pub const fn from_integer(value: Integer) -> Self {
+@@ -171,6 +170,71 @@
+         &self.unscaled
+     }
+ 
++    /// Add with fallible native alignment and result destinations.
++    /// # Errors
++    /// Returns checked native storage refusal without a rounded fallback.
++    pub fn try_add_fallible(&self, rhs: &Self) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.add_using(rhs, &crate::bigint::scratch::Fallible)
++    }
++
++    /// Subtract with fallible native alignment and result destinations.
++    /// # Errors
++    /// Returns checked native storage refusal without an infallible fallback.
++    pub fn try_sub_fallible(&self, rhs: &Self) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.sub_using(rhs, &crate::bigint::scratch::Fallible)
++    }
++
++    fn add_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        if let Some((a, b, scale)) = self.aligned_small(rhs)
++            && let Some(sum) = a.checked_add(b) { return Ok(Self::from_small(sum, scale)); }
++        let (a, b, scale) = self.aligned_using(rhs, storage)?;
++        Self::new_using(a.add_using(&b, storage)?, scale, storage)
++    }
++
++    fn sub_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        if let Some((a, b, scale)) = self.aligned_small(rhs)
++            && let Some(value) = a.checked_sub(b) { return Ok(Self::from_small(value, scale)); }
++        let (a, b, scale) = self.aligned_using(rhs, storage)?;
++        Self::new_using(a.sub_using(&b, storage)?, scale, storage)
++    }
++
++    pub(crate) fn copy_using(
++        &self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        Ok(Self { unscaled: self.unscaled.copy_using(storage)?, scale: self.scale })
++    }
++
++    pub(crate) fn neg_using(
++        &self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        Ok(Self { unscaled: self.unscaled.neg_using(storage)?, scale: self.scale })
++    }
++
++    /// Copy through fallible native destinations for an actual by-value promotion.
++    /// # Errors
++    /// Refuses physical storage rather than cloning unpriced owned limbs.
++    pub fn try_copy(&self) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.copy_using(&crate::bigint::scratch::Fallible)
++    }
++
++    /// Absolute value through fallible native destinations.
++    /// # Errors
++    /// Refuses physical storage without changing the rounding/value law.
++    pub fn try_abs(&self) -> Result<Self, crate::bigint::LimbScratchError> {
++        if self.is_negative() { self.try_neg() } else { self.try_copy() }
++    }
++
++    /// Negate through fallible native destinations.
++    /// # Errors
++    /// Returns physical storage refusal without cloning owned coefficient limbs.
++    pub fn try_neg(&self) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.neg_using(&crate::bigint::scratch::Fallible)
++    }
++
+     /// The canonical scale: the number of fractional digits of the canonical
+     /// lexical form.
+     #[must_use]
+@@ -437,25 +501,28 @@
+     /// `u32::MAX` digits.
+     #[inline]
+     pub fn try_mul(&self, rhs: &Self) -> Result<Self, ExactError> {
+-        let scale = self
+-            .scale
+-            .checked_add(rhs.scale)
+-            .ok_or(ExactError::ScaleOverflow)?;
+-        if let (Some(a), Some(b)) = (self.unscaled.as_i128(), rhs.unscaled.as_i128())
+-            && let Some(product) = a.checked_mul(b)
+-        {
+-            return Ok(Self::from_small(product, scale));
+-        }
+-        Ok(self.mul_big(rhs, scale))
++        self.mul_using(rhs, &crate::bigint::scratch::Unbounded)
++            .map_err(|error| error.into_value_error().expect("unbounded integer storage"))
+     }
+ 
+-    // Spilled multiplication/canonicalization owns a larger working frame;
+-    // keep it separate from the checked machine-coefficient caller.
+-    #[cold]
+-    fn mul_big(&self, rhs: &Self, scale: u32) -> Self {
+-        Self::new(&self.unscaled * &rhs.unscaled, scale)
++    /// Multiply with fallible destinations while preserving the scale law.
++    /// # Errors
++    /// Distinguishes scale overflow from physical destination refusal.
++    pub fn try_mul_fallible(&self, rhs: &Self) -> Result<Self, super::ExactOperationError> {
++        self.mul_using(rhs, &crate::bigint::scratch::Fallible)
+     }
+ 
++    pub(crate) fn mul_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, super::ExactOperationError> {
++        let scale = self.scale.checked_add(rhs.scale).ok_or(ExactError::ScaleOverflow)?;
++        if let (Some(a), Some(b)) = (self.unscaled.as_i128(), rhs.unscaled.as_i128())
++            && let Some(product) = a.checked_mul(b) {
++                return Ok(Self::from_small(product, scale));
++            }
++        Ok(Self::new_using(self.unscaled.mul_using(&rhs.unscaled, storage)?, scale, storage)?)
++    }
++
+     /// The canonical decimal `value × 10^-scale` for an inline coefficient: no
+     /// trailing zero to strip is the common case, decided by one remainder.
+     #[inline]
+@@ -518,37 +585,65 @@
+     /// quotient with no finite expansion; [`ExactError::ScaleOverflow`] for a
+     /// quotient scale past `u32::MAX`.
+     pub fn div(&self, rhs: &Self, policy: DivisionPolicy) -> Result<Self, ExactError> {
+-        if rhs.is_zero() {
+-            return Err(ExactError::DivisionByZero);
+-        }
+-        if self.is_zero() {
+-            return Ok(Self::ZERO);
+-        }
++        self.div_using(rhs, policy, &crate::bigint::scratch::Unbounded)
++            .map_err(|error| error.into_value_error().expect("unbounded integer storage"))
++    }
++
++    /// Exact division with staged physical admission of the actual reduced
++    /// coefficient and final exponent; avoids pricing an unreduced worst case.
++    /// The callback retains an owned frame and adds its own control headers.
++    /// # Errors
++    /// Preserves value-space errors and physical admission/storage refusal.
++    pub fn try_div_exact_admitted(
++        &self, rhs: &Self,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
++        if rhs.is_zero() { return Err(ExactError::DivisionByZero.into()); }
++        if self.is_zero() { return Ok(Self::ZERO); }
++        admit(cost::decimal_exact_initial_layout(self.limb_len(), rhs.limb_len())?)?;
++        self.div_exact_admitted_using(rhs, &crate::bigint::scratch::Fallible, admit)
++    }
++
++    /// Divide through the same native rounded/exact algorithms with fallible storage.
++    /// # Errors
++    /// Keeps domain/scale errors separate from actual allocation refusal.
++    pub fn try_div_fallible(
++        &self, rhs: &Self, policy: DivisionPolicy,
++    ) -> Result<Self, super::ExactOperationError> {
++        self.div_using(rhs, policy, &crate::bigint::scratch::Fallible)
++    }
++
++    fn div_using(
++        &self, rhs: &Self, policy: DivisionPolicy, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, super::ExactOperationError> {
++        if rhs.is_zero() { return Err(ExactError::DivisionByZero.into()); }
++        if self.is_zero() { return Ok(Self::ZERO); }
+         match policy {
+-            DivisionPolicy::Scale { scale, rounding } => self.div_rounded(rhs, scale, rounding),
+-            DivisionPolicy::Exact => self.div_exact(rhs),
++            DivisionPolicy::Scale { scale, rounding } => self.div_rounded_using(rhs, scale, rounding, storage),
++            DivisionPolicy::Exact => self.div_exact_using(rhs, storage),
+         }
+     }
+ 
+     /// The quotient rounded to `scale` digits: with the operands
+     /// `a·10^-sa` and `b·10^-sb`, the coefficient is
+     /// `round(a · 10^(scale + sb − sa) / b)`.
+-    fn div_rounded(&self, rhs: &Self, scale: u32, rounding: Rounding) -> Result<Self, ExactError> {
++    fn div_rounded_using(
++        &self, rhs: &Self, scale: u32, rounding: Rounding,
++        storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, super::ExactOperationError> {
+         let negative = self.is_negative() != rhs.is_negative();
+         let shift = i64::from(scale) + i64::from(rhs.scale) - i64::from(self.scale);
+         let digits = u32::try_from(shift.unsigned_abs()).map_err(|_| ExactError::ScaleOverflow)?;
+         if let Some(quotient) = self.div_rounded_small(rhs, shift, rounding, negative) {
+-            return Ok(Self::new(Integer::from(quotient), scale));
++            return Ok(Self::from_small(quotient, scale));
+         }
+-        let (a, b) = (self.unscaled.abs(), rhs.unscaled.abs());
++        let (a, b) = (self.unscaled.abs_using(storage)?, rhs.unscaled.abs_using(storage)?);
+         let (numerator, denominator) = if shift >= 0 {
+-            (scale_up(&a, digits), b)
+-        } else {
+-            (a, scale_up(&b, digits))
+-        };
+-        let quotient = round_quotient(&numerator, &denominator, rounding, negative);
+-        let signed = if negative { -quotient } else { quotient };
+-        Ok(Self::new(signed, scale))
++            (scale_up_using(&a, digits, storage)?, b)
++        } else { (a, scale_up_using(&b, digits, storage)?) };
++        let quotient = round_quotient_using(&numerator, &denominator, rounding, negative, storage)?;
++        let signed = if negative { quotient.negated_owned() } else { quotient };
++        Ok(Self::new_using(signed, scale, storage)?)
+     }
+ 
+     /// [`Self::div_rounded`] in machine arithmetic, when both coefficients and
+@@ -587,52 +682,77 @@
+     /// `g = gcd(a, b)` and `b / g = 2^x · 5^y · r`, the quotient terminates exactly
+     /// when `r = 1`, and then `a/b = (a/g) · 2^(k−x) · 5^(k−y) / 10^k` with
+     /// `k = max(x, y)`.
+-    fn div_exact(&self, rhs: &Self) -> Result<Self, ExactError> {
++    fn div_exact_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, super::ExactOperationError> {
++        self.div_exact_admitted_using(rhs, storage, &mut |_| Ok(()))
++    }
++
++    fn div_exact_admitted_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++        admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
++    ) -> Result<Self, super::ExactOperationError> {
++        use crate::bigint::LimbScratchError::SizeOverflow;
+         let negative = self.is_negative() != rhs.is_negative();
+         let (a, b) = (
+-            self.unscaled.abs().to_bigint(),
+-            rhs.unscaled.abs().to_bigint(),
++            self.unscaled.with_bigint(|value| value.abs_using(storage))?,
++            rhs.unscaled.with_bigint(|value| value.abs_using(storage))?,
+         );
+-        let g = a.gcd(&b);
+-        let reduced_a = a.div_rem(&g).expect("gcd of nonzero values is nonzero").0;
+-        let reduced_b = b.div_rem(&g).expect("gcd of nonzero values is nonzero").0;
+-        let (rest, twos) = strip_factor(reduced_b, 2);
+-        let (rest, fives) = strip_factor(rest, 5);
+-        if rest != BigInt::one() {
+-            return Err(ExactError::NonTerminating);
+-        }
++        let g = a.gcd_using(&b, storage)?;
++        let reduced_a = a.div_rem_using(&g, storage)?.expect("gcd is nonzero").0;
++        let reduced_b = b.div_rem_using(&g, storage)?.expect("gcd is nonzero").0;
++        drop(a); drop(b); drop(g);
++        let (rest, twos) = strip_factor_using(reduced_b, 2, storage)?;
++        let (rest, fives) = strip_factor_using(rest, 5, storage)?;
++        if rest != BigInt::one() { return Err(ExactError::NonTerminating.into()); }
++        drop(rest);
+         let k = twos.max(fives);
+-        let coefficient = reduced_a.mul_pow2(k - twos).mul_pow5(k - fives);
+-        // value = coefficient · 10^(sb − sa − k).
++        // Every previous reduction/factor temporary is gone. The actual
++        // reduced numerator stays covered while its fresh shift is allocated.
++        admit(cost::binary_shift_layout(
++            reduced_a.bit_len(), k - twos, reduced_a.allocated_bytes(),
++        )?)?;
++        let shifted = reduced_a.shl_using(k - twos, storage)?;
++        drop(reduced_a);
++        admit(cost::pow5_layout(shifted.bit_len(), k - fives, shifted.allocated_bytes())?)?;
++        let coefficient = shifted.mul_pow5_using(k - fives, storage)?;
++        drop(shifted);
+         let exponent = i64::from(rhs.scale) - i64::from(self.scale) - i64::from(k);
+-        let signed = Integer::from_bigint(if negative {
+-            coefficient.negated()
+-        } else {
+-            coefficient
+-        });
++        let signed = Integer::from_bigint(coefficient.with_sign(negative));
+         if exponent >= 0 {
+             let up = u32::try_from(exponent).map_err(|_| ExactError::ScaleOverflow)?;
+-            Ok(Self::new(scale_up(&signed, up), 0))
++            let native = cost::scale_up_layout(&signed, up)?;
++            let live = usize::try_from(signed.heap_bytes()).map_err(|_| SizeOverflow)?;
++            admit(cost::NumericOperationLayout::bytes(
++                live.checked_add(native.peak_bytes()).ok_or(SizeOverflow)?, native.retained_bytes(),
++            )?)?;
++            Ok(Self::new_using(scale_up_using(&signed, up, storage)?, 0, storage)?)
+         } else {
+             let scale = u32::try_from(-exponent).map_err(|_| ExactError::ScaleOverflow)?;
+-            Ok(Self::new(signed, scale))
++            admit(cost::normalize_layout(&signed, scale)?)?;
++            Ok(Self::new_using(signed, scale, storage)?)
+         }
+     }
+ 
+     /// Both coefficients at the larger scale.
+     fn aligned(&self, rhs: &Self) -> (Integer, Integer, u32) {
++        self.aligned_using(rhs, &crate::bigint::scratch::Unbounded)
++            .expect("unbounded integer storage")
++    }
++
++    fn aligned_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<(Integer, Integer, u32), crate::bigint::LimbScratchError> {
+         match self.scale.cmp(&rhs.scale) {
+-            Ordering::Equal => (self.unscaled.clone(), rhs.unscaled.clone(), self.scale),
+-            Ordering::Less => (
+-                scale_up(&self.unscaled, rhs.scale - self.scale),
+-                rhs.unscaled.clone(),
+-                rhs.scale,
+-            ),
+-            Ordering::Greater => (
+-                self.unscaled.clone(),
+-                scale_up(&rhs.unscaled, self.scale - rhs.scale),
+-                self.scale,
+-            ),
++            Ordering::Equal => Ok((self.unscaled.copy_using(storage)?, rhs.unscaled.copy_using(storage)?, self.scale)),
++            Ordering::Less => Ok((
++                scale_up_using(&self.unscaled, rhs.scale - self.scale, storage)?,
++                rhs.unscaled.copy_using(storage)?, rhs.scale,
++            )),
++            Ordering::Greater => Ok((
++                self.unscaled.copy_using(storage)?,
++                scale_up_using(&rhs.unscaled, self.scale - rhs.scale, storage)?, self.scale,
++            )),
+         }
+     }
+ 
+@@ -895,40 +1015,41 @@
+ 
+ /// `value × 10^digits`, exactly.
+ fn scale_up(value: &Integer, digits: u32) -> Integer {
+-    if digits == 0 || value.is_zero() {
+-        return value.clone();
+-    }
+-    if digits <= MAX_I128_POW10
+-        && let Some(small) = value.as_i128()
+-        && let Some(product) =
+-            small.checked_mul(i128::try_from(POW10[digits as usize]).expect("10^38 < 2^127"))
+-    {
+-        return Integer::from_i128(product);
+-    }
+-    Integer::from_bigint(value.to_bigint().mul_pow10(digits))
++    scale_up_using(value, digits, &crate::bigint::scratch::Unbounded)
++        .expect("unbounded integer storage")
+ }
+ 
++fn scale_up_using(
++    value: &Integer, digits: u32, storage: &impl crate::bigint::scratch::Allocate,
++) -> Result<Integer, crate::bigint::LimbScratchError> {
++    if digits == 0 || value.is_zero() { return value.copy_using(storage); }
++    if digits <= MAX_I128_POW10 && let Some(small) = value.as_i128()
++        && let Some(product) = small.checked_mul(
++            i128::try_from(POW10[digits as usize]).expect("10^38 fits i128"),
++        ) { return Ok(Integer::from_i128(product)); }
++    value.with_bigint(|big| big.mul_pow10_using(digits, storage)).map(Integer::from_bigint)
++}
++
+ /// `⌊n / d⌋` rounded in direction `rounding` for the exact sign `negative`
+ /// (`n`, `d` non-negative magnitudes, `d` nonzero); the magnitude of the result.
+ pub(crate) fn round_quotient(
+-    numerator: &Integer,
+-    denominator: &Integer,
+-    rounding: Rounding,
+-    negative: bool,
++    numerator: &Integer, denominator: &Integer, rounding: Rounding, negative: bool,
+ ) -> Integer {
+-    let (quotient, remainder) = numerator
+-        .div_rem(denominator)
+-        .expect("the denominator is nonzero");
+-    if remainder.is_zero() {
+-        return quotient;
+-    }
+-    let twice = &remainder + &remainder;
++    round_quotient_using(numerator, denominator, rounding, negative, &crate::bigint::scratch::Unbounded)
++        .expect("unbounded integer storage")
++}
++
++fn round_quotient_using(
++    numerator: &Integer, denominator: &Integer, rounding: Rounding, negative: bool,
++    storage: &impl crate::bigint::scratch::Allocate,
++) -> Result<Integer, super::ExactOperationError> {
++    let (quotient, remainder) = numerator.div_rem_using(denominator, storage)?;
++    if remainder.is_zero() { return Ok(quotient); }
++    let twice = remainder.add_using(&remainder, storage)?;
+     let half = twice.cmp(denominator);
+     if rounding.increments(negative, quotient.is_odd(), half, true) {
+-        &quotient + &Integer::ONE
+-    } else {
+-        quotient
+-    }
++        Ok(quotient.add_using(&Integer::ONE, storage)?)
++    } else { Ok(quotient) }
+ }
+ 
+ /// Split `coefficient`'s magnitude at `drop` digits: the kept (truncated) signed
+@@ -981,32 +1102,35 @@
+ 
+ /// `value` with every factor `prime` (2 or 5) divided out, and how many there
+ /// were, in chunks of the largest power that fits one machine division.
+-pub(crate) fn strip_factor(mut value: BigInt, prime: u64) -> (BigInt, u32) {
+-    let (chunk, chunk_power) = if prime == 2 {
+-        (1_u64 << 32, 32)
+-    } else {
+-        (5_u64.pow(27), 27)
+-    };
++pub(crate) fn strip_factor(value: BigInt, prime: u64) -> (BigInt, u32) {
++    strip_factor_using(value, prime, &crate::bigint::scratch::Unbounded)
++        .expect("unbounded integer storage")
++}
++
++fn strip_factor_using(
++    mut value: BigInt, prime: u64, storage: &impl crate::bigint::scratch::Allocate,
++) -> Result<(BigInt, u32), super::ExactOperationError> {
++    let (chunk, chunk_power) = if prime == 2 { (1_u64 << 32, 32) } else { (5_u64.pow(27), 27) };
+     let mut count = 0_u32;
+     loop {
+-        match value.div_rem_u64(chunk) {
+-            Some((quotient, 0)) if !value.is_zero() => {
++        match value.div_rem_using(&BigInt::from_u64(chunk), storage)? {
++            Some((quotient, remainder)) if remainder.is_zero() && !value.is_zero() => {
+                 value = quotient;
+-                count += chunk_power;
++                count = count.checked_add(chunk_power).ok_or(ExactError::ScaleOverflow)?;
+             }
+             _ => break,
+         }
+     }
+     loop {
+-        match value.div_rem_u64(prime) {
+-            Some((quotient, 0)) if !value.is_zero() => {
++        match value.div_rem_using(&BigInt::from_u64(prime), storage)? {
++            Some((quotient, remainder)) if remainder.is_zero() && !value.is_zero() => {
+                 value = quotient;
+-                count += 1;
++                count = count.checked_add(1).ok_or(ExactError::ScaleOverflow)?;
+             }
+             _ => break,
+         }
+     }
+-    (value, count)
++    Ok((value, count))
+ }
+ 
+ impl Default for Decimal {
+@@ -1156,36 +1280,21 @@
+ impl Add<&Decimal> for &Decimal {
+     type Output = Decimal;
+     fn add(self, rhs: &Decimal) -> Decimal {
+-        if let Some((a, b, scale)) = self.aligned_small(rhs)
+-            && let Some(sum) = a.checked_add(b)
+-        {
+-            return Decimal::from_small(sum, scale);
+-        }
+-        let (a, b, scale) = self.aligned(rhs);
+-        Decimal::new(&a + &b, scale)
++        self.add_using(rhs, &crate::bigint::scratch::Unbounded).expect("unbounded integer storage")
+     }
+ }
+ 
+ impl Sub<&Decimal> for &Decimal {
+     type Output = Decimal;
+     fn sub(self, rhs: &Decimal) -> Decimal {
+-        if let Some((a, b, scale)) = self.aligned_small(rhs)
+-            && let Some(difference) = a.checked_sub(b)
+-        {
+-            return Decimal::from_small(difference, scale);
+-        }
+-        let (a, b, scale) = self.aligned(rhs);
+-        Decimal::new(&a - &b, scale)
++        self.sub_using(rhs, &crate::bigint::scratch::Unbounded).expect("unbounded integer storage")
+     }
+ }
+ 
+ impl Neg for &Decimal {
+     type Output = Decimal;
+     fn neg(self) -> Decimal {
+-        Decimal {
+-            unscaled: -&self.unscaled,
+-            scale: self.scale,
+-        }
++        self.neg_using(&crate::bigint::scratch::Unbounded).expect("unbounded integer storage")
+     }
+ }
+ 
+diff --git a/crates/xsd/src/exact/cost.rs b/crates/xsd/src/exact/cost.rs
+--- a/crates/xsd/src/exact/cost.rs
++++ b/crates/xsd/src/exact/cost.rs
+@@ -117,6 +117,15 @@
+     #[must_use]
+     pub const fn retained_bytes(self) -> usize { self.retained_bytes }
+ 
++    pub(crate) fn bytes(
++        peak_bytes: usize, retained_bytes: usize,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        use crate::bigint::LimbScratchError::SizeOverflow;
++        std::alloc::Layout::array::<u8>(peak_bytes).map_err(|_| SizeOverflow)?;
++        std::alloc::Layout::array::<u8>(retained_bytes).map_err(|_| SizeOverflow)?;
++        Ok(Self { peak_bytes, retained_bytes })
++    }
++
+     pub(crate) fn words(peak: u64, retained: u64) -> Result<Self, crate::bigint::LimbScratchError> {
+         use crate::bigint::LimbScratchError::SizeOverflow;
+         let checked = |words: u64| -> Result<usize, crate::bigint::LimbScratchError> {
+@@ -166,6 +175,122 @@
+     }
+ }
+ 
++fn checked_sum_words(values: &[u64]) -> Result<u64, crate::bigint::LimbScratchError> {
++    values.iter().try_fold(0_u64, |sum, value| sum.checked_add(*value)
++        .ok_or(crate::bigint::LimbScratchError::SizeOverflow))
++}
++
++fn owned_words(limbs: u64) -> u64 { if limbs <= 3 { 0 } else { limbs } }
++
++// Mirrors the actual destination families of mag_div_rem, not saturated fuel.
++// The <=8-limb normalized branch uses stack scratch; larger division retains
++// normalized numerator/divisor and quotient before returning its remainder.
++fn division_words(la: u64, lb: u64) -> Result<u64, crate::bigint::LimbScratchError> {
++    if la <= 8 {
++        checked_sum_words(&[owned_words(la), owned_words(la.min(lb))])
++    } else {
++        checked_sum_words(&[
++            owned_words(la.checked_add(1).ok_or(crate::bigint::LimbScratchError::SizeOverflow)?),
++            owned_words(lb), owned_words(la),
++        ])
++    }
++}
++
++/// Initial exact-division storage before the actual reduced factor/exponent
++/// is known. Final coefficient and scale growth are admitted separately.
++pub(crate) fn decimal_exact_initial_layout(
++    la: u64, lb: u64,
++) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
++    let (a, b, g) = (owned_words(la), owned_words(lb), owned_words(la.min(lb)));
++    let gcd = checked_sum_words(&[a, b, a, b, g])?;
++    let reduce_a = checked_sum_words(&[a, b, g, division_words(la, la.min(lb))?])?;
++    let reduce_b = checked_sum_words(&[a, b, g, a, division_words(lb, la.min(lb))?])?;
++    let factor = checked_sum_words(&[a, b, b])?;
++    let peak = gcd.max(reduce_a).max(reduce_b).max(factor);
++    NumericOperationLayout::words(peak, peak)
++}
++
++/// Actual original/shifted coefficient overlap for a native binary shift.
++pub(crate) fn binary_shift_layout(
++    bits: u64, shift: u32, current_bytes: usize,
++) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    let result = bits.checked_add(u64::from(shift)).ok_or(SizeOverflow)?.div_ceil(64);
++    let output = owned_words(result);
++    let bytes = usize::try_from(output).map_err(|_| SizeOverflow)?
++        .checked_mul(size_of::<u64>()).ok_or(SizeOverflow)?;
++    let peak = current_bytes.checked_add(bytes).ok_or(SizeOverflow)?;
++    NumericOperationLayout::bytes(peak, bytes)
++}
++
++/// Pow5 uses the existing word-chunk multiply body. Its original operand and
++/// both old/new exact-capacity destinations coexist; no exponent-size guess.
++pub(crate) fn pow5_layout(
++    bits: u64, exponent: u32, current_bytes: usize,
++) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    let added = (u128::from(log2_upper_q16(5)) * u128::from(exponent)).div_ceil(65_536);
++    let bits = u128::from(bits).checked_add(added).ok_or(SizeOverflow)?;
++    let limbs = u64::try_from(bits.div_ceil(64)).map_err(|_| SizeOverflow)?;
++    let destination = limbs.checked_add(1).ok_or(SizeOverflow)?;
++    let words = if limbs <= 3 { 0 } else { destination };
++    let bytes = usize::try_from(words).map_err(|_| SizeOverflow)?
++        .checked_mul(size_of::<u64>()).ok_or(SizeOverflow)?;
++    let peak = bytes.checked_mul(2).and_then(|n| n.checked_add(current_bytes)).ok_or(SizeOverflow)?;
++    NumericOperationLayout::bytes(peak, bytes)
++}
++
++/// Native power-of-ten creation and borrowed-coefficient product. The caller
++/// adds every still-live temporary outside this kernel before admitting it.
++pub(crate) fn scale_up_layout(
++    coefficient: &super::Integer, digits: u32,
++) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    if coefficient.is_zero() { return Ok(NumericOperationLayout::INLINE); }
++    if digits == 0 {
++        let bytes = usize::try_from(coefficient.heap_bytes()).map_err(|_| SizeOverflow)?;
++        return NumericOperationLayout::bytes(bytes, bytes);
++    }
++    if let Some(value) = coefficient.as_i128()
++        && let Some(power) = 10_i128.checked_pow(digits)
++        && value.checked_mul(power).is_some() {
++            return Ok(NumericOperationLayout::INLINE);
++        }
++    let la = coefficient.limb_len();
++    let power = limbs_for_digits(u64::from(digits));
++    let power_capacity = power.checked_add(1).ok_or(SizeOverflow)?;
++    let power_words = if power <= 3 { 0 } else { power_capacity };
++    let result = la.checked_add(power).ok_or(SizeOverflow)?;
++    let result_words = owned_words(result);
++    let power_peak = power_words.checked_mul(2).ok_or(SizeOverflow)?;
++    let product_peak = checked_sum_words(&[power_words, result_words])?;
++    NumericOperationLayout::words(power_peak.max(product_peak), result_words)
++}
++
++/// Native normalization's factor stripping and actual power/division families,
++/// excluding the already-live coefficient capacity.
++pub(crate) fn normalization_extra_words(limbs: u64) -> Result<u64, crate::bigint::LimbScratchError> {
++    if limbs <= 3 { return Ok(0); }
++    let l = owned_words(limbs);
++    let power = limbs.checked_add(1).ok_or(crate::bigint::LimbScratchError::SizeOverflow)?;
++    let two_copies = checked_sum_words(&[l, l])?;
++    let power_divide = checked_sum_words(&[owned_words(power), division_words(limbs, power)?])?;
++    Ok(two_copies.max(power_divide))
++}
++
++pub(crate) fn normalize_layout(
++    coefficient: &super::Integer, scale: u32,
++) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    let current = usize::try_from(coefficient.heap_bytes()).map_err(|_| SizeOverflow)?;
++    if scale == 0 || coefficient.as_i128().is_some() {
++        return NumericOperationLayout::bytes(current, current);
++    }
++    let extra = usize::try_from(normalization_extra_words(coefficient.limb_len())?)
++        .map_err(|_| SizeOverflow)?.checked_mul(size_of::<u64>()).ok_or(SizeOverflow)?;
++    NumericOperationLayout::bytes(current.checked_add(extra).ok_or(SizeOverflow)?, current)
++}
++
+ /// Checked physical layout of native decimal group conversion and final lexical.
+ #[derive(Debug, Clone, Copy)]
+ pub struct NumericRenderLayout {
+diff --git a/crates/xsd/src/exact/mod.rs b/crates/xsd/src/exact/mod.rs
+--- a/crates/xsd/src/exact/mod.rs
++++ b/crates/xsd/src/exact/mod.rs
+@@ -102,7 +102,7 @@
+ 
+ pub use cost::Cost;
+ pub use decimal::{Decimal, PreparedDecimalText};
+-pub use error::{BoundedTarget, ExactError, ExactKind, ExactParseError};
++pub use error::{BoundedTarget, ExactError, ExactKind, ExactOperationError, ExactParseError};
+ pub use integer::Integer;
+ pub use rational::Rational;
+ pub use rounding::{DivisionPolicy, DivisionPolicyError, Rounding};
+diff --git a/crates/xsd/src/exact/error.rs b/crates/xsd/src/exact/error.rs
+--- a/crates/xsd/src/exact/error.rs
++++ b/crates/xsd/src/exact/error.rs
+@@ -215,3 +215,50 @@
+         }
+     }
+ }
++
++/// A fallible native operation's semantic error or physical destination refusal.
++/// Physical errors do not acquire an F&O code.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum ExactOperationError {
++    /// Existing exact value-space/domain failure.
++    Value(ExactError),
++    /// Checked native destination/allocation refusal.
++    Storage(crate::bigint::LimbScratchError),
++}
++
++impl ExactOperationError {
++    /// Existing F&O code, absent for physical storage failure.
++    #[must_use]
++    pub const fn code(&self) -> Option<ErrorCode> {
++        match self {
++            Self::Value(value) => Some(value.code()),
++            Self::Storage(_) => None,
++        }
++    }
++    pub(crate) fn into_value_error(self) -> Result<ExactError, crate::bigint::LimbScratchError> {
++        match self {
++            Self::Value(value) => Ok(value),
++            Self::Storage(error) => Err(error),
++        }
++    }
++}
++purrdf_lex::variant_from!(ExactOperationError {
++    Value(ExactError),
++    Storage(crate::bigint::LimbScratchError),
++});
++impl fmt::Display for ExactOperationError {
++    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::Value(value) => fmt::Display::fmt(value, out),
++            Self::Storage(error) => fmt::Display::fmt(error, out),
++        }
++    }
++}
++impl std::error::Error for ExactOperationError {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        match self {
++            Self::Value(value) => Some(value),
++            Self::Storage(error) => Some(error),
++        }
++    }
++}

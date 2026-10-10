@@ -1,0 +1,28 @@
+python3 scripts/check-simd-asm.py --doc --write-doc
+== x86_64: 3 Cargo jobs
+== x86_64-v3: 3 Cargo jobs
+== x86_64 graph 0: /opt/purrdf-508-qualification/target/simd-asm/contexts/1089511c75e91132eada57a24af97b16e554d29f74e05ee36c6e4f9547d125c6/cargo.graph-0.stderr.log
+== x86_64-v3 graph 0: /opt/purrdf-508-qualification/target/simd-asm/contexts/8a67d59f1b1ca3622f58f8f22da441deef6a9b75804fae9c09455c712d807b25/cargo.graph-0.stderr.log
+== x86_64-v4: 3 Cargo jobs
+== x86_64-v4 graph 0: /opt/purrdf-508-qualification/target/simd-asm/contexts/89715b2d437096eae3ec10674902bce9bcd58697871f0e55855af467226567ff/cargo.graph-0.stderr.log
+== aarch64: 3 Cargo jobs
+== aarch64 graph 0: /opt/purrdf-508-qualification/target/simd-asm/contexts/9e4ccae2ba0e9becc40013abe1f19d70bf3c1bc7e9b66dbb9a07ca72b2650c7d/cargo.graph-0.stderr.log
+== x86_64-v4 graph 1: /opt/purrdf-508-qualification/target/simd-asm/contexts/89715b2d437096eae3ec10674902bce9bcd58697871f0e55855af467226567ff/cargo.graph-1.stderr.log
+== aarch64-neoverse-v1: 3 Cargo jobs
+== aarch64-neoverse-v1 graph 0: /opt/purrdf-508-qualification/target/simd-asm/contexts/27786f34003e9eaa2a10162000fd029287b2b432d568f1ae6755dc321ac6ce25/cargo.graph-0.stderr.log
+== aarch64 graph 1: /opt/purrdf-508-qualification/target/simd-asm/contexts/9e4ccae2ba0e9becc40013abe1f19d70bf3c1bc7e9b66dbb9a07ca72b2650c7d/cargo.graph-1.stderr.log
+== wasm32: 3 Cargo jobs
+== wasm32 graph 0: /opt/purrdf-508-qualification/target/simd-asm/contexts/43368d258467bbe64b352c6f3fdc3bc994787427c3835eb36eee7871142c3580/cargo.graph-0.stderr.log
+== aarch64-neoverse-v1 graph 1: /opt/purrdf-508-qualification/target/simd-asm/contexts/27786f34003e9eaa2a10162000fd029287b2b432d568f1ae6755dc321ac6ce25/cargo.graph-1.stderr.log
+== wasm32-simd128: 3 Cargo jobs
+== wasm32-simd128 graph 0: /opt/purrdf-508-qualification/target/simd-asm/contexts/2f76db3ffc5e9bc8a289f7ed91dc529de25097e629ace42a844392716b65ead1/cargo.graph-0.stderr.log
+== wasm32 graph 1: /opt/purrdf-508-qualification/target/simd-asm/contexts/43368d258467bbe64b352c6f3fdc3bc994787427c3835eb36eee7871142c3580/cargo.graph-1.stderr.log
+== wasm32: {"analysis_seconds": 18.73451568600285, "build_seconds": 752.6218754340007, "fresh_artifacts": 108, "lock_seconds": 0.001577814000484068, "parsed_units": 70, "reused_units": 65, "rustc_invocations": 27, "seconds": 771.6925269229978}
+== wasm32-simd128 graph 1: /opt/purrdf-508-qualification/target/simd-asm/contexts/2f76db3ffc5e9bc8a289f7ed91dc529de25097e629ace42a844392716b65ead1/cargo.graph-1.stderr.log
+== wasm32-simd128: {"analysis_seconds": 16.26375476300018, "build_seconds": 740.2070397989955, "fresh_artifacts": 108, "lock_seconds": 0.00020443399989744648, "parsed_units": 70, "reused_units": 65, "rustc_invocations": 27, "seconds": 756.959454197}
+FAIL: x86_64: missing/changed assembly provenance for /opt/purrdf-508-qualification/target/simd-asm/contexts/1089511c75e91132eada57a24af97b16e554d29f74e05ee36c6e4f9547d125c6/build/x86_64-unknown-linux-gnu/release/build/typenum/7636000ed98a27d2/out/typenum-7636000ed98a27d2.s; rerun with --fresh
+x86_64-v3: missing/changed assembly provenance for /opt/purrdf-508-qualification/target/simd-asm/contexts/8a67d59f1b1ca3622f58f8f22da441deef6a9b75804fae9c09455c712d807b25/build/x86_64-unknown-linux-gnu/release/build/typenum/fe636f9ed7c88f00/out/typenum-fe636f9ed7c88f00.s; rerun with --fresh
+`core.intern` on x86_64-v4: no function of crate `purrdf_core` has `<purrdf_core::ir::builder::Interner>::intern` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`core.intern` on aarch64: no function of crate `purrdf_core` has `<purrdf_core::ir::builder::Interner>::intern` in its path -- the symbol was renamed or inlined away, and the evidence with it
+`core.intern` on aarch64-neoverse-v1: no function of crate `purrdf_core` has `<purrdf_core::ir::builder::Interner>::intern` in its path -- the symbol was renamed or inlined away, and the evidence with it
+make: *** [Makefile:683: simd-asm] Error 1

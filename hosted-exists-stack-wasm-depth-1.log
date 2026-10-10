@@ -1,0 +1,43 @@
+✖ admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned (615.952681ms)
+ℹ admitted nesting endpoints: {"synchronous":128,"job":128}
+✖ nested FILTER NOT EXISTS answers on the synchronous lane as deep as its stack evaluates it, and one level more is a typed refusal (2025.372423ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 0
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2233.784379
+
+✖ failing tests:
+
+test at tests/async-concurrency.test.mjs:390:1
+✖ admitted nesting answers or is refused on a job's region exactly as on the synchronous lane, and the instance is not poisoned (615.952681ms)
+  AssertionError [ERR_ASSERTION]: 128 levels answer synchronously; 182 did on the build measured
+      at TestContext.<anonymous> (file:///home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-wasm/js/tests/async-concurrency.test.mjs:434:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/query.test.mjs:706:1
+✖ nested FILTER NOT EXISTS answers on the synchronous lane as deep as its stack evaluates it, and one level more is a typed refusal (2025.372423ms)
+  AssertionError [ERR_ASSERTION]: 128 levels answer; 181 did on the smallest build measured
+      at TestContext.<anonymous> (file:///home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-wasm/js/tests/query.test.mjs:751:10)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

@@ -1,0 +1,132 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The CDT lexical diagnostic and caller-supplied fallible box factories.
+
+use crate::{CdtError, CdtTripleTerm, CdtValue};
+use alloc::boxed::Box;
+use core::alloc::Layout;
+use core::fmt;
+
+pub(crate) use purrdf_lex::allocation::Resident;
+pub use purrdf_lex::allocation::{Admission, StorageError};
+pub(crate) type Memory<'a> = purrdf_lex::allocation::Memory<'a, dyn Storage + 'a>;
+
+/// The leaf's lexical diagnostic or a physical failure.
+#[derive(Debug)]
+pub enum ReadError {
+    /// The existing exact diagnostic, including its original offset and text.
+    Lexical(CdtError),
+    /// Physical failure; must never be collapsed into a malformed literal.
+    Storage(StorageError),
+}
+
+impl From<CdtError> for ReadError {
+    fn from(error: CdtError) -> Self {
+        Self::Lexical(error)
+    }
+}
+
+impl From<StorageError> for ReadError {
+    fn from(error: StorageError) -> Self {
+        Self::Storage(error)
+    }
+}
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lexical(error) => fmt::Display::fmt(error, f),
+            Self::Storage(error) => fmt::Display::fmt(error, f),
+        }
+    }
+}
+
+/// A caller's concrete storage owner and fallible native box factory.
+/// `resize` covers live requested layouts, including both buffers during replacement.
+/// Parse success transfers the surviving payload to a caller retaining its original
+/// admission. Diagnostics and call locals die before admission is released on error.
+/// Factories run only after `Layout::new::<Payload>()` admission and must allocate
+/// exactly that payload fallibly, with no unpriced alternate destination.
+pub trait Storage: Admission {
+    /// Fallibly allocate the already admitted nested composite payload.
+    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError>;
+    /// Fallibly allocate the already admitted nested triple payload.
+    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError>;
+}
+
+impl Storage for Resident {
+    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
+        purrdf_lex::allocation::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
+    }
+    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
+        purrdf_lex::allocation::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
+    }
+}
+
+pub(crate) trait CdtMemory {
+    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError>;
+    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError>;
+}
+
+impl CdtMemory for Memory<'_> {
+    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
+        self.add_bytes(Layout::new::<CdtValue>().size())?;
+        self.admission_mut().boxed_value(value)
+    }
+    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
+        self.add_bytes(Layout::new::<CdtTripleTerm>().size())?;
+        self.admission_mut().boxed_triple(value)
+    }
+}
+
+/// A native child call's original storage updates its parent's live total before
+/// every allocation. The parent continues owning the surviving child payload.
+/// This bridge neither reserves a bound nor observes a resident factory result.
+pub(crate) struct ChildStorage<'m, 'a> {
+    parent: &'m mut Memory<'a>,
+    live: usize,
+}
+impl<'m, 'a> ChildStorage<'m, 'a> {
+    pub(crate) fn new(parent: &'m mut Memory<'a>) -> Self { Self { parent, live: 0 } }
+}
+impl Admission for ChildStorage<'_, '_> {
+    fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+        if next >= self.live {
+            self.parent.add_bytes(next - self.live)?;
+        } else {
+            self.parent.release_bytes(self.live - next)?;
+        }
+        self.live = next;
+        Ok(())
+    }
+}
+impl Storage for ChildStorage<'_, '_> {
+    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
+        self.parent.admission_mut().boxed_value(value)
+    }
+    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
+        self.parent.admission_mut().boxed_triple(value)
+    }
+}
+
+/// Execute the existing parser under a native parent computation. Its own
+/// scratch release and surviving payload updates belong to the original grant.
+pub(crate) fn parse_cdt_in_memory(lexical: &str, datatype: crate::CdtDatatype, memory: &mut Memory<'_>) -> Result<Option<CdtValue>, StorageError> {
+    let mut child = ChildStorage::new(memory);
+    match crate::parse::try_parse_cdt(lexical, datatype, &mut child) {
+        Ok((value, _)) => Ok(Some(value)),
+        Err(ReadError::Lexical(error)) => {
+            // This denotation consumer reports ill-typed, not parser prose.
+            // All parser locals and this diagnostic die before their original
+            // child admission is released. No dropped scratch remains charged.
+            drop(error);
+            child.resize(0)?;
+            Ok(None)
+        }
+        Err(ReadError::Storage(error)) => {
+            child.resize(0)?;
+            Err(error)
+        }
+    }
+}

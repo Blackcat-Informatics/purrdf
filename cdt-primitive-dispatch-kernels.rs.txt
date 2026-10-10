@@ -1,0 +1,92 @@
+fn get_with_memory(value: &CdtValue, argument: &CdtTerm, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtTerm>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => list_get_with_memory(items, argument, memory),
+        CdtContents::Map(entries) => map_get_with_memory(entries, argument, memory),
+    }
+}
+fn contains_with_memory(value: &CdtValue, term: &CdtTerm, memory: &mut Memory<'_>) -> Result<CdtOutcome<bool>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => list_contains_with_memory(items, term, memory),
+        CdtContents::Map(_) => Ok(raise("cdt:contains applies to a cdt:List; a cdt:Map has cdt:containsKey")),
+    }
+}
+fn head_with_memory(value: &CdtValue, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtTerm>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => list_head_with_memory(items, memory),
+        CdtContents::Map(_) => Ok(raise("cdt:head applies to a cdt:List")),
+    }
+}
+fn tail_with_memory(value: &CdtValue, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => list_tail_with_memory(items, memory),
+        CdtContents::Map(_) => Ok(raise("cdt:tail applies to a cdt:List")),
+    }
+}
+fn reverse_with_memory(value: &CdtValue, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => Ok(CdtOutcome::Value(list_reverse_with_memory(items, memory)?)),
+        CdtContents::Map(_) => Ok(raise("cdt:reverse applies to a cdt:List")),
+    }
+}
+fn subseq_with_memory(value: &CdtValue, start: &CdtTerm, length: Option<&CdtTerm>, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => list_subseq_with_memory(items, start, length, memory),
+        CdtContents::Map(_) => Ok(raise("cdt:subseq applies to a cdt:List")),
+    }
+}
+fn concat_with_memory(values: &[CdtValue], memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let mut lists: Vec<&[CdtTerm]> = Vec::new();
+    memory.reserve(&mut lists, values.len())?;
+    for value in values {
+        match value.contents() {
+            CdtContents::List(items) => lists.push(items),
+            CdtContents::Map(_) => {
+                memory.release_vec(lists)?;
+                return Ok(raise("cdt:concat applies to cdt:List arguments only"));
+            }
+        }
+    }
+    let result = list_concat_with_memory(&lists, memory)?;
+    memory.release_vec(lists)?;
+    Ok(result)
+}
+fn contains_key_with_memory(value: &CdtValue, key: &CdtTerm, memory: &mut Memory<'_>) -> Result<CdtOutcome<bool>, StorageError> {
+    match value.contents() {
+        CdtContents::Map(entries) => Ok(CdtOutcome::Value(map_contains_key_with_memory(entries, key, memory)?)),
+        CdtContents::List(_) => Ok(raise("cdt:containsKey applies to a cdt:Map; a cdt:List has cdt:contains")),
+    }
+}
+fn keys_with_memory(value: &CdtValue, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    match value.contents() {
+        CdtContents::Map(entries) => Ok(CdtOutcome::Value(map_keys_with_memory(entries, memory)?)),
+        CdtContents::List(_) => Ok(raise("cdt:keys applies to a cdt:Map")),
+    }
+}
+fn merge_with_memory(values: &[CdtValue], memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let mut maps: Vec<&[CdtEntry]> = Vec::new();
+    memory.reserve(&mut maps, values.len())?;
+    for value in values {
+        match value.contents() {
+            CdtContents::Map(entries) => maps.push(entries),
+            CdtContents::List(_) => {
+                memory.release_vec(maps)?;
+                return Ok(raise("cdt:merge applies to cdt:Map arguments only"));
+            }
+        }
+    }
+    let result = map_merge_with_memory(&maps, memory)?;
+    memory.release_vec(maps)?;
+    Ok(result)
+}
+fn put_with_memory(value: &CdtValue, key: &CdtTerm, item: &CdtTerm, memory: &mut Memory<'_>) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    match value.contents() {
+        CdtContents::Map(entries) => map_put_with_memory(entries, key, item, memory),
+        CdtContents::List(_) => Ok(raise("cdt:put applies to a cdt:Map")),
+    }
+}
+fn remove_with_memory(value: &CdtValue, key: &CdtTerm, memory: &mut Memory<'_>) -> Result<CdtOutcome<MapRemoval>, StorageError> {
+    match value.contents() {
+        CdtContents::Map(entries) => Ok(CdtOutcome::Value(map_remove_with_memory(entries, key, memory)?)),
+        CdtContents::List(_) => Ok(raise("cdt:remove applies to a cdt:Map")),
+    }
+}

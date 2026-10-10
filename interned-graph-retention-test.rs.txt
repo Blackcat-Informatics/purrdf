@@ -1,0 +1,35 @@
+/// A borrowed graph can leave the scoped visitor only with its original lease.
+#[test]
+fn interned_graph_retention_keeps_original_account_until_last_extraction() {
+    let (image, _) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let query = "CONSTRUCT { <https://example.org/target> <https://example.org/p> ?o } WHERE { <https://example.org/target> <https://example.org/p> ?o }";
+    let mut execution = engine.prepare_execution(query, None, &[], QueryOptions::EMPTY).unwrap();
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let source = open(&image, CEILING);
+    let (graph, evidence) = engine.execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |outcome| {
+        let purrdf_sparql_eval::InternedOutcome::Graph(graph) = outcome else { panic!("CONSTRUCT returns graph") };
+        graph.retain()
+    }).unwrap();
+    let graph = graph.unwrap();
+    let measured = window.close();
+    assert_eq!(graph.quad_count(), 1);
+    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= evidence.peak_bytes());
+    assert!(evidence.peak_bytes() <= CEILING);
+    let retained = source.evidence().live_bytes();
+    drop(execution);
+    drop(engine);
+    assert_eq!(source.evidence().live_bytes(), retained, "graph owns the original account after evaluation and engine destruction");
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let shared = graph.clone();
+    let clones = window.close();
+    assert_eq!(clones.peak_working_bytes, 0, "graph clone shares payload and admission");
+    drop(graph);
+    assert_eq!(source.evidence().live_bytes(), retained);
+    let result = shared.into_result();
+    assert_eq!(result.graph().unwrap().quad_count(), 1);
+    assert_eq!(source.evidence().live_bytes(), retained, "common result extraction keeps the original grant");
+    drop(result);
+    assert!(source.evidence().live_bytes() < retained, "last graph owner releases admission");
+    assert!(source.read_error().is_none());
+}

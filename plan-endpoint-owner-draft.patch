@@ -1,0 +1,595 @@
+diff --git a/crates/sparql-eval/src/service_endpoints.rs b/crates/sparql-eval/src/service_endpoints.rs
+--- a/crates/sparql-eval/src/service_endpoints.rs
++++ b/crates/sparql-eval/src/service_endpoints.rs
+@@ -89,6 +89,7 @@
+ use crate::remote::Invocation;
+ use crate::scratch::SolutionTerm;
+ use crate::solution::{SolutionSeq, VarSchema};
++use crate::workspace::{AdmittedVec, SharedWorkspace};
+ 
+ /// Whether the query being evaluated contains a variable-endpoint `SERVICE`, and if it
+ /// does, where it is served.
+@@ -102,7 +103,7 @@
+     /// The query has no variable-endpoint `SERVICE`: nothing to analyse.
+     Absent,
+     /// The query has one; the index answers for every operand of the query as written.
+-    Present(Arc<ServedIndex>),
++    Present(SharedWorkspace<ServedIndex>),
+ }
+ 
+ impl EndpointScan {
+@@ -112,6 +113,26 @@
+     }
+ }
+ 
++/// Shared endpoint variables retain their native arrays and shared control.
++#[derive(Debug, Clone)]
++enum EndpointVariables {
++    Caller(Arc<[Variable]>),
++    Native(SharedWorkspace<AdmittedVec<Variable>>),
++}
++impl std::ops::Deref for EndpointVariables {
++    type Target = [Variable];
++    fn deref(&self) -> &[Variable] {
++        match self { Self::Caller(values) => values, Self::Native(values) => values }
++    }
++}
++impl From<Arc<[Variable]>> for EndpointVariables {
++    fn from(values: Arc<[Variable]>) -> Self { Self::Caller(values) }
++}
++impl PartialEq for EndpointVariables {
++    fn eq(&self, other: &Self) -> bool { **self == **other }
++}
++impl Eq for EndpointVariables {}
++
+ /// The endpoint analysis of one tree's algebra, indexed by [`NodeId`].
+ ///
+ /// Only nodes of the tree the scan walked have entries. A pattern built during evaluation
+@@ -120,36 +141,44 @@
+ /// evaluated, as is every operand evaluated while a deferred `EXISTS` placeholder is in
+ /// scope (the placeholder's substitution decides what its body serves, and the scan
+ /// cannot see it).
+-#[derive(Debug, Default)]
++#[derive(Debug)]
+ pub(crate) struct ServedIndex {
+     /// Every operand of a group join (both sides), an `OPTIONAL` (right) and a `MINUS`
+     /// (right): the endpoint variables served in it (see [`served_endpoint_variables`]).
+-    served: Vec<Option<Arc<[Variable]>>>,
++    served: AdmittedVec<Option<EndpointVariables>>,
+     /// Every `EXISTS` body: the variable-endpoint `SERVICE` variables in it that no
+     /// `SELECT` inside it hides.
+-    exists_uses: Vec<Option<Arc<[Variable]>>>,
++    exists_uses: AdmittedVec<Option<EndpointVariables>>,
++    workspace: crate::WorkspaceCapability,
+ }
+ 
+ impl ServedIndex {
+     /// An index with no entries over a tree of `len` nodes.
++    #[cfg(test)]
+     fn with_len(len: usize) -> Self {
+-        Self {
+-            served: vec![None; len],
+-            exists_uses: vec![None; len],
+-        }
++
++        Self::with_len_admitted(len, &crate::WorkspaceCapability::resident()).expect("resident endpoint index")
+     }
+ 
++    fn with_len_admitted(len: usize, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
++        let mut served = AdmittedVec::with_capacity(len, workspace)?;
++        let mut exists_uses = AdmittedVec::with_capacity(len, workspace)?;
++        for _ in 0..len { served.push_reserved(None); exists_uses.push_reserved(None); }
++        Ok(Self { served, exists_uses, workspace: workspace.clone() })
++
++}
++
+     /// The variable-endpoint `SERVICE` variables in `body`, an `EXISTS` body of the
+     /// scanned tree, or `None` when `body` is not one.
+     pub(crate) fn exists_uses(&self, body: NodeId) -> Option<&[Variable]> {
+         self.exists_uses
+             .get(body.index())
+-            .and_then(Option::as_deref)
++            .and_then(Option::as_ref).map(|variables| &**variables)
+     }
+ 
+     /// The endpoint variables served in `operand`, an operand of the scanned tree, or
+     /// `None` when `operand` is not one.
+-    fn served_at(&self, operand: NodeId) -> Option<&Arc<[Variable]>> {
++    fn served_at(&self, operand: NodeId) -> Option<&EndpointVariables> {
+         self.served.get(operand.index()).and_then(Option::as_ref)
+     }
+ }
+@@ -473,56 +502,88 @@
+ /// scan every evaluation runs allocates nothing for one and never needs more stack for
+ /// a deeper query.
+ pub(crate) fn mentions_variable_endpoint(pattern: &GraphPattern) -> bool {
+-    let mut pending: purrdf_core::SmallVec<[ScanNode<'_>; 16]> = purrdf_core::SmallVec::new();
+-    pending.push(ScanNode::Pattern(pattern));
++
++    mentions_variable_endpoint_admitted(pattern, &crate::WorkspaceCapability::resident()).expect("resident SERVICE scan")
++}
++
++fn mentions_variable_endpoint_admitted(
++    pattern: &GraphPattern,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<bool, EvalError> {
++    let mut storage = crate::workspace::LexicalFrame::new(workspace);
++    let mut pending = purrdf_lex::walk::WorkList::<ScanNode<'_>, 16>::new();
++    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++    pending.try_push_admitted(ScanNode::Pattern(pattern), &mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "SERVICE presence scan"))?;
++    let mut found = false;
+     while let Some(node) = pending.pop() {
++        let mut failure = None;
+         match node {
+-            // A `SERVICE` body is forwarded as text, never evaluated here, so it is not
+-            // entered.
+             ScanNode::Pattern(GraphPattern::Service { name, .. }) => {
+-                if matches!(name, NamedNodePattern::Variable(_)) {
+-                    return true;
+-                }
++                if matches!(name, NamedNodePattern::Variable(_)) { found = true; break; }
+             }
+             ScanNode::Pattern(pattern) => {
+                 crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+-                    pending.push(match part {
++                    let child = match part {
+                         PatternPart::Child(child, _) => ScanNode::Pattern(child),
+                         PatternPart::Expression(expr) => ScanNode::Expression(expr),
+-                    });
+-                    false
++                    };
++                    if let Err(error) = pending.try_push_admitted(child, &mut memory) {
++                        failure = Some(memory.admission_mut().storage_error(error, "SERVICE presence scan"));
++                        true
++                    } else { false }
+                 });
+             }
+             ScanNode::Expression(expr) => {
+                 crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+-                    match part {
+-                        ExpressionPart::Sub(sub) => pending.push(ScanNode::Expression(sub)),
+-                        ExpressionPart::Exists(body) => pending.push(ScanNode::Pattern(body)),
+-                        ExpressionPart::Call(_) => {}
++                    let child = match part {
++                        ExpressionPart::Sub(sub) => Some(ScanNode::Expression(sub)),
++                        ExpressionPart::Exists(body) => Some(ScanNode::Pattern(body)),
++                        ExpressionPart::Call(_) => None,
++                    };
++                    if let Some(child) = child {
++                        if let Err(error) = pending.try_push_admitted(child, &mut memory) {
++                            failure = Some(memory.admission_mut().storage_error(error, "SERVICE presence scan"));
++                            return true;
++                        }
+                     }
+                     false
+                 });
+             }
+         }
++        if let Some(error) = failure { return Err(error); }
+     }
+-    false
++    pending.release_admitted(&mut memory)
++        .map_err(|error| memory.admission_mut().storage_error(error, "SERVICE presence scan"))?;
++    Ok(found)
++
+ }
+ 
+ /// The scan of the tree rooted at `pattern`, of `len` nodes, whose node addresses `ids`
+ /// maps to their ids — built with the tree by [`crate::plan::Tree::build`].
++#[cfg(test)]
+ pub(crate) fn scan(
+     pattern: &GraphPattern,
+     ids: &crate::plan::AddressIndex<'_>,
+     len: usize,
+ ) -> EndpointScan {
+-    if !mentions_variable_endpoint(pattern) {
+-        return EndpointScan::Absent;
+-    }
+-    let mut index = ServedIndex::with_len(len);
+-    index.summarize(pattern, ids);
+-    EndpointScan::Present(Arc::new(index))
++
++    scan_admitted(pattern, ids, len, &crate::WorkspaceCapability::resident()).expect("resident SERVICE analysis")
+ }
+ 
++pub(crate) fn scan_admitted(
++    pattern: &GraphPattern,
++    ids: &crate::plan::AddressIndex<'_>,
++    len: usize,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<EndpointScan, EvalError> {
++    if !mentions_variable_endpoint_admitted(pattern, workspace)? { return Ok(EndpointScan::Absent); }
++    let mut index = ServedIndex::with_len_admitted(len, workspace)?;
++    index.summarize_admitted(pattern, ids)?;
++    Ok(EndpointScan::Present(SharedWorkspace::new_admitted(index, workspace)?))
++
++}
++
+ /// One variable's variable-endpoint `SERVICE` occurrences below a node, relative to that
+ /// node: `direct` when some occurrence carries its rows up to it, `conflict` when some
+ /// occurrence reaches it only through an operator that could absorb, drop or re-select
+@@ -536,6 +597,7 @@
+ }
+ 
+ /// Fold `from` into `into`, one entry per variable.
++#[cfg(test)]
+ fn merge(into: &mut Vec<Occurrence>, from: Vec<Occurrence>) {
+     for occurrence in from {
+         if let Some(existing) = into
+@@ -551,6 +613,7 @@
+ }
+ 
+ /// `summary` seen through an operator that does not carry its rows upwards.
++#[cfg(test)]
+ fn indirect(mut summary: Vec<Occurrence>) -> Vec<Occurrence> {
+     for occurrence in &mut summary {
+         occurrence.conflict |= occurrence.direct;
+@@ -559,22 +622,64 @@
+     summary
+ }
+ 
++
++fn merge_admitted(into: &mut AdmittedVec<Occurrence>, from: AdmittedVec<Occurrence>) -> Result<(), EvalError> {
++    for occurrence in from {
++        if let Some(existing) = into.as_mut_slice().iter_mut().find(|existing| existing.variable == occurrence.variable) {
++            existing.direct |= occurrence.direct;
++            existing.conflict |= occurrence.conflict;
++        } else { into.push(occurrence)?; }
++    }
++    Ok(())
++}
++
++fn indirect_admitted(mut summary: AdmittedVec<Occurrence>) -> AdmittedVec<Occurrence> {
++    for occurrence in summary.as_mut_slice() { occurrence.conflict |= occurrence.direct; occurrence.direct = false; }
++    summary
++}
++
++fn one_occurrence(occurrence: Occurrence, workspace: &crate::WorkspaceCapability) -> Result<AdmittedVec<Occurrence>, EvalError> {
++    let mut summary = AdmittedVec::with_capacity(1, workspace)?;
++    summary.push_reserved(occurrence);
++    Ok(summary)
++}
++
+ impl ServedIndex {
++    fn variables(&self, summary: &[Occurrence], served: bool) -> Result<EndpointVariables, EvalError> {
++        let count = summary.iter().filter(|occurrence| !served || occurrence.direct && !occurrence.conflict).count();
++        let mut variables = AdmittedVec::with_capacity(count, &self.workspace)?;
++        for occurrence in summary.iter().filter(|occurrence| !served || occurrence.direct && !occurrence.conflict) {
++            variables.push_reserved(occurrence.variable.clone());
++        }
++        Ok(EndpointVariables::Native(SharedWorkspace::new_admitted(variables, &self.workspace)?))
++    }
++}
++
++impl ServedIndex {
+     /// Record `operand`'s served variables.
++    #[cfg(test)]
+     fn note(
+         &mut self,
+         operand: &GraphPattern,
+         summary: &[Occurrence],
+         ids: &crate::plan::AddressIndex<'_>,
+     ) {
+-        let served: Arc<[Variable]> = summary
+-            .iter()
+-            .filter(|o| o.direct && !o.conflict)
+-            .map(|o| o.variable.clone())
+-            .collect();
+-        self.served[scanned_id(ids, operand).index()] = Some(served);
++
++        self.note_admitted(operand, summary, ids).expect("resident endpoint oracle note")
+     }
+ 
++    fn note_admitted(
++        &mut self,
++        operand: &GraphPattern,
++        summary: &[Occurrence],
++        ids: &crate::plan::AddressIndex<'_>,
++    ) -> Result<(), EvalError> {
++        let served = self.variables(summary, true)?;
++        self.served.as_mut_slice()[scanned_id(ids, operand).index()] = Some(served);
++        Ok(())
++
++}
++
+     /// The occurrences below `pattern`, indexing every operand and `EXISTS` body on the
+     /// way. Wildcard-free, like [`classify`], whose classification it computes.
+     ///
+@@ -584,93 +689,121 @@
+     /// the summary stack the node is exited and combines them. The order the parts'
+     /// summaries are merged in is the order the operator evaluates the parts, so the
+     /// served lists and `EXISTS` uses come out in that order.
++    #[cfg(test)]
+     fn summarize(
+         &mut self,
+         pattern: &GraphPattern,
+         ids: &crate::plan::AddressIndex<'_>,
+     ) -> Vec<Occurrence> {
+-        let mut frames = vec![SummaryFrame::Enter(SummaryNode::Pattern(pattern))];
+-        let mut summaries: Vec<Vec<Occurrence>> = Vec::new();
++
++        self.summarize_admitted(pattern, ids).expect("resident endpoint summary")
++            .try_into_resident().expect("resident endpoint summary ownership")
++    }
++
++    fn summarize_admitted(
++        &mut self,
++        pattern: &GraphPattern,
++        ids: &crate::plan::AddressIndex<'_>,
++    ) -> Result<AdmittedVec<Occurrence>, EvalError> {
++        let mut storage = crate::workspace::LexicalFrame::new(&self.workspace);
++        let mut frames = purrdf_lex::walk::WorkList::<SummaryFrame<'_>, 16>::new();
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++        let mut summaries = AdmittedVec::<AdmittedVec<Occurrence>>::new(&self.workspace);
++        frames.try_push_admitted(SummaryFrame::Enter(SummaryNode::Pattern(pattern)), &mut memory)
++            .map_err(|error| memory.admission_mut().storage_error(error, "SERVICE summary frames"))?;
+         while let Some(frame) = frames.pop() {
+             match frame {
+                 SummaryFrame::Enter(node) => {
+                     let exit = frames.len();
+-                    frames.push(SummaryFrame::Exit(node, 0));
++                    frames.try_push_admitted(SummaryFrame::Exit(node, 0), &mut memory)
++                        .map_err(|error| memory.admission_mut().storage_error(error, "SERVICE summary frames"))?;
+                     let first = frames.len();
+-                    summary_parts(node, &mut |part| frames.push(SummaryFrame::Enter(part)));
++                    let mut failure = None;
++                    summary_parts(node, &mut |part| {
++                        if failure.is_none() {
++                            if let Err(error) = frames.try_push_admitted(SummaryFrame::Enter(part), &mut memory) {
++                                failure = Some(memory.admission_mut().storage_error(error, "SERVICE summary frames"));
++                            }
++                        }
++                    });
++                    if let Some(error) = failure { return Err(error); }
+                     let parts = frames.len() - first;
+-                    frames[first..].reverse();
+-                    frames[exit] = SummaryFrame::Exit(node, parts);
++                    frames.reverse_top(parts);
++                    frames.set(exit, SummaryFrame::Exit(node, parts));
+                 }
+                 SummaryFrame::Exit(node, parts) => {
+-                    let start = summaries.len() - parts;
+-                    let mut kids = summaries.split_off(start).into_iter();
+-                    let summary = self.combine(node, &mut kids, ids);
+-                    summaries.push(summary);
++                    let start = summaries.len().checked_sub(parts).expect("one summary per entered child");
++                    let summary = {
++                        let mut kids = summaries.drain_from(start);
++                        self.combine_admitted(node, &mut kids, ids)?
++                    };
++                    summaries.push(summary)?;
+                 }
+             }
+         }
+-        summaries
+-            .pop()
+-            .expect("the root's summary is the last one computed")
+-    }
++        frames.release_admitted(&mut memory)
++            .map_err(|error| memory.admission_mut().storage_error(error, "SERVICE summary frames"))?;
++        Ok(summaries.pop().expect("the root summary is last"))
+ 
++}
++
+     /// The summary of `node` from its parts' summaries, `kids`, in the order
+     /// [`summary_parts`] pushed the parts.
+-    fn combine(
++    fn combine_admitted(
+         &mut self,
+         node: SummaryNode<'_>,
+-        kids: &mut std::vec::IntoIter<Vec<Occurrence>>,
++        kids: &mut impl Iterator<Item = AdmittedVec<Occurrence>>,
+         ids: &crate::plan::AddressIndex<'_>,
+-    ) -> Vec<Occurrence> {
+-        fn part(kids: &mut std::vec::IntoIter<Vec<Occurrence>>) -> Vec<Occurrence> {
++    ) -> Result<AdmittedVec<Occurrence>, EvalError> {
++        let workspace = self.workspace.clone();
++        fn part(kids: &mut impl Iterator<Item = AdmittedVec<Occurrence>>) -> AdmittedVec<Occurrence> {
+             kids.next().expect("every part pushed its summary")
+         }
+-        match node {
++        Ok(match node {
+             SummaryNode::Pattern(pattern) => match pattern {
+                 GraphPattern::Bgp { .. }
+                 | GraphPattern::Path { .. }
+                 | GraphPattern::Values { .. }
+-                | GraphPattern::PropertyFunction(_) => Vec::new(),
++                | GraphPattern::PropertyFunction(_) => AdmittedVec::new(&workspace),
+                 GraphPattern::Service { name, .. } => match name {
+-                    NamedNodePattern::Variable(variable) => vec![Occurrence {
++                    NamedNodePattern::Variable(variable) => one_occurrence(Occurrence {
+                         variable: variable.clone(),
+                         direct: true,
+                         conflict: false,
+-                    }],
+-                    NamedNodePattern::NamedNode(_) => Vec::new(),
++                    }, &workspace)?,
++                    NamedNodePattern::NamedNode(_) => AdmittedVec::new(&workspace),
+                 },
+                 GraphPattern::Join { left, right } => {
+                     let mut summary = part(kids);
+                     let right_summary = part(kids);
+-                    self.note(left, &summary, ids);
+-                    self.note(right, &right_summary, ids);
+-                    merge(&mut summary, right_summary);
++                    self.note_admitted(left, &summary, ids)?;
++                    self.note_admitted(right, &right_summary, ids)?;
++                    merge_admitted(&mut summary, right_summary)?;
+                     summary
+                 }
+                 GraphPattern::Lateral { .. } => {
+                     let mut summary = part(kids);
+                     let right_summary = part(kids);
+-                    merge(&mut summary, right_summary);
++                    merge_admitted(&mut summary, right_summary)?;
+                     summary
+                 }
+                 GraphPattern::Apply { policy, .. } => {
+                     let mut summary = part(kids);
+                     let right_summary = part(kids);
+-                    merge(
++                    merge_admitted(
+                         &mut summary,
+                         if policy.optional.is_some() {
+-                            indirect(right_summary)
++                            indirect_admitted(right_summary)
+                         } else {
+                             right_summary
+                         },
+-                    );
++                    )?;
+                     summary
+                 }
+                 GraphPattern::Union { .. } => {
+-                    let mut summary = Vec::new();
++                    let mut summary = AdmittedVec::new(&workspace);
+                     for arm_summary in kids.by_ref() {
+-                        merge(&mut summary, arm_summary);
++                        merge_admitted(&mut summary, arm_summary)?;
+                     }
+                     summary
+                 }
+@@ -679,19 +812,19 @@
+                 } => {
+                     let mut summary = part(kids);
+                     let right_summary = part(kids);
+-                    self.note(right, &right_summary, ids);
+-                    merge(&mut summary, indirect(right_summary));
++                    self.note_admitted(right, &right_summary, ids)?;
++                    merge_admitted(&mut summary, indirect_admitted(right_summary))?;
+                     if expression.is_some() {
+                         let expression_summary = part(kids);
+-                        merge(&mut summary, expression_summary);
++                        merge_admitted(&mut summary, expression_summary)?;
+                     }
+                     summary
+                 }
+                 GraphPattern::Minus { right, .. } => {
+                     let mut summary = part(kids);
+                     let right_summary = part(kids);
+-                    self.note(right, &right_summary, ids);
+-                    merge(&mut summary, indirect(right_summary));
++                    self.note_admitted(right, &right_summary, ids)?;
++                    merge_admitted(&mut summary, indirect_admitted(right_summary))?;
+                     summary
+                 }
+                 GraphPattern::Filter { .. }
+@@ -699,7 +832,7 @@
+                 | GraphPattern::Unfold { .. } => {
+                     let mut summary = part(kids);
+                     let expression_summary = part(kids);
+-                    merge(&mut summary, expression_summary);
++                    merge_admitted(&mut summary, expression_summary)?;
+                     summary
+                 }
+                 GraphPattern::Graph { .. }
+@@ -708,7 +841,7 @@
+                 GraphPattern::OrderBy { .. } => {
+                     let mut summary = part(kids);
+                     for key_summary in kids.by_ref() {
+-                        merge(&mut summary, key_summary);
++                        merge_admitted(&mut summary, key_summary)?;
+                     }
+                     summary
+                 }
+@@ -722,39 +855,38 @@
+                     if *start == 0 && length.is_none() {
+                         summary
+                     } else {
+-                        indirect(summary)
++                        indirect_admitted(summary)
+                     }
+                 }
+                 GraphPattern::Group { variables, .. } => {
+                     let mut summary = part(kids);
+-                    for occurrence in &mut summary {
++                    for occurrence in summary.as_mut_slice() {
+                         if !variables.contains(&occurrence.variable) {
+                             occurrence.conflict |= occurrence.direct;
+                             occurrence.direct = false;
+                         }
+                     }
+                     for expression_summary in kids.by_ref() {
+-                        merge(&mut summary, expression_summary);
++                        merge_admitted(&mut summary, expression_summary)?;
+                     }
+                     summary
+                 }
+             },
+             // The occurrences inside an expression's `EXISTS` patterns: never direct.
+             SummaryNode::Expression(_) => {
+-                let mut summary = Vec::new();
++                let mut summary = AdmittedVec::new(&workspace);
+                 for part_summary in kids.by_ref() {
+-                    merge(&mut summary, part_summary);
++                    merge_admitted(&mut summary, part_summary)?;
+                 }
+                 summary
+             }
+             SummaryNode::Exists(body) => {
+                 let body_summary = part(kids);
+-                let uses: Arc<[Variable]> =
+-                    body_summary.iter().map(|o| o.variable.clone()).collect();
+-                self.exists_uses[scanned_id(ids, body).index()] = Some(uses);
+-                indirect(body_summary)
++                let uses = self.variables(&body_summary, false)?;
++                self.exists_uses.as_mut_slice()[scanned_id(ids, body).index()] = Some(uses);
++                indirect_admitted(body_summary)
+             }
+-        }
++        })
+     }
+ }
+ 
+@@ -881,15 +1013,15 @@
+     operand: &GraphPattern,
+     index: &ServedIndex,
+     ctx: &EvalCtx<'_, D>,
+-) -> Arc<[Variable]> {
++) -> EndpointVariables {
+     if ctx.deferred_exists.is_none()
+         && let Some(served) = ctx
+             .plan_node(operand)
+             .and_then(|operand| index.served_at(operand))
+     {
+-        return Arc::clone(served);
++        return served.clone();
+     }
+-    served_endpoint_variables(operand, ctx.deferred_exists.as_deref()).into()
++    EndpointVariables::Caller(served_endpoint_variables(operand, ctx.deferred_exists.as_deref()).into())
+ }
+ 
+ /// The innermost frame for `variable`, if any frame names it.
+@@ -928,7 +1060,7 @@
+     let EndpointScan::Present(index) = ctx.endpoint_scan() else {
+         return eval_evaluated(right, ctx);
+     };
+-    let index = Arc::clone(index);
++    let index = index.clone();
+     let served = served_in(right, &index, ctx);
+     if served.is_empty() {
+         return eval_evaluated(right, ctx);
+@@ -2721,7 +2853,7 @@
+                         let body_summary = self.summarize_reference(body, ids);
+                         let uses: Arc<[Variable]> =
+                             body_summary.iter().map(|o| o.variable.clone()).collect();
+-                        self.exists_uses[super::scanned_id(ids, body).index()] = Some(uses);
++                        self.exists_uses.as_mut_slice()[super::scanned_id(ids, body).index()] = Some(uses.into());
+                         merge(&mut summary, indirect(body_summary));
+                     }
+                     ExpressionPart::Call(_) => {}
+@@ -3046,11 +3178,11 @@
+             let reference_summary = reference_index.summarize_reference(&root, ids);
+             assert_eq!(summary, reference_summary, "shape {shape}: {root:?}");
+             assert_eq!(
+-                index.served, reference_index.served,
++                &*index.served, &*reference_index.served,
+                 "shape {shape}: {root:?}"
+             );
+             assert_eq!(
+-                index.exists_uses, reference_index.exists_uses,
++                &*index.exists_uses, &*reference_index.exists_uses,
+                 "shape {shape}: {root:?}"
+             );
+ 

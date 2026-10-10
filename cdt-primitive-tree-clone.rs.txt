@@ -1,0 +1,205 @@
+/// The copy of a term that owns no node.
+fn shallow(leaf: &CdtTerm, memory: &mut crate::memory::Memory<'_>) -> Result<CdtTerm, crate::memory::StorageError> {
+    Ok(match leaf {
+        CdtTerm::Iri(iri) => CdtTerm::Iri(memory.string(iri)?),
+        CdtTerm::Blank(label) => CdtTerm::Blank(memory.string(label)?),
+        CdtTerm::Literal(literal) => CdtTerm::Literal(literal.clone_with_memory(memory)?),
+        CdtTerm::Null => CdtTerm::Null,
+        CdtTerm::Composite(_) | CdtTerm::TripleTerm(_) => unreachable!("only a leaf is copied shallowly"),
+    })
+}
+
+/// One step of the bottom-up copy.
+enum Step<'a> { Enter(&'a CdtTerm), Exit(&'a CdtTerm) }
+
+fn finished(copies: &mut Vec<CdtTerm>) -> CdtTerm {
+    copies.pop().expect("copies are assembled after their children")
+}
+
+/// The original bottom-up copy, admitting each native destination before birth.
+fn clone_tree(root: &CdtTerm, memory: &mut crate::memory::Memory<'_>) -> Result<CdtTerm, crate::memory::StorageError> {
+    use crate::memory::CdtMemory as _;
+    let mut steps: WorkList<Step<'_>, 8> = WorkList::new();
+    steps.try_push_admitted(Step::Enter(root), memory)?;
+    let mut copies: Vec<CdtTerm> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Enter(node) => match node {
+                CdtTerm::Composite(value) => {
+                    steps.try_push_admitted(Step::Exit(node), memory)?;
+                    match value.contents() {
+                        CdtContents::List(items) => {
+                            for child in items.iter().rev() { steps.try_push_admitted(Step::Enter(child), memory)?; }
+                        }
+                        CdtContents::Map(entries) => {
+                            for entry in entries.iter().rev() { steps.try_push_admitted(Step::Enter(&entry.value), memory)?; }
+                        }
+                    }
+                }
+                CdtTerm::TripleTerm(triple) => {
+                    steps.try_push_admitted(Step::Exit(node), memory)?;
+                    steps.try_push_admitted(Step::Enter(&triple.object), memory)?;
+                    steps.try_push_admitted(Step::Enter(&triple.predicate), memory)?;
+                    steps.try_push_admitted(Step::Enter(&triple.subject), memory)?;
+                }
+                leaf => {
+                    let copy = shallow(leaf, memory)?;
+                    memory.push(&mut copies, copy)?;
+                }
+            },
+            Step::Exit(node) => {
+                let copy = match node {
+                    CdtTerm::Composite(value) => {
+                        let first = copies.len() - value.len();
+                        let parts = match value.contents() {
+                            CdtContents::List(_) => {
+                                let mut items = Vec::new();
+                                memory.reserve(&mut items, value.len())?;
+                                items.extend(copies.drain(first..));
+                                CdtParts::List(items)
+                            }
+                            CdtContents::Map(entries) => {
+                                let mut output = Vec::new();
+                                memory.reserve(&mut output, entries.len())?;
+                                for (entry, value) in entries.iter().zip(copies.drain(first..)) {
+                                    let key = entry.key.clone_with_memory(memory)?;
+                                    output.push(CdtEntry { key, value });
+                                }
+                                CdtParts::Map(output)
+                            }
+                        };
+                        let extent = value.extent();
+                        let value = match parts {
+                            CdtParts::List(items) => CdtValue::from_checked_items(items, extent),
+                            CdtParts::Map(entries) => CdtValue::from_checked_entries(entries, extent),
+                        };
+                        CdtTerm::Composite(memory.boxed_value(value)?)
+                    }
+                    CdtTerm::TripleTerm(_) => {
+                        let object = finished(&mut copies);
+                        let predicate = finished(&mut copies);
+                        let subject = finished(&mut copies);
+                        CdtTerm::TripleTerm(memory.boxed_triple(CdtTripleTerm { subject, predicate, object })?)
+                    }
+                    _ => unreachable!("only a node that owns children is exited"),
+                };
+                memory.push(&mut copies, copy)?;
+            }
+        }
+    }
+    let result = finished(&mut copies);
+    memory.release_vec(copies)?;
+    steps.release_admitted(memory)?;
+    Ok(result)
+}
+
+impl CdtTerm {
+    /// Copy under original native storage; surviving bytes exclude dead scratch.
+    ///
+    /// # Errors
+    /// Returns checked layout, physical allocator or original admission refusal.
+    pub fn clone_admitted(&self, storage: &mut dyn crate::memory::Storage) -> Result<(Self, usize), crate::memory::StorageError> {
+        let mut memory = crate::memory::Memory::new(storage);
+        let value = memory.scope(|memory| self.clone_with_memory(memory))?;
+        Ok((value, memory.live_bytes()))
+    }
+    pub(crate) fn clone_with_memory(&self, memory: &mut crate::memory::Memory<'_>) -> Result<Self, crate::memory::StorageError> {
+        if owns_nodes(self) { clone_tree(self, memory) } else { shallow(self, memory) }
+    }
+    /// Release only storage already included in this original Memory account.
+    pub(crate) fn release_with_memory(self, memory: &mut crate::memory::Memory<'_>) -> Result<(), crate::memory::StorageError> {
+        let bytes = owned_bytes(OwnedRoot::Term(&self), memory)?;
+        drop(self);
+        memory.release_bytes(bytes)
+    }
+}
+impl Clone for CdtTerm {
+    fn clone(&self) -> Self {
+        self.clone_admitted(&mut crate::memory::Resident).expect("resident CDT clone capacity").0
+    }
+}
+
+impl CdtValue {
+    /// Copy the immutable composite under its original native caller.
+    ///
+    /// # Errors
+    /// Returns checked layout, allocator or original admission refusal.
+    pub fn clone_admitted(&self, storage: &mut dyn crate::memory::Storage) -> Result<(Self, usize), crate::memory::StorageError> {
+        let mut memory = crate::memory::Memory::new(storage);
+        let value = memory.scope(|memory| self.clone_with_memory(memory))?;
+        Ok((value, memory.live_bytes()))
+    }
+    pub(crate) fn clone_with_memory(&self, memory: &mut crate::memory::Memory<'_>) -> Result<Self, crate::memory::StorageError> {
+        let extent = self.extent();
+        match self.contents() {
+            CdtContents::List(items) => {
+                let mut output = Vec::new();
+                memory.reserve(&mut output, items.len())?;
+                for item in items { output.push(item.clone_with_memory(memory)?); }
+                Ok(Self::from_checked_items(output, extent))
+            }
+            CdtContents::Map(entries) => {
+                let mut output = Vec::new();
+                memory.reserve(&mut output, entries.len())?;
+                for entry in entries { output.push(entry.clone_with_memory(memory)?); }
+                Ok(Self::from_checked_entries(output, extent))
+            }
+        }
+    }
+    pub(crate) fn release_with_memory(self, memory: &mut crate::memory::Memory<'_>) -> Result<(), crate::memory::StorageError> {
+        let bytes = owned_bytes(OwnedRoot::Value(&self), memory)?;
+        drop(self);
+        memory.release_bytes(bytes)
+    }
+}
+impl Clone for CdtValue {
+    fn clone(&self) -> Self {
+        self.clone_admitted(&mut crate::memory::Resident).expect("resident CDT clone capacity").0
+    }
+}
+
+/// Both destruction-only roots share one checked physical-layout observation.
+/// This cannot admit or certify an unpriced producer.
+enum OwnedRoot<'a> { Term(&'a CdtTerm), Value(&'a CdtValue) }
+fn owned_bytes(root: OwnedRoot<'_>, memory: &mut crate::memory::Memory<'_>) -> Result<usize, crate::memory::StorageError> {
+    use core::alloc::Layout;
+    use crate::memory::StorageError;
+    let mut bytes = 0usize;
+    let mut pending: WorkList<OwnedRoot<'_>, 8> = WorkList::new();
+    pending.try_push_admitted(root, memory)?;
+    while let Some(node) = pending.pop() {
+        let local = match node {
+            OwnedRoot::Term(term) => match term {
+                CdtTerm::Iri(value) | CdtTerm::Blank(value) => value.capacity(),
+                CdtTerm::Literal(value) => value.owned_bytes()?,
+                CdtTerm::Null => 0,
+                CdtTerm::Composite(value) => {
+                    pending.try_push_admitted(OwnedRoot::Value(value), memory)?;
+                    Layout::new::<CdtValue>().size()
+                }
+                CdtTerm::TripleTerm(value) => {
+                    pending.try_push_admitted(OwnedRoot::Term(&value.object), memory)?;
+                    pending.try_push_admitted(OwnedRoot::Term(&value.predicate), memory)?;
+                    pending.try_push_admitted(OwnedRoot::Term(&value.subject), memory)?;
+                    Layout::new::<CdtTripleTerm>().size()
+                }
+            },
+            OwnedRoot::Value(value) => match value.parts_for_release() {
+                CdtParts::List(items) => {
+                    for term in items { pending.try_push_admitted(OwnedRoot::Term(term), memory)?; }
+                    Layout::array::<CdtTerm>(items.capacity()).map_err(|_| StorageError::SizeOverflow)?.size()
+                }
+                CdtParts::Map(entries) => {
+                    for entry in entries {
+                        bytes = bytes.checked_add(entry.key.owned_bytes()?).ok_or(StorageError::SizeOverflow)?;
+                        pending.try_push_admitted(OwnedRoot::Term(&entry.value), memory)?;
+                    }
+                    Layout::array::<CdtEntry>(entries.capacity()).map_err(|_| StorageError::SizeOverflow)?.size()
+                }
+            },
+        };
+        bytes = bytes.checked_add(local).ok_or(StorageError::SizeOverflow)?;
+    }
+    pending.release_admitted(memory)?;
+    Ok(bytes)
+}

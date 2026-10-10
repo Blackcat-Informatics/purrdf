@@ -1,0 +1,65 @@
+[
+  {
+    "path": "crates/cdt/src/tree.rs",
+    "preimage_sha256": "1ee3aad626d0218440887984efbbe96fa678194ef7999f560da0347c421e678b",
+    "postimage_sha256": "6bfa82ee459ce3c881668f2c0fdd9cb51c12d74088226ce1c01810dc1be07761",
+    "current_source_sha256": "1ee3aad626d0218440887984efbbe96fa678194ef7999f560da0347c421e678b",
+    "preimage_matches_current_source": true
+  },
+  {
+    "path": "crates/cdt/src/term.rs",
+    "preimage_sha256": "622b0b5efbde066942ed442da4ffbee343a28b5607e18b0fed1a985f08a1f155",
+    "postimage_sha256": "8565a3b5b135574d37889e75b99563f40fd1d2622aaaece26bd8ce38adca7bc9",
+    "current_source_sha256": "622b0b5efbde066942ed442da4ffbee343a28b5607e18b0fed1a985f08a1f155",
+    "preimage_matches_current_source": true
+  },
+  {
+    "path": "crates/cdt/src/memory.rs",
+    "preimage_sha256": "530f2bb3e60e51911d44d16999bf4bbc03c593057759b34ac95973fae4c4d3de",
+    "postimage_sha256": "ec0285c3c62e2dd2091c14300665f61f1c208ed22d662b9bee7aa65d9f5ed930",
+    "current_source_sha256": "530f2bb3e60e51911d44d16999bf4bbc03c593057759b34ac95973fae4c4d3de",
+    "preimage_matches_current_source": true
+  },
+  {
+    "path": "crates/cdt/tests/value_relations.rs",
+    "preimage_sha256": "c5182a8b8b1d7e3445495af9680369bd9aa25f2aa71e78c51404dc364d332ab5",
+    "postimage_sha256": "de581d5ea17812039321a4673a5dcd4123160b119dd37d8a37a27c3cd4f9dc1a",
+    "current_source_sha256": "c5182a8b8b1d7e3445495af9680369bd9aa25f2aa71e78c51404dc364d332ab5",
+    "preimage_matches_current_source": true
+  },
+  {
+    "path": "crates/sparql-eval/src/cdt_fn.rs",
+    "preimage_sha256": "1579d68b7ba272cb37c03e7d41195db9c29771206d70a23a52b99e5adbe6d39f",
+    "postimage_sha256": "0e0f3fdc6acd008775db6adeec12f4ce50928e512e24094a5f22d7b99edec727",
+    "current_source_sha256": "1579d68b7ba272cb37c03e7d41195db9c29771206d70a23a52b99e5adbe6d39f",
+    "preimage_matches_current_source": true
+  },
+  {
+    "path": "crates/xsd/src/exact/error.rs",
+    "preimage_sha256": "e8d807e9eb3909c940bb08813807a6514d71c255589f40a1f3f92c2e82498de8",
+    "postimage_sha256": "8dcaf7d8d40214f59e7b263f3ebaf123c2ddff785942100cbfab25d990564cff",
+    "current_source_sha256": "e8d807e9eb3909c940bb08813807a6514d71c255589f40a1f3f92c2e82498de8",
+    "preimage_matches_current_source": true
+  },
+  {
+    "path": "crates/xsd/src/exact/integer.rs",
+    "preimage_sha256": "cacac891b6fe819293b146221ad1d535f3b9c6a7846039339c285bbd9284cd67",
+    "postimage_sha256": "3110744f64792872c15e25fadad4a4696794869eea0a40962034238c77969072",
+    "current_source_sha256": "cacac891b6fe819293b146221ad1d535f3b9c6a7846039339c285bbd9284cd67",
+    "preimage_matches_current_source": true
+  },
+  {
+    "path": "crates/xsd/src/exact/decimal.rs",
+    "preimage_sha256": "fa0dc80de33d6e1828777df7869e33ce2df266f80791fcbe267d810377c75285",
+    "postimage_sha256": "c1cc7620954799b0e21b87c8c2a81fff2b81c298b215d1f606c3d68e27fca746",
+    "current_source_sha256": "fa0dc80de33d6e1828777df7869e33ce2df266f80791fcbe267d810377c75285",
+    "preimage_matches_current_source": true
+  },
+  {
+    "path": "crates/lex/src/allocation/text.rs",
+    "preimage_sha256": "aa3caee58b40e5b3622540ae656d5adac9cfaaa056735b16f34b21dcff27eee0",
+    "postimage_sha256": "90a2d1198945bb5d51ae1f1950e1702fad97f801c431838a70a2494f70520671",
+    "current_source_sha256": "aa3caee58b40e5b3622540ae656d5adac9cfaaa056735b16f34b21dcff27eee0",
+    "preimage_matches_current_source": true
+  }
+]

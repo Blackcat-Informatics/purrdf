@@ -1,0 +1,89 @@
+/// The sole typed leaf-conversion body. The storage factory determines physical
+/// ownership; view resolution and lexical/type semantics remain shared.
+fn owned_term_leaf<D: DatasetView + ?Sized, C: ?Sized, E>(
+    view: &D,
+    term: TermRef<'_, D::Id>,
+    ctx: &mut C,
+    mut text: impl FnMut(&mut C, &str) -> Result<String, E>,
+    lookup_error: impl Fn(TermLookupError<D::ReadError>) -> E,
+) -> Result<TermValue, E> {
+    Ok(match term {
+        TermRef::Iri(iri) => TermValue::Iri(text(ctx, iri)?),
+        TermRef::Blank { label, scope } => TermValue::Blank { label: text(ctx, label)?, scope },
+        TermRef::Literal { lexical, datatype, language, direction } => {
+            let guard = view.resolve(datatype)
+                .map_err(|error| lookup_error(TermLookupError::Read(error)))?;
+            let TermRef::Iri(datatype) = guard.term() else {
+                return Err(lookup_error(TermLookupError::ForeignId));
+            };
+            TermValue::Literal {
+                lexical_form: text(ctx, lexical)?,
+                datatype: text(ctx, datatype)?,
+                language: language.map(|language| text(ctx, language)).transpose()?,
+                direction,
+            }
+        }
+        TermRef::Triple { .. } => unreachable!("a triple term is assembled from its components"),
+    })
+}
+
+/// One original component assembly; each concrete box factory admits before birth.
+fn owned_term_triple<E>(
+    s: TermValue, p: TermValue, o: TermValue,
+    mut boxed: impl FnMut(TermValue) -> Result<crate::ir::TermBox, E>,
+) -> Result<TermValue, E> {
+    Ok(TermValue::Triple { s: boxed(s)?, p: boxed(p)?, o: boxed(o)? })
+}
+
+    fn term_value_with_storage<E>(
+        &self,
+        id: Self::Id,
+        lookup_error: impl Fn(TermLookupError<Self::ReadError>) -> E,
+        storage_error: impl Fn(std::collections::TryReserveError) -> E,
+    ) -> Result<TermValue, E> {
+        crate::ir::try_fold_term_with_storage(
+            self, id,
+            |_, term| owned_term_leaf(self, term, &mut (),
+                |(), source| crate::ir::try_owned_text(source).map_err(&storage_error),
+                &lookup_error,
+            ),
+            |_, s, p, o| owned_term_triple(s, p, o,
+                |value| crate::small::try_boxed(value).map(Into::into).map_err(&storage_error),
+            ),
+            |error| lookup_error(TermLookupError::Read(error)), &storage_error,
+        )
+    }
+
+    /// Resolve the same original owned term under actual native live-capacity admission.
+    ///
+    /// Every copied string, child box and fold buffer is admitted before its
+    /// fallible construction. Construction scratch dies before its grant is
+    /// released. The caller retains this memory's surviving original payload
+    /// grant with the returned value; no whole-view maximum is required.
+    ///
+    /// # Errors
+    /// Preserves malformed-id and backing failures through lookup_error, and
+    /// checked layout/admission/allocator failure through storage_error. A failed
+    /// copy destroys all partial children before releasing its original delta.
+    fn term_value_with_memory<S: purrdf_lex::allocation::Admission + ?Sized, E>(
+        &self,
+        id: Self::Id,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+        lookup_error: impl Fn(TermLookupError<Self::ReadError>) -> E,
+        storage_error: impl Fn(purrdf_lex::allocation::StorageError,
+            &mut purrdf_lex::allocation::Memory<'_, S>) -> E,
+    ) -> Result<TermValue, E> {
+        crate::ir::try_fold_term_with_memory(
+            self, id,
+            |_, term, memory| owned_term_leaf(self, term, memory,
+                |memory, source| memory.string(source)
+                    .map_err(|error| storage_error(error, memory)),
+                &lookup_error,
+            ),
+            |_, s, p, o, memory| owned_term_triple(s, p, o,
+                |value| memory.boxed(value).map(Into::into)
+                    .map_err(|error| storage_error(error, memory)),
+            ),
+            |error| lookup_error(TermLookupError::Read(error)), &storage_error, memory,
+        )
+    }

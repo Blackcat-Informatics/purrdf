@@ -1,0 +1,120 @@
+    #[test]
+    fn native_service_index_clones_keep_original_metadata_until_the_last_owner() {
+        use purrdf_sparql_algebra::{Child, GraphPattern, NamedNodePattern, Variable};
+        let pattern = GraphPattern::Service {
+            name: NamedNodePattern::Variable(Variable::new("endpoint")),
+            inner: Child::new(GraphPattern::Bgp { patterns: Vec::new() }),
+            silent: false,
+        };
+        let (workspace, ledger, base) = account(262_144);
+        let capability = workspace.capability();
+        let tree = crate::plan::Tree::build_admitted(&pattern, &capability).expect("native service shape");
+        let index = tree.shape().endpoints().clone();
+        assert!(!index.is_absent());
+        drop(tree);
+        let live = ledger.live.load(Ordering::Relaxed);
+        assert!(live > base);
+        let copy = index.clone();
+        drop(index);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        drop(copy);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_service_metadata_refusal_keeps_first_cause_and_destroys_partial_owners() {
+        use purrdf_sparql_algebra::{Child, GraphPattern, NamedNodePattern, Variable};
+        let mut pattern = GraphPattern::Bgp { patterns: Vec::new() };
+        for ordinal in 0..64 {
+            pattern = GraphPattern::Join {
+                left: Child::new(pattern),
+                right: Child::new(GraphPattern::Service {
+                    name: NamedNodePattern::Variable(Variable::new(format!("endpoint{ordinal}"))),
+                    inner: Child::new(GraphPattern::Bgp { patterns: Vec::new() }),
+                    silent: true,
+                }),
+            };
+        }
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("original account layout");
+        for extra in [0, 1, 64, 256, 1024] {
+            let (workspace, ledger, _) = account(base + extra);
+            let capability = workspace.capability();
+            let error = crate::plan::Tree::build_admitted(&pattern, &capability)
+                .err().expect("actual SERVICE preparation cannot fit");
+            assert!(matches!(error, EvalError::WorkspaceStopped));
+            drop(error);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+            assert_eq!(workspace.take_failure().expect("original cause").identity, 7);
+            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+            assert!(workspace.take_failure().is_none());
+            drop(capability);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn native_service_unsupported_retains_original_code_text_and_grant() {
+        use purrdf_sparql_algebra::{Child, GraphPattern, NamedNodePattern, Variable};
+        let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().expect("empty source");
+        let variable = Variable::new("endpoint");
+        let node = GraphPattern::Service {
+            name: NamedNodePattern::Variable(variable.clone()),
+            inner: Child::new(GraphPattern::Bgp { patterns: Vec::new() }),
+            silent: true,
+        };
+        let mut resident = crate::EvalCtx::new(dataset.as_ref());
+        let expected = crate::service_endpoints::eval_variable_endpoint(
+            &node, &variable, true, &mut resident,
+        ).err().expect("no endpoint has no failed invocation to silence");
+        let (workspace, ledger, base) = account(65_536);
+        let capability = workspace.capability();
+        let mut native = crate::EvalCtx::new(dataset.as_ref());
+        native.growth = capability.clone();
+        let error = crate::service_endpoints::eval_variable_endpoint(
+            &node, &variable, true, &mut native,
+        ).err().expect("native unbound endpoint refusal");
+        assert_eq!(error.to_string(), expected.to_string());
+        assert_eq!(error.code(), expected.code());
+        assert_eq!(error.code(), Some(EvalError::UNSUPPORTED_CODE));
+        assert_eq!(error.diagnostic_code(), expected.diagnostic_code());
+        assert!(matches!(&error, EvalError::NativeDiagnostic(value)
+            if value.kind() == crate::NativeDiagnosticKind::UnclassifiedUnsupported));
+        let live = ledger.live.load(Ordering::Relaxed);
+        assert!(live > base);
+        let copy = error.clone();
+        drop(error);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), live);
+        drop(native);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        drop(copy);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_service_literal_render_refusal_is_physical_and_silent_cannot_absorb_it() {
+        let variable = purrdf_sparql_algebra::Variable::new("endpoint");
+        let value = purrdf_core::TermValue::simple_literal("original endpoint".repeat(8192));
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("original account layout");
+        let (workspace, ledger, _) = account(base + 1);
+        let capability = workspace.capability();
+        let error = crate::service_endpoints::non_iri_endpoint(&variable, &value, &capability);
+        assert!(matches!(&error, EvalError::WorkspaceStopped));
+        let result = crate::remote::failed_invocation::<TermId>(
+            "original caller endpoint", purrdf_core::SilencedKind::NotAnIri,
+            error, true, &capability,
+        );
+        assert!(matches!(result, Err(EvalError::WorkspaceStopped)));
+        drop(result);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        assert_eq!(workspace.take_failure().expect("original typed refusal").identity, 7);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }

@@ -1,0 +1,65 @@
+impl RelationAttestations {
+    fn record_admitted(&mut self, generation: &IndexGeneration, service: &ServiceLevel, workspace: &crate::workspace::WorkspaceCapability) -> Result<(), crate::EvalError> {
+        self.generations.insert_admitted(generation, workspace, |value, _| Ok(value.clone()))?;
+        if let ServiceLevel::Incomplete { reason } = service {
+            self.incompleteness.insert_admitted(reason, workspace, |reason, memory| memory.string(reason))?;
+        }
+        self.invocations = self.invocations.saturating_add(1);
+        Ok(())
+    }
+    fn merge_admitted(&mut self, other: &Self, workspace: &crate::workspace::WorkspaceCapability) -> Result<(), crate::EvalError> {
+        self.generations.merge_admitted(&other.generations, workspace)?;
+        self.incompleteness.merge_admitted(&other.incompleteness, workspace)?;
+        self.invocations = self.invocations.saturating_add(other.invocations);
+        Ok(())
+    }
+}
+
+impl RelationWitness {
+    /// Record at the original relation receipt producer. IRI/reason strings and
+    /// declaration arrays are admitted before allocation; an existing generation
+    /// shares its caller-supplied immutable spelling without copying it.
+    ///
+    /// # Errors
+    /// Returns physical workspace or allocator refusal while existing owners stay live.
+    pub fn try_record(&mut self, iri: &str, generation: &IndexGeneration, service: &ServiceLevel, workspace: &crate::workspace::WorkspaceCapability) -> Result<(), crate::EvalError> {
+        let index = self.entries.as_ref().map_or(Err(0), |entries| entries.binary_search_by(|(name, _)| name.as_str().cmp(iri)));
+        match index {
+            Ok(index) => {
+                let entries = mutable_witness_array(&mut self.entries, workspace)?;
+                entries.as_mut_slice()[index].1.record_admitted(generation, service, workspace)?;
+            }
+            Err(index) => {
+                let name = retained_witness_value(&iri, workspace, |text, memory| memory.string(text))?;
+                let mut attestations = RelationAttestations::default();
+                attestations.record_admitted(generation, service, workspace)?;
+                let entries = mutable_witness_array(&mut self.entries, workspace)?;
+                entries.push((name, attestations))?;
+                entries.as_mut_slice()[index..].rotate_right(1);
+            }
+        }
+        Ok(())
+    }
+
+    /// Merge original child receipts by sharing their declaration payloads and
+    /// admitting only genuinely new destination arrays/control storage.
+    ///
+    /// # Errors
+    /// Returns physical workspace or allocator refusal.
+    pub fn try_merge(&mut self, other: &Self, workspace: &crate::workspace::WorkspaceCapability) -> Result<(), crate::EvalError> {
+        if let Some(source) = &other.entries {
+            for (name, attestations) in source.iter() {
+                let index = self.entries.as_ref().map_or(Err(0), |entries| entries.binary_search_by(|(candidate, _)| candidate.as_str().cmp(name.as_str())));
+                let entries = mutable_witness_array(&mut self.entries, workspace)?;
+                match index {
+                    Ok(index) => entries.as_mut_slice()[index].1.merge_admitted(attestations, workspace)?,
+                    Err(index) => {
+                        entries.push((name.clone(), attestations.clone()))?;
+                        entries.as_mut_slice()[index..].rotate_right(1);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}

@@ -1,0 +1,511 @@
+python3 scripts/check-hash-domains.py --self-test
+PASS: the clean seeded workspace passes, its tests and test modules out of scope
+PASS: a second registration of the same bytes is refused
+PASS: a registration extending another one is refused as a prefix violation
+PASS: a registration differing in its last byte passes
+PASS: a domain that is a byte-prefix of another is refused
+PASS: a NUL-terminated neighbour of a registered domain is not its prefix and passes
+PASS: an empty domain is refused
+PASS: a one-byte domain that begins no other one passes
+PASS: a versioned byte literal handed to update is refused
+PASS: the same bytes through a registered Domain pass
+PASS: a NUL-terminated str literal framed into a hasher is refused
+PASS: a field label framed into a hasher passes
+PASS: a literal re-spelling a registered unversioned domain is refused
+PASS: a one-shot digest over a versioned literal is refused
+PASS: a one-shot digest over a word with a v inside it passes
+PASS: a domain constant declared as a raw &str is refused
+PASS: a vocabulary IRI in a constant named DOMAIN passes
+PASS: a raw literal in a #[cfg(test)] function is out of scope
+PASS: the same raw literal outside #[cfg(test)] is refused
+PASS: a domain opening hashers in two functions, undeclared, is refused
+PASS: the same shared domain declared as a ledger exception passes
+PASS: a declared shared domain that now opens one construction is STALE
+PASS: a declared undomained digest passes
+PASS: a declared undomained digest that now opens under a Domain is STALE
+PASS: a declared exception naming no anchor is refused
+PASS: a declared exception naming a function the file lacks is STALE
+PASS: a stale README table is regenerated between its markers
+PASS: a README without the markers is reported, not rewritten
+PASS: a current README table is left exactly as it is
+PASS: the table lists each registration once, sorted by bytes
+PASS: escapes decode to the bytes the compiler emits
+OK: check-hash-domains self-test
+python3 scripts/check-hash-domains.py
+OK: 82 hash domains registered through purrdf_hash::Domain, unique and prefix-free; no raw domain literal reaches a hasher; 3 ledger-declared exception(s) hold; the crates/hash/README.md registry table is current
+python3 scripts/check-corpus-frozen.py
+verified 3386 frozen XML files in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/target/conformance/xmlconf
+OK: 28 vendored corpora byte-frozen.
+bash scripts/check-generated.sh
+   Compiling cmov v0.5.4
+   Compiling inout v0.2.2
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-events)
+   Compiling cpubits v0.1.1
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/deflate)
+   Compiling twox-hash v2.1.2
+   Compiling fastrand v2.4.1
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/testkit)
+   Compiling cipher v0.5.2
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+   Compiling aead v0.6.1
+   Compiling ctutils v0.4.2
+   Compiling structured-zstd v0.0.49
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/alloc-probe)
+   Compiling universal-hash v0.6.1
+   Compiling ctr v0.10.1
+   Compiling polyval v0.7.3
+   Compiling aes v0.9.3
+   Compiling ghash v0.6.0
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 2m 03s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_loss_matrix rdf`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.07s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_loss_matrix transcode`
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 18.27s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_rule_inventory`
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.68s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 4.30s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_tables normalization`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_tables case-context`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_tables text`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_tables idna`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_tables ecma-properties`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_tables ecma-ranges`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_tables xpath`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_tables xpath-compatibility`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_tables xpath-dated-names`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_unicode_tables xpath-dated-blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.50s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_html_entities`
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 5.60s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/gen_lexicons --check`
+cjdict: 315964 -> 315956 entries, 8 collision groups, 4833368 bytes, 64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f
+thaidict: 26383 -> 26383 entries, 0 collision groups, 620428 bytes, 193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0
+laodict: 30550 -> 30505 entries, 45 collision groups, 824965 bytes, 6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f
+khmerdict: 81028 -> 81025 entries, 3 collision groups, 2430900 bytes, 90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b
+burmesedict: 41120 -> 41120 entries, 0 collision groups, 1362430 bytes, f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a
+OK: 154 documented claim(s) agree with their generated source (stale-name ban swept 2313 file(s); entailment-overclaim ban swept 36 of 247 prose unit(s) — Markdown documents and registry descriptions — sentence by sentence, and matched every marker-bearing claim across the 2323 unit(s) outside that set).
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.28s
+     Running `/opt/purrdf-508-qualification/target/debug/examples/viz_samples /opt/purrdf-508-qualification/target/gate-scratch/check-generated.mspGdi/visualization --svg-only`
+wrote RDF 1.2 visualization artifacts to /opt/purrdf-508-qualification/target/gate-scratch/check-generated.mspGdi/visualization
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 46.09s
+     Running unittests src/lib.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-core/1c7f8ab4d6fee602/out/purrdf_core-1c7f8ab4d6fee602)
+
+running 1 test
+test sssom::tests::corpus_accessibility_parses_and_validates_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1240 filtered out; finished in 0.00s
+
+python3 scripts/check-issue-refs.py
+OK: no #NNN issue-reference tokens and no new process references in comments or docs (23 pre-existing process reference(s), 5 control-flow 'this branch' site(s), 23 runtime-plan 'the plan's' site(s), and 1 spec-clause 'G<N>:' site(s) registered).
+python3 scripts/check-brand-casing.py
+OK: no bare 'purrdf' prose outside identifiers/code spans (59 pre-existing file(s) registered).
+python3 scripts/check-spec-attribution.py --self-test
+check-spec-attribution self-test:
+  caught   bindings/python/src/py_store/query.rs module rustdoc: line 1, `CONSTRUCT template` near `SPARQL 1.2`
+  caught   bindings/python/src/py_store/query.rs QueryQuads pyclass __doc__: line 1, `CONSTRUCT template` near `SPARQL 1.2`
+  caught   bindings/python/tests/test_construct_named_graphs.py module docstring: line 1, `quad-template` near `SPARQL 1.2`
+  caught   crates/sparql-results/src/graph.rs module rustdoc: line 1, `CONSTRUCT { GRAPH` near `SPARQL 1.2`
+  passes   the corrected module rustdoc
+  passes   the corrected pyclass __doc__
+  passes   the corrected Python module docstring
+  passes   the corrected sparql-results rustdoc
+  passes   the book's negative statement
+  passes   the introduction's feature list
+  passes   a plain SPARQL 1.1 CONSTRUCT description carrying no version claim
+  passes   an unrelated SPARQL 1.2 mention with no extension phrasing nearby
+  passes   a Chinese page: the quad template disclaimed in the house voice
+  passes   a Chinese page: the same disclaimer with the Latin/CJK spaces dropped
+  passes   a Chinese page: the negative statement, SPARQL 1.2 as the subject
+  passes   a Chinese page: the introduction's feature-list wording
+  passes   a Chinese page: a plain SPARQL 1.1 CONSTRUCT description, no version claim
+  passes   a Chinese page: an unrelated SPARQL 1.2 mention with no extension phrasing
+  passes   a Chinese page: 'not part of SPARQL 1.2, PurRDF's own extension'
+  passes   a Chinese page: 'SPARQL 1.2 has no quad template'
+  passes   a Chinese page: 'not a SPARQL 1.2 standard feature'
+  caught   the quad template attributed to SPARQL 1.1
+  caught   a Chinese page attributing the quad template to SPARQL 1.2: line 1, `CONSTRUCT { GRAPH` near `SPARQL 1.2`
+  caught   a Chinese page calling the quad template a SPARQL 1.2 feature: line 1, `四元组模板` near `SPARQL 1.2`
+  caught   a Chinese page: SPARQL 1.2's CONSTRUCT template names a graph per statement: line 1, `CONSTRUCT 模板` near `SPARQL 1.2`
+  caught   a Chinese page: the quad template attributed to SPARQL 1.1 by the possessive: line 1, `四元组模板` near `SPARQL 1.1`
+  caught   a violation in a TRACKED file (throwaway repository)
+  spared   the untracked docs/book/book/searchindex-ef3e7a03.js (it matches, and is not enumerated)
+  self-test OK
+check-spec-attribution: no unqualified specification attributions.
+python3 scripts/check-doc-claims.py
+OK: 154 documented claim(s) agree with their generated source (stale-name ban swept 2313 file(s); entailment-overclaim ban swept 36 of 247 prose unit(s) — Markdown documents and registry descriptions — sentence by sentence, and matched every marker-bearing claim across the 2323 unit(s) outside that set).
+cargo run -q --locked -p helper-census -- --glossary-gate
+OK: 69 rows, 43 rejections, 24 K tokens respected by 4314 translated units; 3 tracked translated Markdown documents; 1716 self-tests
+python3 scripts/check-versions.py
+OK: version 3.0.1 coherent across crates.io/PyPI/npm; release lane publishes all 31 publishable crates.
+python3 scripts/check-release-notes.py --self-test
+OK: reviewed-summary and exact release-checksum refusal regressions pass
+python3 scripts/check-release-notes.py
+OK: reviewed PurRDF 3.0.1 GitHub summary (2596 UTF-8 bytes)
+python3 scripts/check-publish-order.py
+OK: 31 release crates == the publishable members; the order is a topological order of normal AND dev dependencies (33 in-set dev edges, all backward), so `cargo publish` can verify every crate; the 0-entry unbootstrapped ledger is in-set and in order
+bash scripts/check-crates-io-records.sh --self-test
+check-crates-io-records.sh self-test (release set: 31 crates; version 3.0.1)
+  ok      every record present and locked, empty ledger (exit 0)
+  ok      ledgered crate missing (purrdf-wasm): bootstrap pending, permitted (exit 0)
+  ok      strict functional preflight refuses ledgered missing record
+  ok      ledgered crate created at 3.0.1 by this release: tolerated (exit 0)
+  ok      ledgered crate with a record, no release version given: stale (exit 1)
+  ok      missing crate absent from the ledger (purrdf-wasm) (exit 1)
+  ok      stale ledger entry (purrdf-hash has a record) (exit 1)
+  ok      record not locked (purrdf-hash trustpub_only=false) (exit 1)
+  ok      record with no trustpub_only field (purrdf-hash) (exit 1)
+  ok      explicit list of 2 crates (exit 0, no ledger check)
+  ok      registry answers 503 for purrdf-hash (exit 1)
+check-crates-io-records.sh self-test: every refusal fires and the green path passes
+bash scripts/publish-release-crates.sh --self-test
+publish-release-crates.sh self-test (version 3.0.1)
+  -- interleave (real): fixture ledger purrdf-stack
+  ok      real round 1: STOP at purrdf-lex, waiting on purrdf-stack (first dependent the loop reaches, computed independently)
+          token step creates: purrdf-stack
+  ok      real round 2: COMPLETE — every release crate on crates.io
+  -- interleave (chain): fixture ledger purrdf-hash purrdf-lex
+  ok      chain round 1: STOP at purrdf-iri, waiting on purrdf-hash (first dependent the loop reaches, computed independently)
+          token step creates: purrdf-hash purrdf-lex
+  ok      chain round 2: COMPLETE — every release crate on crates.io
+  ok      registry answers 502: exit 1, no decision taken
+  ok      a normal dependency onto helper-census: refused, exit 1, edge named
+  ok      a build dependency onto helper-census: refused, exit 1, edge named
+  ok      a versioned dev-dependency onto helper-census: refused, exit 1, edge named
+  ok      a versionless dev-dependency onto helper-census: accepted in silence (cargo strips it)
+  ok      the committed workspace: accepted, so the refusals above are a filter and not a ban
+  ok      mock registry cannot authorize functional publication
+  ok      API-first propagation waits for the actual Cargo index
+  ok      an API-only version times out instead of authorizing a dependent
+  ok      malformed, mismatched or yanked Cargo index refused
+  ok      malformed, mismatched or yanked Cargo index refused
+  ok      malformed, mismatched or yanked Cargo index refused
+  ok      malformed, mismatched or yanked Cargo index refused
+  ok      malformed, mismatched or yanked Cargo index refused
+  ok      malformed, mismatched or yanked Cargo index refused
+  ok      yanked API identity refused
+  ok      resumed uploads wait for skipped predecessors before publishing users
+publish-release-crates.sh self-test: the interleave terminates, every STOP is at the right crate, faults stop the loop, and a path dependency onto a never-published member is refused unless cargo would strip it
+python3 scripts/publish-github-release.py --self-test
+...............................
+----------------------------------------------------------------------
+Ran 31 tests in 0.038s
+
+OK
+OK: lexicon archive determinism, inventory and refusal checks
+python3 scripts/test_git_sync.py
+............................
+----------------------------------------------------------------------
+Ran 28 tests in 44.375s
+
+OK
+python3 scripts/publish-npm.py --self-test
+test_empty_or_multiple_audit_rows_refuse (npm_publisher_tests.PublicationTests.test_empty_or_multiple_audit_rows_refuse) ... ok
+test_failed_upload_preserves_tar_and_cleans_auth_config (npm_publisher_tests.PublicationTests.test_failed_upload_preserves_tar_and_cleans_auth_config) ... ok
+test_missing_tar_refuses_without_authentication (npm_publisher_tests.PublicationTests.test_missing_tar_refuses_without_authentication) ... ok
+test_multiple_tarballs_refuse_even_when_one_is_audited (npm_publisher_tests.PublicationTests.test_multiple_tarballs_refuse_even_when_one_is_audited) ... ok
+test_oidc_publishes_audited_tar_instead_of_directory (npm_publisher_tests.PublicationTests.test_oidc_publishes_audited_tar_instead_of_directory) ... ok
+test_release_workflow_uses_same_receipt_for_check_and_publish (npm_publisher_tests.PublicationTests.test_release_workflow_uses_same_receipt_for_check_and_publish) ... ok
+test_stale_package_version_refuses (npm_publisher_tests.PublicationTests.test_stale_package_version_refuses) ... ok
+test_symlink_tar_refuses (npm_publisher_tests.PublicationTests.test_symlink_tar_refuses) ... ok
+test_tar_changed_after_audit_refuses (npm_publisher_tests.PublicationTests.test_tar_changed_after_audit_refuses) ... ok
+test_token_publishes_same_tar_and_removes_private_auth_config (npm_publisher_tests.PublicationTests.test_token_publishes_same_tar_and_removes_private_auth_config) ... ok
+test_wrong_receipt_identity_and_incomplete_runtime_evidence_refuse (npm_publisher_tests.PublicationTests.test_wrong_receipt_identity_and_incomplete_runtime_evidence_refuse) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.015s
+
+OK
+bash scripts/bootstrap-crates-io.sh --self-test
+   Packaging purrdf-bootstrap-fixture v0.0.0 (/opt/purrdf-508-qualification/tmp/purrdf-empty-selftest-fied6ibg/purrdf-bootstrap-fixture)
+    Packaged 8 files, 23.1KiB (8.7KiB compressed)
+   Verifying purrdf-bootstrap-fixture v0.0.0 (/opt/purrdf-508-qualification/tmp/purrdf-empty-selftest-fied6ibg/purrdf-bootstrap-fixture)
+warning: explicit `package.readme` can be inferred
+  --> Cargo.toml:23:1
+   |
+23 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-bootstrap-fixture` (manifest) generated 1 warning
+   Compiling purrdf-bootstrap-fixture v0.0.0 (/opt/purrdf-508-qualification/build/package/purrdf-bootstrap-fixture-0.0.0)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+   Packaging purrdf-bootstrap-fixture v0.0.0 (/opt/purrdf-508-qualification/tmp/purrdf-empty-selftest-fied6ibg/purrdf-bootstrap-fixture)
+    Blocking waiting for file lock on package cache
+    Packaged 8 files, 22.9KiB (8.6KiB compressed)
+   Verifying purrdf-bootstrap-fixture v0.0.0 (/opt/purrdf-508-qualification/tmp/purrdf-empty-selftest-fied6ibg/purrdf-bootstrap-fixture)
+warning: explicit `package.readme` can be inferred
+  --> Cargo.toml:23:1
+   |
+23 | readme = "README.md"
+   | ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `cargo::manual_readme` is set to `warn` by default
+help: consider removing `package.readme`
+warning: `purrdf-bootstrap-fixture` (manifest) generated 1 warning
+   Compiling purrdf-bootstrap-fixture v0.0.0 (/opt/purrdf-508-qualification/build/package/purrdf-bootstrap-fixture-0.0.0)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+bootstrap self-test: verified empty package accepted; accidental API refused
+bootstrap registry self-test: missing/present records distinguished; unavailable registry refused
+python3 scripts/check-wasm-js-exports.py
+OK: all 45 #[wasm_bindgen] free function(s) in crates/rdf-wasm/src are re-exported from crates/rdf-wasm/js/index.mjs.
+python3 scripts/check-entailment-surface.py
+OK: all 5 conclusion-directed entailment service(s) (certain_answers, certain_answers_with, entails, entails_with, verify) reach Rust, Python, WASM, the C ABI and the `purrdf` command line, each with the boundary's whole parameter list; and all 33 mutations of that tree fail this gate.
+python3 scripts/check-python-stub-parity.py
+OK: all 328 Python-visible member(s) of 52 `#[pyclass]`(es) are declared in bindings/python/python/src/purrdf/__init__.pyi, as are all 19 pinned `.refusal` name(s) of 1 `create_exception!` boundary(ies); all 19 mutations of that tree fail this gate; and all 8 valid spelling(s) of it pass.
+python3 scripts/conformance-matrix.py --self-test
+conformance-matrix: withholding each of the 23 scoreboard lines across 21 scraped suites, every one of which must turn its row RED —
+  ok         Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML): whole specimen recognised
+  caught     Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML): without 'TOTAL: total   9  passed   7  allowlisted-gap  2'
+  ok         SPARQL 1.0 cases superseded by RDF 1.2: whole specimen recognised
+  caught     SPARQL 1.0 cases superseded by RDF 1.2: without 'W3C10 SUPERSEDED: graded 1, sparql12-order 1'
+  ok         SPARQL 1.0 unlisted vendored files: whole specimen recognised
+  caught     SPARQL 1.0 unlisted vendored files: without 'W3C10 UNLISTED: files 20, orphan-manifest-files 8, unreferenced-payloads 11, unlisted-entry-results 1'
+  ok         SPARQL 1.0/1.1/1.2 evaluation (full corpus): whole specimen recognised
+  caught     SPARQL 1.0/1.1/1.2 evaluation (full corpus): without '[w3c-sparql11/aggregates] 12 passed, 1 xfail, 0 unexpected-pass, 0 failed, 0 unmodeled'
+  ok         SPARQL CONSTRUCT (first-party corpus): whole specimen recognised
+  caught     SPARQL CONSTRUCT (first-party corpus): without 'CONSTRUCT-CORPUS: passed 29 total 29'
+  ok         SPARQL DESCRIBE (first-party corpus): whole specimen recognised
+  caught     SPARQL DESCRIBE (first-party corpus): without 'DESCRIBE-CORPUS: passed 7 total 7'
+  ok         SPARQL CDT (SEP-0009, vendored corpus): whole specimen recognised
+  caught     SPARQL CDT (SEP-0009, vendored corpus): without 'SPARQL-CDT-CORPUS: passed 9 xfail 1 total 10'
+  ok         SPARQL execution governors: whole specimen recognised
+  caught     SPARQL execution governors: without 'GOVERNOR-CORPUS: passed 12 total 12 bands 4'
+  ok         Entailment (OWL 2 DL consistency): whole specimen recognised
+  caught     Entailment (OWL 2 DL consistency): without 'OWL2-ENTAILMENT: agreed 9 ledgered 2 unledgered 0 stale 0 total 11'
+  caught     Entailment (OWL 2 DL consistency): without 'OWL2-DL-EXCLUDED: total 8 non-terminating 1 decides 5 withholds 1 no-premise 1'
+  ok         Entailment (OWL 2 RL, W3C entailment tests): whole specimen recognised
+  caught     Entailment (OWL 2 RL, W3C entailment tests): without 'OWL2-RL-ENTAILMENT: agreed 9 ledgered 2 unledgered 0 stale 0 total 11 actionable 1'
+  ok         SHACL Core + SHACL-SPARQL: whole specimen recognised
+  caught     SHACL Core + SHACL-SPARQL: without 'TOTAL: passed 6, xfailed 2, ledger 2'
+  ok         SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL): whole specimen recognised
+  caught     SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL): without 'W3C12 TOTAL: passed 5, non-canonical-expected-decimal 1, xfailed 2, ledger 2'
+  ok         SHACL 1.2 unlisted vendored files: whole specimen recognised
+  caught     SHACL 1.2 unlisted vendored files: without 'W3C12 UNLISTED: passed 2, exact 1, with-delta 1, total 2'
+  ok         SHACL (first-party corpus): whole specimen recognised
+  caught     SHACL (first-party corpus): without 'SHAPES-CORPUS: passed 9 total 9'
+  ok         Community SHACL dated profiles (REC 2017 / WD 2026): whole specimen recognised
+  caught     Community SHACL dated profiles (REC 2017 / WD 2026): without 'COMMUNITY-SHACL: passed 115 total 115'
+  ok         SHACL prepared-product equivalence: whole specimen recognised
+  caught     SHACL prepared-product equivalence: without 'PRODUCT-EQUIVALENCE: passed 9 ledgered 1 unparsable 2 disagreed 0 total 12'
+  ok         XSD/XPath regExp (first-party corpus): whole specimen recognised
+  caught     XSD/XPath regExp (first-party corpus): without 'XSD-REGEX-CORPUS: passed 9 total 9'
+  ok         SHACL Rules: whole specimen recognised
+  caught     SHACL Rules: without 'RULES: passed 6 total 6'
+  ok         ShEx 2.1 validation: whole specimen recognised
+  caught     ShEx 2.1 validation: without 'entries 40 | attempted 32 | pass 32 | xfail 0 | fail 0 | skipped 8'
+  ok         GTS transport (frozen vectors): whole specimen recognised
+  caught     GTS transport (frozen vectors): without 'GTS-VECTORS: agreed 8 total 9 diverging 1'
+  ok         GeoSPARQL 1.1 determinism corpus: whole specimen recognised
+  caught     GeoSPARQL 1.1 determinism corpus: without 'digest=9667c2ee2cd3ad4b'
+  caught     GeoSPARQL 1.1 determinism corpus: without 'corpus_len=20'
+  ok         shards: every suite in one of 4 shards; a missing, stray, mislabelled, short, overreaching or field-less shard result is refused and the complete set reassembles
+OK: all 21 scraped suites recognise their specimen, and withholding any of the 23 scoreboard lines turns the row RED with a counted failure.
+python3 scripts/check-simd-asm.py --self-test
+.................
+----------------------------------------------------------------------
+Ran 17 tests in 0.289s
+
+OK
+OK: simd-asm self-test -- every refusal fires and every valid neighbour passes
+python3 scripts/bench-suite-targets.py --self-test
+OK: self-test — a harness suite is selected; a plain-main probe and a suite on another harness are not
+OK: self-test — a target new at the head is kept and marked as having no base
+OK: self-test — the crate list is read from the bench recipe alone
+OK: self-test — the committed Makefile's bench recipe names 19 crates
+SELF-TEST PASS
+python3 scripts/cleanroom/transcript_audit.py --self-test
+OK: self-test — forbidden Read path is rejected
+OK: self-test — allowed neighbour Read path is accepted
+OK: self-test — relative Read into the forbidden tree is rejected
+OK: self-test — Bash cat of a registry source is rejected
+OK: self-test — Bash cat of cargo config is accepted
+OK: self-test — forbidden SHA abbreviation in git is rejected
+OK: self-test — a different SHA in git is accepted
+OK: self-test — forbidden branch in git is rejected
+OK: self-test — a branch sharing its prefix is accepted
+OK: self-test — WebFetch to a non-allowlisted host is rejected
+OK: self-test — WebFetch to rfc-editor.org is accepted
+OK: self-test — WebSearch is rejected
+OK: self-test — Grep from an ancestor of the forbidden tree is rejected
+OK: self-test — Grep inside an allowed tree is accepted
+OK: self-test — a `cd` into an allowed clone, then a relative `find`, from a forbidden session cwd is accepted
+OK: self-test — a `cd` into an allowed clone, then a `..`-relative `cat` that lands in the forbidden tree is rejected
+OK: self-test — a `cd` straight into the forbidden tree is rejected
+OK: self-test — a heredoc body assignment after `cd` is not a path-shaped word is accepted
+OK: self-test — a subagent call nested in another record is found, once
+OK: self-test — an unknown record type and an unaudited tool are reported, not dropped
+OK: self-test — a malformed line is an error and the audit exits 2
+OK: self-test — an audited tool whose input lacks its field is an error, not a pass
+OK: self-test — the report digest is key-order independent and content sensitive
+SELF-TEST PASS
+python3 scripts/cleanroom/guard_hook.py --self-test
+OK: self-test — Read inside the forbidden tree: blocked
+OK: self-test — Read beside it: allowed
+OK: self-test — Bash into rustlib/src: blocked
+OK: self-test — Bash into rustlib/bin: allowed
+OK: self-test — cd into an allowed clone, then a relative find, from a forbidden session cwd: allowed
+OK: self-test — cd into an allowed clone, then a ..-relative cat that lands in the forbidden tree: blocked
+OK: self-test — cd straight into the forbidden tree: blocked
+OK: self-test — a heredoc body assignment after cd is not a path-shaped word: allowed
+OK: self-test — WebSearch: blocked
+OK: self-test — an unaudited tool: allowed
+OK: self-test — an unreadable event: blocked
+SELF-TEST PASS
+python3 scripts/cleanroom/deny_settings.py --self-test
+OK: self-test — the generated settings validate and spell every glob as a rule
+OK: self-test — a policy path with a space survives the hook command's quoting
+OK: self-test — a narrowed matcher and a missing WebSearch rule are both refused
+SELF-TEST PASS
+python3 scripts/cleanroom/similarity.py --self-test
+OK: self-test — a missing calibration file is exit 2, not a comparison
+OK: self-test — (i) a renamed near-copy is flagged by structure (longest run 157 > 78)
+OK: self-test — the report quotes no reference-only identifier
+OK: self-test — (ii) an independent implementation of a same-shaped function passes (shared ratio 0.0)
+OK: self-test — (iii) a distinctive constant shared in another spelling is listed for review, and a review hit alone leaves the exit status 0
+OK: self-test — (iii) the same constant listed in --spec-allow is not listed for review
+OK: self-test — a shared generic number is not listed for review
+OK: self-test — a shared distinctive number is listed for review
+OK: self-test — a ratio limit >= 1.0 or a missing generic list is exit 2; the committed file runs
+OK: self-test — k is refused for an unfiring ratio limit or an unstable noise floor, and the smallest stable separating k is chosen
+OK: self-test — a sweep with no stable separating k is a calibration failure, not a pick
+OK: self-test — strings, nested comments and a quote char lex as one token each
+SELF-TEST PASS
+python3 scripts/cleanroom/provenance.py --self-test
+OK: self-test — a complete file is accepted
+OK: self-test — a file without `sources` is refused
+OK: self-test — `replaced` without the clean-room statement is refused
+OK: self-test — the same statement with `replaced` empty is accepted
+OK: self-test — a module path that does not exist is refused
+OK: self-test — an unknown source kind is refused
+SELF-TEST PASS
+python3 scripts/check-tracked-paths.py --self-test
+OK: self-test — all 35 unsafe name shapes are refused
+OK: self-test — all 19 ordinary paths are accepted
+OK: self-test — all 3 colliding pairs are refused
+OK: self-test — all 4 non-colliding sets are accepted
+SELF-TEST PASS
+python3 scripts/check-tracked-paths.py
+OK: none of the 18293 tracked paths begins a component with '-', contains a character that does not render as what it is (a control, an invisible format character, a line separator), begins or ends a component with whitespace, or collides with another tracked path under Unicode normalisation or case folding
+python3 scripts/check-test-shards.py --self-test
+OK: workspace shard wiring, all ASCII boundaries and unsupported-target refusals
+python3 scripts/check-test-shards.py
+OK: six feature-unified shards cover 43 workspace members
+python3 scripts/benchmark-acquire.py --self-test
+OK: self-test sample digest 921be79c6c6926b1ada6a93f5e5848c94d75f042c58a5cfb0e7128315a2da1bd
+OK: self-test — verify_digest accepts matching bytes
+OK: self-test — verify_digest rejects wrong bytes naming expected and actual
+OK: self-test — a verified cache entry is a cache hit with no fetch
+OK: self-test — a cache miss installs bytes that verify
+OK: self-test — a cached file that stops verifying is a hard failure, not a cache miss
+OK: self-test — corrupt cache bytes are quarantined, not deleted or overwritten
+OK: self-test — wrong fetched bytes are rejected before installation
+OK: self-test — unverified fetched bytes never reach the cached name
+OK: self-test — right size with wrong content still fails the digest
+OK: self-test — bytes matching sha256 but not the publisher's md5 are refused
+OK: self-test — an md5 mismatch is refused and nothing is installed
+OK: self-test — the licensing posture sentence is derived from the pins (2 carry no licence grant at all, 2 are citation-ware with no redistribution grant)
+OK: self-test — a cached entry whose publisher md5 disagrees is refused, not reported OK
+OK: self-test — a cached md5 mismatch is quarantined and nothing is refetched
+OK: self-test — 25 workload pin name(s) are well formed and unique
+OK: self-test — all 4 digest pin(s) are 64 lowercase hex characters
+OK: self-test — an absent workload pin exits 2 and says which name was asked for
+OK: self-test — a recorded pin exits 0 and prints only its value
+OK: self-test — all 20 answer pin(s) are decimal counts
+OK: self-test — all 20 answer pin(s) are classified, so a new workload family is a failure to classify rather than a silent pass
+OK: self-test — the 20 per-query pins sum to 434748, matching the aggregate pin
+OK: self-test — every version-keyed pin names the workspace version (3.0.1)
+OK: self-test — the LUBM published-query count is pinned (14)
+OK: self-test — the template count and every dataset row pin are positive and pinned
+OK: self-test — the git-visibility matcher flags the cache tree and nothing else
+OK: self-test — all 4 pins are well formed and uniquely named
+OK: self-test — select_artifacts(None) selects every pinned artifact
+OK: self-test — select_artifacts selects a single named artifact (queries-sparql.txt)
+OK: self-test — select_artifacts follows ARTIFACTS order and de-duplicates a repeated name
+OK: self-test — select_artifacts refuses an unknown name, naming it and listing valid names
+OK: self-test — a valid --only name still works immediately after a refusal
+OK: self-test — select_artifacts refuses a mix of one known and one unknown name
+SELF-TEST PASS
+python3 scripts/watdiv-queries.py --offline-self-test
+  candidates cache at /opt/purrdf-508-qualification/target/gate-scratch/tmppq5ozeq1/tampered.tsv no longer digests to what its header records; rescraping rather than trusting it. the bytes that failed are held at /opt/purrdf-508-qualification/target/gate-scratch/tmppq5ozeq1/tampered.tsv.mismatched
+OK: splitmix64 matches its published reference vector for 0
+OK: the fixture query set at seed 0 reproduces its pinned digest (e377b94c32559233…)
+OK: two builds at one seed agree byte for byte
+OK: a different seed is a different workload, not the same one
+OK: a template with no mapping is seed-independent
+OK: every index of a 7-candidate pool is reachable (saw 7/7)
+OK: every draw at a half-rejecting count is still in range
+OK: the rejection retry path is taken at a half-rejecting count (97 of 200)
+OK: a pool whose reject window is 2 out of 2**64 never retries (0 of 200 retried)
+OK: the retry figure is a measurement, not the sample size (97 < 200)
+OK: the retry stride is odd (0x9e3779b97f4a7c15)
+OK: a freshly written candidates cache round-trips exactly
+OK: a cache taken from a different dataset is a miss
+OK: a cache whose rows are in another order reloads canonically, so the order is a property of this program rather than of a file under target/
+OK: a cache under an older header version is a miss even when everything else about it is well formed
+OK: a candidates cache whose body was edited is a miss, not a hit
+OK: a cache whose body was edited is set aside as evidence rather than simply overwritten by the rescrape
+OK: and it is out of the way, so the rescrape writes a clean cache rather than reading the edited one again
+OK: a concurrent run's in-flight scratch survives the sweep, so its os.replace does not fail with a bare FileNotFoundError
+OK: scratch older than the stated threshold is still swept, so a killed run does not leave files accumulating unreported
+OK: and the cache was written while both of those held, so neither check is satisfied by a function that did nothing
+OK: a legal body is accepted -- declared prefixes only
+OK: a legal body is accepted -- a colon inside a quoted literal
+OK: a legal body is accepted -- escaped quotes wrapping a colon
+OK: a legal body is accepted -- a long literal wrapping a colon
+OK: a legal body is accepted -- a colon inside an IRI path
+OK: a legal body is accepted -- a real substituted WatDiv IRI
+OK: an undeclared prefix is refused, naming the prefix
+OK: an undeclared prefix beside an IRI is refused, naming the prefix
+OK: an undeclared prefix after a long literal is refused, naming the prefix
+OK: a well-formed census parses to its declared counts (got {'wsdbm:User': 100, 'wsdbm:City': 7})
+OK: a missing census is refused
+OK: a census with no leading type count is refused
+OK: a census declaring more rows than it holds is refused
+OK: a census row the parser cannot read is refused, quoting it
+OK: a directory holding fewer than 20 templates is refused
+OK: a templates path that is not a directory is refused
+OK: this script's EXPECTED_TEMPLATES (20) equals the pinned count (20)
+OFFLINE SELF-TEST PASS
+python3 scripts/lubm-queries.py --offline-self-test
+OK: prose naming 'Query 11, 12 and 13' does not split a block (got [1, 2])
+OK: the fixture OPENS on the prose line the split must survive, not merely contains it
+OK: projection commas are removed (got 'SELECT ?X ?Y')
+OK: the projection keeps both variables in order (got ['?X', '?Y'])
+OK: a queries file that is not in the cache is refused, naming the fetch step
+OK: a file holding fewer than 14 queries is refused, naming the count
+OK: this script's PUBLISHED_QUERIES (14) equals the pinned count (14)
+OFFLINE SELF-TEST PASS
+python3 crates/text/tests/reference/bm25f.py --check
+16 exact BM25F reference vectors verified

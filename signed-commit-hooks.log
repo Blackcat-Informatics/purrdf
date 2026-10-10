@@ -1,0 +1,80 @@
+OK: non-Rust ratchet: 3 changed non-Rust path(s) in the staged index against 3b6ec4d9f769 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'crates/text/src/fixed.rs'.
+Recorded resolution for 'crates/text/src/index.rs'.
+Recorded resolution for 'crates/text/src/ranking.rs'.
+Recorded resolution for 'crates/text/src/relation.rs'.
+Recorded resolution for 'crates/text/src/score.rs'.
+[paudley/508-sparql-eval-complete-bounded-workspace c3171c015] Admit complete operational SPARQL storage before allocation
+ 447 files changed, 101670 insertions(+), 27324 deletions(-)
+ create mode 100644 crates/cdt/src/memory.rs
+ create mode 100644 crates/datalog/src/admission.rs
+ create mode 100644 crates/datalog/tests/never_derive.rs
+ create mode 100644 crates/iri/unicode/16.0.0/UnicodeData.txt
+ create mode 100644 crates/iri/unicode/17.0.0/SentenceBreakProperty.txt
+ create mode 100644 crates/iri/unicode/17.0.0/SentenceBreakTest.txt
+ create mode 100644 crates/lex/src/allocation.rs
+ create mode 100644 crates/lex/src/allocation/boxed.rs
+ create mode 100644 crates/lex/src/allocation/shared.rs
+ create mode 100644 crates/lex/src/allocation/text.rs
+ create mode 100644 crates/lex/src/unicode/case_tables.rs
+ create mode 100644 crates/lex/src/unicode/casing.rs
+ create mode 100644 crates/mime/Cargo.toml
+ create mode 100644 crates/mime/SPEC.md
+ create mode 100644 crates/mime/examples/gen_serialized_corpus.rs
+ create mode 100644 crates/mime/licenses/CC-BY-4.0.txt
+ create mode 100644 crates/mime/licenses/LICENSE-APACHE
+ create mode 100644 crates/mime/licenses/LICENSE-MIT
+ create mode 100644 crates/mime/licenses/LICENSE-MULAN
+ create mode 100644 crates/mime/licenses/NOTICE.txt
+ create mode 100644 crates/mime/licenses/inventory.json
+ create mode 100644 crates/mime/src/decode.rs
+ create mode 100644 crates/mime/src/error.rs
+ create mode 100644 crates/mime/src/lib.rs
+ create mode 100644 crates/mime/src/model.rs
+ create mode 100644 crates/mime/src/parse.rs
+ create mode 100644 crates/mime/src/profile.rs
+ create mode 100644 crates/mime/src/project.rs
+ create mode 100644 crates/mime/src/transfer.rs
+ create mode 100644 crates/mime/tests/corpus/cpython/LICENSES/Python-2.0.txt
+ create mode 100644 crates/mime/tests/corpus/cpython/PROVENANCE.md
+ create mode 100644 crates/mime/tests/corpus/cpython/REUSE.toml
+ create mode 100644 crates/mime/tests/corpus/cpython/msg_01.txt
+ create mode 100644 crates/mime/tests/corpus/cpython/msg_02.txt
+ create mode 100644 crates/mime/tests/golden/serialized-corpus.sha256
+ create mode 100644 crates/mime/tests/lossless.rs
+ create mode 100644 crates/mime/tests/support/corpus.rs
+ create mode 100644 crates/rdf-core/src/cover/emit.rs
+ create mode 100644 crates/rdf-core/src/xsd_regex/xpath/compatibility.rs
+ create mode 100644 crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs
+ create mode 100644 crates/rdf-core/tests/byte_cover.rs
+ create mode 100644 crates/rdf-core/tests/cdt_blank_storage.rs
+ create mode 100644 crates/rdf-core/tests/native_regex_storage.rs
+ create mode 100644 crates/rdf-core/tests/shared_owned_control.rs
+ create mode 100644 crates/retrieval/src/candidate.rs
+ create mode 100644 crates/retrieval/src/union.rs
+ create mode 100644 crates/retrieval/tests/candidate_union.rs
+ create mode 100644 crates/sparql-algebra/src/parser/table.rs
+ create mode 100644 crates/sparql-algebra/tests/allocation_free_drop.rs
+ create mode 100644 crates/sparql-algebra/tests/lexer_owned_admission.rs
+ create mode 100644 crates/sparql-eval/src/composite_value.rs
+ create mode 100644 crates/sparql-eval/src/modifier/owners.rs
+ create mode 100644 crates/sparql-eval/src/native_numeric.rs
+ create mode 100644 crates/sparql-eval/src/parsed_value.rs
+ create mode 100644 crates/sparql-eval/src/retained.rs
+ create mode 100644 crates/sparql-eval/src/workspace.rs
+ create mode 100644 crates/sparql-eval/tests/cdt_owned_admission.rs
+ create mode 100644 crates/sparql-eval/tests/contextual_lowercase.rs
+ create mode 100644 crates/sparql-eval/tests/correlated_owned_admission.rs
+ create mode 100644 crates/sparql-eval/tests/custom_aggregate_ownership.rs
+ create mode 100644 crates/sparql-eval/tests/diagnostic_owned_admission.rs
+ create mode 100644 crates/sparql-eval/tests/expr_vm_owned_strings.rs
+ create mode 100644 crates/sparql-eval/tests/numeric_aggregate_ownership.rs
+ create mode 100644 crates/text/src/query_workspace.rs
+ create mode 100644 crates/text/src/unicode/sentence.rs
+ create mode 100644 crates/text/tests/bounded_text_focus.rs
+ create mode 100644 crates/text/tests/sentence_borrowed.rs
+ create mode 100644 crates/text/tests/support/ranking_oracle.rs
+ create mode 100644 crates/text/tests/support/sentence_cases.rs
+ create mode 100644 crates/text/tests/support/unrestricted_ranking_cases.rs
+ create mode 100644 crates/text/tests/unrestricted_ranking.rs
+ create mode 100644 scripts/conformance-frozen/mime-cpython.sha256

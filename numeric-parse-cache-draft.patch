@@ -1,0 +1,1018 @@
+diff --git a/crates/xsd/src/bigint/scratch.rs b/crates/xsd/src/bigint/scratch.rs
+--- a/crates/xsd/src/bigint/scratch.rs
++++ b/crates/xsd/src/bigint/scratch.rs
+@@ -33,6 +33,8 @@
+     },
+     /// Arena sizing overflows the platform's addressable storage.
+     SizeOverflow,
++    /// The allocator refused an explicitly fallible native destination.
++    AllocationFailed,
+ }
+ 
+ impl fmt::Display for LimbScratchError {
+@@ -57,6 +59,7 @@
+                 "cannot replace integer scratch while {held_destinations} of {destinations} destinations are held"
+             ),
+             Self::SizeOverflow => f.write_str("integer scratch sizing overflow"),
++            Self::AllocationFailed => f.write_str("integer destination allocation failed"),
+         }
+     }
+ }
+@@ -249,6 +252,11 @@
+ pub(crate) trait Allocate {
+     fn destination(&self, capacity: usize, length: usize) -> Result<Mag, LimbScratchError>;
+ 
++    fn push(&self, destination: &mut Mag, word: u64) -> Result<(), LimbScratchError> {
++        destination.push(word);
++        Ok(())
++    }
++
+     fn copy(&self, words: &[u64]) -> Result<Mag, LimbScratchError> {
+         let mut result = self.destination(words.len(), words.len())?;
+         result.copy_from_slice(words);
+@@ -271,6 +279,46 @@
+     }
+ }
+ 
++pub(crate) struct Fallible;
++impl Allocate for Fallible {
++    fn destination(&self, capacity: usize, length: usize) -> Result<Mag, LimbScratchError> {
++        if length > capacity { return Err(LimbScratchError::SizeOverflow); }
++        std::alloc::Layout::array::<u64>(capacity).map_err(|_| LimbScratchError::SizeOverflow)?;
++        if capacity <= 4 && length <= 3 {
++            let mut result = Mag::new();
++            result.resize(length, 0);
++            return Ok(result);
++        }
++        let mut words = Vec::new();
++        words.try_reserve_exact(capacity).map_err(|_| LimbScratchError::AllocationFailed)?;
++        words.resize(length, 0);
++        Ok(Mag::Heap(words))
++    }
++
++    fn push(&self, destination: &mut Mag, word: u64) -> Result<(), LimbScratchError> {
++        match destination {
++            Mag::Inline { words, length } if length.get() == 4 => {
++                let mut heap = Vec::new();
++                heap.try_reserve_exact(4).map_err(|_| LimbScratchError::AllocationFailed)?;
++                heap.extend_from_slice(words);
++                heap.push(word);
++                *destination = Mag::Heap(heap);
++            }
++            Mag::Heap(words) => {
++                if words.len() == words.capacity() {
++                    words.try_reserve_exact(1).map_err(|_| LimbScratchError::AllocationFailed)?;
++                }
++                words.push(word);
++            }
++            Mag::Inline { .. } => destination.push(word),
++            Mag::Shared(_) | Mag::Pooled(_) => {
++                unreachable!("fallible parse destinations are fresh inline or heap magnitudes");
++            }
++        }
++        Ok(())
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::{LimbScratch, LimbScratchError};
+diff --git a/crates/xsd/src/bigint.rs b/crates/xsd/src/bigint.rs
+--- a/crates/xsd/src/bigint.rs
++++ b/crates/xsd/src/bigint.rs
+@@ -248,11 +248,11 @@
+     let mut carry = u128::from(addend);
+     for &limb in a {
+         let cur = u128::from(limb) * u128::from(multiplier) + carry;
+-        out.push(cur as u64);
++        storage.push(&mut out, cur as u64)?;
+         carry = cur >> 64;
+     }
+     while carry != 0 {
+-        out.push(carry as u64);
++        storage.push(&mut out, carry as u64)?;
+         carry >>= 64;
+     }
+     mag_trim(&mut out);
+@@ -550,30 +550,29 @@
+ /// Accumulates a run of ASCII digit bytes into a magnitude.
+ ///
+ /// The caller must have already established that every byte is an ASCII digit.
+-fn mag_from_digit_bytes(digits: impl Iterator<Item = u8>) -> Option<Mag> {
++fn mag_from_digit_bytes(
++    digits: impl Iterator<Item = u8>,
++    storage: &impl Allocate,
++) -> Result<Option<Mag>, LimbScratchError> {
+     let mut acc = Mag::new();
+     let mut any = false;
+     let mut chunk_value = 0u64;
+     let mut chunk_len = 0usize;
+     for byte in digits {
+-        if !byte.is_ascii_digit() {
+-            return None;
+-        }
++        if !byte.is_ascii_digit() { return Ok(None); }
+         any = true;
+         chunk_value = chunk_value * 10 + u64::from(byte - b'0');
+         chunk_len += 1;
+         if chunk_len == DECIMAL_CHUNK {
+-            acc = mag_mul_small_add(&acc, CHUNK_BASE, chunk_value, &Unbounded)
+-                .expect("unbounded integer storage");
++            acc = mag_mul_small_add(&acc, CHUNK_BASE, chunk_value, storage)?;
+             chunk_value = 0;
+             chunk_len = 0;
+         }
+     }
+     if chunk_len > 0 {
+-        acc = mag_mul_small_add(&acc, POW10_U64[chunk_len], chunk_value, &Unbounded)
+-            .expect("unbounded integer storage");
++        acc = mag_mul_small_add(&acc, POW10_U64[chunk_len], chunk_value, storage)?;
+     }
+-    any.then_some(acc)
++    Ok(any.then_some(acc))
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -1193,9 +1192,32 @@
+     /// Parses a nonempty sequence of ASCII digits without allocating a string.
+     /// Sign and separators are refused; leading zeros are accepted.
+     pub fn from_decimal_bytes(digits: impl Iterator<Item = u8>) -> Option<Self> {
+-        Some(Self::from_parts(false, mag_from_digit_bytes(digits)?))
++        Self::from_decimal_bytes_using(digits, false, &Unbounded)
++            .expect("unbounded integer storage")
+     }
+ 
++    /// Parse decimal digit bytes with fallible owned destinations. A sign flag
++    /// consumes the resulting magnitude, so a negative input never clones it.
++    /// Invalid digits return None, separately from physical storage refusal.
++    ///
++    /// # Errors
++    /// Returns checked layout or allocator refusal without an infallible fallback.
++    pub fn try_from_decimal_bytes(
++        digits: impl Iterator<Item = u8>,
++        negative: bool,
++    ) -> Result<Option<Self>, LimbScratchError> {
++        Self::from_decimal_bytes_using(digits, negative, &scratch::Fallible)
++    }
++
++    pub(crate) fn from_decimal_bytes_using(
++        digits: impl Iterator<Item = u8>,
++        negative: bool,
++        storage: &impl Allocate,
++    ) -> Result<Option<Self>, LimbScratchError> {
++        mag_from_digit_bytes(digits, storage)
++            .map(|magnitude| magnitude.map(|magnitude| Self::from_parts(negative, magnitude)))
++    }
++
+     /// Builds a non-negative integer from every `u128` magnitude.
+     #[must_use]
+     pub fn from_u128(value: u128) -> Self {
+diff --git a/crates/xsd/src/exact/error.rs b/crates/xsd/src/exact/error.rs
+--- a/crates/xsd/src/exact/error.rs
++++ b/crates/xsd/src/exact/error.rs
+@@ -154,3 +154,64 @@
+ }
+ 
+ impl std::error::Error for ExactError {}
++
++/// Native parse classification separate from physical destination refusal.
++/// It borrows no owned lexical diagnostic, so failure reporting can remain
++/// allocation-free after an operational workspace refuses storage.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum ExactParseError {
++    /// Invalid lexical text; a resident public parser may attach its text.
++    InvalidLexical {
++        /// Value-space lexical kind.
++        kind: ExactKind,
++        /// Stable lexical reason.
++        reason: &'static str,
++    },
++    /// Original decimal lexical scale exceeds its exact representation.
++    ScaleOverflow,
++    /// Native physical destination could not be allocated.
++    Storage(crate::bigint::LimbScratchError),
++}
++
++impl ExactParseError {
++    /// Value-space F&O code; physical storage refusal has none.
++    #[must_use]
++    pub const fn code(&self) -> Option<ErrorCode> {
++        match self {
++            Self::InvalidLexical { .. } => Some(ErrorCode::Forg0001),
++            Self::ScaleOverflow => Some(ErrorCode::Foar0002),
++            Self::Storage(_) => None,
++        }
++    }
++
++    pub(crate) fn into_value_error(
++        self, lexical: &str,
++    ) -> Result<ExactError, crate::bigint::LimbScratchError> {
++        match self {
++            Self::InvalidLexical { kind, reason } => Ok(ExactError::invalid(lexical, kind, reason)),
++            Self::ScaleOverflow => Ok(ExactError::ScaleOverflow),
++            Self::Storage(error) => Err(error),
++        }
++    }
++}
++
++impl fmt::Display for ExactParseError {
++    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        match self {
++            Self::InvalidLexical { kind, reason } => {
++                write!(formatter, "invalid {} lexical: {reason}", kind.name())
++            }
++            Self::ScaleOverflow => formatter.write_str("decimal scale exceeds u32::MAX digits"),
++            Self::Storage(error) => fmt::Display::fmt(error, formatter),
++        }
++    }
++}
++
++impl std::error::Error for ExactParseError {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
++        match self {
++            Self::Storage(error) => Some(error),
++            _ => None,
++        }
++    }
++}
+diff --git a/crates/xsd/src/exact/mod.rs b/crates/xsd/src/exact/mod.rs
+--- a/crates/xsd/src/exact/mod.rs
++++ b/crates/xsd/src/exact/mod.rs
+@@ -102,7 +102,7 @@
+ 
+ pub use cost::Cost;
+ pub use decimal::Decimal;
+-pub use error::{BoundedTarget, ExactError, ExactKind};
++pub use error::{BoundedTarget, ExactError, ExactKind, ExactParseError};
+ pub use integer::Integer;
+ pub use rational::Rational;
+ pub use rounding::{DivisionPolicy, DivisionPolicyError, Rounding};
+diff --git a/crates/xsd/src/exact/integer.rs b/crates/xsd/src/exact/integer.rs
+--- a/crates/xsd/src/exact/integer.rs
++++ b/crates/xsd/src/exact/integer.rs
+@@ -444,6 +444,41 @@
+     }
+ }
+ 
++
++impl Integer {
++    /// Read an exact integer with fallible native limb destinations.
++    ///
++    /// # Errors
++    /// Distinguishes borrowed lexical classification from physical refusal.
++    pub fn try_from_lexical(lexical: &str) -> Result<Self, super::ExactParseError> {
++        Self::parse_with_storage(lexical, &crate::bigint::scratch::Fallible)
++    }
++
++    fn parse_with_storage(
++        lexical: &str,
++        storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, super::ExactParseError> {
++        if !crate::numeric::is_integer_lexical(lexical) {
++            return Err(super::ExactParseError::InvalidLexical {
++                kind: ExactKind::Integer,
++                reason: "expected an optional sign then digits",
++            });
++        }
++        let digits = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
++        if digits.len() <= 38 && let Ok(value) = lexical.parse::<i128>() {
++            return Ok(Self::from_i128(value));
++        }
++        let value = BigInt::from_decimal_bytes_using(
++            digits.bytes(), lexical.starts_with('-'), storage,
++        ).map_err(super::ExactParseError::Storage)?
++            .ok_or(super::ExactParseError::InvalidLexical {
++                kind: ExactKind::Integer,
++                reason: "expected an optional sign then digits",
++            })?;
++        Ok(Self::from_bigint(value))
++    }
++}
++
+ impl FromStr for Integer {
+     type Err = ExactError;
+     /// Parse the `xsd:integer` lexical space (XSD 1.1 Part 2 §3.4.13.1): an
+@@ -457,30 +492,8 @@
+     ///
+     /// [`ExactError::InvalidLexical`] for text outside the lexical space.
+     fn from_str(lexical: &str) -> Result<Self, ExactError> {
+-        if !crate::numeric::is_integer_lexical(lexical) {
+-            return Err(ExactError::invalid(
+-                lexical,
+-                ExactKind::Integer,
+-                "expected an optional sign then digits",
+-            ));
+-        }
+-        // Up to 38 digits always fits i128; the machine parse is the fast path.
+-        let body = lexical
+-            .strip_prefix(['+', '-'])
+-            .map_or(lexical.len(), str::len);
+-        if body <= 38
+-            && let Ok(value) = lexical.parse::<i128>()
+-        {
+-            return Ok(Self::from_i128(value));
+-        }
+-        let value = BigInt::from_digits(lexical).ok_or_else(|| {
+-            ExactError::invalid(
+-                lexical,
+-                ExactKind::Integer,
+-                "expected an optional sign then digits",
+-            )
+-        })?;
+-        Ok(Self::from_bigint(value))
++        Self::parse_with_storage(lexical, &crate::bigint::scratch::Unbounded)
++            .map_err(|error| error.into_value_error(lexical).expect("unbounded integer storage"))
+     }
+ }
+ 
+diff --git a/crates/xsd/src/exact/decimal.rs b/crates/xsd/src/exact/decimal.rs
+--- a/crates/xsd/src/exact/decimal.rs
++++ b/crates/xsd/src/exact/decimal.rs
+@@ -932,6 +932,57 @@
+     }
+ }
+ 
++
++impl Decimal {
++    /// Read an exact decimal with fallible native limb destinations.
++    ///
++    /// # Errors
++    /// Distinguishes borrowed lexical/scale refusal from physical allocation.
++    pub fn try_from_lexical(lexical: &str) -> Result<Self, super::ExactParseError> {
++        Self::parse_with_storage(lexical, &crate::bigint::scratch::Fallible)
++    }
++
++    fn parse_with_storage(
++        lexical: &str,
++        storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, super::ExactParseError> {
++        if !crate::numeric::is_decimal_lexical(lexical) {
++            return Err(super::ExactParseError::InvalidLexical {
++                kind: ExactKind::Decimal,
++                reason: "expected an optional sign then digits with at most one '.'",
++            });
++        }
++        let negative = lexical.starts_with('-');
++        let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
++        let (whole, fraction) = body.split_once('.').unwrap_or((body, ""));
++        // Check the original lexical scale before reducing it. Fractional
++        // trailing zeros are removed on borrowed slices, before coefficient
++        // conversion; no concatenated text or later big normalization is needed.
++        u32::try_from(fraction.len()).map_err(|_| super::ExactParseError::ScaleOverflow)?;
++        let fraction = fraction.trim_end_matches('0');
++        let scale = u32::try_from(fraction.len()).map_err(|_| super::ExactParseError::ScaleOverflow)?;
++        let whole = whole.trim_start_matches('0');
++        let digits = whole.len().checked_add(fraction.len()).ok_or(super::ExactParseError::ScaleOverflow)?;
++        let unscaled = if digits <= usize::try_from(MAX_I128_POW10).expect("a small constant") {
++            let magnitude = whole.bytes().chain(fraction.bytes())
++                .fold(0_i128, |acc, digit| acc * 10 + i128::from(digit - b'0'));
++            Integer::from_i128(if negative { -magnitude } else { magnitude })
++        } else {
++            let magnitude = BigInt::from_decimal_bytes_using(
++                whole.bytes().chain(fraction.bytes()), negative, storage,
++            ).map_err(super::ExactParseError::Storage)?
++                .expect("validated as a decimal lexical");
++            Integer::from_bigint(magnitude)
++        };
++        if unscaled.is_zero() {
++            return Ok(Self::ZERO);
++        }
++        // A nonzero coefficient at nonzero scale ends in the last digit of
++        // the trimmed fraction, which is nonzero. These parts are canonical.
++        Ok(Self { unscaled, scale })
++    }
++}
++
+ impl FromStr for Decimal {
+     type Err = ExactError;
+     /// Parse the `xsd:decimal` lexical space (XSD 1.1 Part 2 §3.3.3.1) of any
+@@ -945,39 +996,8 @@
+     /// [`ExactError::InvalidLexical`] for text outside the lexical space;
+     /// [`ExactError::ScaleOverflow`] for more than `u32::MAX` fractional digits.
+     fn from_str(lexical: &str) -> Result<Self, ExactError> {
+-        if !crate::numeric::is_decimal_lexical(lexical) {
+-            return Err(ExactError::invalid(
+-                lexical,
+-                ExactKind::Decimal,
+-                "expected an optional sign then digits with at most one '.'",
+-            ));
+-        }
+-        let negative = lexical.starts_with('-');
+-        let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
+-        let (whole, fraction) = body.split_once('.').unwrap_or((body, ""));
+-        let scale = u32::try_from(fraction.len()).map_err(|_| ExactError::ScaleOverflow)?;
+-        let whole = whole.trim_start_matches('0');
+-        let unscaled = if whole.len() + fraction.len()
+-            <= usize::try_from(MAX_I128_POW10).expect("a small constant")
+-        {
+-            // At most 38 digits: the coefficient is an i128, read in one pass.
+-            let magnitude = whole
+-                .bytes()
+-                .chain(fraction.bytes())
+-                .fold(0_i128, |acc, digit| acc * 10 + i128::from(digit - b'0'));
+-            Integer::from_i128(if negative { -magnitude } else { magnitude })
+-        } else {
+-            let mut digits = String::with_capacity(whole.len() + fraction.len() + 1);
+-            if negative {
+-                digits.push('-');
+-            }
+-            digits.push_str(whole);
+-            digits.push_str(fraction);
+-            Integer::from_bigint(
+-                BigInt::from_digits(&digits).expect("validated as a decimal lexical"),
+-            )
+-        };
+-        Ok(Self::new(unscaled, scale))
++        Self::parse_with_storage(lexical, &crate::bigint::scratch::Unbounded)
++            .map_err(|error| error.into_value_error(lexical).expect("unbounded integer storage"))
+     }
+ }
+ 
+diff --git a/crates/xsd/src/numeric.rs b/crates/xsd/src/numeric.rs
+--- a/crates/xsd/src/numeric.rs
++++ b/crates/xsd/src/numeric.rs
+@@ -484,32 +484,21 @@
+ /// This is the unified entry point for all integer-family datatypes; `parse` in
+ /// `value.rs` routes every integer-family IRI through here.
+ pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128, XsdError> {
+-    // First, parse as an unconstrained integer (which may itself fail with
+-    // InvalidLexical for malformed input, or OutOfRange for beyond-i128).
+-    // We call parse_integer but report the error under `datatype` for non-Integer
+-    // subtypes, so callers see the correct IRI in the error.
++    read_integer_typed(lexical, datatype).map_err(|error| error.owned(datatype, lexical))
++}
++
++pub(crate) fn read_integer_typed(
++    lexical: &str, datatype: XsdDatatype,
++) -> Result<i128, NumericReadError> {
+     if !is_integer_lexical(lexical) {
+-        return Err(XsdError::invalid(
+-            datatype,
+-            lexical,
+-            "expected an optional sign then digits",
+-        ));
++        return Err(NumericReadError::Invalid("expected an optional sign then digits"));
+     }
+-    let value = lexical.parse::<i128>().map_err(|_| XsdError::OutOfRange {
+-        datatype,
+-        lexical: lexical.to_string(),
+-        reason: crate::value::reason::INTEGER_TOO_LARGE,
+-    })?;
+-
+-    // Now range-check against the datatype's inclusive bounds.
++    let value = lexical.parse::<i128>()
++        .map_err(|_| NumericReadError::OutOfRange(crate::value::reason::INTEGER_TOO_LARGE))?;
+     if let Some((min, max)) = datatype.integer_range()
+         && (value < min || value > max)
+     {
+-        return Err(XsdError::OutOfRange {
+-            datatype,
+-            lexical: lexical.to_string(),
+-            reason: crate::value::reason::OUTSIDE_DATATYPE,
+-        });
++        return Err(NumericReadError::OutOfRange(crate::value::reason::OUTSIDE_DATATYPE));
+     }
+     Ok(value)
+ }
+@@ -517,56 +506,55 @@
+ /// `xsd:decimal`: optional sign, digits with an optional single `.` (at least one
+ /// digit overall; `.5`, `1.`, `1.5`, `12` all valid).
+ pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
+-    let dt = XsdDatatype::Decimal;
++    read_decimal(s).map_err(|error| error.owned(XsdDatatype::Decimal, s))
++}
++
++/// A borrowed classification of the bounded numeric readers. Exact fallback
++/// and physical sizing inspect it without first allocating an owned diagnostic.
++pub(crate) enum NumericReadError {
++    Invalid(&'static str),
++    OutOfRange(&'static str),
++}
++
++impl NumericReadError {
++    pub(crate) fn owned(self, datatype: XsdDatatype, lexical: &str) -> XsdError {
++        match self {
++            Self::Invalid(reason) => XsdError::invalid(datatype, lexical, reason),
++            Self::OutOfRange(reason) => XsdError::OutOfRange {
++                datatype,
++                lexical: lexical.to_owned(),
++                reason,
++            },
++        }
++    }
++}
++
++pub(crate) fn read_decimal(s: &str) -> Result<Decimal, NumericReadError> {
+     let neg = s.starts_with('-');
+     let body = s.strip_prefix(['+', '-']).unwrap_or(s);
+-
+-    let (int_str, frac_str) = match body.split_once('.') {
+-        Some((i, f)) => (i, f),
+-        None => (body, ""),
+-    };
+-    // A second '.' can only live after the first one, i.e. inside `frac_str`:
+-    // one scan of the tail replaces the `contains` + `matches().count()` pair.
++    let (int_str, frac_str) = body.split_once('.').unwrap_or((body, ""));
+     if frac_str.contains('.') {
+-        return Err(XsdError::invalid(dt, s, "more than one decimal point"));
++        return Err(NumericReadError::Invalid("more than one decimal point"));
+     }
+     if int_str.is_empty() && frac_str.is_empty() {
+-        return Err(XsdError::invalid(dt, s, "no digits"));
++        return Err(NumericReadError::Invalid("no digits"));
+     }
+-    if !int_str.bytes().all(|b| b.is_ascii_digit()) || !frac_str.bytes().all(|b| b.is_ascii_digit())
++    if !int_str.bytes().all(|byte| byte.is_ascii_digit())
++        || !frac_str.bytes().all(|byte| byte.is_ascii_digit())
+     {
+-        return Err(XsdError::invalid(dt, s, "non-digit character"));
++        return Err(NumericReadError::Invalid("non-digit character"));
+     }
+     if frac_str.len() > usize::from(MAX_DECIMAL_SCALE) {
+-        return Err(XsdError::OutOfRange {
+-            datatype: dt,
+-            lexical: s.to_string(),
+-            reason: crate::value::reason::DECIMAL_TOO_PRECISE,
+-        });
++        return Err(NumericReadError::OutOfRange(crate::value::reason::DECIMAL_TOO_PRECISE));
+     }
+-
+-    let digits = format!("{int_str}{frac_str}");
+-    let digits_trimmed = digits.trim_start_matches('0');
+-    let out_of_range = || XsdError::OutOfRange {
+-        datatype: dt,
+-        lexical: s.to_string(),
+-        reason: crate::value::reason::INTEGER_TOO_LARGE,
+-    };
+-    // The magnitude is read unsigned so that `i128::MIN`, whose magnitude is one past
+-    // `i128::MAX`, is a mantissa like any other (it is the value `xsd:decimal` of the
+-    // integer `i128::MIN` holds, and its canonical lexical must read back).
+-    let magnitude = if digits_trimmed.is_empty() {
+-        0u128
+-    } else {
+-        digits_trimmed.parse::<u128>().map_err(|_| out_of_range())?
+-    };
++    let magnitude = int_str.bytes().chain(frac_str.bytes()).try_fold(0u128, |acc, digit| {
++        acc.checked_mul(10)?.checked_add(u128::from(digit - b'0'))
++    }).ok_or(NumericReadError::OutOfRange(crate::value::reason::INTEGER_TOO_LARGE))?;
+     let mantissa = if neg {
+         0i128.checked_sub_unsigned(magnitude)
+     } else {
+         i128::try_from(magnitude).ok()
+-    }
+-    .ok_or_else(out_of_range)?;
+-    // `frac_str.len() <= MAX_DECIMAL_SCALE <= u8::MAX`, so the cast cannot truncate.
++    }.ok_or(NumericReadError::OutOfRange(crate::value::reason::INTEGER_TOO_LARGE))?;
+     Ok(Decimal::from_parts(mantissa, frac_str.len() as u8))
+ }
+ 
+diff --git a/crates/xsd/src/exact/cost.rs b/crates/xsd/src/exact/cost.rs
+--- a/crates/xsd/src/exact/cost.rs
++++ b/crates/xsd/src/exact/cost.rs
+@@ -95,6 +95,137 @@
+     }
+ }
+ 
++
++/// Checked physical layout of the existing fallible native numeric parse.
++/// This is separate from governor fuel and never rounds an overflow down.
++#[derive(Debug, Clone, Copy)]
++pub struct NumericParseLayout {
++    peak_bytes: usize,
++    retained_bytes: usize,
++    invalid: bool,
++    error_code: Option<crate::ErrorCode>,
++}
++
++impl NumericParseLayout {
++    /// Temporary and resulting heap that can coexist during parsing.
++    #[must_use]
++    pub const fn peak_bytes(self) -> usize { self.peak_bytes }
++    /// Maximum retained magnitude payload, excluding the consumer's header.
++    #[must_use]
++    pub const fn retained_bytes(self) -> usize { self.retained_bytes }
++    /// A lexical/value-space refusal is already known, without owned text.
++    #[must_use]
++    pub const fn is_invalid(self) -> bool { self.invalid }
++    /// The known F&O code, if this layout represents a lexical refusal.
++    #[must_use]
++    pub const fn error_code(self) -> Option<crate::ErrorCode> { self.error_code }
++}
++
++fn inline_parse_layout() -> NumericParseLayout {
++    NumericParseLayout { peak_bytes: 0, retained_bytes: 0, invalid: false, error_code: None }
++}
++
++fn invalid_parse_layout(error_code: Option<crate::ErrorCode>) -> NumericParseLayout {
++    NumericParseLayout { peak_bytes: 0, retained_bytes: 0, invalid: true, error_code }
++}
++
++/// The two native decimal-chunk destinations. Each asks for previous len + 1;
++/// original and replacement buffers coexist. Three-limb magnitudes stay inline.
++fn magnitude_parse_layout(digits: usize) -> Result<NumericParseLayout, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    let digits = u64::try_from(digits).map_err(|_| SizeOverflow)?;
++    let limbs = limbs_for_digits(digits);
++    if limbs <= 3 { return Ok(inline_parse_layout()); }
++    let words = usize::try_from(limbs).map_err(|_| SizeOverflow)?
++        .checked_add(1).ok_or(SizeOverflow)?;
++    let retained_bytes = words.checked_mul(size_of::<u64>()).ok_or(SizeOverflow)?;
++    let peak_bytes = retained_bytes.checked_add(retained_bytes).ok_or(SizeOverflow)?;
++    Ok(NumericParseLayout { peak_bytes, retained_bytes, invalid: false, error_code: None })
++}
++
++/// Physical storage for the fallible native numeric reader
++/// [`crate::value::try_parse_numeric`]. Invalid classification is part of this
++/// plan; the caller must not invoke an owned-error parser for an invalid plan.
++/// Returns None for another datatype, whose native layout remains required.
++///
++/// # Errors
++/// Refuses checked layout overflow before the native parser allocates.
++pub fn numeric_parse_layout(
++    lexical: &str,
++    datatype: crate::XsdDatatype,
++    xsd10: bool,
++) -> Result<Option<NumericParseLayout>, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    use crate::numeric::NumericReadError;
++    use crate::{ErrorCode, XsdDatatype as D};
++    if datatype.is_integer_family() {
++        match crate::numeric::read_integer_typed(lexical, datatype) {
++            Ok(_) => return Ok(Some(inline_parse_layout())),
++            Err(NumericReadError::Invalid(_)) => {
++                return Ok(Some(invalid_parse_layout(Some(ErrorCode::Forg0001))));
++            }
++            Err(NumericReadError::OutOfRange(reason)) => {
++                if lexical.parse::<i128>().is_ok() {
++                    return Ok(Some(invalid_parse_layout(crate::value::reason::classify(datatype, reason))));
++                }
++            }
++        }
++        let negative = lexical.starts_with('-');
++        let accepted = match datatype {
++            D::Integer => true,
++            D::NonNegativeInteger | D::PositiveInteger => !negative,
++            D::NonPositiveInteger | D::NegativeInteger => negative,
++            _ => false,
++        };
++        if !accepted {
++            return Ok(Some(invalid_parse_layout(crate::value::reason::classify(
++                datatype, crate::value::reason::OUTSIDE_DATATYPE,
++            ))));
++        }
++        let digits = lexical.strip_prefix(['+', '-']).unwrap_or(lexical)
++            .trim_start_matches('0').len();
++        return magnitude_parse_layout(digits).map(Some);
++    }
++    match datatype {
++        D::Decimal => {
++            match crate::numeric::read_decimal(lexical) {
++                Ok(_) => return Ok(Some(inline_parse_layout())),
++                Err(NumericReadError::Invalid(_)) => {
++                    return Ok(Some(invalid_parse_layout(Some(ErrorCode::Forg0001))));
++                }
++                Err(NumericReadError::OutOfRange(_)) => {}
++            }
++            let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
++            let (whole, fraction) = body.split_once('.').unwrap_or((body, ""));
++            if u32::try_from(fraction.len()).is_err() {
++                return Ok(Some(invalid_parse_layout(Some(ErrorCode::Foar0002))));
++            }
++            let whole = whole.trim_start_matches('0');
++            let fraction = fraction.trim_end_matches('0');
++            let digits = if whole.is_empty() {
++                fraction.trim_start_matches('0').len()
++            } else {
++                whole.len().checked_add(fraction.len()).ok_or(SizeOverflow)?
++            };
++            magnitude_parse_layout(digits).map(Some)
++        }
++        D::Float | D::Double => {
++            let special = matches!(lexical, "INF" | "-INF" | "NaN")
++                || (!xsd10 && lexical == "+INF");
++            let letters = lexical.bytes()
++                .any(|byte| byte.is_ascii_alphabetic() && byte != b'e' && byte != b'E');
++            let valid = special || (!letters && match datatype {
++                D::Float => lexical.parse::<f32>().is_ok(),
++                _ => lexical.parse::<f64>().is_ok(),
++            });
++            Ok(Some(if valid { inline_parse_layout() } else {
++                invalid_parse_layout(Some(ErrorCode::Forg0001))
++            }))
++        }
++        _ => Ok(None),
++    }
++}
++
+ /// The cost of parsing a lexical form of `len` bytes into any exact value.
+ #[must_use]
+ pub const fn parse(len: u64) -> Cost {
+diff --git a/crates/xsd/src/value.rs b/crates/xsd/src/value.rs
+--- a/crates/xsd/src/value.rs
++++ b/crates/xsd/src/value.rs
+@@ -199,6 +199,20 @@
+         }
+     }
+ 
++    /// Checked heap retained by this value, read without decimal rendering.
++    #[must_use]
++    pub fn owned_heap_bytes(&self) -> Option<usize> {
++        match self {
++            Self::BigInteger { value, .. } => usize::try_from(value.heap_bytes()).ok(),
++            Self::BigDecimal(value) => usize::try_from(value.heap_bytes()).ok(),
++            Self::String(text) => Some(text.capacity()),
++            Self::Binary { bytes, .. } => Some(bytes.capacity()),
++            Self::Integer { .. } | Self::Decimal(_) | Self::Float(_) | Self::Double(_)
++            | Self::Boolean(_) | Self::DateTime(_) | Self::Date(_) | Self::Time(_)
++            | Self::Duration(_) | Self::Gregorian(_) => Some(0),
++        }
++    }
++
+     /// The canonical lexical form of this value (XSD canonical mapping).
+     ///
+     /// # Examples
+@@ -283,13 +297,13 @@
+             Err(error @ XsdError::OutOfRange { .. }) => parse_big_integer(lexical, datatype, error),
+             Err(error) => Err(error),
+         },
+-        D::Decimal => match crate::numeric::parse_decimal(lexical) {
++        D::Decimal => match crate::numeric::read_decimal(lexical) {
+             Ok(decimal) => Ok(XsdValue::Decimal(decimal)),
+-            Err(XsdError::OutOfRange { .. }) => lexical
++            Err(crate::numeric::NumericReadError::OutOfRange(_)) => lexical
+                 .parse::<exact::Decimal>()
+                 .map(XsdValue::from_exact_decimal)
+                 .map_err(XsdError::Exact),
+-            Err(error) => Err(error),
++            Err(error) => Err(error.owned(datatype, lexical)),
+         },
+         D::Float => crate::numeric::parse_float(lexical).map(XsdValue::Float),
+         D::Double => crate::numeric::parse_double(lexical).map(XsdValue::Double),
+@@ -397,6 +411,84 @@
+     }
+ }
+ 
++
++/// A native numeric lexical/value-space result that owns no error lexical.
++#[derive(Debug)]
++pub enum ParsedNumeric {
++    /// The numeric value was read successfully.
++    Value(XsdValue),
++    /// Ordinary F&O lexical/value-space refusal, separately from storage.
++    Invalid(Option<ErrorCode>),
++    /// Dispatch belongs to another native datatype, never an unsupported refusal.
++    OtherDatatype,
++}
++
++/// The existing numeric reader over fallible exact destinations. A caller
++/// admits the checked native NumericParseLayout before invoking this entry.
++///
++/// # Errors
++/// Physical allocation/layout refusal is returned independently of lexical
++/// classification and cannot be silently converted into an unbound answer.
++pub fn try_parse_numeric(
++    lexical: &str,
++    datatype: XsdDatatype,
++    xsd10: bool,
++) -> Result<ParsedNumeric, crate::bigint::LimbScratchError> {
++    use crate::numeric::NumericReadError;
++    let Some(layout) = exact::cost::numeric_parse_layout(lexical, datatype, xsd10)? else {
++        return Ok(ParsedNumeric::OtherDatatype);
++    };
++    if layout.is_invalid() {
++        return Ok(ParsedNumeric::Invalid(layout.error_code()));
++    }
++    let exact_result = |error: exact::ExactParseError| {
++        match error {
++            exact::ExactParseError::Storage(error) => Err(error),
++            other => Ok(ParsedNumeric::Invalid(other.code())),
++        }
++    };
++    if datatype.is_integer_family() {
++        return match crate::numeric::read_integer_typed(lexical, datatype) {
++            Ok(value) => Ok(ParsedNumeric::Value(XsdValue::Integer { value, datatype })),
++            Err(NumericReadError::Invalid(_)) => Ok(ParsedNumeric::Invalid(Some(ErrorCode::Forg0001))),
++            Err(NumericReadError::OutOfRange(reason)) => {
++                match exact::Integer::try_from_lexical(lexical) {
++                    Ok(value) if value.as_i128().is_some() => {
++                        Ok(ParsedNumeric::Invalid(reason::classify(datatype, reason)))
++                    }
++                    Ok(value) if datatype.admits_integer(&value) => {
++                        Ok(ParsedNumeric::Value(XsdValue::from_exact_integer(value, datatype)))
++                    }
++                    Ok(_) => Ok(ParsedNumeric::Invalid(
++                        reason::classify(datatype, reason::OUTSIDE_DATATYPE),
++                    )),
++                    Err(error) => exact_result(error),
++                }
++            }
++        };
++    }
++    match datatype {
++        XsdDatatype::Decimal => match crate::numeric::read_decimal(lexical) {
++            Ok(value) => Ok(ParsedNumeric::Value(XsdValue::Decimal(value))),
++            Err(NumericReadError::Invalid(_)) => Ok(ParsedNumeric::Invalid(Some(ErrorCode::Forg0001))),
++            Err(NumericReadError::OutOfRange(_)) => match exact::Decimal::try_from_lexical(lexical) {
++                Ok(value) => Ok(ParsedNumeric::Value(XsdValue::from_exact_decimal(value))),
++                Err(error) => exact_result(error),
++            },
++        },
++        XsdDatatype::Float | XsdDatatype::Double => {
++            // The allocation-free native layout has already classified this
++            // primitive branch as valid; no owned refusal is constructed.
++            let value = if xsd10 { parse_xsd10(lexical, datatype) } else { parse(lexical, datatype) };
++            Ok(match value {
++                Ok(value) => ParsedNumeric::Value(value),
++                Err(error) => ParsedNumeric::Invalid(error.code()),
++            })
++        }
++        _ => Ok(ParsedNumeric::OtherDatatype),
++    }
++}
++
+ /// A failure to map a lexical form into the XSD value space. Malformed input is a
+ /// hard error (never a silent default), per the project's no-optionality rule.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+diff --git a/crates/sparql-eval/src/parsed_value.rs b/crates/sparql-eval/src/parsed_value.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/sparql-eval/src/parsed_value.rs
+@@ -0,0 +1,178 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Query-owned immutable parsed values and their admitted lookup table.
++
++use std::hash::Hash;
++use std::ops::Deref;
++use std::sync::Arc;
++
++use hashbrown::HashTable;
++use purrdf_xsd::{XsdDatatype, XsdValue};
++
++use crate::{EvalError, WorkspaceAllocation, WorkspaceCapability};
++
++/// A nonnumeric datatype belongs to its native parser's separate layout.
++/// This is a dispatch result, never an unsupported-operation refusal.
++pub(crate) enum NumericParse {
++    OtherDatatype,
++    Value(ParsedValue),
++    Invalid(Option<purrdf_xsd::ErrorCode>),
++}
++
++#[derive(Debug)]
++struct ParsedPayload {
++    // Values die before their admission, including the last shared cache view.
++    value: XsdValue,
++    _allocation: WorkspaceAllocation,
++}
++
++#[derive(Debug)]
++enum ParsedStorage {
++    // Constructed only when the value owns no heap allocation.
++    Inline(XsdValue),
++    Shared(Arc<ParsedPayload>),
++}
++
++/// No raw extraction or independent lease clone is exposed. Numeric operators
++/// borrow the value while this carrier keeps its original capacity admitted.
++#[derive(Debug)]
++pub(crate) struct ParsedValue {
++    storage: ParsedStorage,
++}
++
++impl Clone for ParsedValue {
++    fn clone(&self) -> Self {
++        Self { storage: match &self.storage {
++            ParsedStorage::Inline(value) => ParsedStorage::Inline(value.clone()),
++            ParsedStorage::Shared(payload) => ParsedStorage::Shared(payload.clone()),
++        } }
++    }
++}
++
++impl Deref for ParsedValue {
++    type Target = XsdValue;
++
++    fn deref(&self) -> &Self::Target {
++        match &self.storage {
++            ParsedStorage::Inline(value) => value,
++            ParsedStorage::Shared(payload) => &payload.value,
++        }
++    }
++}
++
++impl ParsedValue {
++    /// Parse a numeric literal after native checked physical admission.
++    /// Datatype/lexical errors keep the previous unbound result; operational
++    /// admission errors return directly without constructing diagnostic text.
++    pub(crate) fn parse_numeric(
++        lexical: &str,
++        datatype: XsdDatatype,
++        xsd10: bool,
++        workspace: &WorkspaceCapability,
++    ) -> Result<NumericParse, EvalError> {
++        let Some(layout) = purrdf_xsd::exact::cost::numeric_parse_layout(
++            lexical, datatype, xsd10,
++        ).map_err(|_| EvalError::WorkspaceBoundOverflow)? else {
++            return Ok(NumericParse::OtherDatatype);
++        };
++        if layout.is_invalid() { return Ok(NumericParse::Invalid(layout.error_code())); }
++        let header = if layout.retained_bytes() == 0 { 0 } else {
++            crate::workspace::shared_layout::<ParsedPayload>()?
++        };
++        let peak = u64::try_from(layout.peak_bytes())
++            .map_err(|_| EvalError::WorkspaceBoundOverflow)?
++            .checked_add(header).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        // Known lexical refusal returns its code without owned diagnostic text.
++        // A true zero-heap parse also avoids allocating a workspace lease box.
++        let mut allocation = if peak == 0 { None } else { Some(workspace.charge(peak)?) };
++        let parsed = purrdf_xsd::value::try_parse_numeric(lexical, datatype, xsd10)
++            .map_err(|error| match error {
++                purrdf_xsd::bigint::LimbScratchError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
++                _ => EvalError::AllocationFailed { construct: "numeric parse destination" },
++            })?;
++        let value = match parsed {
++            purrdf_xsd::value::ParsedNumeric::Value(value) => value,
++            purrdf_xsd::value::ParsedNumeric::Invalid(code) => return Ok(NumericParse::Invalid(code)),
++            purrdf_xsd::value::ParsedNumeric::OtherDatatype => return Ok(NumericParse::OtherDatatype),
++        };
++        let bytes = value.owned_heap_bytes().ok_or(EvalError::WorkspaceBoundOverflow)?;
++        if bytes == 0 {
++            drop(allocation);
++            return Ok(NumericParse::Value(Self { storage: ParsedStorage::Inline(value) }));
++        }
++        if bytes > layout.retained_bytes() {
++            // A violated native certificate is a hard invariant failure,
++            // never a request to silently obtain extra unpriced storage.
++            return Err(EvalError::WorkspaceBoundOverflow);
++        }
++        let retained = u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?
++            .checked_add(header).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        let mut allocation = allocation.take().ok_or(EvalError::WorkspaceBoundOverflow)?;
++        allocation.resize(retained)?;
++        let payload = Arc::new(ParsedPayload { value, _allocation: allocation });
++        Ok(NumericParse::Value(Self { storage: ParsedStorage::Shared(payload) }))
++    }
++}
++
++/// Table capacity belongs to the cache; individual value carriers own their
++/// parsed payload. Old and replacement tables stay admitted during growth.
++#[derive(Debug)]
++pub(crate) struct ParsedCache<K> {
++    entries: HashTable<(K, Option<ParsedValue>)>,
++    _allocation: Option<WorkspaceAllocation>,
++}
++
++// Deriving Default would impose K: Default, though an empty table needs no key.
++impl<K> Default for ParsedCache<K> {
++    fn default() -> Self {
++        Self { entries: HashTable::new(), _allocation: None }
++    }
++}
++
++impl<K: Copy + Eq + Hash> ParsedCache<K> {
++    /// The outer option distinguishes a miss from cached malformed/opaque None.
++    pub(crate) fn get(&self, key: K) -> Option<Option<ParsedValue>> {
++        self.entries.find(purrdf_hash::fixed::hash_one(&key), |entry| entry.0 == key)
++            .map(|entry| entry.1.clone())
++    }
++
++    pub(crate) fn insert_admitted(
++        &mut self,
++        key: K,
++        value: Option<ParsedValue>,
++        workspace: &WorkspaceCapability,
++    ) -> Result<(), EvalError> {
++        let hash = purrdf_hash::fixed::hash_one(&key);
++        if self.entries.find(hash, |entry| entry.0 == key).is_some() {
++            return Ok(());
++        }
++        let needed = self.entries.len().checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        if needed > self.entries.capacity() {
++            let capacity = self.entries.capacity().checked_mul(2)
++                .ok_or(EvalError::WorkspaceBoundOverflow)?.max(needed);
++            let bytes = purrdf_core::hash::hash_table_allocation_bound::<(K, Option<ParsedValue>)>(capacity)
++                .ok_or(EvalError::WorkspaceBoundOverflow)?;
++            let allocation = workspace.charge(
++                u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
++            )?;
++            let mut entries = HashTable::new();
++            entries.try_reserve(capacity, |entry: &(K, Option<ParsedValue>)| {
++                purrdf_hash::fixed::hash_one(&entry.0)
++            }).map_err(|_| EvalError::AllocationFailed { construct: "parsed-value cache table" })?;
++            for (old_key, old_value) in self.entries.iter() {
++                entries.insert_unique(
++                    purrdf_hash::fixed::hash_one(old_key), (*old_key, old_value.clone()),
++                    |entry| purrdf_hash::fixed::hash_one(&entry.0),
++                );
++            }
++            // Assignment drops the old table before releasing its admission.
++            self.entries = entries;
++            self._allocation = Some(allocation);
++        }
++        self.entries.insert_unique(hash, (key, value), |entry| {
++            purrdf_hash::fixed::hash_one(&entry.0)
++        });
++        Ok(())
++    }
++}

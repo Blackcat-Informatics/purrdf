@@ -1,0 +1,696 @@
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt/src/limits.rs:69:
+ use alloc::vec::Vec;
+ 
+ use crate::error::CdtError;
+-use crate::memory::{Memory, StorageError};
+ #[cfg(test)]
+ use crate::memory::Resident;
++use crate::memory::{Memory, StorageError};
+ use crate::render::{key_lexical_len, try_term_lexical_len};
+ use crate::term::{CdtKey, CdtTerm};
+ 
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt/src/limits.rs:140:
+ /// value's whole element count for a nested composite, and the sum over its
+ /// components for a triple term. Iterative, with an explicit worklist.
+ 
+-
+ pub(crate) fn try_term_elements(
+     term: &CdtTerm,
+     memory: &mut Memory<'_>,
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt/src/limits.rs:245:
+     }
+     Ok(())
+ }
+-
+-
+ 
+ #[cfg(test)]
+ mod tests {
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt/src/render.rs:282:
+ /// A nested composite answers from its carried measure, so this costs the element's
+ /// own leaves and nothing below a composite.
+ 
+-
+ pub(crate) fn try_term_lexical_len(
+     term: &CdtTerm,
+     memory: &mut Memory<'_>,
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf/src/projections/dataset_description.rs:1212:
+         let reversed = project_construct_view(reordered.as_ref(), &config).expect("reordered");
+         assert_eq!(resident.input_records, 3);
+         assert_eq!(resident.output_records, 2);
+-        assert!(datasets_isomorphic(resident.dataset.as_ref(), reversed.dataset.as_ref()));
++        assert!(datasets_isomorphic(
++            resident.dataset.as_ref(),
++            reversed.dataset.as_ref()
++        ));
+ 
+         let bytes = PackBuilder::build_bytes(&source).expect("pack");
+         let view = PackView::from_bytes(&bytes).expect("pack view");
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf/src/projections/dataset_description.rs:1219:
+         let packed = project_construct_view(&view, &config).expect("packed");
+-        assert!(datasets_isomorphic(resident.dataset.as_ref(), packed.dataset.as_ref()));
++        assert!(datasets_isomorphic(
++            resident.dataset.as_ref(),
++            packed.dataset.as_ref()
++        ));
+         assert_eq!(resident.input_records, packed.input_records);
+         assert_eq!(resident.output_records, packed.output_records);
+     }
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/benches/../tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/benches/../tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/benches/../tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/benches/../tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/benches/../tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/benches/../tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/benches/../tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/benches/../tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/benches/../tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/src/governor/soundness.rs:1574:
+ 
+ use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, Variable};
+ 
+-#[cfg(test)]
+-use crate::{DetHashMap, DetHashSet};
+ use crate::parallel::function_is_builtin_stateful;
+ use crate::plan::{NodeId, PlanHandle, TreeKey};
+ use crate::solution::SchemaBuilder;
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/src/governor/soundness.rs:1582:
+ use crate::{AdmittedMap, AdmittedVec, EvalError, VarSchema, WorkspaceCapability};
++#[cfg(test)]
++use crate::{DetHashMap, DetHashSet};
+ 
+ /// Test oracles compare membership, independently of the native schema's
+ /// deterministic column order. Production VarSchema equality stays ordered.
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/construct_builder.rs:367:
+             .expect("native stack admission preserves its diagnostic code"),
+         other => panic!("a plan too tall for the publishing stack must be refused: {other:?}"),
+     };
+-    assert_eq!(
+-        code,
+-        purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
+-    );
++    assert_eq!(code, purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE);
+     assert_eq!(state.evidence(), before, "admission precedes governor work");
+     let output = target.freeze().expect("untouched destination");
+     assert_eq!(output.term_count(), 2);
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
+Diff in /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval/tests/support/mod.rs:20:
+ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+ 
+ use purrdf_core::{
+-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult,
+-    StopCause, TermValue,
++    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
+ };
+ use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
+ use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};

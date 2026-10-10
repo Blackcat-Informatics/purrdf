@@ -1,0 +1,84 @@
+#[cfg(test)]
+mod native_graph_birth_tests {
+    use super::*;
+
+    struct Grant { live: usize, limit: usize, peak: usize }
+    impl Admission for Grant {
+        fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+            if live > self.limit { return Err(StorageError::AdmissionFailed); }
+            self.live = live;
+            self.peak = self.peak.max(live);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn native_graph_refuses_before_the_first_arena_allocation() {
+        let mut grant = Grant { live: 0, limit: 0, peak: 0 };
+        let mut memory = Memory::new(&mut grant);
+        let mut builder = RdfDatasetBuilder::new();
+        assert_eq!(builder.intern_iri_with_memory("http://example.org/subject", &mut memory), Err(StorageError::AdmissionFailed));
+        assert_eq!(builder.interner.arena.capacity(), 0);
+        assert_eq!(builder.interner.terms.capacity(), 0);
+        assert_eq!(builder.interner.index.capacity(), 0);
+        assert_eq!(memory.live_bytes(), 0);
+    }
+
+    #[test]
+    fn native_freeze_preserves_rdf12_rows_and_original_grant_through_indexes() {
+        let mut resident = RdfDatasetBuilder::new();
+        let mut builder = RdfDatasetBuilder::new();
+        let mut grant = Grant { live: 0, limit: usize::MAX, peak: 0 };
+        let mut memory = Memory::new(&mut grant);
+        let mut ids = [TermId::from_index(0); 5];
+        let mut resident_ids = ids;
+        for (index, iri) in ["http://example.org/s", "http://example.org/p", "http://example.org/o", "http://example.org/r", "http://example.org/g"].into_iter().enumerate() {
+            ids[index] = builder.intern_iri_with_memory(iri, &mut memory).expect("native IRI");
+            resident_ids[index] = resident.intern_iri(iri);
+        }
+        let [s, p, o, r, g] = ids;
+        let [rs, rp, ro, rr, rg] = resident_ids;
+        let triple = builder.intern_triple_with_memory(s, p, o, &mut memory).expect("native triple");
+        let resident_triple = resident.intern_triple(rs, rp, ro);
+        builder.push_quad_with_memory(s, p, triple, Some(g), &mut memory).expect("native quad");
+        builder.push_reifier_in_graph_with_memory(r, triple, Some(g), &mut memory).expect("native reifier");
+        builder.push_annotation_in_graph_with_memory(r, p, o, Some(g), &mut memory).expect("native annotation");
+        resident.push_quad(rs, rp, resident_triple, Some(rg));
+        resident.push_reifier_in_graph(rr, resident_triple, Some(rg));
+        resident.push_annotation_in_graph(rr, rp, ro, Some(rg));
+        let resident = resident.freeze().expect("resident RDF 1.2 graph");
+        let mut graph = builder.freeze_with_memory(&mut memory).expect("native RDF 1.2 graph");
+        graph.warm_query_indexes_with_memory(&mut memory).expect("originally admitted query indexes");
+        assert_eq!(graph.rdf_row_count(), resident.rdf_row_count());
+        assert_eq!(graph.term_count(), resident.term_count());
+        assert_eq!(graph.named_graphs().collect::<Vec<_>>(), resident.named_graphs().collect::<Vec<_>>());
+        for index in 0..graph.term_count() {
+            let id = TermId::from_index(index as u32);
+            assert_eq!(graph.term_value(id), resident.term_value(id));
+        }
+        let live = memory.live_bytes();
+        assert!(live > 0);
+        graph.warm_query_indexes_with_memory(&mut memory).expect("warmed graph borrows the original indexes");
+        assert_eq!(memory.live_bytes(), live);
+        drop(graph);
+        memory.release_bytes(live).expect("graph dies before its original grant");
+        assert_eq!(memory.live_bytes(), 0);
+    }
+
+    #[test]
+    fn native_structural_failure_releases_builder_and_retains_only_the_diagnostic() {
+        let mut grant = Grant { live: 0, limit: usize::MAX, peak: 0 };
+        let mut memory = Memory::new(&mut grant);
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_literal_parts_with_memory("literal", None, None, None, &mut memory).expect("native literal");
+        let p = builder.intern_iri_with_memory("http://example.org/p", &mut memory).expect("native predicate");
+        builder.push_quad_with_memory(s, p, s, None, &mut memory).expect("native invalid row");
+        let NativeBuildError::Diagnostic(diagnostic) = builder.freeze_with_memory(&mut memory).expect_err("RDF 1.2 rejects a literal subject") else { panic!("expected original structural diagnostic"); };
+        assert_eq!(diagnostic.code, "rdf-ir-literal-subject");
+        assert_eq!(memory.live_bytes(), diagnostic.code.capacity() + diagnostic.message.capacity());
+        let bytes = memory.live_bytes();
+        drop(diagnostic);
+        memory.release_bytes(bytes).expect("diagnostic dies before its grant");
+        assert_eq!(memory.live_bytes(), 0);
+    }
+}

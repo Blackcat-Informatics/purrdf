@@ -1,0 +1,249 @@
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error: unnecessary qualification
+    --> crates/sparql-eval/src/expr.rs:2212:25
+     |
+2212 |     let mut seed_rows = crate::solution::RowsBuilder::new(&ctx.growth);
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+2212 -     let mut seed_rows = crate::solution::RowsBuilder::new(&ctx.growth);
+2212 +     let mut seed_rows = RowsBuilder::new(&ctx.growth);
+     |
+
+error: unused import: `Solution`
+   --> crates/sparql-eval/src/property_fn_eval.rs:105:23
+    |
+105 | use crate::solution::{Solution, SolutionSeq, VarSchema};
+    |                       ^^^^^^^^
+    |
+    = note: `-D unused-imports` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_imports)]`
+
+error: unused import: `Solution`
+  --> crates/sparql-eval/src/service_endpoints.rs:91:23
+   |
+91 | use crate::solution::{Solution, SolutionSeq, VarSchema};
+   |                       ^^^^^^^^
+
+error[E0599]: no associated function or constant named `default` found for struct `WorkspaceAllocation` in the current scope
+    --> crates/sparql-eval/src/modifier.rs:1363:66
+     |
+1363 |             components, _allocation: crate::WorkspaceAllocation::default(),
+     |                                                                  ^^^^^^^ associated function or constant not found in `WorkspaceAllocation`
+     |
+    ::: crates/sparql-eval/src/workspace.rs:261:1
+     |
+ 261 | pub struct WorkspaceAllocation {
+     | ------------------------------ associated function or constant `default` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following trait defines an item `default`, perhaps you need to implement it:
+             candidate #1: `std::default::Default`
+
+error[E0599]: no method named `pop` found for struct `AdmittedVec<project_admitted::Step<'_>>` in the current scope
+    --> crates/sparql-eval/src/modifier.rs:1464:34
+     |
+1464 |     while let Some(step) = steps.pop() {
+     |                                  ^^^ method not found in `AdmittedVec<project_admitted::Step<'_>>`
+     |
+    ::: crates/sparql-eval/src/workspace.rs:26:1
+     |
+  26 | pub struct AdmittedVec<T> {
+     | ------------------------- method `pop` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+note: `RankHeap` defines an item `pop`, perhaps you need to implement it
+    --> crates/sparql-eval/src/knn/metric.rs:375:1
+     |
+ 375 | trait RankHeap {
+     | ^^^^^^^^^^^^^^
+
+error[E0599]: no method named `pop` found for struct `AdmittedVec<SortKey<'_, ParsedValue>>` in the current scope
+    --> crates/sparql-eval/src/modifier.rs:1474:30
+     |
+1474 |                 let o = keys.pop().expect("a triple object's key is ready");
+     |                              ^^^ method not found in `AdmittedVec<SortKey<'_, ParsedValue>>`
+     |
+    ::: crates/sparql-eval/src/workspace.rs:26:1
+     |
+  26 | pub struct AdmittedVec<T> {
+     | ------------------------- method `pop` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+note: `RankHeap` defines an item `pop`, perhaps you need to implement it
+    --> crates/sparql-eval/src/knn/metric.rs:375:1
+     |
+ 375 | trait RankHeap {
+     | ^^^^^^^^^^^^^^
+
+error[E0599]: no method named `pop` found for struct `AdmittedVec<SortKey<'_, ParsedValue>>` in the current scope
+    --> crates/sparql-eval/src/modifier.rs:1475:30
+     |
+1475 |                 let p = keys.pop().expect("a triple predicate's key is ready");
+     |                              ^^^ method not found in `AdmittedVec<SortKey<'_, ParsedValue>>`
+     |
+    ::: crates/sparql-eval/src/workspace.rs:26:1
+     |
+  26 | pub struct AdmittedVec<T> {
+     | ------------------------- method `pop` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+note: `RankHeap` defines an item `pop`, perhaps you need to implement it
+    --> crates/sparql-eval/src/knn/metric.rs:375:1
+     |
+ 375 | trait RankHeap {
+     | ^^^^^^^^^^^^^^
+
+error[E0599]: no method named `pop` found for struct `AdmittedVec<SortKey<'_, ParsedValue>>` in the current scope
+    --> crates/sparql-eval/src/modifier.rs:1476:30
+     |
+1476 |                 let s = keys.pop().expect("a triple subject's key is ready");
+     |                              ^^^ method not found in `AdmittedVec<SortKey<'_, ParsedValue>>`
+     |
+    ::: crates/sparql-eval/src/workspace.rs:26:1
+     |
+  26 | pub struct AdmittedVec<T> {
+     | ------------------------- method `pop` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+note: `RankHeap` defines an item `pop`, perhaps you need to implement it
+    --> crates/sparql-eval/src/knn/metric.rs:375:1
+     |
+ 375 | trait RankHeap {
+     | ^^^^^^^^^^^^^^
+
+error[E0599]: no method named `pop` found for struct `AdmittedVec<SortKey<'_, ParsedValue>>` in the current scope
+    --> crates/sparql-eval/src/modifier.rs:1481:33
+     |
+1481 |     Ok(OwnedSortKey { key: keys.pop().expect("the root sort key is ready") })
+     |                                 ^^^ method not found in `AdmittedVec<SortKey<'_, ParsedValue>>`
+     |
+    ::: crates/sparql-eval/src/workspace.rs:26:1
+     |
+  26 | pub struct AdmittedVec<T> {
+     | ------------------------- method `pop` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+note: `RankHeap` defines an item `pop`, perhaps you need to implement it
+    --> crates/sparql-eval/src/knn/metric.rs:375:1
+     |
+ 375 | trait RankHeap {
+     | ^^^^^^^^^^^^^^
+
+error[E0599]: no method named `pop` found for struct `AdmittedVec<(&SortKey<'_, V>, &SortKey<'_, V>)>` in the current scope
+    --> crates/sparql-eval/src/modifier.rs:1591:38
+     |
+1591 |     while let Some((a, b)) = pending.pop() {
+     |                                      ^^^ method not found in `AdmittedVec<(&SortKey<'_, V>, &SortKey<'_, V>)>`
+     |
+    ::: crates/sparql-eval/src/workspace.rs:26:1
+     |
+  26 | pub struct AdmittedVec<T> {
+     | ------------------------- method `pop` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+note: `RankHeap` defines an item `pop`, perhaps you need to implement it
+    --> crates/sparql-eval/src/knn/metric.rs:375:1
+     |
+ 375 | trait RankHeap {
+     | ^^^^^^^^^^^^^^
+
+error[E0308]: arguments to this function are incorrect
+    --> crates/sparql-eval/src/modifier.rs:1598:24
+     |
+1598 |             _ => match shallow_order_admitted(a, b, workspace)? {
+     |                        ^^^^^^^^^^^^^^^^^^^^^^
+     |
+note: expected `&SortKey<'_, _>`, found `SortKey<'_, V>`
+    --> crates/sparql-eval/src/modifier.rs:1598:47
+     |
+1598 |             _ => match shallow_order_admitted(a, b, workspace)? {
+     |                                               ^
+     = note: expected reference `&SortKey<'_, _>`
+                     found enum `SortKey<'_, V>`
+note: expected `&SortKey<'_, _>`, found `SortKey<'_, V>`
+    --> crates/sparql-eval/src/modifier.rs:1598:50
+     |
+1598 |             _ => match shallow_order_admitted(a, b, workspace)? {
+     |                                                  ^
+     = note: expected reference `&SortKey<'_, _>`
+                     found enum `SortKey<'_, V>`
+note: function defined here
+    --> crates/sparql-eval/src/modifier.rs:1613:4
+     |
+1613 | fn shallow_order_admitted<V: std::borrow::Borrow<XsdValue>>(
+     |    ^^^^^^^^^^^^^^^^^^^^^^
+1614 |     a: &SortKey<'_, V>, b: &SortKey<'_, V>, workspace: &crate::WorkspaceCapability,
+     |     ------------------  ------------------
+help: consider borrowing here
+     |
+1598 |             _ => match shallow_order_admitted(&a, b, workspace)? {
+     |                                               +
+help: consider borrowing here
+     |
+1598 |             _ => match shallow_order_admitted(a, &b, workspace)? {
+     |                                                  +
+
+error[E0277]: a value of type `RetainedRow<<D as DatasetView>::Id>` cannot be built from an iterator over elements of type `Option<SolutionTerm<<D as DatasetView>::Id>>`
+    --> crates/sparql-eval/src/modifier.rs:2635:68
+     |
+2635 |                         keep.iter().map(|&column| rows[i][column]).collect(),
+     |                                                                    ^^^^^^^ value of type `RetainedRow<<D as DatasetView>::Id>` cannot be built from `std::iter::Iterator<Item=Option<SolutionTerm<<D as DatasetView>::Id>>>`
+     |
+help: the trait `FromIterator<Option<SolutionTerm<<D as DatasetView>::Id>>>` is not implemented for `RetainedRow<<D as DatasetView>::Id>`
+    --> crates/sparql-eval/src/solution.rs:281:1
+     |
+ 281 | pub struct RetainedRow<I: ViewTermId = TermId> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/modifier.rs:2638:33
+     |
+2638 |                 if !seen.insert(identity) {
+     |                          ------ ^^^^^^^^ expected `Cow<'_, SmallVec<[Option<_>; 4]>>`, found `Cow<'_, RetainedRow<_>>`
+     |                          |
+     |                          arguments to this method are incorrect
+     |
+     = note: expected enum `Cow<'_, SmallVec<[Option<SolutionTerm<<D as DatasetView>::Id>>; 4]>>`
+                found enum `Cow<'_, RetainedRow<<D as DatasetView>::Id>>`
+note: method defined here
+    --> /rustc/4b6d04e706108ccfeafe2547fbe857dfe8972bad/library/std/src/collections/hash/set.rs:1034:12
+     |
+1034 |     pub fn insert(&mut self, value: T) -> bool {
+     |            ^^^^^^
+
+error[E0502]: cannot borrow `*ctx` as mutable because it is also borrowed as immutable
+    --> crates/sparql-eval/src/modifier.rs:2341:91
+     |
+2329 |                     let identity = |row: &Solution<D::Id>| {
+     |                                    ----------------------- immutable borrow occurs here
+2330 |                         RetainedRow::try_build(visible.as_ref().map_or(row.len(), Vec::len), &ctx.growth, |identity| {
+     |                                                                                               ---------- first borrow occurs due to use of `*ctx.growth` in closure
+...
+2341 |                             RetainedRow::try_build(agg.args().len(), &ctx.growth.clone(), |probe| {
+     |                                                                                           ^^^^^^^ mutable borrow occurs here
+2342 |                                 for (slot, link) in probe.iter_mut().zip(&mut links.as_mut_slice()[..agg.args().len()]) {
+2343 |                                     *slot = link.term(row, &seq.schema, ctx)?;
+     |                                                                         --- second borrow occurs due to use of `*ctx` in closure
+...
+2353 |                         identity(row)?
+     |                         -------- immutable borrow later used here
+
+Some errors have detailed explanations: E0277, E0308, E0502, E0599.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 14 previous errors

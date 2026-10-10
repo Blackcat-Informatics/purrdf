@@ -1,0 +1,142 @@
+/// Preserve the resident refusal variant and the exact original diagnostic law;
+/// bounded execution retains the native text grant through terminal publication.
+fn unsupported_endpoint(
+    message: impl std::fmt::Display,
+    workspace: &crate::WorkspaceCapability,
+) -> EvalError {
+    if workspace.is_bounded() {
+        crate::NativeDiagnostic::error(
+            crate::NativeDiagnosticKind::UnclassifiedUnsupported, message, workspace,
+        )
+    } else {
+        EvalError::unsupported(message.to_string())
+    }
+}
+
+pub(crate) fn unbound_endpoint(
+    variable: &Variable,
+    cause: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> EvalError {
+    let v = variable.as_str();
+    unsupported_endpoint(format_args!(
+        "SERVICE ?{v} with no endpoint: ?{v} names the endpoint, but {cause}, so there is \
+         no endpoint to send the request to. A variable endpoint is evaluated once per \
+         distinct IRI ?{v} is bound to, wherever ?{v} is bound in every solution that \
+         reaches the SERVICE: by a pattern earlier in the same group (a triple pattern, \
+         VALUES, BIND or LATERAL), by the left side of the OPTIONAL, MINUS or group join \
+         whose right side holds the SERVICE, or by the other side of the group join that \
+         holds it — but not through a further OPTIONAL or MINUS \
+         right side, an EXISTS, a LIMIT/OFFSET, an aggregate that does not group by ?{v}, \
+         or a sub-SELECT that does not project ?{v}. Bind ?{v} before the SERVICE, e.g. \
+         `?s <p> ?{v} . SERVICE ?{v} {{ … }}` or `?s <p> ?{v} LATERAL {{ SERVICE ?{v} {{ … }} \
+         }}`. SILENT does not change this: no invocation is made, so there is no failed \
+         invocation for it to absorb"
+    ), workspace)
+}
+
+pub(crate) fn non_iri_endpoint(
+    variable: &Variable,
+    value: &TermValue,
+    workspace: &crate::WorkspaceCapability,
+) -> EvalError {
+    // The canonical spelling uses the sole term-writer body and retains its
+    // original grant while the final diagnostic is counted and rendered.
+    let spelling = match value {
+        TermValue::Blank { .. } | TermValue::Triple { .. } => None,
+        TermValue::Literal { .. } | TermValue::Iri(_) => {
+            match term_text_admitted(value, false, workspace) {
+                Ok(text) => Some(text),
+                Err(error) => return error,
+            }
+        }
+    };
+    let description = match value {
+        TermValue::Blank { .. } => "a blank node",
+        TermValue::Triple { .. } => "a triple term",
+        TermValue::Literal { .. } => "the literal ",
+        TermValue::Iri(_) => "",
+    };
+    let v = variable.as_str();
+    unsupported_endpoint(format_args!(
+        "SERVICE ?{v}: ?{v} is bound to {description}{}, which is not an IRI, so there is \
+         no endpoint to send the request to",
+        spelling.as_ref().map_or("", |text| text.as_str()),
+    ), workspace)
+}
+
+/// The native lexical destination retains its first physical failure. The
+/// emitter polls TextOut::failed and performs no private buffer growth.
+struct EndpointText<'a, 'storage> {
+    text: &'a mut String,
+    memory: &'a mut purrdf_lex::allocation::Memory<'storage, crate::workspace::LexicalFrame>,
+    failure: Option<purrdf_lex::allocation::StorageError>,
+}
+
+impl std::fmt::Write for EndpointText<'_, '_> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        if self.failure.is_some() { return Err(std::fmt::Error); }
+        match self.memory.push_str(self.text, text) {
+            Ok(()) => Ok(()),
+            Err(error) => { self.failure = Some(error); Err(std::fmt::Error) }
+        }
+    }
+    fn write_char(&mut self, ch: char) -> std::fmt::Result {
+        let mut bytes = [0_u8; 4];
+        self.write_str(ch.encode_utf8(&mut bytes))
+    }
+}
+impl purrdf_lex::text_out::TextOut for EndpointText<'_, '_> {
+    fn push_str(&mut self, text: &str) { let _ = std::fmt::Write::write_str(self, text); }
+    fn push(&mut self, ch: char) { let _ = std::fmt::Write::write_char(self, ch); }
+    fn failed(&self) -> bool { self.failure.is_some() }
+}
+
+fn term_text_admitted(
+    value: &TermValue,
+    raw_iri: bool,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
+    use purrdf_lex::allocation::Memory;
+    use crate::workspace::LexicalFrame;
+    // Every concrete payload is declared after its original frame so failure
+    // destroys the actual string/work list before dropping the grant.
+    let mut output = LexicalFrame::new(workspace);
+    let mut text = Some(String::new());
+    {
+        let mut memory = Memory::new(&mut output);
+        let text = text.as_mut().expect("original endpoint output");
+        if raw_iri && let TermValue::Iri(iri) = value {
+            memory.push_str(text, iri).map_err(|error| {
+                memory.admission_mut().storage_error(error, "SERVICE endpoint text")
+            })?;
+        } else {
+            let mut working = LexicalFrame::new(workspace);
+            let mut working_memory = Memory::new(&mut working);
+            let mut sink = EndpointText { text, memory: &mut memory, failure: None };
+            let result = purrdf_core::write_term_value_with_memory(value, &mut sink, &mut working_memory);
+            // Destination failure occurred inside the emitter before any later
+            // working failure; both original frames keep their first cause.
+            if let Some(error) = sink.failure {
+                return Err(sink.memory.admission_mut().storage_error(error, "SERVICE endpoint text"));
+            }
+            result.map_err(|error| working_memory.admission_mut().storage_error(
+                error, "SERVICE endpoint term spelling",
+            ))?;
+        }
+    }
+    output.finish_text(&mut text)
+}
+
+fn endpoint_text_admitted(
+    value: &TermValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
+    term_text_admitted(value, true, workspace)
+}
+
+#[cfg(test)]
+fn endpoint_text(value: &TermValue) -> String {
+    endpoint_text_admitted(value, &crate::WorkspaceCapability::default())
+        .expect("resident endpoint text").as_str().to_owned()
+}

@@ -1,0 +1,863 @@
+[
+  {
+    "file": "expr.rs",
+    "line": 2839,
+    "column": 1,
+    "message": "error: empty line after doc comment",
+    "lint": "empty_line_after_doc_comments"
+  },
+  {
+    "file": "expr.rs",
+    "line": 5566,
+    "column": 1,
+    "message": "error: empty line after doc comment",
+    "lint": "empty_line_after_doc_comments"
+  },
+  {
+    "file": "scratch.rs",
+    "line": 482,
+    "column": 5,
+    "message": "error: empty line after doc comment",
+    "lint": "empty_line_after_doc_comments"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 1826,
+    "column": 1,
+    "message": "error: empty line after doc comment",
+    "lint": "empty_line_after_doc_comments"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 157,
+    "column": 5,
+    "message": "error: empty line after doc comment",
+    "lint": "empty_line_after_doc_comments"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 184,
+    "column": 5,
+    "message": "error: empty line after doc comment",
+    "lint": "empty_line_after_doc_comments"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 497,
+    "column": 1,
+    "message": "error: empty lines after doc comment",
+    "lint": "empty_line_after_doc_comments"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 1422,
+    "column": 1,
+    "message": "error: empty line after doc comment",
+    "lint": "empty_line_after_doc_comments"
+  },
+  {
+    "file": "binop.rs",
+    "line": 541,
+    "column": 61,
+    "message": "error: redundant closure",
+    "lint": "redundant_closure_for_method_calls"
+  },
+  {
+    "file": "binop.rs",
+    "line": 904,
+    "column": 32,
+    "message": "error: redundant clone",
+    "lint": "redundant_clone"
+  },
+  {
+    "file": "binop.rs",
+    "line": 1220,
+    "column": 27,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "binop.rs",
+    "line": 1569,
+    "column": 16,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "binop.rs",
+    "line": 1846,
+    "column": 33,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "binop.rs",
+    "line": 1908,
+    "column": 37,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "binop.rs",
+    "line": 2444,
+    "column": 26,
+    "message": "error: redundant clone",
+    "lint": "redundant_clone"
+  },
+  {
+    "file": "binop.rs",
+    "line": 2760,
+    "column": 33,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "binop.rs",
+    "line": 2830,
+    "column": 37,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "binop.rs",
+    "line": 2929,
+    "column": 26,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "binop.rs",
+    "line": 2935,
+    "column": 30,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "deferred_exists.rs",
+    "line": 534,
+    "column": 21,
+    "message": "error: temporary with significant `Drop` can be early dropped",
+    "lint": "significant_drop_tightening"
+  },
+  {
+    "file": "deferred_exists.rs",
+    "line": 721,
+    "column": 21,
+    "message": "error: this `if` statement can be collapsed",
+    "lint": "collapsible_if"
+  },
+  {
+    "file": "deferred_exists.rs",
+    "line": 762,
+    "column": 17,
+    "message": "error: temporary with significant `Drop` can be early dropped",
+    "lint": "significant_drop_tightening"
+  },
+  {
+    "file": "deferred_exists.rs",
+    "line": 787,
+    "column": 17,
+    "message": "error: temporary with significant `Drop` can be early dropped",
+    "lint": "significant_drop_tightening"
+  },
+  {
+    "file": "deferred_exists.rs",
+    "line": 834,
+    "column": 21,
+    "message": "error: temporary with significant `Drop` can be early dropped",
+    "lint": "significant_drop_tightening"
+  },
+  {
+    "file": "deferred_exists.rs",
+    "line": 827,
+    "column": 38,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "deferred_exists.rs",
+    "line": 1005,
+    "column": 25,
+    "message": "error: this `if` guard returns a bool literal and is followed by another",
+    "lint": "needless_bool"
+  },
+  {
+    "file": "deferred_exists.rs",
+    "line": 1013,
+    "column": 26,
+    "message": "error: unnecessary semicolon",
+    "lint": "unnecessary_semicolon"
+  },
+  {
+    "file": "enf.rs",
+    "line": 263,
+    "column": 1,
+    "message": "error: large size difference between variants",
+    "lint": "large_enum_variant"
+  },
+  {
+    "file": "enf.rs",
+    "line": 419,
+    "column": 17,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "eval.rs",
+    "line": 232,
+    "column": 17,
+    "message": "error: temporary with significant `Drop` can be early dropped",
+    "lint": "significant_drop_tightening"
+  },
+  {
+    "file": "eval.rs",
+    "line": 236,
+    "column": 26,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "eval.rs",
+    "line": 1432,
+    "column": 17,
+    "message": "error: the borrowed expression implements the required traits",
+    "lint": "needless_borrows_for_generic_args"
+  },
+  {
+    "file": "eval.rs",
+    "line": 1608,
+    "column": 50,
+    "message": "error: implicit borrow as raw pointer",
+    "lint": "borrow_as_ptr"
+  },
+  {
+    "file": "eval.rs",
+    "line": 1608,
+    "column": 63,
+    "message": "error: implicit borrow as raw pointer",
+    "lint": "borrow_as_ptr"
+  },
+  {
+    "file": "eval.rs",
+    "line": 2649,
+    "column": 5,
+    "message": "error: this function has a `#[must_use]` attribute with no message, but returns a type already considered as `#[must_use]`",
+    "lint": "double_must_use"
+  },
+  {
+    "file": "expr.rs",
+    "line": 1210,
+    "column": 80,
+    "message": "error: calling `WorkList::default()` is more clear than this expression",
+    "lint": "default_trait_access"
+  },
+  {
+    "file": "expr.rs",
+    "line": 1347,
+    "column": 66,
+    "message": "error: calling `WorkList::default()` is more clear than this expression",
+    "lint": "default_trait_access"
+  },
+  {
+    "file": "expr.rs",
+    "line": 1371,
+    "column": 17,
+    "message": "error: this `if` can be collapsed into the outer `match`",
+    "lint": "collapsible_match"
+  },
+  {
+    "file": "expr.rs",
+    "line": 3387,
+    "column": 21,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "expr.rs",
+    "line": 4761,
+    "column": 67,
+    "message": "error: redundant closure",
+    "lint": "redundant_closure_for_method_calls"
+  },
+  {
+    "file": "expr.rs",
+    "line": 5072,
+    "column": 77,
+    "message": "error: this expression creates a reference which is immediately dereferenced by the compiler",
+    "lint": "needless_borrow"
+  },
+  {
+    "file": "expr.rs",
+    "line": 5078,
+    "column": 73,
+    "message": "error: this expression creates a reference which is immediately dereferenced by the compiler",
+    "lint": "needless_borrow"
+  },
+  {
+    "file": "expr.rs",
+    "line": 5084,
+    "column": 73,
+    "message": "error: this expression creates a reference which is immediately dereferenced by the compiler",
+    "lint": "needless_borrow"
+  },
+  {
+    "file": "expr.rs",
+    "line": 5416,
+    "column": 5,
+    "message": "error: collection is never read",
+    "lint": "collection_is_never_read"
+  },
+  {
+    "file": "expr.rs",
+    "line": 6525,
+    "column": 29,
+    "message": "error: this expression creates a reference which is immediately dereferenced by the compiler",
+    "lint": "needless_borrow"
+  },
+  {
+    "file": "expr.rs",
+    "line": 6556,
+    "column": 29,
+    "message": "error: this expression creates a reference which is immediately dereferenced by the compiler",
+    "lint": "needless_borrow"
+  },
+  {
+    "file": "expr.rs",
+    "line": 6561,
+    "column": 60,
+    "message": "error: this expression creates a reference which is immediately dereferenced by the compiler",
+    "lint": "needless_borrow"
+  },
+  {
+    "file": "expr.rs",
+    "line": 6618,
+    "column": 29,
+    "message": "error: this expression creates a reference which is immediately dereferenced by the compiler",
+    "lint": "needless_borrow"
+  },
+  {
+    "file": "expr.rs",
+    "line": 6950,
+    "column": 12,
+    "message": "error: this argument is passed by value, but not consumed in the function body",
+    "lint": "needless_pass_by_value"
+  },
+  {
+    "file": "expr.rs",
+    "line": 14192,
+    "column": 9,
+    "message": "error: assigning the result of `Clone::clone()` may be inefficient",
+    "lint": "assigning_clones"
+  },
+  {
+    "file": "parallel.rs",
+    "line": 3114,
+    "column": 22,
+    "message": "error: unnecessary semicolon",
+    "lint": "unnecessary_semicolon"
+  },
+  {
+    "file": "parallel.rs",
+    "line": 3157,
+    "column": 22,
+    "message": "error: unnecessary semicolon",
+    "lint": "unnecessary_semicolon"
+  },
+  {
+    "file": "xpath_regex.rs",
+    "line": 50,
+    "column": 9,
+    "message": "error: unnecessary structure name repetition",
+    "lint": "use_self"
+  },
+  {
+    "file": "xpath_regex.rs",
+    "line": 53,
+    "column": 9,
+    "message": "error: unnecessary structure name repetition",
+    "lint": "use_self"
+  },
+  {
+    "file": "xpath_regex.rs",
+    "line": 56,
+    "column": 9,
+    "message": "error: unnecessary structure name repetition",
+    "lint": "use_self"
+  },
+  {
+    "file": "xpath_regex.rs",
+    "line": 144,
+    "column": 10,
+    "message": "error: the `Err`-variant returned from this function is very large",
+    "lint": "result_large_err"
+  },
+  {
+    "file": "xpath_regex.rs",
+    "line": 158,
+    "column": 10,
+    "message": "error: the `Err`-variant returned from this function is very large",
+    "lint": "result_large_err"
+  },
+  {
+    "file": "remote.rs",
+    "line": 441,
+    "column": 39,
+    "message": "error: the `Err`-variant returned from this function is very large",
+    "lint": "result_large_err"
+  },
+  {
+    "file": "remote.rs",
+    "line": 546,
+    "column": 49,
+    "message": "error: used underscore-prefixed binding",
+    "lint": "used_underscore_binding"
+  },
+  {
+    "file": "remote.rs",
+    "line": 609,
+    "column": 55,
+    "message": "error: used underscore-prefixed binding",
+    "lint": "used_underscore_binding"
+  },
+  {
+    "file": "remote.rs",
+    "line": 1031,
+    "column": 61,
+    "message": "error: redundant closure",
+    "lint": "redundant_closure_for_method_calls"
+  },
+  {
+    "file": "remote.rs",
+    "line": 1143,
+    "column": 65,
+    "message": "error: redundant closure",
+    "lint": "redundant_closure_for_method_calls"
+  },
+  {
+    "file": "remote.rs",
+    "line": 1225,
+    "column": 6,
+    "message": "error: very complex type used. Consider factoring parts into `type` definitions",
+    "lint": "type_complexity"
+  },
+  {
+    "file": "remote.rs",
+    "line": 1230,
+    "column": 13,
+    "message": "error: this `if` statement can be collapsed",
+    "lint": "collapsible_if"
+  },
+  {
+    "file": "remote.rs",
+    "line": 1760,
+    "column": 28,
+    "message": "error: deref which would be done by auto-deref",
+    "lint": "explicit_auto_deref"
+  },
+  {
+    "file": "remote.rs",
+    "line": 1765,
+    "column": 28,
+    "message": "error: deref which would be done by auto-deref",
+    "lint": "explicit_auto_deref"
+  },
+  {
+    "file": "remote.rs",
+    "line": 2075,
+    "column": 15,
+    "message": "error: this argument is passed by value, but not consumed in the function body",
+    "lint": "needless_pass_by_value"
+  },
+  {
+    "file": "remote.rs",
+    "line": 2234,
+    "column": 28,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "remote_http.rs",
+    "line": 194,
+    "column": 39,
+    "message": "error: the `Err`-variant returned from this function is very large",
+    "lint": "result_large_err"
+  },
+  {
+    "file": "remote_http.rs",
+    "line": 195,
+    "column": 30,
+    "message": "error: used underscore-prefixed binding",
+    "lint": "used_underscore_binding"
+  },
+  {
+    "file": "remote_http.rs",
+    "line": 234,
+    "column": 20,
+    "message": "error: this argument is passed by value, but not consumed in the function body",
+    "lint": "needless_pass_by_value"
+  },
+  {
+    "file": "scratch.rs",
+    "line": 925,
+    "column": 13,
+    "message": "error: redundant closure",
+    "lint": "redundant_closure_for_method_calls"
+  },
+  {
+    "file": "scratch.rs",
+    "line": 937,
+    "column": 5,
+    "message": "error: this function has too many arguments (9/7)",
+    "lint": "too_many_arguments"
+  },
+  {
+    "file": "scratch.rs",
+    "line": 1062,
+    "column": 33,
+    "message": "error: the borrowed expression implements the required traits",
+    "lint": "needless_borrows_for_generic_args"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 510,
+    "column": 21,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 693,
+    "column": 21,
+    "message": "error: this `if` statement can be collapsed",
+    "lint": "collapsible_if"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 913,
+    "column": 25,
+    "message": "error: this `if` statement can be collapsed",
+    "lint": "collapsible_if"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 1378,
+    "column": 28,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 1398,
+    "column": 43,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 1437,
+    "column": 37,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 1545,
+    "column": 20,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 1682,
+    "column": 22,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 1994,
+    "column": 21,
+    "message": "error: the borrowed expression implements the required traits",
+    "lint": "needless_borrows_for_generic_args"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 2037,
+    "column": 23,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 2045,
+    "column": 30,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 2058,
+    "column": 21,
+    "message": "error: the borrowed expression implements the required traits",
+    "lint": "needless_borrows_for_generic_args"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 1183,
+    "column": 56,
+    "message": "error: this argument is passed by value, but not consumed in the function body",
+    "lint": "needless_pass_by_value"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 1189,
+    "column": 55,
+    "message": "error: this argument is passed by value, but not consumed in the function body",
+    "lint": "needless_pass_by_value"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 2709,
+    "column": 19,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 2738,
+    "column": 19,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 2938,
+    "column": 19,
+    "message": "error: do not call a function with mutable arguments inside of `debug_assert!`",
+    "lint": "debug_assert_with_mut_call"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 3111,
+    "column": 35,
+    "message": "error: do not call a function with mutable arguments inside of `debug_assert!`",
+    "lint": "debug_assert_with_mut_call"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 3266,
+    "column": 31,
+    "message": "error: it is more concise to loop over references to containers instead of using explicit iteration methods",
+    "lint": "explicit_iter_loop"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 3968,
+    "column": 20,
+    "message": "error: enclosing `Ok` and `?` operator are unneeded",
+    "lint": "needless_question_mark"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 4056,
+    "column": 5,
+    "message": "error: large size difference between variants",
+    "lint": "large_enum_variant"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 4216,
+    "column": 32,
+    "message": "error: enclosing `Ok` and `?` operator are unneeded",
+    "lint": "needless_question_mark"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 4429,
+    "column": 35,
+    "message": "error: the `Err`-variant returned from this function is very large",
+    "lint": "result_large_err"
+  },
+  {
+    "file": "expr.rs",
+    "line": 4628,
+    "column": 10,
+    "message": "error: this parameter is a mutable reference but is not used mutably",
+    "lint": "needless_pass_by_ref_mut"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 1428,
+    "column": 1,
+    "message": "error: empty lines after doc comment",
+    "lint": "empty_line_after_doc_comments"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 1565,
+    "column": 1,
+    "message": "error: empty line after doc comment",
+    "lint": "empty_line_after_doc_comments"
+  },
+  {
+    "file": "expr.rs",
+    "line": 1210,
+    "column": 80,
+    "message": "error: calling `WorkList::default()` is more clear than this expression",
+    "lint": "default_trait_access"
+  },
+  {
+    "file": "expr.rs",
+    "line": 6950,
+    "column": 12,
+    "message": "error: this argument is passed by value, but not consumed in the function body",
+    "lint": "needless_pass_by_value"
+  },
+  {
+    "file": "expr.rs",
+    "line": 13598,
+    "column": 59,
+    "message": "error: matching over `()` is more explicit",
+    "lint": "ignored_unit_patterns"
+  },
+  {
+    "file": "expr.rs",
+    "line": 13628,
+    "column": 59,
+    "message": "error: matching over `()` is more explicit",
+    "lint": "ignored_unit_patterns"
+  },
+  {
+    "file": "expr.rs",
+    "line": 13689,
+    "column": 67,
+    "message": "error: matching over `()` is more explicit",
+    "lint": "ignored_unit_patterns"
+  },
+  {
+    "file": "expr.rs",
+    "line": 13693,
+    "column": 65,
+    "message": "error: matching over `()` is more explicit",
+    "lint": "ignored_unit_patterns"
+  },
+  {
+    "file": "xpath_regex.rs",
+    "line": 763,
+    "column": 30,
+    "message": "error: implicit borrow as raw pointer",
+    "lint": "borrow_as_ptr"
+  },
+  {
+    "file": "xpath_regex.rs",
+    "line": 763,
+    "column": 39,
+    "message": "error: implicit borrow as raw pointer",
+    "lint": "borrow_as_ptr"
+  },
+  {
+    "file": "xpath_regex.rs",
+    "line": 943,
+    "column": 30,
+    "message": "error: implicit borrow as raw pointer",
+    "lint": "borrow_as_ptr"
+  },
+  {
+    "file": "xpath_regex.rs",
+    "line": 943,
+    "column": 41,
+    "message": "error: implicit borrow as raw pointer",
+    "lint": "borrow_as_ptr"
+  },
+  {
+    "file": "service_endpoints.rs",
+    "line": 844,
+    "column": 9,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 382,
+    "column": 50,
+    "message": "error: this argument is passed by value, but not consumed in the function body",
+    "lint": "needless_pass_by_value"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 417,
+    "column": 5,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 690,
+    "column": 5,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 697,
+    "column": 5,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 764,
+    "column": 5,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 817,
+    "column": 5,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 831,
+    "column": 5,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 934,
+    "column": 5,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 945,
+    "column": 5,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 1558,
+    "column": 5,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 1658,
+    "column": 5,
+    "message": "error: consider adding a `;` to the last statement for consistent formatting",
+    "lint": "semicolon_if_nothing_returned"
+  },
+  {
+    "file": "substitute.rs",
+    "line": 1725,
+    "column": 22,
+    "message": "error: redundant closure",
+    "lint": "redundant_closure"
+  }
+]

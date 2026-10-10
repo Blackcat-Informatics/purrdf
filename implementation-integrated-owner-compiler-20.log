@@ -1,0 +1,54 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+error: method `exists_scope` is never used
+    --> crates/sparql-algebra/src/parser.rs:1147:8
+     |
+ 894 | impl<'a, 'o, 'm, 's, const RDFLIB: bool> Parser<'a, 'o, 'm, 's, RDFLIB> {
+     | ----------------------------------------------------------------------- method in this implementation
+...
+1147 |     fn exists_scope(&self) -> &[Variable] {
+     |        ^^^^^^^^^^^^
+     |
+     = note: `-D dead-code` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: function `join` is never used
+    --> crates/sparql-algebra/src/parser.rs:3716:4
+     |
+3716 | fn join(left: GraphPattern, right: GraphPattern) -> GraphPattern {
+     |    ^^^^
+
+error: function `walk_nodes` is never used
+   --> crates/sparql-algebra/src/scope.rs:424:15
+    |
+424 | pub(crate) fn walk_nodes<'a, E>(
+    |               ^^^^^^^^^^
+
+error: unreachable `pub` item
+  --> crates/sparql-algebra/src/owned.rs:18:1
+   |
+18 | pub enum Owned {
+   | ---^^^^^^^^^^^
+   | |
+   | help: consider restricting its visibility: `pub(crate)`
+   |
+   = help: or consider exporting it for use by other crates
+   = note: `-D unreachable-pub` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(unreachable_pub)]`
+
+error: missing documentation for a function
+   --> crates/sparql-algebra/src/walk.rs:497:1
+    |
+497 | / pub fn try_walk_pre_post<'a, E: std::fmt::Debug, A>(
+498 | |     root: NodeRef<'a>,
+499 | |     mut visit: impl FnMut(Visit, NodeRef<'a>) -> Result<Flow, E>,
+500 | |     mut admit: impl FnMut(usize) -> Result<A, E>,
+501 | | ) -> Result<bool, WalkError<E>> {
+    | |_______________________________^
+    |
+    = note: `-D missing-docs` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(missing_docs)]`
+
+error: could not compile `purrdf-sparql-algebra` (lib) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-sparql-algebra` (lib test) due to 5 previous errors

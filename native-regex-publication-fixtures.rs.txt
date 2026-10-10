@@ -1,0 +1,53 @@
+#[cfg(test)]
+mod publication_fixtures {
+    use super::{OwnedPatternValue, Publication};
+    use std::cell::Cell;
+
+    struct Value<'a>(&'a Cell<u8>);
+    struct Grant<'a>(&'a Cell<u8>);
+
+    impl Drop for Value<'_> {
+        fn drop(&mut self) { assert_eq!(self.0.replace(1), 0, "value must die before grant"); }
+    }
+    impl Drop for Grant<'_> {
+        fn drop(&mut self) { assert_eq!(self.0.replace(2), 1, "grant covers value destruction"); }
+    }
+
+    struct Refuse;
+    impl<'a> Publication<Value<'a>, Option<Grant<'a>>> for Refuse {
+        type Output = ();
+        type Error = &'static str;
+        fn publish(self, _: &mut Option<Value<'a>>, _: &mut Option<Grant<'a>>) -> Result<(), &'static str> {
+            Err("original admission refusal")
+        }
+    }
+
+    struct Published<'a> { _value: Value<'a>, _grant: Grant<'a> }
+    struct Transfer;
+    impl<'a> Publication<Value<'a>, Option<Grant<'a>>> for Transfer {
+        type Output = Published<'a>;
+        type Error = &'static str;
+        fn publish(self, value: &mut Option<Value<'a>>, storage: &mut Option<Grant<'a>>) -> Result<Self::Output, Self::Error> {
+            // All fallible work is complete; only the final owner is constructed.
+            Ok(Published { _value: value.take().unwrap(), _grant: storage.take().unwrap() })
+        }
+    }
+
+    #[test]
+    fn publication_refusal_keeps_original_payload_before_grant_drop_order() {
+        let order = Cell::new(0);
+        let value = OwnedPatternValue::new(Value(&order), Some(Grant(&order)));
+        assert_eq!(value.publish_with(Refuse), Err("original admission refusal"));
+        assert_eq!(order.get(), 2);
+    }
+
+    #[test]
+    fn successful_publication_has_no_gap_between_native_and_result_owners() {
+        let order = Cell::new(0);
+        let value = OwnedPatternValue::new(Value(&order), Some(Grant(&order)));
+        let published = value.publish_with(Transfer).unwrap();
+        assert_eq!(order.get(), 0);
+        drop(published);
+        assert_eq!(order.get(), 2);
+    }
+}

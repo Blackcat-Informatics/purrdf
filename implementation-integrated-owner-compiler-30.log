@@ -1,0 +1,591 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hash)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/testkit)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/deflate)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/ed25519)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/gts)
+    Checking purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0425]: cannot find type `BTreeSet` in this scope
+   --> crates/sparql-eval/src/witness.rs:291:24
+    |
+291 | impl<T: Ord> PartialEq<BTreeSet<T>> for WitnessSet<T> {
+    |                        ^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 49 + use std::collections::BTreeSet;
+    |
+
+error[E0425]: cannot find type `BTreeSet` in this scope
+   --> crates/sparql-eval/src/witness.rs:292:26
+    |
+292 |     fn eq(&self, other: &BTreeSet<T>) -> bool {
+    |                          ^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+ 49 + use std::collections::BTreeSet;
+    |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1379:35
+     |
+1379 |     standpoint_predicates: Option<std::sync::Arc<StandpointPredicates>>,
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1379 -     standpoint_predicates: Option<std::sync::Arc<StandpointPredicates>>,
+1379 +     standpoint_predicates: Option<Arc<StandpointPredicates>>,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:1383:29
+     |
+1383 |     loss_vocabulary: Option<std::sync::Arc<LossVocabulary>>,
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1383 -     loss_vocabulary: Option<std::sync::Arc<LossVocabulary>>,
+1383 +     loss_vocabulary: Option<Arc<LossVocabulary>>,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:2842:43
+     |
+2842 |         self.standpoint_predicates = Some(std::sync::Arc::new(predicates));
+     |                                           ^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2842 -         self.standpoint_predicates = Some(std::sync::Arc::new(predicates));
+2842 +         self.standpoint_predicates = Some(Arc::new(predicates));
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:2853:37
+     |
+2853 |         self.loss_vocabulary = Some(std::sync::Arc::new(vocab));
+     |                                     ^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+2853 -         self.loss_vocabulary = Some(std::sync::Arc::new(vocab));
+2853 +         self.loss_vocabulary = Some(Arc::new(vocab));
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:3085:57
+     |
+3085 |             ctx = ctx.with_shared_standpoint_predicates(std::sync::Arc::clone(predicates));
+     |                                                         ^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3085 -             ctx = ctx.with_shared_standpoint_predicates(std::sync::Arc::clone(predicates));
+3085 +             ctx = ctx.with_shared_standpoint_predicates(Arc::clone(predicates));
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/engine.rs:3088:51
+     |
+3088 |             ctx = ctx.with_shared_loss_vocabulary(std::sync::Arc::clone(vocab));
+     |                                                   ^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+3088 -             ctx = ctx.with_shared_loss_vocabulary(std::sync::Arc::clone(vocab));
+3088 +             ctx = ctx.with_shared_loss_vocabulary(Arc::clone(vocab));
+     |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/eval.rs:489:39
+    |
+489 |     pub standpoint_predicates: Option<std::sync::Arc<StandpointPredicates>>,
+    |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+489 -     pub standpoint_predicates: Option<std::sync::Arc<StandpointPredicates>>,
+489 +     pub standpoint_predicates: Option<Arc<StandpointPredicates>>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/eval.rs:494:33
+    |
+494 |     pub loss_vocabulary: Option<std::sync::Arc<LossVocabulary>>,
+    |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+494 -     pub loss_vocabulary: Option<std::sync::Arc<LossVocabulary>>,
+494 +     pub loss_vocabulary: Option<Arc<LossVocabulary>>,
+    |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:1313:48
+     |
+1313 |         self.with_shared_standpoint_predicates(std::sync::Arc::new(predicates))
+     |                                                ^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1313 -         self.with_shared_standpoint_predicates(std::sync::Arc::new(predicates))
+1313 +         self.with_shared_standpoint_predicates(Arc::new(predicates))
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:1319:21
+     |
+1319 |         predicates: std::sync::Arc<StandpointPredicates>,
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1319 -         predicates: std::sync::Arc<StandpointPredicates>,
+1319 +         predicates: Arc<StandpointPredicates>,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:1331:42
+     |
+1331 |         self.with_shared_loss_vocabulary(std::sync::Arc::new(vocab))
+     |                                          ^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1331 -         self.with_shared_loss_vocabulary(std::sync::Arc::new(vocab))
+1331 +         self.with_shared_loss_vocabulary(Arc::new(vocab))
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/eval.rs:1337:16
+     |
+1337 |         vocab: std::sync::Arc<LossVocabulary>,
+     |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1337 -         vocab: std::sync::Arc<LossVocabulary>,
+1337 +         vocab: Arc<LossVocabulary>,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/property_fn_eval.rs:1501:46
+     |
+1501 |     pub(crate) standpoint_predicates: Option<std::sync::Arc<crate::eval::StandpointPredicates>>,
+     |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1501 -     pub(crate) standpoint_predicates: Option<std::sync::Arc<crate::eval::StandpointPredicates>>,
+1501 +     pub(crate) standpoint_predicates: Option<Arc<crate::eval::StandpointPredicates>>,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/property_fn_eval.rs:1503:40
+     |
+1503 |     pub(crate) loss_vocabulary: Option<std::sync::Arc<crate::eval::LossVocabulary>>,
+     |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1503 -     pub(crate) loss_vocabulary: Option<std::sync::Arc<crate::eval::LossVocabulary>>,
+1503 +     pub(crate) loss_vocabulary: Option<Arc<crate::eval::LossVocabulary>>,
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/property_fn_eval.rs:1520:57
+     |
+1520 |             ctx = ctx.with_shared_standpoint_predicates(std::sync::Arc::clone(predicates));
+     |                                                         ^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1520 -             ctx = ctx.with_shared_standpoint_predicates(std::sync::Arc::clone(predicates));
+1520 +             ctx = ctx.with_shared_standpoint_predicates(Arc::clone(predicates));
+     |
+
+error: unnecessary qualification
+    --> crates/sparql-eval/src/property_fn_eval.rs:1523:51
+     |
+1523 |             ctx = ctx.with_shared_loss_vocabulary(std::sync::Arc::clone(vocabulary));
+     |                                                   ^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1523 -             ctx = ctx.with_shared_loss_vocabulary(std::sync::Arc::clone(vocabulary));
+1523 +             ctx = ctx.with_shared_loss_vocabulary(Arc::clone(vocabulary));
+     |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/update.rs:167:50
+    |
+167 |     pub(crate) standpoint_predicates: Option<&'e std::sync::Arc<StandpointPredicates>>,
+    |                                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+167 -     pub(crate) standpoint_predicates: Option<&'e std::sync::Arc<StandpointPredicates>>,
+167 +     pub(crate) standpoint_predicates: Option<&'e Arc<StandpointPredicates>>,
+    |
+
+error: unnecessary qualification
+   --> crates/sparql-eval/src/update.rs:660:53
+    |
+660 |         ctx = ctx.with_shared_standpoint_predicates(std::sync::Arc::clone(preds));
+    |                                                     ^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+660 -         ctx = ctx.with_shared_standpoint_predicates(std::sync::Arc::clone(preds));
+660 +         ctx = ctx.with_shared_standpoint_predicates(Arc::clone(preds));
+    |
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/construct.rs:404:21
+    |
+404 |         loss_vocab: loss_vocab.as_ref(),
+    |                     ^^^^^^^^^^^^^^^^^^^ expected `Option<&LossVocabulary>`, found `Option<&Arc<LossVocabulary>>`
+    |
+    = note: expected enum `Option<&LossVocabulary>`
+               found enum `Option<&Arc<LossVocabulary>>`
+help: try using `.map(|v| &**v)` to convert `Option<&Arc<LossVocabulary>>` to `Option<&LossVocabulary>`
+    |
+404 |         loss_vocab: loss_vocab.as_ref().map(|v| &**v),
+    |                                        ++++++++++++++
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+    --> crates/sparql-eval/src/engine/graph_build.rs:248:29
+     |
+ 248 | ...                   empty_result_for(&prepared.query),
+     |                       ^^^^^^^^^^^^^^^^----------------- argument #2 of type `&WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/engine.rs:6288:4
+     |
+6288 | fn empty_result_for(
+     |    ^^^^^^^^^^^^^^^^
+6289 |     query: &Query,
+6290 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+ 248 |                             empty_result_for(&prepared.query, /* &WorkspaceCapability */),
+     |                                                             ++++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/engine/graph_build.rs:248:29
+     |
+ 246 |                         let (result, _) = super::retain_query_result(
+     |                                           -------------------------- arguments to this function are incorrect
+ 247 |                             dataset,
+ 248 |                             empty_result_for(&prepared.query),
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `SparqlResult`, found `Result<SparqlResult, EvalError>`
+     |
+     = note: expected enum `SparqlResult`
+                found enum `Result<SparqlResult, EvalError>`
+note: function defined here
+    --> crates/sparql-eval/src/engine.rs:4766:4
+     |
+4766 | fn retain_query_result<D: FallibleDatasetView + Sync>(
+     |    ^^^^^^^^^^^^^^^^^^^
+4767 |     dataset: &D,
+4768 |     result: SparqlResult,
+     |     --------------------
+help: use the `?` operator to extract the `Result<SparqlResult, EvalError>` value, propagating a `Result::Err` value to the caller
+     |
+ 248 |                             empty_result_for(&prepared.query)?,
+     |                                                              +
+
+error[E0277]: expected an `FnOnce(EvalError)` closure, found `fn(EvaluationFailure) -> RdfDiagnostic {EvaluationFailure::into_diagnostic}`
+   --> crates/sparql-eval/src/engine.rs:336:18
+    |
+336 |         .map_err(EvaluationFailure::into_diagnostic)?;
+    |          ------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(EvalError)` closure, found `fn(EvaluationFailure) -> RdfDiagnostic {EvaluationFailure::into_diagnostic}`
+    |          |
+    |          required by a bound introduced by this call
+    |
+    = help: the trait `FnOnce(EvalError)` is not implemented for fn item `fn(EvaluationFailure) -> RdfDiagnostic {EvaluationFailure::into_diagnostic}`
+    = note: expected a closure with signature `fn(EvalError)`
+               found a closure with signature `fn(EvaluationFailure)`
+note: required by a bound in `Result::<T, E>::map_err`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+    |
+961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+    |                  ------- required by a bound in this associated function
+962 |     where
+963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+    |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+
+error[E0433]: cannot find type `RdfLiteral` in this scope
+    --> crates/sparql-eval/src/construct.rs:1735:47
+     |
+1735 |                 "literal" => b.intern_literal(RdfLiteral::simple("not a graph")),
+     |                                               ^^^^^^^^^^ use of undeclared type `RdfLiteral`
+     |
+     = note: struct `crate::user_fn::tests::invocation_admission::RdfLiteral` exists but is inaccessible
+help: consider importing this struct
+     |
+1289 +     use purrdf_core::RdfLiteral;
+     |
+
+error[E0433]: cannot find type `RdfLiteral` in this scope
+    --> crates/sparql-eval/src/construct.rs:2002:36
+     |
+2002 |         let lit = b.intern_literal(RdfLiteral::simple("hello"));
+     |                                    ^^^^^^^^^^ use of undeclared type `RdfLiteral`
+     |
+     = note: struct `crate::user_fn::tests::invocation_admission::RdfLiteral` exists but is inaccessible
+help: consider importing this struct
+     |
+1289 +     use purrdf_core::RdfLiteral;
+     |
+
+error[E0433]: cannot find type `RdfLiteral` in this scope
+    --> crates/sparql-eval/src/construct.rs:2081:36
+     |
+2081 |         let lit = b.intern_literal(RdfLiteral::simple("hello"));
+     |                                    ^^^^^^^^^^ use of undeclared type `RdfLiteral`
+     |
+     = note: struct `crate::user_fn::tests::invocation_admission::RdfLiteral` exists but is inaccessible
+help: consider importing this struct
+     |
+1289 +     use purrdf_core::RdfLiteral;
+     |
+
+error[E0433]: cannot find type `RdfLiteral` in this scope
+    --> crates/sparql-eval/src/construct.rs:2234:42
+     |
+2234 |         let forty_two = b.intern_literal(RdfLiteral::simple("42"));
+     |                                          ^^^^^^^^^^ use of undeclared type `RdfLiteral`
+     |
+     = note: struct `crate::user_fn::tests::invocation_admission::RdfLiteral` exists but is inaccessible
+help: consider importing this struct
+     |
+1289 +     use purrdf_core::RdfLiteral;
+     |
+
+error[E0433]: cannot find type `RdfLiteral` in this scope
+    --> crates/sparql-eval/src/construct.rs:2240:41
+     |
+2240 |         let conf_val = b.intern_literal(RdfLiteral::simple("0.9"));
+     |                                         ^^^^^^^^^^ use of undeclared type `RdfLiteral`
+     |
+     = note: struct `crate::user_fn::tests::invocation_admission::RdfLiteral` exists but is inaccessible
+help: consider importing this struct
+     |
+1289 +     use purrdf_core::RdfLiteral;
+     |
+
+error[E0433]: cannot find type `RdfLiteral` in this scope
+    --> crates/sparql-eval/src/construct.rs:2675:42
+     |
+2675 |         let forty_two = b.intern_literal(RdfLiteral::simple("42"));
+     |                                          ^^^^^^^^^^ use of undeclared type `RdfLiteral`
+     |
+     = note: struct `crate::user_fn::tests::invocation_admission::RdfLiteral` exists but is inaccessible
+help: consider importing this struct
+     |
+1289 +     use purrdf_core::RdfLiteral;
+     |
+
+error[E0433]: cannot find type `RdfLiteral` in this scope
+    --> crates/sparql-eval/src/construct.rs:2698:42
+     |
+2698 |         let forty_two = b.intern_literal(RdfLiteral::simple("42"));
+     |                                          ^^^^^^^^^^ use of undeclared type `RdfLiteral`
+     |
+     = note: struct `crate::user_fn::tests::invocation_admission::RdfLiteral` exists but is inaccessible
+help: consider importing this struct
+     |
+1289 +     use purrdf_core::RdfLiteral;
+     |
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/construct.rs:404:21
+    |
+404 |         loss_vocab: loss_vocab.as_ref(),
+    |                     ^^^^^^^^^^^^^^^^^^^ expected `Option<&LossVocabulary>`, found `Option<&Arc<LossVocabulary>>`
+    |
+    = note: expected enum `Option<&LossVocabulary>`
+               found enum `Option<&std::sync::Arc<LossVocabulary>>`
+help: try using `.map(|v| &**v)` to convert `Option<&std::sync::Arc<LossVocabulary>>` to `Option<&LossVocabulary>`
+    |
+404 |         loss_vocab: loss_vocab.as_ref().map(|v| &**v),
+    |                                        ++++++++++++++
+
+error[E0061]: this function takes 2 arguments but 1 argument was supplied
+    --> crates/sparql-eval/src/engine/graph_build.rs:248:29
+     |
+ 248 | ...                   empty_result_for(&prepared.query),
+     |                       ^^^^^^^^^^^^^^^^----------------- argument #2 of type `&workspace::WorkspaceCapability` is missing
+     |
+note: function defined here
+    --> crates/sparql-eval/src/engine.rs:6288:4
+     |
+6288 | fn empty_result_for(
+     |    ^^^^^^^^^^^^^^^^
+6289 |     query: &Query,
+6290 |     workspace: &crate::WorkspaceCapability,
+     |     --------------------------------------
+help: provide the argument
+     |
+ 248 |                             empty_result_for(&prepared.query, /* &WorkspaceCapability */),
+     |                                                             ++++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/engine/graph_build.rs:248:29
+     |
+ 246 |                         let (result, _) = super::retain_query_result(
+     |                                           -------------------------- arguments to this function are incorrect
+ 247 |                             dataset,
+ 248 |                             empty_result_for(&prepared.query),
+     |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `SparqlResult`, found `Result<SparqlResult, EvalError>`
+     |
+     = note: expected enum `SparqlResult`
+                found enum `Result<SparqlResult, error::EvalError>`
+note: function defined here
+    --> crates/sparql-eval/src/engine.rs:4766:4
+     |
+4766 | fn retain_query_result<D: FallibleDatasetView + Sync>(
+     |    ^^^^^^^^^^^^^^^^^^^
+4767 |     dataset: &D,
+4768 |     result: SparqlResult,
+     |     --------------------
+help: use the `?` operator to extract the `Result<purrdf_core::SparqlResult, error::EvalError>` value, propagating a `Result::Err` value to the caller
+     |
+ 248 |                             empty_result_for(&prepared.query)?,
+     |                                                              +
+
+error[E0277]: expected an `FnOnce(error::EvalError)` closure, found `fn(EvaluationFailure) -> purrdf_core::RdfDiagnostic {EvaluationFailure::into_diagnostic}`
+   --> crates/sparql-eval/src/engine.rs:336:18
+    |
+336 |         .map_err(EvaluationFailure::into_diagnostic)?;
+    |          ------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected an `FnOnce(error::EvalError)` closure, found `fn(EvaluationFailure) -> purrdf_core::RdfDiagnostic {EvaluationFailure::into_diagnostic}`
+    |          |
+    |          required by a bound introduced by this call
+    |
+    = help: the trait `FnOnce(error::EvalError)` is not implemented for fn item `fn(EvaluationFailure) -> purrdf_core::RdfDiagnostic {EvaluationFailure::into_diagnostic}`
+    = note: expected a closure with signature `fn(error::EvalError)`
+               found a closure with signature `fn(EvaluationFailure)`
+note: required by a bound in `Result::<T, E>::map_err`
+   --> /home/paudley/stage/packages/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:963:12
+    |
+961 |     pub const fn map_err<F, O>(self, op: O) -> Result<T, F>
+    |                  ------- required by a bound in this associated function
+962 |     where
+963 |         O: [const] FnOnce(E) -> F + [const] Destruct,
+    |            ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Result::<T, E>::map_err`
+
+error[E0594]: cannot assign to data in dereference of `AdmittedVec<bool>`
+   --> crates/sparql-eval/src/construct.rs:705:9
+    |
+705 |         reifier_decl_mask[idx] = true;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot assign
+    |
+    = help: trait `DerefMut` is required to modify through a dereference, but it is not implemented for `AdmittedVec<bool>`
+
+error[E0507]: cannot move out of an `Arc`
+    --> crates/sparql-eval/src/expr.rs:5642:43
+     |
+5642 |         .term_id_by_value(&TermValue::Iri(predicates.according_to))
+     |                                           ^^^^^^^^^^^^^^^^^^^^^^^ move occurs because value has type `std::string::String`, which does not implement the `Copy` trait
+     |
+help: consider cloning the value if the performance cost is acceptable
+     |
+5642 |         .term_id_by_value(&TermValue::Iri(predicates.according_to.clone()))
+     |                                                                  ++++++++
+
+error[E0507]: cannot move out of an `Arc`
+    --> crates/sparql-eval/src/expr.rs:5646:43
+     |
+5646 |         .term_id_by_value(&TermValue::Iri(predicates.sharpens))
+     |                                           ^^^^^^^^^^^^^^^^^^^ move occurs because value has type `std::string::String`, which does not implement the `Copy` trait
+     |
+help: consider cloning the value if the performance cost is acceptable
+     |
+5646 |         .term_id_by_value(&TermValue::Iri(predicates.sharpens.clone()))
+     |                                                              ++++++++
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/list_fn.rs:949:65
+    |
+949 |             SparqlResult::Solutions { rows, aux, .. } => (rows, aux),
+    |                                                                 ^^^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+    |
+    = note: expected struct `std::sync::Arc<purrdf_core::RdfDataset>`
+               found struct `purrdf_core::DatasetHandle`
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/src/list_fn.rs:974:39
+    |
+955 |     fn run_graph(ds: &Arc<RdfDataset>, query: &str) -> Arc<RdfDataset> {
+    |                                                        --------------- expected `std::sync::Arc<purrdf_core::RdfDataset>` because of return type
+...
+974 |             SparqlResult::Graph(g) => g,
+    |                                       ^ expected `Arc<RdfDataset>`, found `DatasetHandle`
+    |
+    = note: expected struct `std::sync::Arc<purrdf_core::RdfDataset>`
+               found struct `purrdf_core::DatasetHandle`
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/list_fn.rs:1166:9
+     |
+1162 |       ) -> (Vec<String>, Arc<RdfDataset>) {
+     |            ------------------------------ expected `(Vec<std::string::String>, std::sync::Arc<purrdf_core::RdfDataset>)` because of return type
+...
+1166 | /         engine
+1167 | |             .query_interned_view(
+1168 | |                 ds.as_ref(),
+1169 | |                 InternedRequest {
+...    |
+1196 | |             .expect("interned query")
+     | |_____________________________________^ expected `(Vec<String>, Arc<RdfDataset>)`, found `(_, RetainedGraph)`
+     |
+     = note: expected tuple `(Vec<std::string::String>, std::sync::Arc<purrdf_core::RdfDataset>)`
+                found tuple `(_, RetainedGraph)`
+
+Some errors have detailed explanations: E0061, E0277, E0308, E0425, E0507, E0594.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-sparql-eval` (lib) due to 27 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/remote.rs:1555:21
+     |
+1555 |                     aux,
+     |                     ^^^ expected `DatasetHandle`, found `Result<DatasetHandle, EvalError>`
+     |
+     = note: expected struct `DatasetHandle`
+                  found enum `Result<DatasetHandle, error::EvalError>`
+help: use the `?` operator to extract the `Result<purrdf_core::DatasetHandle, error::EvalError>` value, propagating a `Result::Err` value to the caller
+     |
+1555 |                     aux: aux?,
+     |                        ++++++
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/remote.rs:1590:25
+     |
+1590 |                         aux,
+     |                         ^^^ expected `DatasetHandle`, found `Result<DatasetHandle, EvalError>`
+     |
+     = note: expected struct `DatasetHandle`
+                  found enum `Result<DatasetHandle, error::EvalError>`
+help: consider using `Result::expect` to unwrap the `Result<purrdf_core::DatasetHandle, error::EvalError>` value, panicking if the value is a `Result::Err`
+     |
+1590 |                         aux: aux.expect("REASON"),
+     |                            ++++++++++++++++++++++
+
+Some errors have detailed explanations: E0061, E0277, E0308, E0433, E0507, E0594.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 37 previous errors

@@ -1,0 +1,51 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+error[E0063]: missing field `unpinned_cache_bytes` in initializer of `SegmentedReadLimits`
+  --> crates/rdf-core/src/ir/segmented/session.rs:40:9
+   |
+40 |         Self {
+   |         ^^^^ missing `unpinned_cache_bytes`
+
+error[E0615]: attempted to take value of method `unpinned_cache_bytes` on type `&SegmentedEvidence`
+   --> crates/rdf-core/src/ir/segmented/session.rs:291:21
+    |
+291 |             || self.unpinned_cache_bytes != other.unpinned_cache_bytes
+    |                     ^^^^^^^^^^^^^^^^^^^^ method, not a field
+    |
+help: use parentheses to call the method
+    |
+291 |             || self.unpinned_cache_bytes() != other.unpinned_cache_bytes
+    |                                         ++
+
+error[E0615]: attempted to take value of method `unpinned_cache_bytes` on type `&SegmentedEvidence`
+   --> crates/rdf-core/src/ir/segmented/session.rs:291:51
+    |
+291 |             || self.unpinned_cache_bytes != other.unpinned_cache_bytes
+    |                                                   ^^^^^^^^^^^^^^^^^^^^ method, not a field
+    |
+help: use parentheses to call the method
+    |
+291 |             || self.unpinned_cache_bytes != other.unpinned_cache_bytes()
+    |                                                                       ++
+
+error[E0615]: attempted to take value of method `unpinned_cache_bytes` on type `&SegmentedEvidence`
+   --> crates/rdf-core/src/ir/segmented/session.rs:350:14
+    |
+350 |         self.unpinned_cache_bytes
+    |              ^^^^^^^^^^^^^^^^^^^^ method, not a field
+    |
+help: use parentheses to call the method
+    |
+350 |         self.unpinned_cache_bytes()
+    |                                  ++
+
+error[E0560]: struct `SegmentedEvidence` has no field named `unpinned_cache_bytes`
+    --> crates/rdf-core/src/ir/segmented/session.rs:1009:13
+     |
+1009 |             unpinned_cache_bytes: state
+     |             ^^^^^^^^^^^^^^^^^^^^ `SegmentedEvidence` does not have this field
+     |
+     = note: all struct fields are already assigned
+
+Some errors have detailed explanations: E0063, E0560, E0615.
+For more information about an error, try `rustc --explain E0063`.
+error: could not compile `purrdf-core` (lib) due to 5 previous errors

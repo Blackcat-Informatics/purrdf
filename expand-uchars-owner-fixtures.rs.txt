@@ -1,0 +1,106 @@
+#[test]
+fn uchar_expansion_admits_its_real_utf8_capacity_and_preserves_malformed_bytes() {
+    use purrdf_lex::allocation::Memory;
+    use purrdf_lex::terminals::{expand_uchars, expand_uchars_with_memory};
+    for input in ["urn:plain", "urn:é", r"urn:\u00E9", r"urn:\U0001F431", r"urn:\u+041",
+        r"urn:\uD800", r"urn:\U00110000", r"a\u0041\u+041\\u0042", "\\", "é\\u0041é"] {
+        let expected = expand_uchars(input);
+        let mut account = Account::new(input.len());
+        let window = CurrentThreadWindow::open();
+        let mut memory = Memory::new(&mut account);
+        let actual = expand_uchars_with_memory(input, &mut memory).unwrap();
+        let live = memory.live_bytes();
+        let measured = window.close();
+        assert_eq!(actual, expected, "{input}");
+        assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), live);
+        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= live);
+        match actual {
+            std::borrow::Cow::Borrowed(value) => {
+                assert!(std::ptr::eq(value, input));
+                assert_eq!(live, 0);
+            }
+            std::borrow::Cow::Owned(value) => {
+                assert_eq!(live, value.capacity());
+                assert_eq!(value.capacity(), input.len());
+                memory.release_string(value).unwrap();
+                assert_eq!(memory.live_bytes(), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn uchar_expansion_refuses_before_allocation_and_borrowed_input_needs_no_grant() {
+    use purrdf_lex::allocation::Memory;
+    use purrdf_lex::terminals::expand_uchars_with_memory;
+    for input in [r"urn:\u0041", r"urn:\u+041", "\\"] {
+        let mut account = Account::new(0);
+        let window = CurrentThreadWindow::open();
+        let mut memory = Memory::new(&mut account);
+        let refused = expand_uchars_with_memory(input, &mut memory).unwrap_err();
+        let measured = window.close();
+        assert_eq!(refused, StorageError::AdmissionFailed);
+        assert_eq!(memory.live_bytes(), 0);
+        assert_eq!(measured.peak_working_bytes, 0);
+        assert_eq!(measured.retained_bytes, 0);
+    }
+    let mut account = Account::new(0);
+    let mut memory = Memory::new(&mut account);
+    assert!(matches!(expand_uchars_with_memory("urn:é", &mut memory).unwrap(),
+        std::borrow::Cow::Borrowed("urn:é")));
+    assert_eq!(memory.live_bytes(), 0);
+}
+
+#[test]
+fn native_string_append_covers_old_and_new_buffers_with_amortized_growth() {
+    use purrdf_lex::allocation::Memory;
+    let mut account = Account::new(16_384);
+    let window = CurrentThreadWindow::open();
+    let mut memory = Memory::new(&mut account);
+    let mut text = String::new();
+    let mut replacements = 0;
+    let mut previous_capacity = 0;
+    for _ in 0..1024 {
+        memory.push_str(&mut text, "é").unwrap();
+        if text.capacity() != previous_capacity {
+            replacements += 1;
+            if previous_capacity != 0 { assert_eq!(text.capacity(), previous_capacity * 2); }
+            previous_capacity = text.capacity();
+        }
+    }
+    memory.push_char(&mut text, '🐱').unwrap();
+    assert!(text.starts_with("éé"));
+    assert!(text.ends_with('🐱'));
+    assert_eq!(text.len(), 2052);
+    assert!(replacements <= 11, "growth must not allocate for every splice fragment");
+    let live = memory.live_bytes();
+    assert_eq!(live, text.capacity());
+    let measured = window.close();
+    memory.release_string(text).unwrap();
+    assert_eq!(memory.live_bytes(), 0);
+    assert_eq!(account.live, 0);
+    assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), live);
+    assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
+    assert!(account.peak > live, "buffer replacement must cover overlapping old and new layouts");
+}
+
+#[test]
+fn native_string_append_refusal_preserves_original_buffer_and_utf8() {
+    use purrdf_lex::allocation::Memory;
+    let mut account = Account::new(5);
+    let window = CurrentThreadWindow::open();
+    let mut memory = Memory::new(&mut account);
+    let mut text = memory.string("é").unwrap();
+    let original = text.as_ptr();
+    assert_eq!(memory.push_str(&mut text, "ab"), Err(StorageError::AdmissionFailed));
+    assert_eq!(text, "é");
+    assert_eq!(text.as_ptr(), original);
+    assert_eq!(text.capacity(), 2);
+    assert_eq!(memory.live_bytes(), 2);
+    let measured = window.close();
+    memory.release_string(text).unwrap();
+    assert_eq!(account.refused, Some(6));
+    assert_eq!(account.peak, 2);
+    assert_eq!(measured.peak_working_bytes, 2);
+    assert_eq!(measured.retained_bytes, 2);
+}

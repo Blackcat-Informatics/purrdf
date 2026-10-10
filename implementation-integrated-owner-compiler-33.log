@@ -1,0 +1,277 @@
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+error: unnecessary qualification
+   --> crates/cdt/tests/value_relations.rs:892:9
+    |
+892 |         purrdf_cdt::CdtEntry {
+    |         ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+892 -         purrdf_cdt::CdtEntry {
+892 +         CdtEntry {
+    |
+
+error: unnecessary qualification
+   --> crates/cdt/tests/value_relations.rs:893:18
+    |
+893 |             key: purrdf_cdt::CdtKey::Iri("urn:z".into()),
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+893 -             key: purrdf_cdt::CdtKey::Iri("urn:z".into()),
+893 +             key: CdtKey::Iri("urn:z".into()),
+    |
+
+error: unnecessary qualification
+   --> crates/cdt/tests/value_relations.rs:896:9
+    |
+896 |         purrdf_cdt::CdtEntry {
+    |         ^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+896 -         purrdf_cdt::CdtEntry {
+896 +         CdtEntry {
+    |
+
+error: unnecessary qualification
+   --> crates/cdt/tests/value_relations.rs:897:18
+    |
+897 |             key: purrdf_cdt::CdtKey::Iri("urn:k".into()),
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+897 -             key: purrdf_cdt::CdtKey::Iri("urn:k".into()),
+897 +             key: CdtKey::Iri("urn:k".into()),
+    |
+
+error: unnecessary qualification
+   --> crates/cdt/tests/value_relations.rs:900:9
+    |
+900 |         purrdf_cdt::CdtEntry {
+    |         ^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+900 -         purrdf_cdt::CdtEntry {
+900 +         CdtEntry {
+    |
+
+error: unnecessary qualification
+   --> crates/cdt/tests/value_relations.rs:901:18
+    |
+901 |             key: purrdf_cdt::CdtKey::Iri("urn:k".into()),
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+901 -             key: purrdf_cdt::CdtKey::Iri("urn:k".into()),
+901 +             key: CdtKey::Iri("urn:k".into()),
+    |
+
+error: unnecessary qualification
+   --> crates/cdt/tests/value_relations.rs:964:51
+    |
+964 |             source = CdtTerm::TripleTerm(Box::new(purrdf_cdt::CdtTripleTerm {
+    |                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+964 -             source = CdtTerm::TripleTerm(Box::new(purrdf_cdt::CdtTripleTerm {
+964 +             source = CdtTerm::TripleTerm(Box::new(CdtTripleTerm {
+    |
+
+error[E0061]: this struct takes 1 argument but 2 arguments were supplied
+    --> crates/cdt/tests/value_relations.rs:1033:21
+     |
+1033 |     let mut grant = RefuseBoxAndShrink(NativeGrant::new(), false);
+     |                     ^^^^^^^^^^^^^^^^^^                     ----- unexpected argument #2 of type `bool`
+     |
+note: tuple struct defined here
+    --> crates/cdt/tests/value_relations.rs:991:8
+     |
+ 991 | struct RefuseBoxAndShrink(NativeGrant);
+     |        ^^^^^^^^^^^^^^^^^^
+help: remove the extra argument
+     |
+1033 -     let mut grant = RefuseBoxAndShrink(NativeGrant::new(), false);
+1033 +     let mut grant = RefuseBoxAndShrink(NativeGrant::new());
+     |
+
+error[E0609]: no field `1` on type `RefuseBoxAndShrink`
+    --> crates/cdt/tests/value_relations.rs:1038:15
+     |
+1038 |         grant.1,
+     |               ^ unknown field
+     |
+     = note: available field is: `0`
+
+Some errors have detailed explanations: E0061, E0609.
+For more information about an error, try `rustc --explain E0061`.
+error: could not compile `purrdf-cdt` (test "value_relations") due to 9 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0716]: temporary value dropped while borrowed
+   --> crates/sparql-algebra/src/serialize.rs:359:39
+    |
+359 |     let mut memory = Memory::new(&mut Resident);
+    |                                       ^^^^^^^^ - temporary value is freed at the end of this statement
+    |                                       |
+    |                                       creates a temporary value which is freed while still in use
+360 |     match validate_carrier_pattern_with_memory(pattern, &mut memory)
+    |                                                         ----------- borrow later used here
+    |
+help: consider using a `let` binding to create a longer lived value
+    |
+359 ~     let mut binding = Resident;
+360 ~     let mut memory = Memory::new(&mut binding);
+    |
+
+error: cannot explicitly dereference within an implicitly-borrowing pattern
+   --> crates/sparql-algebra/src/serialize.rs:701:14
+    |
+701 |         for (&(owner, label), group) in &groups {
+    |              ^ reference pattern not allowed when implicitly borrowing
+    |
+    = note: for more information, see <https://doc.rust-lang.org/reference/patterns.html#binding-modes>
+note: matching on a reference type with a non-reference pattern implicitly borrows the contents
+   --> crates/sparql-algebra/src/serialize.rs:701:13
+    |
+701 |         for (&(owner, label), group) in &groups {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^ this non-reference pattern matches on a reference type `&_`
+help: match on the reference with a reference pattern and borrow explicitly using a variable binding mode
+    |
+701 |         for &(&(owner, label), ref group) in &groups {
+    |             +                  +++
+
+For more information about this error, try `rustc --explain E0716`.
+error: could not compile `purrdf-sparql-algebra` (lib) due to 2 previous errors
+error[E0308]: mismatched types
+    --> crates/sparql-algebra/src/serialize.rs:2679:13
+     |
+2678 |         emit(
+     |         ---- arguments to this function are incorrect
+2679 |             s,
+     |             ^ expected `&mut Surface<'_, '_, '_, _>`, found `&mut String`
+     |
+     = note: expected mutable reference `&mut Surface<'_, '_, '_, _>`
+                found mutable reference `&mut std::string::String`
+note: function defined here
+    --> crates/sparql-algebra/src/serialize.rs:1372:4
+     |
+1372 | fn emit<S: Admission + ?Sized>(
+     |    ^^^^
+1373 |     s: &mut Surface<'_, '_, '_, S>,
+     |     ------------------------------
+
+Some errors have detailed explanations: E0308, E0716.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-algebra` (lib test) due to 3 previous errors
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/term_walk.rs:148:9
+    |
+148 | impl<E: core::fmt::Display> core::fmt::Display for OwnedTermFoldError<E> {
+    |         ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `-D unused-qualifications` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+    |
+148 - impl<E: core::fmt::Display> core::fmt::Display for OwnedTermFoldError<E> {
+148 + impl<E: fmt::Display> core::fmt::Display for OwnedTermFoldError<E> {
+    |
+
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/term_walk.rs:148:29
+    |
+148 | impl<E: core::fmt::Display> core::fmt::Display for OwnedTermFoldError<E> {
+    |                             ^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+148 - impl<E: core::fmt::Display> core::fmt::Display for OwnedTermFoldError<E> {
+148 + impl<E: core::fmt::Display> fmt::Display for OwnedTermFoldError<E> {
+    |
+
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/term_walk.rs:149:27
+    |
+149 |     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+149 -     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+149 +     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> core::fmt::Result {
+    |
+
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/term_walk.rs:149:56
+    |
+149 |     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    |                                                        ^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+149 -     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+149 +     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {
+    |
+
+error: unnecessary qualification
+    --> crates/rdf-core/src/ir/term_walk.rs:1005:28
+     |
+1005 |     let result: Result<(), core::convert::Infallible> = debug_script_tokens(value, &mut |token| {
+     |                            ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1005 -     let result: Result<(), core::convert::Infallible> = debug_script_tokens(value, &mut |token| {
+1005 +     let result: Result<(), Infallible> = debug_script_tokens(value, &mut |token| {
+     |
+
+error: could not compile `purrdf-core` (lib) due to 5 previous errors
+error: unnecessary qualification
+    --> crates/rdf-core/src/collections.rs:1512:23
+     |
+1512 |         let members = super::walk_rdf_list_with_memory(
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1512 -         let members = super::walk_rdf_list_with_memory(
+1512 +         let members = walk_rdf_list_with_memory(
+     |
+
+error: unnecessary qualification
+    --> crates/rdf-core/src/collections.rs:1552:22
+     |
+1552 |         let result = super::walk_rdf_list_with_memory(
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1552 -         let result = super::walk_rdf_list_with_memory(
+1552 +         let result = walk_rdf_list_with_memory(
+     |
+
+error: unnecessary qualification
+   --> crates/rdf-core/src/ir/term_walk.rs:148:9
+    |
+148 | impl<E: core::fmt::Display> core::fmt::Display for OwnedTermFoldError<E> {
+    |         ^^^^^^^^^^^^^^^^^^
+    |
+help: remove the unnecessary path segments
+    |
+148 - impl<E: core::fmt::Display> core::fmt::Display for OwnedTermFoldError<E> {
+148 + impl<E: fmt::Display> core::fmt::Display for OwnedTermFoldError<E> {
+    |
+
+error: could not compile `purrdf-core` (lib test) due to 7 previous errors

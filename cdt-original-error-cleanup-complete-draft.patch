@@ -1,0 +1,254 @@
+--- a/crates/lex/src/allocation.rs
++++ b/crates/lex/src/allocation.rs
+@@ -113,18 +113,26 @@
+     /// This never observes or adopts a resident factory's returned payload.
+     ///
+     /// # Errors
+-    /// Returns the body's original storage refusal or a cleanup invariant failure.
++    /// Returns the body's first physical failure. Refund failure after that
++    /// failure cannot replace it; successful child payload keeps its original grant.
+     pub fn scope<T>(
+         &mut self,
+         body: impl FnOnce(&mut Self) -> Result<T, StorageError>,
+     ) -> Result<T, StorageError> {
+         let baseline = self.live;
+-        let result = body(self);
+-        if result.is_err() {
+-            let released = self.live.checked_sub(baseline).ok_or(StorageError::SizeOverflow)?;
+-            self.release_bytes(released)?;
++        match body(self) {
++            Ok(value) => Ok(value),
++            Err(original) => {
++                // The body's locals have died. Attempt their original refund even
++                // when a sticky caller now refuses shrink; the original operation
++                // error remains authoritative. A failed refund keeps the existing
++                // grant intact until its owner dies, never freeing it too early.
++                if let Some(released) = self.live.checked_sub(baseline) {
++                    let _ = self.release_bytes(released);
++                }
++                Err(original)
++            }
+         }
+-        result
+     }
+ 
+     /// Borrow the original admission for a native payload factory above this leaf.
+@@ -374,6 +382,22 @@
+         self.remove(bytes)
+     }
+ 
++    /// Destroy an original vector and preserve the operation's first physical error.
++    /// A refund refusal propagates when the operation succeeded. On an existing
++    /// failure the original cause wins, while the original grant remains alive if
++    /// its caller refuses shrink.
++    ///
++    /// # Errors
++    /// Returns the operation's original error, otherwise its actual refund failure.
++    pub fn release_vec_after<T, R>(
++        &mut self,
++        values: Vec<T>,
++        result: Result<R, StorageError>,
++    ) -> Result<R, StorageError> {
++        let refund = self.release_vec(values);
++        result.and_then(|value| refund.map(|()| value))
++    }
++
+     /// Destroy owned UTF-8 storage before releasing its original buffer admission.
+     ///
+     /// # Errors
+@@ -614,3 +638,88 @@
+         assert_eq!(memory.live_bytes(), 0);
+     }
+ }
++
++#[cfg(test)]
++mod original_failure_cleanup_regressions {
++    use super::{Admission, Memory, StorageError};
++    use core::cell::Cell;
++
++    struct Payload<'a> { destroyed: &'a Cell<bool> }
++    impl Drop for Payload<'_> {
++        fn drop(&mut self) { self.destroyed.set(true); }
++    }
++    struct RefuseShrink<'a> {
++        destroyed: &'a Cell<bool>,
++        live: usize,
++        attempted: Option<usize>,
++    }
++    impl Admission for RefuseShrink<'_> {
++        fn resize(&mut self, next: usize) -> Result<(), StorageError> {
++            if next < self.live {
++                assert!(self.destroyed.get(), "original payload dies before the refund callback");
++                self.attempted = Some(next);
++                return Err(StorageError::AdmissionFailed);
++            }
++            self.live = next;
++            Ok(())
++        }
++    }
++
++    #[test]
++    fn native_scope_preserves_checked_layout_failure_when_shrink_refuses() {
++        let destroyed = Cell::new(false);
++        let mut storage = RefuseShrink { destroyed: &destroyed, live: 0, attempted: None };
++        let (baseline, surviving, result) = {
++            let mut memory = Memory::new(&mut storage);
++            let parent = memory.string("parent").unwrap();
++            let baseline = memory.live_bytes();
++            let result: Result<(), StorageError> = memory.scope(|memory| {
++                let mut children = Vec::new();
++                memory.push(&mut children, Payload { destroyed: &destroyed })?;
++                let mut impossible = Vec::<u64>::new();
++                memory.reserve(&mut impossible, usize::MAX)?;
++                Ok(())
++            });
++            assert_eq!(parent, "parent", "original outside payload remains intact");
++            let surviving = memory.live_bytes();
++            drop(parent);
++            (baseline, surviving, result)
++        };
++        assert_eq!(result, Err(StorageError::SizeOverflow), "first concrete native layout error remains authoritative");
++        assert!(destroyed.get());
++        assert_eq!(storage.attempted, Some(baseline));
++        assert_eq!(storage.live, surviving, "failed shrink retains the original grant rather than releasing it early");
++    }
++
++    #[test]
++    fn array_refund_preserves_original_error_after_destroying_actual_elements() {
++        let destroyed = Cell::new(false);
++        let mut storage = RefuseShrink { destroyed: &destroyed, live: 0, attempted: None };
++        let result = {
++            let mut memory = Memory::new(&mut storage);
++            let mut values = Vec::new();
++            memory.push(&mut values, Payload { destroyed: &destroyed }).unwrap();
++            let mut impossible = Vec::<u64>::new();
++            let original = memory.reserve(&mut impossible, usize::MAX);
++            memory.release_vec_after(values, original)
++        };
++        assert_eq!(result, Err(StorageError::SizeOverflow));
++        assert!(destroyed.get());
++        assert_eq!(storage.attempted, Some(0));
++    }
++
++    #[test]
++    fn array_refund_failure_is_hard_when_original_operation_succeeded() {
++        let destroyed = Cell::new(false);
++        let mut storage = RefuseShrink { destroyed: &destroyed, live: 0, attempted: None };
++        let result = {
++            let mut memory = Memory::new(&mut storage);
++            let mut values = Vec::new();
++            memory.push(&mut values, Payload { destroyed: &destroyed }).unwrap();
++            memory.release_vec_after(values, Ok(37))
++        };
++        assert_eq!(result, Err(StorageError::AdmissionFailed));
++        assert!(destroyed.get());
++        assert_eq!(storage.attempted, Some(0));
++    }
++}
+--- a/crates/cdt/src/ops.rs
++++ b/crates/cdt/src/ops.rs
+@@ -375,30 +375,36 @@
+ /// Numeric scratch is admitted from the native operation certificate before the
+ /// original kernel runs; it dies inside the kernel before this scope releases it.
+ fn xsd_relation(a: &XsdValue, b: &XsdValue, equal: bool, memory: &mut Memory<'_>) -> Result<Option<bool>, StorageError> {
+-    let baseline = memory.live_bytes();
+-    let mut original_failure = None;
+-    let mut admit = |layout: purrdf_xsd::exact::cost::NumericOperationLayout| {
+-        let next = baseline.checked_add(layout.peak_bytes()).ok_or(purrdf_xsd::bigint::LimbScratchError::SizeOverflow)?;
+-        let required = next.saturating_sub(memory.live_bytes());
+-        if let Err(error) = memory.add_bytes(required) {
+-            original_failure = Some(error);
+-            return Err(purrdf_xsd::bigint::LimbScratchError::AllocationFailed);
+-        }
+-        Ok(())
+-    };
+-    let answer = if equal {
+-        purrdf_xsd::ops::value_equal_admitted(a, b, &mut admit)
+-    } else {
+-        purrdf_xsd::ops::value_cmp_admitted(a, b, &mut admit).map(|order| order.map(|order| order == Ordering::Less))
+-    };
+-    memory.release_bytes(memory.live_bytes() - baseline)?;
+-    if let Some(error) = original_failure { return Err(error); }
+-    answer.map_err(|error| match error {
+-        purrdf_xsd::bigint::LimbScratchError::SizeOverflow => StorageError::SizeOverflow,
+-        purrdf_xsd::bigint::LimbScratchError::AllocationFailed
+-        | purrdf_xsd::bigint::LimbScratchError::Capacity { .. }
+-        | purrdf_xsd::bigint::LimbScratchError::Exhausted { .. }
+-        | purrdf_xsd::bigint::LimbScratchError::Retained { .. } => StorageError::AllocationFailed,
++    memory.scope(|memory| {
++        let baseline = memory.live_bytes();
++        let mut original_failure = None;
++        let mut admit = |layout: purrdf_xsd::exact::cost::NumericOperationLayout| {
++            let next = baseline.checked_add(layout.peak_bytes()).ok_or(purrdf_xsd::bigint::LimbScratchError::SizeOverflow)?;
++            let required = next.saturating_sub(memory.live_bytes());
++            if let Err(error) = memory.add_bytes(required) {
++                original_failure.get_or_insert(error);
++                return Err(purrdf_xsd::bigint::LimbScratchError::AllocationFailed);
++            }
++            Ok(())
++        };
++        let answer = if equal {
++            purrdf_xsd::ops::value_equal_admitted(a, b, &mut admit)
++        } else {
++            purrdf_xsd::ops::value_cmp_admitted(a, b, &mut admit).map(|order| order.map(|order| order == Ordering::Less))
++        };
++        // Native scratch has already died. Select its original failure before any
++        // refund callback; the common scope preserves it if that callback refuses.
++        if let Some(error) = original_failure { return Err(error); }
++        let answer = answer.map_err(|error| match error {
++            purrdf_xsd::bigint::LimbScratchError::SizeOverflow => StorageError::SizeOverflow,
++            purrdf_xsd::bigint::LimbScratchError::AllocationFailed
++            | purrdf_xsd::bigint::LimbScratchError::Capacity { .. }
++            | purrdf_xsd::bigint::LimbScratchError::Exhausted { .. }
++            | purrdf_xsd::bigint::LimbScratchError::Retained { .. } => StorageError::AllocationFailed,
++        })?;
++        let scratch = memory.live_bytes().checked_sub(baseline).ok_or(StorageError::SizeOverflow)?;
++        memory.release_bytes(scratch)?;
++        Ok(answer)
+     })
+ }
+ 
+@@ -819,9 +825,7 @@
+ /// The distinction applies to the top-level pair only. A blank node buried inside two
+ /// nested composites is compared by [`term_equal`]'s rule, because at that depth the
+ /// question is again one of value equality; no corpus test reaches that case.
+-pub(crate) fn membership_equal(item: &CdtTerm, term: &CdtTerm) -> Result<bool, CdtTypeError> {
+-    membership_equal_with_memory(item, term, &mut Memory::new(&mut Resident)).expect("resident membership storage")
+-}
++
+ pub(crate) fn membership_equal_with_memory(item: &CdtTerm, term: &CdtTerm, memory: &mut Memory<'_>) -> Result<Result<bool, CdtTypeError>, StorageError> {
+     if let (CdtTerm::Blank(p), CdtTerm::Blank(q)) = (item, term) { return Ok(Ok(p == q)); }
+     term_equal_with_memory(item, term, memory)
+@@ -884,8 +888,7 @@
+     if result.is_ok() {
+         while let Some((left, right)) = work.pop() { left.release(memory)?; right.release(memory)?; }
+     }
+-    memory.release_vec(work)?;
+-    result
++    memory.release_vec_after(work, result)
+ }
+ 
+ /// SEP-0009 `cdt:list-equal` over two lists' elements.
+@@ -1232,8 +1235,7 @@
+     if result.is_ok() {
+         while let Some(frame) = stack.pop() { frame.left.release(memory)?; frame.right.release(memory)?; }
+     }
+-    memory.release_vec(stack)?;
+-    result
++    memory.release_vec_after(stack, result)
+ }
+ 
+ /// SEP-0009 `cdt:list-less-than` over two lists' elements.
+--- a/crates/cdt/src/memory.rs
++++ b/crates/cdt/src/memory.rs
+@@ -125,7 +125,9 @@
+             Ok(None)
+         }
+         Err(ReadError::Storage(error)) => {
+-            child.resize(0)?;
++            // All parser locals have died. Attempt the original child refund, but
++            // a second refusal must not replace the parser's first physical cause.
++            let _ = child.resize(0);
+             Err(error)
+         }
+     }

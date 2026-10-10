@@ -1,0 +1,181 @@
+/// The original term-fold kernel's concrete scratch operations. Payload
+/// factories receive the same storage object, so native payload and work-list
+/// admission cannot borrow two independent accounts for one live allocation.
+trait FoldBuffers<N, T, E> {
+    fn push_step(&mut self, steps: &mut WorkList<FoldStep<N>, 32>, step: FoldStep<N>) -> Result<(), E>;
+    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E>;
+    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E>;
+    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E>;
+}
+
+struct ResidentFold<F>(F);
+
+impl<N, T, E, F: FnMut(std::collections::TryReserveError) -> E> FoldBuffers<N, T, E> for ResidentFold<F> {
+    fn push_step(&mut self, steps: &mut WorkList<FoldStep<N>, 32>, step: FoldStep<N>) -> Result<(), E> {
+        steps.try_push(step).map_err(&mut self.0)
+    }
+    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E> {
+        answers.try_reserve_exact(required).map_err(&mut self.0)
+    }
+    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E> {
+        answers.try_reserve(1).map_err(&mut self.0)?;
+        answers.push(answer);
+        Ok(())
+    }
+    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E> {
+        drop(steps);
+        drop(answers);
+        Ok(())
+    }
+}
+
+struct NativeFold<'memory, 'storage, S: purrdf_lex::allocation::Admission + ?Sized, F> {
+    memory: &'memory mut purrdf_lex::allocation::Memory<'storage, S>,
+    storage_error: F,
+}
+
+impl<N, T, E, S, F> FoldBuffers<N, T, E> for NativeFold<'_, '_, S, F>
+where
+    S: purrdf_lex::allocation::Admission + ?Sized,
+    F: FnMut(purrdf_lex::allocation::StorageError, &mut purrdf_lex::allocation::Memory<'_, S>) -> E,
+{
+    fn push_step(&mut self, steps: &mut WorkList<FoldStep<N>, 32>, step: FoldStep<N>) -> Result<(), E> {
+        steps.try_push_admitted(step, self.memory)
+            .map_err(|error| (self.storage_error)(error, self.memory))
+    }
+    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E> {
+        self.memory.reserve(answers, required)
+            .map_err(|error| (self.storage_error)(error, self.memory))
+    }
+    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E> {
+        self.memory.push(answers, answer)
+            .map_err(|error| (self.storage_error)(error, self.memory))
+    }
+    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E> {
+        steps.release_admitted(self.memory)
+            .map_err(|error| (self.storage_error)(error, self.memory))?;
+        self.memory.release_vec(answers)
+            .map_err(|error| (self.storage_error)(error, self.memory))
+    }
+}
+
+/// The sole original bottom-up traversal, shared by resident fallible and native
+/// admitted folds. The callbacks own returned payloads; scratch is destroyed
+/// before its original native grant is refunded.
+fn try_fold_nested_buffered<N: Copy, C: ?Sized, T, E, B: FoldBuffers<N, T, E>>(
+    root: N,
+    ctx: &mut C,
+    mut enter: impl FnMut(&mut C, N, &mut B) -> Result<Nested<N, T>, E>,
+    mut triple: impl FnMut(&mut C, N, T, T, T, &mut B) -> Result<T, E>,
+    buffers: &mut B,
+) -> Result<T, E> {
+    let (s, p, o) = match enter(ctx, root, buffers)? {
+        Nested::Leaf(answer) => return Ok(answer),
+        Nested::Triple(s, p, o) => (s, p, o),
+    };
+    let mut steps = WorkList::with(FoldStep::Assemble(root));
+    for step in [FoldStep::Enter(o), FoldStep::Enter(p), FoldStep::Enter(s)] {
+        buffers.push_step(&mut steps, step)?;
+    }
+    let mut answers = Vec::new();
+    buffers.reserve_answers(&mut answers, 3)?;
+    while let Some(step) = steps.pop() {
+        match step {
+            FoldStep::Enter(node) => match enter(ctx, node, buffers)? {
+                Nested::Leaf(answer) => buffers.push_answer(&mut answers, answer)?,
+                Nested::Triple(s, p, o) => {
+                    for step in [
+                        FoldStep::Assemble(node), FoldStep::Enter(o),
+                        FoldStep::Enter(p), FoldStep::Enter(s),
+                    ] {
+                        buffers.push_step(&mut steps, step)?;
+                    }
+                }
+            },
+            FoldStep::Assemble(node) => {
+                let o = answers.pop().expect("a triple's object is folded");
+                let p = answers.pop().expect("a triple's predicate is folded");
+                let s = answers.pop().expect("a triple's subject is folded");
+                let answer = triple(ctx, node, s, p, o, buffers)?;
+                buffers.push_answer(&mut answers, answer)?;
+            }
+        }
+    }
+    let answer = answers.pop().expect("the root's answer is the last one assembled");
+    buffers.finish(steps, answers)?;
+    Ok(answer)
+}
+
+fn try_fold_nested_with_storage<N: Copy, C: ?Sized, T, E>(
+    root: N,
+    ctx: &mut C,
+    mut enter: impl FnMut(&mut C, N) -> Result<Nested<N, T>, E>,
+    mut triple: impl FnMut(&mut C, N, T, T, T) -> Result<T, E>,
+    storage_error: impl FnMut(std::collections::TryReserveError) -> E,
+) -> Result<T, E> {
+    try_fold_nested_buffered(
+        root, ctx, |ctx, node, _| enter(ctx, node),
+        |ctx, node, s, p, o, _| triple(ctx, node, s, p, o),
+        &mut ResidentFold(storage_error),
+    )
+}
+
+/// Fold the same original nested structure under actual native live-capacity admission.
+///
+/// Payload callbacks receive this memory to admit their actual strings and
+/// boxes before construction. The work list and answer array use it too. A
+/// failed fold destroys every partial answer before refunding its original delta;
+/// the first typed read, callback or physical error remains authoritative.
+///
+/// # Errors
+/// Returns the first original visitor or physical allocation failure.
+pub fn try_fold_nested_with_memory<N: Copy, C: ?Sized, T, E, S: purrdf_lex::allocation::Admission + ?Sized>(
+    root: N,
+    ctx: &mut C,
+    mut enter: impl FnMut(&mut C, N, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<Nested<N, T>, E>,
+    mut triple: impl FnMut(&mut C, N, T, T, T, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
+    storage_error: impl FnMut(purrdf_lex::allocation::StorageError, &mut purrdf_lex::allocation::Memory<'_, S>) -> E,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<T, E> {
+    let baseline = memory.live_bytes();
+    let result = try_fold_nested_buffered(
+        root, ctx, |ctx, node, buffers: &mut NativeFold<'_, '_, S, _>| {
+            enter(ctx, node, buffers.memory)
+        }, |ctx, node, s, p, o, buffers| triple(ctx, node, s, p, o, buffers.memory),
+        &mut NativeFold { memory, storage_error },
+    );
+    if result.is_err()
+        && let Some(released) = memory.live_bytes().checked_sub(baseline)
+    {
+        // The kernel's owned locals have died. A refund refusal cannot replace
+        // the original error or release any still-live enclosing payload.
+        let _ = memory.release_bytes(released);
+    }
+    result
+}
+
+/// Fold a DatasetView's original typed term under native payload and work admission.
+///
+/// # Errors
+/// Returns the first backing read, callback or physical failure; no whole-view
+/// maximum or dictionary census is needed to copy a supported term.
+pub fn try_fold_term_with_memory<D: DatasetView + ?Sized, T, E, S: purrdf_lex::allocation::Admission + ?Sized>(
+    view: &D,
+    id: D::Id,
+    mut leaf: impl FnMut(D::Id, TermRef<'_, D::Id>, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
+    mut triple: impl FnMut(D::Id, T, T, T, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
+    mut read_error: impl FnMut(D::ReadError) -> E,
+    storage_error: impl FnMut(purrdf_lex::allocation::StorageError, &mut purrdf_lex::allocation::Memory<'_, S>) -> E,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<T, E> {
+    try_fold_nested_with_memory(
+        id, &mut (), |(), id, memory| {
+            let guard = view.resolve(id).map_err(&mut read_error)?;
+            match guard.term() {
+                TermRef::Triple { s, p, o } => Ok(Nested::Triple(s, p, o)),
+                resolved => leaf(id, resolved, memory).map(Nested::Leaf),
+            }
+        }, |(), id, s, p, o, memory| triple(id, s, p, o, memory),
+        storage_error, memory,
+    )
+}

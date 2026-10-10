@@ -1,0 +1,64 @@
+fn join_leaf_with_values(
+    leaf: Box<GraphPattern>, leaf_vars: &VarSchema,
+    term_row: &[(Variable,purrdf_sparql_algebra::GroundTerm)], source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionTracking<'_>>, memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    join_selected_values(leaf,term_row,|v| leaf_vars.contains(v),source,map,memory)
+}
+
+fn wrap_with_expr_term_only_values(
+    node: Box<GraphPattern>, free: &FreeVars, row: &SubstitutionRow, source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionTracking<'_>>, memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    join_selected_values(node,&row.term,
+        |v| free.contains(v) && !row.expr.iter().any(|(ev,_)| ev == v),source,map,memory)
+}
+
+/// One original Values-Insertion owner body for both leaf and expression-only sites.
+/// Filters are borrowed twice; no temporary reference array or deep clone bypass.
+fn join_selected_values(
+    node: Box<GraphPattern>, term_row: &[(Variable,purrdf_sparql_algebra::GroundTerm)],
+    selected: impl Fn(&Variable)->bool, source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionTracking<'_>>, memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    let count = term_row.iter().filter(|(v,_)| selected(v)).count();
+    if count == 0 { return Ok(node); }
+    let mut variables = Vec::new();
+    let mut values = Vec::new();
+    memory.reserve(&mut variables,count).map_err(|e| correlated_storage_error(memory,e))?;
+    memory.reserve(&mut values,count).map_err(|e| correlated_storage_error(memory,e))?;
+    for (variable,value) in term_row.iter().filter(|(v,_)| selected(v)) {
+        variables.push(variable.clone());
+        values.push(Some(value.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory,e))?));
+    }
+    let mut bindings = Vec::new();
+    memory.push(&mut bindings,values).map_err(|e| correlated_storage_error(memory,e))?;
+    demote_to_scaffolding(map,std::ptr::from_ref(node.as_ref()) as usize);
+    let values = boxed_and_mapped_scaffolding(GraphPattern::Values { variables,bindings },source,map,memory)?;
+    boxed_and_mapped(GraphPattern::Join { left:node.into(),right:values.into() },source,map,memory)
+}
+
+fn bind_row_into_call(
+    call: &purrdf_sparql_algebra::PropertyFunctionCall, row: &SubstitutionRow,
+    source: &GraphPattern, map: &mut Option<&mut SubstitutionTracking<'_>>, memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>,EvalError> {
+    let mut bound = call.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory,e))?;
+    let seed = crate::substitute::bind_call_arguments_with_memory(&mut bound,&row.term,None,memory)
+        .map_err(|failure| failure.into_eval_error(memory.admission_mut().workspace()))?;
+    let node = boxed_and_mapped(GraphPattern::PropertyFunction(bound),source,map,memory)?;
+    match seed {
+        Some(seed) => plant_mapped_driver(node,seed,source,map,|seed,call| GraphPattern::Lateral { left:seed.into(),right:call.into() },memory),
+        None => Ok(node),
+    }
+}
+
+fn plant_mapped_driver(
+    node:Box<GraphPattern>,seed:GraphPattern,source:&GraphPattern,
+    map:&mut Option<&mut SubstitutionTracking<'_>>,
+    assemble:impl FnOnce(Box<GraphPattern>,Box<GraphPattern>)->GraphPattern,
+    memory:&mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>,EvalError> {
+    demote_to_scaffolding(map,std::ptr::from_ref(node.as_ref()) as usize);
+    let seed=boxed_and_mapped_scaffolding(seed,source,map,memory)?;
+    boxed_and_mapped(assemble(seed,node),source,map,memory)
+}

@@ -1,0 +1,202 @@
+#[derive(Default)]
+struct RawBlankGroup {
+    terms: Vec<*const TermPattern>,
+    surfaces: ScopeTable<usize, ()>,
+}
+
+#[derive(Clone, Copy)]
+struct PatternFrame<'a> { pattern: &'a GraphPattern, owner: usize, surface: usize }
+
+struct RawBlankScopes<'a> {
+    owners: Vec<&'a GraphPattern>,
+    groups: ScopeTable<(usize, &'a str), RawBlankGroup>,
+}
+impl<'a> RawBlankScopes<'a> {
+    fn collect<S: Admission + ?Sized>(pattern: &'a GraphPattern, memory: &mut Memory<'_, S>) -> Result<Self, StorageError> {
+        let mut result = Self { owners: Vec::new(), groups: ScopeTable::default() };
+        let mut frames = WorkList::<PatternFrame<'_>, 16>::new();
+        let mut next_surface = 0usize;
+        crate::walk::walk_pre_post_with_memory(NodeRef::Pattern(pattern), |visit, node, memory| {
+            match (visit, node) {
+                (Visit::Enter, NodeRef::Pattern(pattern)) => {
+                    let parent = frames.top_mut().copied();
+                    let owner = parent.filter(|p| crate::scope::joins_blank_scope(p.pattern));
+                    let (owner, surface) = if let Some(parent) = owner {
+                        let surface = if spine_child_needs_bracing_with_memory(parent.pattern, pattern, memory)? {
+                            next_surface = next_surface.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+                            next_surface
+                        } else { parent.surface };
+                        (parent.owner, surface)
+                    } else {
+                        let owner = result.owners.len();
+                        memory.push(&mut result.owners, pattern)?;
+                        next_surface = next_surface.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+                        (owner, next_surface)
+                    };
+                    frames.try_push_admitted(PatternFrame { pattern, owner, surface }, memory)?;
+                }
+                (Visit::Exit, NodeRef::Pattern(_)) => { frames.pop(); }
+                (Visit::Enter, NodeRef::Term(term @ TermPattern::BlankNode(blank))) => {
+                    let frame = frames.top_mut().expect("a pattern owns each match term");
+                    let key = (frame.owner, blank.as_str());
+                    if result.groups.get(&key).is_none() { result.groups.insert(key, RawBlankGroup::default(), memory)?; }
+                    let group = result.groups.get_mut(&key).expect("original blank group inserted");
+                    memory.push(&mut group.terms, core::ptr::from_ref(term))?;
+                    group.surfaces.insert(frame.surface, (), memory)?;
+                }
+                _ => {}
+            }
+            Ok::<_, StorageError>(Flow::Descend)
+        }, memory)?;
+        frames.release_admitted(memory)?;
+        Ok(result)
+    }
+    fn carried_labels<S: Admission + ?Sized>(&self, owner: usize, memory: &mut Memory<'_, S>) -> Result<ScopeTable<&'a str, ()>, StorageError> {
+        let mut labels = ScopeTable::default();
+        crate::scope::visit_spine_leaves_with_memory(self.owners[owner], &mut |leaf, memory| {
+            crate::scope::visit_leaf_labels_with_memory(leaf, crate::scope::LabelSource::Carried, &mut |label, memory| {
+                labels.insert(label, (), memory)?;
+                Ok::<_, StorageError>(false)
+            }, memory)
+        }, memory)?;
+        Ok(labels)
+    }
+    fn release<S: Admission + ?Sized>(self, memory: &mut Memory<'_, S>) -> Result<(), StorageError> {
+        // The original arena's nested vector/table bytes were admitted before
+        // construction and remain live until the complete scopes payload dies.
+        let mut nested = 0usize;
+        for (_, group) in self.groups.iter() {
+            nested = nested.checked_add(core::alloc::Layout::array::<*const TermPattern>(group.terms.capacity()).map_err(|_| StorageError::SizeOverflow)?.size()).ok_or(StorageError::SizeOverflow)?;
+            nested = nested.checked_add(group.surfaces.storage_bytes()?).ok_or(StorageError::SizeOverflow)?;
+        }
+        self.groups.release(memory)?;
+        memory.release_bytes(nested)?;
+        memory.release_vec(self.owners)
+    }
+}
+
+#[derive(Default)]
+struct VariableNames {
+    variables: ScopeTable<Variable, String>,
+    blanks: ScopeTable<*const TermPattern, usize>,
+    blank_aliases: Vec<BlankName>,
+    unit: Option<String>,
+}
+impl VariableNames {
+    fn for_pattern<S: Admission + ?Sized>(pattern: &GraphPattern, reserve: impl FnOnce(&mut dyn FnMut(&Variable)), memory: &mut Memory<'_, S>) -> Result<Self, StorageError> {
+        let needs_names = !crate::walk::walk_pre_post_with_memory(NodeRef::Pattern(pattern), |visit, node, _| {
+            if visit == Visit::Enter {
+                let mut found = matches!(node, NodeRef::Term(TermPattern::BlankNode(_)));
+                node.for_each_variable(|variable| found |= variable.is_hidden());
+                if found { return Ok::<_, StorageError>(Flow::Stop); }
+            }
+            Ok(Flow::Descend)
+        }, memory)?;
+        if !needs_names { return Ok(Self::default()); }
+        let mut ordinary: ScopeTable<String, ()> = ScopeTable::default();
+        let mut hidden: ScopeTable<Variable, ()> = ScopeTable::default();
+        let mut has_raw = false;
+        crate::walk::walk_pre_post_with_memory(NodeRef::Pattern(pattern), |visit, node, memory| {
+            let mut failure = None;
+            if visit == Visit::Enter {
+                has_raw |= matches!(node, NodeRef::Term(TermPattern::BlankNode(_)));
+                node.for_each_variable(|variable| {
+                    if failure.is_some() { return; }
+                    let answer = if variable.is_hidden() { hidden.insert(variable.clone(), (), memory).map(|_| ()) }
+                    else { reserve_name(&mut ordinary, variable.as_str(), memory) };
+                    if let Err(error) = answer { failure = Some(error); }
+                });
+            }
+            failure.map_or(Ok(Flow::Descend), Err)
+        }, memory)?;
+        let mut failure = None;
+        reserve(&mut |variable| {
+            if failure.is_none() { failure = reserve_name(&mut ordinary, variable.as_str(), memory).err(); }
+        });
+        if let Some(error) = failure { return Err(error); }
+        let prefix = fresh_prefix_with_memory("__purrdf_hidden_", &ordinary.iter().map(|(name, _)| name.as_str()), memory)?;
+        let mut names = Self::default();
+        let mut ordered = memory.collect(hidden.iter().map(|(variable, _)| variable.clone()))?;
+        ordered.sort_unstable();
+        for (index, variable) in ordered.iter().enumerate() {
+            let text = memory.format(&format_args!("{prefix}{index}"))?;
+            names.variables.insert(variable.clone(), text, memory)?;
+        }
+        memory.release_vec(ordered)?;
+        hidden.release(memory)?;
+        if !names.variables.is_empty() { names.unit = Some(memory.format(&format_args!("{prefix}0unit"))?); }
+        if has_raw {
+            let scopes = RawBlankScopes::collect(pattern, memory)?;
+            names.alias_raw_blanks(&scopes, &prefix, memory)?;
+            scopes.release(memory)?;
+        }
+        memory.release_string(prefix)?;
+        let string_bytes = ordinary.iter().try_fold(0usize, |total, (name, _)| total.checked_add(name.capacity()).ok_or(StorageError::SizeOverflow))?;
+        ordinary.release(memory)?;
+        memory.release_bytes(string_bytes)?;
+        Ok(names)
+    }
+    fn alias_raw_blanks<S: Admission + ?Sized>(&mut self, scopes: &RawBlankScopes<'_>, variable_prefix: &str, memory: &mut Memory<'_, S>) -> Result<(), StorageError> {
+        let mut owners_per_label: ScopeTable<&str, usize> = ScopeTable::default();
+        for ((_, label), _) in scopes.groups.iter() {
+            if let Some(count) = owners_per_label.get_mut(label) { *count = count.checked_add(1).ok_or(StorageError::SizeOverflow)?; }
+            else { owners_per_label.insert(*label, 1, memory)?; }
+        }
+        let blank_prefix = fresh_prefix_with_memory("__purrdf_scoped_blank_", &owners_per_label.iter().map(|(label, _)| *label), memory)?;
+        let mut canonical_names: ScopeTable<&str, &str> = ScopeTable::default();
+        for (variable, name) in self.variables.iter() {
+            if let Some(label) = variable.source_blank_label() { canonical_names.insert(label, name.as_str(), memory)?; }
+        }
+        let mut groups = memory.collect(scopes.groups.iter())?;
+        groups.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        let mut next_variable = self.variables.iter().count();
+        let mut next_blank = 0usize;
+        let mut last_owner = None;
+        let mut carried = ScopeTable::default();
+        for (&(owner, label), group) in &groups {
+            if last_owner != Some(owner) { carried.release(memory)?; carried = scopes.carried_labels(owner, memory)?; last_owner = Some(owner); }
+            let canonical = carried.get(&label).and_then(|()| canonical_names.get(&label));
+            let alias = if let Some(name) = canonical { Some(BlankName::Witness(memory.string(name)?)) }
+            else if group.surfaces.iter().count() > 1 {
+                let name = memory.format(&format_args!("{variable_prefix}{next_variable}"))?;
+                if self.unit.is_none() { self.unit = Some(memory.format(&format_args!("{name}unit"))?); }
+                next_variable = next_variable.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+                Some(BlankName::Witness(name))
+            } else if owners_per_label.get(&label).copied().unwrap_or(0) > 1 || !purrdf_lex::terminals::is_valid_blank_node_label(label) {
+                let name = memory.format(&format_args!("{blank_prefix}{next_blank}"))?;
+                next_blank = next_blank.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+                Some(BlankName::Label(name))
+            } else { None };
+            if let Some(alias) = alias {
+                let index = self.blank_aliases.len(); memory.push(&mut self.blank_aliases, alias)?;
+                for &term in &group.terms { self.blanks.insert(term, index, memory)?; }
+            }
+        }
+        memory.release_vec(groups)?;
+        canonical_names.release(memory)?;
+        carried.release(memory)?;
+        owners_per_label.release(memory)?;
+        memory.release_string(blank_prefix)
+    }
+    fn has_witnesses(&self) -> bool { self.unit.is_some() }
+    fn name<'a>(&'a self, variable: &'a Variable) -> &'a str { self.variables.get(variable).map_or_else(|| variable.as_str(), String::as_str) }
+    fn unit_name(&self) -> &str { self.unit.as_deref().expect("a witness identity has an alias") }
+    fn projection<S: Admission + ?Sized>(&self, s: &mut Surface<'_, '_, '_, S>, pattern: &GraphPattern) {
+        let variables = s.storage.run(|memory| crate::parser::visible_variables_with_memory(pattern, memory)).unwrap_or_default();
+        for variable in &variables { let _ = write!(s, "?{} ", self.name(variable)); }
+        if variables.is_empty() && s.storage.failure.get().is_none() { let _ = write!(s, "(1 AS ?{}) ", self.unit_name()); }
+        s.storage.cleanup(|memory| memory.release_vec(variables));
+    }
+}
+fn reserve_name<S: Admission + ?Sized>(names: &mut ScopeTable<String, ()>, name: &str, memory: &mut Memory<'_, S>) -> Result<(), StorageError> {
+    if names.get_by(|stored| name.cmp(stored.as_str())).is_none() { let owned = memory.string(name)?; names.insert(owned, (), memory)?; }
+    Ok(())
+}
+fn fresh_prefix_with_memory<'a, S: Admission + ?Sized>(initial: &str, names: &(impl Iterator<Item = &'a str> + Clone), memory: &mut Memory<'_, S>) -> Result<String, StorageError> {
+    let mut prefix = memory.string(initial)?;
+    while (*names).clone().any(|name| name.starts_with(&prefix)) {
+        let required = prefix.len().checked_add(1).ok_or(StorageError::SizeOverflow)?;
+        memory.reserve_string(&mut prefix, required)?; prefix.insert(0, '_');
+    }
+    Ok(prefix)
+}

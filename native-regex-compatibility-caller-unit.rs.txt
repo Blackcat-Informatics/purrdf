@@ -1,0 +1,106 @@
+// Replace NativeProgram through the Cache/Program declarations at their real
+// existing home; reuse the shipping FailureOwner/ErrorPublication unchanged
+// except classifying CompatibilityFlags/CompatibilitySource as lexical.
+#[derive(Debug)]
+enum NativePattern {
+    Dated(xpath::CompiledPattern),
+    Compatibility(xpath::CompatibilityPattern),
+}
+
+impl NativePattern {
+    fn matches_source(&self, profile: Option<xpath::Profile>, pattern: &str, flags: &str) -> bool {
+        match (self, profile) {
+            (Self::Dated(value), Some(profile)) => value.matches_source(profile, pattern, flags),
+            (Self::Compatibility(value), None) => value.matches_source(pattern, flags),
+            _ => false,
+        }
+    }
+    fn admit(&self, limits: xpath::Limits) -> Result<(), xpath::Error> {
+        match self { Self::Dated(value) => value.admit(limits), Self::Compatibility(value) => value.admit(limits) }
+    }
+    fn is_match_with_storage(
+        &self, input: &str, limits: xpath::Limits, storage: LexicalFrame,
+    ) -> Result<xpath::OwnedPatternValue<bool, LexicalFrame>, xpath::OwnedPatternError<LexicalFrame>> {
+        match self {
+            Self::Dated(value) => value.is_match_with_storage(input, limits, storage),
+            Self::Compatibility(value) => value.is_match_with_storage(input, limits, storage),
+        }
+    }
+    fn replace_all_with_storage<'h>(
+        &self, input: &'h str, replacement: &str, limits: xpath::Limits,
+        matcher: LexicalFrame, output: LexicalFrame,
+    ) -> Result<xpath::OwnedReplacement<'h, LexicalFrame, LexicalFrame>,
+        xpath::OwnedPatternError<(LexicalFrame, LexicalFrame)>> {
+        match self {
+            Self::Dated(value) => value.replace_all_with_storage(input, replacement, limits, matcher, output),
+            Self::Compatibility(value) => value.replace_all_with_storage(input, replacement, limits, matcher, output),
+        }
+    }
+}
+
+pub(crate) struct NativeProgram {
+    // Both public law carriers delegate to one program body. The payload dies
+    // before the original compiler/control grant, including a shallow clone.
+    pattern: NativePattern,
+    storage: LexicalFrame,
+}
+impl std::fmt::Debug for NativeProgram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeProgram").field("storage", &self.storage).finish_non_exhaustive()
+    }
+}
+struct ProgramPublication<T> {
+    wrap: fn(T) -> NativePattern,
+}
+impl<T> xpath::Publication<T, LexicalFrame> for ProgramPublication<T> {
+    type Output = Shared<NativeProgram>;
+    type Error = EvalError;
+    fn publish(self, value: &mut Option<T>, storage: &mut LexicalFrame) -> Result<Self::Output, EvalError> {
+        let control = Shared::<NativeProgram>::allocation_layout().size();
+        let total = storage.live_bytes().checked_add(control).ok_or(EvalError::WorkspaceBoundOverflow)?;
+        storage.resize_live(total)?;
+        let workspace = storage.workspace().clone();
+        // The final control is allocated before either original owner is
+        // removed. The factory only moves the payload and original grant.
+        Shared::try_new_with(|| NativeProgram {
+            pattern: (self.wrap)(value.take().expect("native program remains enclosed")),
+            storage: std::mem::replace(storage, LexicalFrame::new(&workspace)),
+        }).map_err(|_| EvalError::AllocationFailed { construct: "native XPath shared program" })
+    }
+}
+
+fn compile_owned(
+    profile: xpath::Profile, pattern: &str, flags: &str, limits: xpath::Limits,
+    workspace: &WorkspaceCapability,
+) -> Result<Option<Shared<NativeProgram>>, EvalError> {
+    let publication = ProgramPublication { wrap: NativePattern::Dated };
+    match xpath::compile_with_storage(profile, pattern, flags, limits, LexicalFrame::new(workspace)) {
+        Ok(compiled) => compiled.publish_with(publication).map(Some),
+        Err(error) => error.publish_with(ErrorPublication::new()),
+    }
+}
+
+fn compile_compatibility_owned(
+    pattern: &str, flags: &str, limits: xpath::Limits, workspace: &WorkspaceCapability,
+) -> Result<Option<Shared<NativeProgram>>, EvalError> {
+    let publication = ProgramPublication { wrap: NativePattern::Compatibility };
+    match xpath::compile_compatibility_with_storage(pattern, flags, limits, LexicalFrame::new(workspace)) {
+        Ok(compiled) => compiled.publish_with(publication).map(Some),
+        Err(error) => error.publish_with(ErrorPublication::new()),
+    }
+}
+
+/// Successful programs only; full original source/flags/law are rechecked.
+pub(crate) type Cache = BoundedCache<u64, Shared<NativeProgram>>;
+
+#[derive(Clone)]
+pub(crate) struct Program {
+    compiled: Shared<NativeProgram>,
+    limits: xpath::Limits,
+}
+
+impl Program {
+    fn new(compiled: Shared<NativeProgram>, limits: xpath::Limits) -> Self {
+        Self { compiled, limits }
+    }
+}

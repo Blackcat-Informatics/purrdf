@@ -1,0 +1,18 @@
+fn slot_for(
+    variable: Variable,
+    projected: bool,
+    slots: &mut DetHashMap<Variable, usize>,
+    schema: &mut VarSchema,
+    slot_cols: &mut Vec<Option<usize>>,
+    slot_seed: &mut Vec<Option<usize>>,
+    input: &VarSchema,
+) -> usize {
+    if let Some(&slot) = slots.get(&variable) {
+        return slot;
+    }
+    let slot = slot_cols.len();
+    slot_cols.push(projected.then(|| schema.push(variable.clone())));
+    slot_seed.push(projected.then(|| input.index_of(&variable)).flatten());
+    slots.insert(variable, slot);
+    slot
+}

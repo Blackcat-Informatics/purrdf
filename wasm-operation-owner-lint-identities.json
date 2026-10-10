@@ -1,0 +1,5 @@
+{
+  "source": "crates/rdf-wasm/src/operation.rs",
+  "preimage_sha256": "0e9a18ab6e11e2e42a7c66bffd53c513b0f0c9aaf658b7c5769c96f7263fdb2a",
+  "postimage_sha256": "0e50733d62a575a315bf6d8a9cd6a40126cf52536bb4fc5e0a14e999a6011c00"
+}

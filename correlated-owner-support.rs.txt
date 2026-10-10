@@ -1,0 +1,167 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+pub(crate) type CorrelatedMemory<'a> = purrdf_lex::allocation::Memory<'a, crate::workspace::LexicalFrame>;
+
+pub(crate) fn correlated_storage_error(
+    memory: &mut CorrelatedMemory<'_>, error: purrdf_lex::allocation::StorageError,
+) -> EvalError {
+    memory.admission_mut().storage_error(error, "correlated native algebra")
+}
+
+pub(crate) fn correlated_box<T>(value: T, memory: &mut CorrelatedMemory<'_>) -> Result<Box<T>, EvalError> {
+    memory.add_bytes(std::alloc::Layout::new::<T>().size())
+        .map_err(|error| correlated_storage_error(memory, error))?;
+    purrdf_lex::allocation::try_boxed(value)
+        .map_err(|_| EvalError::AllocationFailed { construct: "correlated native child" })
+}
+
+/// A copied tree and its ORIGINAL native allocation owner, in destruction order.
+/// The root box is permanent before source addresses or analyses are recorded.
+pub(crate) struct CorrelatedPattern {
+    body: Box<GraphPattern>,
+    frame: crate::workspace::LexicalFrame,
+}
+
+impl std::ops::Deref for CorrelatedPattern {
+    type Target = GraphPattern;
+    fn deref(&self) -> &GraphPattern { &self.body }
+}
+impl AsRef<GraphPattern> for CorrelatedPattern {
+    fn as_ref(&self) -> &GraphPattern { &self.body }
+}
+
+impl CorrelatedPattern {
+    pub(crate) fn build(
+        workspace: &crate::WorkspaceCapability,
+        build: impl FnOnce(&mut CorrelatedMemory<'_>) -> Result<Box<GraphPattern>, EvalError>,
+    ) -> Result<Self, EvalError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let body = build(&mut purrdf_lex::allocation::Memory::new(&mut frame))?;
+        Ok(Self { body, frame })
+    }
+
+    pub(crate) fn copy(pattern: &GraphPattern, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
+        Self::build(workspace, |memory| {
+            let copy = pattern.clone_with_memory(memory)
+                .map_err(|error| correlated_storage_error(memory, error))?;
+            correlated_box(copy, memory)
+        })
+    }
+
+    /// Move the existing root beneath one admitted wrapper; no deep copy occurs.
+    pub(crate) fn first(self) -> Result<Self, EvalError> {
+        let Self { body, mut frame } = self;
+        // On any failure the body is destroyed before its original frame.
+        let result = {
+            let live = frame.live_bytes();
+            let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, live);
+            correlated_box(GraphPattern::Slice { inner: body.into(), start: 0, length: Some(1) }, &mut memory)
+        };
+        result.map(|body| Self { body, frame })
+    }
+
+    /// Resident-only compatibility door. A bounded lease can never be detached.
+    #[cfg(test)]
+    fn into_resident(self) -> Box<GraphPattern> {
+        assert!(!self.frame.workspace().is_bounded());
+        self.body
+    }
+}
+
+/// The immutable per-row arrays and the original child-box grant.
+/// Lexical leaves have their own intrinsic SharedText ownership.
+pub(crate) struct SubstitutionPayload {
+    pub(crate) expr: Vec<(Variable, Expression)>,
+    pub(crate) term: Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>,
+    _frame: Option<crate::workspace::LexicalFrame>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct SubstitutionRow {
+    contents: Option<crate::workspace::SharedWorkspace<SubstitutionPayload>>,
+}
+impl std::ops::Deref for SubstitutionRow {
+    type Target = SubstitutionPayload;
+    fn deref(&self) -> &SubstitutionPayload {
+        static EMPTY: SubstitutionPayload = SubstitutionPayload { expr: Vec::new(), term: Vec::new(), _frame: None };
+        self.contents.as_deref().unwrap_or(&EMPTY)
+    }
+}
+
+impl SubstitutionRow {
+    pub(crate) fn build(
+        workspace: &crate::WorkspaceCapability,
+        fill: impl FnOnce(
+            &mut Vec<(Variable, Expression)>,
+            &mut Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>,
+            &mut CorrelatedMemory<'_>,
+        ) -> Result<(), EvalError>,
+    ) -> Result<Self, EvalError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let mut expr = Vec::new();
+        let mut term = Vec::new();
+        fill(&mut expr, &mut term, &mut purrdf_lex::allocation::Memory::new(&mut frame))?;
+        let payload = SubstitutionPayload { expr, term, _frame: Some(frame) };
+        if payload.expr.is_empty() && payload.term.is_empty() { return Ok(Self::default()); }
+        Ok(Self { contents: Some(crate::workspace::SharedWorkspace::new_admitted(payload, workspace)?) })
+    }
+
+    #[cfg(test)]
+    fn resident(expr: Vec<(Variable, Expression)>, term: Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>) -> Self {
+        Self { contents: Some(crate::workspace::SharedWorkspace::new_admitted(
+            SubstitutionPayload { expr, term, _frame: None }, &crate::WorkspaceCapability::resident(),
+        ).expect("resident substitution row control allocation failed")) }
+    }
+
+    pub(crate) fn filtered(
+        &self, workspace: &crate::WorkspaceCapability, keep: impl Fn(&Variable) -> bool,
+    ) -> Result<Self, EvalError> {
+        Self::build(workspace, |expr, term, memory| {
+            for (variable, value) in self.expr.iter().filter(|(v, _)| keep(v)) {
+                let copy = value.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory, e))?;
+                memory.push(expr, (variable.clone(), copy)).map_err(|e| correlated_storage_error(memory, e))?;
+            }
+            for (variable, value) in self.term.iter().filter(|(v, _)| keep(v)) {
+                let copy = value.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory, e))?;
+                memory.push(term, (variable.clone(), copy)).map_err(|e| correlated_storage_error(memory, e))?;
+            }
+            Ok(())
+        })
+    }
+
+    fn narrow_to(&self, variables: &[Variable], workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
+        self.filtered(workspace, |v| variables.contains(v))
+    }
+
+    pub(crate) fn application_inputs(
+        &self, inputs: &[(Variable, Variable)], marker: Option<(&Variable, bool)>, workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Self::build(workspace, |expr, term, memory| {
+            for (input, source) in inputs {
+                if let Some((_, value)) = self.expr.iter().find(|(v, _)| v == source) {
+                    let copy = value.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory, e))?;
+                    memory.push(expr, (input.clone(), copy)).map_err(|e| correlated_storage_error(memory, e))?;
+                }
+                if let Some((_, value)) = self.term.iter().find(|(v, _)| v == source) {
+                    let copy = value.clone_with_memory(memory).map_err(|e| correlated_storage_error(memory, e))?;
+                    memory.push(term, (input.clone(), copy)).map_err(|e| correlated_storage_error(memory, e))?;
+                }
+            }
+            if let Some((variable, value)) = marker {
+                let literal = correlated_boolean(value, workspace)?;
+                memory.push(expr, (variable.clone(), Expression::Literal(literal.clone())))
+                    .map_err(|e| correlated_storage_error(memory, e))?;
+                memory.push(term, (variable.clone(), purrdf_sparql_algebra::GroundTerm::Literal(literal)))
+                    .map_err(|e| correlated_storage_error(memory, e))?;
+            }
+            Ok(())
+        })
+    }
+}
+
+fn correlated_boolean(value: bool, workspace: &crate::WorkspaceCapability) -> Result<purrdf_sparql_algebra::Literal, EvalError> {
+    let lexical = workspace.authored_text(if value { "true" } else { "false" })?;
+    let datatype = purrdf_sparql_algebra::NamedNode::from_admitted(workspace.authored_text(XSD_BOOLEAN)?);
+    Ok(purrdf_sparql_algebra::Literal::from_admitted(lexical, datatype, None, None))
+}

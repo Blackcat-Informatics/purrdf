@@ -1,0 +1,52 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 11.76s
+     Running tests/prepared_execution.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/dfb497cce083cf1d/out/prepared_execution-dfb497cce083cf1d)
+
+running 17 tests
+test binding_a_name_that_was_not_declared_is_refused ... ok
+test declaring_one_parameter_twice_is_refused ... ok
+test a_duplicate_declaration_is_refused_before_either_door_exists ... ok
+test a_repeated_pre_bound_name_answers_the_empty_solution ... ok
+test a_blank_and_an_iri_focus_node_answer_correctly_through_the_same_handle ... ok
+test a_prepared_execution_answers_each_binding_from_one_plan ... ok
+test executing_a_prepared_plan_under_a_mismatched_property_function_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test running_with_a_parameter_unbound_is_refused ... ok
+test executing_a_prepared_plan_under_a_mismatched_aggregate_registry_is_refused_but_a_matched_registry_still_answers ... ok
+test re_running_a_prepared_execution_costs_a_pinned_constant ... ok
+test evaluating_an_admitted_plan_costs_a_pinned_constant_per_call ... ok
+test the_id_door_refuses_an_out_of_range_slot_exactly_as_the_value_door_does ... ok
+test the_id_door_refuses_an_unbound_parameter_exactly_as_the_value_door_does ... ok
+test unbind_all_returns_every_slot_to_unbound_and_a_later_bind_answers_the_new_value ... ok
+test the_third_run_costs_measurably_less_because_the_memo_is_reused ... ok
+test the_two_doors_are_interchangeable_within_one_execution ... ok
+test a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/query_completion.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-sparql-eval/9878b07c0c4f8576/out/query_completion-9878b07c0c4f8576)
+
+running 21 tests
+test preexisting_source_failure_outranks_parse_and_empty_pattern_success ... ok
+test refused_reporting_admission_remains_typed_even_before_sticky_failure ... ok
+test sticky_operational_root_outranks_the_direct_admission_error ... ok
+test retained_prepared_visits_remain_inside_the_checked_publication_scope ... ok
+test public_explain_projection_holds_real_execution_permit_through_final_read ... ok
+test refused_execution_never_invokes_a_scoped_visitor_and_the_handle_can_retry ... ok
+test explain_preflight_failure_outranks_malformed_query ... ok
+test typed_owned_and_governed_queries_never_publish_iterator_or_materialization_failures ... ok
+test named_graph_lookup_refusal_never_certifies_an_empty_scope ... ok
+test final_checkpoint_failure_discards_success_and_keeps_workspace_held ... ok
+test explain_admitted_supplied_inputs_preserve_parse_failure_before_reading ... ok
+test explain_admission_failures_remain_typed_without_an_explanation ... ok
+test graph_admission_and_final_checkpoint_failures_leave_destination_unchanged ... ok
+test prepared_governed_queries_discard_rows_produced_before_an_iterator_failure ... ok
+test healthy_explain_preserves_parse_and_evaluation_diagnostics_and_final_evidence ... ok
+test direct_execution_admission_failures_keep_their_typed_cause_and_exact_evidence ... ok
+test healthy_query_routes_hold_execution_admission_through_final_checkpoint ... ok
+test explain_measuring_and_final_checkpoint_failures_publish_no_ledger ... ok
+test explain_stop_retains_stopped_receipt_while_operational_failure_takes_precedence ... ok
+test the_final_prepared_checkpoint_outranks_every_ready_evaluator_outcome ... ok
+test healthy_explain_is_identical_to_resident_and_holds_admission_through_publication ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

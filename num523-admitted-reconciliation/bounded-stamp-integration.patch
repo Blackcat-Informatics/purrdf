@@ -1,0 +1,14 @@
+--- a/crates/sparql-eval/tests/segmented_query.rs
++++ b/crates/sparql-eval/tests/segmented_query.rs
+@@ -539,6 +539,11 @@
+ #[test]
+ fn bounded_select_algebra_matches_resident_bags_across_public_entries() {
+     const CASES: &[(&str, &str, usize)] = &[
++        (
++            "dateTimeStamp admitted calendar casts",
++            "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#> SELECT ?stamp ?date WHERE { VALUES ?value { \"2026-10-04T12:00:00Z\" \"2026-10-04T12:00:00\" } BIND(xsd:dateTimeStamp(?value) AS ?stamp) BIND(xsd:date(?stamp) AS ?date) }",
++            2,
++        ),
+         (
+             "zero-column bag",
+             "SELECT * WHERE { VALUES () { () () } }",

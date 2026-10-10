@@ -1,0 +1,67 @@
+/// Immutable native site tree; ordinary clones retain its original body and grant.
+#[derive(Clone)]
+pub(crate) struct PreparedPattern(crate::workspace::SharedWorkspace<CorrelatedPattern>);
+impl std::ops::Deref for PreparedPattern { type Target=GraphPattern;fn deref(&self)->&GraphPattern { &self.0 } }
+impl AsRef<GraphPattern> for PreparedPattern { fn as_ref(&self)->&GraphPattern { self } }
+impl PreparedPattern {
+    pub(crate) fn new(pattern:CorrelatedPattern,workspace:&crate::WorkspaceCapability)->Result<Self,EvalError> {
+        crate::workspace::SharedWorkspace::new_admitted(pattern,workspace).map(Self)
+    }
+}
+
+/// The original map stack, with immutable linked controls. Forks share the
+/// prefix without allocating a copied metadata array or changing lookup order.
+#[derive(Clone,Default)]
+pub(crate) struct CorrelatedMaps(Option<crate::workspace::SharedWorkspace<CorrelatedMapLayer>>);
+struct CorrelatedMapLayer {
+    map:crate::workspace::SharedWorkspace<SubstitutionSourceMap>,
+    parent:CorrelatedMaps,
+}
+impl CorrelatedMaps {
+    pub(crate) fn push(&mut self,map:crate::workspace::SharedWorkspace<SubstitutionSourceMap>,workspace:&crate::WorkspaceCapability)->Result<(),EvalError> {
+        let next=crate::workspace::SharedWorkspace::new_admitted(CorrelatedMapLayer { map,parent:self.clone() },workspace)?;
+        self.0=Some(next);Ok(())
+    }
+    pub(crate) fn pop(&mut self)->Option<crate::workspace::SharedWorkspace<SubstitutionSourceMap>> {
+        let layer=self.0.take()?;
+        self.0=layer.parent.0.clone();
+        Some(layer.map.clone())
+    }
+    pub(crate) fn last(&self)->Option<&crate::workspace::SharedWorkspace<SubstitutionSourceMap>> { self.0.as_ref().map(|layer|&layer.map) }
+    pub(crate) fn iter(&self)->impl Iterator<Item=&crate::workspace::SharedWorkspace<SubstitutionSourceMap>> {
+        std::iter::successors(self.0.as_deref(),|layer|layer.parent.0.as_deref()).map(|layer|&layer.map)
+    }
+}
+
+impl crate::eval::PreparedExists {
+    pub(crate) fn build_admitted(pattern:&GraphPattern,workspace:&crate::WorkspaceCapability)->Result<Self,EvalError> {
+        #[cfg(test)]
+        crate::eval::PREPARED_EXISTS_BUILD_COUNT.with(|count|count.set(count.get()+1));
+        let mut frame=crate::workspace::LexicalFrame::new(workspace);
+        let body={
+            let mut memory=purrdf_lex::allocation::Memory::new(&mut frame);
+            match crate::enf::normalize_with_memory(pattern,&mut memory)? {
+                crate::enf::Enf::FoldedEmpty=>return Ok(Self::FoldedFalse),
+                crate::enf::Enf::Pattern(pattern)=>correlated_box(pattern,&mut memory)?,
+            }
+        };
+        let normalized=PreparedPattern::new(CorrelatedPattern { body,frame },workspace)?;
+        let mut ledger_source=crate::enf::ledger_source_map_admitted(pattern,&normalized,workspace)?;
+        let witness_inner=CorrelatedPattern::copy(&normalized,workspace)?;
+        let witness_map=crate::enf::ledger_source_map_admitted(pattern,&witness_inner,workspace)?;
+        let root_source=ledger_source.get(&(std::ptr::from_ref(normalized.as_ref()) as usize)).map(|entry|entry.source);
+        for (&address,&entry) in witness_map.iter() { ledger_source.insert_admitted(address,entry,workspace)?; }
+        let witness_wrapped=PreparedPattern::new(witness_inner.first()?,workspace)?;
+        if let Some(source)=root_source {
+            ledger_source.insert_admitted(std::ptr::from_ref(witness_wrapped.as_ref()) as usize,SubstitutionSource { source,counts_rows:false },workspace)?;
+        }
+        let mut analysis=crate::governor::soundness::NodeAnalysisTable::default();
+        let root=crate::governor::soundness::analyze_pattern_admitted(&normalized,&mut analysis,workspace)?;
+        Ok(Self::Pattern {
+            normalized,witness_wrapped,free_vars:root.free_vars,stateful:root.has_stateful_builtin,
+            analysis:crate::workspace::SharedWorkspace::new_admitted(analysis,workspace)?,
+            ledger_source:crate::workspace::SharedWorkspace::new_admitted(ledger_source,workspace)?,
+            witness_sites:std::sync::OnceLock::new(),normalized_sites:std::sync::OnceLock::new(),
+        })
+    }
+}

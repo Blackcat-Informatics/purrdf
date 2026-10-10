@@ -1,0 +1,106 @@
+    #[test]
+    fn service_response_retains_original_buffers_and_refuses_detached_extraction() {
+        use crate::remote::{AdmittedResolvedBindings,ResolvedBindings};
+        let (workspace,ledger,base)=account(65_536);
+        let capability=workspace.capability();
+        let response=AdmittedResolvedBindings::try_build(&capability,|memory|{
+            let mut rows=Vec::new();
+            for _ in 0..3 {memory.push(&mut rows,Vec::new())?;}
+            Ok(ResolvedBindings{variables:Vec::new(),rows,cell_limit_exceeded_at:None})
+        }).expect("native response");
+        let live=ledger.live.load(Ordering::Relaxed);
+        assert!(live>base);
+        let response=response.try_into_resident().expect_err("bounded response cannot shed original grants");
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed),live);
+        assert_eq!(response.bindings().rows.len(),3);
+        drop(response);
+        assert_eq!(ledger.live.load(Ordering::Relaxed),base);
+        drop(capability);
+        assert_eq!(ledger.live.load(Ordering::Relaxed),0);
+    }
+
+    #[test]
+    fn service_error_clone_keeps_original_text_and_control_without_allocation() {
+        use crate::remote::AdmittedRemoteError;
+        let (workspace,ledger,base)=account(65_536);
+        let capability=workspace.capability();
+        let error=AdmittedRemoteError::message(purrdf_core::SilencedKind::Decode,"malformed endpoint result",&capability).unwrap();
+        let live=ledger.live.load(Ordering::Relaxed);
+        let probe=purrdf_alloc_probe::thread_window();
+        let copy=error.clone();
+        let measured=probe.finish();
+        assert_eq!(measured.allocations,0);
+        drop(error);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed),live);
+        assert_eq!(copy.error(),&crate::remote::RemoteError::Decode("malformed endpoint result".to_owned()));
+        drop(copy);
+        assert_eq!(ledger.live.load(Ordering::Relaxed),base);
+    }
+
+    #[test]
+    fn bounded_service_and_http_refuse_unpriced_opaque_hosts_before_dispatch() {
+        use crate::remote::{ServiceRequest,ServiceResolver,ResolvedBindings,RemoteError,ServiceResolutionError};
+        use crate::remote_http::{HttpRequest,HttpTransport};
+        struct Opaque(AtomicUsize);
+        impl ServiceResolver for Opaque {
+            fn resolve(&self,_:ServiceRequest<'_>)->Result<ResolvedBindings,RemoteError>{self.0.fetch_add(1,Ordering::Relaxed);Ok(ResolvedBindings{variables:Vec::new(),rows:Vec::new(),cell_limit_exceeded_at:None})}
+        }
+        impl HttpTransport for Opaque {
+            fn post(&self,_:HttpRequest<'_>)->Result<Vec<u8>,RemoteError>{self.0.fetch_add(1,Ordering::Relaxed);Ok(Vec::new())}
+        }
+        let (workspace,ledger,base)=account(65_536);
+        let capability=workspace.capability();
+        let source=Opaque(AtomicUsize::new(0));
+        assert!(matches!(source.resolve_admitted(ServiceRequest::new("http://example.org/service","SELECT * {}"),capability.clone()),Err(ServiceResolutionError::Operational(EvalError::WorkspaceUnpriced("opaque SERVICE resolver")))));
+        assert!(matches!(source.post_admitted(HttpRequest{endpoint:"http://example.org/service",query_text:"SELECT * {}",user_agent:"fixture",timeout:std::time::Duration::from_secs(1),content_type:"application/sparql-query",accept:"application/sparql-results+json",headers:&[],stop:None},capability),Err(ServiceResolutionError::Operational(EvalError::WorkspaceUnpriced("opaque HTTP transport")))));
+        assert_eq!(source.0.load(Ordering::Relaxed),0);
+        assert_eq!(ledger.live.load(Ordering::Relaxed),base);
+    }
+
+    #[test]
+    fn native_in_process_service_and_http_decode_preserve_bags_under_original_grants() {
+        use crate::remote::{ServiceRequest,ServiceResolver};
+        use crate::remote_http::{AdmittedHttpBody,HttpRequest,HttpTransport,HttpRemoteQuerySource};
+        struct Native;
+        impl HttpTransport for Native {
+            fn post(&self,_:HttpRequest<'_>)->Result<Vec<u8>,crate::remote::RemoteError>{panic!("bounded production must use the native transport body")}
+            fn post_admitted(&self,_:HttpRequest<'_>,workspace:super::WorkspaceCapability)->Result<AdmittedHttpBody,crate::remote::ServiceResolutionError>{
+                AdmittedHttpBody::try_build(&workspace,|memory|memory.collect(br#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":{"type":"literal","value":"same"}},{"x":{"type":"literal","value":"same"}}]}}"#.iter().copied()).map_err(Into::into))
+            }
+        }
+        let (workspace,ledger,base)=account(4_194_304);
+        let capability=workspace.capability();
+        let dataset=Arc::new(purrdf_core::RdfDataset::default());
+        let source=crate::service::InProcessServiceResolver::new().with_endpoint("http://example.org/service",dataset);
+        let local=source.resolve_admitted(ServiceRequest::new("http://example.org/service","SELECT ?x WHERE {VALUES ?x {1 1}}"),capability.clone()).expect("same native evaluator");
+        assert_eq!(local.bindings().variables[0].as_str(),"x");
+        assert_eq!(local.bindings().rows.len(),2);
+        assert!(ledger.live.load(Ordering::Relaxed)>base);
+        drop(local);
+        assert_eq!(ledger.live.load(Ordering::Relaxed),base);
+        let http=HttpRemoteQuerySource::new(Native).resolve_admitted(ServiceRequest::new("http://example.org/service","SELECT ?x {}"),capability).expect("native transport and decoder");
+        assert_eq!(http.bindings().rows.len(),2);
+        assert_eq!(http.bindings().rows[0],http.bindings().rows[1]);
+        drop(http);
+        assert_eq!(ledger.live.load(Ordering::Relaxed),base);
+    }
+
+    #[test]
+    fn native_response_first_growth_refusal_releases_every_working_buffer() {
+        use crate::remote::{AdmittedResolvedBindings,ResolvedBindings,ServiceResolutionError};
+        let base=QueryWorkspace::<Refusal>::control_bytes().unwrap();
+        let (workspace,ledger,_)=account(base);
+        let capability=workspace.capability();
+        let response=AdmittedResolvedBindings::try_build(&capability,|memory|{
+            let mut rows=Vec::new();
+            memory.push(&mut rows,Vec::new())?;
+            Ok(ResolvedBindings{variables:Vec::new(),rows,cell_limit_exceeded_at:None})
+        });
+        assert!(matches!(response,Err(ServiceResolutionError::Operational(EvalError::WorkspaceStopped))));
+        assert_eq!(ledger.live.load(Ordering::Relaxed),base);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed),0);
+    }

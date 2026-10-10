@@ -1,0 +1,336 @@
+--- a/crates/lex/src/diagnostic.rs
++++ b/crates/lex/src/diagnostic.rs
+@@ -227,6 +227,31 @@
+         Ok(self)
+     }
+ 
++    /// Exact heap layouts retained by this immutable presentation, excluding
++    /// the outer value itself. Includes spare parameter capacity, text arguments
++    /// and independently boxed secondary detail.
++    #[must_use]
++    pub fn retained_bytes(&self) -> Option<usize> {
++        let mut bytes = 0usize;
++        let mut current = Some(self);
++        while let Some(value) = current {
++            bytes = bytes.checked_add(value.message_id.capacity())?
++                .checked_add(value.english.capacity())?
++                .checked_add(value.parameters.capacity().checked_mul(size_of::<DiagnosticParameter>())?)?;
++            for parameter in &value.parameters {
++                bytes = bytes.checked_add(parameter.name.capacity())?;
++                if let DiagnosticValue::Text(text) = &parameter.value {
++                    bytes = bytes.checked_add(text.capacity())?;
++                }
++            }
++            current = value.detail.as_deref();
++            if current.is_some() {
++                bytes = bytes.checked_add(size_of::<Self>())?;
++            }
++        }
++        Some(bytes)
++    }
++
+     /// Stable message identity used by a presentation catalogue.
+     pub fn message_id(&self) -> &str {
+         &self.message_id
+@@ -261,3 +286,4 @@
+         Value::Object(object)
+     }
+ }
++
+--- a/crates/rdf-core/src/diagnostic.rs
++++ b/crates/rdf-core/src/diagnostic.rs
+@@ -2,7 +2,6 @@
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+ use std::fmt;
+-use std::fmt::Write as _;
+ 
+ pub use purrdf_lex::diagnostic::{
+     DiagnosticParameter, DiagnosticPresentation, DiagnosticPresentationError, DiagnosticValue,
+@@ -171,39 +170,26 @@
+     /// to the logical label or `<unknown>`) followed by any GTS anchors, e.g.
+     /// `term#3 quad#7`.
+     pub fn display(&self) -> String {
+-        let mut out = self
+-            .path
+-            .as_deref()
+-            .or(self.logical.as_deref())
+-            .unwrap_or("<unknown>")
+-            .to_owned();
++        self.to_string()
++    }
++}
++
++impl fmt::Display for RdfLocation {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str(self.path.as_deref().or(self.logical.as_deref()).unwrap_or("<unknown>"))?;
+         if let Some(line) = self.line {
+-            out.push(':');
+-            out.push_str(&line.to_string());
+-            if let Some(column) = self.column {
+-                out.push(':');
+-                out.push_str(&column.to_string());
+-            }
+-        }
+-        if let Some(term_id) = self.gts_term_id {
+-            let _ = write!(out, " term#{term_id}");
+-        }
+-        if let Some(quad_index) = self.gts_quad_index {
+-            let _ = write!(out, " quad#{quad_index}");
+-        }
+-        if let Some(reifier_id) = self.gts_reifier_id {
+-            let _ = write!(out, " reifier#{reifier_id}");
+-        }
+-        if let Some(frame_index) = self.gts_frame_index {
+-            let _ = write!(out, " frame#{frame_index}");
++            write!(f, ":{line}")?;
++            if let Some(column) = self.column { write!(f, ":{column}")?; }
+         }
+-        if let Some(segment_index) = self.gts_segment_index {
+-            let _ = write!(out, " segment#{segment_index}");
++        for (label, value) in [
++            ("term", self.gts_term_id), ("quad", self.gts_quad_index),
++            ("reifier", self.gts_reifier_id), ("frame", self.gts_frame_index),
++            ("segment", self.gts_segment_index),
++        ] {
++            if let Some(value) = value { write!(f, " {label}#{value}")?; }
+         }
+-        if let Some(subject) = &self.subject {
+-            let _ = write!(out, " subject={subject}");
+-        }
+-        out
++        if let Some(subject) = &self.subject { write!(f, " subject={subject}")?; }
++        Ok(())
+     }
+ }
+ 
+@@ -235,6 +221,43 @@
+ }
+ 
+ impl RdfDiagnostic {
++    /// Exact concrete heap capacity, excluding the outer diagnostic value.
++    /// Location and presentation boxes, spare arrays and all owned text count.
++    #[must_use]
++    pub fn retained_bytes(&self) -> Option<usize> {
++        let mut bytes = self.code.capacity().checked_add(self.message.capacity())?
++            .checked_add(self.detail.as_ref().map_or(0, String::capacity))?;
++        if let Some(location) = &self.location {
++            bytes = bytes.checked_add(size_of::<RdfLocation>())?;
++            for text in [&location.path, &location.logical, &location.subject].into_iter().flatten() {
++                bytes = bytes.checked_add(text.capacity())?;
++            }
++        }
++        if let Some(presentation) = &self.presentation {
++            bytes = bytes.checked_add(size_of::<DiagnosticPresentation>())?
++                .checked_add(presentation.retained_bytes()?)?;
++        }
++        Some(bytes)
++    }
++
++    /// Construct a native error through its original physical admission before
++    /// copying the code or rendering the borrowed message once. The formatter
++    /// must allocate no private payload; all destination growth uses this memory.
++    ///
++    /// # Errors
++    /// Returns the physical refusal, allocator failure or formatter failure.
++    pub fn try_error_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
++        code: &str,
++        message: &(impl fmt::Display + ?Sized),
++        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
++    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
++        let mut owned_code = String::new();
++        memory.reserve_string(&mut owned_code, code.len())?;
++        owned_code.push_str(code);
++        let message = memory.format(message)?;
++        Ok(Self::error(owned_code, message))
++    }
++
+     /// A diagnostic from its severity, code, and message, with no detail or
+     /// location.
+     pub fn new(severity: RdfSeverity, code: impl Into<String>, message: impl Into<String>) -> Self {
+@@ -342,7 +365,7 @@
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         write!(f, "{} {}: {}", self.severity, self.code, self.message)?;
+         if let Some(location) = &self.location {
+-            write!(f, " at {}", location.display())?;
++            write!(f, " at {location}")?;
+         }
+         if let Some(detail) = &self.detail {
+             write!(f, " ({detail})")?;
+@@ -491,3 +514,4 @@
+         }));
+     }
+ }
++
+--- a/crates/sparql-eval/src/retained.rs
++++ b/crates/sparql-eval/src/retained.rs
+@@ -272,3 +272,77 @@
+         &self.payload.value
+     }
+ }
++
++#[derive(Debug)]
++struct DiagnosticPayload {
++    // The physical payload dies before its original grant.
++    value: purrdf_core::RdfDiagnostic,
++    _allocation: crate::WorkspaceAllocation,
++}
++
++/// An immutable query diagnostic retaining its original allocation account.
++/// Cloning shares payload; borrowing preserves code, location and presentation.
++#[derive(Debug, Clone)]
++pub struct RetainedDiagnostic {
++    payload: Shared<DiagnosticPayload>,
++}
++
++impl RetainedDiagnostic {
++    /// Transfer a diagnostic whose complete heap layout is already covered by
++    /// allocation. The grant must also cover the concrete Shared control layout
++    /// before invoking this allocation-first publication.
++    pub(crate) fn from_admitted(
++        value: purrdf_core::RdfDiagnostic,
++        allocation: crate::WorkspaceAllocation,
++    ) -> Result<Self, EvalError> {
++        let original = DiagnosticPayload { value, _allocation: allocation };
++        let payload = Shared::try_new_with(|| original)
++            .map_err(|_| EvalError::AllocationFailed { construct: "retained diagnostic owner" })?;
++        Ok(Self { payload })
++    }
++
++    /// Render borrowed native error fields through one original admission.
++    /// The diagnostic text and code are allocated only after their concrete
++    /// layouts are admitted; the control header is added before publication.
++    pub(crate) fn render(
++        code: &str,
++        message: &(impl std::fmt::Display + ?Sized),
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Self, EvalError> {
++        let mut frame = crate::workspace::LexicalFrame::new(workspace);
++        let value = {
++            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
++            purrdf_core::RdfDiagnostic::try_error_with_memory(code, message, &mut memory)
++        }.map_err(|error| frame.storage_error(error, "retained diagnostic text"))?;
++        let total = frame.live_bytes().checked_add(Self::control_bytes())
++            .ok_or(EvalError::WorkspaceBoundOverflow)?;
++        frame.resize_live(total)?;
++        let allocation = frame.into_allocation()
++            .expect("nonzero diagnostic control layout has its original grant");
++        Self::from_admitted(value, allocation)
++    }
++
++    pub(crate) fn control_bytes() -> usize {
++        Shared::<DiagnosticPayload>::allocation_layout().size()
++    }
++
++    /// Borrow the immutable diagnostic; explicit caller copies use caller storage.
++    #[must_use]
++    pub fn diagnostic(&self) -> &purrdf_core::RdfDiagnostic { &self.payload.value }
++}
++
++impl std::ops::Deref for RetainedDiagnostic {
++    type Target = purrdf_core::RdfDiagnostic;
++    fn deref(&self) -> &Self::Target { self.diagnostic() }
++}
++
++impl std::fmt::Display for RetainedDiagnostic {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        std::fmt::Display::fmt(self.diagnostic(), f)
++    }
++}
++
++impl std::error::Error for RetainedDiagnostic {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(self.diagnostic()) }
++}
++
+--- a/crates/sparql-eval/src/lib.rs
++++ b/crates/sparql-eval/src/lib.rs
+@@ -135,7 +135,7 @@
+ pub use rdflib::select_query_dataset;
+ mod registry_id;
+ mod retained;
+-pub use retained::{RetainedEvidence, RetainedPartialSparqlResult, RetainedQueryExplanation, RetainedSolutions, RetainedSparqlResult};
++pub use retained::{RetainedDiagnostic, RetainedEvidence, RetainedPartialSparqlResult, RetainedQueryExplanation, RetainedSolutions, RetainedSparqlResult};
+ // The SPARQL 1.1 Protocol request surface: HTTP request → operation, dataset
+ // parameters applied as text, and response-format negotiation. No I/O.
+ pub mod protocol;
+@@ -349,3 +349,4 @@
+ 
+ /// Immutable admission-carrying native producer diagnostics.
+ pub use error::{NativeDiagnostic, NativeDiagnosticKind};
++
+--- a/crates/rdf-core/tests/native_regex_storage.rs
++++ b/crates/rdf-core/tests/native_regex_storage.rs
+@@ -242,3 +242,73 @@
+         assert_eq!(measured.retained_bytes, 0, "partial diagnostic text is destroyed on refusal");
+     }
+ }
++
++#[test]
++fn diagnostic_retained_layout_includes_private_presentation_and_location() {
++    use purrdf_core::{DiagnosticParameter, DiagnosticPresentation, DiagnosticValue, RdfDiagnostic, RdfLocation};
++    let window = CurrentThreadWindow::open();
++    let presentation = DiagnosticPresentation::new(
++        "query.failure", "failure at {offset}: {reason}",
++        vec![
++            DiagnosticParameter::new("offset", DiagnosticValue::Unsigned((1 << 53) + 7)),
++            DiagnosticParameter::new("reason", DiagnosticValue::Text("exact original reason".repeat(7))),
++        ],
++    ).unwrap().with_detail(
++        DiagnosticPresentation::new("query.detail", "independent detail", vec![]).unwrap()
++    ).unwrap();
++    let diagnostic = RdfDiagnostic::error("typed-failure", "")
++        .with_presentation(presentation)
++        .with_location(RdfLocation::file("source.rdf").with_line(91).with_column(4))
++        .with_detail("retained secondary text");
++    let measured = window.close();
++    assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), diagnostic.retained_bytes().unwrap(),
++        "all private arrays, boxes, presentation arguments and text remain covered");
++
++    struct Count(usize);
++    impl std::fmt::Write for Count {
++        fn write_str(&mut self, value: &str) -> std::fmt::Result {
++            self.0 += value.len();
++            Ok(())
++        }
++    }
++    let mut destination = Count(0);
++    let window = CurrentThreadWindow::open();
++    std::fmt::write(&mut destination, format_args!("{diagnostic}")).unwrap();
++    let measured = window.close();
++    assert!(destination.0 > diagnostic.message.len());
++    assert_eq!(measured.allocations, 0, "native rendering must not allocate hidden location scratch");
++}
++
++#[test]
++fn diagnostic_render_admits_code_and_message_before_each_real_allocation() {
++    use purrdf_core::RdfDiagnostic;
++    use purrdf_lex::allocation::Memory;
++    let source = "diagnostic original borrowed text".repeat(64);
++    let mut account = Account::new(1_000_000);
++    let window = CurrentThreadWindow::open();
++    let diagnostic = {
++        let mut memory = Memory::new(&mut account);
++        RdfDiagnostic::try_error_with_memory("native-query", &source, &mut memory).unwrap()
++    };
++    let measured = window.close();
++    assert_eq!(diagnostic.message, source);
++    assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), diagnostic.retained_bytes().unwrap());
++    assert_eq!(diagnostic.retained_bytes().unwrap(), account.live);
++    assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
++    drop(diagnostic);
++
++    for limit in [0, 5, source.len() / 2] {
++        let mut account = Account::new(limit);
++        let window = CurrentThreadWindow::open();
++        let error = {
++            let mut memory = Memory::new(&mut account);
++            RdfDiagnostic::try_error_with_memory("native-query", &source, &mut memory).unwrap_err()
++        };
++        let measured = window.close();
++        assert_eq!(error, StorageError::AdmissionFailed);
++        assert!(account.refused.unwrap() > limit);
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
++        assert_eq!(measured.retained_bytes, 0, "partial diagnostic dies while its grant remains live");
++    }
++}
++

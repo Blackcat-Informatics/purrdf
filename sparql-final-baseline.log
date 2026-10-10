@@ -1,0 +1,18 @@
+heaptrack output will be written to "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/sparql-final-baseline.zst"
+starting application, this might take some time...
+NOTE: heaptrack detected DEBUGINFOD_URLS but will disable it to prevent 
+unintended network delays during recording
+If you really want to use DEBUGINFOD, export HEAPTRACK_ENABLE_DEBUGINFOD=1
+
+running 1 test
+test every_sparql_surface_costs_a_constant_per_conforming_focus_node ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 5.28s
+
+heaptrack stats:
+	allocations:          	4213842
+	leaked allocations:   	8098
+	temporary allocations:	255903
+Heaptrack finished! Now run the following to investigate the data:
+
+  heaptrack --analyze "/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/.stage/sparql-eval-complete-bounded-workspace/sparql-final-baseline.zst"

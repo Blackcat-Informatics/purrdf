@@ -1,0 +1,67 @@
+--- a/crates/cdt/tests/value_relations.rs
++++ b/crates/cdt/tests/value_relations.rs
+@@ -889,16 +889,16 @@
+ #[test]
+ fn native_duplicate_diagnostic_preserves_stable_original_value_order() {
+     let entries = vec![
+-        purrdf_cdt::CdtEntry {
+-            key: purrdf_cdt::CdtKey::Iri("urn:z".into()),
++        CdtEntry {
++            key: CdtKey::Iri("urn:z".into()),
+             value: CdtTerm::Null,
+         },
+-        purrdf_cdt::CdtEntry {
+-            key: purrdf_cdt::CdtKey::Iri("urn:k".into()),
++        CdtEntry {
++            key: CdtKey::Iri("urn:k".into()),
+             value: CdtTerm::Iri("urn:one".into()),
+         },
+-        purrdf_cdt::CdtEntry {
+-            key: purrdf_cdt::CdtKey::Iri("urn:k".into()),
++        CdtEntry {
++            key: CdtKey::Iri("urn:k".into()),
+             value: CdtTerm::Iri("urn:second-very-long".into()),
+         },
+     ];
+@@ -961,7 +961,7 @@
+     purrdf_stack::on_stack(128 * 1024, || {
+         let mut source = CdtTerm::Null;
+         for _ in 0..10_000 {
+-            source = CdtTerm::TripleTerm(Box::new(purrdf_cdt::CdtTripleTerm {
++            source = CdtTerm::TripleTerm(Box::new(CdtTripleTerm {
+                 subject: source,
+                 predicate: CdtTerm::Null,
+                 object: CdtTerm::Null,
+@@ -988,10 +988,10 @@
+ }
+ 
+ // A concrete native box refusal remains the first error when refund refuses too.
+-struct RefuseBoxAndShrink(NativeGrant);
++struct RefuseBoxAndShrink(NativeGrant, bool);
+ impl Admission for RefuseBoxAndShrink {
+     fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+-        if next < self.0.live {
++        if self.1 && next < self.0.live {
+             return Err(StorageError::AdmissionFailed);
+         }
+         self.0.resize(next)
+@@ -999,16 +999,18 @@
+ }
+ impl Storage for RefuseBoxAndShrink {
+     fn boxed_value(&mut self, _value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
++        self.1 = true;
+         Err(StorageError::AllocationFailed)
+     }
+     fn boxed_triple(&mut self, _value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
++        self.1 = true;
+         Err(StorageError::AllocationFailed)
+     }
+ }
+ #[test]
+ fn native_box_failure_stays_primary_when_original_refund_also_refuses() {
+     let source = parse_list("[[1],{'a':[2]}]").unwrap();
+-    let mut grant = RefuseBoxAndShrink(NativeGrant::new());
++    let mut grant = RefuseBoxAndShrink(NativeGrant::new(), false);
+     let window = CurrentThreadWindow::open();
+     let answer = source.clone_admitted(&mut grant);
+     let measured = window.close();

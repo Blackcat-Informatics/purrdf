@@ -1,0 +1,197 @@
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -3385,25 +3385,40 @@
+         stop: Option<Arc<dyn crate::governor::StopSignal>>,
+     ) -> Result<QueryExplanation, RdfDiagnostic> {
+         let publication = crate::user_fn::RefusalPublication::default();
+-        checked_query_read(dataset, &publication, || {
+-            let options = publication.options(dataset, options)?;
+-            let reporting = bounded_workspace::reserve_reporting(dataset)
+-                .map_err(bounded_workspace::AdmissionError::into_diagnostic)?;
++        checked_query_read_with_permit(dataset, &publication, || {
++            let options = match publication.options(dataset, options) {
++                Ok(options) => options,
++                Err(error) => return (Err(error.into()), None),
++            };
++            let reporting = match bounded_workspace::reserve_reporting(dataset) {
++                Ok(reporting) => reporting,
++                Err(error) => return (Err(error.into_diagnostic().into()), None),
++            };
+             let workspace = reporting.execution();
+-            let prepared = self.prepare_for_admitted(
++            let prepared = match self.prepare_for_admitted(
+                 query_text,
+                 base_iri,
+                 options.env,
+                 &workspace.capability(),
+-            )?;
+-            self.explain_prepared(
++            ) {
++                Ok(prepared) => prepared,
++                Err(error) => return (Err(error), Some((reporting, None))),
++            };
++            let execution = match bounded_workspace::reserve_execution(dataset, workspace) {
++                Ok(execution) => execution,
++                Err(error) => {
++                    return (Err(error.into_diagnostic().into()), Some((reporting, None)));
++                }
++            };
++            let measured = self.explain_prepared(
+                 dataset,
+                 &prepared,
+                 options,
+                 stop,
+                 Sequencing::Free,
+-                &workspace,
+-            )
++                &execution,
++            );
++            (measured, Some((reporting, Some(execution))))
+         })
+     }
+ 
+@@ -4497,7 +4512,17 @@
+     publication: &crate::user_fn::RefusalPublication,
+     evaluate: impl FnOnce() -> Result<T, E>,
+ ) -> Result<T, RdfDiagnostic> {
+-    let evaluation = dataset
++    checked_query_read_with_permit(dataset, publication, || (evaluate(), ()))
++}
++
++/// Keep a native producer's original scoped permits through the shared final
++/// checked_read, including a ready evaluator failure. The result dies first.
++fn checked_query_read_with_permit<D: DatasetView, T, E: Into<EvaluationFailure>, R>(
++    dataset: &D,
++    publication: &crate::user_fn::RefusalPublication,
++    evaluate: impl FnOnce() -> (Result<T, E>, R),
++) -> Result<T, RdfDiagnostic> {
++    let (evaluation, _permit) = dataset
+         .checked_read(|_| evaluate())
+         .map_err(source_read_diagnostic)?;
+     publication.finish(
+--- a/crates/sparql-eval/tests/query_completion.rs
++++ b/crates/sparql-eval/tests/query_completion.rs
+@@ -1550,7 +1550,122 @@
+         }
+     }
+ }
++
++/// The resident public projection still owns both original scoped permits at
++/// its last checked_read. Its infallible source keeps admission observable.
++struct ExplainProjection<'a> {
++    source: &'a Source,
++    final_reporting: AtomicUsize,
++    final_execution: AtomicUsize,
++}
++struct ProjectionReservation<R>(R);
++impl<R: WorkspaceReservation<Error = RefusedRead>> WorkspaceReservation
++    for ProjectionReservation<R>
++{
++    type Error = std::convert::Infallible;
++
++    fn resize(&mut self, bytes: u64) -> Result<(), Self::Error> {
++        self.0.resize(bytes).expect("healthy projection reservation");
++        Ok(())
++    }
++}
++impl DatasetView for ExplainProjection<'_> {
++    type Id = TermId;
++    type ReadError = std::convert::Infallible;
++    type TermGuard<'a> = <RdfDataset as DatasetView>::TermGuard<'a> where Self: 'a;
++    type ProbePlan = ();
++
++    fn read_error(&self) -> Option<Self::ReadError> {
++        assert!(self.source.read_error().is_none());
++        self.final_reporting.store(
++            self.source.reporting_guards.load(Ordering::Relaxed),
++            Ordering::Relaxed,
++        );
++        self.final_execution.store(
++            self.source.execution_guards.load(Ordering::Relaxed),
++            Ordering::Relaxed,
++        );
++        None
++    }
++    fn reserve_workspace(
++        &self,
++        bytes: u64,
++    ) -> Result<impl WorkspaceReservation<Error = Self::ReadError> + '_, Self::ReadError> {
++        Ok(ProjectionReservation(
++            self.source.reserve_workspace(bytes).expect("healthy projection ingress"),
++        ))
++    }
++    fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
++        self.source.quads()
++    }
++    fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
++        self.source.reads.fetch_add(1, Ordering::Relaxed);
++        <RdfDataset as DatasetView>::resolve(self.source.resident.as_ref(), id)
++    }
++    fn term_id_by_value(&self, value: &TermValue) -> Result<Option<TermId>, Self::ReadError> {
++        self.source.reads.fetch_add(1, Ordering::Relaxed);
++        <RdfDataset as DatasetView>::term_id_by_value(self.source.resident.as_ref(), value)
++    }
++    fn capabilities(&self) -> RdfStoreCapabilities {
++        self.source.capabilities()
++    }
++    fn term_count(&self) -> u64 {
++        self.source.term_count()
++    }
++    fn len_hint(&self) -> Option<u64> {
++        Some(1)
++    }
++    fn cardinality_estimate(
++        &self,
++        _: Option<TermId>,
++        _: Option<TermId>,
++        _: Option<TermId>,
++        _: GraphMatch,
++    ) -> u64 {
++        1
++    }
++    fn probe_plan(&self, _: bool, _: bool, _: bool, _: GraphMatch) {}
++    fn quads_for_pattern_with_plan(
++        &self,
++        (): &(),
++        s: Option<TermId>,
++        p: Option<TermId>,
++        o: Option<TermId>,
++        g: GraphMatch,
++    ) -> impl Iterator<Item = QuadIds> + '_ {
++        self.quads_for_pattern(s, p, o, g)
++    }
++}
++/// Exercise the actual public Infallible view door. Operational EXPLAIN refusal
++/// stays in the separately tested typed fallible door.
++fn public_explain_projection_holds_real_execution_permit_through_final_read() {
++    let engine = NativeSparqlEngine::new();
++    for (query, prepared) in [(QUERY, true), ("not SPARQL", false)] {
++        let source = Source::at(RefusalSite::Never);
++        let view = ExplainProjection {
++            source: &source,
++            final_reporting: AtomicUsize::new(0),
++            final_execution: AtomicUsize::new(0),
++        };
++        let result = engine.explain_query_view(&view, query, None);
++        if prepared {
++            result.expect("healthy public EXPLAIN projection");
++            assert_eq!(source.execution_attempts.load(Ordering::Relaxed), 1);
++            assert_eq!(view.final_execution.load(Ordering::Relaxed), 1);
++        } else {
++            let diagnostic = result.expect_err("parse precedes execution admission");
++            assert_eq!(diagnostic.code, "native-sparql-query-parse");
++            assert_eq!(source.execution_attempts.load(Ordering::Relaxed), 0);
++            assert_eq!(source.reads.load(Ordering::Relaxed), 0);
++            assert_eq!(view.final_execution.load(Ordering::Relaxed), 0);
++        }
++        assert_eq!(view.final_reporting.load(Ordering::Relaxed), 1);
++        source.assert_released();
++    }
++}
++
+ purrdf_testkit::harness_main!(
++    public_explain_projection_holds_real_execution_permit_through_final_read,
+     typed_owned_and_governed_queries_never_publish_iterator_or_materialization_failures,
+     preexisting_source_failure_outranks_parse_and_empty_pattern_success,
+     retained_prepared_visits_remain_inside_the_checked_publication_scope,
+

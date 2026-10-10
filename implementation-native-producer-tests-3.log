@@ -1,0 +1,168 @@
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/cdt)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+   Compiling purrdf-hnsw v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/hnsw)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text)
+    Finished `test` profile [optimized] target(s) in 50.78s
+     Running unittests src/lib.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-hnsw/05615e7232098775/out/purrdf_hnsw-05615e7232098775)
+
+running 77 tests
+test builder::tests::a_zero_norm_row_is_refused_under_cosine ... ok
+test graph::tests::a_canonical_image_round_trips_byte_for_byte ... ok
+test error::tests::every_variant_renders_without_its_debug_representation ... ok
+test graph::tests::a_matrix_rejects_ragged_and_non_finite_input ... ok
+test graph::tests::commit_sorts_truncates_and_dedups_neighbours ... ok
+test graph::tests::only_a_reassociated_header_carries_a_build_shape ... ok
+test graph::tests::the_header_code_is_decoded_only_by_its_own_arithmetic ... ok
+test graph::tests::entry_point_is_the_min_row_at_the_max_level ... ok
+test graph::tests::truncated_and_corrupt_images_are_refused ... ok
+test level::tests::bits_per_level_is_floor_log2 ... ok
+test guard::tests::the_profile_identifier_is_recognised_by_its_name ... ok
+test level::tests::level_cap_is_the_smallest_power_reaching_n ... ok
+test level::tests::every_level_is_attained_within_the_cap ... ok
+test params::tests::a_beam_too_narrow_for_layer_zero_is_refused ... ok
+test level::tests::level_cap_rejects_m_below_two_in_debug - should panic ... ok
+test level::tests::level_from_index_stays_within_the_cap_and_follows_the_formula ... ok
+test params::tests::a_well_formed_set_round_trips ... ok
+test params::tests::degree_bound_splits_at_layer_zero ... ok
+test params::tests::ef_search_zero_is_refused ... ok
+test params::tests::m0_below_m_is_refused ... ok
+test params::tests::m_below_two_is_refused ... ok
+test params::tests::ef_construction_below_m_is_refused ... ok
+test params::tests::the_boundaries_are_admitted_not_merely_approached ... ok
+test params::tests::the_thirty_two_bit_estimate_is_the_same_on_every_host ... ok
+test params::tests::zero_rows_and_zero_dimensions_are_refused ... ok
+test params::tests::the_thirty_two_bit_admission_check_refuses_and_admits ... ok
+test profile::tests::a_missing_parameter_is_refused ... ok
+test profile::tests::a_non_ascending_tag_is_refused ... ok
+test profile::tests::a_non_critical_parameter_is_refused ... ok
+test profile::tests::parameters_round_trip_through_the_canonical_block ... ok
+test profile::tests::every_image_code_has_a_published_row ... ok
+test profile::tests::the_implementation_identity_carries_the_evidence ... ok
+test profile::tests::the_reassociated_declaration_binds_its_arithmetic_and_path ... ok
+test profile::tests::non_zero_padding_is_refused ... ok
+test profile::tests::zeroed_padding_passes_the_block_check ... ok
+test profile::tests::the_loss_contract_is_approximate_and_non_transforming ... ok
+test profile::tests::the_reassociated_evidence_is_pinned ... ok
+test profile::tests::the_profile_declaration_binds_the_arithmetic ... ok
+test relation::tests::the_space_generation_is_frozen ... ok
+test relation::tests::a_negative_count_and_a_free_seed_are_refused ... ok
+test relation::tests::the_relation_is_registered_under_the_callers_iri ... ok
+test search::tests::a_greedy_descent_walks_toward_the_query ... ok
+test relation::tests::a_zero_count_is_an_empty_answer_with_zero_work ... ok
+test search::tests::the_beam_returns_the_nearest_first ... ok
+test search::tests::the_distance_cache_is_value_neutral ... ok
+test search::tests::visited_stamps_clear_on_a_new_generation ... ok
+test relation::tests::a_space_assembled_from_an_index_is_held_to_the_guards_candidate_bound ... ok
+test select::tests::a_beam_within_the_budget_is_kept_whole ... ok
+test select::tests::a_near_duplicate_loses_its_place_to_a_new_direction ... ok
+test select::tests::selection_is_a_pure_function_of_the_beam ... ok
+test select::tests::the_nearest_m_would_have_spent_both_edges_on_one_direction ... ok
+test relation::tests::a_ceiling_that_prevents_the_first_pull_charges_no_work ... ok
+test select::tests::an_over_strict_pass_is_topped_up_to_the_budget ... ok
+test relation::tests::a_search_charges_its_distance_evaluations_exactly_once ... ok
+test tests::a_batch_query_preserves_input_order ... ok
+test tests::a_portable_path_image_decodes_only_on_a_portable_path_host ... ok
+test builder::tests::the_same_input_builds_the_same_graph_twice ... ok
+test tests::a_query_finds_itself_and_respects_k ... ok
+test tests::a_zero_request_is_an_empty_answer_not_an_error ... ok
+test tests::a_path_this_build_cannot_run_is_refused ... ok
+test tests::an_extension_metric_is_refused ... ok
+test tests::a_foreign_build_identity_is_refused_named ... ok
+test tests::a_batch_answers_every_query_exactly_as_a_single_search_does ... ok
+test tests::a_version_one_image_is_refused_by_name_rather_than_answered_false ... ok
+test tests::an_exact_image_resolves_its_one_code ... ok
+test tests::decode_refuses_exact_code_as_fast ... ok
+test tests::decode_refuses_fast_code_as_exact ... ok
+test tests::a_foreign_build_shape_is_refused_named ... ok
+test tests::an_index_verifies_its_own_rebuild_and_round_trips_through_bytes ... ok
+test tests::the_versions_and_identifier_name_the_exact_arithmetic ... ok
+test tests::loss_contract_unchanged_for_both_arithmetics ... ok
+test tests::other_path_refused_named ... ok
+test tests::same_path_rebuild_verifies ... ok
+test tests::a_tampered_distance_is_false_for_both_arithmetics ... ok
+test tests::an_index_runs_on_every_host_path_and_every_required_one ... ok
+test tests::a_narrower_recorded_path_is_run_not_refused ... ok
+test tests::one_distance_per_pair_across_call_sites ... ok
+
+test result: ok. 77 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-text/967756e760507335/out/purrdf_text-967756e760507335)
+
+running 70 tests
+test error::tests::conversion_maps_arithmetic_failures_to_function ... ok
+test error::tests::conversion_maps_config_and_data_to_their_namesakes ... ok
+test error::tests::display_carries_the_detail ... ok
+test error::tests::conversion_preserves_the_detail ... ok
+test error::tests::each_constructor_builds_its_own_variant ... ok
+test error::tests::source_read_failure_remains_fatal_and_preserves_its_detail ... ok
+test fixed::tests::addition_and_subtraction_report_overflow ... ok
+test fixed::tests::division_by_zero_is_a_domain_error ... ok
+test fixed::tests::ln_of_a_non_positive_value_is_a_domain_error ... ok
+test fixed::tests::ln_of_one_is_exactly_zero ... ok
+test fixed::tests::ln_of_two_reproduces_the_constant ... ok
+test fixed::tests::multiplication_and_division_are_exact_on_representable_values ... ok
+test fixed::tests::ordering_is_numeric ... ok
+test fixed::tests::signs_compose_as_they_should ... ok
+test fixed::tests::the_binade_brackets_its_input ... ok
+test fixed::tests::the_constants_denote_what_they_say ... ok
+test fixed::tests::the_lexical_form_is_exact_and_fixed_width ... ok
+test index::tests::an_absent_language_differs_from_an_empty_one ... ok
+test fixed::tests::ln_is_a_pure_function ... ok
+test index::tests::a_non_iri_graph_selector_is_refused ... ok
+test index::tests::digest_fields_are_self_delimiting ... ok
+test index::tests::the_average_is_exact ... ok
+test index::tests::the_partition_key_reports_its_absences ... ok
+test index::tests::the_predicate_list_is_sorted ... ok
+test relation::tests::a_bound_position_selects_one_occurrence ... ok
+test relation::tests::a_ceiling_with_a_bound_doc_still_emits_the_matching_row ... ok
+test relation::tests::a_free_needle_is_an_error ... ok
+test relation::tests::a_bound_document_pushdown_loses_no_row ... ok
+test relation::tests::a_non_string_language_is_an_error ... ok
+test relation::tests::a_huge_but_well_formed_rank_is_empty_not_an_error ... ok
+test relation::tests::a_rank_of_zero_is_an_error ... ok
+test relation::tests::a_multi_partition_index_declares_nothing_but_its_neighbours_still_do ... ok
+test relation::tests::a_rank_past_the_end_is_empty_not_an_error ... ok
+test relation::tests::a_non_string_needle_is_an_error ... ok
+test relation::tests::a_single_partition_index_declares_its_ranked_capability ... ok
+test relation::tests::a_zero_term_needle_is_an_honest_empty_result ... ok
+test relation::tests::a_ceiling_yields_the_prefix_of_the_unbounded_answer ... ok
+test relation::tests::an_empty_index_declares_zero_rows_and_emits_none ... ok
+test relation::tests::occurrence_emits_one_row_per_position_in_ascending_order ... ok
+test relation::tests::both_relations_are_stable ... ok
+test relation::tests::occurrence_rejects_a_multi_term_needle ... ok
+test relation::tests::the_bound_document_row_bound_is_attained_not_merely_respected ... ok
+test relation::tests::the_occurrence_row_bound_table_is_the_documented_one ... ok
+test relation::tests::search_emits_rank_order_with_exact_rows ... ok
+test relation::tests::the_declared_shape_is_the_documented_one ... ok
+test relation::tests::the_ceiling_counts_emitted_rows_not_skipped_ones ... ok
+test score::tests::a_bound_absent_dimension_is_not_a_bound_empty_one ... ok
+test relation::tests::the_search_row_bound_table_is_the_documented_one ... ok
+test score::tests::the_constants_are_the_canonical_ones ... ok
+test relation::tests::untagged_documents_emit_the_empty_language ... ok
+test relation::tests::verify_binding_accepts_the_source_dataset_and_rejects_another ... ok
+test score::tests::the_filter_constrains_one_dimension_at_a_time ... ok
+test score::tests::the_needle_is_reduced_to_sorted_distinct_terms ... ok
+test surface::tests::conflicting_source_identity_and_invalid_projection_are_rejected ... ok
+test term_bytes::tests::a_shifted_split_does_not_collide ... ok
+test term_bytes::tests::an_absent_language_differs_from_an_empty_one ... ok
+test term_bytes::tests::blank_scope_is_encoded ... ok
+test term_bytes::tests::each_variant_has_its_own_tag ... ok
+test term_bytes::tests::both_directions_are_distinguished ... ok
+test term_bytes::tests::encoding_is_deterministic ... ok
+test relation::tests::emission_order_is_a_pure_function_of_the_invocation ... ok
+test term_bytes::tests::the_fingerprint_is_deterministic_and_order_sensitive ... ok
+test term_bytes::tests::encoding_agrees_with_the_recursive_reference ... ok
+test term_bytes::tests::the_fingerprint_of_a_deeply_nested_term_is_the_digest_of_its_encoding ... ok
+test term_bytes::tests::encoding_is_injective ... ok
+test term_bytes::tests::encoding_appends_to_the_buffer ... ok
+test relation::tests::auxiliary_partitions_do_not_loosen_occurrence_bounds ... ok
+test relation::tests::rows_per_invocation_is_a_real_function_of_the_mode ... ok
+test term_bytes::tests::a_hundred_thousand_level_term_encodes_on_a_128_kib_thread ... ok
+test unicode::tests::the_ascii_bypass_agrees_with_the_pipeline ... ok
+
+test result: ok. 70 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+

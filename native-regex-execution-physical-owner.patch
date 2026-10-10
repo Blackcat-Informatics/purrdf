@@ -1,0 +1,1218 @@
+--- a/crates/lex/src/walk.rs
++++ b/crates/lex/src/walk.rs
+@@ -131,6 +131,39 @@
+         Ok(())
+     }
+ 
++
++    /// Push through the caller's exact physical spill admission.
++    ///
++    /// Inline entries keep the ordinary work-list path. Spill growth uses the
++    /// shared native Memory body and preserves the original entries on refusal.
++    ///
++    /// # Errors
++    /// Returns the original storage, layout or allocator refusal.
++    pub fn try_push_admitted<S: crate::allocation::Admission + ?Sized>(
++        &mut self,
++        value: T,
++        memory: &mut crate::allocation::Memory<'_, S>,
++    ) -> Result<(), crate::allocation::StorageError> {
++        if self.held == N { memory.push(&mut self.spill, value)?; }
++        else { self.push(value); }
++        Ok(())
++    }
++
++    /// Destroy entries and the actual spill allocation before shrinking its grant.
++    ///
++    /// Element payloads retain their own independent native admission.
++    ///
++    /// # Errors
++    /// Returns the original caller's shrink refusal or layout overflow.
++    pub fn release_admitted<S: crate::allocation::Admission + ?Sized>(
++        self,
++        memory: &mut crate::allocation::Memory<'_, S>,
++    ) -> Result<(), crate::allocation::StorageError> {
++        let Self { inline, spill, .. } = self;
++        drop(inline);
++        memory.release_vec(spill)
++    }
++
+     /// Heap spill capacity, excluding the inline entries.
+     #[must_use]
+     pub fn heap_capacity(&self) -> usize { self.spill.capacity() }
+--- a/crates/rdf-core/src/xsd_regex/xpath/mod.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/mod.rs
+@@ -21,9 +21,50 @@
+ mod unicode_tables;
+ 
+ pub use cache::PatternCache;
+-pub use compile::{CompiledPattern, OwnedCompileError, OwnedCompiledPattern, compile, compile_with_storage};
++pub use compile::{CompiledPattern, OwnedCompiledPattern, compile, compile_with_storage};
++pub use r#match::OwnedCaptures;
++pub use replace::OwnedReplacement;
+ pub use r#match::Captures;
+ 
++
++/// One immutable native value and the original physical account admitting it.
++///
++/// Payload destruction precedes account destruction. Neither may be detached;
++/// only borrowed views of the payload and its original typed account are public.
++pub struct OwnedPatternValue<T, S> {
++    value: T,
++    storage: S,
++}
++
++impl<T, S> OwnedPatternValue<T, S> {
++    pub(super) const fn new(value: T, storage: S) -> Self { Self { value, storage } }
++
++    /// Borrow the payload while its physical admission remains alive.
++    #[must_use]
++    pub const fn value(&self) -> &T { &self.value }
++
++    /// Inspect the original caller's typed account without detaching it.
++    #[must_use]
++    pub const fn storage(&self) -> &S { &self.storage }
++}
++
++impl<T: fmt::Debug, S> fmt::Debug for OwnedPatternValue<T, S> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("OwnedPatternValue").field("value", &self.value).finish_non_exhaustive()
++    }
++}
++
++/// A failed native pattern operation with its original typed admission owner.
++pub type OwnedPatternError<S> = OwnedPatternValue<Error, S>;
++
++impl<S> fmt::Display for OwnedPatternError<S> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { self.value.fmt(f) }
++}
++
++impl<S> std::error::Error for OwnedPatternError<S> {
++    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.value) }
++}
++
+ /// The Recommendation that defines a pattern's grammar and matching law.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+ #[non_exhaustive]
+@@ -300,13 +341,54 @@
+     }
+ 
+     pub(super) fn reserve<T>(&mut self, values: &mut Vec<T>, required: usize) -> Result<(), Error> {
++        self.reserve_resource(values, required, Resource::CompileSlots, required as u64)
++    }
++
++    pub(super) fn reserve_match<T>(
++        &mut self, values: &mut Vec<T>, required: usize, units: u64,
++    ) -> Result<(), Error> {
++        self.reserve_resource(values, required, Resource::MatchSlots, units)
++    }
++
++    fn reserve_resource<T>(
++        &mut self, values: &mut Vec<T>, required: usize, resource: Resource, units: u64,
++    ) -> Result<(), Error> {
+         if let Some(memory) = &mut self.memory {
+             return memory.reserve(values, required).map_err(Error::Storage);
+         }
+         if required > values.capacity() {
+-            values.try_reserve_exact(required - values.len()).map_err(|_| Error::Allocation {
+-                resource: Resource::CompileSlots, units: required as u64,
+-            })?;
++            values.try_reserve_exact(required - values.len()).map_err(|_| Error::Allocation { resource, units })?;
++        }
++        Ok(())
++    }
++
++    pub(super) fn push_work<T, const N: usize>(
++        &mut self,
++        work: &mut purrdf_lex::walk::WorkList<T, N>,
++        value: T,
++        resource: Resource,
++        units: u64,
++    ) -> Result<(), Error> {
++        if let Some(memory) = &mut self.memory {
++            return work.try_push_admitted(value, memory).map_err(Error::Storage);
++        }
++        work.try_push(value).map_err(|_| Error::Allocation { resource, units })
++    }
++
++    pub(super) fn release_work<T, const N: usize>(
++        &mut self, work: purrdf_lex::walk::WorkList<T, N>,
++    ) -> Result<(), Error> {
++        if let Some(memory) = &mut self.memory {
++            return work.release_admitted(memory).map_err(Error::Storage);
++        }
++        drop(work);
++        Ok(())
++    }
++
++    /// Only after the abandoned machine and its pending states have died.
++    pub(super) fn release_abandoned_machine(&mut self) -> Result<(), Error> {
++        if let Some(memory) = &mut self.memory {
++            memory.release_bytes(memory.live_bytes()).map_err(Error::Storage)?;
+         }
+         Ok(())
+     }
+--- a/crates/rdf-core/src/xsd_regex/xpath/compile.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/compile.rs
+@@ -363,55 +363,8 @@
+ }
+ 
+ 
+-/// A compiled program and the exact physical grant that admitted its buffers.
+-///
+-/// Neither the program nor the grant can be detached. The callback owner is
+-/// destroyed after the native program, including every source and arena buffer.
+-#[derive(Debug)]
+-pub struct OwnedCompiledPattern<S> {
+-    pattern: CompiledPattern,
+-    storage: S,
+-}
+-
+-impl<S> OwnedCompiledPattern<S> {
+-    /// Borrow the program while its original physical admission remains alive.
+-    #[must_use]
+-    pub const fn pattern(&self) -> &CompiledPattern { &self.pattern }
+-
+-    /// Inspect the original caller's account without detaching its grant.
+-    #[must_use]
+-    pub const fn storage(&self) -> &S { &self.storage }
+-}
+-
+-/// A failed native compilation retaining its original typed admission owner.
+-pub struct OwnedCompileError<S> {
+-    error: Error,
+-    storage: S,
+-}
+-
+-impl<S> OwnedCompileError<S> {
+-    /// The grammar, work or physical-storage verdict.
+-    #[must_use]
+-    pub const fn error(&self) -> &Error { &self.error }
+-
+-    /// Original caller account, including its first typed operational cause.
+-    #[must_use]
+-    pub const fn storage(&self) -> &S { &self.storage }
+-}
+-
+-impl<S> std::fmt::Debug for OwnedCompileError<S> {
+-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+-        f.debug_struct("OwnedCompileError").field("error", &self.error).finish_non_exhaustive()
+-    }
+-}
+-
+-impl<S> std::fmt::Display for OwnedCompileError<S> {
+-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.error.fmt(f) }
+-}
+-
+-impl<S> std::error::Error for OwnedCompileError<S> {
+-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.error) }
+-}
++/// A compiled native program retaining its original physical admission.
++pub type OwnedCompiledPattern<S> = super::OwnedPatternValue<CompiledPattern, S>;
+ 
+ /// Compile the unchanged dated grammar with an owned physical admission.
+ ///
+@@ -429,11 +382,11 @@
+     flags: &str,
+     limits: Limits,
+     mut storage: S,
+-) -> Result<OwnedCompiledPattern<S>, OwnedCompileError<S>> {
++) -> Result<OwnedCompiledPattern<S>, super::OwnedPatternError<S>> {
+     let verdict = compile_budget(profile, pattern, flags, Budget::with_storage(limits, &mut storage));
+     match verdict {
+-        Ok(pattern) => Ok(OwnedCompiledPattern { pattern, storage }),
+-        Err(error) => Err(OwnedCompileError { error, storage }),
++        Ok(pattern) => Ok(super::OwnedPatternValue::new(pattern, storage)),
++        Err(error) => Err(super::OwnedPatternValue::new(error, storage)),
+     }
+ }
+ 
+--- a/crates/rdf-core/src/xsd_regex/xpath/match.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/match.rs
+@@ -57,7 +57,67 @@
+     }
+ }
+ 
++
++/// Captures retaining the original caller's physical account.
++pub type OwnedCaptures<S> = super::OwnedPatternValue<Option<Captures>, S>;
++
++fn owned_execution<S: purrdf_lex::allocation::Admission, T>(
++    program: &CompiledPattern,
++    input: &str,
++    limits: Limits,
++    mut storage: S,
++    leg: impl FnOnce(&mut Vm<'_>) -> Result<(T, usize), Error>,
++) -> Result<super::OwnedPatternValue<T, S>, super::OwnedPatternError<S>> {
++    let verdict = (|| {
++        program.admit(limits)?;
++        let mut vm = Vm::with_storage(program, input, limits, &mut storage);
++        leg(&mut vm)
++    })();
++    // Every machine buffer is destroyed before its account is shrunk to the
++    // output that actually survives this operation.
++    match verdict {
++        Ok((value, bytes)) => match storage.resize(bytes) {
++            Ok(()) => Ok(super::OwnedPatternValue::new(value, storage)),
++            Err(error) => {
++                drop(value);
++                Err(super::OwnedPatternValue::new(Error::Storage(error), storage))
++            }
++        },
++        Err(error) => Err(super::OwnedPatternValue::new(error, storage)),
++    }
++}
++
+ impl CompiledPattern {
++
++    /// Match through the unchanged native machines with physical admission.
++    ///
++    /// # Errors
++    /// Retains the original typed account on language, work, layout, allocator
++    /// or physical-capacity refusal. No partial match is published.
++    pub fn is_match_with_storage<S: purrdf_lex::allocation::Admission>(
++        &self, input: &str, limits: Limits, storage: S,
++    ) -> Result<super::OwnedPatternValue<bool, S>, super::OwnedPatternError<S>> {
++        owned_execution(self, input, limits, storage, |vm| Ok((vm.is_match_from(0)?, 0)))
++    }
++
++    /// Find ordered captures while retaining their exact buffer admission.
++    ///
++    /// # Errors
++    /// Preserves the same native verdict and original physical account.
++    pub fn find_with_storage<S: purrdf_lex::allocation::Admission>(
++        &self, input: &str, limits: Limits, storage: S,
++    ) -> Result<OwnedCaptures<S>, super::OwnedPatternError<S>> {
++        owned_execution(self, input, limits, storage, |vm| {
++            let found = vm.find_from(0)?;
++            let bytes = found.as_ref().map_or(Ok(0), |captures| {
++                std::alloc::Layout::array::<Option<Range<usize>>>(captures.spans.capacity())
++                    .map(|layout| layout.size())
++                    .map_err(|_| Error::Storage(purrdf_lex::allocation::StorageError::SizeOverflow))
++            })?;
++            Ok((found, bytes))
++        })
++    }
++
+     /// Whether the input contains a match under this program's dated law.
+     ///
+     /// # Errors
+@@ -192,14 +252,44 @@
+ 
+ impl<'a> Vm<'a> {
+     pub(super) fn new(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+-        Self {
+-            machine: Machine::Backtrack {
+-                machine: Backtrack::new(program, input, limits),
+-                fallback: !program.links.backreferences,
+-            },
++        Self::with_context(Ctx::new(program, input, limits))
++    }
++
++    pub(super) fn with_storage(
++        program: &'a CompiledPattern,
++        input: &'a str,
++        limits: Limits,
++        storage: &'a mut dyn purrdf_lex::allocation::Admission,
++    ) -> Self {
++        Self::with_context(Ctx::with_budget(program, input, Budget::with_storage(limits, storage)))
++    }
++
++    pub(super) fn with_budget(
++        program: &'a CompiledPattern, input: &'a str, budget: Budget<'a>,
++    ) -> Self {
++        Self::with_context(Ctx::with_budget(program, input, budget))
++    }
++
++    /// Destroy all execution buffers before transferring the shared work fuel.
++    pub(super) fn into_budget(self) -> Result<Budget<'a>, Error> {
++        match self.machine {
++            Machine::Backtrack { machine, .. } => Ok(machine.abandon()?.budget),
++            #[cfg(all(test, not(target_arch = "wasm32")))]
++            Machine::Pike(machine) => machine.into_budget(),
++            Machine::Linear(machine) => machine.into_budget(),
++            Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+         }
+     }
+ 
++    fn with_context(ctx: Ctx<'a>) -> Self {
++        let fallback = !ctx.program.links.backreferences;
++        Self { machine: Machine::Backtrack { machine: Backtrack::with_context(ctx), fallback } }
++    }
++
++    pub(super) fn release_captures(&mut self, captures: Captures) -> Result<(), Error> {
++        self.budget().release_vec(captures.spans)
++    }
++
+     /// The backtracking machine alone, which every program can run on.
+     #[cfg(all(test, not(target_arch = "wasm32")))]
+     pub(super) fn backtracking(
+@@ -209,7 +299,7 @@
+     ) -> Self {
+         Self {
+             machine: Machine::Backtrack {
+-                machine: Backtrack::new(program, input, limits),
++                machine: Backtrack::with_context(Ctx::new(program, input, limits)),
+                 fallback: false,
+             },
+         }
+@@ -276,7 +366,7 @@
+                 fallback: true,
+             } => match Self::attempt(machine, start) {
+                 Err(Error::Resource(_)) => {
+-                    self.hand_over();
++                    self.hand_over()?;
+                     self.is_match_from(start)
+                 }
+                 decided => Ok(decided?.is_some()),
+@@ -311,13 +401,14 @@
+     /// decides runs only its own code.
+     #[cold]
+     #[inline(never)]
+-    fn hand_over(&mut self) {
++    fn hand_over(&mut self) -> Result<(), Error> {
+         let Machine::Backtrack { machine, .. } =
+             std::mem::replace(&mut self.machine, Machine::Exchanging)
+         else {
+             unreachable!("only the backtracking machine hands over");
+         };
+-        self.machine = Machine::Linear(Pike::new(machine.abandon()));
++        self.machine = Machine::Linear(Pike::new(machine.abandon()?));
++        Ok(())
+     }
+ 
+     /// Whether the linear-time machines find a match from `start`.
+@@ -349,7 +440,7 @@
+                 fallback: true,
+             } => match Self::attempt(machine, start) {
+                 Err(Error::Resource(_)) => {
+-                    self.hand_over();
++                    self.hand_over()?;
+                     self.find_from(start)
+                 }
+                 decided => decided,
+@@ -381,12 +472,11 @@
+ 
+ impl<'a> Ctx<'a> {
+     pub(super) fn new(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+-        Self {
+-            program,
+-            input,
+-            budget: Budget::new(limits),
+-            live_slots: 0,
+-        }
++        Self::with_budget(program, input, Budget::new(limits))
++    }
++
++    fn with_budget(program: &'a CompiledPattern, input: &'a str, budget: Budget<'a>) -> Self {
++        Self { program, input, budget, live_slots: 0 }
+     }
+ 
+     fn push<T, const N: usize>(
+@@ -397,10 +487,8 @@
+     ) -> Result<(), Error> {
+         let required = self.live_slots + u128::from(slots);
+         self.budget.limits().admit(Resource::MatchSlots, required)?;
+-        stack.try_push(value).map_err(|_| Error::Allocation {
+-            resource: Resource::MatchSlots,
+-            units: stack.len() as u64 + 1,
+-        })?;
++        let units = stack.len() as u64 + 1;
++        self.budget.push_work(stack, value, Resource::MatchSlots, units)?;
+         self.live_slots = required;
+         Ok(())
+     }
+@@ -567,6 +655,8 @@
+         }
+         let value = values.pop().expect("one complete character-set result");
+         self.live_slots -= 1;
++        self.budget.release_work(work)?;
++        self.budget.release_work(values)?;
+         Ok(value)
+     }
+ 
+@@ -647,6 +737,19 @@
+ }
+ 
+ impl State {
++
++    fn release(self, budget: &mut Budget<'_>) -> Result<(), Error> {
++        let Self { actions, captures, .. } = self;
++        budget.release_vec(captures)?;
++        budget.release_work(actions)
++    }
++
++    fn into_captures(self, budget: &mut Budget<'_>) -> Result<Captures, Error> {
++        let Self { actions, captures, .. } = self;
++        budget.release_work(actions)?;
++        Ok(Captures { spans: captures })
++    }
++
+     fn slots(&self) -> u128 {
+         2 + (self.captures.len() as u128) * 2 + (self.actions.len() as u128) * 3
+     }
+@@ -661,16 +764,12 @@
+ }
+ 
+ impl<'a> Backtrack<'a> {
+-    fn new(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+-        Self {
+-            ctx: Ctx::new(program, input, limits),
+-            pending: WorkList::new(),
+-            attempt: None,
+-        }
++    fn with_context(ctx: Ctx<'a>) -> Self {
++        Self { ctx, pending: WorkList::new(), attempt: None }
+     }
+ 
+     /// Release every pending state and hand over the request's accounting.
+-    fn abandon(self) -> Ctx<'a> {
++    fn abandon(self) -> Result<Ctx<'a>, Error> {
+         let Self {
+             mut ctx, pending, ..
+         } = self;
+@@ -678,7 +777,8 @@
+         // A refused attempt may hold its current state and its set-evaluation
+         // cells too; all of them are dropped with the machine.
+         ctx.live_slots = 0;
+-        ctx
++        ctx.budget.release_abandoned_machine()?;
++        Ok(ctx)
+     }
+ 
+     fn action(&mut self, state: &mut State, action: Action) -> Result<(), Error> {
+@@ -696,12 +796,7 @@
+             .budget
+             .charge_wide(Resource::MatchSteps, count as u128)?;
+         let mut captures = Vec::new();
+-        captures
+-            .try_reserve_exact(count)
+-            .map_err(|_| Error::Allocation {
+-                resource: Resource::MatchSlots,
+-                units: count as u64,
+-            })?;
++        self.ctx.budget.reserve_match(&mut captures, count, count as u64)?;
+         captures.resize_with(count, || None);
+         self.ctx.live_slots += slots;
+         let mut state = State {
+@@ -730,19 +825,15 @@
+             state.captures.len() as u128 + state.actions.len() as u128,
+         )?;
+         let mut captures = Vec::new();
+-        captures
+-            .try_reserve_exact(state.captures.len())
+-            .map_err(|_| Error::Allocation {
+-                resource: Resource::MatchSlots,
+-                units: state.captures.len() as u64,
+-            })?;
++        self.ctx.budget.reserve_match(
++            &mut captures, state.captures.len(), state.captures.len() as u64,
++        )?;
+         captures.extend(state.captures.iter().cloned());
+         let mut actions = WorkList::new();
+         for &action in state.actions.iter() {
+-            actions.try_push(action).map_err(|_| Error::Allocation {
+-                resource: Resource::MatchSlots,
+-                units: state.actions.len() as u64,
+-            })?;
++            self.ctx.budget.push_work(
++                &mut actions, action, Resource::MatchSlots, state.actions.len() as u64,
++            )?;
+         }
+         self.ctx.live_slots += slots;
+         Ok(State {
+@@ -759,10 +850,8 @@
+             .budget
+             .limits()
+             .admit(Resource::MatchStates, self.pending.len() as u128 + 1)?;
+-        self.pending.try_push(state).map_err(|_| Error::Allocation {
+-            resource: Resource::MatchStates,
+-            units: self.pending.len() as u64 + 1,
+-        })
++        let units = self.pending.len() as u64 + 1;
++        self.ctx.budget.push_work(&mut self.pending, state, Resource::MatchStates, units)
+     }
+ 
+     /// The first start after a failed `start` that a leading unbounded run
+@@ -797,6 +886,7 @@
+         if let Some(run) = state.run.take() {
+             let Some(stop) = self.stop(state.start, state.position, run)? else {
+                 self.ctx.live_slots -= state.slots();
++                state.release(&mut self.ctx.budget)?;
+                 return Ok(None);
+             };
+             self.stop_at(&mut state, stop, run)?;
+@@ -891,14 +981,13 @@
+                     self.ctx.live_slots -= state.slots();
+                     while let Some(stale) = self.pending.pop() {
+                         self.ctx.live_slots -= stale.slots();
++                        stale.release(&mut self.ctx.budget)?;
+                     }
+                     debug_assert_eq!(self.ctx.live_slots, 0);
+-                    return Ok(Some(Captures {
+-                        spans: state.captures,
+-                    }));
++                    return state.into_captures(&mut self.ctx.budget).map(Some);
+                 }
+                 self.ctx.live_slots -= state.slots();
+-                drop(state);
++                state.release(&mut self.ctx.budget)?;
+                 let mut resumed = None;
+                 while let Some(next) = self.pending.pop() {
+                     resumed = self.resume(next)?;
+--- a/crates/rdf-core/src/xsd_regex/xpath/pike.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/pike.rs
+@@ -436,11 +436,7 @@
+     ctx.budget.limits().admit(Resource::MatchSlots, required)?;
+     let units = u64::try_from(capacity as u128 * cells)
+         .expect("admitted capacity fits its finite u64 slot bound");
+-    vec.try_reserve_exact(capacity - vec.len())
+-        .map_err(|_| Error::Allocation {
+-            resource: Resource::MatchSlots,
+-            units,
+-        })?;
++    ctx.budget.reserve_match(vec, capacity, units)?;
+     ctx.live_slots = ctx.live_slots - old + vec.capacity() as u128 * cells;
+     Ok(())
+ }
+@@ -586,6 +582,14 @@
+ }
+ 
+ impl<'a> Pike<'a> {
++    /// Only the request budget survives; all native buffers die first.
++    pub(super) fn into_budget(self) -> Result<Budget<'a>, Error> {
++        let Self { mut ctx, .. } = self;
++        ctx.live_slots = 0;
++        ctx.budget.release_abandoned_machine()?;
++        Ok(ctx.budget)
++    }
++
+     pub(super) fn new(ctx: Ctx<'a>) -> Self {
+         let program = ctx.program;
+         let counters = program.links.counter_depth as usize;
+@@ -761,12 +765,7 @@
+             size as u128 + (self.visited.entries * key_len) as u128,
+         )?;
+         let mut table = Vec::new();
+-        table
+-            .try_reserve_exact(size)
+-            .map_err(|_| Error::Allocation {
+-                resource: Resource::MatchSlots,
+-                units: size as u64 * 2,
+-            })?;
++        self.ctx.budget.reserve_match(&mut table, size, size as u64 * 2)?;
+         table.resize(size, (0, 0));
+         let generation = self.visited.generation;
+         let mask = size - 1;
+@@ -778,7 +777,7 @@
+             }
+             table[slot] = (generation, entry);
+         }
+-        self.visited.table = table;
++        self.ctx.budget.release_vec(std::mem::replace(&mut self.visited.table, table))?;
+         self.ctx.live_slots = self.ctx.live_slots - old as u128 * SLOT_CELLS
+             + self.visited.table.capacity() as u128 * SLOT_CELLS;
+         Ok(())
+@@ -1484,7 +1483,7 @@
+             None => (0x11_0000, u64::MAX),
+         };
+         if self.moves.epoch != self.sets.epoch() {
+-            self.forget_moves();
++            self.forget_moves()?;
+             self.moves.epoch = self.sets.epoch();
+         }
+         let anchors = if self.ctx.program.links.anchors {
+@@ -1504,14 +1503,20 @@
+     }
+ 
+     /// Clear the walk's transition cache, releasing its storage.
+-    fn forget_moves(&mut self) {
++    fn forget_moves(&mut self) -> Result<(), Error> {
+         self.ctx.live_slots -= self.moves.used() as u128;
+         let (epoch, cleared) = (self.moves.epoch, self.moves.cleared + 1);
+-        self.moves = Moves {
++        let old = std::mem::replace(&mut self.moves, Moves {
+             epoch,
+             cleared,
+             ..Moves::default()
+-        };
++        });
++        self.ctx.budget.release_vec(old.states)?;
++        self.ctx.budget.release_vec(old.index)?;
++        self.ctx.budget.release_vec(old.keys)?;
++        self.ctx.budget.release_vec(old.values)?;
++        self.ctx.budget.release_vec(old.cells)?;
++        Ok(())
+     }
+ 
+     /// The id of the control state `state`: a node and its counters.
+@@ -1521,7 +1526,7 @@
+             .budget
+             .charge_wide(Resource::MatchSteps, copy_steps(width))?;
+         if self.moves.used() + width + 8 > MOVES_CELLS {
+-            self.forget_moves();
++            self.forget_moves()?;
+         }
+         let hash = purrdf_hash::fixed::hash_one(state);
+         if !self.moves.index.is_empty() {
+@@ -1555,12 +1560,7 @@
+                 .budget
+                 .charge_wide(Resource::MatchSteps, (size + id * width) as u128)?;
+             let mut index = Vec::new();
+-            index
+-                .try_reserve_exact(size)
+-                .map_err(|_| Error::Allocation {
+-                    resource: Resource::MatchSlots,
+-                    units: size as u64,
+-                })?;
++            self.ctx.budget.reserve_match(&mut index, size, size as u64)?;
+             index.resize(size, u32::MAX);
+             let mask = size - 1;
+             for (held, chunk) in self.moves.states.chunks_exact(width).enumerate() {
+@@ -1572,7 +1572,7 @@
+             }
+             self.ctx.live_slots = self.ctx.live_slots - old.div_ceil(2) as u128
+                 + index.capacity().div_ceil(2) as u128;
+-            self.moves.index = index;
++            self.ctx.budget.release_vec(std::mem::replace(&mut self.moves.index, index))?;
+         } else {
+             let mask = self.moves.index.len() - 1;
+             let mut slot = hash as usize & mask;
+@@ -1641,7 +1641,10 @@
+             // Interning cleared the cache: the key's state id is gone.
+             return Ok((target != ACCEPT).then_some(target));
+         }
+-        let (target, reached) = (target, reached.to_vec());
++        let mut reached_copy = Vec::new();
++        self.ctx.budget.reserve_match(&mut reached_copy, reached.len(), reached.len() as u64)?;
++        reached_copy.extend_from_slice(reached);
++        let reached = reached_copy;
+         let before = &previous[captures..];
+         let start = self.moves.cells.len();
+         for (cell, (&old, &new)) in before.iter().zip(&reached).enumerate() {
+@@ -1668,12 +1671,8 @@
+                 .charge_wide(Resource::MatchSteps, (size + self.moves.held) as u128)?;
+             let mut keys = Vec::new();
+             let mut values = Vec::new();
+-            keys.try_reserve_exact(size)
+-                .and_then(|()| values.try_reserve_exact(size))
+-                .map_err(|_| Error::Allocation {
+-                    resource: Resource::MatchSlots,
+-                    units: size as u64 * 5,
+-                })?;
++            self.ctx.budget.reserve_match(&mut keys, size, size as u64 * 5)?;
++            self.ctx.budget.reserve_match(&mut values, size, size as u64 * 5)?;
+             keys.resize(size, NO_KEY);
+             values.resize(size, (0, 0, 0));
+             let mask = size - 1;
+@@ -1691,8 +1690,8 @@
+             self.ctx.live_slots = self.ctx.live_slots - old as u128 * 5
+                 + keys.capacity() as u128 * 3
+                 + values.capacity() as u128 * 2;
+-            self.moves.keys = keys;
+-            self.moves.values = values;
++            self.ctx.budget.release_vec(std::mem::replace(&mut self.moves.keys, keys))?;
++            self.ctx.budget.release_vec(std::mem::replace(&mut self.moves.values, values))?;
+         }
+         let mask = self.moves.keys.len() - 1;
+         let mut slot = purrdf_hash::fixed::hash_one(&key) as usize & mask;
+@@ -1702,22 +1701,18 @@
+         self.moves.keys[slot] = key;
+         self.moves.values[slot] = (target, start as u32, len as u32);
+         self.moves.held += 1;
++        self.ctx.budget.release_vec(reached)?;
+         Ok((target != ACCEPT).then_some(target))
+     }
+ 
+-    fn captures(&self) -> Result<Option<Captures>, Error> {
++    fn captures(&mut self) -> Result<Option<Captures>, Error> {
+         let groups = self.found.len() / 2;
+         self.ctx.budget.limits().admit(
+             Resource::MatchSlots,
+             self.ctx.live_slots + groups as u128 * 2,
+         )?;
+         let mut spans = Vec::new();
+-        spans
+-            .try_reserve_exact(groups)
+-            .map_err(|_| Error::Allocation {
+-                resource: Resource::MatchSlots,
+-                units: groups as u64 * 2,
+-            })?;
++        self.ctx.budget.reserve_match(&mut spans, groups, groups as u64 * 2)?;
+         spans.extend(self.found.as_chunks::<2>().0.iter().map(|&[start, end]| {
+             (end != UNSET).then(|| {
+                 debug_assert_ne!(start, UNSET, "a closed group was opened");
+--- a/crates/rdf-core/src/xsd_regex/xpath/sets.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/sets.rs
+@@ -395,7 +395,7 @@
+     /// Whether a match starts at or after `start`.
+     pub(super) fn is_match(&mut self, ctx: &mut Ctx<'_>, start: usize) -> Result<bool, Error> {
+         let found = self.forward(ctx, start);
+-        self.release(ctx);
++        self.release(ctx)?;
+         found
+     }
+ 
+@@ -516,7 +516,7 @@
+ 
+     /// Release every scan buffer and the cache; the kept reverse states
+     /// remain.
+-    fn release(&mut self, ctx: &mut Ctx<'_>) {
++    fn release(&mut self, ctx: &mut Ctx<'_>) -> Result<(), Error> {
+         let cells = self.keys.capacity() as u128
+             + self.intervals.capacity() as u128 * INTERVAL_CELLS
+             + self.work.capacity() as u128 * ITEM_CELLS
+@@ -529,8 +529,22 @@
+             + self.cache.cells() as u128;
+         ctx.live_slots -= cells;
+         let (marks, spacing) = (std::mem::take(&mut self.marks), self.spacing);
+-        *self = Self::new();
++        let old = std::mem::replace(self, Self::new());
++        ctx.budget.release_vec(old.keys)?;
++        ctx.budget.release_vec(old.intervals)?;
++        ctx.budget.release_vec(old.work)?;
++        ctx.budget.release_vec(old.entries)?;
++        ctx.budget.release_vec(old.table)?;
++        ctx.budget.release_vec(old.parked)?;
++        ctx.budget.release_vec(old.state)?;
++        ctx.budget.release_vec(old.next)?;
++        ctx.budget.release_vec(old.order)?;
++        ctx.budget.release_vec(old.cache.contents)?;
++        ctx.budget.release_vec(old.cache.spans)?;
++        ctx.budget.release_vec(old.cache.index)?;
++        ctx.budget.release_vec(old.cache.moves)?;
+         (self.marks, self.spacing) = (marks, spacing);
++        Ok(())
+     }
+ 
+     /// Scan forwards from `start` until a match ends or no start remains.
+@@ -699,13 +713,7 @@
+         if length > old {
+             let required = ctx.live_slots - old.div_ceil(2) as u128 + length.div_ceil(2) as u128;
+             ctx.budget.limits().admit(Resource::MatchSlots, required)?;
+-            marks
+-                .ids
+-                .try_reserve_exact(length)
+-                .map_err(|_| Error::Allocation {
+-                    resource: Resource::MatchSlots,
+-                    units: length as u64,
+-                })?;
++            ctx.budget.reserve_match(&mut marks.ids, length, length as u64)?;
+             ctx.live_slots =
+                 ctx.live_slots - old.div_ceil(2) as u128 + marks.ids.capacity().div_ceil(2) as u128;
+         }
+@@ -718,13 +726,7 @@
+         marks.spans.clear();
+         marks.by_cache.clear();
+         if marks.index.is_empty() {
+-            marks
+-                .index
+-                .try_reserve_exact(16)
+-                .map_err(|_| Error::Allocation {
+-                    resource: Resource::MatchSlots,
+-                    units: 8,
+-                })?;
++            ctx.budget.reserve_match(&mut marks.index, 16, 8)?;
+             ctx.live_slots += marks.index.capacity().div_ceil(2) as u128;
+             marks.index.resize(16, u32::MAX);
+         } else {
+@@ -1446,12 +1448,7 @@
+             (size + self.entries.len() * 2) as u128,
+         )?;
+         let mut table = Vec::new();
+-        table
+-            .try_reserve_exact(size)
+-            .map_err(|_| Error::Allocation {
+-                resource: Resource::MatchSlots,
+-                units: size as u64,
+-            })?;
++        ctx.budget.reserve_match(&mut table, size, size as u64)?;
+         table.resize(size, (0, 0));
+         let mask = size - 1;
+         for (index, entry) in self.entries.iter().enumerate() {
+@@ -1474,7 +1471,7 @@
+         }
+         ctx.live_slots =
+             ctx.live_slots - old as u128 * SLOT_CELLS + table.capacity() as u128 * SLOT_CELLS;
+-        self.table = table;
++        ctx.budget.release_vec(std::mem::replace(&mut self.table, table))?;
+         Ok(())
+     }
+ 
+@@ -1743,7 +1740,7 @@
+             + self.cache.index.len()
+             + self.cache.moves.len() * 2;
+         if used + len + 2 > CACHE_CELLS {
+-            self.clear_cache(ctx);
++            self.clear_cache(ctx)?;
+         }
+         let id = self.cache.spans.len();
+         let start = self.cache.contents.len();
+@@ -1765,10 +1762,15 @@
+     }
+ 
+     /// Empty the cache.
+-    fn clear_cache(&mut self, ctx: &mut Ctx<'_>) {
++    fn clear_cache(&mut self, ctx: &mut Ctx<'_>) -> Result<(), Error> {
+         ctx.live_slots -= self.cache.cells() as u128;
+-        self.cache = Cache::default();
++        let old = std::mem::take(&mut self.cache);
++        ctx.budget.release_vec(old.contents)?;
++        ctx.budget.release_vec(old.spans)?;
++        ctx.budget.release_vec(old.index)?;
++        ctx.budget.release_vec(old.moves)?;
+         self.epoch += 1;
++        Ok(())
+     }
+ 
+     /// Rebuild the state index at twice the size, with every interned state.
+@@ -1783,12 +1785,7 @@
+             (size + self.cache.contents.len()) as u128,
+         )?;
+         let mut index = Vec::new();
+-        index
+-            .try_reserve_exact(size)
+-            .map_err(|_| Error::Allocation {
+-                resource: Resource::MatchSlots,
+-                units: size as u64,
+-            })?;
++        ctx.budget.reserve_match(&mut index, size, size as u64)?;
+         index.resize(size, u32::MAX);
+         let mask = size - 1;
+         for id in 0..self.cache.spans.len() {
+@@ -1800,7 +1797,7 @@
+             index[slot] = id as u32;
+         }
+         ctx.live_slots = ctx.live_slots - old as u128 + index.capacity() as u128;
+-        self.cache.index = index;
++        ctx.budget.release_vec(std::mem::replace(&mut self.cache.index, index))?;
+         Ok(())
+     }
+ 
+@@ -1817,12 +1814,7 @@
+                 (size + self.cache.moves.len()) as u128,
+             )?;
+             let mut moves = Vec::new();
+-            moves
+-                .try_reserve_exact(size)
+-                .map_err(|_| Error::Allocation {
+-                    resource: Resource::MatchSlots,
+-                    units: size as u64 * 2,
+-                })?;
++            ctx.budget.reserve_match(&mut moves, size, size as u64 * 2)?;
+             moves.resize(size, (NO_MOVE, 0));
+             let mask = size - 1;
+             for &(stored, target) in &self.cache.moves {
+@@ -1836,7 +1828,7 @@
+                 moves[slot] = (stored, target);
+             }
+             ctx.live_slots = ctx.live_slots - old as u128 * 2 + moves.capacity() as u128 * 2;
+-            self.cache.moves = moves;
++            ctx.budget.release_vec(std::mem::replace(&mut self.cache.moves, moves))?;
+         }
+         let mask = self.cache.moves.len() - 1;
+         let mut slot = purrdf_hash::fixed::hash_one(&key) as usize & mask;
+@@ -1860,12 +1852,7 @@
+     ctx.budget
+         .charge_wide(Resource::MatchSteps, (size + marks.states.len()) as u128)?;
+     let mut index = Vec::new();
+-    index
+-        .try_reserve_exact(size)
+-        .map_err(|_| Error::Allocation {
+-            resource: Resource::MatchSlots,
+-            units: size as u64,
+-        })?;
++    ctx.budget.reserve_match(&mut index, size, size as u64)?;
+     index.resize(size, u32::MAX);
+     let mask = size - 1;
+     for (id, &(at, len)) in marks.spans.iter().enumerate() {
+@@ -1877,7 +1864,7 @@
+     }
+     ctx.live_slots =
+         ctx.live_slots - old.div_ceil(2) as u128 + index.capacity().div_ceil(2) as u128;
+-    marks.index = index;
++    ctx.budget.release_vec(std::mem::replace(&mut marks.index, index))?;
+     Ok(())
+ }
+ 
+--- a/crates/rdf-core/src/xsd_regex/xpath/replace.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/replace.rs
+@@ -5,6 +5,8 @@
+ 
+ use std::borrow::Cow;
+ 
++use purrdf_lex::allocation::{Admission, Memory};
++
+ use super::r#match::Vm;
+ use super::{Budget, CompiledPattern, Error, Limits, Resource};
+ use crate::xsd_regex::replace::{Cursor, ParseFailure, Part};
+@@ -18,7 +20,10 @@
+         })
+ }
+ 
+-fn append(out: &mut String, text: &str, budget: &mut Budget<'_>) -> Result<(), Error> {
++fn append(
++    out: &mut String, text: &str, budget: &mut Budget<'_>,
++    output: &mut Option<&mut Memory<'_, dyn Admission + '_>>,
++) -> Result<(), Error> {
+     budget.charge_wide(Resource::OutputBytes, text.len() as u128)?;
+     let copy = if text.len() > out.capacity() - out.len() {
+         out.len() as u128
+@@ -26,15 +31,56 @@
+         0
+     };
+     budget.charge_wide(Resource::MatchSteps, text.len() as u128 + copy)?;
+-    out.try_reserve(text.len()).map_err(|_| Error::Allocation {
+-        resource: Resource::OutputBytes,
+-        units: budget.used(Resource::OutputBytes),
+-    })?;
++    if let Some(memory) = output {
++        let required = out.len().checked_add(text.len())
++            .ok_or(Error::Storage(purrdf_lex::allocation::StorageError::SizeOverflow))?;
++        if required > out.capacity() {
++            let capacity = out.capacity().checked_mul(2)
++                .ok_or(Error::Storage(purrdf_lex::allocation::StorageError::SizeOverflow))?
++                .max(required);
++            memory.reserve_string(out, capacity).map_err(Error::Storage)?;
++        }
++    } else {
++        out.try_reserve(text.len()).map_err(|_| Error::Allocation {
++            resource: Resource::OutputBytes,
++            units: budget.used(Resource::OutputBytes),
++        })?;
++    }
+     out.push_str(text);
+     Ok(())
+ }
+ 
++/// Replacement text retaining both original native accounts.
++pub type OwnedReplacement<'h, M, O> = super::OwnedPatternValue<Cow<'h, str>, (M, O)>;
++
+ impl CompiledPattern {
++    /// Run the same dated replacement law with separately admitted matcher and
++    /// output storage. Matcher handover cannot release surviving output bytes.
++    ///
++    /// # Errors
++    /// Returns the original accounts on grammar, work, allocation or capacity
++    /// refusal; no partial replacement text is published.
++    pub fn replace_all_with_storage<'h, M: Admission, O: Admission>(
++        &self, input: &'h str, replacement: &str, limits: Limits,
++        mut matcher: M, mut output: O,
++    ) -> Result<OwnedReplacement<'h, M, O>, super::OwnedPatternError<(M, O)>> {
++        let verdict = {
++            let budget = Budget::with_storage(limits, &mut matcher);
++            let mut memory = Memory::new(&mut output as &mut dyn Admission);
++            self.replace_budget(input, replacement, budget, Some(&mut memory))
++        };
++        match verdict {
++            Ok(value) => match matcher.resize(0) {
++                Ok(()) => Ok(super::OwnedPatternValue::new(value, (matcher, output))),
++                Err(error) => {
++                    drop(value);
++                    Err(super::OwnedPatternValue::new(Error::Storage(error), (matcher, output)))
++                }
++            },
++            Err(error) => Err(super::OwnedPatternValue::new(error, (matcher, output))),
++        }
++    }
++
+     /// Replace every nonoverlapping ordered match under this dated XPath law.
+     ///
+     /// Pattern admission, replacement validation, the empty-string check,
+@@ -56,8 +102,15 @@
+         replacement: &str,
+         limits: Limits,
+     ) -> Result<Cow<'h, str>, Error> {
++        self.replace_budget(input, replacement, Budget::new(limits), None)
++    }
++
++    fn replace_budget<'h>(
++        &self, input: &'h str, replacement: &str, mut budget: Budget<'_>,
++        mut output: Option<&mut Memory<'_, dyn Admission + '_>>,
++    ) -> Result<Cow<'h, str>, Error> {
++        let limits = budget.limits();
+         self.admit(limits)?;
+-        let mut budget = Budget::new(limits);
+         if !self.modes.quoted {
+             let mut template = Cursor::new(replacement, self.captures);
+             while next(&mut template, &mut budget)?.is_some() {}
+@@ -67,8 +120,8 @@
+         if empty.find_from(0)?.is_some() {
+             return Err(Error::EmptyMatch);
+         }
+-        let mut vm = Vm::new(self, input, limits);
+-        *vm.budget() = std::mem::replace(empty.budget(), Budget::new(limits));
++        let budget = empty.into_budget()?;
++        let mut vm = Vm::with_budget(self, input, budget);
+         let mut out = String::new();
+         let mut position = 0;
+         let mut changed = false;
+@@ -79,14 +132,14 @@
+                     // byte is produced, so none is admitted.
+                     return Ok(Cow::Borrowed(input));
+                 }
+-                append(&mut out, &input[position..], vm.budget())?;
++                append(&mut out, &input[position..], vm.budget(), &mut output)?;
+                 return Ok(Cow::Owned(out));
+             };
+             let matched = captures.get(0).expect("successful match has capture zero");
+             debug_assert!(matched.end > matched.start, "empty-match guard was passed");
+-            append(&mut out, &input[position..matched.start], vm.budget())?;
++            append(&mut out, &input[position..matched.start], vm.budget(), &mut output)?;
+             if self.modes.quoted {
+-                append(&mut out, replacement, vm.budget())?;
++                append(&mut out, replacement, vm.budget(), &mut output)?;
+             } else {
+                 let mut template = Cursor::new(replacement, self.captures);
+                 while let Some(part) = next(&mut template, vm.budget())? {
+@@ -97,13 +150,13 @@
+                         }
+                         Part::Group(None) => "",
+                     };
+-                    append(&mut out, text, vm.budget())?;
++                    append(&mut out, text, vm.budget(), &mut output)?;
+                 }
+             }
+             position = matched.end;
+             changed = true;
+             // No previous match's capture vector survives the next search.
+-            drop(captures);
++            vm.release_captures(captures)?;
+         }
+     }
+ }
+--- a/crates/rdf-core/tests/native_regex_storage.rs
++++ b/crates/rdf-core/tests/native_regex_storage.rs
+@@ -1,7 +1,7 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! Independent compiler allocation measurements over the real native program.
++//! Independent allocation measurements over native compile, match and replacement.
+ 
+ use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+ use purrdf_core::xsd_regex::xpath::{self, Limits, Profile};
+@@ -55,13 +55,13 @@
+         );
+         assert_eq!(
+             program.storage().live,
+-            program.pattern().storage_bytes() - size_of::<xpath::CompiledPattern>(),
++            program.value().storage_bytes() - size_of::<xpath::CompiledPattern>(),
+             "the program's source, flags, nodes, sets, links and flat tables are retained"
+         );
+         let resident = xpath::compile(Profile::Xpath31, &source, flags, Limits::new()).unwrap();
+         for input in ["", "abc", "ABCD", &source] {
+             assert_eq!(
+-                program.pattern().is_match(input, Limits::new()),
++                program.value().is_match(input, Limits::new()),
+                 resident.is_match(input, Limits::new()),
+                 "physical admission must preserve the selected native law"
+             );
+@@ -78,7 +78,7 @@
+             Profile::Xpath31, &source, "ix", Limits::new(), Account::new(limit),
+         ).unwrap_err();
+         let measured = window.close();
+-        assert!(matches!(failure.error(), xpath::Error::Storage(StorageError::AdmissionFailed)));
++        assert!(matches!(failure.value(), xpath::Error::Storage(StorageError::AdmissionFailed)));
+         assert!(failure.storage().refused.unwrap() > limit);
+         assert!(failure.storage().peak <= limit);
+         assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= failure.storage().peak);
+@@ -98,3 +98,98 @@
+     let measured = window.close();
+     assert_eq!(measured.retained_bytes, 0);
+ }
++
++#[test]
++fn matcher_peak_and_retained_captures_cover_native_paths() {
++    let spill_source = "(a)".repeat(48);
++    let spill_input = "a".repeat(48);
++    let ambiguous_input = format!("{}ab", "a".repeat(8192));
++    for (source, input) in [
++        (r"(a+)\1", "aaaa"),
++        (spill_source.as_str(), spill_input.as_str()),
++        ("(a|aa){1,64}b", ambiguous_input.as_str()),
++        ("(a|aa){1,64}b", "cccc"),
++    ] {
++        let program = xpath::compile(Profile::Xpath31, source, "", Limits::new()).unwrap();
++        let expected = program.find(input, Limits::new()).unwrap();
++        let window = CurrentThreadWindow::open();
++        let found = program.find_with_storage(input, Limits::new(), Account::new(4_000_000)).unwrap();
++        let measured = window.close();
++        assert_eq!(found.value(), &expected, "{source}");
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= found.storage().peak,
++            "{source}: native state, spills, table rebuilds and captures must be priced");
++        assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), found.storage().live,
++            "{source}: only captures survive the native machine");
++
++        let window = CurrentThreadWindow::open();
++        let matched = program.is_match_with_storage(input, Limits::new(), Account::new(4_000_000)).unwrap();
++        let measured = window.close();
++        assert_eq!(*matched.value(), expected.is_some(), "{source}");
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= matched.storage().peak);
++        assert_eq!(matched.storage().live, 0);
++        assert_eq!(measured.retained_bytes, 0);
++    }
++}
++
++#[test]
++fn matcher_refusal_preserves_the_original_account_before_allocation() {
++    let source = "(a)".repeat(48);
++    let input = "a".repeat(48);
++    let program = xpath::compile(Profile::Xpath31, &source, "", Limits::new()).unwrap();
++    for limit in [0, 32, 256] {
++        let window = CurrentThreadWindow::open();
++        let failure = program.find_with_storage(&input, Limits::new(), Account::new(limit)).unwrap_err();
++        let measured = window.close();
++        assert!(matches!(failure.value(), xpath::Error::Storage(StorageError::AdmissionFailed)));
++        assert!(failure.storage().refused.unwrap() > limit);
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= failure.storage().peak);
++        assert_eq!(measured.retained_bytes, 0);
++    }
++}
++
++#[test]
++fn replacement_prices_output_separately_and_releases_every_search_capture() {
++    let ambiguous_input = format!("{}ababa", "a".repeat(8192));
++    for (source, flags, input, template) in [
++        ("(ab)|(a)", "", "aba", "$2$1!"),
++        (r"(a+)\1", "", "aaaazaaaa", "$1"),
++        ("(a|aa){1,64}b", "", ambiguous_input.as_str(), "[$1]"),
++        ("a", "q", "aaa", r"$x\n"),
++        ("a", "", "zzzz", "unused"),
++    ] {
++        let program = xpath::compile(Profile::Xpath31, source, flags, Limits::new()).unwrap();
++        let expected = program.replace_all(input, template, Limits::new()).unwrap();
++        let window = CurrentThreadWindow::open();
++        let replaced = program.replace_all_with_storage(input, template, Limits::new(),
++            Account::new(4_000_000), Account::new(4_000_000)).unwrap();
++        let measured = window.close();
++        assert_eq!(replaced.value(), &expected, "{source}");
++        let (matcher, output) = replaced.storage();
++        assert_eq!(matcher.live, 0, "machine and every capture die before publication");
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= matcher.peak + output.peak);
++        assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), output.live);
++        match replaced.value() {
++            std::borrow::Cow::Borrowed(value) => {
++                assert_eq!(value.as_ptr(), input.as_ptr());
++                assert_eq!(output.live, 0);
++            }
++            std::borrow::Cow::Owned(value) => assert_eq!(output.live, value.capacity()),
++        }
++    }
++}
++
++#[test]
++fn replacement_refusals_drop_partial_output_and_keep_both_typed_accounts() {
++    let program = xpath::compile(Profile::Xpath31, "(a)", "", Limits::new()).unwrap();
++    for (matcher_limit, output_limit) in [(0, 4_000_000), (4_000_000, 0), (4_000_000, 8)] {
++        let window = CurrentThreadWindow::open();
++        let failure = program.replace_all_with_storage("aaa", "expanded-output", Limits::new(),
++            Account::new(matcher_limit), Account::new(output_limit)).unwrap_err();
++        let measured = window.close();
++        assert!(matches!(failure.value(), xpath::Error::Storage(StorageError::AdmissionFailed)));
++        let (matcher, output) = failure.storage();
++        assert!(matcher.refused.is_some() || output.refused.is_some());
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= matcher.peak + output.peak);
++        assert_eq!(measured.retained_bytes, 0, "refused output is never published");
++    }
++}

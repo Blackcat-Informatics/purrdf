@@ -1,0 +1,737 @@
+--- a/crates/sparql-eval/src/bgp.rs
++++ b/crates/sparql-eval/src/bgp.rs
+@@ -1692,6 +1692,7 @@
+ ///
+ /// Inline for a pattern of up to four slots, which every pattern without a quoted
+ /// triple is.
++#[cfg(test)]
+ pub(crate) fn slot_keys(pattern: &TriplePattern) -> purrdf_core::SmallVec<[Variable; 4]> {
+     let mut keys = purrdf_core::SmallVec::new();
+     collect_triple_slot_keys(pattern, &mut keys);
+@@ -1700,6 +1701,7 @@
+ 
+ /// Append a triple pattern's slot variables, through nested quoted triples, in
+ /// `(s, p, o)` order.
++#[cfg(test)]
+ fn collect_triple_slot_keys(pattern: &TriplePattern, keys: &mut impl Extend<Variable>) {
+     visit_triple_slots(pattern, |key| {
+         keys.extend([match key {
+@@ -1718,6 +1720,7 @@
+ 
+ /// Read every slot without cloning variables or constructing blank identities.
+ /// The same iterative walk supplies the indexed kernel's owning slot census.
++#[cfg(test)]
+ pub(crate) fn visit_triple_slots<'a>(
+     pattern: &'a TriplePattern,
+     mut visit: impl FnMut(SlotKey<'a>),
+@@ -1828,6 +1831,7 @@
+ /// across its occurrences, and the column projected away before the node's rows leave.
+ /// One spelling of the synthetic name, so the two cannot disagree about what a blank
+ /// slot is called.
++#[cfg(test)]
+ pub(crate) fn blank_var(label: &str) -> Variable {
+     blank_var_admitted(label, &crate::WorkspaceCapability::resident())
+         .expect("resident blank variable allocation")
+--- a/crates/sparql-eval/src/blank_scope.rs
++++ b/crates/sparql-eval/src/blank_scope.rs
+@@ -73,7 +73,6 @@
+ use crate::workspace::{AdmittedMap, AdmittedVec, LexicalFrame};
+ use purrdf_lex::allocation::Memory;
+ #[cfg(test)]
+-#[cfg(test)]
+ use purrdf_sparql_algebra::scope::{
+     spine_leaves, visit_leaf_labels, visit_spine_leaves as any_spine_leaf,
+ };
+@@ -91,16 +90,6 @@
+ /// The columns of `schema` that are not renamed shared blanks, in order — or `None`
+ /// when there is no renamed blank to leave out, which is every schema outside a
+ /// basic graph pattern whose pieces share a label.
+-pub(crate) fn visible_columns(schema: &VarSchema) -> Option<Vec<usize>> {
+-    visible_columns_admitted(schema, &crate::WorkspaceCapability::resident())
+-        .expect("resident visible-column allocation")
+-        .map(|columns| {
+-            columns
+-                .try_into_resident()
+-                .expect("resident visible-column owner")
+-        })
+-}
+-
+ /// The same hidden-column identity law, with actual admitted array growth.
+ pub(crate) fn visible_columns_admitted(
+     schema: &VarSchema,
+@@ -197,15 +186,6 @@
+ }
+ 
+ /// Carry a replacement WHERE without cloning the discarded original.
+-pub(crate) fn query_with_pattern(query: &Query, pattern: GraphPattern) -> Query {
+-    query
+-        .clone_with_pattern_with_memory(
+-            pattern,
+-            &mut Memory::new(&mut purrdf_lex::allocation::Resident),
+-        )
+-        .expect("resident query head copy")
+-}
+-
+ pub(crate) fn query_with_pattern_with_memory(
+     query: &Query,
+     pattern: GraphPattern,
+@@ -397,21 +377,9 @@
+ }
+ 
+ #[cfg(test)]
+-fn leaf_labels<'a>(leaf: &'a GraphPattern, out: &mut Vec<&'a str>) {
+-    visit_leaf_labels(leaf, LabelSource::All, &mut |label| {
+-        out.push(label);
+-        false
+-    });
+-}
+-#[cfg(test)]
+ fn leaf_has_blank(leaf: &GraphPattern) -> bool {
+     visit_leaf_labels(leaf, LabelSource::All, &mut |_| true)
+ }
+-#[cfg(test)]
+-fn leaf_has_raw_blank(leaf: &GraphPattern) -> bool {
+-    visit_leaf_labels(leaf, LabelSource::Raw, &mut |_| true)
+-}
+-
+ // ---------------------------------------------------------------------------
+ // Detection (read-only)
+ // ---------------------------------------------------------------------------
+@@ -1065,6 +1033,7 @@
+ }
+ 
+ /// Only the explicitly resident raw adapter adopts already caller-owned storage.
++#[cfg(test)]
+ fn resident_owned_pattern(
+     pattern: GraphPattern,
+     body: impl FnOnce(GraphPattern, &mut Memory<'_, LexicalFrame>) -> PrepResult<GraphPattern>,
+@@ -1093,21 +1062,6 @@
+ /// Map every pattern, including expression and aggregate EXISTS bodies, before
+ /// its children, using the same iterative reconstruction as blank scoping.
+ /// The callback's returned context is passed to its immediate pattern children.
+-pub(crate) fn map_patterns(
+-    pattern: GraphPattern,
+-    all_aggregates: bool,
+-    transform: &mut impl FnMut(&mut GraphPattern, bool) -> bool,
+-) -> GraphPattern {
+-    resident_owned_pattern(pattern, |pattern, memory| {
+-        map_patterns_with_memory(
+-            pattern,
+-            all_aggregates,
+-            &mut |node, in_spine, _| Ok(transform(node, in_spine)),
+-            memory,
+-        )
+-    })
+-}
+-
+ pub(crate) fn map_patterns_with_memory(
+     pattern: GraphPattern,
+     all_aggregates: bool,
+--- a/crates/sparql-eval/src/governor/soundness.rs
++++ b/crates/sparql-eval/src/governor/soundness.rs
+@@ -763,6 +763,7 @@
+ ///
+ /// This is the certificate's view of the tree, and it is built from the same two
+ /// primitives everything else uses — nothing here re-matches on an algebra type.
++#[cfg(test)]
+ pub(crate) fn visit_classified_children<'a, F>(pattern: &'a GraphPattern, visit: &mut F) -> bool
+ where
+     F: FnMut(&'a GraphPattern, ChildEdge) -> bool,
+@@ -805,7 +806,7 @@
+ }
+ 
+ /// The classified edges of one node's children, indexed by the ordinal at which
+-/// [`visit_classified_children`] yields them — which is exactly the order in which the
++/// [`visit_classified_children_admitted`] yields them — which is exactly the order in which the
+ /// evaluator's operator for that variant evaluates them (`left` then `right`, or the
+ /// single `inner`, followed by any `EXISTS` pattern the node's expressions carry).
+ ///
+@@ -837,7 +838,7 @@
+     }
+ }
+ 
+-/// The classified edges of `pattern`'s children, in [`visit_classified_children`] order.
++/// The classified edges of `pattern`'s children, in [`visit_classified_children_admitted`] order.
+ #[cfg(test)]
+ pub(crate) fn child_edges(pattern: &GraphPattern) -> ChildEdges {
+     child_edges_admitted(pattern, &WorkspaceCapability::resident())
+@@ -896,10 +897,10 @@
+ /// traversal. This function is for holders of a plan who are not evaluating it — the
+ /// plan arena ([`crate::plan::Tree::build`]) is this walk, once per evaluated tree, and
+ /// the node order it fixes is the one the per-node charge ledger
+-/// ([`crate::governor::ledger`]) and the answer-cap pushdown ([`plan_cap_pushdown`])
++/// ([`crate::governor::ledger`]) and the answer-cap pushdown ([`plan_cap_pushdown_admitted`])
+ /// number nodes by.
+ ///
+-/// The walk is a pre-order over [`visit_classified_children`], so the visit sequence is a
++/// The walk is a pre-order over [`visit_classified_children_admitted`], so the visit sequence is a
+ /// pure function of the plan — which is what lets a ledger index a node by its ordinal in
+ /// this walk and get the same number on every machine and every run.
+ pub(crate) fn walk_spine<'a, F>(root: &'a GraphPattern, visit: &mut F)
+@@ -1211,10 +1212,10 @@
+ /// gives it. `None` means "no ceiling": every node without one evaluates exactly as it
+ /// would with no pushdown installed.
+ ///
+-/// A pushdown over the evaluation's own tree ([`Self::over_plan`]) finds a node's id
++/// A pushdown over the evaluation's own tree ([`Self::over_plan_admitted`]) finds a node's id
+ /// through that tree. One over a pattern that is not a node of it — a substituted
+ /// temporary, a prepared `EXISTS` body — numbers that pattern in a tree of its own
+-/// ([`plan_cap_pushdown`]) and keeps, for the nodes that received a ceiling, the address
++/// ([`plan_cap_pushdown_admitted`]) and keeps, for the nodes that received a ceiling, the address
+ /// each one lives at while the pattern is borrowed.
+ #[derive(Debug)]
+ pub(crate) struct CapPushdown {
+@@ -1232,15 +1233,6 @@
+     /// The pushdown of `root_ceiling` from `root`, a node of `plan`'s tree, with its
+     /// ids in that tree; `None` when `root` is not a node of it or no node received a
+     /// ceiling.
+-    pub(crate) fn over_plan(
+-        plan: &PlanHandle,
+-        root: &GraphPattern,
+-        root_ceiling: u64,
+-    ) -> Option<Self> {
+-        Self::over_plan_admitted(plan, root, root_ceiling, &WorkspaceCapability::resident())
+-            .expect("resident cap-pushdown planning")
+-    }
+-
+     pub(crate) fn over_plan_admitted(
+         plan: &PlanHandle,
+         root: &GraphPattern,
+@@ -1320,7 +1312,7 @@
+ ///
+ /// The pushdown this returns numbers `root`'s subtree as a tree of its own, under a fresh
+ /// [`TreeKey`] — the form for a pattern that is not a node of the evaluation's tree.
+-/// [`CapPushdown::over_plan`] is the same descent read in that tree's ids.
++/// [`CapPushdown::over_plan_admitted`] is the same descent read in that tree's ids.
+ ///
+ /// # A restricting `Slice` re-seeds the descent
+ ///
+@@ -1353,6 +1345,7 @@
+ ///
+ /// A ceiling that did survive the descent is never replaced: it is the tighter of the two
+ /// (it already passed through this node's `min` with `len`) and it is equally sound.
++#[cfg(test)]
+ pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) -> CapPushdown {
+     plan_cap_pushdown_admitted(root, root_ceiling, &WorkspaceCapability::resident())
+         .expect("resident transient cap-pushdown planning")
+@@ -1385,7 +1378,7 @@
+     })
+ }
+ 
+-/// The ceilings [`plan_cap_pushdown`] describes, one per node of `root`'s subtree in
++/// The ceilings [`plan_cap_pushdown_admitted`] describes, one per node of `root`'s subtree in
+ /// [`walk_spine`]'s pre-order, each node that receives one reported to `recorded` with
+ /// its offset from `root`.
+ fn cap_ceilings<'a>(
+@@ -1567,8 +1560,8 @@
+ // rule needs the CHILDREN'S OWN computed [`NodeAnalysis`] values in hand, not just
+ // a bool for whether visiting them would stop early.
+ //
+-// What IS preserved from that module's doctrine, verbatim: [`analyze_pattern`] and
+-// [`analyze_expr`] below are EXHAUSTIVE, WILDCARD-FREE matches over every
++// What IS preserved from that module's doctrine, verbatim: [`analyze_pattern_admitted`] and
++// [`analyze_expr_admitted`] below are EXHAUSTIVE, WILDCARD-FREE matches over every
+ // [`GraphPattern`]/[`Expression`] variant with every field named, for the identical
+ // reason this module's header states — a new algebra variant must be a compile
+ // error here, not a silent inheritance of the most permissive classification. Kept
+@@ -1582,11 +1575,11 @@
+ use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, Variable};
+ 
+ #[cfg(test)]
+-use crate::DetHashMap;
++use crate::{DetHashMap, DetHashSet};
+ use crate::parallel::function_is_builtin_stateful;
+ use crate::plan::{NodeId, PlanHandle, TreeKey};
+ use crate::solution::SchemaBuilder;
+-use crate::{AdmittedMap, AdmittedVec, DetHashSet, EvalError, VarSchema, WorkspaceCapability};
++use crate::{AdmittedMap, AdmittedVec, EvalError, VarSchema, WorkspaceCapability};
+ 
+ /// Test oracles compare membership, independently of the native schema's
+ /// deterministic column order. Production VarSchema equality stays ordered.
+@@ -1614,7 +1607,7 @@
+     /// position (including inside a nested `EXISTS`'s own inner pattern).
+     pub(crate) free_vars: VarSchema,
+     /// The subset of [`Self::free_vars`] bound in EVERY solution this node
+-    /// produces — see [`analyze_pattern`]'s per-variant derivation.
++    /// produces — see [`analyze_pattern_admitted`]'s per-variant derivation.
+     pub(crate) certainly_bound: VarSchema,
+     /// Whether a stateful builtin, an unresolved `Function::Custom` call (whose
+     /// volatility is registry-dependent and therefore unknowable at this
+@@ -1669,7 +1662,7 @@
+ 
+ /// Node-identity → [`NodeAnalysis`], covering one `EXISTS`/`NOT EXISTS` inner
+ /// pattern and every descendant reachable through its children AND through a
+-/// nested `EXISTS`/`NOT EXISTS` inner pattern — populated by [`analyze_pattern`].
++/// nested `EXISTS`/`NOT EXISTS` inner pattern — populated by [`analyze_pattern_admitted`].
+ ///
+ /// Keyed by node address, safe ONLY over the immutable, prepared query algebra
+ /// this analysis runs on (never over a per-row substituted temporary — the same
+@@ -1678,7 +1671,7 @@
+ /// per-row-substituted trees, not to the tree this table is built from).
+ pub(crate) type NodeAnalysisTable = AdmittedMap<usize, NodeAnalysis>;
+ 
+-/// Look up `pattern`'s entry in `table`, built by an enclosing [`analyze_pattern`]
++/// Look up `pattern`'s entry in `table`, built by an enclosing [`analyze_pattern_admitted`]
+ /// call over the same tree. Returns `None` on a miss, which should not happen when
+ /// `table` was built from exactly this tree — `probe_admissible`'s walk never
+ /// descends into a node `analyze_pattern` did not also visit, since both walks
+@@ -1753,7 +1746,7 @@
+ /// * `PropertyFunction`: free = every argument-vector variable; certainly-bound =
+ ///   ∅ (which side of the call binds which argument is a per-relation, per-mode
+ ///   decision this analysis cannot see) — moot for admissibility regardless,
+-///   since [`probe_admissible`] refuses `PropertyFunction` outright.
++///   since [`probe_admissible_admitted`] refuses `PropertyFunction` outright.
+ /// * `Join` = union of both sides (a row exists only when both matched, so every
+ ///   variable either side certainly binds is certainly bound in the join).
+ /// * `Union` = free is the union, certainly-bound is the INTERSECTION (a row can
+@@ -1773,7 +1766,7 @@
+ ///   (unchanged; these modifiers restrict or reorder ROWS, never which variables
+ ///   a surviving row binds).
+ /// * `Extend` = inner's set ∪ `{target}` (`BIND` always yields a bound target for
+-///   this analysis's purposes — see [`analyze_pattern`]'s own doc note on this simplification's
++///   this analysis's purposes — see [`analyze_pattern_admitted`]'s own doc note on this simplification's
+ ///   scope, below).
+ /// * `Project` = inner's set ∩ the projected list (both free and certainly-bound
+ ///   narrow at the one true scope boundary the surface language has).
+@@ -1808,7 +1801,7 @@
+ /// assumption.
+ ///
+ /// **Which callers neutralize them**: neither over-claim can currently decide a
+-/// [`probe_admissible`] outcome, because [`pattern_probe_step`] never reads it in a
++/// [`probe_admissible_admitted`] outcome, because [`pattern_probe_step`] never reads it in a
+ /// context where the claim's truth would matter:
+ ///
+ /// * [`pattern_probe_step`]'s `Extend` arm answers `!current_row_vars.contains(variable)`
+@@ -1837,6 +1830,7 @@
+ /// does not currently make, so doing this exactly would need a new, third boolean
+ /// output threaded through every `analyze_expr` arm, for a case only reachable
+ /// today by caller accident.
++#[cfg(test)]
+ pub(crate) fn analyze_pattern(
+     pattern: &GraphPattern,
+     table: &mut NodeAnalysisTable,
+@@ -1867,8 +1861,9 @@
+ /// Analyze `expr`, returning its free variables, whether a stateful builtin is
+ /// reachable within it, and whether a hard error/effect is reachable within it (see
+ /// [`NodeAnalysis::can_hard_error`]) — descending into a nested `EXISTS`'s inner
+-/// pattern as [`analyze_pattern`] does (so that pattern's own table entry is populated
+-/// too, for [`probe_admissible`]'s later lookup).
++/// pattern as [`analyze_pattern_admitted`] does (so that pattern's own table entry is populated
++/// too, for [`probe_admissible_admitted`]'s later lookup).
++#[cfg(test)]
+ pub(crate) fn analyze_expr(
+     expr: &Expression,
+     table: &mut NodeAnalysisTable,
+@@ -2162,7 +2157,7 @@
+ 
+ /// `pattern`'s analysis, assembled from its parts' analyses (on top of `values`, in
+ /// the order [`push_pattern_parts`] entered them) by the per-variant derivation
+-/// [`analyze_pattern`]'s doc states.
++/// [`analyze_pattern_admitted`]'s doc states.
+ fn assemble_pattern(
+     pattern: &GraphPattern,
+     values: &mut AnalysisValues,
+@@ -2644,13 +2639,14 @@
+ /// raise a hard [`EvalError`](EvalError) or an observable remote effect
+ /// anywhere within it; see [`NodeAnalysis::can_hard_error`].
+ ///
+-/// `crate::enf`'s laws call this (and [`expr_can_hard_error`]) on the PORTION they
++/// `crate::enf`'s laws call this (and [`expr_can_hard_error_admitted`]) on the PORTION they
+ /// are about to erase — a `LeftJoin`'s right operand and join condition, an
+ /// `ORDER BY`'s sort keys, or a folded `Slice`'s whole inner — before erasing it, so
+ /// a law never deletes a subtree whose evaluation could have failed loudly or
+ /// reached a federation endpoint. Builds a fresh, throwaway [`NodeAnalysisTable`]:
+-/// sound because `can_hard_error`, unlike [`probe_admissible`], needs no lookup
++/// sound because `can_hard_error`, unlike [`probe_admissible_admitted`], needs no lookup
+ /// into an enclosing table — it is a pure bottom-up fold over `pattern` alone.
++#[cfg(test)]
+ pub(crate) fn pattern_can_hard_error(pattern: &GraphPattern) -> bool {
+     pattern_can_hard_error_admitted(pattern, &WorkspaceCapability::resident())
+         .expect("resident hard-error analysis")
+@@ -2664,8 +2660,9 @@
+     Ok(analyze_pattern_admitted(pattern, &mut table, workspace)?.can_hard_error)
+ }
+ 
+-/// The expression twin of [`pattern_can_hard_error`], for a `LeftJoin` join
++/// The expression twin of [`pattern_can_hard_error_admitted`], for a `LeftJoin` join
+ /// condition or an `ORDER BY` sort key `crate::enf` is about to erase.
++#[cfg(test)]
+ pub(crate) fn expr_can_hard_error(expr: &Expression) -> bool {
+     expr_can_hard_error_admitted(expr, &WorkspaceCapability::resident())
+         .expect("resident hard-error expression analysis")
+@@ -2699,7 +2696,7 @@
+ /// this function's "Per-row vs per-schema" section below for why that distinction
+ /// matters). `current_row_vars`, the set every arm below actually tests membership
+ /// against, is `pattern`'s OWN root [`NodeAnalysis::free_vars`] (from `table`, populated
+-/// by an enclosing [`analyze_pattern`] call over this exact tree) INTERSECTED with
++/// by an enclosing [`analyze_pattern_admitted`] call over this exact tree) INTERSECTED with
+ /// `outer_schema`'s columns: a variable only counts as a potential SEP-0007 rebinding
+ /// collision when it is BOTH still visible at `pattern`'s own root (not scoped away by
+ /// an internal `Project` boundary — `NodeAnalysis::free_vars`'s `Project` rule) AND a
+@@ -2783,6 +2780,7 @@
+ ///   answer that depends on WHICH outer row drove the evaluation, which a single
+ ///   evaluate-once-and-probe pass cannot reproduce — unconditionally, regardless of
+ ///   `outer_schema`.
++#[cfg(test)]
+ pub(crate) fn probe_admissible(
+     pattern: &GraphPattern,
+     table: &NodeAnalysisTable,
+@@ -2820,7 +2818,7 @@
+     Expr(&'p Expression, &'t VarSchema),
+ }
+ 
+-/// [`probe_admissible`]'s walk: every node under `pattern` is judged in depth-first
++/// [`probe_admissible_admitted`]'s walk: every node under `pattern` is judged in depth-first
+ /// order, each node's own verdict conjoined with its parts' — a `Filter`'s or
+ /// `Extend`'s or `Unfold`'s inner before its expression — and the walk ends at the
+ /// first refusal. Over a work list, so a pattern of any depth needs no more machine
+@@ -2957,7 +2955,7 @@
+     })
+ }
+ 
+-/// Whether the fresh binding [`exists_row_collision`] reports is an `Extend`/
++/// Whether the fresh binding [`exists_row_collision_admitted`] reports is an `Extend`/
+ /// `(expr AS ?v)` target, a `VALUES` column or an `UNFOLD` target — the same
+ /// shapes, and the same message wording, as the parser's scope check reports:
+ /// the parser's own [`ScopeIntro`](purrdf_sparql_algebra::parser::ScopeIntro),
+@@ -2969,7 +2967,7 @@
+ /// variable, or `VALUES`) that collides with a variable in `row_scope` — the
+ /// CALLER'S ACTUAL current-row variables for one specific μ (`crate::expr::exists`'s
+ /// own `outer_bound`: the schema columns THIS row concretely binds), never
+-/// [`probe_admissible`]'s `current_row_vars` (`NodeAnalysis::free_vars` intersected
++/// [`probe_admissible_admitted`]'s `current_row_vars` (`NodeAnalysis::free_vars` intersected
+ /// with the caller's outer SCHEMA — see that function's doc — a PER-SITE
+ /// over-approximation computed once for the whole pattern, not a per-row one).
+ /// The two must not be conflated: `current_row_vars` is sized to answer "is the
+@@ -3031,6 +3029,7 @@
+ /// reported, so the variable a diagnostic names is the one a reader finds first in the
+ /// query text. A `Project` that narrows the scope gives its subtree an owned narrowed
+ /// set; every other node reads its parent's.
++#[cfg(test)]
+ pub(crate) fn exists_row_collision<'a>(
+     pattern: &'a GraphPattern,
+     row_scope: &DetHashSet<Variable>,
+@@ -3198,7 +3197,7 @@
+     Ok(None)
+ }
+ 
+-/// Which row scope a node of [`exists_row_collision`]'s walk is checked against: the
++/// Which row scope a node of [`exists_row_collision_admitted`]'s walk is checked against: the
+ /// caller's, or the one a `Project` above it narrowed to.
+ #[derive(Clone, Copy)]
+ enum CollisionScope {
+@@ -3208,7 +3207,7 @@
+     Narrowed(usize),
+ }
+ 
+-/// One node [`exists_row_collision`]'s walk has still to search.
++/// One node [`exists_row_collision_admitted`]'s walk has still to search.
+ enum CollisionStep<'a> {
+     /// A node searched for every introduction — `BIND`, `UNFOLD`, `VALUES`, a
+     /// sub-`SELECT` target, an aggregate output — against its scope.
+@@ -3228,7 +3227,7 @@
+     /// the grouped pattern really is such a chain. But this search is also the
+     /// evaluator's OWN backstop for algebra that never went through the parser at all
+     /// (a SHACL-AF pre-binding, an entailment-chase rewrite, or any other caller of
+-    /// the public algebra API) — see [`exists_row_collision`]'s own "Why this exists"
++    /// the public algebra API) — see [`exists_row_collision_admitted`]'s own "Why this exists"
+     /// section — and nothing stops hand-built algebra from putting a grouping-key
+     /// `Extend` behind a `Join`/`Filter`/other transparent wrapper instead of directly
+     /// beneath `Group` (`Group{ inner: Join(Extend(?x, ..), Bgp), variables: [?x] }`,
+@@ -3243,7 +3242,7 @@
+     /// nested beneath it, and the same "keep searching past a non-match" discipline
+     /// the binary/unary wrappers need applies here too. `Bgp`/`Path`/
+     /// `PropertyFunction`/`Values`/`Project`/a nested `Group` are the terminal case:
+-    /// the search stops there, as [`exists_row_collision`]'s own `Values`/`Project`/
++    /// the search stops there, as [`exists_row_collision_admitted`]'s own `Values`/`Project`/
+     /// `Group` arms are handled by the whole-pattern search (for ITS OWN scope) rather
+     /// than folded into this narrower grouping-key search.
+     GroupKey(&'a GraphPattern, &'a [Variable], CollisionScope),
+@@ -3398,7 +3397,7 @@
+     }
+ 
+     /// The context at the node reached by following `path` — a list of child ordinals in
+-    /// [`visit_classified_children`] order — down from the root of `root`.
++    /// [`visit_classified_children_admitted`] order — down from the root of `root`.
+     fn context_at(root: &GraphPattern, path: &[usize]) -> SpineContext {
+         let mut node = root;
+         let mut context = SpineContext::ROOT;
+@@ -4534,7 +4533,7 @@
+ 
+     // ---- recursive references -----------------------------------------------
+ 
+-    /// [`analyze_pattern`], as a recursion over the tree.
++    /// [`analyze_pattern_admitted`], as a recursion over the tree.
+     #[derive(Debug, Clone, Default)]
+     struct ReferenceAnalysis {
+         free_vars: DetHashSet<Variable>,
+@@ -4868,7 +4867,7 @@
+         analysis
+     }
+ 
+-    /// [`analyze_expr`], as a recursion over the tree.
++    /// [`analyze_expr_admitted`], as a recursion over the tree.
+     fn reference_analyze_expr(
+         expr: &Expression,
+         table: &mut ReferenceAnalysisTable,
+@@ -4991,7 +4990,7 @@
+         }
+     }
+ 
+-    /// [`probe_admissible`], over the recursive references.
++    /// [`probe_admissible_admitted`], over the recursive references.
+     fn reference_probe_admissible(
+         pattern: &GraphPattern,
+         table: &NodeAnalysisTable,
+@@ -5010,7 +5009,7 @@
+         reference_admissible(pattern, &current_row_vars, table)
+     }
+ 
+-    /// The pattern half of [`probe_admissible`]'s walk, as a recursion.
++    /// The pattern half of [`probe_admissible_admitted`]'s walk, as a recursion.
+     fn reference_admissible(
+         pattern: &GraphPattern,
+         current_row_vars: &DetHashSet<Variable>,
+@@ -5098,7 +5097,7 @@
+         }
+     }
+ 
+-    /// The expression half of [`probe_admissible`]'s walk, as a recursion.
++    /// The expression half of [`probe_admissible_admitted`]'s walk, as a recursion.
+     fn reference_expr_admissible(
+         expr: &Expression,
+         current_row_vars: &DetHashSet<Variable>,
+@@ -5144,7 +5143,7 @@
+         }
+     }
+ 
+-    /// [`exists_row_collision`], as a recursion over the tree.
++    /// [`exists_row_collision_admitted`], as a recursion over the tree.
+     fn reference_row_collision<'a>(
+         pattern: &'a GraphPattern,
+         row_scope: &DetHashSet<Variable>,
+@@ -5224,7 +5223,7 @@
+         }
+     }
+ 
+-    /// The grouping-key half of [`exists_row_collision`]'s walk, as a recursion.
++    /// The grouping-key half of [`exists_row_collision_admitted`]'s walk, as a recursion.
+     fn reference_group_key_collision<'a>(
+         inner: &'a GraphPattern,
+         variables: &[Variable],
+--- a/crates/sparql-eval/src/property_fn_plan.rs
++++ b/crates/sparql-eval/src/property_fn_plan.rs
+@@ -285,15 +285,6 @@
+ 
+ /// Immutable prepared plans retain their positive topology. Registry and promised
+ /// parameter feasibility still run, without normalizing an already admitted tree.
+-pub(crate) fn recheck_query(
+-    query: &Query,
+-    relations: &PropertyFunctionRegistry,
+-    agg_registry: &AggregateRegistry,
+-    parameters: &DetHashSet<Variable>,
+-) -> Result<Option<Query>, PlanError> {
+-    legacy_query_plan(query, relations, agg_registry, parameters, false)
+-}
+-
+ fn legacy_query_plan(
+     query: &Query,
+     relations: &PropertyFunctionRegistry,
+@@ -519,16 +510,6 @@
+ 
+ #[cfg(test)]
+ impl<'a> Promise<'a> {
+-    /// The promise a plan starts from: every declared parameter, everywhere, or
+-    /// nothing when none is declared.
+-    fn descent(parameters: &'a DetHashSet<Variable>) -> Self {
+-        if parameters.is_empty() {
+-            Self::None
+-        } else {
+-            Self::Everywhere(parameters)
+-        }
+-    }
+-
+     /// What the run writes into the rows and expressions of a pattern evaluated at
+     /// this node — see [`Written`].
+     const fn written(self) -> Written<'a> {
+@@ -714,7 +695,7 @@
+ /// # What joins into one chain
+ ///
+ /// Every member of a chain is joined to every other, and a join is associative and
+-/// commutative — which is what licenses [`order_chain`] to reorder them at all. So a
++/// commutative — which is what licenses [`order_chain_native`] to reorder them at all. So a
+ /// `Join` whose operand is ITSELF a chain spine is one chain with it, not an opaque
+ /// member: `{ VALUES ?q { … } ?q ex:rel ?out }` parses to `Join(VALUES, Lateral(Z,
+ /// call))`, and the call is fed by the `VALUES` exactly as it would be by a triple
+@@ -786,7 +767,7 @@
+ /// right operand — and it runs on the PLANNED query, not the text. The two differ in
+ /// exactly one way this pass controls: a group whose only member is a call parses to
+ /// `Lateral(Z, call)`
+-/// (the empty `Bgp` the parser opens every block with), and [`order_chain`] rebuilds
++/// (the empty `Bgp` the parser opens every block with), and [`order_chain_native`] rebuilds
+ /// that chain as the bare call, because [`push_atom`] drops `Z`. So
+ /// `?s ?p ?o LATERAL { ?q <rel> ?out }` is PLANNED as `Lateral(?s ?p ?o, call)` — the
+ /// position the pushdown writes into — though its text puts a `Lateral` between the
+@@ -842,22 +823,6 @@
+     Ok(())
+ }
+ 
+-/// One chain's feasible order: its atoms as they re-attach, each with whether it is a
+-/// call and — for the calls — the variables bound when it was chosen.
+-#[cfg(test)]
+-struct ChainOrder<'a> {
+-    /// The atoms, in the chosen order.
+-    ordered: Vec<&'a GraphPattern>,
+-    /// Whether each atom of `ordered` is a call.
+-    is_call: Vec<bool>,
+-    /// The set `bound` held at the moment each atom was CHOSEN — i.e. exactly the
+-    /// variables a CALL atom is driven with when it is planned. Captured here (rather
+-    /// than read from the fully-accumulated `bound` after the loop) is what keeps a call
+-    /// from being admitted as though sibling atoms chosen AFTER it — and everything they
+-    /// bind — were already in scope.
+-    bound_before: Vec<DetHashSet<Variable>>,
+-}
+-
+ /// The greedy feasibility order over one chain's atoms.
+ ///
+ /// The algorithm, in full:
+@@ -885,42 +850,6 @@
+ ///
+ /// The atoms are then planned each in turn and the spine rebuilt in this order by the
+ /// [`Planner`] ([`Assemble::Chain`]).
+-#[cfg(test)]
+-fn order_chain<'a>(
+-    atoms: Vec<Atom<'a>>,
+-    relations: &PropertyFunctionRegistry,
+-    outer: &DetHashSet<Variable>,
+-    promise: Promise<'_>,
+-) -> Result<ChainOrder<'a>, PlanError> {
+-    let workspace = WorkspaceCapability::resident();
+-    let mut frame = LexicalFrame::new(&workspace);
+-    let mut memory = Memory::new(&mut frame);
+-    let outer = VarSchema::from_vars_admitted(outer.iter().cloned(), &workspace)
+-        .map_err(PlanError::property_function)?;
+-    let promised = match promise.for_calls() {
+-        None => VarSchema::default(),
+-        Some(values) => VarSchema::from_vars_admitted(values.iter().cloned(), &workspace)
+-            .map_err(PlanError::property_function)?,
+-    };
+-    let native = order_chain_native(
+-        AdmittedVec::from_resident(atoms),
+-        relations,
+-        &outer,
+-        NativePromise::descent(&promised),
+-        &mut memory,
+-    )
+-    .map_err(|error| error.into_plan(&mut memory))?;
+-    Ok(ChainOrder {
+-        ordered: native.ordered.into_iter().collect(),
+-        is_call: native.is_call.into_iter().collect(),
+-        bound_before: native
+-            .bound_before
+-            .into_iter()
+-            .map(|schema| schema.vars().iter().cloned().collect())
+-            .collect(),
+-    })
+-}
+-
+ struct NativeChainOrder<'a> {
+     ordered: AdmittedVec<&'a GraphPattern>,
+     is_call: AdmittedVec<bool>,
+@@ -991,18 +920,6 @@
+ /// answer to read the relation's declared row bound for the mode a call is actually
+ /// invoked in: a relation that is cheap bound and expensive free would otherwise be
+ /// admitted, or refused, against a mode the query never uses.
+-pub(crate) fn invocation_mode(
+-    call: &PropertyFunctionCall,
+-    bound: &DetHashSet<Variable>,
+-) -> BindingPattern {
+-    invocation_mode_with_memory(
+-        call,
+-        &|variable| bound.contains(variable),
+-        &mut Memory::new(&mut purrdf_lex::allocation::Resident),
+-    )
+-    .expect("resident invocation-mode traversal allocation failed")
+-}
+-
+ /// The same invocation law under the original physical walk admission.
+ /// Membership borrows the caller's certainty owner rather than copying its set.
+ pub(crate) fn invocation_mode_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+@@ -1682,7 +1599,7 @@
+             // left operand binds: it sees what the enclosing context binds and no more.
+             // Only a `Lateral` hands its right operand the left rows — which is why a
+             // call that depends on an earlier atom is rebuilt through one (see
+-            // [`order_chain`]).
++            // [`order_chain_native`]).
+             GraphPattern::Join { left, right } => {
+                 self.steps.push(assemble)?;
+                 self.steps.push(Step::Pattern(right, scope, promise))?;
+@@ -2475,12 +2392,6 @@
+ /// hand-rolled datatype-IRI string comparison, so a numeric scalarval's
+ /// admission rule can never drift from what the numeric tower actually accepts
+ /// elsewhere in this crate.
+-#[cfg(test)]
+-fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
+-    scalarval_value_matches_kind_native(value, kind, &WorkspaceCapability::resident())
+-        .expect("resident scalarval parsing allocation failed")
+-}
+-
+ fn scalarval_value_matches_kind_native(
+     value: &Literal,
+     kind: ScalarvalKind,
+@@ -3196,6 +3107,7 @@
+ /// The part of `context` a sub-`SELECT` projecting `variables` lets into its inner
+ /// pattern: an enclosing binding is substituted into it only for a variable it
+ /// projects.
++#[cfg(test)]
+ fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHashSet<Variable> {
+     let workspace = WorkspaceCapability::default();
+     let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
+@@ -5382,7 +5294,7 @@
+         }
+     }
+ 
+-    /// Test-only recursive reference for `super::order_chain`.
++    /// Test-only recursive reference for `super::order_chain_native`.
+     fn reference_order_chain(
+         atoms: Vec<Atom<'_>>,
+         relations: &PropertyFunctionRegistry,
+--- a/crates/sparql-eval/src/template.rs
++++ b/crates/sparql-eval/src/template.rs
+@@ -211,6 +211,7 @@
+ /// positions are resolved subject, predicate, object — each fully before the next —
+ /// and its ordinal is built once all three exist, so a term nested to any depth costs
+ /// no more machine stack.
++#[cfg(test)]
+ pub(crate) fn resolve_term(term: &TermPattern, schema: &VarSchema) -> TermOrdinal {
+     resolve_term_admitted(term, schema, &WorkspaceCapability::resident())
+         .expect("resident template ordinal storage")
+@@ -445,7 +446,7 @@
+ /// row's schema — see that type's doc comment. The two trees are walked in lock
+ /// step; `debug_assert!`s guard the invariant that `ordinal` was actually resolved
+ /// from `term` (a mismatch cannot arise from any caller in this crate, since every
+-/// `TermOrdinal` a caller holds was built by [`resolve_term`]/[`resolve_triple`]
++/// `TermOrdinal` a caller holds was built by [`resolve_term_admitted`]/[`resolve_triple`]
+ /// from the exact pattern it is later paired with).
+ ///
+ /// A quoted triple is instantiated subject, predicate, object — each fully before the
+@@ -719,10 +720,6 @@
+ /// The [`TermPattern`] half of [`template_has_blank_node`]'s scan, through nested
+ /// quoted-triple positions — subject before object, over a work list rather than the
+ /// call stack, ending at the first blank node found.
+-pub(crate) fn term_pattern_has_blank_node(term: &TermPattern) -> bool {
+-    term_pattern_has_blank_node_admitted(term, &WorkspaceCapability::resident())
+-        .expect("resident template classification storage")
+-}
+ pub(crate) fn term_pattern_has_blank_node_admitted(
+     term: &TermPattern,
+     workspace: &WorkspaceCapability,
+@@ -894,7 +891,7 @@
+         }
+     }
+ 
+-    /// The recursive reference for [`resolve_term`].
++    /// The recursive reference for [`resolve_term_admitted`].
+     fn resolve_term_by_recursion(term: &TermPattern, schema: &VarSchema) -> TermOrdinal {
+         match term {
+             TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {

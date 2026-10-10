@@ -1,0 +1,136 @@
+cargo fmt --all --check
+cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.84s
+cargo clippy --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --all-targets --locked -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.29s
+cargo check --workspace --lib --tests --locked
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.32s
+cargo run -q --locked -p helper-census -- --no-features
+python3 scripts/check-toolchain-pin.py
+check-toolchain-pin.py: every workflow agrees with the `nightly` pin
+python3 scripts/check-toolchain-pin.py --self-test
+check-toolchain-pin.py: self-test OK
+python3 scripts/check-gate-parity.py --self-test
+OK: self-test — the tree as committed has no divergence (the valid neighbour)
+OK: self-test — a `make check` gate absent from every workflow is refused
+OK: self-test — a ci.yaml gate absent from `make check` is refused
+OK: self-test — an exemption whose gate is now in `make check` is refused
+OK: self-test — all 7 exemptions are refused when nothing runs them, so a registration cannot hide a gate that runs nowhere
+OK: self-test — every registered exemption still describes a real divergence
+OK: self-test — a `make` in prose is not a step, and a real step still is
+OK: self-test — every target is taken and no flag argument is
+OK: self-test — all 8 `on:` spellings are judged correctly, including the two that must NOT be merge-blocking
+OK: self-test — a commented-out gate counts on neither side, an active one does
+OK: self-test — four spellings of one invocation normalise to one identity
+OK: self-test — none of 4 prose shapes reads as an invocation
+OK: self-test — all 5 real invocation spellings are seen
+OK: self-test — a comment inside the `check` recipe does not end it
+OK: self-test — a quoted `#` hides nothing and a real comment still strips
+OK: self-test — a continuation joins its own line only
+OK: self-test — the same gate with different arguments is refused
+OK: self-test — a gate paired in both lists with both argument forms is accepted
+OK: self-test — excluded consumer omissions and quoted prose are refused
+SELF-TEST PASS
+python3 scripts/check-gate-parity.py
+OK: all 71 hygiene gates in `make check` also run in a pull-request workflow, and vice versa
+python3 scripts/check-stream-chunk.py --self-test
+OK: self-test — all 16 written-out chunk sizes are refused
+OK: self-test — all 11 named or non-streaming reads are accepted
+OK: self-test — all 12 shell shapes are refused, each naming the literal rather than a parse failure
+OK: self-test — all 13 named or non-streaming shell reads are accepted
+OK: self-test -- a read in an escaped body is reported exactly once
+OK: self-test — an embedded finding names its shell line, and a shell-native finding after one keeps its own
+OK: self-test — no script writes the chunk size out (the valid neighbour)
+SELF-TEST PASS
+python3 scripts/check-stream-chunk.py
+OK: every streamed read under scripts/ names its chunk size
+python3 scripts/check-build-profiles.py --self-test
+check-build-profiles.py: self-test OK
+python3 scripts/check-build-profiles.py
+check-build-profiles.py: 1065 units across 2 gate invocations build at opt-level 3 with debug-assertions and overflow-checks on (44 workspace members)
+python3 scripts/check-iri-resolver-singleton.py
+OK: RFC 3986 reference resolution lives only in crates/iri/src (3 reasoned non-resolver exemptions)
+python3 scripts/check-serializer-rewinds.py --self-test
+OK: check-serializer-rewinds self-test
+python3 scripts/check-serializer-rewinds.py
+OK: no serializer rewinds (24 reasoned exemptions, all live)
+cargo run -q --locked -p helper-census -- --python-binding-tests
+OK: no Rust test module under bindings/python/src (28 sources scanned)
+python3 scripts/check-terminal-predicates.py --self-test
+check-terminal-predicates.py: self-test OK
+python3 scripts/check-terminal-predicates.py
+OK: every scanner's terminals come from crates/lex/src/terminals.rs (1 reasoned exemptions)
+python3 scripts/check-thread-locals.py --self-test
+OK: self-test — the tree as committed has no divergence (the valid neighbour)
+OK: self-test — a `thread_local!` in a comment, a string or build output declares nothing
+OK: self-test — a fixture whose every `thread_local!` is listed passes (the neighbour)
+OK: self-test — the same fixture with one unlisted `thread_local!` is refused, naming it
+OK: self-test — a ledger entry whose static is gone is refused as stale
+OK: self-test — a `thread_local!` listed twice is refused
+OK: self-test — an empty ledger is refused
+python3 scripts/check-thread-locals.py
+OK: every `thread_local!` under crates/ is in the interleaving ledger (57 statics)
+python3 scripts/check-shapes-parser-drops.py --self-test
+check-shapes-parser-drops --self-test: 5 planted drops flagged, 4 clean spellings accepted
+python3 scripts/check-shapes-parser-drops.py
+check-shapes-parser-drops: 13 files, no silent drop
+python3 scripts/check-licenses.py --self-test
+OK: self-test — the tree as committed declares 'MIT OR Apache-2.0 OR MulanPSL-2.0' throughout
+OK: self-test — a first-party file left at a narrower offer is refused
+OK: self-test — a fixture repository inside the checkout is refused
+OK: self-test — a registration that no longer matches its file is refused
+OK: self-test — a registration whose suffix is unchecked is refused
+OK: self-test — a published README with no licence section is refused
+OK: self-test — a published README with a proper subset of the offer is refused
+OK: self-test — a fixture README stating the full offer is accepted
+OK: self-test — every published crate README as committed states the full offer
+OK: self-test — the expectation follows Cargo.toml (2380 files offend against 'Zlib OR WTFPL'), so it is read rather than restated
+OK: self-test — a TOML literal-string license parses instead of crashing
+OK: self-test — a complete file is accepted
+OK: self-test — a file without `sources` is refused
+OK: self-test — `replaced` without the clean-room statement is refused
+OK: self-test — the same statement with `replaced` empty is accepted
+OK: self-test — a module path that does not exist is refused
+OK: self-test — an unknown source kind is refused
+SELF-TEST PASS
+OK: self-test — all 2 tracked PROVENANCE.toml file(s) follow the schema
+SELF-TEST PASS
+python3 scripts/check-licenses.py
+OK: 13 vendored root(s) license-clean; MulanPSL-2.0 text matches its pin; every first-party SPDX header declares 'MIT OR Apache-2.0 OR MulanPSL-2.0'; every published crate README states that offer in full; 2 PROVENANCE.toml file(s) follow the provenance schema.
+python3 scripts/fetch-locked-deps.py
+python3 scripts/package-licenses.py --self-test
+directory artifact self-test: console/Pages accepted deterministically; missing/corrupt base/runtime/metadata/compiler/module/shell, symlink/private/traversal and compiler redirection refused; explicit empty wrapper honored
+Docs artifact self-test: full grants/source forms and deterministic resource expansions accepted; missing/corrupt texts/sources, altered static/generated/font assets, unknown assets and missing locale refused
+license artifact self-test: valid tar/wheel accepted; missing/altered source and runtime notices, stale bundles, private/acquired payloads and traversal refused; runtime capture byte-idempotent
+python3 scripts/capi-header.py --self-test
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.003s
+
+OK
+python3 scripts/build-capi-bundle.py --self-test
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.009s
+
+OK
+python3 scripts/build-private-wasm.py --self-test
+........
+----------------------------------------------------------------------
+Ran 8 tests in 0.003s
+
+OK
+python3 bindings/python/purrdf_build_backend.py --self-test
+Python license backend self-test: dynamic source metadata, PEP660 delegation, target selection and wheel RECORD integrity passed
+python3 scripts/package-licenses.py --check
+package-licenses: missing/stale generated notice /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-capi/licenses/inventory.json
+missing/stale generated notice /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-wasm/js/licenses/inventory.json
+missing/stale generated notice /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core/licenses/inventory.json
+missing/stale generated notice /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/iri/licenses/inventory.json
+missing/stale generated notice /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/jsonschema/licenses/inventory.json
+missing/stale generated notice /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex/licenses/inventory.json
+missing/stale generated notice /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/text/licenses/inventory.json
+missing/stale generated notice /home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/bindings/python/licenses/inventory.json
+Regenerate with python3 scripts/package-licenses.py --write
+make: *** [Makefile:124: check] Error 1

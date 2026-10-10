@@ -1,0 +1,9 @@
+python3 scripts/check-simd-asm.py --doc --fresh --write-doc --report .stage/sparql-eval-complete-bounded-workspace/hosted-native-asm-all-configs-3.json
+usage: check-simd-asm.py [-h] [--self-test] [--doc] [--write-doc]
+                         [--probe PATH] [--probe-operands] [--dump]
+                         [--crate CRATE]
+                         [--config {x86_64,x86_64-v3,x86_64-v4,aarch64,aarch64-neoverse-v1,wasm32,wasm32-simd128}]
+                         [--jobs JOBS] [--fresh] [--report REPORT]
+                         [--merge-reports MERGE_REPORTS]
+check-simd-asm.py: error: write the document first, then produce reports for the resulting source identity
+make: *** [Makefile:683: simd-asm] Error 2

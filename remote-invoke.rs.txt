@@ -1,0 +1,80 @@
+pub(crate) fn invoke_service<D: DatasetView + Sync>(endpoint: &str, inner: &GraphPattern, silent: bool, ctx: &mut EvalCtx<'_, D>) -> Result<Invocation<D::Id>, EvalError> {
+    use purrdf_core::SilencedKind;
+    let workspace = ctx.growth.clone();
+    let Some(source) = ctx.remote else {
+        let message = format_args!("no remote query source configured for SERVICE <{endpoint}>");
+        let error = if workspace.is_bounded() {
+            EvalError::RetainedDiagnostic(crate::RetainedDiagnostic::render(EvalError::SERVICE_UNCONFIGURED_CODE, format_args!("SERVICE federation error: {message}"), &workspace)?)
+        } else { EvalError::ServiceUnconfigured(message.to_string()) };
+        return failed_invocation(endpoint, SilencedKind::Unconfigured, error, silent, &workspace);
+    };
+    if let Some(tripped) = ctx.stop_check() {
+        return Ok(Invocation::Answered(Evaluated::Truncated(Truncation::origin(SolutionSeq::empty(crate::eval::syntactic_schema_admitted(inner, &workspace)?), tripped))));
+    }
+    if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::RemoteRequestIssued).and_then(|()| ctx.charge_amount(purrdf_core::ResourceDimension::RemoteRequests, 1)) {
+        return Ok(Invocation::Answered(Evaluated::Truncated(Truncation::origin(SolutionSeq::empty(crate::eval::syntactic_schema_admitted(inner, &workspace)?), tripped))));
+    }
+    struct RequestText { text: String, _frame: crate::workspace::LexicalFrame }
+    let text = {
+        let mut frame = crate::workspace::LexicalFrame::new(&workspace);
+        let (sanitized, sanitized_live) = {
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+            let sanitized = sanitize_forwarded_body_with_memory(inner, &mut memory)?;
+            (sanitized, memory.live_bytes())
+        };
+        let result = {
+            let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, sanitized_live);
+            let result = purrdf_sparql_algebra::try_pattern_to_select_query_with_memory(&sanitized, &mut memory);
+            drop(sanitized);
+            memory.release_bytes(sanitized_live).map_err(|error| memory.admission_mut().storage_error(error, "SERVICE sanitized AST release"))?;
+            result
+        };
+        let text = match result {
+            Ok(text) => text,
+            Err(purrdf_sparql_algebra::CarrierError::Storage(error)) => return Err(frame.storage_error(error, "SERVICE carrier serialization")),
+            Err(purrdf_sparql_algebra::CarrierError::Parse(error)) => {
+                // The original serializer diagnostic remains covered by frame
+                // until the retained boundary has rendered it successfully.
+                return Err(EvalError::RetainedDiagnostic(crate::RetainedDiagnostic::render("native-sparql-query-eval", format_args!("SPARQL parse error: {error}"), &workspace)?));
+            }
+        };
+        RequestText { text, _frame: frame }
+    };
+    let stop = ctx.stop_signal().map(Arc::clone);
+    let max_intermediate_cells = ctx.governor_state().and_then(|state| state.caller_ceiling(purrdf_core::ResourceDimension::IntermediateCells));
+    let response = source.resolve_admitted(ServiceRequest::new(endpoint, &text.text).silent(silent).with_stop(stop.as_ref()).with_max_intermediate_cells(max_intermediate_cells), workspace.clone());
+    let post_return_trip = ctx.stop_check();
+    let error = match response {
+        Ok(mut response) => {
+            let schema = crate::eval::syntactic_schema_admitted(inner, &workspace)?;
+            if schema.vars().iter().all(crate::blank_scope::is_joined_blank) {
+                response.bindings.variables.clear();
+                for row in &mut response.bindings.rows { row.clear(); }
+            }
+            if let Some(tripped) = post_return_trip {
+                let schema = VarSchema::from_vars_admitted(response.bindings.variables.iter().cloned(), &workspace)?.shared_admitted(&workspace)?;
+                return Ok(Invocation::Answered(Evaluated::Truncated(Truncation::bag_only_origin(SolutionSeq::empty(schema), tripped))));
+            }
+            let (seq, tripped) = ingest_admitted(response, ctx)?;
+            return Ok(Invocation::Answered(match tripped { None => Evaluated::Complete(seq), Some(tripped) => Evaluated::Truncated(Truncation::origin(seq, tripped)) }));
+        }
+        Err(ServiceResolutionError::Operational(error)) => return Err(error),
+        Err(ServiceResolutionError::Invocation(error)) => error,
+    };
+    match error.error() {
+        RemoteError::Governed(governor) => return Ok(Invocation::Answered(Evaluated::Truncated(Truncation::origin(SolutionSeq::empty(crate::eval::syntactic_schema_admitted(inner, &workspace)?), ctx.record_trip(*governor))))),
+        RemoteError::GovernedAfterCompletion(governor) => return Ok(Invocation::Answered(Evaluated::Truncated(Truncation::bag_only_origin(SolutionSeq::empty(crate::eval::syntactic_schema_admitted(inner, &workspace)?), ctx.record_trip(*governor))))),
+        RemoteError::StackExhausted(construct) => return Err(EvalError::StackExhausted { construct }),
+        RemoteError::HostStackExhausted(construct) => return Err(EvalError::HostStackExhausted { construct }),
+        RemoteError::WorkspaceStopped => return Err(EvalError::WorkspaceStopped),
+        RemoteError::ExchangeIdExhausted => return Err(EvalError::ExchangeIdExhausted),
+        RemoteError::SourceRead(_) => return Err(RetainedServiceFailure::new(endpoint, error, &workspace)?.into_eval_error()),
+        _ => {},
+    }
+    if silent && let Some(tripped) = post_return_trip {
+        return Ok(Invocation::Answered(Evaluated::Truncated(Truncation::bag_only_origin(SolutionSeq::empty(crate::eval::syntactic_schema_admitted(inner, &workspace)?), tripped))));
+    }
+    let failure = RetainedServiceFailure::new(endpoint, error, &workspace)?;
+    let kind = failure.silenced_kind();
+    failed_invocation(endpoint, kind, failure.into_eval_error(), silent, &workspace)
+}

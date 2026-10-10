@@ -1,0 +1,71 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Proposed append to xsd/tests/exact_governance.rs, reusing its counting
+// allocator and measured helper. Not applied, compiled or run.
+#[test]
+fn temporal_native_values_and_deferred_refusals_allocate_no_heap() {
+    use purrdf_xsd::temporal::{TemporalReadError, read_temporal};
+    enum Expect {
+        Value(&'static str),
+        Invalid,
+        Range,
+    }
+    use Expect::{Invalid, Range, Value};
+    use XsdDatatype as D;
+
+    fn check(datatype: XsdDatatype, lexical: &str, expected: Expect) {
+        let (parsed, allocation) = measured(|| read_temporal(lexical, datatype));
+        assert_eq!(
+            allocation.requested_bytes, 0,
+            "{datatype:?}: native parser traffic"
+        );
+        assert_eq!(
+            allocation.peak_working_bytes, 0,
+            "{datatype:?}: native parser peak"
+        );
+        let parsed = parsed.expect("supported temporal datatype");
+        match (parsed, expected) {
+            (Ok(value), Value(canonical)) => assert_eq!(value.canonical_lexical(), canonical),
+            (Err(TemporalReadError::Invalid { .. }), Invalid)
+            | (Err(TemporalReadError::OutOfRange { .. }), Range) => {}
+            (actual, _) => panic!("unexpected temporal outcome: {actual:?}"),
+        }
+    }
+
+    for (datatype, lexical, expected) in [
+        (
+            D::DateTime,
+            "2026-01-01T00:00:00Z",
+            Value("2026-01-01T00:00:00Z"),
+        ),
+        (D::Date, "2026-01-01+05:30", Value("2026-01-01+05:30")),
+        (D::Time, "00:00:00Z", Value("00:00:00Z")),
+        (D::Duration, "P1Y2M3DT4H5M6.5S", Value("P1Y2M3DT4H5M6.5S")),
+        (D::YearMonthDuration, "P1Y", Value("P1Y")),
+        (D::DayTimeDuration, "PT0S", Value("PT0S")),
+        (D::GYear, "2026Z", Value("2026Z")),
+        (D::GMonth, "--02Z", Value("--02Z")),
+        (D::GDay, "---29Z", Value("---29Z")),
+        (D::GYearMonth, "2026-02Z", Value("2026-02Z")),
+        (D::GMonthDay, "--02-29Z", Value("--02-29Z")),
+        (D::Time, "00:00:00+14:01", Invalid),
+        (D::DateTime, "2026-02-30T00:00:00Z", Invalid),
+        (D::YearMonthDuration, "P1Y1D", Invalid),
+        (D::Time, "00:00:00.", Invalid),
+    ] {
+        check(datatype, lexical, expected);
+    }
+
+    // Construct hostile authored input outside each measured execution window.
+    let zeros = "0".repeat(8192);
+    check(D::Time, &format!("00:00:00.{zeros}Z"), Value("00:00:00Z"));
+    check(D::Time, &format!("00:00:00.{zeros}1Z"), Range);
+    // A deferred range refusal cannot hide a later lexical failure.
+    check(D::Time, &format!("25:00:00.{zeros}1Z"), Invalid);
+    let wide_year = "9".repeat(8192);
+    check(D::Date, &format!("{wide_year}-01-01"), Range);
+    check(D::Date, &format!("{wide_year}-02-30"), Invalid);
+    check(D::Duration, &format!("P{wide_year}Y"), Range);
+    check(D::Duration, &format!("P{wide_year}YQ"), Invalid);
+}

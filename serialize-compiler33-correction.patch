@@ -1,0 +1,43 @@
+--- a/crates/sparql-algebra/src/serialize.rs
++++ b/crates/sparql-algebra/src/serialize.rs
+@@ -356,7 +356,8 @@
+     pattern: &GraphPattern,
+     predicates: PredicateRendering<'_>,
+ ) -> crate::Result<String> {
+-    let mut memory = Memory::new(&mut Resident);
++    let mut resident = Resident;
++    let mut memory = Memory::new(&mut resident);
+     match validate_carrier_pattern_with_memory(pattern, &mut memory)
+         .and_then(|()| select_query_with_memory(pattern, predicates, &mut memory))
+     {
+@@ -698,7 +699,7 @@
+         let mut next_blank = 0usize;
+         let mut last_owner = None;
+         let mut carried = ScopeTable::default();
+-        for (&(owner, label), group) in &groups {
++        for &(&(owner, label), group) in &groups {
+             if last_owner != Some(owner) {
+                 carried.release(memory)?;
+                 carried = scopes.carried_labels(owner, memory)?;
+@@ -2675,12 +2676,19 @@
+ 
+     /// Render one aggregate call on its own.
+     fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
++        let mut resident = Resident;
++        let mut memory = Memory::new(&mut resident);
++        let storage = RenderStorage::new(&mut memory);
+         emit(
+-            s,
++            &mut Surface {
++                text: s,
++                storage: &storage,
++            },
+             Item::Aggregate(agg),
+             PredicateRendering::Independent,
+             &VariableNames::default(),
+-        );
++        )
++        .expect("resident aggregate carrier allocation");
+     }
+     use crate::algebra::AggregateExpressionError;
+     use crate::parser::{ParserOptions, SparqlParser};

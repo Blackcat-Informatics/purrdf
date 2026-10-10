@@ -1,0 +1,334 @@
+diff --git a/crates/sparql-eval/src/knn/mod.rs b/crates/sparql-eval/src/knn/mod.rs
+--- a/crates/sparql-eval/src/knn/mod.rs
++++ b/crates/sparql-eval/src/knn/mod.rs
+@@ -602,9 +602,10 @@
+         declared: Option<Selected<A>>,
+         query_row: usize,
+         row: usize,
++        workspace: &crate::WorkspaceCapability,
+     ) -> Result<f64, EvalError> {
+         let arithmetic = resolve_here(declared)?;
+-        let rows = self.rows()?;
++        let rows = self.rows(workspace)?;
+         let mut distance = [None];
+         arithmetic.distances_indexed(
+             self.kernel.measure(),
+@@ -615,26 +616,30 @@
+             &mut distance,
+         );
+         distance[0].ok_or_else(|| {
+-            EvalError::data(format!(
++            crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Data, format_args!(
+                 "the distance from row {query_row} to row {row} left the finite range \
+                  under {:?}; the artifact's magnitudes cannot be ranked under this metric",
+                 self.metric
+-            ))
++            ), workspace,
++            )
+         })
+     }
+ 
+     /// Every row of this space as the batch kernels read it.
+-    fn rows(&self) -> Result<RowsRef<'_, f64>, EvalError> {
++    fn rows(&self, workspace: &crate::WorkspaceCapability) -> Result<RowsRef<'_, f64>, EvalError> {
+         RowsRef::new(&self.vectors, self.row_count(), self.dimension, &self.norms).ok_or_else(
+             || {
+-                EvalError::internal(format!(
++                crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Internal, format_args!(
+                     "the space's {} value(s) and {} norm(s) do not describe {} row(s) of {} \
+                      component(s)",
+                     self.vectors.len(),
+                     self.norms.len(),
+                     self.row_count(),
+                     self.dimension
+-                ))
++                ), workspace,
++            )
+             },
+         )
+     }
+@@ -691,7 +696,7 @@
+             return Ok((crate::AdmittedVec::new(workspace), 0));
+         }
+         let arithmetic = resolve_here(declared)?;
+-        let rows = self.rows()?;
++        let rows = self.rows(workspace)?;
+         let mut distances = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
+         for _ in 0..self.row_count() {
+             distances.push(None)?;
+@@ -706,12 +711,14 @@
+         let mut scored = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
+         for (row, distance) in distances.into_iter().enumerate() {
+             let distance = distance.ok_or_else(|| {
+-                EvalError::data(format!(
++                crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Data, format_args!(
+                     "the distance from row {query_row} to row {row} left the finite range \
+                      under {:?}; the artifact's magnitudes cannot be ranked under this \
+                      metric",
+                     self.metric
+-                ))
++                ), workspace,
++            )
+             })?;
+             scored.push(Ranked { distance, row })?;
+         }
+@@ -1160,7 +1167,9 @@
+ /// One membership distance under arithmetic `A`: [`EmbeddingSpace::row_distance`] at a
+ /// concrete law, instantiated in the constructors for the reason [`Scan`] is, so the
+ /// pairwise evaluation a candidate-bound call runs is the copy this crate compiled.
+-type Lookup<A> = fn(&EmbeddingSpace, Option<Selected<A>>, usize, usize) -> Result<f64, EvalError>;
++type Lookup<A> = fn(
++    &EmbeddingSpace, Option<Selected<A>>, usize, usize, &crate::WorkspaceCapability,
++) -> Result<f64, EvalError>;
+ 
+ impl EmbeddingKnnRelation {
+     /// A nearest-neighbour relation over `space`, ranking under the [`Exact`] arithmetic.
+@@ -1711,10 +1720,16 @@
+     /// One pairwise evaluation: no other row of the space is read and the graph of
+     /// ranks is never built.
+     fn distance(&self, query_row: usize, row: usize) -> Result<f64, EvalError> {
++        self.distance_admitted(query_row, row, &crate::WorkspaceCapability::default())
++    }
++
++    fn distance_admitted(
++        &self, query_row: usize, row: usize, workspace: &crate::WorkspaceCapability,
++    ) -> Result<f64, EvalError> {
+         self.observations
+             .membership_distances
+             .fetch_add(1, Ordering::Relaxed);
+-        (self.lookup)(&self.space, self.declared, query_row, row)
++        (self.lookup)(&self.space, self.declared, query_row, row, workspace)
+     }
+ 
+     fn term(&self, row: usize) -> Option<&TermValue> {
+diff --git a/crates/sparql-eval/src/knn/invocation.rs b/crates/sparql-eval/src/knn/invocation.rs
+--- a/crates/sparql-eval/src/knn/invocation.rs
++++ b/crates/sparql-eval/src/knn/invocation.rs
+@@ -318,16 +318,20 @@
+         } else { crate::AdmittedVec::new(workspace) };
+         let supplied = args.arity();
+         if supplied != KNN_ARITY {
+-            return Err(EvalError::function(format!(
++            return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
+                 "{relation} expects {KNN_ARITY} argument(s), got {supplied}"
+-            )));
++            ), workspace,
++            ));
+         }
+         let Some(query) = args.get(KNN_QUERY) else {
+-            return Err(EvalError::function(format!(
++            return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
+                 "the query term at position {KNN_QUERY} is free; this relation retrieves the \
+                  neighbours of a seed and cannot enumerate seeds, which is why both of its \
+                  declared modes — `{KNN_MODE}` and `{KNN_MEMBERSHIP_MODE}` — demand it"
+-            )));
++            ), workspace,
++            ));
+         };
+         let query_row = rows.row_of_admitted(query, workspace)?;
+         let (answer, count_term) = if let Some(count) = args.get(KNN_COUNT) {
+@@ -348,13 +352,15 @@
+             )
+         } else {
+             let Some(candidate) = args.get(KNN_NEIGHBOUR) else {
+-                return Err(EvalError::function(format!(
++                return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
+                     "the neighbour count at position {KNN_COUNT} is free and so is the \
+                      neighbour at position {KNN_NEIGHBOUR}; how many neighbours to retrieve \
+                      is a question this relation is asked, not one it answers, so the only \
+                      call it serves without a count is the membership lookup \
+                      `{KNN_MEMBERSHIP_MODE}`, which names the one term it is about"
+-                )));
++                ), workspace,
++            ));
+             };
+             membership_lookups.fetch_add(1, Ordering::Relaxed);
+             let (count, allocation) = admitted_universe_size(rows.len(), workspace)?.into_parts();
+@@ -400,30 +406,38 @@
+         }
+     } else { None };
+     let Some(purrdf_xsd::XsdValue::Integer { value: count, .. }) = parsed.as_deref() else {
+-        return Err(EvalError::function(format!(
+-            "the neighbour count at position {KNN_COUNT} is {value:?}, which is not an integer \
+-             literal; there is no number of neighbours that names"
+-        )));
++        return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
++            "the neighbour count at position {KNN_COUNT} is not an integer literal; \
++             there is no number of neighbours that names"
++        ), workspace,
++            ));
+     };
+     if *count < 0 {
+-        return Err(EvalError::function(format!(
++        return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
+             "the neighbour count at position {KNN_COUNT} is {count}; a search cannot return a \
+              negative number of neighbours"
+-        )));
++        ), workspace,
++            ));
+     }
+     let count = *count;
+     let bound = i128::from(guard.max_neighbours());
+     if count > bound {
+-        return Err(EvalError::function(format!(
++        return Err(crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
+             "the invocation asks for {count} neighbour(s), and the configured guard admits at \
+              most {bound}; returning the {bound} nearest instead would be a short answer \
+              reported as a complete one, so the request is refused rather than clamped"
+-        )));
++        ), workspace,
++            ));
+     }
+     usize::try_from(count).map_err(|_| {
+-        EvalError::function(format!(
++        crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Function, format_args!(
+             "the neighbour count {count} does not fit this platform's index range"
+-        ))
++        ), workspace,
++            )
+     })
+ }
+ 
+@@ -484,6 +498,19 @@
+     /// Whatever the evaluation refuses; the error aborts the query.
+     fn distance(&self, query_row: usize, row: usize) -> Result<f64, EvalError>;
+ 
++    /// Native membership work and diagnostics under the same execution account.
++    ///
++    /// # Errors
++    /// Refuses an opaque bounded source before invoking unpriced producer code.
++    fn distance_admitted(
++        &self, query_row: usize, row: usize, workspace: &crate::WorkspaceCapability,
++    ) -> Result<f64, EvalError> {
++        if workspace.is_bounded() {
++            return Err(EvalError::WorkspaceUnpriced("an opaque membership source without allocation admission"));
++        }
++        self.distance(query_row, row)
++    }
++
+     /// The RDF term row `row` stands for.
+     fn term(&self, row: usize) -> Option<&TermValue>;
+ 
+@@ -570,7 +597,7 @@
+                 }
+                 | KnnAnswer::Membership(None) => (crate::AdmittedVec::new(&self.workspace), 0),
+                 KnnAnswer::Membership(Some((query_row, row))) => {
+-                    let distance = self.source.distance(query_row, row)?;
++                    let distance = self.source.distance_admitted(query_row, row, &self.workspace)?;
+                     let mut ranked = crate::AdmittedVec::with_capacity(1, &self.workspace)?;
+                     ranked.push(Ranked { distance, row })?;
+                     (ranked, 1)
+@@ -585,9 +612,11 @@
+     /// The same admitted construction supplies resident and bounded pull paths.
+     fn build(&self, scored: Ranked) -> Result<crate::property_fn::AdmittedPfRow, EvalError> {
+         let neighbour = self.source.term(scored.row).ok_or_else(|| {
+-            EvalError::data(format!(
++            crate::error::NativeDiagnostic::error(
++                crate::error::NativeDiagnosticKind::Data, format_args!(
+                 "the ranking named row {}, which the space does not hold", scored.row,
+-            ))
++            ), &self.workspace,
++            )
+         })?;
+         let text = purrdf_xsd::numeric::canonical_double_text(scored.distance);
+         let bytes = text.len().checked_add(XSD_DOUBLE.len())
+@@ -725,7 +754,7 @@
+             (TermValue::integer(6), "admits at most 5"),
+         ] {
+             let error = neighbour_count(&count, guard()).expect_err(why);
+-            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
++            assert!(matches!(error, EvalError::Function(_)) || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function), "got {error:?}");
+             assert!(error.to_string().contains(why), "{why}: got {error}");
+         }
+     }
+diff --git a/crates/sparql-eval/src/knn/tests.rs b/crates/sparql-eval/src/knn/tests.rs
+--- a/crates/sparql-eval/src/knn/tests.rs
++++ b/crates/sparql-eval/src/knn/tests.rs
+@@ -477,7 +477,7 @@
+     let error = fixture(&DistanceMetric::Cosine, &with_origin)
+         .open(roomy())
+         .expect_err("a zero-norm vector has no direction");
+-    assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
++    assert!(matches!(error, EvalError::Data(_)) || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data), "got {error:?}");
+     assert!(error.to_string().contains("zero L2 norm"), "got {error}");
+ 
+     for metric in [
+@@ -513,7 +513,7 @@
+     let error = built
+         .open(roomy())
+         .expect_err("a flipped byte must be caught by PURREMB's own sealing");
+-    assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
++    assert!(matches!(error, EvalError::Data(_)) || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data), "got {error:?}");
+ }
+ 
+ // ---------------------------------------------------------------------------
+@@ -768,12 +768,12 @@
+ 
+     let error = invoke(&relation, &[None, None, Some(count(2)), None], None)
+         .expect_err("this relation cannot enumerate seeds");
+-    assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
++    assert!(matches!(error, EvalError::Function(_)) || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function), "got {error:?}");
+     assert!(error.to_string().contains("is free"), "got {error}");
+ 
+     let error = invoke(&relation, &[None, Some(iri("a")), None, None], None)
+         .expect_err("this relation cannot invent how many neighbours to return");
+-    assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
++    assert!(matches!(error, EvalError::Function(_)) || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function), "got {error:?}");
+ 
+     // The neighbouring VALID case.
+     assert_eq!(
+@@ -802,7 +802,7 @@
+     ] {
+         let error = invoke(&relation, &[None, Some(iri("a")), Some(bad), None], None)
+             .expect_err("there is no number of neighbours that names");
+-        assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
++        assert!(matches!(error, EvalError::Function(_)) || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function), "got {error:?}");
+     }
+ 
+     // The over-refusal control. `xsd:int` and `xsd:unsignedByte` are integer-family
+@@ -837,7 +837,7 @@
+         None,
+     )
+     .expect_err("a search cannot return a negative number of neighbours");
+-    assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
++    assert!(matches!(error, EvalError::Function(_)) || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function), "got {error:?}");
+ 
+     // Zero is the boundary a clamp-or-refuse rule gets wrong in both directions: it is a
+     // well-formed request for nothing, answered with nothing.
+@@ -872,7 +872,7 @@
+         None,
+     )
+     .expect_err("k one past the guard is refused, not clamped");
+-    assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
++    assert!(matches!(error, EvalError::Function(_)) || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function), "got {error:?}");
+     assert!(error.to_string().contains("asks for 3"), "got {error}");
+     assert!(error.to_string().contains("at most 2"), "got {error}");
+ }
+@@ -922,7 +922,7 @@
+     let Err(error) = relation.open(&args, None) else {
+         panic!("a zero-argument subject side does not match the declaration")
+     };
+-    assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
++    assert!(matches!(error, EvalError::Function(_)) || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Function), "got {error:?}");
+     assert!(error.to_string().contains("expects"), "got {error}");
+ }
+ 
+@@ -3034,7 +3034,7 @@
+         roomy(),
+         "zero L2 norm",
+     );
+-    assert!(matches!(error, EvalError::Data(_)), "got {error:?}");
++    assert!(matches!(error, EvalError::Data(_)) || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data), "got {error:?}");
+     assert!(
+         EmbeddingSpace::from_vectors(
+             &DistanceMetric::NegativeDot,

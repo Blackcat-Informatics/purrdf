@@ -1,0 +1,262 @@
+fn served_endpoint_variables_admitted(
+    right: &GraphPattern,
+    placeholders: Option<&crate::deferred_exists::DeferredMap>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<Variable>, EvalError> {
+    let mut uses = AdmittedVec::new(workspace);
+    classify_admitted(right, true, &mut uses, placeholders, workspace)?;
+    let mut served = AdmittedVec::new(workspace);
+    for endpoint in uses {
+        if endpoint.direct && !endpoint.conflict {
+            served.push(endpoint.variable)?;
+        }
+    }
+    Ok(served)
+}
+
+#[cfg(test)]
+fn served_endpoint_variables(
+    right: &GraphPattern,
+    placeholders: Option<&crate::deferred_exists::DeferredMap>,
+) -> Vec<Variable> {
+    served_endpoint_variables_admitted(right, placeholders, &crate::WorkspaceCapability::default())
+        .expect("resident endpoint classification")
+        .try_into_resident()
+        .unwrap_or_else(|_| unreachable!("resident capability"))
+}
+
+#[cfg(test)]
+fn record(variable: &Variable, direct: bool, scopes: &[Scope<'_>], uses: &mut Vec<EndpointUse>) {
+    let mut owned = AdmittedVec::from_resident(std::mem::take(uses));
+    record_admitted(variable, direct, scopes, &mut owned).expect("resident endpoint record");
+    *uses = owned.try_into_resident().unwrap_or_else(|_| unreachable!("resident capability"));
+}
+
+#[cfg(test)]
+fn classify(
+    pattern: &GraphPattern,
+    direct: bool,
+    uses: &mut Vec<EndpointUse>,
+    placeholders: Option<&crate::deferred_exists::DeferredMap>,
+) {
+    let mut owned = AdmittedVec::from_resident(std::mem::take(uses));
+    classify_admitted(pattern, direct, &mut owned, placeholders, &crate::WorkspaceCapability::default())
+        .expect("resident endpoint classification");
+    *uses = owned.try_into_resident().unwrap_or_else(|_| unreachable!("resident capability"));
+}
+
+#[cfg(test)]
+fn lateral_endpoint_uses(pattern: &GraphPattern, uses: &mut Vec<(Variable, bool)>) {
+    let mut owned = AdmittedVec::from_resident(std::mem::take(uses));
+    lateral_endpoint_uses_admitted(pattern, &mut owned, &crate::WorkspaceCapability::default())
+        .expect("resident per-solution endpoint classification");
+    *uses = owned.try_into_resident().unwrap_or_else(|_| unreachable!("resident capability"));
+}
+
+fn record_admitted(
+    variable: &Variable,
+    direct: bool,
+    scopes: &[Scope<'_>],
+    uses: &mut AdmittedVec<EndpointUse>,
+) -> Result<(), EvalError> {
+    let mut direct = direct;
+    for scope in scopes {
+        match scope {
+            Scope::Project(vars) if !vars.contains(variable) => return Ok(()),
+            Scope::Group(vars) if !vars.contains(variable) => direct = false,
+            Scope::Project(_) | Scope::Group(_) => {}
+        }
+    }
+    let index = if let Some(index) = uses.iter().position(|used| &used.variable == variable) {
+        index
+    } else {
+        uses.push(EndpointUse {
+            variable: variable.clone(),
+            direct: false,
+            conflict: false,
+        })?;
+        uses.len() - 1
+    };
+    if direct {
+        uses.as_mut_slice()[index].direct = true;
+    } else {
+        uses.as_mut_slice()[index].conflict = true;
+    }
+    Ok(())
+}
+
+fn classify_admitted(
+    pattern: &GraphPattern,
+    direct: bool,
+    uses: &mut AdmittedVec<EndpointUse>,
+    placeholders: Option<&crate::deferred_exists::DeferredMap>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut scopes = AdmittedVec::new(workspace);
+    let mut pending = AdmittedVec::with_capacity(1, workspace)?;
+    pending.push_reserved(ClassifyStep::Pattern(pattern, direct));
+    while let Some(step) = pending.pop() {
+        match step {
+            ClassifyStep::Pattern(pattern, direct) => match pattern {
+                GraphPattern::Bgp { .. }
+                | GraphPattern::Path { .. }
+                | GraphPattern::Values { .. }
+                | GraphPattern::PropertyFunction(_) => {}
+                GraphPattern::Service { name, .. } => {
+                    if let NamedNodePattern::Variable(variable) = name {
+                        record_admitted(variable, direct, &scopes, uses)?;
+                    }
+                }
+                GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+                    pending.push(ClassifyStep::Pattern(right, direct))?;
+                    pending.push(ClassifyStep::Pattern(left, direct))?;
+                }
+                GraphPattern::Apply { left, right, policy } => {
+                    pending.push(ClassifyStep::Pattern(right, direct && policy.optional.is_none()))?;
+                    pending.push(ClassifyStep::Pattern(left, direct))?;
+                }
+                GraphPattern::Union { arms } => {
+                    pending.try_extend(arms.iter().rev().map(|arm| ClassifyStep::Pattern(arm, direct)))?;
+                }
+                GraphPattern::LeftJoin { left, right, expression } => {
+                    if let Some(expression) = expression {
+                        pending.push(ClassifyStep::Expression(expression))?;
+                    }
+                    pending.push(ClassifyStep::Pattern(right, false))?;
+                    pending.push(ClassifyStep::Pattern(left, direct))?;
+                }
+                GraphPattern::Minus { left, right } => {
+                    pending.push(ClassifyStep::Pattern(right, false))?;
+                    pending.push(ClassifyStep::Pattern(left, direct))?;
+                }
+                GraphPattern::Filter { expr, inner } => {
+                    pending.push(ClassifyStep::Expression(expr))?;
+                    pending.push(ClassifyStep::Pattern(inner, direct))?;
+                }
+                GraphPattern::Extend { inner, expression, .. }
+                | GraphPattern::Unfold { inner, expression, .. } => {
+                    pending.push(ClassifyStep::Expression(expression))?;
+                    pending.push(ClassifyStep::Pattern(inner, direct))?;
+                }
+                GraphPattern::Graph { inner, .. }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner } => pending.push(ClassifyStep::Pattern(inner, direct))?,
+                GraphPattern::OrderBy { inner, expression } => {
+                    pending.try_extend(expression.iter().rev().map(|key| ClassifyStep::Expression(key.expression())))?;
+                    pending.push(ClassifyStep::Pattern(inner, direct))?;
+                }
+                GraphPattern::Project { inner, variables } => {
+                    scopes.push(Scope::Project(variables))?;
+                    pending.push(ClassifyStep::LeaveScope)?;
+                    pending.push(ClassifyStep::Pattern(inner, direct))?;
+                }
+                GraphPattern::Slice { inner, start, length } => {
+                    let identity = *start == 0 && length.is_none();
+                    pending.push(ClassifyStep::Pattern(inner, direct && identity))?;
+                }
+                GraphPattern::Group { inner, variables, aggregates } => {
+                    scopes.push(Scope::Group(variables))?;
+                    let first = pending.len();
+                    for (_, aggregate) in aggregates {
+                        for expression in aggregate.args().iter().chain(
+                            aggregate.order_by().iter().map(purrdf_sparql_algebra::OrderExpression::expression),
+                        ) {
+                            pending.push(ClassifyStep::Expression(expression))?;
+                        }
+                    }
+                    pending.as_mut_slice()[first..].reverse();
+                    pending.push(ClassifyStep::LeaveScope)?;
+                    pending.push(ClassifyStep::Pattern(inner, direct))?;
+                }
+            },
+            ClassifyStep::Expression(expression) => {
+                let first = pending.len();
+                let mut failure = None;
+                crate::governor::soundness::visit_expression_parts(expression, &mut |part| {
+                    if failure.is_none() {
+                        let result = match part {
+                            ExpressionPart::Sub(sub) => pending.push(ClassifyStep::Expression(sub)),
+                            ExpressionPart::Exists(body) => pending.push(ClassifyStep::Exists(body)),
+                            ExpressionPart::Call(_) => Ok(()),
+                        };
+                        if let Err(error) = result { failure = Some(error); }
+                    }
+                    failure.is_some()
+                });
+                if let Some(error) = failure { return Err(error); }
+                pending.as_mut_slice()[first..].reverse();
+            }
+            ClassifyStep::Exists(body) => {
+                match placeholders
+                    .and_then(|map| map.get(&(std::ptr::from_ref(body) as usize)))
+                    .and_then(crate::deferred_exists::Deferred::exists)
+                {
+                    Some(slot) => {
+                        for variable in &slot.site.service_uses {
+                            if !slot.env.resolves_endpoint(variable) {
+                                record_admitted(variable, false, &scopes, uses)?;
+                            }
+                        }
+                    }
+                    None => pending.push(ClassifyStep::Pattern(body, false))?,
+                }
+            }
+            ClassifyStep::LeaveScope => { scopes.pop(); }
+        }
+    }
+    Ok(())
+}
+
+fn lateral_endpoint_uses_admitted(
+    pattern: &GraphPattern,
+    uses: &mut AdmittedVec<(Variable, bool)>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
+    enum Step<'a> {
+        Pattern(&'a GraphPattern),
+        LeaveProject(&'a [Variable], usize),
+    }
+    let mut pending = AdmittedVec::with_capacity(1, workspace)?;
+    pending.push_reserved(Step::Pattern(pattern));
+    while let Some(step) = pending.pop() {
+        match step {
+            Step::Pattern(GraphPattern::Service { name, silent, .. }) => {
+                if let NamedNodePattern::Variable(variable) = name {
+                    if let Some((_, all_silent)) = uses.as_mut_slice().iter_mut().find(|(seen, _)| seen == variable) {
+                        *all_silent &= *silent;
+                    } else {
+                        uses.push((variable.clone(), *silent))?;
+                    }
+                }
+            }
+            Step::Pattern(GraphPattern::Project { inner, variables }) => {
+                pending.push(Step::LeaveProject(variables, uses.len()))?;
+                pending.push(Step::Pattern(inner))?;
+            }
+            Step::Pattern(pattern) => {
+                let first = pending.len();
+                let mut failure = None;
+                crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
+                    if failure.is_none()
+                        && let PatternPart::Child(child, _) = part
+                        && let Err(error) = pending.push(Step::Pattern(child))
+                    { failure = Some(error); }
+                    failure.is_some()
+                });
+                if let Some(error) = failure { return Err(error); }
+                pending.as_mut_slice()[first..].reverse();
+            }
+            Step::LeaveProject(variables, first) => {
+                let mut kept = first;
+                for index in first..uses.len() {
+                    if variables.contains(&uses[index].0) {
+                        uses.as_mut_slice().swap(kept, index);
+                        kept += 1;
+                    }
+                }
+                uses.truncate(kept);
+            }
+        }
+    }
+    Ok(())
+}

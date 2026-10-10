@@ -1,0 +1,1003 @@
+diff --git a/crates/rdf-core/src/blank_label.rs b/crates/rdf-core/src/blank_label.rs
+index f62817bd0..fb421a2c3 100644
+--- a/crates/rdf-core/src/blank_label.rs
++++ b/crates/rdf-core/src/blank_label.rs
+@@ -151,6 +151,8 @@
+ 
+ use std::borrow::Cow;
+ 
++use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
++
+ use crate::BlankScope;
+ 
+ /// Which label grammar [`is_valid_label`] should check against.
+@@ -242,38 +244,65 @@ pub fn is_valid_label(label: &str, alphabet: LabelAlphabet) -> bool {
+ /// the one case where a default-scope legal label does not pass through.
+ #[must_use]
+ pub fn encode_blank_label(label: &str, scope: BlankScope, alphabet: LabelAlphabet) -> Cow<'_, str> {
++    encode_blank_label_with_memory(label, scope, alphabet, &mut Memory::new(&mut Resident))
++        .expect("resident blank-label allocation failed")
++}
++
++/// Encode through the original caller's physical admission.
++///
++/// Borrowed spellings need no allocation. An owned spelling remains included in
++/// `memory` until the caller destroys it or transfers its original grant.
++///
++/// # Errors
++/// Returns physical layout, admission, formatting or allocator refusal.
++pub fn encode_blank_label_with_memory<'a, S: Admission + ?Sized>(
++    label: &'a str,
++    scope: BlankScope,
++    alphabet: LabelAlphabet,
++    memory: &mut Memory<'_, S>,
++) -> Result<Cow<'a, str>, StorageError> {
+     if scope == BlankScope::DEFAULT
+         && is_valid_label(label, alphabet)
+         && !label.starts_with(ESCAPE_MARKER)
+     {
+-        return Cow::Borrowed(label);
+-    }
+-    let mut encoded = String::with_capacity(ESCAPE_MARKER.len() + label.len() + 16);
+-    encoded.push_str(ESCAPE_MARKER);
+-    if scope != BlankScope::DEFAULT {
+-        use std::fmt::Write as _;
+-        // Canonical decimal, never zero-padded: the decode below accepts only
+-        // this spelling, so the encoding stays injective over scopes.
+-        let _ = write!(encoded, "{}", scope.ordinal());
+-    }
+-    encoded.push('_');
+-    for ch in label.chars() {
+-        if ch.is_ascii_alphanumeric() {
+-            encoded.push(ch);
+-        } else {
+-            encoded.push('_');
+-            push_hex6(ch as u32, &mut encoded);
+-        }
++        return Ok(Cow::Borrowed(label));
+     }
++    let encoded = memory.format(&EnvelopeSpelling { label, scope })?;
+     debug_assert!(
+         is_valid_label(&encoded, alphabet),
+         "encode_blank_label must always produce a token legal under the target alphabet"
+     );
+-    debug_assert!(
+-        decode_envelope(&encoded).is_some_and(|(l, s)| l == label && s == scope),
+-        "every envelope must decode back to the pair it encodes"
+-    );
+-    Cow::Owned(encoded)
++    Ok(Cow::Owned(encoded))
++}
++
++/// Allocation-free rendering of the single canonical envelope spelling.
++struct EnvelopeSpelling<'a> {
++    label: &'a str,
++    scope: BlankScope,
++}
++
++impl std::fmt::Display for EnvelopeSpelling<'_> {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.write_str(ESCAPE_MARKER)?;
++        if self.scope != BlankScope::DEFAULT {
++            write!(f, "{}", self.scope.ordinal())?;
++        }
++        f.write_str("_")?;
++        for ch in self.label.chars() {
++            if ch.is_ascii_alphanumeric() {
++                write!(f, "{ch}")?;
++            } else {
++                let [_, high, middle, low] = (ch as u32).to_be_bytes();
++                let mut digits = [0u8; 6];
++                f.write_str("_")?;
++                f.write_str(
++                    purrdf_hash::hex::encode_upper_to_slice(&[high, middle, low], &mut digits)
++                        .expect("three bytes render in six digits"),
++                )?;
++            }
++        }
++        Ok(())
++    }
+ }
+ 
+ /// Encode `label` at [`BlankScope::DEFAULT`] into `alphabet` — the unscoped
+@@ -310,19 +339,38 @@ pub fn escape_label(label: &str, alphabet: LabelAlphabet) -> Cow<'_, str> {
+ /// asserted in debug builds on every accepted envelope.
+ #[must_use]
+ pub fn decode_blank_label(token: &str, alphabet: LabelAlphabet) -> (Cow<'_, str>, BlankScope) {
+-    // The hot path for real data: one prefix compare, no allocation, no scan.
++    decode_blank_label_with_memory(token, alphabet, &mut Memory::new(&mut Resident))
++        .expect("resident blank-label allocation failed")
++}
++
++/// Decode the same envelope and byte-exact image law under physical admission.
++///
++/// The decoded label retains its original admission; image-test scratch is
++/// destroyed and released before returning. Malformed envelopes remain borrowed.
++///
++/// # Errors
++/// Returns physical refusal instead of treating it as a malformed envelope.
++pub fn decode_blank_label_with_memory<'a, S: Admission + ?Sized>(
++    token: &'a str,
++    alphabet: LabelAlphabet,
++    memory: &mut Memory<'_, S>,
++) -> Result<(Cow<'a, str>, BlankScope), StorageError> {
+     if !token.starts_with(ESCAPE_MARKER) {
+-        return (Cow::Borrowed(token), BlankScope::DEFAULT);
++        return Ok((Cow::Borrowed(token), BlankScope::DEFAULT));
+     }
+-    let Some((label, scope)) = decode_envelope(token) else {
+-        return (Cow::Borrowed(token), BlankScope::DEFAULT);
++    let Some((label, scope)) = decode_envelope(token, memory)? else {
++        return Ok((Cow::Borrowed(token), BlankScope::DEFAULT));
+     };
+-    if encode_blank_label(&label, scope, alphabet).as_ref() != token {
+-        // Not in the encoder's image under this alphabet, so no serializer
+-        // could have written it: it denotes itself.
+-        return (Cow::Borrowed(token), BlankScope::DEFAULT);
++    let encoded = encode_blank_label_with_memory(&label, scope, alphabet, memory)?;
++    let identical = encoded.as_ref() == token;
++    if let Cow::Owned(encoded) = encoded {
++        memory.release_string(encoded)?;
+     }
+-    (Cow::Owned(label), scope)
++    if !identical {
++        memory.release_string(label)?;
++        return Ok((Cow::Borrowed(token), BlankScope::DEFAULT));
++    }
++    Ok((Cow::Owned(label), scope))
+ }
+ 
+ /// Re-target an OWNED-model blank label — the
+@@ -362,70 +410,83 @@ pub fn retarget_owned_label(owned: &str, alphabet: LabelAlphabet) -> Cow<'_, str
+ /// This is the syntactic half of the decode; [`decode_blank_label`] adds the
+ /// image test that rejects a well-formed envelope the encoder would not have
+ /// written.
+-fn decode_envelope(token: &str) -> Option<(String, BlankScope)> {
+-    let rest = token.strip_prefix(ESCAPE_MARKER)?;
+-    // The scope digits are the maximal digit run, always terminated by the `_`
+-    // that opens the body — so the split is unambiguous even when the body
+-    // itself starts with digits.
+-    let digits_len = rest.bytes().take_while(u8::is_ascii_digit).count();
+-    let (digits, body) = rest.split_at(digits_len);
+-    let body = body.strip_prefix('_')?;
+-    let scope = if digits.is_empty() {
+-        BlankScope::DEFAULT
+-    } else {
+-        // `encode_blank_label` writes a canonical, non-zero decimal, so a
+-        // zero-padded or zero ordinal is outside its image and must not decode
+-        // (the image test below would reject it anyway; refusing here keeps the
+-        // grammar's statement exact).
+-        if digits.starts_with('0') {
+-            return None;
+-        }
+-        let ordinal = digits.parse::<u32>().ok()?;
+-        if ordinal == 0 {
+-            return None;
+-        }
+-        BlankScope(ordinal)
++fn decode_envelope<S: Admission + ?Sized>(
++    token: &str,
++    memory: &mut Memory<'_, S>,
++) -> Result<Option<(String, BlankScope)>, StorageError> {
++    // Parse the envelope grammar first without storage, then render the same
++    // decoded scalars into the admitted destination.
++    fn parts(token: &str) -> Option<(&str, BlankScope)> {
++        let rest = token.strip_prefix(ESCAPE_MARKER)?;
++        // The scope digits are the maximal digit run, always terminated by the `_`
++        // that opens the body — so the split is unambiguous even when the body
++        // itself starts with digits.
++        let digits_len = rest.bytes().take_while(u8::is_ascii_digit).count();
++        let (digits, body) = rest.split_at(digits_len);
++        let body = body.strip_prefix('_')?;
++        let scope = if digits.is_empty() {
++            BlankScope::DEFAULT
++        } else {
++            // `encode_blank_label` writes a canonical, non-zero decimal, so a
++            // zero-padded or zero ordinal is outside its image and must not decode
++            // (the image test below would reject it anyway; refusing here keeps the
++            // grammar's statement exact).
++            if digits.starts_with('0') {
++                return None;
++            }
++            let ordinal = digits.parse::<u32>().ok()?;
++            if ordinal == 0 {
++                return None;
++            }
++            BlankScope(ordinal)
++        };
++        Some((body, scope))
++    }
++    let Some((body, scope)) = parts(token) else {
++        return Ok(None);
+     };
+-    let mut decoded = String::with_capacity(body.len());
++    let mut decoded = String::new();
++    memory.reserve_string(&mut decoded, body.len())?;
+     let mut chars = body.chars();
+     while let Some(ch) = chars.next() {
+         if ch.is_ascii_alphanumeric() {
+-            decoded.push(ch);
++            memory.push_char(&mut decoded, ch)?;
+             continue;
+         }
+-        if ch != '_' {
+-            return None;
++        let mut scalar = None;
++        if ch == '_' {
++            let mut cp: u32 = 0;
++            let mut valid = true;
++            for _ in 0..6 {
++                match chars.next().and_then(hex6_digit) {
++                    Some(digit) => cp = cp * 16 + digit,
++                    None => {
++                        valid = false;
++                        break;
++                    }
++                }
++            }
++            if valid {
++                scalar = char::from_u32(cp);
++            }
+         }
+-        let mut cp: u32 = 0;
+-        for _ in 0..6 {
+-            cp = cp * 16 + chars.next().and_then(hex6_digit)?;
+-        }
+-        decoded.push(char::from_u32(cp)?);
++        let Some(scalar) = scalar else {
++            memory.release_string(decoded)?;
++            return Ok(None);
++        };
++        memory.push_char(&mut decoded, scalar)?;
+     }
+-    Some((decoded, scope))
++    Ok(Some((decoded, scope)))
+ }
+ 
+ /// One digit of a fixed-width escape group: `0-9` or UPPERCASE `A-F`, matching
+-/// exactly what [`push_hex6`] writes. Lowercase is deliberately refused so the
++/// exactly what the canonical envelope renderer writes. Lowercase is deliberately refused so the
+ /// decode accepts only the escape's own image.
+ fn hex6_digit(c: char) -> Option<u32> {
+     let byte = u8::try_from(c).ok().filter(|b| !b.is_ascii_lowercase())?;
+     purrdf_hash::hex::nibble(byte).map(u32::from)
+ }
+ 
+-/// Append `cp` as exactly six uppercase hex digits (24 bits covers the whole
+-/// `0..=0x10FFFF` scalar range), the fixed-width escape body [`escape_label`]
+-/// writes after each `_`: the low three bytes of `cp`, big-endian, in
+-/// uppercase base16.
+-fn push_hex6(cp: u32, out: &mut String) {
+-    let [_, high, middle, low] = cp.to_be_bytes();
+-    let mut digits = [0u8; 6];
+-    out.push_str(
+-        purrdf_hash::hex::encode_upper_to_slice(&[high, middle, low], &mut digits)
+-            .expect("three bytes render in six digits"),
+-    );
+-}
+-
+ // Keep the dataset-codec API while the exact shared lexical grammar lives below
+ // both dataset codecs and the SPARQL front end.
+ pub use purrdf_lex::terminals::is_valid_blank_node_label;
+diff --git a/crates/rdf-core/src/cdt_blank.rs b/crates/rdf-core/src/cdt_blank.rs
+index 7d23356f2..8cf17ab32 100644
+--- a/crates/rdf-core/src/cdt_blank.rs
++++ b/crates/rdf-core/src/cdt_blank.rs
+@@ -38,7 +38,7 @@
+ //! those bytes. [`bind_cdt_blank_labels`] does exactly that and nothing else: it
+ //! rewrites the `BLANK_NODE_LABEL` token spans, in place, to the canonical
+ //! `(label, scope)` spelling that
+-//! [`encode_blank_label`] produces, and
++//! [`encode_blank_label`](crate::blank_label::encode_blank_label) produces, and
+ //! leaves **every other byte of the lexical form untouched** — whitespace,
+ //! numeric spellings, map-entry order, quote style, escape spellings and
+ //! datatype IRIs all survive byte for byte.
+@@ -90,11 +90,16 @@
+ 
+ use std::borrow::Cow;
+ 
+-use purrdf_iri::terminals::{self, expand_uchars};
++use purrdf_iri::terminals;
++use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
++use purrdf_lex::terminals::expand_uchars_with_memory;
+ 
+ use purrdf_cdt::{CDT_LIST, CDT_MAP, CdtContents, CdtError, CdtTerm, CdtValue, parse_cdt_by_iri};
+ 
+-use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
++use crate::blank_label::{
++    LabelAlphabet, decode_blank_label, decode_blank_label_with_memory,
++    encode_blank_label_with_memory,
++};
+ use crate::ir::term::BlankScope;
+ 
+ /// Whether `datatype` is one of the two SEP-0009 composite datatype IRIs.
+@@ -151,15 +156,34 @@ impl BlankBinding {
+     /// at [`BlankScope::DEFAULT`].
+     #[must_use]
+     pub fn rebind(self, token: &str) -> Cow<'_, str> {
+-        let (label, scope) = self.resolve(token);
+-        match encode_blank_label(&label, scope, LabelAlphabet::BlankNodeLabel) {
+-            // Re-borrow from `token` rather than from the temporary `label` when
+-            // the whole round trip was the identity, so the caller keeps its
+-            // no-allocation fast path.
++        self.rebind_with_memory(token, &mut Memory::new(&mut Resident))
++            .expect("resident blank-label binding allocation failed")
++    }
++
++    /// Bind the same label under the caller's original physical admission.
++    ///
++    /// # Errors
++    /// Returns physical refusal without changing label identity or spelling.
++    pub fn rebind_with_memory<'a, S: Admission + ?Sized>(
++        self,
++        token: &'a str,
++        memory: &mut Memory<'_, S>,
++    ) -> Result<Cow<'a, str>, StorageError> {
++        let (label, scope) = match self {
++            Self::Decoded(alphabet) => decode_blank_label_with_memory(token, alphabet, memory)?,
++            Self::Ambient(scope) => (Cow::Borrowed(token), scope),
++        };
++        let encoded =
++            encode_blank_label_with_memory(&label, scope, LabelAlphabet::BlankNodeLabel, memory)?;
++        let bound = match encoded {
+             Cow::Borrowed(encoded) if encoded == token => Cow::Borrowed(token),
+-            Cow::Borrowed(encoded) => Cow::Owned(encoded.to_owned()),
++            Cow::Borrowed(encoded) => Cow::Owned(memory.string(encoded)?),
+             Cow::Owned(encoded) => Cow::Owned(encoded),
++        };
++        if let Cow::Owned(label) = label {
++            memory.release_string(label)?;
+         }
++        Ok(bound)
+     }
+ }
+ 
+@@ -301,6 +325,53 @@ pub fn bind_cdt_blank_labels_unchecked<'a>(
+     )
+ }
+ 
++/// Bind the existing unchecked scanner's labels under original physical admission.
++///
++/// Recognition, root spans, nesting and byte-preserving splicing are identical to
++/// the resident path. An owned result remains admitted in `memory`; the caller
++/// must retain that original grant until the result is destroyed or transferred.
++///
++/// # Errors
++/// Returns physical refusal; it is never converted to a malformed-text no-op.
++pub fn bind_cdt_blank_labels_unchecked_with_memory<'a, S: Admission + ?Sized>(
++    lexical: &'a str,
++    datatype: &str,
++    binding: BlankBinding,
++    memory: &mut Memory<'_, S>,
++) -> Result<Cow<'a, str>, StorageError> {
++    if !is_cdt_datatype(datatype) {
++        return Ok(Cow::Borrowed(lexical));
++    }
++    let spans = scan_tokens_with_memory(lexical, memory)?;
++    let output = splice_with_memory(
++        lexical,
++        &spans,
++        &mut |token, memory| match token {
++            TokenKind::Blank(label) => match binding.rebind_with_memory(label, memory)? {
++                Cow::Borrowed(_) => Ok(None),
++                Cow::Owned(bound) => {
++                    let replacement = memory.format(&format_args!("_:{bound}"))?;
++                    memory.release_string(bound)?;
++                    Ok(Some(replacement))
++                }
++            },
++            TokenKind::Iri { .. } => Ok(None),
++        },
++        memory,
++    )?;
++    release_spans(spans, memory)?;
++    Ok(output)
++}
++
++fn release_spans<S: Admission + ?Sized>(
++    spans: Vec<TokenSpan>,
++    memory: &mut Memory<'_, S>,
++) -> Result<(), StorageError> {
++    let bytes = span_payload_bytes(&spans)?;
++    memory.release_vec(spans)?;
++    memory.release_bytes(bytes)
++}
++
+ /// Rewrite the blank-node AND IRI tokens of an ALREADY-BOUND composite lexical
+ /// form, so a whole-dataset term rewrite reaches inside composite literals.
+ ///
+@@ -440,32 +511,69 @@ fn splice<'a>(
+     spans: &[TokenSpan],
+     rewrite: &mut dyn FnMut(&TokenKind) -> Option<String>,
+ ) -> Cow<'a, str> {
++    let mut resident = Resident;
++    let mut memory = Memory::new(&mut resident);
++    splice_with_memory(
++        lexical,
++        spans,
++        &mut |token, memory| {
++            let replacement = rewrite(token);
++            // Resident callbacks own their storage before entering this scanner.
++            // Bounded callbacks below allocate through the original memory instead.
++            if let Some(text) = &replacement {
++                memory.add_bytes(text.capacity())?;
++            }
++            Ok(replacement)
++        },
++        &mut memory,
++    )
++    .expect("resident composite splice allocation failed")
++}
++
++fn splice_with_memory<'a, S: Admission + ?Sized>(
++    lexical: &'a str,
++    spans: &[TokenSpan],
++    rewrite: &mut impl FnMut(&TokenKind, &mut Memory<'_, S>) -> Result<Option<String>, StorageError>,
++    memory: &mut Memory<'_, S>,
++) -> Result<Cow<'a, str>, StorageError> {
+     let mut out: Option<String> = None;
+     let mut cursor = 0usize;
+     for span in spans {
+-        // A token the previous splice already consumed (only reachable if the
+-        // scan produced overlapping spans, which it does not) is skipped rather
+-        // than allowed to slice mid-character.
+         if span.start < cursor {
+             continue;
+         }
+-        let Some(replacement) = rewrite(&span.kind) else {
++        let Some(replacement) = rewrite(&span.kind, memory)? else {
+             continue;
+         };
+-        let buf = out.get_or_insert_with(|| String::with_capacity(lexical.len() + 16));
+-        buf.push_str(&lexical[cursor..span.start]);
+-        buf.push_str(&replacement);
++        let buf = out.get_or_insert_with(String::new);
++        append_text(buf, &lexical[cursor..span.start], memory)?;
++        append_text(buf, &replacement, memory)?;
++        memory.release_string(replacement)?;
+         cursor = span.end;
+     }
+     match out {
+         Some(mut buf) => {
+-            buf.push_str(&lexical[cursor..]);
+-            Cow::Owned(buf)
++            append_text(&mut buf, &lexical[cursor..], memory)?;
++            Ok(Cow::Owned(buf))
+         }
+-        None => Cow::Borrowed(lexical),
++        None => Ok(Cow::Borrowed(lexical)),
+     }
+ }
+ 
++fn append_text<S: Admission + ?Sized>(
++    text: &mut String,
++    suffix: &str,
++    memory: &mut Memory<'_, S>,
++) -> Result<(), StorageError> {
++    let required = text
++        .len()
++        .checked_add(suffix.len())
++        .ok_or(StorageError::SizeOverflow)?;
++    memory.reserve_string(text, required)?;
++    text.push_str(suffix);
++    Ok(())
++}
++
+ /// Cross-check the byte scanner against the SEP-0009 grammar: both must report
+ /// the same blank-node labels.
+ fn check_scan_agrees(spans: &[TokenSpan], value: &CdtValue) -> Result<(), CdtBlankError> {
+@@ -592,33 +700,83 @@ impl Region {
+ /// unescaped-then-re-escaped, so a nested literal's escape spellings survive a
+ /// rewrite of its labels byte for byte.
+ fn scan_tokens(lexical: &str) -> Vec<TokenSpan> {
++    scan_tokens_with_memory(lexical, &mut Memory::new(&mut Resident))
++        .expect("resident composite scanner allocation failed")
++}
++
++fn scan_tokens_with_memory<S: Admission + ?Sized>(
++    lexical: &str,
++    memory: &mut Memory<'_, S>,
++) -> Result<Vec<TokenSpan>, StorageError> {
+     let mut spans = Vec::new();
+-    let mut queue = vec![Region {
+-        text: lexical.to_owned(),
+-        map: Vec::new(),
+-    }];
++    let mut queue = Vec::new();
++    let text = memory.string(lexical)?;
++    memory.push(
++        &mut queue,
++        Region {
++            text,
++            map: Vec::new(),
++        },
++    )?;
+     // One region per embedded composite literal; the outer parse's element
+     // budget bounds how many there can be.
+     let mut budget = purrdf_cdt::MAX_ELEMENTS;
+     while let Some(region) = queue.pop() {
+         if budget == 0 {
++            release_region(region, memory)?;
+             break;
+         }
+         budget -= 1;
+-        scan_region(&region, &mut spans, &mut queue);
++        scan_region(&region, &mut spans, &mut queue, memory)?;
++        release_region(region, memory)?;
+     }
+     spans.sort_unstable_by_key(|span| span.start);
+     // A token located inside an embedded literal is nested INSIDE that
+     // literal's own IRIREF-bearing span only in the datatype case, which is
+     // scanned in the parent region; the label regions never overlap. Drop any
+     // span that would still overlap its predecessor rather than trust that.
++    let before = span_payload_bytes(&spans)?;
+     spans.dedup_by(|later, earlier| later.start < earlier.end);
+-    spans
++    let after = span_payload_bytes(&spans)?;
++    memory.release_bytes(
++        before
++            .checked_sub(after)
++            .ok_or(StorageError::SizeOverflow)?,
++    )?;
++    while let Some(region) = queue.pop() {
++        release_region(region, memory)?;
++    }
++    memory.release_vec(queue)?;
++    Ok(spans)
++}
++
++fn span_payload_bytes(spans: &[TokenSpan]) -> Result<usize, StorageError> {
++    spans.iter().try_fold(0usize, |total, span| {
++        total
++            .checked_add(match &span.kind {
++                TokenKind::Blank(text) => text.capacity(),
++                TokenKind::Iri { iri, .. } => iri.capacity(),
++            })
++            .ok_or(StorageError::SizeOverflow)
++    })
++}
++
++fn release_region<S: Admission + ?Sized>(
++    region: Region,
++    memory: &mut Memory<'_, S>,
++) -> Result<(), StorageError> {
++    memory.release_string(region.text)?;
++    memory.release_vec(region.map)
+ }
+ 
+ /// Scan one region, appending token spans and queueing the unescaped content of
+ /// every composite-typed literal it embeds.
+-fn scan_region(region: &Region, spans: &mut Vec<TokenSpan>, queue: &mut Vec<Region>) {
++fn scan_region<S: Admission + ?Sized>(
++    region: &Region,
++    spans: &mut Vec<TokenSpan>,
++    queue: &mut Vec<Region>,
++    memory: &mut Memory<'_, S>,
++) -> Result<(), StorageError> {
+     let bytes = region.text.as_bytes();
+     let mut i = 0usize;
+     while i < bytes.len() {
+@@ -630,20 +788,24 @@ fn scan_region(region: &Region, spans: &mut Vec<TokenSpan>, queue: &mut Vec<Regi
+                 if let Some(close) = close {
+                     // An element-position IRI: `iri_only` is false, because the
+                     // grammar admits a blank node in this very position.
+-                    push_iri_span(region, i, close, end, false, spans);
++                    push_iri_span(region, i, close, end, false, spans, memory)?;
+                 }
+                 i = end;
+             }
+-            b'"' | b'\'' => i = scan_string(region, i, spans, queue),
++            b'"' | b'\'' => i = scan_string(region, i, spans, queue, memory)?,
+             b'_' if bytes.get(i + 1) == Some(&b':') => {
+                 let label_start = i + 2;
+                 let end = scan_label_body(&region.text, label_start);
+                 if end > label_start {
+-                    spans.push(TokenSpan {
+-                        start: region.root_of(i),
+-                        end: region.root_of(end),
+-                        kind: TokenKind::Blank(region.text[label_start..end].to_owned()),
+-                    });
++                    let label = memory.string(&region.text[label_start..end])?;
++                    memory.push(
++                        spans,
++                        TokenSpan {
++                            start: region.root_of(i),
++                            end: region.root_of(end),
++                            kind: TokenKind::Blank(label),
++                        },
++                    )?;
+                 }
+                 i = end.max(label_start);
+             }
+@@ -653,6 +815,7 @@ fn scan_region(region: &Region, spans: &mut Vec<TokenSpan>, queue: &mut Vec<Regi
+             }
+         }
+     }
++    Ok(())
+ }
+ 
+ /// Scan an `IRIREF` opening at `start`, returning `(end, close)` — the offset
+@@ -702,33 +865,39 @@ fn scan_label_body(text: &str, start: usize) -> usize {
+ 
+ /// Record one `IRIREF` token: `open` is the `<`, `close` the `>`, `end` one past
+ /// the `>`.
+-fn push_iri_span(
++fn push_iri_span<S: Admission + ?Sized>(
+     region: &Region,
+     open: usize,
+     close: usize,
+     end: usize,
+     iri_only: bool,
+     spans: &mut Vec<TokenSpan>,
+-) {
+-    spans.push(TokenSpan {
+-        start: region.root_of(open),
+-        end: region.root_of(end),
+-        kind: TokenKind::Iri {
+-            iri: expand_uchars(&region.text[open + 1..close]).into_owned(),
+-            iri_only,
++    memory: &mut Memory<'_, S>,
++) -> Result<(), StorageError> {
++    let iri = match expand_uchars_with_memory(&region.text[open + 1..close], memory)? {
++        Cow::Borrowed(text) => memory.string(text)?,
++        Cow::Owned(text) => text,
++    };
++    memory.push(
++        spans,
++        TokenSpan {
++            start: region.root_of(open),
++            end: region.root_of(end),
++            kind: TokenKind::Iri { iri, iri_only },
+         },
+-    });
++    )
+ }
+ 
+ /// Scan a quoted string opening at `start`, queueing its unescaped content when
+ /// a `^^` datatype marks it as an embedded composite literal. Returns the offset
+ /// just past the literal (including any datatype or language tag).
+-fn scan_string(
++fn scan_string<S: Admission + ?Sized>(
+     region: &Region,
+     start: usize,
+     spans: &mut Vec<TokenSpan>,
+     queue: &mut Vec<Region>,
+-) -> usize {
++    memory: &mut Memory<'_, S>,
++) -> Result<usize, StorageError> {
+     let bytes = region.text.as_bytes();
+     let quote = bytes[start];
+     let long = region.text[start..].starts_with(if quote == b'"' { "\"\"\"" } else { "'''" });
+@@ -760,39 +929,53 @@ fn scan_string(
+         i += 1;
+     }
+     if after >= bytes.len() {
+-        return bytes.len();
++        return Ok(bytes.len());
+     }
+ 
+     // `String (LANGTAG | '^^' IRIREF)?` — only the typed form can be composite.
+     if !region.text[after..].starts_with("^^") {
+-        return after;
++        return Ok(after);
+     }
+     let iri_start = after + 2;
+     if bytes.get(iri_start) != Some(&b'<') {
+-        return iri_start;
++        return Ok(iri_start);
+     }
+     let (iri_end, close) = scan_iriref(bytes, iri_start);
+     let Some(close) = close else {
+-        return iri_end;
++        return Ok(iri_end);
+     };
+     // An IRIREF body's `UCHAR` escapes decoded, so a datatype written with them
+     // still compares equal to the composite IRIs.
+-    let datatype = expand_uchars(&region.text[iri_start + 1..close]);
++    let datatype = expand_uchars_with_memory(&region.text[iri_start + 1..close], memory)?;
+     if is_cdt_datatype(&datatype) {
+-        queue.push(unescaped_region(region, content_start, content_end));
++        let nested = unescaped_region(region, content_start, content_end, memory)?;
++        memory.push(queue, nested)?;
++    }
++    if let Cow::Owned(datatype) = datatype {
++        memory.release_string(datatype)?;
+     }
+     // A literal's datatype can never be a blank node, so a rewriter that mints
+     // blanks from IRIs must refuse here rather than write an invalid literal.
+-    push_iri_span(region, iri_start, close, iri_end, true, spans);
+-    iri_end
++    push_iri_span(region, iri_start, close, iri_end, true, spans, memory)?;
++    Ok(iri_end)
+ }
+ 
+ /// Build the scan region for an embedded composite literal: its content
+ /// unescaped, plus the root offset of every resulting byte.
+-fn unescaped_region(region: &Region, content_start: usize, content_end: usize) -> Region {
++fn unescaped_region<S: Admission + ?Sized>(
++    region: &Region,
++    content_start: usize,
++    content_end: usize,
++    memory: &mut Memory<'_, S>,
++) -> Result<Region, StorageError> {
+     let raw = &region.text[content_start..content_end];
+-    let mut text = String::with_capacity(raw.len());
+-    let mut map = Vec::with_capacity(raw.len() + 1);
++    let mut text = String::new();
++    let mut map = Vec::new();
++    memory.reserve_string(&mut text, raw.len())?;
++    memory.reserve(
++        &mut map,
++        raw.len().checked_add(1).ok_or(StorageError::SizeOverflow)?,
++    )?;
+     let bytes = raw.as_bytes();
+     let mut i = 0usize;
+     while i < bytes.len() {
+@@ -804,21 +987,21 @@ fn unescaped_region(region: &Region, content_start: usize, content_end: usize) -
+                 // Every byte an escape produces points at the escape's opening
+                 // backslash: a label never rides in an escape, so this offset is
+                 // only ever consulted for bytes that are not part of a label.
+-                map.push(root);
++                memory.push(&mut map, root)?;
+             }
+-            text.push(ch);
++            memory.push_char(&mut text, ch)?;
+             i += width;
+         } else {
+             let ch = raw[i..].chars().next().unwrap_or('\u{fffd}');
+             for k in 0..ch.len_utf8() {
+-                map.push(root + k);
++                memory.push(&mut map, root + k)?;
+             }
+             text.push(ch);
+             i += ch.len_utf8();
+         }
+     }
+-    map.push(region.root_of(content_end));
+-    Region { text, map }
++    memory.push(&mut map, region.root_of(content_end))?;
++    Ok(Region { text, map })
+ }
+ 
+ /// Decode one escape sequence at `at`, returning the scalar and the raw width
+diff --git a/crates/rdf-core/tests/cdt_blank_storage.rs b/crates/rdf-core/tests/cdt_blank_storage.rs
+new file mode 100644
+index 000000000..6fa59d48f
+--- /dev/null
++++ b/crates/rdf-core/tests/cdt_blank_storage.rs
+@@ -0,0 +1,235 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Actual allocation measurements for composite blank-label ingress and decoding.
++
++use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
++use purrdf_core::BlankScope;
++use purrdf_core::blank_label::{
++    LabelAlphabet, decode_blank_label, decode_blank_label_with_memory, encode_blank_label,
++};
++use purrdf_core::cdt_blank::{
++    BlankBinding, bind_cdt_blank_labels_unchecked, bind_cdt_blank_labels_unchecked_with_memory,
++};
++use purrdf_lex::allocation::{Admission, Memory, StorageError};
++use std::borrow::Cow;
++
++#[global_allocator]
++static GLOBAL: CountingAllocator = CountingAllocator;
++
++#[derive(Debug)]
++struct Account {
++    limit: usize,
++    live: usize,
++    peak: usize,
++    refused: Option<usize>,
++}
++impl Account {
++    const fn new(limit: usize) -> Self {
++        Self {
++            limit,
++            live: 0,
++            peak: 0,
++            refused: None,
++        }
++    }
++}
++impl Admission for Account {
++    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
++        if live > self.limit {
++            self.refused = Some(live);
++            return Err(StorageError::AdmissionFailed);
++        }
++        self.live = live;
++        self.peak = self.peak.max(live);
++        Ok(())
++    }
++}
++
++fn nested_fixture() -> String {
++    let encoded = encode_blank_label("a é.b", BlankScope(29), LabelAlphabet::BlankNodeLabel);
++    // Escaped datatypes and escaped content exercise decoding and root maps.
++    let inner = format!("[_:{encoded}, _:plain, <urn:\\u00e9>]");
++    let quoted = inner.replace('\\', "\\\\").replace('\'', "\\'");
++    format!(
++        "[_:root, '{quoted}'^^<{}>, <<( _:s <urn:p> _:o )>>]",
++        purrdf_cdt::CDT_LIST.replace("List", "Li\\u0073t"),
++    )
++}
++
++#[test]
++fn nested_binding_peak_and_surviving_output_use_original_admission() {
++    let input = nested_fixture();
++    for binding in [
++        BlankBinding::Ambient(BlankScope(7)),
++        BlankBinding::Decoded(LabelAlphabet::BlankNodeLabel),
++    ] {
++        let expected = bind_cdt_blank_labels_unchecked(&input, purrdf_cdt::CDT_LIST, binding);
++        let mut account = Account::new(2_000_000);
++        let window = CurrentThreadWindow::open();
++        let mut memory = Memory::new(&mut account);
++        let output = bind_cdt_blank_labels_unchecked_with_memory(
++            &input,
++            purrdf_cdt::CDT_LIST,
++            binding,
++            &mut memory,
++        )
++        .unwrap();
++        let retained = memory.live_bytes();
++        let measured = window.close();
++        assert_eq!(output.as_ref(), expected.as_ref());
++        assert_eq!(usize::try_from(measured.retained_bytes).unwrap(), retained);
++        let capacity = match &output {
++            Cow::Owned(text) => text.capacity(),
++            Cow::Borrowed(_) => 0,
++        };
++        assert_eq!(retained, capacity, "only the original destination survives");
++        let end = CurrentThreadWindow::open();
++        if let Cow::Owned(text) = output {
++            memory.release_string(text).unwrap();
++        }
++        assert_eq!(memory.live_bytes(), 0);
++        drop(memory);
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
++        assert_eq!(
++            end.close().retained_bytes,
++            -(i64::try_from(capacity).unwrap())
++        );
++    }
++}
++
++#[test]
++fn plain_and_non_composite_binding_preserve_borrowed_bytes() {
++    for (input, datatype) in [
++        ("[_:plain, _:é]", purrdf_cdt::CDT_LIST),
++        ("anything _:label", "urn:ordinary"),
++        ("['[_:hidden]'@en, _:visible]", purrdf_cdt::CDT_LIST),
++        ("[unterminated <iri _:ignored", purrdf_cdt::CDT_LIST),
++    ] {
++        let binding = BlankBinding::Decoded(LabelAlphabet::BlankNodeLabel);
++        let expected = bind_cdt_blank_labels_unchecked(input, datatype, binding);
++        let mut account = Account::new(100_000);
++        let window = CurrentThreadWindow::open();
++        let mut memory = Memory::new(&mut account);
++        let output =
++            bind_cdt_blank_labels_unchecked_with_memory(input, datatype, binding, &mut memory)
++                .unwrap();
++        assert_eq!(output, expected);
++        assert!(matches!(output, Cow::Borrowed(_)));
++        assert_eq!(memory.live_bytes(), 0);
++        let measured = window.close();
++        drop(memory);
++        assert_eq!(measured.retained_bytes, 0);
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
++        if datatype == "urn:ordinary" {
++            assert_eq!(measured.allocations, 0);
++        }
++    }
++}
++
++#[test]
++fn physical_refusals_never_become_unmodified_composite_success() {
++    let input = nested_fixture().repeat(16);
++    let mut healthy = Account::new(2_000_000);
++    let output = bind_cdt_blank_labels_unchecked_with_memory(
++        &input,
++        purrdf_cdt::CDT_LIST,
++        BlankBinding::Ambient(BlankScope(8)),
++        &mut Memory::new(&mut healthy),
++    )
++    .unwrap();
++    drop(output);
++    for limit in [0, input.len(), input.len() + 128, healthy.peak - 1] {
++        let mut account = Account::new(limit);
++        let window = CurrentThreadWindow::open();
++        let failure = {
++            let mut memory = Memory::new(&mut account);
++            bind_cdt_blank_labels_unchecked_with_memory(
++                &input,
++                purrdf_cdt::CDT_LIST,
++                BlankBinding::Ambient(BlankScope(8)),
++                &mut memory,
++            )
++            .unwrap_err()
++        };
++        let measured = window.close();
++        assert_eq!(failure, StorageError::AdmissionFailed);
++        assert!(account.refused.unwrap() > limit);
++        assert!(account.peak <= limit);
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
++        assert_eq!(measured.retained_bytes, 0);
++    }
++}
++
++#[test]
++fn decoder_image_scratch_dies_before_publication_and_refusal_is_typed() {
++    let token = encode_blank_label(
++        &"x é._".repeat(512),
++        BlankScope(u32::MAX),
++        LabelAlphabet::BlankNodeLabel,
++    )
++    .into_owned();
++    let expected = decode_blank_label(&token, LabelAlphabet::BlankNodeLabel);
++    let mut account = Account::new(100_000);
++    let window = CurrentThreadWindow::open();
++    let mut memory = Memory::new(&mut account);
++    let (label, scope) =
++        decode_blank_label_with_memory(&token, LabelAlphabet::BlankNodeLabel, &mut memory).unwrap();
++    assert_eq!((label.as_ref(), scope), (expected.0.as_ref(), expected.1));
++    let measured = window.close();
++    let Cow::Owned(label) = label else {
++        panic!("canonical envelope must decode");
++    };
++    assert_eq!(memory.live_bytes(), label.capacity());
++    assert_eq!(
++        usize::try_from(measured.retained_bytes).unwrap(),
++        label.capacity()
++    );
++    memory.release_string(label).unwrap();
++    assert_eq!(memory.live_bytes(), 0);
++    drop(memory);
++    assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
++    for limit in [0, token.len() / 2, token.len(), account.peak - 1] {
++        let mut account = Account::new(limit);
++        let window = CurrentThreadWindow::open();
++        let failure = decode_blank_label_with_memory(
++            &token,
++            LabelAlphabet::BlankNodeLabel,
++            &mut Memory::new(&mut account),
++        )
++        .unwrap_err();
++        let measured = window.close();
++        assert_eq!(failure, StorageError::AdmissionFailed);
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
++        assert_eq!(measured.retained_bytes, 0);
++    }
++}
++
++#[test]
++fn malformed_and_non_image_envelopes_keep_identity_and_release_scratch() {
++    for token in [
++        "plain",
++        "purrdfesc_abc",
++        "purrdfesc01_abc",
++        "purrdfesc9__00d800",
++        "purrdfesc9__00D800",
++        "purrdfesc9__FFFFFF",
++        "purrdfesc9__00005",
++        "purrdfesc9_a!",
++    ] {
++        let expected = decode_blank_label(token, LabelAlphabet::BlankNodeLabel);
++        let mut account = Account::new(10_000);
++        let window = CurrentThreadWindow::open();
++        let mut memory = Memory::new(&mut account);
++        let result =
++            decode_blank_label_with_memory(token, LabelAlphabet::BlankNodeLabel, &mut memory)
++                .unwrap();
++        assert_eq!(result, expected);
++        assert!(matches!(result.0, Cow::Borrowed(_)));
++        assert_eq!(memory.live_bytes(), 0);
++        let measured = window.close();
++        drop(memory);
++        assert_eq!(measured.retained_bytes, 0);
++        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak);
++    }
++}

@@ -1,0 +1,847 @@
+diff --git a/crates/xsd/src/bigint.rs b/crates/xsd/src/bigint.rs
+--- a/crates/xsd/src/bigint.rs
++++ b/crates/xsd/src/bigint.rs
+@@ -172,7 +172,10 @@
+         // for coordinate arithmetic, where operands are small integers.
+         return Ok(mag_from_u128(u128::from(x) * u128::from(y)));
+     }
+-    let mut out: Mag = storage.destination(a.len() + b.len(), a.len() + b.len())?;
++    let mut out: Mag = storage.destination(
++        a.len().checked_add(b.len()).ok_or(LimbScratchError::SizeOverflow)?,
++        a.len().checked_add(b.len()).ok_or(LimbScratchError::SizeOverflow)?,
++    )?;
+     write_mul(a, b, &mut out);
+     mag_trim(&mut out);
+     Ok(out)
+@@ -244,7 +247,7 @@
+     addend: u64,
+     storage: &impl Allocate,
+ ) -> Result<Mag, LimbScratchError> {
+-    let mut out: Mag = storage.destination(a.len() + 1, 0)?;
++    let mut out: Mag = storage.destination(a.len().checked_add(1).ok_or(LimbScratchError::SizeOverflow)?, 0)?;
+     let mut carry = u128::from(addend);
+     for &limb in a {
+         let cur = u128::from(limb) * u128::from(multiplier) + carry;
+@@ -306,13 +309,12 @@
+     if a.is_empty() {
+         return Ok(Mag::new());
+     }
+-    let limb_shift = (bits / 64) as usize;
++    let limb_shift = usize::try_from(bits / 64).map_err(|_| LimbScratchError::SizeOverflow)?;
+     let bit_shift = (bits % 64) as u32;
+     let carry = bit_shift != 0 && a[a.len() - 1] >> (64 - bit_shift) != 0;
+-    let mut out = storage.destination(
+-        a.len() + limb_shift + usize::from(carry),
+-        a.len() + limb_shift + usize::from(carry),
+-    )?;
++    let length = a.len().checked_add(limb_shift)
++        .and_then(|n| n.checked_add(usize::from(carry))).ok_or(LimbScratchError::SizeOverflow)?;
++    let mut out = storage.destination(length, length)?;
+     write_shl(a, bit_shift, &mut out[limb_shift..]);
+     Ok(out)
+ }
+@@ -462,7 +464,8 @@
+         mag_shr_in_place(&mut remainder, u64::from(shift));
+         return Ok((quotient, remainder));
+     }
+-    let mut numerator = storage.destination(a.len() + 1, a.len() + 1)?;
++    let length = a.len().checked_add(1).ok_or(LimbScratchError::SizeOverflow)?;
++    let mut numerator = storage.destination(length, length)?;
+     let mut divisor = storage.destination(b.len(), b.len())?;
+     let mut quotient = storage.destination(quotient_length, quotient_length)?;
+     write_shl(a, shift, &mut numerator);
+@@ -579,6 +582,59 @@
+ // BigInt
+ // ---------------------------------------------------------------------------
+ 
++/// Prepared decimal groups from the native 10^19 conversion, with no lexical String.
++/// Callers retain their admitted render frame while this temporary is alive.
++pub struct PreparedDecimalDigits {
++    negative: bool,
++    groups: Mag,
++    digits: usize,
++}
++
++impl PreparedDecimalDigits {
++    /// Exact unsigned coefficient length, available before output allocation.
++    #[must_use]
++    pub const fn digits_len(&self) -> usize { self.digits }
++    /// Sign of the original value.
++    #[must_use]
++    pub const fn is_negative(&self) -> bool { self.negative }
++    /// Exact signed text length.
++    #[must_use]
++    pub fn len(&self) -> usize { self.digits + usize::from(self.negative) }
++    /// Decimal text is never empty.
++    #[must_use]
++    pub const fn is_empty(&self) -> bool { false }
++    /// Actual temporary group capacity that remains live after conversion.
++    #[must_use]
++    pub fn heap_bytes(&self) -> usize { self.groups.allocated_bytes() }
++
++    pub(crate) fn write_unsigned<W: fmt::Write + ?Sized>(&self, out: &mut W) -> fmt::Result {
++        let mut groups = self.groups.iter().rev();
++        let leading = groups.next().expect("prepared zero includes one group");
++        write!(out, "{leading}")?;
++        for group in groups { write!(out, "{group:019}")?; }
++        Ok(())
++    }
++
++    pub(crate) fn write_fmt<W: fmt::Write + ?Sized>(&self, out: &mut W) -> fmt::Result {
++        if self.negative { out.write_str("-")?; }
++        self.write_unsigned(out)
++    }
++
++    /// Append the complete lexical without growing a caller-owned String.
++    /// # Errors
++    /// Refuses all insufficient capacity before the first output write.
++    pub fn write_to(&self, out: &mut String) -> Result<(), crate::numeric::NumericRenderError> {
++        let available = out.capacity() - out.len();
++        if self.len() > available {
++            return Err(crate::numeric::NumericRenderError::DestinationTooSmall {
++                required_bytes: self.len(), available_bytes: available,
++            });
++        }
++        self.write_fmt(out).expect("prepared digits fit the checked String capacity");
++        Ok(())
++    }
++}
++
+ /// An arbitrary-precision signed integer.
+ ///
+ /// The magnitude is little-endian base-2<sup>64</sup> with no trailing zero
+@@ -657,6 +713,25 @@
+         }
+     }
+ 
++    /// Copy an operand through the selected native destination seam.
++    pub(crate) fn copy_using(&self, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
++        Ok(Self::from_parts(self.negative, storage.copy(&self.magnitude)?))
++    }
++
++    pub(crate) fn abs_using(&self, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
++        Ok(self.copy_using(storage)?.with_sign(false))
++    }
++
++    pub(crate) fn neg_using(&self, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
++        Ok(self.copy_using(storage)?.with_sign(!self.negative))
++    }
++
++    /// Change only the sign of an owned magnitude; no clone or allocation.
++    pub(crate) fn with_sign(mut self, negative: bool) -> Self {
++        self.negative = negative && !self.magnitude.is_empty();
++        self
++    }
++
+     /// Returns the absolute value.
+     #[must_use]
+     pub fn abs(&self) -> Self {
+@@ -831,7 +906,7 @@
+         self.gcd_using(other, scratch)
+     }
+ 
+-    fn gcd_using(&self, other: &Self, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
++    pub(crate) fn gcd_using(&self, other: &Self, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
+         Ok(Self::from_parts(
+             false,
+             mag_gcd(&self.magnitude, &other.magnitude, storage)?,
+@@ -1303,6 +1378,48 @@
+         }
+     }
+ 
++    /// Checked native temporary/destination layout for decimal rendering.
++    /// # Errors
++    /// Refuses addressable byte overflow before any conversion allocation.
++    pub fn decimal_render_layout(
++        &self, scale: u32,
++    ) -> Result<crate::exact::cost::NumericRenderLayout, LimbScratchError> {
++        crate::exact::cost::numeric_render_layout(
++            self.bit_len(), self.limb_len(), scale, self.negative,
++        )
++    }
++
++    /// Convert through the existing division kernel into admitted decimal groups.
++    /// No source magnitude clone or lexical String is constructed.
++    /// # Errors
++    /// Returns checked layout or physical native destination refusal.
++    pub fn prepare_decimal_digits(&self) -> Result<PreparedDecimalDigits, LimbScratchError> {
++        let layout = self.decimal_render_layout(0)?;
++        let storage = scratch::Fallible;
++        let mut groups = storage.destination(layout.group_capacity(), 0)?;
++        if self.is_zero() {
++            storage.push(&mut groups, 0)?;
++        } else {
++            let mut quotient: Option<Mag> = None;
++            loop {
++                let current: &[u64] = quotient.as_ref().map_or(&self.magnitude, |value| value);
++                if current.is_empty() { break; }
++                let (next, remainder) = mag_divmod_small(current, CHUNK_BASE, &storage)?;
++                storage.push(&mut groups, remainder)?;
++                quotient = Some(next);
++            }
++        }
++        let leading = groups.last().copied().expect("zero includes one group");
++        let leading_digits = if leading == 0 { 1 } else {
++            usize::try_from(leading.ilog10()).map_err(|_| LimbScratchError::SizeOverflow)? + 1
++        };
++        let digits = groups.len().checked_sub(1)
++            .and_then(|n| n.checked_mul(DECIMAL_CHUNK))
++            .and_then(|n| n.checked_add(leading_digits)).ok_or(LimbScratchError::SizeOverflow)?;
++        digits.checked_add(usize::from(self.negative)).ok_or(LimbScratchError::SizeOverflow)?;
++        Ok(PreparedDecimalDigits { negative: self.negative, groups, digits })
++    }
++
+     /// Builds a value from a sign flag and a magnitude, restoring the invariant.
+     fn from_parts(negative: bool, mut magnitude: Mag) -> Self {
+         mag_trim(&mut magnitude);
+@@ -1414,27 +1531,7 @@
+     /// Writes the canonical decimal form: a `-` only when negative, no leading
+     /// zeros, and `0` for zero.
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        if self.magnitude.is_empty() {
+-            return f.write_str("0");
+-        }
+-        let mut groups = Mag::new();
+-        let mut cur = self.magnitude.clone();
+-        while !cur.is_empty() {
+-            let (q, r) =
+-                mag_divmod_small(&cur, CHUNK_BASE, &Unbounded).expect("unbounded integer storage");
+-            groups.push(r);
+-            cur = q;
+-        }
+-        if self.negative {
+-            f.write_str("-")?;
+-        }
+-        let mut rest = groups.iter().rev();
+-        let leading = rest.next().expect("a non-zero magnitude has a group");
+-        write!(f, "{leading}")?;
+-        for group in rest {
+-            write!(f, "{group:019}")?;
+-        }
+-        Ok(())
++        self.prepare_decimal_digits().map_err(|_| fmt::Error)?.write_fmt(f)
+     }
+ }
+ 
+diff --git a/crates/xsd/src/bigint/compat.rs b/crates/xsd/src/bigint/compat.rs
+--- a/crates/xsd/src/bigint/compat.rs
++++ b/crates/xsd/src/bigint/compat.rs
+@@ -215,22 +215,30 @@
+     /// Schoolbook small products and recursive Karatsuba large products.
+     #[must_use]
+     pub fn mul_fast(&self, other: &Self) -> Self {
++        self.mul_fast_using(other, &super::Unbounded).expect("unbounded integer storage")
++    }
++
++    /// The same Karatsuba/schoolbook implementation with explicit destinations.
++    pub(crate) fn mul_fast_using(
++        &self, other: &Self, storage: &impl super::Allocate,
++    ) -> Result<Self, super::LimbScratchError> {
++        use super::LimbScratchError::SizeOverflow;
+         if self.limb_len().min(other.limb_len()) < KARATSUBA_THRESHOLD {
+-            return self
+-                .mul_using(other, &super::Unbounded)
+-                .expect("unbounded integer storage");
++            return self.mul_using(other, storage);
+         }
+         let split = self.limb_len().max(other.limb_len()) / 2;
+         let (long, short) = if self.limb_len() >= other.limb_len() {
+             (self, other)
+-        } else {
+-            (other, self)
+-        };
++        } else { (other, self) };
+         if short.limb_len() <= split {
+-            let mut output = Mag::zeroed(long.limb_len() + short.limb_len() + 1);
++            let length = long.limb_len().checked_add(short.limb_len())
++                .and_then(|n| n.checked_add(1)).ok_or(SizeOverflow)?;
++            let mut output = storage.destination(length, length)?;
+             for (piece_index, words) in long.magnitude.chunks(short.limb_len()).enumerate() {
+-                let piece = Self::from_parts(false, Mag::from_slice(words)).mul_fast(&short.abs());
+-                let offset = piece_index * short.limb_len();
++                let left = Self::from_parts(false, storage.copy(words)?);
++                let right = short.abs_using(storage)?;
++                let piece = left.mul_fast_using(&right, storage)?;
++                let offset = piece_index.checked_mul(short.limb_len()).ok_or(SizeOverflow)?;
+                 let mut carry = 0_u128;
+                 let mut at = offset;
+                 for &word in piece.magnitude.iter() {
+@@ -247,44 +255,37 @@
+                 }
+             }
+             super::mag_trim(&mut output);
+-            return Self::from_parts(self.is_negative() != other.is_negative(), output);
++            return Ok(Self::from_parts(self.is_negative() != other.is_negative(), output));
+         }
+-        let parts = |value: &Self| {
++        let parts = |value: &Self| -> Result<(Self, Self), super::LimbScratchError> {
+             let middle = split.min(value.limb_len());
+-            (
+-                Self::from_parts(false, Mag::from_slice(&value.magnitude[..middle])),
+-                Self::from_parts(false, Mag::from_slice(&value.magnitude[middle..])),
+-            )
++            Ok((
++                Self::from_parts(false, storage.copy(&value.magnitude[..middle])?),
++                Self::from_parts(false, storage.copy(&value.magnitude[middle..])?),
++            ))
+         };
+-        let (a0, a1) = parts(self);
+-        let (b0, b1) = parts(other);
+-        let z0 = a0.mul_fast(&b0);
+-        let z2 = a1.mul_fast(&b1);
+-        let z1 = a0.add(&a1).mul_fast(&b0.add(&b1)).sub(&z0).sub(&z2);
+-        let shift = u64::try_from(split)
+-            .expect("limb count fits u64")
+-            .checked_mul(64)
+-            .expect("product shift fits u64");
+-        let shifted_middle = Self::from_parts(
+-            false,
+-            super::mag_shl(&z1.magnitude, shift, &super::Unbounded)
+-                .expect("unbounded integer storage"),
+-        );
+-        let shifted_high = Self::from_parts(
+-            false,
+-            super::mag_shl(
+-                &z2.magnitude,
+-                shift.checked_mul(2).expect("product shift fits u64"),
+-                &super::Unbounded,
+-            )
+-            .expect("unbounded integer storage"),
+-        );
+-        let magnitude = z0.add(&shifted_middle).add(&shifted_high);
+-        if self.is_negative() != other.is_negative() {
+-            magnitude.negated()
+-        } else {
+-            magnitude
+-        }
++        let (a0, a1) = parts(self)?;
++        let (b0, b1) = parts(other)?;
++        let z0 = a0.mul_fast_using(&b0, storage)?;
++        let z2 = a1.mul_fast_using(&b1, storage)?;
++        let left_sum = a0.add_using(&a1, storage)?;
++        let right_sum = b0.add_using(&b1, storage)?;
++        let middle_product = left_sum.mul_fast_using(&right_sum, storage)?;
++        let first_difference = middle_product.sub_using(&z0, storage)?;
++        drop(middle_product);
++        let z1 = first_difference.sub_using(&z2, storage)?;
++        drop(first_difference);
++        drop(left_sum);
++        drop(right_sum);
++        let shift = u64::try_from(split).map_err(|_| SizeOverflow)?
++            .checked_mul(64).ok_or(SizeOverflow)?;
++        let shifted_middle = Self::from_parts(false, super::mag_shl(&z1.magnitude, shift, storage)?);
++        let shifted_high = Self::from_parts(false, super::mag_shl(
++            &z2.magnitude, shift.checked_mul(2).ok_or(SizeOverflow)?, storage,
++        )?);
++        let lower = z0.add_using(&shifted_middle, storage)?;
++        let magnitude = lower.add_using(&shifted_high, storage)?;
++        Ok(magnitude.with_sign(self.is_negative() != other.is_negative()))
+     }
+ }
+ 
+diff --git a/crates/xsd/src/exact/integer.rs b/crates/xsd/src/exact/integer.rs
+--- a/crates/xsd/src/exact/integer.rs
++++ b/crates/xsd/src/exact/integer.rs
+@@ -55,6 +55,112 @@
+             .map_or(Self(Repr::Big(value)), |small| Self(Repr::Small(small)))
+     }
+ 
++    /// Borrow a spilled magnitude; machine coefficients construct only inline limbs.
++    fn with_bigint<T>(&self, use_value: impl FnOnce(&BigInt) -> T) -> T {
++        match &self.0 {
++            Repr::Small(value) => use_value(&BigInt::from_i128(*value)),
++            Repr::Big(value) => use_value(value),
++        }
++    }
++
++    pub(crate) fn copy_using(
++        &self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        match &self.0 {
++            Repr::Small(value) => Ok(Self::from_i128(*value)),
++            Repr::Big(value) => value.copy_using(storage).map(Self::from_bigint),
++        }
++    }
++
++    pub(crate) fn abs_using(
++        &self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        if self.is_negative() { self.neg_using(storage) } else { self.copy_using(storage) }
++    }
++
++    pub(crate) fn neg_using(
++        &self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        if let Some(value) = self.as_i128() && let Some(value) = value.checked_neg() {
++            return Ok(Self::from_i128(value));
++        }
++        self.with_bigint(|value| value.neg_using(storage)).map(Self::from_bigint)
++    }
++
++    pub(crate) fn add_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        if let (Some(a), Some(b)) = (self.as_i128(), rhs.as_i128())
++            && let Some(value) = a.checked_add(b) { return Ok(Self::from_i128(value)); }
++        self.with_bigint(|a| rhs.with_bigint(|b| a.add_using(b, storage)))
++            .map(Self::from_bigint)
++    }
++
++    pub(crate) fn sub_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        if let (Some(a), Some(b)) = (self.as_i128(), rhs.as_i128())
++            && let Some(value) = a.checked_sub(b) { return Ok(Self::from_i128(value)); }
++        self.with_bigint(|a| rhs.with_bigint(|b| a.sub_using(b, storage)))
++            .map(Self::from_bigint)
++    }
++
++    pub(crate) fn mul_using(
++        &self, rhs: &Self, storage: &impl crate::bigint::scratch::Allocate,
++    ) -> Result<Self, crate::bigint::LimbScratchError> {
++        if let (Some(a), Some(b)) = (self.as_i128(), rhs.as_i128())
++            && let Some(value) = a.checked_mul(b) { return Ok(Self::from_i128(value)); }
++        self.with_bigint(|a| rhs.with_bigint(|b| a.mul_fast_using(b, storage)))
++            .map(Self::from_bigint)
++    }
++
++    /// Add using fallible destinations in the existing native kernel.
++    /// # Errors
++    /// Returns physical destination refusal separately from numerical errors.
++    pub fn try_add(&self, rhs: &Self) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.add_using(rhs, &crate::bigint::scratch::Fallible)
++    }
++
++    /// Subtract using fallible destinations in the existing native kernel.
++    /// # Errors
++    /// Returns physical destination refusal without infallible fallback.
++    pub fn try_sub(&self, rhs: &Self) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.sub_using(rhs, &crate::bigint::scratch::Fallible)
++    }
++
++    /// Multiply through the same schoolbook/Karatsuba implementation.
++    /// # Errors
++    /// Returns physical destination refusal without infallible fallback.
++    pub fn try_mul(&self, rhs: &Self) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.mul_using(rhs, &crate::bigint::scratch::Fallible)
++    }
++
++    /// Negate into a fallible fresh native destination.
++    /// # Errors
++    /// Returns physical destination refusal without cloning owned limbs.
++    pub fn try_neg(&self) -> Result<Self, crate::bigint::LimbScratchError> {
++        self.neg_using(&crate::bigint::scratch::Fallible)
++    }
++
++    /// Actual checked native destination bound; governor fuel stays separate.
++    /// # Errors
++    /// Refuses physical address-space arithmetic overflow before allocation.
++    pub fn operation_layout(
++        &self, rhs: &Self, op: cost::IntegerOperation,
++    ) -> Result<cost::NumericOperationLayout, crate::bigint::LimbScratchError> {
++        if let (Some(a), Some(b)) = (self.as_i128(), rhs.as_i128()) {
++            let inline = match op {
++                cost::IntegerOperation::Add => a.checked_add(b),
++                cost::IntegerOperation::Subtract => a.checked_sub(b),
++                cost::IntegerOperation::Multiply => a.checked_mul(b),
++            };
++            if inline.is_some() { return Ok(cost::NumericOperationLayout::INLINE); }
++        }
++        cost::integer_operation_layout(
++            self.limb_len(), rhs.limb_len(), self.is_negative(), rhs.is_negative(), op,
++        )
++    }
++
+     /// The value as a [`BigInt`]; inline values convert without allocating.
+     #[must_use]
+     pub fn to_bigint(&self) -> BigInt {
+@@ -73,6 +179,24 @@
+         }
+     }
+ 
++    /// Prepare the one native decimal renderer without a magnitude clone.
++    /// # Errors
++    /// Returns native physical destination refusal before lexical allocation.
++    pub fn prepare_decimal_digits(
++        &self,
++    ) -> Result<crate::bigint::PreparedDecimalDigits, crate::bigint::LimbScratchError> {
++        self.with_bigint(BigInt::prepare_decimal_digits)
++    }
++
++    /// Checked render layout including sign, point and fractional padding.
++    /// # Errors
++    /// Returns physical address-space overflow without allocation.
++    pub fn render_layout(
++        &self, scale: u32,
++    ) -> Result<cost::NumericRenderLayout, crate::bigint::LimbScratchError> {
++        self.with_bigint(|value| value.decimal_render_layout(scale))
++    }
++
+     /// The XSD 1.1 canonical `xsd:integer` lexical form: an optional `-`, then
+     /// digits with no leading zero (`"0"` for zero).
+     #[must_use]
+@@ -393,10 +517,6 @@
+         cost::gcd(self.limb_len(), other.limb_len())
+     }
+ 
+-    /// Both operands as [`BigInt`]s, for the slow path.
+-    fn big_pair(&self, other: &Self) -> (BigInt, BigInt) {
+-        (self.to_bigint(), other.to_bigint())
+-    }
+ }
+ 
+ impl Default for Integer {
+@@ -546,26 +666,16 @@
+ impl Add<&Integer> for &Integer {
+     type Output = Integer;
+     fn add(self, rhs: &Integer) -> Integer {
+-        if let (Repr::Small(a), Repr::Small(b)) = (&self.0, &rhs.0)
+-            && let Some(sum) = a.checked_add(*b)
+-        {
+-            return Integer::from_i128(sum);
+-        }
+-        let (a, b) = self.big_pair(rhs);
+-        Integer::from_bigint(&a + &b)
++        self.add_using(rhs, &crate::bigint::scratch::Unbounded)
++            .expect("unbounded integer storage")
+     }
+ }
+ 
+ impl Sub<&Integer> for &Integer {
+     type Output = Integer;
+     fn sub(self, rhs: &Integer) -> Integer {
+-        if let (Repr::Small(a), Repr::Small(b)) = (&self.0, &rhs.0)
+-            && let Some(difference) = a.checked_sub(*b)
+-        {
+-            return Integer::from_i128(difference);
+-        }
+-        let (a, b) = self.big_pair(rhs);
+-        Integer::from_bigint(&a - &b)
++        self.sub_using(rhs, &crate::bigint::scratch::Unbounded)
++            .expect("unbounded integer storage")
+     }
+ }
+ 
+@@ -575,33 +685,16 @@
+     // the existing binary engine without imposing its temporary frame here.
+     #[inline]
+     fn mul(self, rhs: &Integer) -> Integer {
+-        if let (Repr::Small(a), Repr::Small(b)) = (&self.0, &rhs.0)
+-            && let Some(product) = a.checked_mul(*b)
+-        {
+-            return Integer::from_i128(product);
+-        }
+-        self.mul_big(rhs)
+-    }
+-}
+-
+-impl Integer {
+-    #[cold]
+-    fn mul_big(&self, rhs: &Self) -> Self {
+-        let (a, b) = self.big_pair(rhs);
+-        Self::from_bigint(&a * &b)
++        self.mul_using(rhs, &crate::bigint::scratch::Unbounded)
++            .expect("unbounded integer storage")
+     }
+ }
+ 
+ impl Neg for &Integer {
+     type Output = Integer;
+     fn neg(self) -> Integer {
+-        match &self.0 {
+-            Repr::Small(value) => value.checked_neg().map_or_else(
+-                || Integer::from_bigint(BigInt::from_i128(*value).negated()),
+-                Integer::from_i128,
+-            ),
+-            Repr::Big(value) => Integer::from_bigint(value.negated()),
+-        }
++        self.neg_using(&crate::bigint::scratch::Unbounded)
++            .expect("unbounded integer storage")
+     }
+ }
+ 
+diff --git a/crates/xsd/src/exact/decimal.rs b/crates/xsd/src/exact/decimal.rs
+--- a/crates/xsd/src/exact/decimal.rs
++++ b/crates/xsd/src/exact/decimal.rs
+@@ -23,6 +23,81 @@
+ /// Powers of ten that fit `i128`: `10^0` through `10^38`.
+ const MAX_I128_POW10: u32 = 38;
+ 
++/// Native prepared decimal text: decimal groups plus the original canonical scale.
++pub struct PreparedDecimalText {
++    digits: crate::bigint::PreparedDecimalDigits,
++    scale: usize,
++    length: usize,
++}
++
++struct DecimalPointWriter<'a, W: fmt::Write + ?Sized> {
++    out: &'a mut W,
++    split: usize,
++    seen: usize,
++    inserted: bool,
++}
++
++impl<W: fmt::Write + ?Sized> fmt::Write for DecimalPointWriter<'_, W> {
++    fn write_str(&mut self, text: &str) -> fmt::Result {
++        let end = self.seen.checked_add(text.len()).ok_or(fmt::Error)?;
++        if !self.inserted && end >= self.split {
++            let split = self.split - self.seen;
++            self.out.write_str(&text[..split])?;
++            self.out.write_str(".")?;
++            self.out.write_str(&text[split..])?;
++            self.inserted = true;
++        } else { self.out.write_str(text)?; }
++        self.seen = end;
++        Ok(())
++    }
++}
++
++impl PreparedDecimalText {
++    /// Exact final length, known before allocating an output destination.
++    #[must_use]
++    pub const fn len(&self) -> usize { self.length }
++    /// Decimal lexical text is never empty.
++    #[must_use]
++    pub const fn is_empty(&self) -> bool { false }
++    /// Actual surviving decimal-group temporary capacity.
++    #[must_use]
++    pub fn temporary_bytes(&self) -> usize { self.digits.heap_bytes() }
++
++    fn write_fmt<W: fmt::Write + ?Sized>(&self, out: &mut W) -> fmt::Result {
++        if self.digits.is_negative() { out.write_str("-")?; }
++        if self.scale == 0 { return self.digits.write_unsigned(out); }
++        if self.digits.digits_len() > self.scale {
++            self.digits.write_unsigned(&mut DecimalPointWriter {
++                out, split: self.digits.digits_len() - self.scale, seen: 0, inserted: false,
++            })
++        } else {
++            out.write_str("0.")?;
++            let mut padding = self.scale - self.digits.digits_len();
++            const ZEROS: &str = "00000000000000000000000000000000";
++            while padding >= ZEROS.len() {
++                out.write_str(ZEROS)?;
++                padding -= ZEROS.len();
++            }
++            out.write_str(&ZEROS[..padding])?;
++            self.digits.write_unsigned(out)
++        }
++    }
++
++    /// Append without growing an admitted output String.
++    /// # Errors
++    /// Refuses insufficient full capacity before changing the output.
++    pub fn write_to(&self, out: &mut String) -> Result<(), crate::numeric::NumericRenderError> {
++        let available = out.capacity() - out.len();
++        if self.length > available {
++            return Err(crate::numeric::NumericRenderError::DestinationTooSmall {
++                required_bytes: self.length, available_bytes: available,
++            });
++        }
++        self.write_fmt(out).expect("prepared decimal fits the checked String capacity");
++        Ok(())
++    }
++}
++
+ /// An `xsd:decimal` of any magnitude and any number of fractional digits:
+ /// `unscaled × 10^-scale`.
+ ///
+@@ -127,6 +202,27 @@
+         self.scale == 0
+     }
+ 
++    /// Checked physical rendering layout independent of governor saturation.
++    /// # Errors
++    /// Refuses address-space overflow before conversion or output allocation.
++    pub fn render_layout(&self) -> Result<cost::NumericRenderLayout, crate::bigint::LimbScratchError> {
++        self.unscaled.render_layout(self.scale)
++    }
++
++    /// Prepare decimal groups without coefficient text or a magnitude clone.
++    /// # Errors
++    /// Distinguishes physical native storage refusal from numerical errors.
++    pub fn prepare_text(&self) -> Result<PreparedDecimalText, crate::bigint::LimbScratchError> {
++        use crate::bigint::LimbScratchError::SizeOverflow;
++        let digits = self.unscaled.prepare_decimal_digits()?;
++        let scale = usize::try_from(self.scale).map_err(|_| SizeOverflow)?;
++        let body = if scale == 0 { digits.digits_len() } else if digits.digits_len() > scale {
++            digits.digits_len().checked_add(1).ok_or(SizeOverflow)?
++        } else { scale.checked_add(2).ok_or(SizeOverflow)? };
++        let length = body.checked_add(usize::from(digits.is_negative())).ok_or(SizeOverflow)?;
++        Ok(PreparedDecimalText { digits, scale, length })
++    }
++
+     /// The XSD 1.1 canonical `xsd:decimal` lexical form (§3.3.3.1, §E.1
+     /// `decimalCanonicalMap`), identical to the bounded
+     /// [`crate::numeric::Decimal::canonical_lexical`] wherever both represent the
+@@ -1004,26 +1100,7 @@
+ impl fmt::Display for Decimal {
+     /// The canonical lexical form.
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        if self.scale == 0 {
+-            return fmt::Display::fmt(&self.unscaled, f);
+-        }
+-        let digits = self.unscaled.abs().to_string();
+-        if self.is_negative() {
+-            f.write_str("-")?;
+-        }
+-        let scale = usize::try_from(self.scale).unwrap_or(usize::MAX);
+-        if digits.len() > scale {
+-            let split = digits.len() - scale;
+-            f.write_str(&digits[..split])?;
+-            f.write_str(".")?;
+-            f.write_str(&digits[split..])
+-        } else {
+-            f.write_str("0.")?;
+-            for _ in 0..scale - digits.len() {
+-                f.write_str("0")?;
+-            }
+-            f.write_str(&digits)
+-        }
++        self.prepare_text().map_err(|_| fmt::Error)?.write_fmt(f)
+     }
+ }
+ 
+diff --git a/crates/xsd/src/exact/cost.rs b/crates/xsd/src/exact/cost.rs
+--- a/crates/xsd/src/exact/cost.rs
++++ b/crates/xsd/src/exact/cost.rs
+@@ -96,6 +96,128 @@
+ }
+ 
+ 
++/// Which integer kernel a checked physical destination layout describes.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum IntegerOperation { Add, Subtract, Multiply }
++
++/// Temporary/result native heap bound, separate from saturating governor fuel.
++#[derive(Debug, Clone, Copy)]
++pub struct NumericOperationLayout {
++    peak_bytes: usize,
++    retained_bytes: usize,
++}
++
++impl NumericOperationLayout {
++    /// A proven machine/inline operation with no heap destination.
++    pub const INLINE: Self = Self { peak_bytes: 0, retained_bytes: 0 };
++    /// Peak new bytes while the already-admitted inputs remain live.
++    #[must_use]
++    pub const fn peak_bytes(self) -> usize { self.peak_bytes }
++    /// Upper bound of surviving native destination capacity.
++    #[must_use]
++    pub const fn retained_bytes(self) -> usize { self.retained_bytes }
++
++    pub(crate) fn words(peak: u64, retained: u64) -> Result<Self, crate::bigint::LimbScratchError> {
++        use crate::bigint::LimbScratchError::SizeOverflow;
++        let checked = |words: u64| -> Result<usize, crate::bigint::LimbScratchError> {
++            let words = usize::try_from(words).map_err(|_| SizeOverflow)?;
++            Ok(std::alloc::Layout::array::<u64>(words).map_err(|_| SizeOverflow)?.size())
++        };
++        Ok(Self { peak_bytes: checked(peak)?, retained_bytes: checked(retained)? })
++    }
++}
++
++/// Checked physical counterpart for the existing integer destination kernels.
++/// This does not treat a governor Cost::ZERO as an allocation certificate.
++///
++/// # Errors
++/// Refuses checked length/byte overflow before creating any native destination.
++pub fn integer_operation_layout(
++    la: u64, lb: u64, negative_a: bool, negative_b: bool, op: IntegerOperation,
++) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    match op {
++        IntegerOperation::Add | IntegerOperation::Subtract => {
++            let add_magnitudes = (negative_a == negative_b)
++                ^ matches!(op, IntegerOperation::Subtract);
++            let capacity = la.max(lb).checked_add(u64::from(add_magnitudes)).ok_or(SizeOverflow)?;
++            // These kernels initialize the complete destination; four words
++            // really allocate even if canonical trimming later returns inline.
++            let heap = if capacity <= 3 { 0 } else { capacity };
++            NumericOperationLayout::words(heap, heap)
++        }
++        IntegerOperation::Multiply => {
++            if la == 0 || lb == 0 || (la <= 1 && lb <= 1) {
++                return Ok(NumericOperationLayout::INLINE);
++            }
++            let result = la.checked_add(lb).ok_or(SizeOverflow)?;
++            if result <= 3 { return Ok(NumericOperationLayout::INLINE); }
++            if la.min(lb) < crate::bigint::KARATSUBA_THRESHOLD as u64 {
++                return NumericOperationLayout::words(result, result);
++            }
++            // Native Karatsuba's established eight-result working law. The
++            // fallible shared body retains exact-capacity destinations; the
++            // original numerical recursion and threshold are unchanged.
++            let peak = result.checked_mul(8).ok_or(SizeOverflow)?;
++            // Recombination adds one explicit carry word to the output.
++            let retained = result.checked_add(1).ok_or(SizeOverflow)?;
++            NumericOperationLayout::words(peak, retained)
++        }
++    }
++}
++
++/// Checked physical layout of native decimal group conversion and final lexical.
++#[derive(Debug, Clone, Copy)]
++pub struct NumericRenderLayout {
++    temporary_bytes: usize,
++    output_bytes: usize,
++    group_capacity: usize,
++}
++
++impl NumericRenderLayout {
++    /// All live quotient/group storage while converting; source is already owned.
++    #[must_use]
++    pub const fn temporary_bytes(self) -> usize { self.temporary_bytes }
++    /// Complete sign/point/padding output capacity, before output allocation.
++    #[must_use]
++    pub const fn output_bytes(self) -> usize { self.output_bytes }
++    /// Requested native group buffer capacity.
++    #[must_use]
++    pub const fn group_capacity(self) -> usize { self.group_capacity }
++    /// Peak new conversion temporaries and output while input owners stay live.
++    /// # Errors
++    /// Refuses checked composition overflow.
++    pub fn peak_bytes(self) -> Result<usize, crate::bigint::LimbScratchError> {
++        self.temporary_bytes.checked_add(self.output_bytes)
++            .ok_or(crate::bigint::LimbScratchError::SizeOverflow)
++    }
++}
++
++/// Native checked layout for the shared 10^19 group renderer.
++/// # Errors
++/// Refuses byte/address-space overflow before any parser or render allocation.
++pub fn numeric_render_layout(
++    bits: u64, limbs: usize, scale: u32, negative: bool,
++) -> Result<NumericRenderLayout, crate::bigint::LimbScratchError> {
++    use crate::bigint::LimbScratchError::SizeOverflow;
++    let digits = usize::try_from(digits_for_bits(bits)).map_err(|_| SizeOverflow)?;
++    let groups = digits.div_ceil(19);
++    let group_words = if groups <= 3 { 0 } else { groups };
++    let quotient_words = if limbs <= 3 { 0 } else { limbs };
++    // Native division retains old/new quotient destinations beside groups.
++    let words = quotient_words.checked_mul(2)
++        .and_then(|n| n.checked_add(group_words)).ok_or(SizeOverflow)?;
++    let temporary_bytes = std::alloc::Layout::array::<u64>(words)
++        .map_err(|_| SizeOverflow)?.size();
++    let scale = usize::try_from(scale).map_err(|_| SizeOverflow)?;
++    let body = if scale == 0 { digits } else if digits > scale {
++        digits.checked_add(1).ok_or(SizeOverflow)?
++    } else { scale.checked_add(2).ok_or(SizeOverflow)? };
++    let output_bytes = body.checked_add(usize::from(negative)).ok_or(SizeOverflow)?;
++    std::alloc::Layout::array::<u8>(output_bytes).map_err(|_| SizeOverflow)?;
++    Ok(NumericRenderLayout { temporary_bytes, output_bytes, group_capacity: groups })
++}
++
+ /// Checked physical layout of the existing fallible native numeric parse.
+ /// This is separate from governor fuel and never rounds an overflow down.
+ #[derive(Debug, Clone, Copy)]
+diff --git a/crates/xsd/src/exact/mod.rs b/crates/xsd/src/exact/mod.rs
+--- a/crates/xsd/src/exact/mod.rs
++++ b/crates/xsd/src/exact/mod.rs
+@@ -101,7 +101,7 @@
+ mod rounding;
+ 
+ pub use cost::Cost;
+-pub use decimal::Decimal;
++pub use decimal::{Decimal, PreparedDecimalText};
+ pub use error::{BoundedTarget, ExactError, ExactKind, ExactParseError};
+ pub use integer::Integer;
+ pub use rational::Rational;

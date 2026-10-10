@@ -1,0 +1,1890 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The dated XPath grammar over the existing XSD/XPath token cursor.
+//!
+//! The program and character sets are flat arenas: nesting never becomes
+//! recursive Rust ownership, parsing or destruction. Quantities are compared
+//! as exact decimal strings before their bounded execution representation is
+//! chosen. Neither the compatibility regex engine nor its Unicode tables
+//! participate in native recognition.
+
+use std::cmp::Ordering;
+use std::ops::Range;
+
+use super::{Budget, Error, Limits, Profile, Resource, dated_blocks, dated_names, unicode_tables};
+use crate::xsd_regex::scan::{Scanner, Token};
+
+#[derive(Debug, Clone, Copy)]
+// These are the independently combinable XPath flags, not exclusive states.
+#[allow(clippy::struct_excessive_bools)]
+pub(super) struct Modes {
+    pub insensitive: bool,
+    pub dot_all: bool,
+    pub multiline: bool,
+    pub whitespace: bool,
+    pub quoted: bool,
+}
+
+impl Modes {
+    fn parse(profile: Profile, flags: &str, budget: &mut Budget) -> Result<Self, Error> {
+        let mut result = Self {
+            insensitive: false,
+            dot_all: false,
+            multiline: false,
+            whitespace: false,
+            quoted: false,
+        };
+        for (offset, flag) in flags.char_indices() {
+            budget.charge(Resource::CompileSteps, 1)?;
+            match flag {
+                'i' => result.insensitive = true,
+                's' => result.dot_all = true,
+                'm' => result.multiline = true,
+                'x' => result.whitespace = true,
+                'q' if profile == Profile::Xpath31 => result.quoted = true,
+                _ => {
+                    return Err(Error::Flags {
+                        offset,
+                        flag,
+                        profile,
+                    });
+                }
+            }
+        }
+        Ok(result)
+    }
+}
+
+/// A quantity larger than u64 is not malformed and is never saturated.
+///
+/// Every attempted repetition spends fresh finite u64 work before incrementing
+/// its u64 count. No admitted execution can reach AboveU64. Exact ordering of
+/// arbitrarily large minimum/maximum quantities is checked before this lowering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Count {
+    Finite(u64),
+    AboveU64,
+}
+
+impl Count {
+    fn from_decimal(decimal: &str) -> Self {
+        decimal.parse::<u64>().map_or(Self::AboveU64, Self::Finite)
+    }
+}
+
+/// `max - min` for decimal quantities without leading zeros where `max` is at
+/// least `min`, saturated at `u64::MAX`. The digits were already charged when
+/// the two quantities were compared; only the lowest twenty digits of the
+/// difference are kept, any higher nonzero digit saturates.
+fn span(min: &str, max: &str) -> u64 {
+    let (min, max) = (min.as_bytes(), max.as_bytes());
+    let mut low = [0_u8; 20];
+    let mut high = false;
+    let mut borrow = 0;
+    for index in 0..max.len() {
+        let top = max[max.len() - 1 - index] - b'0';
+        let bottom = min
+            .len()
+            .checked_sub(1 + index)
+            .map_or(0, |at| min[at] - b'0')
+            + borrow;
+        let (digit, next) = if top >= bottom {
+            (top - bottom, 0)
+        } else {
+            (top + 10 - bottom, 1)
+        };
+        if let Some(slot) = low.get_mut(index) {
+            *slot = digit;
+        } else {
+            high |= digit != 0;
+        }
+        borrow = next;
+    }
+    debug_assert_eq!(borrow, 0, "the maximum is at least the minimum");
+    if high {
+        return u64::MAX;
+    }
+    let mut value: u64 = 0;
+    for &digit in low.iter().rev() {
+        let Some(next) = value
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(u64::from(digit)))
+        else {
+            return u64::MAX;
+        };
+        value = next;
+    }
+    value
+}
+
+#[derive(Debug)]
+pub(super) enum Node {
+    Empty,
+    Character(usize),
+    Start,
+    End,
+    Backreference(usize),
+    Sequence(usize, usize),
+    Choice(usize, usize),
+    Capture {
+        number: usize,
+        body: usize,
+    },
+    Repeat {
+        body: usize,
+        min: Count,
+        max: Option<Count>,
+        greedy: bool,
+        /// The set of the character atom that immediately follows this
+        /// repetition in its sequence: a stop before any other character, or
+        /// at the end of the input, cannot continue.
+        follow: Option<usize>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Set {
+    Range { lo: char, hi: char, folded: bool },
+    Table(&'static [(u32, u32)]),
+    Space,
+    Word,
+    Dot,
+    Complement(usize),
+    Union(usize, usize),
+    Difference(usize, usize),
+}
+
+/// What every match must begin with, as far as a search can use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Lead {
+    /// Nothing known: every start position runs the program.
+    Any,
+    /// Every match begins by consuming a character of this set.
+    Set(usize),
+    /// Every match begins at the start of the input (or, under m, of a line).
+    Start,
+}
+
+/// How every match begins, as far as a search can skip start positions.
+#[derive(Debug)]
+pub(super) struct Leads {
+    /// The first-character or anchor requirement of every match.
+    pub first: Lead,
+    /// A leading unbounded single-character repetition, outside any capture.
+    ///
+    /// If a search from one start fails, every later start inside that
+    /// start's run fails too: its stops are a subset of the stops already
+    /// tried, with the same continuation and no capture depending on the
+    /// start. The search resumes after the run.
+    pub run: Option<usize>,
+    /// The `first` set as sorted, disjoint scalar ranges, when it is a union
+    /// of literal characters and ranges (with their case variants under i).
+    /// Empty when the set has another form; the set itself is then evaluated.
+    pub scalars: Vec<(char, char)>,
+}
+
+/// Compound character sets that are unions of literal ranges (with their case
+/// variants under i), as sorted, disjoint scalar ranges.
+///
+/// A matched character is then one comparison against sorted ranges instead of
+/// a walk over the set's union tree. Sets of any other form keep that walk.
+#[derive(Debug, Default)]
+pub(super) struct FlatSets {
+    /// For each set id, the span of its ranges in `ranges`, if flattened.
+    spans: Vec<Option<(u32, u32)>>,
+    ranges: Vec<(char, char)>,
+}
+
+impl FlatSets {
+    /// The flattened ranges of `set`, if it has them.
+    #[inline]
+    pub(super) fn get(&self, set: usize) -> Option<&[(char, char)]> {
+        let (start, end) = (*self.spans.get(set)?)?;
+        Some(&self.ranges[start as usize..end as usize])
+    }
+
+    fn storage_bytes(&self) -> usize {
+        self.spans
+            .capacity()
+            .saturating_mul(size_of::<Option<(u32, u32)>>())
+            .saturating_add(
+                self.ranges
+                    .capacity()
+                    .saturating_mul(size_of::<(char, char)>()),
+            )
+    }
+}
+
+/// A folded range wider than this is evaluated through its set instead of
+/// being expanded into its case variants.
+const FOLDED_SPAN: u32 = 256;
+
+pub(super) fn case_variants(ch: char) -> &'static [u32] {
+    unicode_tables::CASE_VARIANTS
+        .binary_search_by_key(&(ch as u32), |&(point, _)| point)
+        .map_or(&[], |index| unicode_tables::CASE_VARIANTS[index].1)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LeadStep {
+    Visit(usize),
+    Join,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Admission {
+    nodes: u64,
+    slots: u64,
+}
+
+/// An admitted flat program under one explicitly dated XPath law.
+///
+/// The source and flags identify the law exactly, including quoted source and
+/// whitespace removal. Reuse must call admit with the current request's bounds;
+/// successful compilation under earlier, larger bounds is not current admission.
+#[derive(Debug)]
+pub struct CompiledPattern {
+    pub(super) profile: Profile,
+    pub(super) source: String,
+    pub(super) flags: String,
+    pub(super) modes: Modes,
+    pub(super) nodes: Vec<Node>,
+    pub(super) sets: Vec<Set>,
+    pub(super) root: usize,
+    /// Which start positions a search can skip without running the program.
+    pub(super) lead: Leads,
+    /// Compound character sets that are unions of literal ranges, flattened.
+    pub(super) flat: FlatSets,
+    pub(super) captures: usize,
+    /// The exact windows of repetitions whose minimum and maximum both exceed
+    /// `u64`, by node, ascending.
+    windows: Vec<(usize, u64)>,
+    /// The parent table and nesting facts the matchers walk the arena with.
+    pub(super) links: super::pike::Links,
+    admission: Admission,
+}
+
+impl CompiledPattern {
+    /// Whether this program belongs to the exact requested grammar and text.
+    #[must_use]
+    pub fn matches_source(&self, profile: Profile, pattern: &str, flags: &str) -> bool {
+        self.profile == profile && self.source == pattern && self.flags == flags
+    }
+
+    /// The dated Recommendation used for recognition and execution.
+    #[must_use]
+    pub const fn profile(&self) -> Profile {
+        self.profile
+    }
+
+    /// The original UTF-8 source, before any x-flag removal.
+    #[must_use]
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    /// The original flags. Repeated flags are legal in both Recommendations.
+    #[must_use]
+    pub fn flags(&self) -> &str {
+        &self.flags
+    }
+
+    /// Capturing groups, excluding the entire-pattern capture zero.
+    #[must_use]
+    pub const fn capture_count(&self) -> usize {
+        self.captures
+    }
+
+    /// Owned program payload bytes, including retained buffer capacities.
+    ///
+    /// Shared Unicode tables and allocator metadata are excluded. A sum that
+    /// exceeds the host's address width saturates so bounded caches can decline
+    /// retention without changing execution or admission.
+    #[must_use]
+    pub fn storage_bytes(&self) -> usize {
+        size_of::<Self>()
+            .saturating_add(self.source.capacity())
+            .saturating_add(self.flags.capacity())
+            .saturating_add(self.nodes.capacity().saturating_mul(size_of::<Node>()))
+            .saturating_add(self.sets.capacity().saturating_mul(size_of::<Set>()))
+            .saturating_add(self.flat.storage_bytes())
+            .saturating_add(
+                self.lead
+                    .scalars
+                    .capacity()
+                    .saturating_mul(size_of::<(char, char)>()),
+            )
+            .saturating_add(
+                self.links
+                    .nodes
+                    .capacity()
+                    .saturating_mul(size_of::<super::pike::Link>()),
+            )
+            .saturating_add(
+                self.windows
+                    .capacity()
+                    .saturating_mul(size_of::<(usize, u64)>()),
+            )
+    }
+
+    /// The exact difference between the maximum and the minimum of the
+    /// repetition `repeat`, or `u64::MAX` when it has no maximum or the
+    /// difference exceeds `u64`: no execution completes that many iterations
+    /// beyond its minimum.
+    pub(super) fn window(&self, repeat: usize) -> u64 {
+        let Node::Repeat { min, max, .. } = self.nodes[repeat] else {
+            unreachable!("only a repetition has a window");
+        };
+        match (min, max) {
+            (Count::Finite(min), Some(Count::Finite(max))) => max - min,
+            (Count::AboveU64, Some(Count::AboveU64)) => self
+                .windows
+                .binary_search_by_key(&repeat, |&(node, _)| node)
+                .map_or(u64::MAX, |index| self.windows[index].1),
+            _ => u64::MAX,
+        }
+    }
+
+    /// Admit a reused artifact without treating it as newly executed work.
+    ///
+    /// The source, program nodes and peak construction-storage contract are
+    /// checked before a cache hit. Each match still receives fresh work fuel.
+    ///
+    /// # Errors
+    ///
+    /// A typed resource refusal under the current request's bounds.
+    pub fn admit(&self, limits: Limits) -> Result<(), Error> {
+        limits.admit_pattern(&self.source)?;
+        limits.admit(Resource::ProgramNodes, u128::from(self.admission.nodes))?;
+        limits.admit(Resource::CompileSlots, u128::from(self.admission.slots))?;
+        Ok(())
+    }
+}
+
+
+/// A compiled program and the exact physical grant that admitted its buffers.
+///
+/// Neither the program nor the grant can be detached. The callback owner is
+/// destroyed after the native program, including every source and arena buffer.
+#[derive(Debug)]
+pub struct OwnedCompiledPattern<S> {
+    pattern: CompiledPattern,
+    storage: S,
+}
+
+impl<S> OwnedCompiledPattern<S> {
+    /// Borrow the program while its original physical admission remains alive.
+    #[must_use]
+    pub const fn pattern(&self) -> &CompiledPattern { &self.pattern }
+
+    /// Inspect the original caller's account without detaching its grant.
+    #[must_use]
+    pub const fn storage(&self) -> &S { &self.storage }
+}
+
+/// A failed native compilation retaining its original typed admission owner.
+pub struct OwnedCompileError<S> {
+    error: Error,
+    storage: S,
+}
+
+impl<S> OwnedCompileError<S> {
+    /// The grammar, work or physical-storage verdict.
+    #[must_use]
+    pub const fn error(&self) -> &Error { &self.error }
+
+    /// Original caller account, including its first typed operational cause.
+    #[must_use]
+    pub const fn storage(&self) -> &S { &self.storage }
+}
+
+impl<S> std::fmt::Debug for OwnedCompileError<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnedCompileError").field("error", &self.error).finish_non_exhaustive()
+    }
+}
+
+impl<S> std::fmt::Display for OwnedCompileError<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.error.fmt(f) }
+}
+
+impl<S> std::error::Error for OwnedCompileError<S> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(&self.error) }
+}
+
+/// Compile the unchanged dated grammar with an owned physical admission.
+///
+/// The same parser, program arenas, leading sets and parent-table analysis run
+/// for resident and admitted construction. Matcher and replacement storage are
+/// separately admitted by their execution entry points.
+///
+/// # Errors
+///
+/// Preserves the original caller account alongside every grammar, work,
+/// layout, allocator or physical-admission failure.
+pub fn compile_with_storage<S: purrdf_lex::allocation::Admission>(
+    profile: Profile,
+    pattern: &str,
+    flags: &str,
+    limits: Limits,
+    mut storage: S,
+) -> Result<OwnedCompiledPattern<S>, OwnedCompileError<S>> {
+    let verdict = compile_budget(profile, pattern, flags, Budget::with_storage(limits, &mut storage));
+    match verdict {
+        Ok(pattern) => Ok(OwnedCompiledPattern { pattern, storage }),
+        Err(error) => Err(OwnedCompileError { error, storage }),
+    }
+}
+
+/// Recognize the complete grammar of the selected dated Recommendation.
+///
+/// XPath 2.0 already defines backreferences and reluctant quantifiers. XPath
+/// 3.1 additionally defines non-capturing groups and the q flag. The grammar
+/// uses XML Schema Part 2 Second Edition Appendix F with the XPath corrections.
+///
+/// # Errors
+///
+/// Invalid grammar is Syntax; source, work, program or storage refusal is an
+/// operational Resource error. Source admission precedes any parsing or copy.
+pub fn compile(
+    profile: Profile,
+    pattern: &str,
+    flags: &str,
+    limits: Limits,
+) -> Result<CompiledPattern, Error> {
+    compile_budget(profile, pattern, flags, Budget::new(limits))
+}
+
+fn compile_budget(
+    profile: Profile,
+    pattern: &str,
+    flags: &str,
+    mut budget: Budget<'_>,
+) -> Result<CompiledPattern, Error> {
+    budget.limits().admit_pattern(pattern)?;
+    let modes = Modes::parse(profile, flags, &mut budget)?;
+    let source = owned(pattern, &mut budget)?;
+    let flag_source = owned(flags, &mut budget)?;
+    let normalized = if modes.whitespace && !modes.quoted {
+        Some(crate::xsd_regex::xflag::strip_bounded(
+            pattern,
+            &mut budget,
+        )?)
+    } else {
+        None
+    };
+    let text = normalized
+        .as_ref()
+        .map_or(pattern, |(text, _)| text.as_str());
+    let offsets = normalized.as_ref().map(|(_, offsets)| offsets.as_slice());
+    let before = budget.used(Resource::CompileSlots);
+    let scanner = Scanner::bounded(text, &mut budget, false)?;
+    let scanner_slots = budget.used(Resource::CompileSlots) - before;
+    let mut parser = Parser {
+        scanner,
+        budget,
+        profile,
+        modes,
+        text,
+        offsets,
+        pending: None,
+        nodes: Vec::new(),
+        sets: Vec::new(),
+        frames: Vec::new(),
+        captures: 0,
+        windows: Vec::new(),
+    };
+    let root = if modes.quoted {
+        parser.quoted()?
+    } else {
+        parser.expression()?
+    };
+    let lead = parser.lead(root)?;
+    let flat = parser.flat_sets()?;
+    // No token cursor or construction-only frame survives in the artifact.
+    let Parser {
+        scanner,
+        mut budget,
+        nodes,
+        sets,
+        captures,
+        windows,
+        frames,
+        ..
+    } = parser;
+    budget.release_vec(frames)?;
+    scanner.release(&mut budget)?;
+    budget.release_compile_slots(scanner_slots);
+    if let Some((text, offsets)) = normalized {
+        budget.release_string(text)?;
+        budget.release_vec(offsets)?;
+    }
+    let links = super::pike::analyze(&nodes, root, &mut budget)?;
+    let admission = Admission {
+        nodes: budget.used(Resource::ProgramNodes),
+        slots: budget.peak_compile_slots,
+    };
+    Ok(CompiledPattern {
+        profile,
+        source,
+        flags: flag_source,
+        modes,
+        nodes,
+        sets,
+        root,
+        lead,
+        flat,
+        captures,
+        windows,
+        links,
+        admission,
+    })
+}
+
+fn table(
+    table: &'static [(&'static str, &'static [(u32, u32)])],
+    name: &str,
+) -> Option<&'static [(u32, u32)]> {
+    table
+        .binary_search_by_key(&name, |&(name, _)| name)
+        .ok()
+        .map(|index| table[index].1)
+}
+
+/// The ranges of a block escape name under one dated law.
+///
+/// Both laws incorporate the XSD 1.0 Second Edition block table, which every
+/// minimally conforming processor must recognize, and admit the blocks of the
+/// processor's Unicode 17 database as that edition encourages. Where a name is
+/// in both with different extents, XPath 2.0 keeps the edition's dated range;
+/// XPath 3.1 follows the supported Unicode version, as the XSD 1.1 guidance it
+/// cites no longer ties block semantics to one Unicode version. A name in
+/// neither is invalid: F&O 3.1 section 5.6.1.5 makes it FORX0002, and XPath 2.0,
+/// whose base edition leaves the case undefined, applies the same rule.
+fn block(profile: Profile, name: &str) -> Option<&'static [(u32, u32)]> {
+    let dated = || table(dated_blocks::XSD10_SECOND_EDITION, name);
+    let current = || table(unicode_tables::BLOCKS, name);
+    match profile {
+        Profile::Xpath20 => dated().or_else(current),
+        Profile::Xpath31 => current().or_else(dated),
+    }
+}
+
+pub(super) fn syntax(offset: usize, message: &str) -> Error {
+    Error::Syntax {
+        offset,
+        message: message.to_owned(),
+    }
+}
+
+pub(super) fn owned(text: &str, budget: &mut Budget) -> Result<String, Error> {
+    budget.charge_wide(Resource::CompileSlots, text.len() as u128)?;
+    budget.charge_wide(Resource::CompileSteps, text.len() as u128)?;
+    let mut out = String::new();
+    budget.reserve_string(&mut out, text.len())?;
+    out.push_str(text);
+    Ok(out)
+}
+
+/// Arena capacity remains retained after a frame is popped. Admit deterministic
+/// capacity growth, including copying the existing elements, before allocation.
+fn grow<T>(budget: &mut Budget, arena: &mut Vec<T>, cells: u64) -> Result<(), Error> {
+    if arena.len() < arena.capacity() {
+        return Ok(());
+    }
+    let old = arena.capacity() as u128;
+    let capacity = (old * 2).max(1);
+    let slots = (capacity - old) * u128::from(cells);
+    budget.charge_wide(Resource::CompileSlots, slots)?;
+    budget.charge_wide(Resource::CompileSteps, arena.len() as u128)?;
+    let units = u64::try_from(capacity * u128::from(cells))
+        .expect("admitted capacity fits its finite u64 slot bound");
+    let allocation = || Error::Allocation {
+        resource: Resource::CompileSlots,
+        units,
+    };
+    let capacity = usize::try_from(capacity).map_err(|_| allocation())?;
+    let bytes = capacity
+        .checked_mul(size_of::<T>())
+        .ok_or_else(allocation)?;
+    if bytes > isize::MAX as usize {
+        return Err(allocation());
+    }
+    budget.reserve(arena, capacity)
+}
+
+#[derive(Clone)]
+struct Spanned<'a> {
+    token: Token<'a>,
+    span: Range<usize>,
+}
+
+struct Frame {
+    opening: usize,
+    capture: Option<usize>,
+    sequence: Option<usize>,
+    choices: Option<usize>,
+    atom: Option<usize>,
+    quantified: bool,
+}
+
+impl Frame {
+    fn new(opening: usize, capture: Option<usize>) -> Self {
+        Self {
+            opening,
+            capture,
+            sequence: None,
+            choices: None,
+            atom: None,
+            quantified: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ClassFrame {
+    negated: bool,
+    union: Option<usize>,
+    difference: Option<usize>,
+}
+
+struct Parser<'a, 'storage> {
+    scanner: Scanner<'a>,
+    budget: Budget<'storage>,
+    profile: Profile,
+    modes: Modes,
+    text: &'a str,
+    offsets: Option<&'a [usize]>,
+    pending: Option<Spanned<'a>>,
+    nodes: Vec<Node>,
+    sets: Vec<Set>,
+    frames: Vec<Frame>,
+    captures: usize,
+    /// The exact windows of repetitions whose minimum and maximum both exceed
+    /// `u64`, by node, ascending.
+    windows: Vec<(usize, u64)>,
+}
+
+impl<'a> Parser<'a, '_> {
+    fn offset(&self, offset: usize) -> usize {
+        self.offsets.map_or(offset, |map| map[offset])
+    }
+
+    fn peek(&mut self) -> Result<Option<Spanned<'a>>, Error> {
+        if self.pending.is_none()
+            && let Some(token) = self.scanner.next_bounded(&mut self.budget)?
+        {
+            let span = self.scanner.source_span();
+            let token =
+                token.map_err(|error| syntax(self.offset(span.start), &error.to_string()))?;
+            self.pending = Some(Spanned { token, span });
+        }
+        Ok(self.pending.clone())
+    }
+
+    fn take(&mut self) -> Result<Option<Spanned<'a>>, Error> {
+        self.peek()?;
+        self.budget.charge(Resource::CompileSteps, 1)?;
+        Ok(self.pending.take())
+    }
+
+    fn node(&mut self, node: Node) -> Result<usize, Error> {
+        self.budget.charge(Resource::CompileSteps, 1)?;
+        self.budget.charge(Resource::ProgramNodes, 1)?;
+        grow(&mut self.budget, &mut self.nodes, 6)?;
+        let id = self.nodes.len();
+        self.nodes.push(node);
+        Ok(id)
+    }
+
+    fn set(&mut self, set: Set) -> Result<usize, Error> {
+        self.budget.charge(Resource::CompileSteps, 1)?;
+        self.budget.charge(Resource::ProgramNodes, 1)?;
+        grow(&mut self.budget, &mut self.sets, 3)?;
+        let id = self.sets.len();
+        self.sets.push(set);
+        Ok(id)
+    }
+
+    fn frame(&mut self, opening: usize, capture: Option<usize>) -> Result<(), Error> {
+        grow(&mut self.budget, &mut self.frames, 6)?;
+        self.frames.push(Frame::new(opening, capture));
+        Ok(())
+    }
+
+    fn append(&mut self, atom: usize) -> Result<(), Error> {
+        self.flush_atom()?;
+        let frame = self
+            .frames
+            .last_mut()
+            .expect("an expression frame is present");
+        frame.atom = Some(atom);
+        frame.quantified = false;
+        Ok(())
+    }
+
+    fn flush_atom(&mut self) -> Result<(), Error> {
+        let frame = self
+            .frames
+            .last_mut()
+            .expect("an expression frame is present");
+        if let Some(atom) = frame.atom.take() {
+            let previous = frame.sequence.take();
+            let sequence = if let Some(previous) = previous {
+                // Sequences nest leftward, so the atom executed last before
+                // this one is the previous sequence's right operand.
+                let last = match self.nodes[previous] {
+                    Node::Sequence(_, right) => right,
+                    _ => previous,
+                };
+                if let Node::Character(next) = self.nodes[atom]
+                    && let Node::Repeat { follow, .. } = &mut self.nodes[last]
+                {
+                    *follow = Some(next);
+                }
+                self.node(Node::Sequence(previous, atom))?
+            } else {
+                atom
+            };
+            self.frames.last_mut().expect("frame retained").sequence = Some(sequence);
+        }
+        Ok(())
+    }
+
+    fn branch(&mut self) -> Result<usize, Error> {
+        self.flush_atom()?;
+        let frame = self
+            .frames
+            .last_mut()
+            .expect("an expression frame is present");
+        let sequence = frame.sequence.take();
+        let choices = frame.choices.take();
+        let sequence = if let Some(sequence) = sequence {
+            sequence
+        } else {
+            self.node(Node::Empty)?
+        };
+        if let Some(choices) = choices {
+            self.node(Node::Choice(choices, sequence))
+        } else {
+            Ok(sequence)
+        }
+    }
+
+    /// Derive the search's skippable start positions from the program.
+    ///
+    /// Only constructs that always begin a match the same way are followed: a
+    /// sequence's left operand, a capture body, and a repetition whose minimum
+    /// is at least one. An alternative leads with the union of its branches'
+    /// sets, or with an anchor when both branches are anchored. The program is
+    /// walked on an explicit work list, and a union is an admitted set node.
+    fn lead(&mut self, root: usize) -> Result<Leads, Error> {
+        let mut work: Vec<LeadStep> = Vec::new();
+        let mut values: Vec<Lead> = Vec::new();
+        grow(&mut self.budget, &mut work, 1)?;
+        work.push(LeadStep::Visit(root));
+        while let Some(step) = work.pop() {
+            self.budget.charge(Resource::CompileSteps, 1)?;
+            let value = match step {
+                LeadStep::Visit(node) => match self.nodes[node] {
+                    Node::Character(set) => Lead::Set(set),
+                    Node::Start => Lead::Start,
+                    Node::Sequence(next, _) | Node::Capture { body: next, .. } => {
+                        grow(&mut self.budget, &mut work, 1)?;
+                        work.push(LeadStep::Visit(next));
+                        continue;
+                    }
+                    Node::Repeat { body, min, .. } if min != Count::Finite(0) => {
+                        grow(&mut self.budget, &mut work, 1)?;
+                        work.push(LeadStep::Visit(body));
+                        continue;
+                    }
+                    Node::Choice(left, right) => {
+                        for step in [
+                            LeadStep::Join,
+                            LeadStep::Visit(right),
+                            LeadStep::Visit(left),
+                        ] {
+                            grow(&mut self.budget, &mut work, 1)?;
+                            work.push(step);
+                        }
+                        continue;
+                    }
+                    Node::Repeat { .. } | Node::Empty | Node::End | Node::Backreference(_) => {
+                        Lead::Any
+                    }
+                },
+                LeadStep::Join => {
+                    let right = values.pop().expect("right branch lead completed");
+                    let left = values.pop().expect("left branch lead completed");
+                    match (left, right) {
+                        (Lead::Set(left), Lead::Set(right)) => {
+                            Lead::Set(self.set(Set::Union(left, right))?)
+                        }
+                        (Lead::Start, Lead::Start) => Lead::Start,
+                        _ => Lead::Any,
+                    }
+                }
+            };
+            grow(&mut self.budget, &mut values, 1)?;
+            values.push(value);
+        }
+        let first = values.pop().expect("the root lead completed");
+        let released = (work.capacity() + values.capacity()) as u64;
+        self.budget.release_vec(work)?;
+        self.budget.release_vec(values)?;
+        self.budget.release_compile_slots(released);
+        let mut node = root;
+        let run = loop {
+            self.budget.charge(Resource::CompileSteps, 1)?;
+            match self.nodes[node] {
+                Node::Sequence(left, _) => node = left,
+                Node::Repeat {
+                    body, max: None, ..
+                } => {
+                    break match self.nodes[body] {
+                        Node::Character(set) => Some(set),
+                        _ => None,
+                    };
+                }
+                _ => break None,
+            }
+        };
+        let scalars = match first {
+            Lead::Set(set) => self.scalars(set)?,
+            Lead::Any | Lead::Start => Vec::new(),
+        };
+        Ok(Leads {
+            first,
+            run,
+            scalars,
+        })
+    }
+
+    /// A union of literal ranges as sorted, merged scalar ranges, or empty.
+    ///
+    /// A folded range contributes each member's direct case variants, the
+    /// same relation the matcher applies to it, so membership is unchanged.
+    /// Flatten every compound set a character atom matches with, when it is a
+    /// union of literal ranges.
+    fn flat_sets(&mut self) -> Result<FlatSets, Error> {
+        let mut flat = FlatSets::default();
+        for node in 0..self.nodes.len() {
+            self.budget.charge(Resource::CompileSteps, 1)?;
+            let Node::Character(set) = self.nodes[node] else {
+                continue;
+            };
+            if !matches!(self.sets[set], Set::Union(..)) || flat.get(set).is_some() {
+                continue;
+            }
+            let ranges = self.scalars(set)?;
+            let held = ranges.capacity() as u64 * 2;
+            if !ranges.is_empty() {
+                if flat.spans.is_empty() {
+                    let missing = self.sets.len();
+                    self.budget
+                        .charge_wide(Resource::CompileSlots, missing as u128 * 2)?;
+                    self.budget
+                        .charge_wide(Resource::CompileSteps, missing as u128)?;
+                    self.budget.reserve(&mut flat.spans, missing)?;
+                    flat.spans.resize(missing, None);
+                }
+                let start = flat.ranges.len();
+                for range in ranges.iter().copied() {
+                    grow(&mut self.budget, &mut flat.ranges, 2)?;
+                    flat.ranges.push(range);
+                }
+                let span = |at: usize| u32::try_from(at).expect("admitted ranges fit u32");
+                flat.spans[set] = Some((span(start), span(flat.ranges.len())));
+            }
+            self.budget.release_vec(ranges)?;
+            self.budget.release_compile_slots(held);
+        }
+        Ok(flat)
+    }
+
+    fn scalars(&mut self, root: usize) -> Result<Vec<(char, char)>, Error> {
+        let mut work: Vec<usize> = Vec::new();
+        let mut ranges: Vec<(char, char)> = Vec::new();
+        grow(&mut self.budget, &mut work, 1)?;
+        work.push(root);
+        let mut flat = true;
+        while let Some(set) = work.pop() {
+            self.budget.charge(Resource::CompileSteps, 1)?;
+            match self.sets[set] {
+                Set::Union(left, right) => {
+                    for next in [right, left] {
+                        grow(&mut self.budget, &mut work, 1)?;
+                        work.push(next);
+                    }
+                }
+                Set::Range { lo, hi, folded } => {
+                    grow(&mut self.budget, &mut ranges, 2)?;
+                    ranges.push((lo, hi));
+                    if folded {
+                        if hi as u32 - lo as u32 >= FOLDED_SPAN {
+                            flat = false;
+                            break;
+                        }
+                        for point in lo as u32..=hi as u32 {
+                            let ch = char::from_u32(point).expect("a range holds scalar values");
+                            let variants = case_variants(ch);
+                            self.budget
+                                .charge_wide(Resource::CompileSteps, variants.len() as u128 + 1)?;
+                            for &variant in variants {
+                                let variant =
+                                    char::from_u32(variant).expect("case variants are scalars");
+                                grow(&mut self.budget, &mut ranges, 2)?;
+                                ranges.push((variant, variant));
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    flat = false;
+                    break;
+                }
+            }
+        }
+        let released = work.capacity() as u64;
+        self.budget.release_vec(work)?;
+        self.budget.release_compile_slots(released);
+        if !flat {
+            let released = ranges.capacity() as u64 * 2;
+            self.budget.release_vec(ranges)?;
+            self.budget.release_compile_slots(released);
+            return Ok(Vec::new());
+        }
+        let length = ranges.len() as u128;
+        self.budget.charge_wide(
+            Resource::CompileSteps,
+            length * u128::from(ranges.len().bit_width()),
+        )?;
+        ranges.sort_unstable();
+        let mut merged = 0;
+        for index in 0..ranges.len() {
+            let (lo, hi) = ranges[index];
+            if merged > 0 && lo as u32 <= ranges[merged - 1].1 as u32 + 1 {
+                ranges[merged - 1].1 = ranges[merged - 1].1.max(hi);
+            } else {
+                ranges[merged] = (lo, hi);
+                merged += 1;
+            }
+        }
+        ranges.truncate(merged);
+        Ok(ranges)
+    }
+
+    fn quoted(&mut self) -> Result<usize, Error> {
+        self.frame(0, None)?;
+        for ch in self.text.chars() {
+            self.budget.charge(Resource::CompileSteps, 1)?;
+            let set = self.range(ch, ch)?;
+            let node = self.node(Node::Character(set))?;
+            self.append(node)?;
+        }
+        self.branch()
+    }
+
+    fn expression(&mut self) -> Result<usize, Error> {
+        self.frame(0, None)?;
+        while let Some(spanned) = self.take()? {
+            let offset = self.offset(spanned.span.start);
+            match spanned.token {
+                Token::GroupOpen { capturing } => {
+                    if !capturing && self.profile == Profile::Xpath20 {
+                        return Err(syntax(offset, "non-capturing groups require XPath 3.1"));
+                    }
+                    let capture = if capturing {
+                        self.captures += 1;
+                        Some(self.captures)
+                    } else {
+                        None
+                    };
+                    self.frame(offset, capture)?;
+                }
+                Token::GroupClose => {
+                    if self.frames.len() == 1 {
+                        return Err(syntax(offset, "unmatched closing parenthesis"));
+                    }
+                    let body = self.branch()?;
+                    let frame = self.frames.pop().expect("non-root group present");
+                    let node = if let Some(number) = frame.capture {
+                        self.node(Node::Capture { number, body })?
+                    } else {
+                        body
+                    };
+                    self.append(node)?;
+                }
+                Token::Literal('|') => {
+                    let choices = self.branch()?;
+                    self.frames.last_mut().expect("frame retained").choices = Some(choices);
+                }
+                Token::Literal(quantifier @ ('?' | '*' | '+' | '{')) => {
+                    self.quantifier(quantifier, offset)?;
+                }
+                Token::Literal('}') => {
+                    return Err(syntax(offset, "a closing brace must end a quantity"));
+                }
+                Token::Literal('^') => {
+                    let node = self.node(Node::Start)?;
+                    self.append(node)?;
+                }
+                Token::Literal('$') => {
+                    let node = self.node(Node::End)?;
+                    self.append(node)?;
+                }
+                Token::Backreference(number) => {
+                    let node = self.node(Node::Backreference(number))?;
+                    self.append(node)?;
+                }
+                Token::ClassOpen { negated } => {
+                    let set = self.class(negated)?;
+                    let node = self.node(Node::Character(set))?;
+                    self.append(node)?;
+                }
+                Token::ClassClose | Token::Subtract | Token::ClassMember(_) => {
+                    return Err(syntax(offset, "character-class syntax outside a class"));
+                }
+                token => {
+                    let set = self.member(token, offset)?;
+                    let node = self.node(Node::Character(set))?;
+                    self.append(node)?;
+                }
+            }
+        }
+        if self.frames.len() != 1 {
+            return Err(syntax(
+                self.frames.last().expect("open group").opening,
+                "unclosed group",
+            ));
+        }
+        self.branch()
+    }
+
+    fn quantifier(&mut self, quantifier: char, offset: usize) -> Result<(), Error> {
+        let frame = self
+            .frames
+            .last_mut()
+            .expect("an expression frame is present");
+        if frame.quantified {
+            return Err(syntax(offset, "an atom has only one quantifier"));
+        }
+        let Some(body) = frame.atom.take() else {
+            return Err(syntax(offset, "quantifier has no preceding atom"));
+        };
+        let (min, max, span) = match quantifier {
+            '?' => (Count::Finite(0), Some(Count::Finite(1)), 1),
+            '*' => (Count::Finite(0), None, u64::MAX),
+            '+' => (Count::Finite(1), None, u64::MAX),
+            '{' => self.quantity(offset)?,
+            _ => unreachable!("caller selects the closed quantifier grammar"),
+        };
+        let greedy = if self
+            .peek()?
+            .is_some_and(|spanned| spanned.token == Token::Literal('?'))
+        {
+            self.take()?;
+            false
+        } else {
+            true
+        };
+        let node = self.node(Node::Repeat {
+            body,
+            min,
+            max,
+            greedy,
+            follow: None,
+        })?;
+        if min == Count::AboveU64 && max == Some(Count::AboveU64) {
+            // Only this window cannot be read from the quantities' lowering.
+            grow(&mut self.budget, &mut self.windows, 2)?;
+            self.windows.push((node, span));
+        }
+        let frame = self.frames.last_mut().expect("frame retained");
+        frame.atom = Some(node);
+        frame.quantified = true;
+        Ok(())
+    }
+
+    fn decimal(&mut self, offset: usize) -> Result<&'a str, Error> {
+        let start = self
+            .peek()?
+            .map_or(self.text.len(), |spanned| spanned.span.start);
+        let mut end = start;
+        while let Some(spanned) = self.peek()? {
+            if !matches!(spanned.token, Token::Literal('0'..='9')) {
+                break;
+            }
+            end = spanned.span.end;
+            self.take()?;
+        }
+        if start == end {
+            return Err(syntax(
+                offset,
+                "a quantity requires one or more ASCII digits",
+            ));
+        }
+        let text = self.text[start..end].trim_start_matches('0');
+        Ok(if text.is_empty() { "0" } else { text })
+    }
+
+    fn quantity(&mut self, offset: usize) -> Result<(Count, Option<Count>, u64), Error> {
+        let min = self.decimal(offset)?;
+        let Some(next) = self.take()? else {
+            return Err(syntax(offset, "unclosed quantity"));
+        };
+        match next.token {
+            Token::Literal('}') => {
+                Ok((Count::from_decimal(min), Some(Count::from_decimal(min)), 0))
+            }
+            Token::Literal(',') => {
+                if self
+                    .peek()?
+                    .is_some_and(|spanned| spanned.token == Token::Literal('}'))
+                {
+                    self.take()?;
+                    return Ok((Count::from_decimal(min), None, u64::MAX));
+                }
+                let max = self.decimal(offset)?;
+                self.budget.charge_wide(
+                    Resource::CompileSteps,
+                    min.len() as u128 + max.len() as u128,
+                )?;
+                if min.len().cmp(&max.len()).then_with(|| min.cmp(max)) == Ordering::Greater {
+                    return Err(syntax(offset, "quantity minimum exceeds its maximum"));
+                }
+                if !self
+                    .take()?
+                    .is_some_and(|spanned| spanned.token == Token::Literal('}'))
+                {
+                    return Err(syntax(offset, "a quantity must end with its closing brace"));
+                }
+                Ok((
+                    Count::from_decimal(min),
+                    Some(Count::from_decimal(max)),
+                    span(min, max),
+                ))
+            }
+            _ => Err(syntax(offset, "quantity must be n, n, or n,m")),
+        }
+    }
+
+    fn range(&mut self, lo: char, hi: char) -> Result<usize, Error> {
+        self.set(Set::Range {
+            lo,
+            hi,
+            folded: self.modes.insensitive,
+        })
+    }
+
+    fn property(&mut self, name: &str, offset: usize) -> Result<usize, Error> {
+        self.budget
+            .charge_wide(Resource::CompileSteps, (name.len() as u128) * 10)?;
+        let found = if name.starts_with("Is") {
+            block(self.profile, name)
+        } else {
+            unicode_tables::CATEGORIES
+                .binary_search_by_key(&name, |&(name, _)| name)
+                .ok()
+                .map(|index| unicode_tables::CATEGORIES[index].1)
+        };
+        let Some(ranges) = found else {
+            return Err(syntax(
+                offset,
+                "unknown Unicode category or Is-prefixed block",
+            ));
+        };
+        self.set(Set::Table(ranges))
+    }
+
+    fn member(&mut self, token: Token<'_>, offset: usize) -> Result<usize, Error> {
+        let (set, negated) = match token {
+            Token::Literal(ch) | Token::ClassMember(ch) => return self.range(ch, ch),
+            Token::Escape('n') => return self.range('\n', '\n'),
+            Token::Escape('r') => return self.range('\r', '\r'),
+            Token::Escape('t') => return self.range('\t', '\t'),
+            Token::Escape('d' | 'D') => (self.property("Nd", offset)?, token == Token::Escape('D')),
+            Token::Escape('&' | '~') => {
+                return Err(syntax(offset, "escape is outside XPath SingleCharEsc"));
+            }
+            Token::Escape(ch) => return self.range(ch, ch),
+            Token::NameEscape { negated, chars } => {
+                let ranges = if chars {
+                    dated_names::NAME
+                } else {
+                    dated_names::NAME_START
+                };
+                (self.set(Set::Table(ranges))?, negated)
+            }
+            Token::SpaceEscape { negated } => (self.set(Set::Space)?, negated),
+            Token::WordEscape { negated } => (self.set(Set::Word)?, negated),
+            Token::UnicodeProperty { negated, name } => (self.property(name, offset)?, negated),
+            Token::Dot => return self.set(Set::Dot),
+            _ => return Err(syntax(offset, "construct is not a character-class member")),
+        };
+        if negated {
+            self.set(Set::Complement(set))
+        } else {
+            Ok(set)
+        }
+    }
+
+    fn scalar(token: &Token<'_>) -> Option<char> {
+        match token {
+            Token::Literal(ch) | Token::ClassMember(ch) => Some(*ch),
+            Token::Escape('n') => Some('\n'),
+            Token::Escape('r') => Some('\r'),
+            Token::Escape('t') => Some('\t'),
+            Token::Escape('d' | 'D' | '&' | '~') => None,
+            Token::Escape(ch) => Some(*ch),
+            _ => None,
+        }
+    }
+
+    fn class_union(&mut self, frame: &mut ClassFrame, set: usize) -> Result<(), Error> {
+        frame.union = Some(if let Some(previous) = frame.union {
+            self.set(Set::Union(previous, set))?
+        } else {
+            set
+        });
+        Ok(())
+    }
+
+    fn class(&mut self, negated: bool) -> Result<usize, Error> {
+        let mut frames = Vec::new();
+        self.class_frame(&mut frames, negated)?;
+        loop {
+            let Some(spanned) = self.take()? else {
+                return Err(syntax(
+                    self.offset(self.text.len()),
+                    "unclosed character class",
+                ));
+            };
+            let offset = self.offset(spanned.span.start);
+            match spanned.token {
+                Token::ClassOpen { negated } => self.class_frame(&mut frames, negated)?,
+                Token::ClassClose => {
+                    let frame = frames.pop().expect("a class frame is present");
+                    let set = self.finish_class(frame, offset)?;
+                    if let Some(parent) = frames.last_mut() {
+                        let base = parent
+                            .difference
+                            .take()
+                            .expect("nested class is a subtraction operand");
+                        parent.union = Some(self.set(Set::Difference(base, set))?);
+                        parent.negated = false;
+                    } else {
+                        let slots = frames.capacity() as u64 * 3;
+                        self.budget.release_vec(frames)?;
+                        self.budget.release_compile_slots(slots);
+                        return Ok(set);
+                    }
+                }
+                Token::Subtract => {
+                    let frame = frames.last_mut().expect("a class frame is present");
+                    let base = frame
+                        .union
+                        .take()
+                        .ok_or_else(|| syntax(offset, "subtraction has no left character group"))?;
+                    frame.difference = Some(if frame.negated {
+                        self.set(Set::Complement(base))?
+                    } else {
+                        base
+                    });
+                }
+                token => {
+                    let frame = frames.last_mut().expect("a class frame is present");
+                    if token == Token::Literal('-') {
+                        let at_end = self.peek()?.is_some_and(|next| {
+                            matches!(next.token, Token::ClassClose | Token::Subtract)
+                        });
+                        if frame.union.is_some() && !at_end {
+                            return Err(syntax(
+                                offset,
+                                "an unescaped hyphen is only a group endpoint or range operator",
+                            ));
+                        }
+                    }
+                    let set = self.class_member(token, offset)?;
+                    self.class_union(frame, set)?;
+                }
+            }
+        }
+    }
+
+    fn class_frame(&mut self, frames: &mut Vec<ClassFrame>, negated: bool) -> Result<(), Error> {
+        grow(&mut self.budget, frames, 3)?;
+        frames.push(ClassFrame {
+            negated,
+            union: None,
+            difference: None,
+        });
+        Ok(())
+    }
+
+    fn finish_class(&mut self, frame: ClassFrame, offset: usize) -> Result<usize, Error> {
+        let Some(set) = frame.union else {
+            return Err(syntax(offset, "character group is empty"));
+        };
+        if frame.difference.is_some() {
+            return Err(syntax(offset, "subtraction operand is missing"));
+        }
+        if frame.negated {
+            self.set(Set::Complement(set))
+        } else {
+            Ok(set)
+        }
+    }
+
+    fn class_member(&mut self, token: Token<'_>, offset: usize) -> Result<usize, Error> {
+        if let Some(lo) = Self::scalar(&token)
+            && token != Token::Literal('-')
+            && self
+                .peek()?
+                .is_some_and(|next| next.token == Token::Literal('-'))
+        {
+            self.take()?;
+            let Some(next) = self.peek()? else {
+                return Err(syntax(offset, "unclosed character range"));
+            };
+            if matches!(next.token, Token::ClassClose | Token::Subtract) {
+                let lo = self.range(lo, lo)?;
+                let dash = self.range('-', '-')?;
+                return self.set(Set::Union(lo, dash));
+            }
+            let hi = Self::scalar(&next.token)
+                .filter(|_| next.token != Token::Literal('-'))
+                .ok_or_else(|| {
+                    syntax(
+                        self.offset(next.span.start),
+                        "range endpoint must be one character",
+                    )
+                })?;
+            self.take()?;
+            if lo > hi {
+                return Err(syntax(offset, "character range is reversed"));
+            }
+            return self.range(lo, hi);
+        }
+        self.member(token, offset)
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    fn accepted(profile: Profile, source: &str, flags: &str) -> CompiledPattern {
+        compile(profile, source, flags, Limits::new())
+            .unwrap_or_else(|error| panic!("{profile:?} {source:?} {flags:?}: {error}"))
+    }
+
+    #[test]
+    fn dated_grammar_controls_groups_flags_backreferences_and_reluctance() {
+        for profile in [Profile::Xpath20, Profile::Xpath31] {
+            for source in [
+                "",
+                "|",
+                "a|",
+                "(a|b)*?",
+                "(a)\\12",
+                "(a)(b)\\2\\1",
+                "a{0002,003}?",
+                "^+$?",
+            ] {
+                accepted(profile, source, "ismxi");
+            }
+            for source in [
+                "(a\\1)",
+                "((?:a)\\1)",
+                "(a)\\2",
+                "*a",
+                "a**",
+                "a{,2}",
+                "a{2,1}",
+                "a{1",
+                "a}",
+                "(a",
+                "a)",
+                "(?i)a",
+                r"\&",
+                r"\~",
+            ] {
+                assert!(
+                    matches!(
+                        compile(profile, source, "", Limits::new()),
+                        Err(Error::Syntax { .. })
+                    ),
+                    "{source}"
+                );
+            }
+        }
+        accepted(Profile::Xpath31, "(?:a)(b)\\1", "");
+        assert!(matches!(
+            compile(Profile::Xpath20, "(?:a)", "", Limits::new()),
+            Err(Error::Syntax { .. })
+        ));
+        accepted(Profile::Xpath31, r"[(\1.*?", "qsimx");
+        assert!(matches!(
+            compile(Profile::Xpath20, "literal", "q", Limits::new()),
+            Err(Error::Flags { .. })
+        ));
+        assert!(matches!(
+            compile(Profile::Xpath31, "literal", "Q", Limits::new()),
+            Err(Error::Flags { .. })
+        ));
+    }
+
+    #[test]
+    fn flag_errors_are_typed_and_operational_admission_has_precedence() {
+        for (profile, flags, offset, flag) in [
+            (Profile::Xpath20, "q", 0, 'q'),
+            (Profile::Xpath31, "Q", 0, 'Q'),
+            (Profile::Xpath31, "ié", 1, 'é'),
+        ] {
+            let error = compile(profile, "a", flags, Limits::new()).unwrap_err();
+            assert_eq!(
+                error,
+                Error::Flags {
+                    offset,
+                    flag,
+                    profile
+                }
+            );
+            assert!(!error.is_operational());
+            assert!(error.to_string().contains("FORX0001"));
+            let source = compile(
+                profile,
+                "a",
+                flags,
+                Limits::new().with(Resource::PatternBytes, 0),
+            )
+            .unwrap_err();
+            assert!(source.is_operational());
+            assert!(matches!(
+                source,
+                Error::Resource(super::super::Refusal {
+                    resource: Resource::PatternBytes,
+                    ..
+                })
+            ));
+            let work = compile(
+                profile,
+                "a",
+                flags,
+                Limits::new().with(Resource::CompileSteps, 0),
+            )
+            .unwrap_err();
+            assert!(work.is_operational());
+            assert!(matches!(
+                work,
+                Error::Resource(super::super::Refusal {
+                    resource: Resource::CompileSteps,
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn class_grammar_has_nested_subtraction_exact_properties_and_ranges() {
+        for source in [
+            r"[a-z-[aeiou]]",
+            r"[^a-[b-[c]]]",
+            r"[-a]",
+            r"[a-]",
+            r"[a--[b]]",
+            r"[\--a]",
+            r"[a&&b~~c]",
+            r"[\i\I\c\C\s\S\w\W\d\D]",
+            r"[\p{Lu}\P{IsGreekandCoptic}]",
+            r"\p{IsHighSurrogates}",
+            r"[\n-\r]",
+        ] {
+            accepted(Profile::Xpath31, source, "i");
+        }
+        for source in [
+            r"[]",
+            r"[z-a]",
+            r"[a-b-c]",
+            r"[a-\d]",
+            r"[\d-a]",
+            r"[a-[b]c]",
+            r"[a[b]]",
+            r"\p{Greek}",
+            r"\p{Script=Greek}",
+            r"\p{IsBasic_Latin}",
+            r"\p{isBasicLatin}",
+            r"\p{Lu",
+        ] {
+            assert!(
+                matches!(
+                    compile(Profile::Xpath31, source, "", Limits::new()),
+                    Err(Error::Syntax { .. })
+                ),
+                "{source}"
+            );
+        }
+        let program = accepted(Profile::Xpath31, r"[^A-Z-[IO]]", "i");
+        assert!(matches!(program.sets.last(), Some(Set::Difference(..))));
+        let program = accepted(Profile::Xpath31, r"\p{Lu}", "i");
+        assert!(matches!(program.sets.as_slice(), [Set::Table(_)]));
+    }
+
+    #[test]
+    fn surrogate_category_escapes_are_invalid_in_both_dated_grammars() {
+        for profile in [Profile::Xpath20, Profile::Xpath31] {
+            for source in [r"\p{Cs}", r"\P{Cs}", r"[\p{Cs}]", r"[\P{Cs}]"] {
+                assert!(
+                    matches!(
+                        compile(profile, source, "", Limits::new()),
+                        Err(Error::Syntax { .. })
+                    ),
+                    "{profile:?} {source}"
+                );
+            }
+            for source in [
+                r"\p{C}",
+                r"\p{Cc}",
+                r"\p{Cf}",
+                r"\p{Co}",
+                r"\p{Cn}",
+                r"\P{C}",
+                r"\p{IsHighSurrogates}",
+                r"\P{IsHighSurrogates}",
+            ] {
+                accepted(profile, source, "");
+            }
+        }
+    }
+
+    #[test]
+    fn xsd10_second_edition_block_names_are_part_of_both_dated_laws() {
+        let member = |profile, source: &str, ch: char| {
+            accepted(profile, source, "")
+                .is_match(ch.encode_utf8(&mut [0; 4]), Limits::new())
+                .unwrap()
+        };
+        for profile in [Profile::Xpath20, Profile::Xpath31] {
+            // Names only the dated table defines, with their dated extents.
+            for (source, inside, outside) in [
+                (r"\p{IsGreek}", '\u{3b1}', '\u{400}'),
+                (r"\p{IsCombiningMarksforSymbols}", '\u{20d0}', '\u{2100}'),
+                (r"\p{IsPrivateUse}", '\u{e000}', '\u{f0000}'),
+                (r"[a\p{IsGreek}-[\p{IsGreekandCoptic}]]", 'a', '\u{3b1}'),
+            ] {
+                assert!(member(profile, source, inside), "{profile:?} {source}");
+                assert!(!member(profile, source, outside), "{profile:?} {source}");
+            }
+            assert!(!member(profile, r"\P{IsGreek}", '\u{3b1}'));
+            assert!(member(profile, r"[^\p{IsPrivateUse}]", 'a'));
+            // Unicode 17 names remain recognized beside the dated table.
+            accepted(profile, r"\p{IsGreekandCoptic}\p{IsOldItalic}", "");
+            // Neighbouring names in neither table are FORX0002 syntax.
+            for source in [
+                r"\p{IsGreekX}",
+                r"\p{Isgreek}",
+                r"\p{IsPrivateUseArea-}",
+                r"\p{IsBadBlockName}",
+            ] {
+                assert!(
+                    matches!(
+                        compile(profile, source, "", Limits::new()),
+                        Err(Error::Syntax { .. })
+                    ),
+                    "{profile:?} {source}"
+                );
+            }
+        }
+        // A name in both tables keeps its dated extent only under XPath 2.0.
+        for (source, ch, xpath20) in [
+            (r"\p{IsSpecials}", '\u{feff}', true),
+            (r"\p{IsSpecials}", '\u{fffe}', false),
+            (r"\p{IsSpecials}", '\u{fff0}', true),
+            (r"\p{IsHangulSyllables}", '\u{d7a4}', false),
+            (r"\p{IsHangulSyllables}", '\u{d7a3}', true),
+            (r"\p{IsCJKUnifiedIdeographsExtensionA}", '\u{4db6}', false),
+            (r"\p{IsArabicPresentationForms-B}", '\u{feff}', false),
+        ] {
+            assert_eq!(member(Profile::Xpath20, source, ch), xpath20, "{source}");
+        }
+        for (source, ch, xpath31) in [
+            (r"\p{IsSpecials}", '\u{feff}', false),
+            (r"\p{IsSpecials}", '\u{fffe}', true),
+            (r"\p{IsHangulSyllables}", '\u{d7a4}', true),
+            (r"\p{IsCJKUnifiedIdeographsExtensionA}", '\u{4db6}', true),
+            (r"\p{IsArabicPresentationForms-B}", '\u{feff}', true),
+        ] {
+            assert_eq!(member(Profile::Xpath31, source, ch), xpath31, "{source}");
+        }
+    }
+
+    #[test]
+    fn folded_lead_ranges_rely_on_a_symmetric_case_variant_relation() {
+        // A folded range is expanded into its members' variants; the matcher
+        // asks whether a character's variants meet the range. Those agree only
+        // when the generated direct relation is symmetric.
+        for &(point, variants) in unicode_tables::CASE_VARIANTS {
+            for &variant in variants {
+                let back = char::from_u32(variant).map_or(&[][..], case_variants);
+                assert!(back.contains(&point), "{point:#x} -> {variant:#x}");
+            }
+        }
+        let program = accepted(Profile::Xpath31, "k|[x-z]", "i");
+        assert_eq!(
+            program.lead.scalars,
+            [
+                ('K', 'K'),
+                ('X', 'Z'),
+                ('k', 'k'),
+                ('x', 'z'),
+                ('\u{212a}', '\u{212a}')
+            ]
+        );
+        // Wider folded ranges and other set forms keep set evaluation.
+        assert_eq!(
+            accepted(Profile::Xpath31, "[a-\u{2000}]", "i").lead.scalars,
+            []
+        );
+        assert_eq!(accepted(Profile::Xpath31, "\\p{Lu}", "").lead.scalars, []);
+        assert!(matches!(
+            accepted(Profile::Xpath31, "\\p{Lu}", "").lead.first,
+            Lead::Set(_)
+        ));
+    }
+
+    #[test]
+    fn name_escapes_use_the_xml_10_second_edition_classes_in_both_laws() {
+        let member = |profile, source: &str, ch: char| {
+            accepted(profile, source, "")
+                .is_match(ch.encode_utf8(&mut [0; 4]), Limits::new())
+                .unwrap()
+        };
+        for profile in [Profile::Xpath20, Profile::Xpath31] {
+            // (character, in \i, in \c). U+10000 and U+0D7A are name characters
+            // only in later XML editions; U+0030 and U+00B7 are name but not
+            // initial characters; U+9FA6 lies past the edition's ideographs.
+            for (ch, start, name) in [
+                ('A', true, true),
+                ('_', true, true),
+                (':', true, true),
+                ('\u{4e00}', true, true),
+                ('\u{3007}', true, true),
+                ('0', false, true),
+                ('-', false, true),
+                ('.', false, true),
+                ('\u{b7}', false, true),
+                ('\u{300}', false, true),
+                ('\u{10000}', false, false),
+                ('\u{d7a}', false, false),
+                ('\u{9fa6}', false, false),
+                ('\u{37f}', false, false),
+                (' ', false, false),
+            ] {
+                assert_eq!(
+                    member(profile, r"^\i$", ch),
+                    start,
+                    "{profile:?} \\i {ch:?}"
+                );
+                assert_eq!(member(profile, r"^\c$", ch), name, "{profile:?} \\c {ch:?}");
+                assert_eq!(
+                    member(profile, r"^\I$", ch),
+                    !start,
+                    "{profile:?} \\I {ch:?}"
+                );
+                assert_eq!(
+                    member(profile, r"^\C$", ch),
+                    !name,
+                    "{profile:?} \\C {ch:?}"
+                );
+                assert_eq!(
+                    member(profile, r"^[\i]$", ch),
+                    start,
+                    "{profile:?} [\\i] {ch:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repetition_windows_are_exact_above_u64_and_saturate_beyond_it() {
+        for (min, max, window) in [
+            ("5", "5", 0),
+            ("0", "18446744073709551615", u64::MAX),
+            ("1", "18446744073709551615", u64::MAX - 1),
+            ("1", "18446744073709551617", u64::MAX),
+            ("18446744073709551616", "18446744073709551617", 1),
+            (
+                "99999999999999999999999999999",
+                "100000000000000000000000000002",
+                3,
+            ),
+            ("18446744073709551616", "36893488147419103231", u64::MAX),
+            ("18446744073709551616", "36893488147419103232", u64::MAX),
+        ] {
+            assert_eq!(span(min, max), window, "{{{min},{max}}}");
+            let program = accepted(Profile::Xpath31, &format!("a{{{min},{max}}}"), "");
+            let repeat = program.nodes.len() - 1;
+            let exact = span(min, max);
+            // A finite pair is read from its quantities; a pair above `u64`
+            // from the kept window.
+            assert_eq!(program.window(repeat), exact, "{{{min},{max}}}");
+        }
+        for (source, window) in [
+            ("a?", 1),
+            ("a*", u64::MAX),
+            ("a+", u64::MAX),
+            ("a{7,}", u64::MAX),
+            ("a{7}", 0),
+        ] {
+            let program = accepted(Profile::Xpath31, source, "");
+            assert_eq!(program.window(program.nodes.len() - 1), window, "{source}");
+        }
+    }
+
+    #[test]
+    fn arbitrary_decimal_quantities_keep_order_without_syntax_overflow() {
+        let large = "18446744073709551616";
+        let program = accepted(Profile::Xpath31, &format!("a{{{large},{large}}}"), "");
+        assert!(matches!(
+            program.nodes.last(),
+            Some(Node::Repeat {
+                min: Count::AboveU64,
+                max: Some(Count::AboveU64),
+                ..
+            })
+        ));
+        accepted(
+            Profile::Xpath20,
+            &format!("a{{000{large},999999999999999999999999999999}}"),
+            "",
+        );
+        accepted(
+            Profile::Xpath31,
+            "a{00000000000000000000000000000000000000002}",
+            "",
+        );
+        assert!(matches!(
+            compile(
+                Profile::Xpath31,
+                "a{9999999999999999999999999,18446744073709551616}",
+                "",
+                Limits::new()
+            ),
+            Err(Error::Syntax { .. })
+        ));
+    }
+
+    #[test]
+    fn whitespace_removal_uses_the_existing_cursor_and_preserves_raw_offsets() {
+        let source = "é  a  * *";
+        let error = compile(Profile::Xpath31, source, "x", Limits::new()).unwrap_err();
+        assert!(matches!(error, Error::Syntax { offset: 9, .. }), "{error}");
+        let program = accepted(Profile::Xpath31, r"hello\ sworld", "x");
+        assert_eq!(program.source(), r"hello\ sworld");
+        assert!(program.sets.iter().any(|set| matches!(set, Set::Space)));
+        let quoted = accepted(Profile::Xpath31, r"hello\ sworld", "qx");
+        assert_eq!(quoted.captures, 0);
+        assert!(!quoted.sets.iter().any(|set| matches!(set, Set::Space)));
+    }
+
+    #[test]
+    fn all_compiler_refusals_are_operational_and_cached_admission_is_current() {
+        let source = "(a|b)+";
+        let program = accepted(Profile::Xpath31, source, "");
+        for (resource, required) in [
+            (Resource::PatternBytes, source.len() as u64),
+            (Resource::ProgramNodes, program.admission.nodes),
+            (Resource::CompileSlots, program.admission.slots),
+        ] {
+            let high = Limits::new().with(resource, required);
+            assert!(
+                compile(Profile::Xpath31, source, "", high).is_ok(),
+                "{resource:?}"
+            );
+            let low = high.with(resource, required - 1);
+            assert!(
+                matches!(
+                    compile(Profile::Xpath31, source, "", low),
+                    Err(Error::Resource(_))
+                ),
+                "{resource:?}"
+            );
+            assert!(
+                matches!(program.admit(low), Err(Error::Resource(_))),
+                "{resource:?}"
+            );
+        }
+        assert!(matches!(
+            compile(
+                Profile::Xpath31,
+                "[",
+                "",
+                Limits::new().with(Resource::PatternBytes, 0)
+            ),
+            Err(Error::Resource(_))
+        ));
+        assert!(matches!(
+            compile(
+                Profile::Xpath31,
+                source,
+                "",
+                Limits::new().with(Resource::CompileSteps, 0)
+            ),
+            Err(Error::Resource(_))
+        ));
+    }
+
+    #[test]
+    fn compile_steps_admit_the_exact_requirement_and_refuse_one_less() {
+        for (profile, source, flags) in [
+            (Profile::Xpath31, "(a|b)+", ""),
+            (Profile::Xpath20, r"([\p{IsGreek}-[α]]{2,3}?) \1?", "ix"),
+            (Profile::Xpath31, "a.b", "q"),
+        ] {
+            let steps = |limit| Limits::new().with(Resource::CompileSteps, limit);
+            // Work is monotone, so bisection finds the exact requirement.
+            let (mut refused, mut admitted) = (0, Limits::new().limit(Resource::CompileSteps));
+            assert!(compile(profile, source, flags, steps(admitted)).is_ok());
+            while admitted - refused > 1 {
+                let middle = refused + (admitted - refused) / 2;
+                if compile(profile, source, flags, steps(middle)).is_ok() {
+                    admitted = middle;
+                } else {
+                    refused = middle;
+                }
+            }
+            let required = admitted;
+            assert!(compile(profile, source, flags, steps(required)).is_ok());
+            let refusal = compile(profile, source, flags, steps(required - 1)).unwrap_err();
+            assert!(
+                matches!(
+                    refusal,
+                    Error::Resource(super::super::Refusal {
+                        resource: Resource::CompileSteps,
+                        required: needed,
+                        limit,
+                    }) if needed == u128::from(required) && limit == required - 1
+                ),
+                "{profile:?} {source:?}: {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_groups_and_subtractions_construct_and_drop_on_a_bounded_native_stack() {
+        purrdf_stack::on_stack(256 * 1024, || {
+            let groups = format!("{}a{}", "(".repeat(6000), ")".repeat(6000));
+            let program = accepted(Profile::Xpath31, &groups, "");
+            assert_eq!(program.capture_count(), 6000);
+            drop(program);
+            let classes = format!("{}a{}", "[a-".repeat(3000), "]".repeat(3000));
+            let program = accepted(Profile::Xpath31, &classes, "");
+            assert!(program.sets.len() > 3000);
+            drop(program);
+        })
+        .unwrap();
+    }
+}

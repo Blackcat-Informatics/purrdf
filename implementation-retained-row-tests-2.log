@@ -1,0 +1,23 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error: method `search` is never used
+   --> crates/sparql-eval/src/knn/mod.rs:672:8
+    |
+288 | impl EmbeddingSpace {
+    | ------------------- method in this implementation
+...
+672 |     fn search<A: Arithmetic>(
+    |        ^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: associated function `link_without_exists` is never used
+   --> crates/sparql-eval/src/vm/mod.rs:256:19
+    |
+205 | impl<'e, I: Copy + PartialEq> Linked<'e, I> {
+    | ------------------------------------------- associated function in this implementation
+...
+256 |     pub(crate) fn link_without_exists<D: DatasetView<Id = I> + Sync>(
+    |                   ^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `purrdf-sparql-eval` (lib test) due to 2 previous errors

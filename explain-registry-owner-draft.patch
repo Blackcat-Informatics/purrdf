@@ -1,0 +1,240 @@
+diff --git a/crates/rdf-core/src/binding_pattern.rs b/crates/rdf-core/src/binding_pattern.rs
+--- a/crates/rdf-core/src/binding_pattern.rs
++++ b/crates/rdf-core/src/binding_pattern.rs
+@@ -191,9 +191,7 @@
+     /// Arity 2 yields `"bb"`, `"bf"`, `"fb"` or `"ff"`; arity 3 yields e.g.
+     /// `"bfb"`. Round-trips with [`from_code`](BindingPattern::from_code).
+     pub fn code(self) -> String {
+-        (0..self.arity())
+-            .map(|p| if self.is_bound(p) { 'b' } else { 'f' })
+-            .collect()
++        self.to_string()
+     }
+ 
+     /// Reconstruct a pattern from its per-position [`code`](BindingPattern::code)
+@@ -212,6 +210,15 @@
+     }
+ }
+ 
++impl std::fmt::Display for BindingPattern {
++    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        for position in 0..self.arity() {
++            formatter.write_str(if self.is_bound(position) { "b" } else { "f" })?;
++        }
++        Ok(())
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+diff --git a/crates/sparql-eval/src/property_fn.rs b/crates/sparql-eval/src/property_fn.rs
+--- a/crates/sparql-eval/src/property_fn.rs
++++ b/crates/sparql-eval/src/property_fn.rs
+@@ -2192,7 +2192,7 @@
+     /// relation was registered without one — which is what "does not
+     /// participate in ranked retrieval" looks like when the declaration lives
+     /// beside the registry rather than on the relation trait.
+-    pub ranked: Option<RankedDeclaration>,
++    pub ranked: Option<Arc<RankedDeclaration>>,
+ }
+ 
+ /// A caller-injected table of property functions, keyed by predicate IRI.
+diff --git a/crates/sparql-eval/src/property_fn.rs b/crates/sparql-eval/src/property_fn.rs
+--- a/crates/sparql-eval/src/property_fn.rs
++++ b/crates/sparql-eval/src/property_fn.rs
+@@ -2240,7 +2240,7 @@
+     /// Never iterated: every ordered surface reads it **by key** while
+     /// iterating the already-sorted `relations`, so a fixed-key hash map's
+     /// iteration order can never reach an output.
+-    ranked: DetHashMap<String, RankedDeclaration>,
++    ranked: DetHashMap<String, Arc<RankedDeclaration>>,
+ }
+ 
+ impl core::fmt::Debug for PropertyFunctionRegistry {
+diff --git a/crates/sparql-eval/src/property_fn.rs b/crates/sparql-eval/src/property_fn.rs
+--- a/crates/sparql-eval/src/property_fn.rs
++++ b/crates/sparql-eval/src/property_fn.rs
+@@ -2387,7 +2387,7 @@
+         if let Some(decl) = decl {
+             validate_declaration(&iri, &decl, relation.as_ref());
+             assert_stratum_unclaimed(&iri, &decl, &self.ranked);
+-            self.ranked.insert(iri.clone(), decl);
++            self.ranked.insert(iri.clone(), Arc::new(decl));
+         }
+         self.relations.insert(iri, relation);
+     }
+@@ -2399,7 +2399,7 @@
+     /// nothing, and nothing is what a consumer reads back.
+     #[must_use]
+     pub fn ranked_declaration(&self, iri: &str) -> Option<&RankedDeclaration> {
+-        self.ranked.get(iri)
++        self.ranked.get(iri).map(Arc::as_ref)
+     }
+ 
+     /// Resolve a predicate IRI to its registered relation, if any.
+diff --git a/crates/sparql-eval/src/property_fn.rs b/crates/sparql-eval/src/property_fn.rs
+--- a/crates/sparql-eval/src/property_fn.rs
++++ b/crates/sparql-eval/src/property_fn.rs
+@@ -2633,7 +2633,7 @@
+ fn assert_stratum_unclaimed(
+     iri: &str,
+     decl: &RankedDeclaration,
+-    ranked: &DetHashMap<String, RankedDeclaration>,
++    ranked: &DetHashMap<String, Arc<RankedDeclaration>>,
+ ) {
+     let claimed = ranked
+         .iter()
+diff --git a/crates/sparql-eval/src/property_fn.rs b/crates/sparql-eval/src/property_fn.rs
+--- a/crates/sparql-eval/src/property_fn.rs
++++ b/crates/sparql-eval/src/property_fn.rs
+@@ -2514,37 +2514,53 @@
+     ///
+     /// [`EvalError::FunctionOperational`] if any registered relation's declaration methods panic.
+     pub fn describe(&self) -> Result<Vec<PfDescriptor>, EvalError> {
+-        let mut out: Vec<PfDescriptor> = Vec::with_capacity(self.relations.len());
++        self.describe_admitted(&crate::WorkspaceCapability::resident())?
++            .try_into_resident().map_err(|_| EvalError::WorkspaceBoundOverflow)
++    }
++
++    /// The bounded description path shares the registered immutable ranked
++    /// declaration. Only concrete descriptor arrays and mode/IRI text allocate.
++    pub(crate) fn describe_admitted(
++        &self,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<crate::workspace::AdmittedRecords<PfDescriptor>, EvalError> {
++        let mut out = crate::workspace::AdmittedRecords::with_capacity(self.relations.len(), workspace)?;
+         for (iri, relation) in &self.relations {
+             let arity = declaration_contained(iri, "arity", || relation.arity())?;
+-            let volatility =
+-                declaration_contained(iri, "determinism class", || relation.volatility())?;
+-            let modes = declaration_contained(iri, "declared modes", || relation.modes().to_vec())?;
+-            let mut described_modes = Vec::with_capacity(modes.len());
+-            for mode in modes {
+-                let rows_per_invocation =
+-                    declaration_contained(iri, "row bound", || relation.rows_per_invocation(mode))?;
++            let volatility = declaration_contained(iri, "determinism class", || relation.volatility())?;
++            let modes = declaration_contained(iri, "declared modes", || relation.modes())?;
++            let bytes = std::alloc::Layout::array::<PfMode>(modes.len())
++                .map_err(|_| EvalError::WorkspaceBoundOverflow)?.size()
++                .checked_add(iri.len()).ok_or(EvalError::WorkspaceBoundOverflow)?;
++            let bytes = modes.iter().try_fold(bytes, |bytes, mode| {
++                bytes.checked_add(mode.arity()).ok_or(EvalError::WorkspaceBoundOverflow)
++            })?;
++            let allocation = workspace.charge(u64::try_from(bytes)
++                .map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++            let mut described_modes = crate::workspace::vector::<PfMode>(modes.len(), "EXPLAIN declared modes")?;
++            for &mode in modes {
++                let rows_per_invocation = declaration_contained(iri, "row bound", || relation.rows_per_invocation(mode))?;
+                 described_modes.push(PfMode {
+-                    code: mode.code(),
++                    code: crate::workspace::format_exact(&mode, mode.arity(), "EXPLAIN mode spelling")?,
+                     rows_per_invocation,
+                 });
+             }
+             out.push(PfDescriptor {
+-                iri: iri.clone(),
++                iri: crate::workspace::string(iri, "EXPLAIN relation IRI")?,
+                 subject_arity: arity.subject,
+                 object_arity: arity.object,
+                 volatility,
+                 modes: described_modes,
+-                // Read BY KEY out of the side table while iterating `relations`,
+-                // never by iterating `ranked`: the fixed-key map's order stays
+-                // unobservable, and the output is sorted by IRI below.
+                 ranked: self.ranked.get(iri).cloned(),
+-            });
++            }, allocation)?;
+         }
+-        out.sort_by(|a, b| a.iri.cmp(&b.iri));
++        // Registered IRIs are unique, so unstable sorting preserves the same
++        // canonical order while requiring no auxiliary allocation.
++        out.as_mut_slice().sort_unstable_by(|a, b| a.iri.cmp(&b.iri));
+         Ok(out)
+-    }
++
+ }
++}
+ 
+ /// Refuse a stratum some already-registered producer serves: one stratum carries
+ /// one producer.
+diff --git a/crates/sparql-eval/src/agg_fn.rs b/crates/sparql-eval/src/agg_fn.rs
+--- a/crates/sparql-eval/src/agg_fn.rs
++++ b/crates/sparql-eval/src/agg_fn.rs
+@@ -708,11 +708,16 @@
+     agg: &dyn CustomAggregate,
+     iri: &str,
+ ) -> Result<Vec<ScalarvalSpec>, EvalError> {
+-    crate::contain::declaration_contained(KIND, iri, "scalarval declaration", || {
+-        agg.scalarvals().to_vec()
+-    })
++    scalarvals_borrowed(agg, iri).map(<[ScalarvalSpec]>::to_vec)
+ }
+ 
++fn scalarvals_borrowed<'a>(
++    agg: &'a dyn CustomAggregate,
++    iri: &str,
++) -> Result<&'a [ScalarvalSpec], EvalError> {
++    crate::contain::declaration_contained(KIND, iri, "scalarval declaration", || agg.scalarvals())
++}
++
+ // ---------------------------------------------------------------------------
+ // The registry
+ // ---------------------------------------------------------------------------
+diff --git a/crates/sparql-eval/src/agg_fn.rs b/crates/sparql-eval/src/agg_fn.rs
+--- a/crates/sparql-eval/src/agg_fn.rs
++++ b/crates/sparql-eval/src/agg_fn.rs
+@@ -973,22 +973,43 @@
+     /// [`EvalError::FunctionOperational`] if any registered aggregate's declaration methods
+     /// panic.
+     pub fn describe(&self) -> Result<Vec<AggDescriptor>, EvalError> {
+-        let mut out: Vec<AggDescriptor> = Vec::with_capacity(self.aggregates.len());
++        self.describe_admitted(&crate::WorkspaceCapability::resident())?
++            .try_into_resident().map_err(|_| EvalError::WorkspaceBoundOverflow)
++    }
++
++    pub(crate) fn describe_admitted(
++        &self,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<crate::workspace::AdmittedRecords<AggDescriptor>, EvalError> {
++        let mut out = crate::workspace::AdmittedRecords::with_capacity(self.aggregates.len(), workspace)?;
+         for (iri, aggregate) in &self.aggregates {
+             let aggregate = aggregate.as_ref();
++            let arity = arity_contained(aggregate, iri)?;
++            let volatility = volatility_contained(aggregate, iri)?;
++            let algebraic_class = algebraic_class_contained(aggregate, iri)?;
++            let state_bound = state_bound_contained(aggregate, iri)?;
++            let scalarvals = scalarvals_borrowed(aggregate, iri)?;
++            let bytes = std::alloc::Layout::array::<ScalarvalSpec>(scalarvals.len())
++                .map_err(|_| EvalError::WorkspaceBoundOverflow)?.size()
++                .checked_add(iri.len()).ok_or(EvalError::WorkspaceBoundOverflow)?;
++            let allocation = workspace.charge(u64::try_from(bytes)
++                .map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++            let mut owned_scalarvals = crate::workspace::vector::<ScalarvalSpec>(scalarvals.len(), "EXPLAIN aggregate scalar declarations")?;
++            owned_scalarvals.extend_from_slice(scalarvals);
+             out.push(AggDescriptor {
+-                iri: iri.clone(),
+-                arity: arity_contained(aggregate, iri)?,
+-                volatility: volatility_contained(aggregate, iri)?,
+-                algebraic_class: algebraic_class_contained(aggregate, iri)?,
+-                state_bound: state_bound_contained(aggregate, iri)?,
+-                scalarvals: scalarvals_contained(aggregate, iri)?,
+-            });
++                iri: crate::workspace::string(iri, "EXPLAIN aggregate IRI")?,
++                arity,
++                volatility,
++                algebraic_class,
++                state_bound,
++                scalarvals: owned_scalarvals,
++            }, allocation)?;
+         }
+-        out.sort_by(|a, b| a.iri.cmp(&b.iri));
++        out.as_mut_slice().sort_unstable_by(|a, b| a.iri.cmp(&b.iri));
+         Ok(out)
+-    }
++
+ }
++}
+ 
+ /// A deterministic fingerprint of everything about `aggregates` that can change
+ /// either the prepare-time admission of an `AGG(<iri>, …)` call OR the

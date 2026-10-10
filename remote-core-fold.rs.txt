@@ -1,0 +1,36 @@
+    /// Consume the same term bottom-up under the original native allocation
+    /// owner. String/box construction belongs to the supplied leaf/triple doors.
+    /// # Errors
+    /// Preserves the first visitor failure or before-growth storage refusal.
+    pub fn try_fold_owned_with_memory<T, E, S: purrdf_lex::allocation::Admission + ?Sized>(
+        self,
+        mut leaf: impl FnMut(Self, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
+        mut triple: impl FnMut(T, T, T, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<T, OwnedTermFoldError<E>> {
+        enum Step { Enter(TermValue), Assemble }
+        let Self::Triple { .. } = self else { return leaf(self, memory).map_err(OwnedTermFoldError::Visitor); };
+        let mut steps = Vec::new();
+        memory.push(&mut steps, Step::Enter(self))?;
+        let mut answers = Vec::new();
+        memory.reserve(&mut answers, 3)?;
+        while let Some(step) = steps.pop() {
+            match step {
+                Step::Enter(Self::Triple { s, p, o }) => {
+                    memory.extend(&mut steps, [Step::Assemble, Step::Enter(o.into_inner()), Step::Enter(p.into_inner()), Step::Enter(s.into_inner())])?;
+                }
+                Step::Enter(term) => { let answer = leaf(term, memory).map_err(OwnedTermFoldError::Visitor)?; memory.push(&mut answers, answer)?; }
+                Step::Assemble => {
+                    let o = answers.pop().expect("a triple's object is folded");
+                    let p = answers.pop().expect("a triple's predicate is folded");
+                    let s = answers.pop().expect("a triple's subject is folded");
+                    let answer = triple(s, p, o, memory).map_err(OwnedTermFoldError::Visitor)?;
+                    memory.push(&mut answers, answer)?;
+                }
+            }
+        }
+        let answer = answers.pop().expect("the root's answer is the last one assembled");
+        memory.release_vec(steps)?;
+        memory.release_vec(answers)?;
+        Ok(answer)
+    }

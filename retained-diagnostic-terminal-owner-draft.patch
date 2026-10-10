@@ -1,0 +1,557 @@
+--- a/crates/sparql-eval/src/fallible.rs
++++ b/crates/sparql-eval/src/fallible.rs
+@@ -63,6 +63,55 @@
+     }
+ }
+ 
++/// An allocation-free engine control refusal, including before the first
++/// workspace account exists. This preserves the exact static cause without
++/// constructing diagnostic text under a refused allocation.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++#[non_exhaustive]
++pub enum QueryControlFailure {
++    /// The required allocation owner was not supplied.
++    Unpriced(&'static str),
++    /// A concrete live layout cannot be represented.
++    LayoutOverflow,
++    /// The native diagnostic formatter violated its contract.
++    DiagnosticFormatting,
++    /// The shared account stopped after retaining its original source cause.
++    WorkspaceStopped,
++}
++
++impl QueryControlFailure {
++    pub(crate) fn from_eval_error(error: &crate::EvalError) -> Option<Self> {
++        match error {
++            crate::EvalError::WorkspaceUnpriced(value) => Some(Self::Unpriced(value)),
++            crate::EvalError::WorkspaceBoundOverflow => Some(Self::LayoutOverflow),
++            crate::EvalError::UnstableNativeDiagnostic => Some(Self::DiagnosticFormatting),
++            crate::EvalError::WorkspaceStopped => Some(Self::WorkspaceStopped),
++            _ => None,
++        }
++    }
++
++    fn as_eval_error(self) -> crate::EvalError {
++        match self {
++            Self::Unpriced(value) => crate::EvalError::WorkspaceUnpriced(value),
++            Self::LayoutOverflow => crate::EvalError::WorkspaceBoundOverflow,
++            Self::DiagnosticFormatting => crate::EvalError::UnstableNativeDiagnostic,
++            Self::WorkspaceStopped => crate::EvalError::WorkspaceStopped,
++        }
++    }
++
++    /// Stable machine-readable identity without a rendered allocation.
++    #[must_use]
++    pub fn diagnostic_code(self) -> &'static str { self.as_eval_error().diagnostic_code().expect("every static control failure has a diagnostic code") }
++}
++
++impl std::fmt::Display for QueryControlFailure {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        std::fmt::Display::fmt(&self.as_eval_error(), f)
++    }
++}
++
++impl std::error::Error for QueryControlFailure {}
++
+ /// A query over a [`FallibleDatasetView`](purrdf_core::FallibleDatasetView) that did not
+ /// reach a complete result.
+ ///
+@@ -79,7 +128,7 @@
+     /// Parsing or evaluation failed while the view itself remained operational.
+     Query {
+         /// The ordinary parse/evaluation diagnostic.
+-        diagnostic: RdfDiagnostic,
++        diagnostic: crate::RetainedDiagnostic,
+         /// Deterministic evidence captured at the final ready checkpoint.
+         evidence: Evidence,
+     },
+@@ -99,6 +148,13 @@
+         /// Backend-owned or previously admitted evidence at the checkpoint.
+         evidence: Evidence,
+     },
++    /// An engine control invariant refused the operation without allocating text.
++    ControlFailure {
++        /// Exact typed, allocation-free engine cause.
++        failure: QueryControlFailure,
++        /// Backend-owned or previously admitted evidence.
++        evidence: Evidence,
++    },
+     /// A caller-set execution governor stopped the query before it finished, over a view
+     /// that stayed operational throughout.
+     ///
+@@ -141,6 +197,9 @@
+                 evidence: map(evidence),
+             },
+             Self::AllocationFailed { construct, evidence } => FallibleSparqlError::AllocationFailed { construct, evidence: map(evidence) },
++            Self::ControlFailure { failure, evidence } => FallibleSparqlError::ControlFailure {
++                failure, evidence: map(evidence),
++            },
+             Self::BudgetExhausted {
+                 tripped,
+                 partial,
+@@ -160,6 +219,7 @@
+             Self::Query { evidence, .. }
+             | Self::Operational { evidence, .. }
+             | Self::AllocationFailed { evidence, .. }
++            | Self::ControlFailure { evidence, .. }
+             | Self::BudgetExhausted { evidence, .. } => evidence,
+         }
+     }
+@@ -168,7 +228,7 @@
+     #[must_use]
+     pub const fn operational_error(&self) -> Option<&OperationalError> {
+         match self {
+-            Self::Query { .. } | Self::AllocationFailed { .. } | Self::BudgetExhausted { .. } => None,
++            Self::Query { .. } | Self::AllocationFailed { .. } | Self::ControlFailure { .. } | Self::BudgetExhausted { .. } => None,
+             Self::Operational { error, .. } => Some(error),
+         }
+     }
+@@ -176,10 +236,10 @@
+     /// Borrow the ordinary query diagnostic, when parsing/evaluation failed while
+     /// the view remained ready.
+     #[must_use]
+-    pub const fn diagnostic(&self) -> Option<&RdfDiagnostic> {
++    pub fn diagnostic(&self) -> Option<&RdfDiagnostic> {
+         match self {
+-            Self::Query { diagnostic, .. } => Some(diagnostic),
+-            Self::Operational { .. } | Self::AllocationFailed { .. } | Self::BudgetExhausted { .. } => None,
++            Self::Query { diagnostic, .. } => Some(diagnostic.diagnostic()),
++            Self::Operational { .. } | Self::AllocationFailed { .. } | Self::ControlFailure { .. } | Self::BudgetExhausted { .. } => None,
+         }
+     }
+ 
+@@ -187,7 +247,7 @@
+     #[must_use]
+     pub const fn tripped(&self) -> Option<TrippedGovernor> {
+         match self {
+-            Self::Query { .. } | Self::Operational { .. } | Self::AllocationFailed { .. } => None,
++            Self::Query { .. } | Self::Operational { .. } | Self::AllocationFailed { .. } | Self::ControlFailure { .. } => None,
+             Self::BudgetExhausted { tripped, .. } => Some(*tripped),
+         }
+     }
+@@ -196,7 +256,7 @@
+     #[must_use]
+     pub const fn partial_answers(&self) -> Option<&PartialAnswers<crate::RetainedPartialSparqlResult>> {
+         match self {
+-            Self::Query { .. } | Self::Operational { .. } | Self::AllocationFailed { .. } => None,
++            Self::Query { .. } | Self::Operational { .. } | Self::AllocationFailed { .. } | Self::ControlFailure { .. } => None,
+             Self::BudgetExhausted { partial, .. } => Some(partial),
+         }
+     }
+@@ -210,6 +270,7 @@
+             Self::Query { diagnostic, .. } => diagnostic.fmt(f),
+             Self::Operational { error, .. } => write!(f, "operational query failure: {error}"),
+             Self::AllocationFailed { construct, .. } => write!(f, "engine allocation failed: {construct}"),
++            Self::ControlFailure { failure, .. } => failure.fmt(f),
+             Self::BudgetExhausted { tripped, .. } => {
+                 write!(f, "query budget exhausted: {tripped}")
+             }
+@@ -227,6 +288,7 @@
+         match self {
+             Self::Query { diagnostic, .. } => Some(diagnostic),
+             Self::Operational { error, .. } => Some(error),
++            Self::ControlFailure { failure, .. } => Some(failure),
+             // A tripped governor is a typed outcome, not an error with a cause: there is
+             // no underlying failure to point at, and inventing one would report a
+             // bounded query as a broken one.
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -2760,7 +2760,7 @@
+         let _reporting = reserve_fallible_reporting(dataset)?;
+         let prepared = match self.prepare_for(query_text, base_iri, options.env) {
+             Ok(prepared) => prepared,
+-            Err(diagnostic) => return finish_fallible_read(dataset, Err(diagnostic.into())),
++            Err(diagnostic) => return finish_fallible_read(dataset, Err(diagnostic.into()), Some(&_reporting.execution())),
+         };
+         let workspace = reserve_fallible_workspace(dataset, &prepared.query, false, options)?;
+         let publication = crate::user_fn::RefusalPublication::default();
+@@ -2790,7 +2790,7 @@
+         if let Some(error) = workspace.take_failure() {
+             return Err(fallible_admission_failure(dataset, bounded_workspace::AdmissionError::Operational(error)));
+         }
+-        publication.finish(finish_fallible_read(dataset, measured), |error| {
++        publication.finish(finish_fallible_read(dataset, measured, Some(&workspace)), |error| {
+             matches!(error, FallibleSparqlError::Query { .. })
+         })
+     }
+@@ -3348,7 +3348,7 @@
+                 dataset, bounded_workspace::AdmissionError::Operational(error),
+             ));
+         }
+-        publication.finish(finish_fallible_read(dataset, evaluated), |error| {
++        publication.finish(finish_fallible_read(dataset, evaluated, Some(&workspace)), |error| {
+             matches!(error, FallibleSparqlError::Query { .. })
+         })
+     }
+@@ -3804,11 +3804,13 @@
+ #[derive(Debug)]
+ enum EvaluationFailure {
+     Diagnostic(RdfDiagnostic),
++    RetainedDiagnostic(crate::RetainedDiagnostic),
+     Evaluation(crate::EvalError),
+ }
+ 
+ purrdf_lex::variant_from!(EvaluationFailure {
+     Diagnostic(RdfDiagnostic),
++    RetainedDiagnostic(crate::RetainedDiagnostic),
+     Evaluation(crate::EvalError),
+ });
+ 
+@@ -3816,6 +3818,7 @@
+     fn into_diagnostic(self) -> RdfDiagnostic {
+         match self {
+             Self::Diagnostic(diagnostic) => diagnostic,
++            Self::RetainedDiagnostic(diagnostic) => diagnostic.diagnostic().clone(),
+             Self::Evaluation(error) => RdfDiagnostic::error(
+                 eval_diagnostic_code(&error, "native-sparql-query-eval"),
+                 error.to_string(),
+@@ -3869,28 +3872,71 @@
+ fn finish_fallible_read<D, R>(
+     dataset: &D,
+     evaluation: Result<R, EvaluationFailure>,
++    workspace: Option<&crate::workspace::QueryWorkspace<D::ReadError>>,
+ ) -> FallibleScopedResult<R, D::Error, D::Evidence>
+ where
+     D: FallibleDatasetView + Sync,
+ {
++    if let Some(error) = workspace.and_then(crate::workspace::QueryWorkspace::take_failure) {
++        return Err(fallible_admission_failure(dataset, bounded_workspace::AdmissionError::Operational(error)));
++    }
+     match dataset.operation_status() {
+-        ViewOperationStatus::Failed { error, evidence } => {
+-            Err(FallibleSparqlError::Operational { error, evidence })
+-        }
+-        ViewOperationStatus::Ready { evidence } => match evaluation {
+-            Ok(value) => Ok((value, evidence)),
+-            Err(EvaluationFailure::Evaluation(crate::EvalError::AllocationFailed { construct })) =>
+-                Err(FallibleSparqlError::AllocationFailed { construct, evidence }),
+-            Err(diagnostic) => {
+-                let diagnostic = diagnostic.into_diagnostic();
+-                // Rendering an externally supplied cause can change the source.
+-                // The publication certificate is the checkpoint AFTER rendering.
+-                match dataset.operation_status() {
+-                    ViewOperationStatus::Failed { error, evidence } => Err(FallibleSparqlError::Operational { error, evidence }),
+-                    ViewOperationStatus::Ready { evidence } => Err(FallibleSparqlError::Query { diagnostic, evidence }),
++        ViewOperationStatus::Failed { error, evidence } => Err(FallibleSparqlError::Operational { error, evidence }),
++        ViewOperationStatus::Ready { evidence } => {
++            let failure = match evaluation {
++                Ok(value) => return Ok((value, evidence)),
++                Err(failure) => failure,
++            };
++            if let EvaluationFailure::Evaluation(error) = &failure {
++                if let crate::EvalError::AllocationFailed { construct } = error {
++                    return Err(FallibleSparqlError::AllocationFailed { construct, evidence });
++                }
++                if let Some(failure) = crate::QueryControlFailure::from_eval_error(error) {
++                    return Err(FallibleSparqlError::ControlFailure { failure, evidence });
+                 }
+             }
+-        },
++            let diagnostic = match failure {
++                EvaluationFailure::RetainedDiagnostic(diagnostic) => Ok(diagnostic),
++                EvaluationFailure::Diagnostic(diagnostic) if dataset.storage_live_budget().is_none() => {
++                    crate::RetainedDiagnostic::resident(diagnostic)
++                }
++                EvaluationFailure::Diagnostic(_) => Err(crate::EvalError::WorkspaceUnpriced(
++                    "raw query diagnostic without its original producer grant",
++                )),
++                EvaluationFailure::Evaluation(error) => match workspace {
++                    Some(owner) => crate::RetainedDiagnostic::render(
++                        eval_diagnostic_code(&error, "native-sparql-query-eval"),
++                        &error, &owner.capability(),
++                    ),
++                    None if dataset.storage_live_budget().is_none() => crate::RetainedDiagnostic::render(
++                        eval_diagnostic_code(&error, "native-sparql-query-eval"),
++                        &error, &crate::WorkspaceCapability::default(),
++                    ),
++                    None => Err(crate::EvalError::WorkspaceUnpriced(
++                        "query diagnostic without its original execution account",
++                    )),
++                },
++            };
++            // Rendering and admission can change a source. A nonsticky refusal
++            // retained by the original account outranks a formatting failure.
++            if let Some(error) = workspace.and_then(crate::workspace::QueryWorkspace::take_failure) {
++                return Err(fallible_admission_failure(dataset, bounded_workspace::AdmissionError::Operational(error)));
++            }
++            match dataset.operation_status() {
++                ViewOperationStatus::Failed { error, evidence } => Err(FallibleSparqlError::Operational { error, evidence }),
++                ViewOperationStatus::Ready { evidence } => match diagnostic {
++                    Ok(diagnostic) => Err(FallibleSparqlError::Query { diagnostic, evidence }),
++                    Err(crate::EvalError::AllocationFailed { construct }) => Err(FallibleSparqlError::AllocationFailed { construct, evidence }),
++                    Err(error) => {
++                        // LexicalFrame and Shared publication return only static
++                        // physical failures; another cause is an invariant bug.
++                        let failure = crate::QueryControlFailure::from_eval_error(&error)
++                            .expect("native diagnostic publication returns a static physical failure");
++                        Err(FallibleSparqlError::ControlFailure { failure, evidence })
++                    }
++                },
++            }
++        }
+     }
+ }
+ 
+@@ -3918,17 +3964,15 @@
+     D: FallibleDatasetView + Sync,
+ {
+     match dataset.operation_status() {
+-        ViewOperationStatus::Failed { error, evidence } => {
+-            FallibleSparqlError::Operational { error, evidence }
+-        }
++        ViewOperationStatus::Failed { error, evidence } => FallibleSparqlError::Operational { error, evidence },
+         ViewOperationStatus::Ready { evidence } => match failure {
+-            bounded_workspace::AdmissionError::Query(diagnostic) => FallibleSparqlError::Query {
+-                diagnostic,
+-                evidence,
+-            },
+-            bounded_workspace::AdmissionError::Operational(error) => {
+-                FallibleSparqlError::Operational { error, evidence }
+-            }
++            bounded_workspace::AdmissionError::Query(diagnostic) => finish_fallible_read::<D, ()>(
++                dataset, Err(diagnostic.into()), None,
++            ).expect_err("a diagnostic cannot publish success"),
++            bounded_workspace::AdmissionError::Evaluation(error) => finish_fallible_read::<D, ()>(
++                dataset, Err(error.into()), None,
++            ).expect_err("an admission failure cannot publish success"),
++            bounded_workspace::AdmissionError::Operational(error) => FallibleSparqlError::Operational { error, evidence },
+             bounded_workspace::AdmissionError::AllocationFailed(construct) => FallibleSparqlError::AllocationFailed { construct, evidence },
+         },
+     }
+@@ -3965,10 +4009,10 @@
+     let result = match evaluation {
+         Ok(result) => retain_query_result(dataset, result, workspace)?,
+         Err(diagnostic) => {
+-            return finish_fallible_read(dataset, Err(diagnostic)).map(|_: ((), _)| unreachable!());
++            return finish_fallible_read(dataset, Err(diagnostic), workspace).map(|_: ((), _)| unreachable!());
+         }
+     };
+-    finish_fallible_read(dataset, Ok(result)).map(|((result, _owner), evidence)| {
++    finish_fallible_read(dataset, Ok(result), workspace).map(|((result, _owner), evidence)| {
+         CompleteSparqlResult { result, evidence: crate::RetainedEvidence::backend(evidence) }
+     })
+ }
+@@ -4054,7 +4098,7 @@
+                 Ok(GovernedOutcome::Complete { result, .. }) => {
+                     let (result, owner) = retain_query_result(dataset, result, workspace)
+                         .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, governors.clone())))?;
+-                    let ((result, _owner), view) = finish_fallible_read(dataset, Ok((result, owner)))
++                    let ((result, _owner), view) = finish_fallible_read(dataset, Ok((result, owner)), workspace)
+                         .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, governors.clone())))?;
+                     Ok(CompleteSparqlResult {
+                         result,
+@@ -4073,7 +4117,7 @@
+                         PartialAnswers::AtMost(partial) => PartialAnswers::AtMost(retain(partial)?),
+                         PartialAnswers::Unknown(barrier) => PartialAnswers::Unknown(barrier),
+                     };
+-                    let (partial, view) = finish_fallible_read(dataset, Ok(partial))
++                    let (partial, view) = finish_fallible_read(dataset, Ok(partial), workspace)
+                         .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, governors.clone())))?;
+                     Err(FallibleSparqlError::BudgetExhausted {
+                         tripped: exhausted.tripped,
+@@ -4081,7 +4125,7 @@
+                         evidence: GovernedEvidence::new(view, governors.clone()),
+                     })
+                 }
+-                Err(diagnostic) => finish_fallible_read::<D, ()>(dataset, Err(diagnostic))
++                Err(diagnostic) => finish_fallible_read::<D, ()>(dataset, Err(diagnostic), workspace)
+                     .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, governors)))
+                     .map(|_| unreachable!("a failed query cannot publish a complete answer")),
+             }
+--- a/crates/sparql-eval/src/engine/bounded_workspace.rs
++++ b/crates/sparql-eval/src/engine/bounded_workspace.rs
+@@ -23,6 +23,7 @@
+ /// Admission keeps operational causes typed until the caller selects its egress.
+ pub(super) enum AdmissionError<E> {
+     Query(RdfDiagnostic),
++    Evaluation(EvalError),
+     Operational(E),
+     AllocationFailed(&'static str),
+ }
+@@ -33,7 +34,7 @@
+     fn from(error: EvalError) -> Self {
+         match error {
+             EvalError::AllocationFailed { construct } => Self::AllocationFailed(construct),
+-            error => Self::Query(diagnostic(&error)),
++            error => Self::Evaluation(error),
+         }
+     }
+ }
+@@ -44,6 +45,7 @@
+     pub(super) fn into_diagnostic(self) -> RdfDiagnostic {
+         match self {
+             Self::Query(error) => error,
++            Self::Evaluation(error) => diagnostic(&error),
+             Self::Operational(error) => diagnostic(&EvalError::source_read(error)),
+             Self::AllocationFailed(construct) => diagnostic(&EvalError::AllocationFailed { construct }),
+         }
+--- a/crates/sparql-eval/src/retained.rs
++++ b/crates/sparql-eval/src/retained.rs
+@@ -322,6 +322,13 @@
+         Self::from_admitted(value, allocation)
+     }
+ 
++    /// The resident public boundary keeps an already caller-owned diagnostic.
++    /// Operational bounded paths must supply its original admitted producer owner.
++    pub(crate) fn resident(value: purrdf_core::RdfDiagnostic) -> Result<Self, EvalError> {
++        let allocation = crate::WorkspaceCapability::default().charge(0)?;
++        Self::from_admitted(value, allocation)
++    }
++
+     pub(crate) fn control_bytes() -> usize {
+         Shared::<DiagnosticPayload>::allocation_layout().size()
+     }
+@@ -345,4 +352,3 @@
+ impl std::error::Error for RetainedDiagnostic {
+     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> { Some(self.diagnostic()) }
+ }
+-
+--- a/crates/sparql-eval/src/lib.rs
++++ b/crates/sparql-eval/src/lib.rs
+@@ -206,7 +206,7 @@
+ pub use execution::set_memo_verification_enabled;
+ pub use extension_env::ExtensionEnv;
+ pub use fallible::{
+-    CompleteSparqlResult, FallibleScopedResult, FallibleSparqlError, FallibleSparqlResult,
++    QueryControlFailure, CompleteSparqlResult, FallibleScopedResult, FallibleSparqlError, FallibleSparqlResult,
+ };
+ pub use governed::{
+     BudgetExhausted, GovernedEvidence, GovernedOutcome, GovernedUpdateOutcome, PartialAnswers,
+@@ -349,4 +349,3 @@
+ 
+ /// Immutable admission-carrying native producer diagnostics.
+ pub use error::{NativeDiagnostic, NativeDiagnosticKind};
+-
+--- a/crates/sparql-eval/src/engine/graph_build.rs
++++ b/crates/sparql-eval/src/engine/graph_build.rs
+@@ -225,15 +225,18 @@
+                         publish(staged, destination, Some(state.evidence())),
+                         evidence,
+                     )),
+-                    Err(GraphBuildError::Query(diagnostic)) => Err(FallibleSparqlError::Query {
+-                        diagnostic,
+-                        evidence,
+-                    }),
+-                    Err(GraphBuildError::Evaluation(error)) => super::finish_fallible_read::<D, ()>(
+-                        dataset, Err(error.into()),
+-                    ).map_err(|error| error.map_evidence(|view| {
+-                        GovernedEvidence::new(view, state.evidence())
+-                    })).map(|()| unreachable!("a native failure cannot publish a graph")),
++                    Err(error @ (GraphBuildError::Query(_) | GraphBuildError::Evaluation(_))) => {
++                        let failure = match error {
++                            GraphBuildError::Query(diagnostic) => diagnostic.into(),
++                            GraphBuildError::Evaluation(error) => error.into(),
++                            GraphBuildError::BudgetExhausted { .. } => unreachable!("matched a query failure"),
++                        };
++                        super::finish_fallible_read::<D, ()>(
++                            dataset, Err(failure), Some(&workspace),
++                        ).map_err(|error| error.map_evidence(|view| {
++                            GovernedEvidence::new(view, state.evidence())
++                        })).map(|_| unreachable!("a native failure cannot publish a graph"))
++                    },
+                     Err(GraphBuildError::BudgetExhausted { tripped, .. }) => {
+                         let (result, _) = super::retain_query_result(
+                             dataset, empty_result_for(&prepared.query), Some(&workspace),
+--- /dev/null
++++ b/crates/sparql-eval/tests/diagnostic_owned_admission.rs
+@@ -0,0 +1,100 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Real public diagnostic publication, allocator traffic and retained lifetimes.
++
++mod support;
++
++use purrdf_alloc_probe::CurrentThreadWindow;
++use purrdf_core::{DatasetView, SparqlRequest};
++use purrdf_sparql_eval::{
++    FallibleSparqlError, NativeDiagnostic, NativeDiagnosticKind, NativeSparqlEngine,
++    QueryControlFailure, QueryGovernors, QueryOptions, RetainedDiagnostic,
++};
++use purrdf_sparql_eval::user_fn::{Arity, UserFunctionRegistry, Volatility};
++use support::segmented::{CEILING, fixture, open_with_evidence};
++use std::sync::Arc;
++
++#[global_allocator]
++static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
++
++#[test]
++fn initial_control_outcome_clone_and_render_require_no_allocator() {
++    struct Sink;
++    impl std::fmt::Write for Sink {
++        fn write_str(&mut self, _: &str) -> std::fmt::Result { Ok(()) }
++    }
++    for failure in [
++        QueryControlFailure::Unpriced("missing owned factory"),
++        QueryControlFailure::LayoutOverflow,
++        QueryControlFailure::DiagnosticFormatting,
++        QueryControlFailure::WorkspaceStopped,
++    ] {
++        let window = CurrentThreadWindow::open();
++        let error: FallibleSparqlError<std::convert::Infallible, ()> =
++            FallibleSparqlError::ControlFailure { failure, evidence: () };
++        let cloned = error.clone();
++        std::fmt::write(&mut Sink, format_args!("{cloned}")).unwrap();
++        assert!(!failure.diagnostic_code().is_empty());
++        drop(error);
++        drop(cloned);
++        assert_eq!(window.close().allocations, 0,
++            "refused initial admission cannot allocate even for reporting or cloning");
++    }
++}
++
++fn extract<E, V>(error: FallibleSparqlError<E, V>) -> RetainedDiagnostic {
++    let FallibleSparqlError::Query { diagnostic, evidence } = error else {
++        panic!("the healthy source must publish the retained original native diagnostic");
++    };
++    drop(evidence);
++    diagnostic
++}
++
++#[test]
++fn native_error_retains_original_payload_across_all_public_entries_and_extraction() {
++    let (image, _) = fixture();
++    let text: Arc<str> = Arc::from("original admitted native failure é ".repeat(512));
++    let engine = NativeSparqlEngine::new();
++    let mut registry = UserFunctionRegistry::default();
++    let original = text.clone();
++    registry.register_native_admitted(
++        "http://example.org/fail", Arity::Exact(0), Volatility::Stable,
++        Arc::new(move |_, workspace| Err(NativeDiagnostic::error(
++            NativeDiagnosticKind::Internal, &original, workspace,
++        ))),
++    );
++    let bound = engine.bind_functions(registry, QueryOptions::EMPTY.env).unwrap();
++    let options = QueryOptions::EMPTY.with_functions(&bound);
++    let query = "SELECT (<http://example.org/fail>() AS ?value) WHERE {}";
++    let prepared = engine.prepare_query_with_options(query, None, options).unwrap();
++    let request = || SparqlRequest { query, base_iri: None, substitutions: &[] };
++    for entry in 0..4 {
++        let source = open_with_evidence(&image, CEILING, 2, 16_384);
++        let window = CurrentThreadWindow::open();
++        let diagnostic = match entry {
++            0 => extract(engine.query_fallible_view(&source, request(), options).unwrap_err()),
++            1 => extract(engine.query_prepared_fallible_view(&source, &prepared, &[], options).unwrap_err()),
++            2 => extract(engine.query_governed_fallible_view(&source, request(), options, &QueryGovernors::METERED)
++                .unwrap_err()),
++            _ => extract(engine.query_prepared_governed_fallible_view(
++                &source, &prepared, &[], options, &QueryGovernors::METERED,
++            ).unwrap_err()),
++        };
++        let measured = window.close();
++        assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
++        assert!(source.evidence().peak_bytes() <= CEILING);
++        assert_eq!(diagnostic.code, purrdf_sparql_eval::EvalError::INTERNAL_CODE);
++        assert!(diagnostic.message.ends_with(text.as_ref()));
++        let live = source.evidence().live_bytes();
++        let window = CurrentThreadWindow::open();
++        let clone = diagnostic.clone();
++        assert_eq!(window.close().allocations, 0);
++        drop(diagnostic);
++        assert_eq!(source.evidence().live_bytes(), live);
++        assert!(clone.message.ends_with(text.as_ref()));
++        drop(clone);
++        assert!(source.evidence().live_bytes() < live,
++            "the final error payload owner releases its original grant");
++    }
++}

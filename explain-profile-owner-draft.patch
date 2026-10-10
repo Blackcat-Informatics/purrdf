@@ -1,0 +1,60 @@
+diff --git a/crates/sparql-eval/src/governor/mod.rs b/crates/sparql-eval/src/governor/mod.rs
+--- a/crates/sparql-eval/src/governor/mod.rs
++++ b/crates/sparql-eval/src/governor/mod.rs
+@@ -2086,24 +2086,45 @@
+ /// one `label\tcost` line per entry in table order, every line terminated by `\n`. Tab and
+ /// newline cannot occur in a label, so no entry can be encoded two ways and no two
+ /// distinct schedules can encode alike.
++fn write_schedule(
++    out: &mut impl std::fmt::Write,
++    id: &str,
++    version: u32,
++    schedule: &[(&str, u64)],
++) -> std::fmt::Result {
++    writeln!(out, "{id}")?;
++    writeln!(out, "{version}")?;
++    for (label, cost) in schedule { writeln!(out, "{label}\t{cost}")?; }
++    Ok(())
++}
++
++#[cfg(test)]
+ fn schedule_preimage(id: &str, version: u32, schedule: &[(&str, u64)]) -> String {
+     let mut preimage = String::new();
+-    preimage.push_str(id);
+-    preimage.push('\n');
+-    preimage.push_str(&version.to_string());
+-    preimage.push('\n');
+-    for (label, cost) in schedule {
+-        preimage.push_str(label);
+-        preimage.push('\t');
+-        preimage.push_str(&cost.to_string());
+-        preimage.push('\n');
+-    }
++    write_schedule(&mut preimage, id, version, schedule)
++        .expect("writing a resident schedule preimage cannot fail");
+     preimage
+ }
+ 
++/// Hash the one schedule spelling directly from its borrowed fields. No
++/// temporary preimage String or decimal conversion String is constructed.
++fn schedule_hash(id: &str, version: u32, schedule: &[(&str, u64)]) -> [u8; 32] {
++    struct HashText(sha2::Sha256);
++    impl std::fmt::Write for HashText {
++        fn write_str(&mut self, text: &str) -> std::fmt::Result {
++            self.0.update(text.as_bytes());
++            Ok(())
++        }
++    }
++    let mut text = HashText(sha2::Sha256::new());
++    write_schedule(&mut text, id, version, schedule)
++        .expect("the SHA text sink cannot fail");
++    text.0.finalize().into()
++}
++
+ /// The lowercase-hex SHA-256 of [`schedule_preimage`].
+ fn schedule_digest(id: &str, version: u32, schedule: &[(&str, u64)]) -> String {
+-    let digest = sha2::Sha256::digest(schedule_preimage(id, version, schedule).as_bytes());
++    let digest = schedule_hash(id, version, schedule);
+     purrdf_hash::hex::encode(&digest)
+ }
+ 

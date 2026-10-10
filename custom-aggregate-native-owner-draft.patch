@@ -1,0 +1,942 @@
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -101,7 +101,8 @@
+ 
+ pub(crate) mod owners;
+ use crate::workspace::AdmittedVec;
+-use owners::{DedupState, order_permutation};
++use owners::DedupState;
++pub(crate) use owners::order_permutation;
+ 
+ use std::cmp::Ordering;
+ use std::sync::Arc;
+@@ -118,9 +119,8 @@
+ 
+ use purrdf_xsd::datatype::XSD_STRING;
+ 
+-use crate::DetHashSet;
+ use crate::agg_fn::AggregateAccumulator as _;
+-use crate::convert::{ground_term_to_workspace_value, literal_to_value, named_node_to_value};
++use crate::convert::{ground_term_to_workspace_value, named_node_to_value};
+ use crate::error::EvalError;
+ use crate::eval::{EvalCtx, eval_evaluated};
+ #[cfg(test)]
+@@ -2299,19 +2299,18 @@
+         _allocation: crate::WorkspaceAllocation,
+     },
+     Numeric(Option<NumericFold>, NumericAggregate),
+-    Custom(Box<ContextualCustomFold>),
+-}
+-
+-enum AggregateFinished {
+-    Resident(TermValue),
+-    Admitted(crate::WorkspaceTerm),
++    Custom {
++        value: Box<ContextualCustomFold>,
++        // The actual box dies before its external control grant.
++        allocation: crate::WorkspaceAllocation,
++    },
+ }
+ 
+ struct ContextualCustomFold {
+-    accumulator: Box<dyn crate::agg_fn::AggregateAccumulator>,
++    accumulator: crate::agg_fn::WorkspaceAccumulator,
+     aggregate: Arc<dyn crate::agg_fn::CustomAggregate>,
+-    iri: String,
+-    scalarvals: Vec<(String, TermValue)>,
++    iri: purrdf_lex::allocation::SharedText,
++    scalarvals: AggregateScalarvals,
+     survivors: AdmittedVec<Vec<TermValue>>,
+     survivor_owners: AdmittedVec<AggregateSurvivorOwners>,
+     admitted_work: u64,
+@@ -2357,46 +2356,60 @@
+             )?,
+             AggregateFunction::Custom(iri) => {
+                 let iri = iri.as_str();
+-                let custom = ctx.aggregates.resolve(iri).cloned().ok_or_else(|| {
+-                    EvalError::function(format!("no custom aggregate is registered for <{iri}>"))
+-                })?;
+-                let bound = crate::agg_fn::state_bound_contained(custom.as_ref(), iri)?;
++                let custom = ctx
++                    .aggregates
++                    .resolve(iri)
++                    .cloned()
++                    .ok_or_else(|| missing_custom_aggregate(iri, &ctx.growth))?;
++                let bound = crate::agg_fn::state_bound_contained_admitted(
++                    custom.as_ref(),
++                    iri,
++                    &ctx.growth,
++                )?;
+                 if let Err(tripped) =
+                     ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bound)
+                 {
+                     record_contextual_trip(ctx, local_trip, tripped);
+                     return Ok(None);
+                 }
+-                let scalarvals: Vec<_> = agg
+-                    .scalarvals()
+-                    .iter()
+-                    .map(|(name, value)| (name.clone(), literal_to_value(value)))
+-                    .collect();
+-                let initial = crate::agg_fn::exact_numeric_cost_contained(
++                let scalarvals = AggregateScalarvals::resolve(agg, &ctx.growth)?;
++                let initial = crate::agg_fn::exact_numeric_cost_contained_admitted(
+                     custom.as_ref(),
+                     iri,
+                     &[],
+                     &scalarvals,
+                     ctx.division,
++                    &ctx.growth,
+                 )?;
+                 if let Err(tripped) = ctx.charge_exact_numeric(initial) {
+                     record_contextual_trip(ctx, local_trip, tripped);
+                     return Ok(None);
+                 }
+-                Self::Custom(Box::new(ContextualCustomFold {
+-                    accumulator: crate::agg_fn::init_contained(
+-                        custom.as_ref(),
+-                        iri,
+-                        &scalarvals,
+-                        ctx.division,
+-                    )?,
++                let allocation = ctx.growth.charge(
++                    u64::try_from(size_of::<ContextualCustomFold>())
++                        .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
++                )?;
++                let iri = ctx.growth.authored_text(iri)?;
++                let accumulator = crate::agg_fn::init_contained_admitted(
++                    custom.as_ref(),
++                    &iri,
++                    &scalarvals,
++                    ctx.division,
++                    &ctx.growth,
++                )?;
++                let value = purrdf_core::small::try_boxed(ContextualCustomFold {
++                    accumulator,
+                     aggregate: custom,
+-                    iri: iri.to_owned(),
++                    iri,
+                     scalarvals,
+                     survivors: AdmittedVec::new(&ctx.growth),
+                     survivor_owners: AdmittedVec::new(&ctx.growth),
+                     admitted_work: initial.work(),
+-                }))
++                })
++                .map_err(|_| EvalError::AllocationFailed {
++                    construct: "contextual custom aggregate control",
++                })?;
++                Self::Custom { value, allocation }
+             }
+             AggregateFunction::Fold => Self::builtin(
+                 crate::cdt_agg::FoldAccumulator::for_arguments_admitted(
+@@ -2417,7 +2430,7 @@
+             Self::Builtin { accumulator, .. } => accumulator
+                 .step_admitted(&values, &ctx.growth)
+                 .map(|()| None),
+-            Self::Custom(custom) => {
++            Self::Custom { value: custom, .. } => {
+                 // Price the complete fold before its arithmetic; argument
+                 // expressions have already run in contextual row order.
+                 custom.survivors.reserve_next()?;
+@@ -2428,12 +2441,13 @@
+                 // Preserve update order and early host errors. A complete-only
+                 // declaration requires accepted-prefix preflight before each
+                 // step; charge only growth in its conservative work bound.
+-                let cost = crate::agg_fn::exact_numeric_cost_contained(
++                let cost = crate::agg_fn::exact_numeric_cost_contained_admitted(
+                     custom.aggregate.as_ref(),
+                     &custom.iri,
+                     &custom.survivors,
+                     &custom.scalarvals,
+                     ctx.division,
++                    &ctx.growth,
+                 )?;
+                 let growth = purrdf_xsd::exact::Cost::new(
+                     cost.work().saturating_sub(custom.admitted_work),
+@@ -2443,10 +2457,11 @@
+                     return Ok(Some(tripped));
+                 }
+                 custom.admitted_work = custom.admitted_work.max(cost.work());
+-                crate::agg_fn::step_contained(
+-                    custom.accumulator.as_mut(),
++                crate::agg_fn::step_contained_admitted(
++                    &mut custom.accumulator,
+                     &custom.iri,
+                     custom.survivors.last().expect("accepted tuple"),
++                    &ctx.growth,
+                 )?;
+                 Ok(None)
+             }
+@@ -2470,34 +2485,44 @@
+         division: DivisionPolicy,
+         absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+         workspace: &crate::WorkspaceCapability,
+-    ) -> Result<Option<AggregateFinished>, EvalError> {
++    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+         match self {
+             Self::Builtin {
+                 accumulator,
+                 _allocation,
+             } => {
+-                let result = accumulator
+-                    .finish_admitted(workspace)
+-                    .map(|value| value.map(AggregateFinished::Admitted));
++                let result = accumulator.finish_admitted(workspace);
+                 drop(_allocation);
+                 result
+             }
+-            Self::Custom(custom) => {
+-                let ContextualCustomFold {
+-                    accumulator, iri, ..
+-                } = *custom;
+-                crate::agg_fn::finish_contained(accumulator, &iri, absorb)
+-                    .map(|value| value.map(AggregateFinished::Resident))
++            Self::Custom { value, allocation } => {
++                // The consuming native body has destroyed the original box
++                // before its outside control admission is released here.
++                let result = value.finish(absorb, workspace);
++                drop(allocation);
++                result
+             }
+             Self::Numeric(fold, aggregate) => match fold {
+                 None => Ok(None),
+                 Some(fold) => match aggregate {
+                     NumericAggregate::Sum => fold.finish_sum_admitted(workspace),
+                     NumericAggregate::Avg => fold.finish_avg_admitted(division, absorb, workspace),
+-                }
+-                .map(|value| value.map(AggregateFinished::Admitted)),
++                },
+             },
+         }
++    }
++}
++
++impl ContextualCustomFold {
++    fn finish(
++        self: Box<Self>,
++        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
++        let Self {
++            accumulator, iri, ..
++        } = *self;
++        crate::agg_fn::finish_contained_admitted(accumulator, &iri, absorb, workspace)
+     }
+ }
+ 
+@@ -2793,12 +2818,7 @@
+                         },
+                         &ctx.growth.clone(),
+                     )?
+-                    .map(|value| match value {
+-                        AggregateFinished::Admitted(value) => ctx.intern_workspace_term(value),
+-                        AggregateFinished::Resident(value) => ctx
+-                            .scratch
+-                            .try_intern_checked_admitted(ctx.dataset, value, &ctx.growth),
+-                    })
++                    .map(|value| ctx.intern_workspace_term(value))
+                     .transpose()?
+                     .flatten();
+             }
+@@ -2939,6 +2959,105 @@
+         self.grants.push_reserved(allocation);
+         Ok(())
+     }
++}
++
++/// Borrowed custom-aggregate ABI metadata with its original lexical/term owners.
++/// Values and the values' array are destroyed before either grant array.
++struct AggregateScalarvals {
++    values: AdmittedVec<(String, TermValue)>,
++    owners: AdmittedVec<[crate::WorkspaceAllocation; 2]>,
++}
++
++impl std::ops::Deref for AggregateScalarvals {
++    type Target = [(String, TermValue)];
++    fn deref(&self) -> &Self::Target {
++        &self.values
++    }
++}
++
++impl AggregateScalarvals {
++    fn resolve(
++        aggregate: &AggregateExpression,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Self, EvalError> {
++        let length = aggregate.scalarvals().len();
++        let mut result = Self {
++            values: AdmittedVec::with_capacity(length, workspace)?,
++            owners: AdmittedVec::with_capacity(length, workspace)?,
++        };
++        for (name, literal) in aggregate.scalarvals() {
++            // Both metadata destinations exist before creating their payload.
++            // `string` uses one fallible exact-capacity copy at the shared home.
++            let name_owner = workspace.charge(
++                u64::try_from(name.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
++            )?;
++            let name = crate::workspace::string(name, "aggregate scalarval name")?;
++            let term = crate::convert::literal_to_workspace_value(literal, workspace)?;
++            let (value, term_owner) = term.into_parts();
++            result.values.push_reserved((name, value));
++            result.owners.push_reserved([name_owner, term_owner]);
++        }
++        Ok(result)
++    }
++}
++
++/// DISTINCT's identity witnesses borrow the already retained survivor payloads.
++/// Hash collisions still compare exact RDF terms through the admitted native walk.
++/// No second term copy or independently unowned recursive Hash/Eq is created.
++#[derive(Default)]
++struct AggregateTupleWitnesses {
++    buckets: crate::AdmittedMap<u64, AdmittedVec<usize>>,
++}
++
++impl AggregateTupleWitnesses {
++    fn keep(
++        &mut self,
++        tuple: &[TermValue],
++        survivors: &[Vec<TermValue>],
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<bool, EvalError> {
++        use std::hash::Hasher as _;
++        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
++        hasher.write_usize(tuple.len());
++        for value in tuple {
++            hasher.write_u64(workspace.term_hash(value)?);
++        }
++        let hash = hasher.finish();
++        if let Some(bucket) = self.buckets.get(&hash) {
++            for &ordinal in bucket.iter() {
++                let previous = &survivors[ordinal];
++                let mut equal = previous.len() == tuple.len();
++                if equal {
++                    for (left, right) in previous.iter().zip(tuple) {
++                        if !workspace.terms_equal(left, right)? {
++                            equal = false;
++                            break;
++                        }
++                    }
++                }
++                if equal {
++                    return Ok(false);
++                }
++            }
++        }
++        let ordinal = survivors.len();
++        if let Some(bucket) = self.buckets.get_mut(&hash) {
++            bucket.push(ordinal)?;
++        } else {
++            let mut bucket = AdmittedVec::new(workspace);
++            bucket.push(ordinal)?;
++            self.buckets.insert_admitted(hash, bucket, workspace)?;
++        }
++        Ok(true)
++    }
++}
++
++fn missing_custom_aggregate(iri: &str, workspace: &crate::WorkspaceCapability) -> EvalError {
++    crate::NativeDiagnostic::error(
++        crate::NativeDiagnosticKind::Function,
++        format_args!("no custom aggregate is registered for <{iri}>"),
++        workspace,
++    )
+ }
+ 
+ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
+@@ -3156,8 +3275,7 @@
+             || Ok(CountAccumulator::default()),
+             |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+             &capability,
+-        )?
+-        .map(AggregateFinished::Admitted),
++        )?,
+         AggregateFunction::Sum => fold_numeric_admitted(
+             sequential,
+             &survivors,
+@@ -3165,8 +3283,7 @@
+             ctx.division,
+             &mut |code| ctx.record_expression_error(Some(code)),
+             &capability,
+-        )?
+-        .map(AggregateFinished::Admitted),
++        )?,
+         AggregateFunction::Avg => fold_numeric_admitted(
+             sequential,
+             &survivors,
+@@ -3174,32 +3291,28 @@
+             ctx.division,
+             &mut |code| ctx.record_expression_error(Some(code)),
+             &capability,
+-        )?
+-        .map(AggregateFinished::Admitted),
++        )?,
+         AggregateFunction::Min => fold_builtin_admitted(
+             sequential,
+             &survivors,
+             || Ok(MinAccumulator::default()),
+             |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+             &capability,
+-        )?
+-        .map(AggregateFinished::Admitted),
++        )?,
+         AggregateFunction::Max => fold_builtin_admitted(
+             sequential,
+             &survivors,
+             || Ok(MaxAccumulator::default()),
+             |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+             &capability,
+-        )?
+-        .map(AggregateFinished::Admitted),
++        )?,
+         AggregateFunction::Sample => fold_builtin_admitted(
+             sequential,
+             &survivors,
+             || Ok(SampleAccumulator::default()),
+             |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+             &capability,
+-        )?
+-        .map(AggregateFinished::Admitted),
++        )?,
+         AggregateFunction::GroupConcat => {
+             let sep = agg.separator().unwrap_or(" ");
+             fold_builtin_admitted(
+@@ -3209,7 +3322,6 @@
+                 |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+                 &capability,
+             )?
+-            .map(AggregateFinished::Admitted)
+         }
+         // `Custom` was dispatched away at the top of this function, before any
+         // charge or row was consulted — this arm cannot be reached by any
+@@ -3240,13 +3352,7 @@
+         }
+     };
+     value
+-        .map(|value| match value {
+-            AggregateFinished::Admitted(value) => ctx.intern_workspace_term(value),
+-            AggregateFinished::Resident(value) => {
+-                ctx.scratch
+-                    .try_intern_checked_admitted(ctx.dataset, value, &ctx.growth)
+-            }
+-        })
++        .map(|value| ctx.intern_workspace_term(value))
+         .transpose()
+         .map(Option::flatten)
+ }
+@@ -3445,16 +3551,16 @@
+     schema: &VarSchema,
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let custom = ctx.aggregates.resolve(iri).cloned().ok_or_else(|| {
+-        EvalError::function(format!("no custom aggregate is registered for <{iri}>"))
+-    })?;
+-
+-    // Meter the declared per-accumulator state bound against the scratch-arena
+-    // ceiling AT ADMISSION (once per group's accumulator), because a custom
+-    // accumulator's retained state is opaque host Rust the evaluator cannot
+-    // observe mid-fold the way it observes a minted `TermValue` the instant the
+-    // scratch interner produces one — see `CustomAggregate::state_bound`'s docs.
+-    let state_bound = crate::agg_fn::state_bound_contained(custom.as_ref(), iri)?;
++    let custom = ctx
++        .aggregates
++        .resolve(iri)
++        .cloned()
++        .ok_or_else(|| missing_custom_aggregate(iri, &ctx.growth))?;
++
++    // The existing governor charge is a declared host-state meter; physical
++    // factories and growth are separately admitted at their native lifecycle.
++    let state_bound =
++        crate::agg_fn::state_bound_contained_admitted(custom.as_ref(), iri, &ctx.growth)?;
+     if let Err(tripped) =
+         ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, state_bound)
+     {
+@@ -3462,59 +3568,45 @@
+         return Ok(None);
+     }
+ 
+-    // Phase 1: evaluate every row's positional argument tuple against `ctx`,
+-    // charge `AggregateAccumulation` for each one, apply `DISTINCT` on the full
+-    // tuple, and charge `ScratchBytes` for each tuple actually retained into
+-    // `survivors` — otherwise unchanged from before within-group chunking
+-    // existed. See `eval_aggregate`'s matching phase-1 comment for why the REST
+-    // of this phase's spend stays a pure function of `idxs`/`ctx` regardless of
+-    // what phase 2 below does, and for why `survivors`' retained `TermValue`
+-    // clones need their own `ScratchBytes` charge: `ctx.scratch.value_of` mints
+-    // nothing, so [`EvalCtx::charge_scratch_growth`]'s automatic arena charge
+-    // never sees them, and this per-group buffer is otherwise-uncharged memory
+-    // proportional to the group's cardinality.
+-    let mut seen: Option<DetHashSet<Vec<TermValue>>> = agg.distinct.then(DetHashSet::default);
+-    let mut tuple: Vec<TermValue> = Vec::with_capacity(agg.args().len());
+-    // As in `eval_aggregate`'s phase 1: `idxs.len()` is the exact upper bound on
+-    // survivors without `DISTINCT`, so reserve it once instead of growing by doubling.
+-    let mut survivors: Vec<Vec<TermValue>> =
+-        Vec::with_capacity(if agg.distinct { 0 } else { idxs.len() });
+-    // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
+-    // latched trip first, then the `aggregate-accumulation` charge and its poll.
++    let mut seen = agg.distinct.then(AggregateTupleWitnesses::default);
++    let capacity = if agg.distinct { 0 } else { idxs.len() };
++    // Locals drop in reverse declaration order: all survivor values and their
++    // containing array die before the independent original payload grants.
++    let mut survivor_owners = AdmittedVec::with_capacity(capacity, &ctx.growth)?;
++    let mut survivors = AdmittedVec::<Vec<TermValue>>::with_capacity(capacity, &ctx.growth)?;
+     let mut checkpoint =
+         crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
+     for &i in idxs {
+-        tuple.clear();
++        let mut tuple = AggregateSurvivors::new(&ctx.growth);
+         let mut every_position_bound = true;
+         for argument in &mut links[..agg.args().len()] {
+             let Some(term) = argument.term(&rows[i], schema, ctx)? else {
+                 every_position_bound = false;
+                 break;
+             };
+-            tuple.push(
+-                ctx.scratch
+-                    .try_value_of(ctx.dataset, term)
+-                    .map_err(EvalError::source_read)?,
+-            );
++            tuple.reserve_next()?;
++            tuple.push(ctx.scratch.try_owned_value_of(
++                ctx.dataset,
++                term,
++                &ctx.growth,
++                |error| ctx.workspace.source_error(error),
++            )?)?;
+         }
+         if !every_position_bound {
+             continue;
+         }
+-        // The `aggregate-accumulation` charge point, charged once the row's whole
+-        // argument tuple is bound — BEFORE the `DISTINCT` check below, exactly as
+-        // the built-in fold path in `eval_aggregate` charges it: producing and
+-        // inspecting the tuple is the work this point prices, whether or not
+-        // `DISTINCT` goes on to discard it.
++        // Preserve callback/governor order: every bound tuple is charged before
++        // DISTINCT, even when the identity witness then rejects a duplicate.
+         if let Err(tripped) = checkpoint.pass(ctx) {
+             ctx.record_barrier(tripped);
+             return Ok(None);
+         }
+-        if let Some(seen) = seen.as_mut()
+-            && !seen.insert(tuple.clone())
++        if let Some(seen) = &mut seen
++            && !seen.keep(&tuple, &survivors, &ctx.growth)?
+         {
+             continue;
+         }
+-        let tuple_bytes: u64 = tuple
++        let tuple_bytes = tuple
+             .iter()
+             .map(crate::scratch::value_bytes)
+             .fold(0u64, u64::saturating_add);
+@@ -3524,38 +3616,16 @@
+             ctx.record_barrier(tripped);
+             return Ok(None);
+         }
+-        // Move the tuple into `survivors` rather than cloning it a second time: the
+-        // `seen` clone above (when `DISTINCT` is engaged) is the one genuinely
+-        // unavoidable copy, because that set and this buffer are two independent
+-        // owners of the same content. `tuple` is replaced with a fresh, correctly
+-        // sized buffer so the next iteration's `tuple.clear()` still has the
+-        // capacity this loop already paid for.
+-        survivors.push(std::mem::replace(
+-            &mut tuple,
+-            Vec::with_capacity(agg.args().len()),
+-        ));
+-    }
+-
+-    // Phase 2: fold the (already `DISTINCT`-resolved, already in row order)
+-    // survivor tuples — chunked in parallel for a large enough group, but ONLY
+-    // when `custom` declares `Volatility::Stable` (mirrors
+-    // `EvalCtx::may_fork_aggregate`'s own per-group gate at the finer,
+-    // within-group grain: a `Volatile` aggregate's `step`/`combine` may depend
+-    // on state this evaluator does not control, so it stays on ONE
+-    // accumulator, sequentially, exactly as before this increment existed).
+-    //
+-    // A chunked fold creates MORE than one live accumulator at once (one per
+-    // chunk, combined down afterward) — [`CustomAggregate::state_bound`]'s
+-    // admission charge above metered exactly ONE accumulator's declared bound,
+-    // so chunking must charge the EXTRA accumulators beyond that first one
+-    // before creating them, using [`crate::parallel::planned_aggregate_chunk_count`]
+-    // (the exact count [`crate::parallel::par_chunk_reduce_init`] will create, not
+-    // an estimate) so this stays an honest upper bound on peak retained state. That
+-    // count is a pure function of `survivors.len()` alone — see
+-    // [`crate::parallel::aggregate_chunk_size_for`]'s doc comment — so this charge,
+-    // unlike an earlier increment's, cannot vary with the host's thread count.
+-    let stable = crate::agg_fn::volatility_contained(custom.as_ref(), iri)? == Volatility::Stable;
+-    // A `Volatile` aggregate folds on one accumulator whatever the evaluation decided.
++        survivors.reserve_next()?;
++        survivor_owners.reserve_next()?;
++        let (values, owners) = tuple.into_parts();
++        survivors.push_reserved(values);
++        survivor_owners.push_reserved(owners);
++    }
++
++    // Keep the exact existing chunk plan and chunk-index reduction/error order.
++    let stable = crate::agg_fn::volatility_contained_admitted(custom.as_ref(), iri, &ctx.growth)?
++        == Volatility::Stable;
+     let sequential = ctx.sequential_operation_required() || !stable;
+     let chunk_count = crate::parallel::planned_aggregate_chunk_count(sequential, survivors.len());
+     if chunk_count > 1 {
+@@ -3566,52 +3636,48 @@
+             return Ok(None);
+         }
+     }
+-    // The call site's `; NAME=value` scalarval clauses, resolved to `TermValue`
+-    // ONCE, ahead of every accumulator this fold creates — a scalarval is ONE
+-    // value for the WHOLE aggregation (see `AggregateExpression::scalarvals`'s
+-    // docs), never re-evaluated per row or per chunk. Already validated at
+-    // prepare time (`crate::property_fn_plan::plan_aggregate`) against
+-    // `custom`'s declared `CustomAggregate::scalarvals`: every name known, no
+-    // duplicate, every declared name present, every value the right kind — so
+-    // `CustomAggregate::init` below can trust this slice without re-checking it.
+-    let scalarvals: Vec<(String, TermValue)> = agg
+-        .scalarvals()
+-        .iter()
+-        .map(|(name, literal)| (name.clone(), literal_to_value(literal)))
+-        .collect();
+-    // The fold's arbitrary-precision arithmetic, priced by the aggregate itself from
+-    // the operands' sizes and charged before any of it runs.
+-    let cost = crate::agg_fn::exact_numeric_cost_contained(
++    let scalarvals = AggregateScalarvals::resolve(agg, &ctx.growth)?;
++    let cost = crate::agg_fn::exact_numeric_cost_contained_admitted(
+         custom.as_ref(),
+         iri,
+         &survivors,
+         &scalarvals,
+         ctx.division,
++        &ctx.growth,
+     )?;
+     if !crate::expr::numeric_step_admitted(ctx, cost) {
+         return Ok(None);
+     }
+-    let accumulator = crate::parallel::par_chunk_reduce_init(
++    let accumulator = crate::parallel::par_chunk_reduce_init_admitted(
+         sequential,
+         &survivors,
+-        || crate::agg_fn::init_contained(custom.as_ref(), iri, &scalarvals, ctx.division),
+-        |accumulator, tuple| crate::agg_fn::step_contained(accumulator.as_mut(), iri, tuple),
+-        |accumulator, other| crate::agg_fn::combine_contained(accumulator.as_mut(), iri, other),
++        &ctx.growth,
++        || {
++            crate::agg_fn::init_contained_admitted(
++                custom.as_ref(),
++                iri,
++                &scalarvals,
++                ctx.division,
++                &ctx.growth,
++            )
++        },
++        |accumulator, tuple| {
++            crate::agg_fn::step_contained_admitted(accumulator, iri, tuple, &ctx.growth)
++        },
++        |accumulator, other| {
++            crate::agg_fn::combine_contained_admitted(accumulator, iri, other, &ctx.growth)
++        },
+     )?;
+-
+-    let value = crate::agg_fn::finish_contained(accumulator, iri, &mut |code| {
+-        ctx.record_expression_error(Some(code));
+-    })?;
+-    // THE custom-aggregate seam. `AggregateAccumulator::finish` returns an
+-    // `Option<TermValue>` with no constraint on the language string at all, and
+-    // this is where that value would otherwise become a solution term. `and_then`
+-    // routes a refused tag onto the same unbound answer an accumulator that
+-    // returned `None` gets — see `ScratchInterner::intern_checked`.
++    let value = crate::agg_fn::finish_contained_admitted(
++        accumulator,
++        iri,
++        &mut |code| {
++            ctx.record_expression_error(Some(code));
++        },
++        &ctx.growth,
++    )?;
+     Ok(value
+-        .map(|v| {
+-            ctx.scratch
+-                .try_intern_checked_admitted(ctx.dataset, v, &ctx.growth)
+-        })
++        .map(|value| ctx.intern_workspace_term(value))
+         .transpose()?
+         .flatten())
+ }
+@@ -3682,7 +3748,7 @@
+ 
+ /// New native payloads retain their operation frame's admission. A physical
+ /// refusal is propagated, never converted into aggregate poisoning/replay.
+-fn numeric_fold_binary(
++pub(crate) fn numeric_fold_binary(
+     a: &XsdValue,
+     b: &XsdValue,
+     op: purrdf_xsd::numeric::NumericBinaryOperator,
+@@ -3690,10 +3756,9 @@
+     workspace: &crate::WorkspaceCapability,
+ ) -> Result<Result<ParsedValue, Option<purrdf_xsd::ErrorCode>>, EvalError> {
+     let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+-    let computed =
+-        purrdf_xsd::numeric::numeric_binary_admitted(a, b, op, division, &mut |layout| {
+-            frame.admit(layout)
+-        });
++    let computed = purrdf_xsd::ops::value_binary_admitted(a, b, op, division, &mut |layout| {
++        frame.admit(layout)
++    });
+     frame.finish_value(computed)
+ }
+ 
+--- /dev/null
++++ b/crates/sparql-eval/tests/custom_aggregate_ownership.rs
+@@ -0,0 +1,253 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Custom aggregate tuple/metadata/output owners through the complete query door.
++
++mod support;
++
++use purrdf_alloc_probe::CurrentThreadWindow;
++use purrdf_core::{DatasetView, SegmentedError, TermValue};
++use purrdf_sparql_eval::agg_fn::{
++    AggregateAccumulator, AggregateRegistry, AlgebraicClass, CustomAggregate, ScalarvalKind,
++    ScalarvalSpec, WorkspaceAccumulator,
++};
++use purrdf_sparql_eval::user_fn::{Arity, Volatility};
++use purrdf_sparql_eval::{
++    EvalError, ExtensionEnv, FallibleSparqlError, NativeSparqlEngine, QueryOptions,
++    WorkspaceCapability, WorkspaceTerm,
++};
++use purrdf_xsd::{
++    datatype::XSD_STRING,
++    exact::{Cost, DivisionPolicy},
++};
++use std::sync::{
++    Arc,
++    atomic::{AtomicUsize, Ordering},
++};
++use support::segmented::{CEILING, fixture, open};
++
++#[global_allocator]
++static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
++
++const IRI: &str = "http://example.org/aggregate/last-pair";
++
++struct LastPair {
++    prefix: WorkspaceTerm,
++    last: Option<WorkspaceTerm>,
++    workspace: WorkspaceCapability,
++    steps: Arc<AtomicUsize>,
++}
++
++fn lexical(value: &TermValue) -> &str {
++    match value {
++        TermValue::Literal { lexical_form, .. } => lexical_form,
++        _ => panic!("the fixture admits literal tuples"),
++    }
++}
++
++impl AggregateAccumulator for LastPair {
++    fn native_workspace(&self) -> Option<&WorkspaceCapability> {
++        Some(&self.workspace)
++    }
++    fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
++        let value = self.workspace.literal(
++            format_args!(
++                "{}{}|{}",
++                lexical(&self.prefix),
++                lexical(&args[0]),
++                lexical(&args[1])
++            ),
++            XSD_STRING,
++        )?;
++        self.last = Some(value);
++        self.steps.fetch_add(1, Ordering::Relaxed);
++        Ok(())
++    }
++    fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
++        let other = other
++            .into_any()
++            .downcast::<Self>()
++            .map_err(|_| EvalError::internal("last-pair fixture received a different partial"))?;
++        if other.last.is_some() {
++            self.last = other.last;
++        }
++        Ok(())
++    }
++    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
++        self
++    }
++    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
++        Ok(self.last.map(|value| (*value).clone()))
++    }
++    fn finish_admitted(
++        self: Box<Self>,
++        _: &WorkspaceCapability,
++    ) -> Result<Option<WorkspaceTerm>, EvalError> {
++        Ok(self.last)
++    }
++}
++
++struct LastPairAggregate {
++    steps: Arc<AtomicUsize>,
++}
++
++impl CustomAggregate for LastPairAggregate {
++    fn arity(&self) -> Arity {
++        Arity::Exact(2)
++    }
++    fn volatility(&self) -> Volatility {
++        Volatility::Stable
++    }
++    fn algebraic_class(&self) -> AlgebraicClass {
++        AlgebraicClass::OrderDependent
++    }
++    fn scalarvals(&self) -> &[ScalarvalSpec] {
++        const SPEC: [ScalarvalSpec; 1] = [ScalarvalSpec::new("PREFIX", ScalarvalKind::String)];
++        &SPEC
++    }
++    fn init(&self, scalarvals: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
++        let workspace = WorkspaceCapability::resident();
++        Box::new(LastPair {
++            prefix: workspace.clone_term(&scalarvals[0].1).unwrap(),
++            last: None,
++            workspace,
++            steps: self.steps.clone(),
++        })
++    }
++    fn init_admitted(
++        &self,
++        scalarvals: &[(String, TermValue)],
++        _: DivisionPolicy,
++        workspace: &WorkspaceCapability,
++    ) -> Result<WorkspaceAccumulator, EvalError> {
++        WorkspaceAccumulator::new(
++            LastPair {
++                prefix: workspace.clone_term(&scalarvals[0].1)?,
++                last: None,
++                workspace: workspace.clone(),
++                steps: self.steps.clone(),
++            },
++            workspace,
++        )
++    }
++    fn exact_numeric_cost_admitted(
++        &self,
++        _: &[Vec<TermValue>],
++        _: &[(String, TermValue)],
++        _: DivisionPolicy,
++        _: &WorkspaceCapability,
++    ) -> Result<Cost, EvalError> {
++        Ok(Cost::ZERO)
++    }
++}
++
++fn environment() -> (ExtensionEnv, Arc<AtomicUsize>) {
++    let steps = Arc::new(AtomicUsize::new(0));
++    let mut registry = AggregateRegistry::default();
++    registry.register(
++        IRI,
++        Arc::new(LastPairAggregate {
++            steps: steps.clone(),
++        }),
++    );
++    (ExtensionEnv::over_aggregates(registry).unwrap(), steps)
++}
++
++fn query(prefix: &str) -> String {
++    format!(
++        "SELECT (AGG(<{IRI}>, DISTINCT ?a, ?b; PREFIX='{prefix}') AS ?answer) WHERE {{ VALUES (?a ?b) {{ ('a' '1') ('a' '1') ('a' '2') ('b' UNDEF) ('a' '1') }} }}"
++    )
++}
++
++#[test]
++fn full_tuple_distinct_scalarvals_and_output_original_grants_survive_extraction() {
++    let (image, _) = fixture();
++    let (environment, steps) = environment();
++    let engine = NativeSparqlEngine::new();
++    let options = QueryOptions::EMPTY.with_env(&environment);
++    let prepared = engine
++        .prepare_query_with_options(&query("pre:"), None, options)
++        .unwrap();
++    let source = open(&image, CEILING);
++    let window = CurrentThreadWindow::open();
++    let complete = engine
++        .query_prepared_fallible_view(&source, &prepared, &[], options)
++        .unwrap();
++    let measured = window.close();
++    assert_eq!(
++        steps.load(Ordering::Relaxed),
++        2,
++        "DISTINCT compares the full tuple, skips the unbound row, and keeps first occurrence order"
++    );
++    assert_eq!(
++        complete.result.solutions().unwrap().1,
++        [vec![Some(TermValue::simple_literal("pre:a|2"))]]
++    );
++    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
++    assert!(source.evidence().peak_bytes() <= CEILING);
++
++    let (result, evidence) = complete.into_parts();
++    drop(evidence);
++    let live = source.evidence().live_bytes();
++    let window = CurrentThreadWindow::open();
++    let cloned = result.clone();
++    assert_eq!(window.close().allocations, 0);
++    assert_eq!(source.evidence().live_bytes(), live);
++    drop(result);
++    assert_eq!(
++        cloned.solutions().unwrap().1,
++        [vec![Some(TermValue::simple_literal("pre:a|2"))]]
++    );
++    assert_eq!(source.evidence().live_bytes(), live);
++    drop(cloned);
++    assert!(source.evidence().live_bytes() < live);
++}
++
++#[test]
++fn scalarval_capacity_refusal_keeps_original_source_error_and_does_not_start_the_fold() {
++    let (image, _) = fixture();
++    let (environment, steps) = environment();
++    let engine = NativeSparqlEngine::new();
++    let options = QueryOptions::EMPTY.with_env(&environment);
++    let small = engine
++        .prepare_query_with_options(&query("p:"), None, options)
++        .unwrap();
++    let calibration = open(&image, CEILING);
++    let healthy = engine
++        .query_prepared_fallible_view(&calibration, &small, &[], options)
++        .unwrap();
++    let ceiling = calibration.evidence().peak_bytes();
++    drop(healthy);
++    drop(calibration);
++    steps.store(0, Ordering::Relaxed);
++
++    let prefix = "p".repeat(usize::try_from(ceiling).unwrap().checked_add(1).unwrap());
++    let large = engine
++        .prepare_query_with_options(&query(&prefix), None, options)
++        .unwrap();
++    let source = open(&image, ceiling);
++    let window = CurrentThreadWindow::open();
++    let refused = engine.query_prepared_fallible_view(&source, &large, &[], options);
++    let measured = window.close();
++    assert!(matches!(
++        refused,
++        Err(FallibleSparqlError::Operational {
++            error: SegmentedError::Residency { .. },
++            ..
++        })
++    ));
++    assert_eq!(steps.load(Ordering::Relaxed), 0);
++    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
++    assert!(source.evidence().peak_bytes() <= ceiling);
++
++    let source = open(&image, CEILING);
++    let complete = engine
++        .query_prepared_fallible_view(&source, &large, &[], options)
++        .unwrap();
++    assert_eq!(
++        complete.result.solutions().unwrap().1,
++        [vec![Some(TermValue::simple_literal(format!(
++            "{prefix}a|2"
++        )))]]
++    );
++}

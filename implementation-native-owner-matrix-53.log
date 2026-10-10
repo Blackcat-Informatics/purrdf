@@ -1,0 +1,61 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error: calls to `std::mem::drop` with a value that implements `Copy` does nothing
+   --> crates/sparql-eval/tests/query_completion.rs:869:9
+    |
+869 |         drop(receipt);
+    |         ^^^^^-------^
+    |              |
+    |              argument has type `Receipt`
+    |
+    = note: `-D dropping-copy-types` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(dropping_copy_types)]`
+help: use `let _ = ...` to ignore the expression or result
+    |
+869 -         drop(receipt);
+869 +         let _ = receipt;
+    |
+
+error: calls to `std::mem::drop` with a value that implements `Copy` does nothing
+    --> crates/sparql-eval/tests/query_completion.rs:1299:13
+     |
+1299 |             drop(receipt);
+     |             ^^^^^-------^
+     |                  |
+     |                  argument has type `Receipt`
+     |
+help: use `let _ = ...` to ignore the expression or result
+     |
+1299 -             drop(receipt);
+1299 +             let _ = receipt;
+     |
+
+error: calls to `std::mem::drop` with a value that implements `Copy` does nothing
+    --> crates/sparql-eval/tests/query_completion.rs:1327:5
+     |
+1327 |     drop(receipt);
+     |     ^^^^^-------^
+     |          |
+     |          argument has type `Receipt`
+     |
+help: use `let _ = ...` to ignore the expression or result
+     |
+1327 -     drop(receipt);
+1327 +     let _ = receipt;
+     |
+
+error: calls to `std::mem::drop` with a value that implements `Copy` does nothing
+    --> crates/sparql-eval/tests/query_completion.rs:1448:9
+     |
+1448 |         drop(receipt);
+     |         ^^^^^-------^
+     |              |
+     |              argument has type `Receipt`
+     |
+help: use `let _ = ...` to ignore the expression or result
+     |
+1448 -         drop(receipt);
+1448 +         let _ = receipt;
+     |
+
+error: could not compile `purrdf-sparql-eval` (test "query_completion") due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...

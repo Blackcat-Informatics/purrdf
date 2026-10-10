@@ -1,0 +1,22 @@
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -6451,7 +6451,8 @@
+     use purrdf_sparql_algebra::GraphPattern;
+ 
+     /// A plan-cache key's bytes, written out by hand: the base-IRI presence
+-    /// byte, every text field as its length in eight little-endian bytes then
++    /// byte follows the resident/native ownership byte, every text field has
++    /// its length in eight little-endian bytes then
+     /// its UTF-8, each option list and the parameter list as their counts in
+     /// eight little-endian bytes then their members framed the same way, and
+     /// the exempt list likewise. Two keys can only compare equal when every field
+@@ -6482,7 +6483,7 @@
+         .write_into(&mut key, &crate::WorkspaceCapability::resident())
+         .expect("resident key framing");
+ 
+-        let mut expected = vec![1];
++        let mut expected = vec![0, 1];
+         framed(&mut expected, "http://example.org/base/");
+         for list in [
+             &options.extension_fn_namespaces,

@@ -1,0 +1,34 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+error[E0599]: no method named `live_bytes` found for struct `purrdf_lex::allocation::Memory<'a, S>` in the current scope
+    --> crates/rdf-core/src/ir/term_walk.rs:1338:31
+     |
+1338 |         let baseline = memory.live_bytes();
+     |                               ^^^^^^^^^^ method not found in `purrdf_lex::allocation::Memory<'_, purrdf_lex::allocation::Resident>`
+
+error[E0599]: no method named `live_bytes` found for mutable reference `&mut purrdf_lex::allocation::Memory<'_, purrdf_lex::allocation::Resident>` in the current scope
+    --> crates/rdf-core/src/ir/term_walk.rs:1345:36
+     |
+1345 |                     assert!(memory.live_bytes() > baseline, "the pending walk spilled");
+     |                                    ^^^^^^^^^^ method not found in `&mut purrdf_lex::allocation::Memory<'_, purrdf_lex::allocation::Resident>`
+
+error[E0599]: no method named `live_bytes` found for struct `purrdf_lex::allocation::Memory<'a, S>` in the current scope
+    --> crates/rdf-core/src/ir/term_walk.rs:1355:27
+     |
+1355 |         assert_eq!(memory.live_bytes(), baseline + retained.capacity());
+     |                           ^^^^^^^^^^ method not found in `purrdf_lex::allocation::Memory<'_, purrdf_lex::allocation::Resident>`
+
+error[E0599]: no method named `live_bytes` found for struct `purrdf_lex::allocation::Memory<'a, S>` in the current scope
+    --> crates/rdf-core/src/ir/term_walk.rs:1357:27
+     |
+1357 |         assert_eq!(memory.live_bytes(), baseline);
+     |                           ^^^^^^^^^^ method not found in `purrdf_lex::allocation::Memory<'_, purrdf_lex::allocation::Resident>`
+
+error[E0599]: no method named `live_bytes` found for struct `purrdf_lex::allocation::Memory<'a, S>` in the current scope
+    --> crates/rdf-core/src/ir/term_walk.rs:1359:27
+     |
+1359 |         assert_eq!(memory.live_bytes(), 0);
+     |                           ^^^^^^^^^^ method not found in `purrdf_lex::allocation::Memory<'_, purrdf_lex::allocation::Resident>`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-core` (lib test) due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,1335 @@
+diff --git a/crates/sparql-eval/src/modifier.rs b/crates/sparql-eval/src/modifier.rs
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -112,12 +112,10 @@
+     OrderExpression, PropertyPathExpression, Variable,
+ };
+ use purrdf_xsd::exact::DivisionPolicy;
+-use purrdf_xsd::numeric::numeric_div_with_policy;
+-use purrdf_xsd::{
+-    BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_total_cmp,
+-};
++use purrdf_xsd::{XsdDatatype, XsdValue, parse_by_iri, value_total_cmp};
++#[cfg(test)]
++use purrdf_xsd::numeric_div;
+ 
+-use purrdf_xsd::datatype::XSD_INTEGER;
+ use purrdf_xsd::datatype::XSD_STRING;
+ 
+ use crate::agg_fn::AggregateAccumulator as _;
+@@ -125,6 +123,7 @@
+ use crate::error::EvalError;
+ use crate::eval::{EvalCtx, eval_evaluated};
+ use crate::expr::xsd_of;
++use crate::parsed_value::ParsedValue;
+ use crate::governor::ChargePoint;
+ use crate::governor::lift::{Evaluated, Lift, Truncation};
+ use crate::scratch::SolutionTerm;
+diff --git a/crates/sparql-eval/src/modifier.rs b/crates/sparql-eval/src/modifier.rs
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -3197,523 +3197,248 @@
+ }
+ 
+-/// The running numeric fold `SUM`/`AVG` share, wrapped `Option`-poisonable by
+-/// [`fold_numeric`]'s chain (the poisoned state lives one level up, as `None`,
+-/// rather than as a variant here).
+-///
+-/// `SUM`/`AVG` are the two built-ins that do NOT go through
+-/// [`crate::agg_fn::AggregateAccumulator`]'s `combine`: SPARQL defines them as a
+-/// left-to-right chain of `op:numeric-add`, and a combine of two partial sums is
+-/// a different expression — see [`fold_numeric`] for the fold that keeps the
+-/// chain's value bit for bit while still chunking the exact tiers.
++/// The source-order `SUM`/`AVG` fold, poisoned by its caller's `Option`.
+ ///
+-/// A **pure-integer** running group ([`Self::Int`]) accumulates through
+-/// [`BigInt`] — arbitrary precision, so it never overflows regardless of how
+-/// large the true total gets; only a genuinely non-numeric value poisons it.
+-/// The moment a `decimal`/`float`/`double` value joins the group, the fold
+-/// promotes to [`Self::Ok`] and continues through `numeric_add`'s spec-defined
+-/// promotion tower — see [`int_sum_promote_base`] for the promotion step, exact
+-/// for `decimal` at any size and correctly rounded for `float`/`double`.
+-/// [`Self::Ok`]'s own arithmetic is `numeric_add`'s: `xsd:decimal` exact at every
+-/// size (on the arbitrary-precision tower once it leaves the machine words) and
+-/// `xsd:float`/`xsd:double` IEEE, inf/NaN included.
++/// Integer and decimal totals use the existing native exact kernels. Their
++/// immutable parsed carriers retain all heap magnitudes while operands are
++/// borrowed; cloning a partial shares that owner instead of copying its digits.
++/// A singleton integer keeps its original datatype, while addition produces
++/// plain `xsd:integer` through the native numeric law.
+ ///
+-/// ## `SUM`/`AVG` over `xsd:duration` — a PurRDF extension
++/// Floating-point additions cannot reassociate. [`NumericSummary`] merges only
++/// exact partials proven equal to the chain and replays its remaining operands
++/// in source order.
+ ///
+-/// SPARQL 1.1 §18.5.1.3 defines `SUM` as repeated `op:numeric-add`, whose domain
+-/// is the numeric tower alone; F&O has no `SUM`/`AVG` for `xsd:duration` either.
+-/// [`Self::Dur`] extends the aggregate algebra to the duration group, which
+-/// `.goals`' MAXIMAL UTILITY line asks for once nothing in [`XsdValue::is_numeric`]'s
+-/// gate has to move to reach it (see [`NumericFold::step_xsd`]'s doc for the exact
+-/// gate). The RAW `(months, seconds)` pair is an abelian group under
+-/// componentwise `+` unconditionally — see [`Self::Dur`]'s own doc for why the
+-/// fold accumulates that raw pair (rather than folding through
+-/// [`purrdf_xsd::temporal::add_durations`]'s validated `Duration` at every
+-/// step, which is NOT closed under `+` and made an earlier revision of this
+-/// fold order-dependent) — so the group sum is well-defined for any nonempty
+-/// multiset, independent of fold order and chunk boundaries; `AVG` is that
+-/// sum divided by the folded count.
++/// Duration aggregates extend the fold over the RAW group `ℤ × Decimal`.
++/// Months are checked `i128` totals; seconds use the same native decimal
++/// additions as numeric SUM. Mixed-sign partials remain valid running state:
++/// [`purrdf_xsd::temporal::Duration::new`] validates the finished sum or mean
++/// once. This preserves the existing order-independent duration result and
++/// joined subtype, including groups with an unrepresentable intermediate.
+ #[derive(Debug, Clone)]
+ enum NumericFold {
+-    /// No value has been folded in yet.
++    /// No value has been folded.
+     Empty,
+-    /// Every value folded in so far has been `xsd:integer` (or a derived
+-    /// integer facet): an exact, unbounded running total, plus the count of
+-    /// values folded (only `AVG` reads it) and the datatype to report if the
+-    /// fold never grows past this single value (see [`int_sum_value`]'s docs
+-    /// on why a singleton group preserves its one literal's exact subtype,
+-    /// e.g. `xsd:byte`, while two or more folded values normalize to plain
+-    /// `xsd:integer` — `datatype` here mirrors that: it starts as the first
+-    /// value's own datatype and is stamped to [`XsdDatatype::Integer`] the
+-    /// instant a second value (via `step` OR `combine_owned`) is actually
+-    /// folded in).
+-    Int {
+-        sum: BigInt,
+-        count: u64,
+-        datatype: XsdDatatype,
+-    },
+-    /// A running sum plus the count of values folded so far (only `AVG` reads
+-    /// the count) — at `decimal`/`float`/`double` tier or higher; promotion is
+-    /// monotonic (`integer ⊂ decimal ⊂ float ⊂ double`), so once here the fold
+-    /// never returns to [`Self::Int`].
+-    Ok { acc: XsdValue, count: u64 },
+-    /// A running duration sum, carried as its own RAW `(months, seconds)`
+-    /// components rather than as an already-validated `XsdValue::Duration` —
+-    /// this decomposition is the fix for a real nondeterminism defect, not a
+-    /// stylistic choice; see the paragraph below for why.
+-    ///
+-    /// XSD 1.1 Part 2 §3.3.6's duration value space is the pair `(months,
+-    /// seconds)` with BOTH components non-negative or BOTH non-positive
+-    /// ([`purrdf_xsd::temporal::Duration::new`] enforces this — sign
+-    /// coherence). That set is NOT closed under componentwise `+`: e.g.
+-    /// `(12, 0) + (0, -86400) = (12, -86400)` is mixed-sign and therefore
+-    /// unrepresentable, even though summing the SAME three durations in a
+-    /// different order (or after a different chunk boundary) can land on a
+-    /// representable total instead. An earlier revision of this variant
+-    /// carried `acc: XsdValue::Duration` and folded through
+-    /// [`purrdf_xsd::temporal::add_durations`]/`purrdf_xsd::value_add` at every
+-    /// intermediate row — validating sign coherence at EVERY step, not just
+-    /// the final one — which therefore poisoned or not depending on fold
+-    /// order and on chunk boundaries: a genuine nondeterminism bug, since
+-    /// [`crate::parallel::par_chunk_reduce_init`] chunks a large group
+-    /// differently than a small one folds sequentially
+-    /// (`crate::parallel::PARALLEL_MIN_ROWS`), and both are legitimate ways to
+-    /// fold the identical multiset of rows to the identical answer.
+-    ///
+-    /// Sign coherence is a property of the RESULT, not of every partial sum on
+-    /// the way to it: the (months, seconds) pair sums over the free abelian
+-    /// group `ℤ × Decimal`, which IS totally order-independent (ordinary
+-    /// integer/decimal addition — no partiality anywhere in the group itself).
+-    /// So this variant accumulates the two components raw — `months` as a
+-    /// `checked_add`ed running `i128`, never validated against sign coherence
+-    /// mid-fold; `seconds` as an `XsdValue::Decimal` accumulated through
+-    /// [`numeric_add`] (the SAME function [`Self::Ok`]'s own decimal SUM uses,
+-    /// so duration seconds and a plain `xsd:decimal` SUM overflow identically)
+-    /// — and defers the ONE sign-coherence check to [`Self::finish_sum`]/
+-    /// [`Self::finish_avg`], on the fully-summed total. Because the raw
+-    /// accumulation itself is now genuinely order-independent, that single
+-    /// validation is order-independent too: sequential folding and every
+-    /// chunking agree on the SAME raw total and therefore on the SAME
+-    /// validation outcome — representable → the same value; unrepresentable →
+-    /// unbound, deterministically, every time.
+-    ///
+-    /// `months` is `i128`, not the `i64` [`purrdf_xsd::temporal::Duration::new`]
+-    /// itself requires: a running sum of `n` `i64`-bounded values cannot
+-    /// overflow `i128` until `n` exceeds roughly `2^64` rows, which is not a
+-    /// group size any real query reaches, so the accumulation is total in
+-    /// practice — only the narrowing back to `i64` at `finish` can fail
+-    /// (checked anyway, for honesty, not because it is expected to fire).
+-    ///
+-    /// `datatype` is the joined result tag
+-    /// ([`purrdf_xsd::temporal::duration_result_datatype`]: `dayTimeDuration` iff every folded value declared it, likewise
+-    /// `yearMonthDuration`, else the general `xsd:duration`) — a genuine
+-    /// semilattice join (associative, commutative, idempotent on its own), so
+-    /// folding it per step, unlike the sign check, stays safe.
++    /// Only integer values have contributed. The first carrier keeps its facet;
++    /// every subsequent native addition normalizes to plain xsd:integer.
++    Int { sum: ParsedValue, count: u64 },
++    /// A decimal or IEEE total, with the native monotone numeric promotion law.
++    Ok { acc: ParsedValue, count: u64 },
++    /// Raw duration components; coherence is checked only on the final value.
+     Dur {
+-        /// Raw running months total — see this variant's own doc.
+         months: i128,
+-        /// Raw running seconds total, always `XsdValue::Decimal(_)` — see this
+-        /// variant's own doc.
+-        seconds: XsdValue,
+-        /// The joined result tag — see this variant's own doc.
++        seconds: ParsedValue,
+         datatype: XsdDatatype,
+-        /// The folded row count (`AVG` reads it).
+         count: u64,
+     },
+ }
+ 
++/// Numeric inputs use the one admitted native parser. Other families poison
++/// this fold without constructing an unused string/binary parse destination.
++fn parse_numeric_fold_value(
++    value: &TermValue, workspace: &crate::WorkspaceCapability,
++) -> Result<Option<ParsedValue>, EvalError> {
++    let TermValue::Literal { lexical_form, datatype, .. } = value else {
++        return Ok(None);
++    };
++    let Some(datatype) = XsdDatatype::from_iri(datatype) else { return Ok(None); };
++    if !datatype.is_numeric() && !matches!(
++        datatype, XsdDatatype::Duration | XsdDatatype::DayTimeDuration | XsdDatatype::YearMonthDuration,
++    ) {
++        return Ok(None);
++    }
++    ParsedValue::parse(lexical_form, datatype, false, workspace)
++}
++
++/// New native payloads retain their operation frame's admission. A physical
++/// refusal is propagated, never converted into aggregate poisoning/replay.
++fn numeric_fold_binary(
++    a: &XsdValue, b: &XsdValue, op: purrdf_xsd::numeric::NumericBinaryOperator,
++    division: DivisionPolicy, workspace: &crate::WorkspaceCapability,
++) -> Result<Result<ParsedValue, Option<purrdf_xsd::ErrorCode>>, EvalError> {
++    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
++    let computed = purrdf_xsd::numeric::numeric_binary_admitted(
++        a, b, op, division, &mut |layout| frame.admit(layout),
++    );
++    frame.finish_value(computed)
++}
++
+ impl NumericFold {
+-    /// Fold the already-parsed value `xv` in (the caller parses with
+-    /// [`xsd_of`]; a value that does not parse poisons there). `false` means
+-    /// `xv` POISONS the fold — a genuinely non-numeric value, or an arithmetic
+-    /// failure promoting/adding it — and the sequential chain
+-    /// ([`fold_numeric`]/[`NumericSummary::finish`]) turns that into its own
+-    /// `None`, discarding this state permanently; `true` means `self` now
+-    /// reflects `xv` folded in.
+-    ///
+-    /// This match is exhaustive over `Empty`/`Int`/`Ok`/`Dur`: poisoning has no
+-    /// variant of its own to (mis)match here, because the wrapper's
+-    /// `Option<Self>` going from `Some` to `None` — never a fifth variant of
+-    /// THIS type — is where "poisoned" is expressed. There is therefore no
+-    /// state this match must defensively refuse to handle.
+-    ///
+-    /// The gate below accepts the numeric tower OR a duration, never both in
+-    /// the same group: the duration check sits entirely on
+-    /// [`XsdValue::is_numeric`]'s **failure path** (short-circuit `&&`), so a numeric
+-    /// value executes exactly the branches it executed before [`Self::Dur`]
+-    /// existed — [`XsdValue::is_numeric`] itself is unchanged and untouched by this
+-    /// widening (see its own doc for why: widening THAT predicate, rather than
+-    /// gating here, would let a mixed numeric+duration group silently coerce
+-    /// through whichever other call site trusts it). A group that mixes the
+-    /// two poisons: `Self::Int`/`Self::Ok` reject a duration value through
+-    /// their own existing arithmetic (`int_sum_promote_base`'s `None` arm, or
+-    /// `numeric_add`'s `TypeMismatch`, respectively — neither needed an edit),
+-    /// and `Self::Dur` rejects a numeric value explicitly below.
+-    ///
+-    /// A `false` return leaves `self` exactly as it was: every arm below
+-    /// computes its fallible result before assigning anything, which
+-    /// [`NumericSummary`] relies on to stop an exact fold at a refused row and
+-    /// hand that row to the sequential chain instead.
+-    fn step_xsd(&mut self, xv: &XsdValue) -> bool {
+-        if !xv.is_numeric() && !matches!(xv, XsdValue::Duration(_)) {
+-            return false;
++    /// Fold an already-owned native value. A semantic refusal leaves the state
++    /// unchanged; the caller records poisoning. Physical admission/allocation
++    /// failure remains a hard operational error.
++    fn step_parsed(
++        &mut self, xv: ParsedValue, workspace: &crate::WorkspaceCapability,
++    ) -> Result<bool, EvalError> {
++        use purrdf_xsd::numeric::NumericBinaryOperator::Add;
++        if !xv.is_numeric() && !matches!(&*xv, XsdValue::Duration(_)) {
++            return Ok(false);
+         }
+         match self {
+             Self::Empty => {
+-                *self = match xv {
+-                    XsdValue::Integer { value, datatype } => Self::Int {
+-                        sum: BigInt::from_i128(*value),
+-                        count: 1,
+-                        datatype: *datatype,
+-                    },
+-                    XsdValue::BigInteger { value, datatype } => Self::Int {
+-                        sum: value.to_bigint(),
+-                        count: 1,
+-                        datatype: *datatype,
+-                    },
++                *self = match &*xv {
++                    XsdValue::Integer { .. } | XsdValue::BigInteger { .. } => {
++                        Self::Int { sum: xv, count: 1 }
++                    }
+                     XsdValue::Duration(dur) => Self::Dur {
+                         months: i128::from(dur.months()),
+-                        seconds: XsdValue::Decimal(dur.seconds()),
++                        seconds: ParsedValue::from_admitted(XsdValue::Decimal(dur.seconds()), None, 0)?,
+                         datatype: dur.datatype(),
+                         count: 1,
+                     },
+-                    other => Self::Ok {
+-                        acc: other.clone(),
+-                        count: 1,
+-                    },
++                    _ => Self::Ok { acc: xv, count: 1 },
+                 };
+-                true
++                Ok(true)
+             }
+-            Self::Int {
+-                sum,
+-                count,
+-                datatype,
+-            } => match xv {
+-                XsdValue::Integer { value, .. } => {
+-                    sum.add_i128(*value);
+-                    *count += 1;
+-                    *datatype = XsdDatatype::Integer;
+-                    true
+-                }
+-                XsdValue::BigInteger { value, .. } => {
+-                    sum.add_assign(&value.to_bigint());
+-                    *count += 1;
+-                    *datatype = XsdDatatype::Integer;
+-                    true
+-                }
+-                other => match int_sum_promote_base(sum, other) {
+-                    Some(base) => match numeric_add(&base, other) {
+-                        Ok(result) => {
+-                            *self = Self::Ok {
+-                                acc: result,
+-                                count: *count + 1,
+-                            };
+-                            true
+-                        }
+-                        Err(_) => false,
+-                    },
+-                    None => false,
+-                },
+-            },
+-            Self::Ok { acc, count } => match numeric_add(acc, xv) {
+-                Ok(sum) => {
+-                    *acc = sum;
+-                    *count += 1;
+-                    true
++            Self::Int { sum, count } => {
++                let next_count = count.checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
++                let Ok(result) = numeric_fold_binary(
++                    sum, &xv, Add, DivisionPolicy::xsd_default(), workspace,
++                )? else { return Ok(false); };
++                if matches!(&*xv, XsdValue::Integer { .. } | XsdValue::BigInteger { .. }) {
++                    *sum = result;
++                    *count = next_count;
++                } else {
++                    *self = Self::Ok { acc: result, count: next_count };
+                 }
+-                Err(_) => false,
+-            },
+-            Self::Dur {
+-                months,
+-                seconds,
+-                datatype,
+-                count,
+-            } => {
+-                // The top-of-function gate admits only the numeric tower or a
+-                // duration; a numeric value reaching an already-`Dur` fold is
+-                // exactly the mixed-group case, and poisons.
+-                let XsdValue::Duration(dur) = xv else {
+-                    return false;
+-                };
+-                // Raw componentwise accumulation — no `Duration::new` call, no
+-                // sign check, here. See `Self::Dur`'s own doc for why: the
+-                // check belongs once, on the finished total, not on every
+-                // partial sum along the way.
++                Ok(true)
++            }
++            Self::Ok { acc, count } => {
++                let next_count = count.checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
++                let Ok(sum) = numeric_fold_binary(
++                    acc, &xv, Add, DivisionPolicy::xsd_default(), workspace,
++                )? else { return Ok(false); };
++                *acc = sum;
++                *count = next_count;
++                Ok(true)
++            }
++            Self::Dur { months, seconds, datatype, count } => {
++                let XsdValue::Duration(dur) = &*xv else { return Ok(false); };
+                 let Some(new_months) = months.checked_add(i128::from(dur.months())) else {
+-                    return false;
+-                };
+-                let Ok(new_seconds) = numeric_add(seconds, &XsdValue::Decimal(dur.seconds()))
+-                else {
+-                    return false;
++                    return Ok(false);
+                 };
++                let next_count = count.checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
++                let Ok(new_seconds) = numeric_fold_binary(
++                    seconds, &XsdValue::Decimal(dur.seconds()), Add,
++                    DivisionPolicy::xsd_default(), workspace,
++                )? else { return Ok(false); };
+                 *months = new_months;
+                 *seconds = new_seconds;
+-                *datatype =
+-                    purrdf_xsd::temporal::duration_result_datatype(*datatype, dur.datatype());
+-                *count += 1;
+-                true
++                *datatype = purrdf_xsd::temporal::duration_result_datatype(*datatype, dur.datatype());
++                *count = next_count;
++                Ok(true)
+             }
+         }
+     }
+ 
+-    /// `SUM`'s finish: empty group → `0^^xsd:integer` (SPARQL §18.5.1);
+-    /// otherwise the running total — exact for a pure-integer group (whatever
+-    /// its magnitude, via [`BigInt::to_decimal_string`] when it no longer fits
+-    /// `i128`), the `decimal`/`float`/`double`-tower total, or (PurRDF
+-    /// extension) the group's duration total, rendered through the same
+-    /// [`crate::expr::xsd_literal_value`] [`Self::Ok`] uses. A duration-typed
+-    /// group is never `Self::Empty` at finish: [`Self::step_xsd`] only creates
+-    /// [`Self::Dur`] on the FIRST folded duration, so the empty-group `0` row
+-    /// above is reached only when literally nothing was folded, exactly as
+-    /// SPARQL's `SUM(empty) = 0` requires regardless of the group's would-be
+-    /// type.
+-    ///
+-    /// Returns `None` — poisoning to SPARQL unbound — in exactly one case:
+-    /// [`Self::Dur`]'s raw `(months, seconds)` total fails
+-    /// [`purrdf_xsd::temporal::Duration::new`]'s validation (mixed-sign
+-    /// components, or a months total that no longer fits `i64`) — see that
+-    /// variant's own doc for why this single, order-independent check is
+-    /// deferred all the way to here rather than applied at every fold step.
+-    /// `Self::Empty`/`Self::Int`/`Self::Ok` remain unconditionally infallible,
+-    /// exactly as before [`Self::Dur`]'s raw-component representation existed:
+-    /// nothing past `step_xsd`'s own poisoning (already handled by the chain,
+-    /// see [`fold_numeric`]) can make one of those three unrepresentable.
+-    fn finish_sum(self) -> Option<TermValue> {
++    /// SUM(empty) = integer zero. Duration validation occurs only here.
++    fn sum_value(self) -> Result<Option<ParsedValue>, EvalError> {
+         match self {
+-            Self::Empty => Some(TermValue::integer(0)),
+-            Self::Int { sum, datatype, .. } => Some(int_sum_value(&sum, datatype)),
+-            Self::Ok { acc, .. } => Some(crate::expr::xsd_literal_value(&acc)),
+-            Self::Dur {
+-                months,
+-                seconds,
+-                datatype,
+-                ..
+-            } => {
+-                let months = i64::try_from(months).ok()?;
+-                // A seconds total past the bounded decimal is past every
+-                // representable duration.
+-                let XsdValue::Decimal(seconds) = seconds else {
+-                    return None;
+-                };
+-                let dur = purrdf_xsd::temporal::Duration::new(months, seconds, datatype).ok()?;
+-                Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
++            Self::Empty => ParsedValue::from_admitted(XsdValue::Integer {
++                value: 0, datatype: XsdDatatype::Integer,
++            }, None, 0).map(Some),
++            Self::Int { sum, .. } | Self::Ok { acc: sum, .. } => Ok(Some(sum)),
++            Self::Dur { months, seconds, datatype, .. } => {
++                let Ok(months) = i64::try_from(months) else { return Ok(None); };
++                let XsdValue::Decimal(seconds) = &*seconds else { return Ok(None); };
++                let Ok(duration) = purrdf_xsd::temporal::Duration::new(months, *seconds, datatype)
++                else { return Ok(None); };
++                ParsedValue::from_admitted(XsdValue::Duration(duration), None, 0).map(Some)
+             }
+         }
+     }
+ 
+-    /// `AVG`'s finish: empty group → `0^^xsd:integer`; otherwise the running
+-    /// total divided by the folded count, through
+-    /// [`purrdf_xsd::numeric::numeric_div_with_policy`] under the query's
+-    /// `division` — the one quotient `/` computes, so `AVG(?x)` and
+-    /// `SUM(?x) / COUNT(?x)` are the same value on every group, at every size.
+-    ///
+-    /// The quotient is always a value of `xsd:decimal`'s unbounded value space,
+-    /// on the arbitrary-precision tower when it leaves the machine words. It is
+-    /// unbound where the policy refuses it (a non-terminating mean under
+-    /// [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)) — an
+-    /// aggregate error, whose F&O code goes to `absorb` — and for a duration mean
+-    /// no duration can hold.
+-    fn finish_avg(
+-        self,
+-        division: DivisionPolicy,
+-        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+-    ) -> Option<TermValue> {
+-        // `AVG` is `SUM ÷ COUNT` under the query's division policy, through the one
+-        // quotient `/` computes, so `SUM(?x) / COUNT(?x)` and `AVG(?x)` agree.
+-        let mut mean = |sum: &XsdValue, count: u64| {
+-            let count_val = XsdValue::Integer {
+-                value: i128::from(count),
+-                datatype: XsdDatatype::Integer,
+-            };
+-            match numeric_div_with_policy(sum, &count_val, division) {
+-                Ok(avg) => Some(crate::expr::xsd_literal_value(&avg)),
+-                Err(error) => {
+-                    if let Some(code) = error.code() {
+-                        absorb(code);
++    /// AVG is SUM / COUNT under the query policy for numeric values. Duration
++    /// seconds keep their existing default division law; months round toward
++    /// positive infinity at ties. The mean, rather than its raw sum, is validated.
++    fn avg_value(
++        self, division: DivisionPolicy, absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Option<ParsedValue>, EvalError> {
++        use purrdf_xsd::numeric::NumericBinaryOperator::Divide;
++        match self {
++            Self::Empty => Self::Empty.sum_value(),
++            Self::Int { sum, count } | Self::Ok { acc: sum, count } => {
++                let count = XsdValue::Integer {
++                    value: i128::from(count), datatype: XsdDatatype::Integer,
++                };
++                match numeric_fold_binary(&sum, &count, Divide, division, workspace)? {
++                    Ok(mean) => Ok(Some(mean)),
++                    Err(code) => {
++                        if let Some(code) = code { absorb(code); }
++                        Ok(None)
+                     }
+-                    None
+                 }
+             }
+-        };
+-        match self {
+-            Self::Empty => Some(TermValue::integer(0)),
+-            Self::Int { sum, count, .. } => mean(
+-                &XsdValue::from_exact_integer(
+-                    purrdf_xsd::exact::Integer::from_bigint(sum),
+-                    XsdDatatype::Integer,
+-                ),
+-                count,
+-            ),
+-            Self::Ok { acc, count } => mean(&acc, count),
+-            Self::Dur {
+-                months,
+-                seconds,
+-                datatype,
+-                count,
+-            } => {
+-                // Mirrors `finish_sum`'s deferred-validation shape, but the
+-                // MEAN — not the sum — is what must pass `Duration::new` here:
+-                // a group whose raw SUM would be sign-incoherent can still
+-                // have a representable MEAN (and vice versa), so this cannot
+-                // simply divide `finish_sum`'s already-summed answer. Months
+-                // divide with the same ties-toward-positive-infinity rule
+-                // `purrdf_xsd::temporal::divide_duration` applies internally
+-                // (its own private `round_decimal_to_i64`), replicated here as
+-                // `round_i128_div_to_i64` because the numerator is the fold's
+-                // raw `i128` accumulator, not a `Decimal` `divide_duration`
+-                // could be handed directly. Seconds divide through
+-                // `numeric_div` — the same function [`Self::Ok`]'s own AVG
+-                // uses — for the identical truncated-to-18-fractional-digit
+-                // `Decimal` result plain decimal AVG gets.
++            Self::Dur { months, seconds, datatype, count } => {
+                 let divisor = i128::from(count);
+-                let mean = || {
+-                    let mean_months = round_i128_div_to_i64(months, divisor)?;
+-                    let count_val = XsdValue::Integer {
+-                        value: divisor,
+-                        datatype: XsdDatatype::Integer,
+-                    };
+-                    // A seconds mean past the bounded decimal is past every
+-                    // representable duration.
+-                    let XsdValue::Decimal(mean_seconds) = numeric_div(&seconds, &count_val).ok()?
+-                    else {
+-                        return None;
+-                    };
+-                    let dur =
+-                        purrdf_xsd::temporal::Duration::new(mean_months, mean_seconds, datatype)
+-                            .ok()?;
+-                    Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
+-                };
+-                mean()
++                let Some(months) = round_i128_div_to_i64(months, divisor) else { return Ok(None); };
++                let count = XsdValue::Integer { value: divisor, datatype: XsdDatatype::Integer };
++                let Ok(mean) = numeric_fold_binary(
++                    &seconds, &count, Divide, DivisionPolicy::xsd_default(), workspace,
++                )? else { return Ok(None); };
++                let XsdValue::Decimal(seconds) = &*mean else { return Ok(None); };
++                let Ok(duration) = purrdf_xsd::temporal::Duration::new(months, *seconds, datatype)
++                else { return Ok(None); };
++                ParsedValue::from_admitted(XsdValue::Duration(duration), None, 0).map(Some)
+             }
+         }
+     }
+ 
+-    /// Merge `a` and `b` — `a` the earlier (in source/chunk order) partial
+-    /// fold, `b` the later one — returning `None` when the merge itself
+-    /// poisons (a `decimal`-tier promotion or `numeric_add` failure; see
+-    /// [`int_sum_promote_base`]).
+-    ///
+-    /// This is NOT, by itself, the SPARQL answer for the rows `a` and `b`
+-    /// cover. §18.5.1.3 defines `Sum(S)` as the chain `op:numeric-add(S1,
+-    /// Sum(S2..n))` of single additions, and adding two partial sums is a
+-    /// different expression tree: over `xsd:float`/`xsd:double` it rounds
+-    /// differently (over `{−3, −2^53, −1, −0.7}` every chain gives
+-    /// `−9007199254740996`, the tree `(a+b)+(c+d)` gives `−9007199254740998`).
+-    /// Over `xsd:decimal` every order of exact additions is the chain, but a
+-    /// merge is only cheap while both partials stay in the machine words. The
+-    /// only caller,
+-    /// [`NumericSummary::append`], therefore calls this solely where the
+-    /// merge provably equals the chain: `b` holds no `float`/`double` operand
+-    /// (the summary stops its exact fold at the first one), and either both
+-    /// sides are pure-integer ([`BigInt`] addition is exact and cannot
+-    /// overflow, so every order of it is the chain) or the
+-    /// [`MagnitudeBound`] over every operand either side absorbed shows no
+-    /// chain prefix, operand alignment or total can leave the `i128`
+-    /// mantissa, in which case every decimal addition on the way stayed in
+-    /// machine words and the merged value — mantissa AND scale, since
+-    /// `decimal_add`'s result scale is the maximum of its operands' — is the
+-    /// chain's. A group the bound cannot prove small replays in order instead,
+-    /// on the tower, to the same exact value.
+-    ///
+-    /// [`Self::Dur`]'s raw-component representation (see its own doc) sums
+-    /// the free abelian group `ℤ × Decimal`, so the same two conditions make
+-    /// its merge the chain's too: `months` cannot overflow `i128` for any
+-    /// realistic row count, and the seconds decimals are covered by the bound.
+-    ///
+-    /// [`crate::parallel::par_chunk_reduce_init`] chunks through
+-    /// [`crate::parallel::aggregate_chunk_size_for`], which is a pure function of the
+-    /// group's row count — never of `rayon::current_num_threads()` — so for a given
+-    /// (query, data) pair there is exactly ONE chunking in production, reproduced
+-    /// identically on every host and every run.
+-    fn combine_owned(a: Self, b: Self) -> Option<Self> {
+-        match (a, b) {
++    /// Render through the shared producer home while the native value owner lives.
++    fn finish_sum_admitted(
++        self, workspace: &crate::WorkspaceCapability,
++    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
++        self.sum_value()?.map(|value| crate::expr::xsd_workspace_value(&value, workspace)).transpose()
++    }
++
++    fn finish_avg_admitted(
++        self, division: DivisionPolicy, absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
++        self.avg_value(division, absorb, workspace)?
++            .map(|value| crate::expr::xsd_workspace_value(&value, workspace)).transpose()
++    }
++
++    /// Merge adjacent partials only where NumericSummary proves the result is
++    /// the source-order chain. IEEE partials are not reassociated in production.
++    fn combine_admitted(
++        a: Self, b: Self, workspace: &crate::WorkspaceCapability,
++    ) -> Result<Option<Self>, EvalError> {
++        use purrdf_xsd::numeric::NumericBinaryOperator::Add;
++        Ok(match (a, b) {
+             (Self::Empty, other) | (other, Self::Empty) => Some(other),
+-            (
+-                Self::Int {
+-                    sum: mut sum1,
+-                    count: count1,
+-                    ..
+-                },
+-                Self::Int {
+-                    sum: sum2,
+-                    count: count2,
+-                    ..
+-                },
+-            ) => {
+-                sum1.add_assign(&sum2);
+-                Some(Self::Int {
+-                    sum: sum1,
+-                    count: count1 + count2,
+-                    datatype: XsdDatatype::Integer,
+-                })
++            (Self::Int { sum: a, count: ac }, Self::Int { sum: b, count: bc }) => {
++                let count = ac.checked_add(bc).ok_or(EvalError::WorkspaceBoundOverflow)?;
++                numeric_fold_binary(&a, &b, Add, DivisionPolicy::xsd_default(), workspace)?
++                    .ok().map(|sum| Self::Int { sum, count })
+             }
+-            (
+-                Self::Ok {
+-                    acc: acc1,
+-                    count: count1,
+-                },
+-                Self::Ok {
+-                    acc: acc2,
+-                    count: count2,
+-                },
+-            ) => numeric_add(&acc1, &acc2).ok().map(|sum| Self::Ok {
+-                acc: sum,
+-                count: count1 + count2,
+-            }),
+-            (
+-                Self::Int {
+-                    sum, count: count1, ..
+-                },
+-                Self::Ok { acc, count: count2 },
+-            )
+-            | (
+-                Self::Ok { acc, count: count2 },
+-                Self::Int {
+-                    sum, count: count1, ..
+-                },
+-            ) => int_sum_promote_base(&sum, &acc)
+-                .and_then(|base| numeric_add(&base, &acc).ok())
+-                .map(|result| Self::Ok {
+-                    acc: result,
+-                    count: count1 + count2,
+-                }),
+-            (
+-                Self::Dur {
+-                    months: months1,
+-                    seconds: seconds1,
+-                    datatype: datatype1,
+-                    count: count1,
+-                },
+-                Self::Dur {
+-                    months: months2,
+-                    seconds: seconds2,
+-                    datatype: datatype2,
+-                    count: count2,
+-                },
+-            ) => months1.checked_add(months2).and_then(|months| {
+-                numeric_add(&seconds1, &seconds2)
+-                    .ok()
+-                    .map(|seconds| Self::Dur {
+-                        months,
+-                        seconds,
+-                        datatype: purrdf_xsd::temporal::duration_result_datatype(
+-                            datatype1, datatype2,
+-                        ),
+-                        count: count1 + count2,
++            (Self::Ok { acc: a, count: ac }, Self::Ok { acc: b, count: bc })
++            | (Self::Int { sum: a, count: ac }, Self::Ok { acc: b, count: bc })
++            | (Self::Ok { acc: b, count: bc }, Self::Int { sum: a, count: ac }) => {
++                let count = ac.checked_add(bc).ok_or(EvalError::WorkspaceBoundOverflow)?;
++                numeric_fold_binary(&a, &b, Add, DivisionPolicy::xsd_default(), workspace)?
++                    .ok().map(|acc| Self::Ok { acc, count })
++            }
++            (Self::Dur { months: am, seconds: a, datatype: ad, count: ac },
++             Self::Dur { months: bm, seconds: b, datatype: bd, count: bc }) => {
++                let Some(months) = am.checked_add(bm) else { return Ok(None); };
++                let count = ac.checked_add(bc).ok_or(EvalError::WorkspaceBoundOverflow)?;
++                numeric_fold_binary(&a, &b, Add, DivisionPolicy::xsd_default(), workspace)?
++                    .ok().map(|seconds| Self::Dur {
++                        months, seconds,
++                        datatype: purrdf_xsd::temporal::duration_result_datatype(ad, bd), count,
+                     })
+-            }),
+-            // A duration chunk merged with a numeric chunk (either order) is
+-            // the cross-group mixing `step` already refuses within one
+-            // accumulator — a chunk boundary must not let it back in.
++            }
+             (Self::Dur { .. }, Self::Int { .. } | Self::Ok { .. })
+             | (Self::Int { .. } | Self::Ok { .. }, Self::Dur { .. }) => None,
+-        }
++        })
+     }
+ }
+ 
+ /// Round `numerator / denominator` (`denominator > 0`) to the nearest `i64`,
+ /// ties toward positive infinity — replicates
+ /// `purrdf_xsd::temporal::divide_duration`'s internal (private)
+-/// `round_decimal_to_i64` rounding rule, used by [`NumericFold::finish_avg`]'s
++/// `round_decimal_to_i64` rounding rule, used by [`NumericFold::finish_avg_admitted`]'s
+ /// `Dur` arm to round the duration-AVG months MEAN. Reimplemented here rather
+ /// than reused because the numerator is the fold's raw `i128` accumulator
+ /// (see [`NumericFold::Dur`]'s own doc for why it stays raw through `finish`),
+@@ -3737,63 +3462,6 @@
+     i64::try_from(biased.div_euclid(doubled_denominator)).ok()
+ }
+ 
+-/// Convert a pure-integer running sum into the `XsdValue` `numeric_add` needs
+-/// once a `decimal`/`float`/`double` value `joining` the fold promotes it out
+-/// of [`NumericFold::Int`].
+-///
+-/// Exact (`XsdValue::Integer`) whenever the running sum still fits `i128` — the
+-/// overwhelmingly common case — and exact past it too: a joining
+-/// `decimal` (or a big integer) meets the sum as `XsdValue::BigInteger`, which
+-/// `numeric_add` adds on the tower at any size. A `joining` float/double is IEEE,
+-/// so the sum is converted — correctly rounded, straight to the joining type
+-/// ([`BigInt::to_f64`] for `double`, [`BigInt::to_f32`] for `float`, never
+-/// `double` then narrowed, which would round twice), exactly as the
+-/// `i128 → f64`/`f32` casts in `purrdf_xsd::numeric` round an in-range integer.
+-/// `None` only for a joining value outside the numeric tower.
+-fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
+-    if let Some(value) = sum.to_i128() {
+-        return Some(XsdValue::Integer {
+-            value,
+-            datatype: XsdDatatype::Integer,
+-        });
+-    }
+-    match joining {
+-        XsdValue::Float(_) => Some(XsdValue::Float(sum.to_f32())),
+-        XsdValue::Double(_) => Some(XsdValue::Double(sum.to_f64())),
+-        // A decimal of any size joins the exact sum exactly.
+-        XsdValue::Decimal(_) | XsdValue::BigDecimal(_) | XsdValue::BigInteger { .. } => {
+-            Some(XsdValue::from_exact_integer(
+-                purrdf_xsd::exact::Integer::from_bigint(sum.clone()),
+-                XsdDatatype::Integer,
+-            ))
+-        }
+-        _ => None,
+-    }
+-}
+-
+-/// Render a [`NumericFold::Int`]'s running sum as a `TermValue`: the exact
+-/// canonical lexical form either way — [`crate::expr::xsd_literal_value`]'s
+-/// usual `XsdValue::Integer` path when `sum` still fits `i128` (preserving
+-/// `datatype`, e.g. a singleton `xsd:byte` group — see [`NumericFold::Int`]'s
+-/// docs), or a directly-built `xsd:integer` literal from
+-/// [`BigInt::to_decimal_string`] when it does not: `XsdValue::Integer`'s
+-/// `i128` field cannot hold that magnitude, but `xsd:integer`'s LEXICAL space
+-/// is unbounded, so the term is built straight from the exact decimal string
+-/// rather than forced through a value representation that would have to lose
+-/// precision to accept it. Interning (via [`ScratchInterner`](crate::scratch::ScratchInterner))
+-/// happens once, at the caller — see [`fold_builtin`] — not here.
+-fn int_sum_value(sum: &BigInt, datatype: XsdDatatype) -> TermValue {
+-    match sum.to_i128() {
+-        Some(value) => crate::expr::xsd_literal_value(&XsdValue::Integer { value, datatype }),
+-        None => TermValue::Literal {
+-            lexical_form: sum.to_decimal_string(),
+-            datatype: XSD_INTEGER.to_owned(),
+-            language: None,
+-            direction: None,
+-        },
+-    }
+-}
+-
+ // ---------------------------------------------------------------------------
+ // Built-in aggregate accumulators — instances of `crate::agg_fn::AggregateAccumulator`
+ // ---------------------------------------------------------------------------
+@@ -3896,9 +3564,9 @@
+ /// Which finish [`fold_numeric`] applies to the folded [`NumericFold`].
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ enum NumericAggregate {
+-    /// `SUM` — [`NumericFold::finish_sum`].
++    /// `SUM` — [`NumericFold::finish_sum_admitted`].
+     Sum,
+-    /// `AVG` — [`NumericFold::finish_avg`].
++    /// `AVG` — [`NumericFold::finish_avg_admitted`].
+     Avg,
+ }
+ 
+@@ -3909,14 +3577,14 @@
+ ///
+ /// # The law
+ ///
+-/// The answer is ALWAYS the sequential chain's — [`NumericFold::step_xsd`]
++/// The answer is ALWAYS the sequential chain's — [`NumericFold::step_parsed`]
+ /// applied to every value in source order, `None` (unbound) from the first
+ /// refused value on. At or below [`crate::parallel::PARALLEL_MIN_ROWS`] that
+-/// chain is exactly what runs. Above it, [`crate::parallel::par_chunk_reduce_init`]
++/// chain is exactly what runs. Above it, [`crate::parallel::par_chunk_reduce_init_admitted`]
+ /// folds each chunk into a [`NumericSummary`] and appends the summaries in
+ /// chunk order; [`NumericSummary`]'s doc proves the appended summary finishes
+ /// to the chain's state. What stays parallel is everything that is exact: a
+-/// pure-integer group ([`BigInt`]) and a decimal/duration group whose
++/// pure-integer group ([`purrdf_xsd::BigInt`]) and a decimal/duration group whose
+ /// [`MagnitudeBound`] rules out every `i128`-mantissa overflow merge chunk
+ /// partials exactly, while a `float`/`double` operand switches the rest of the
+ /// group onto the chain — its operands parsed in parallel, its additions
+@@ -3928,43 +3596,51 @@
+     division: DivisionPolicy,
+     absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+ ) -> Result<Option<TermValue>, EvalError> {
++    // Raw output belongs only to this explicitly resident public boundary.
++    let workspace = crate::WorkspaceCapability::resident();
++    fold_numeric_admitted(sequential, values, aggregate, division, absorb, &workspace)
++        .map(|value| value.map(|value| value.into_parts().0))
++}
++
++/// The shared production fold; native payloads, tail and chunk metadata retain
++/// their original physical admissions through final lexical publication.
++fn fold_numeric_admitted(
++    sequential: bool,
++    values: &[TermValue],
++    aggregate: NumericAggregate,
++    division: DivisionPolicy,
++    absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
++    workspace: &crate::WorkspaceCapability,
++) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+     let fold = if crate::parallel::should_parallelize(sequential, values.len()) {
+-        crate::parallel::par_chunk_reduce_init(
+-            sequential,
+-            values,
+-            || Ok(NumericSummary::default()),
+-            |summary, value| {
+-                summary.step(value);
+-                Ok(())
+-            },
+-            |summary, next| {
+-                summary.append(next, values);
+-                Ok(())
+-            },
+-        )?
+-        .finish()
++        crate::parallel::par_chunk_reduce_init_admitted(
++            sequential, values, workspace,
++            || Ok(NumericSummary::new(workspace)),
++            |summary, value| summary.step(value),
++            |summary, next| summary.append(next, values),
++        )?.finish()?
+     } else {
+-        numeric_chain(values)
++        numeric_chain_admitted(values, workspace)?
+     };
+     match fold {
+         None => Ok(None),
+         Some(fold) => match aggregate {
+-            NumericAggregate::Sum => Ok(fold.finish_sum()),
+-            NumericAggregate::Avg => Ok(fold.finish_avg(division, absorb)),
++            NumericAggregate::Sum => fold.finish_sum_admitted(workspace),
++            NumericAggregate::Avg => fold.finish_avg_admitted(division, absorb, workspace),
+         },
+     }
+ }
+ 
+-/// The sequential chain itself: every value folded left to right through
+-/// [`NumericFold::step_xsd`], `None` from the first refused value on.
+-fn numeric_chain(values: &[TermValue]) -> Option<NumericFold> {
++/// The sequential chain, with the same parser and native addition as summaries.
++fn numeric_chain_admitted(
++    values: &[TermValue], workspace: &crate::WorkspaceCapability,
++) -> Result<Option<NumericFold>, EvalError> {
+     let mut fold = NumericFold::Empty;
+     for value in values {
+-        if !xsd_of(value).is_some_and(|xv| fold.step_xsd(&xv)) {
+-            return None;
+-        }
++        let Some(value) = parse_numeric_fold_value(value, workspace)? else { return Ok(None); };
++        if !fold.step_parsed(value, workspace)? { return Ok(None); }
+     }
+-    Some(fold)
++    Ok(Some(fold))
+ }
+ 
+ /// A conservative upper bound on `Σ |x| × 10^scale` over every operand an
+@@ -3977,8 +3653,8 @@
+ /// scaled up by `align_decimals` to the running scale, and every aligned
+ /// running total has magnitude at most `Σ |x| × 10^scale`. So each
+ /// `decimal_add` on the way is exact, a pure-integer prefix promoted through
+-/// `int_sum_promote_base` fits `i128`, and the chain equals the exact sum at
+-/// the maximum scale — which is what [`NumericFold::combine_owned`] computes.
++/// the native numeric kernel fits `i128`, and the chain equals the exact sum at
++/// the maximum scale — which is what [`NumericFold::combine_admitted`] computes.
+ /// When it does not fit, nothing is concluded: the rows are replayed through
+ /// the chain instead.
+ #[derive(Clone, Copy, Debug, Default)]
+@@ -4037,14 +3713,14 @@
+ ///
+ /// A summary covers `rows()` consecutive values. It folds them exactly into
+ /// `head` until the first value it will not absorb — a `float`/`double`
+-/// operand, or any value [`NumericFold::step_xsd`] refuses (non-numeric,
++/// operand, or any value [`NumericFold::step_parsed`] refuses (non-numeric,
+ /// mixed with a duration, an overflow) — and from that value on it only
+-/// parses: `tail` holds every later value's [`xsd_of`] parse, in order.
++/// parses: `tail` holds every later value's admitted immutable parse, in order.
+ ///
+ /// # Proof that the appended summary finishes to the chain
+ ///
+ /// Invariant P for a summary whose first row is the group's first row:
+-/// replaying `tail` onto `head` through [`NumericFold::step_xsd`] (poisoning
++/// replaying `tail` onto `head` through [`NumericFold::step_parsed`] (poisoning
+ /// at the first refusal) is the chain's state after `rows()` values, and
+ /// `head` alone is the chain's state after the `absorbed` values it folded.
+ ///
+@@ -4057,7 +3733,7 @@
+ ///   over every row. If the prefix has not stopped, its `head` is the chain's
+ ///   state and the next chunk's absorbed values follow it: when
+ ///   [`merge_exact`] proves the merge equals the chain (see
+-///   [`NumericFold::combine_owned`] and [`MagnitudeBound`]) the merged value
++///   [`NumericFold::combine_admitted`] and [`MagnitudeBound`]) the merged value
+ ///   is the new `head`; when both sides are exact but of incompatible
+ ///   families (a duration and a number) the chain poisons at the first of the
+ ///   next chunk's values, and so does the summary; otherwise every one of
+@@ -4084,20 +3760,8 @@
+     /// Whether the exact fold has stopped; from then on rows go to `tail`.
+     stopped: bool,
+     /// Every row after the stop, parsed, in source order.
+-    tail: Vec<Option<XsdValue>>,
+-}
+-
+-impl Default for NumericSummary {
+-    fn default() -> Self {
+-        Self {
+-            head: NumericFold::Empty,
+-            poisoned: false,
+-            bound: MagnitudeBound::default(),
+-            absorbed: 0,
+-            stopped: false,
+-            tail: Vec::new(),
+-        }
+-    }
++    tail: AdmittedVec<Option<ParsedValue>>,
++    workspace: crate::WorkspaceCapability,
+ }
+ 
+ /// What [`merge_exact`] concluded about two exact partial folds.
+@@ -4118,8 +3782,9 @@
+     a_bound: MagnitudeBound,
+     b: NumericFold,
+     b_bound: MagnitudeBound,
+-) -> ExactMerge {
+-    match (&a, &b) {
++    workspace: &crate::WorkspaceCapability,
++) -> Result<ExactMerge, EvalError> {
++    Ok(match (&a, &b) {
+         (_, NumericFold::Empty) => ExactMerge::Merged(a, a_bound),
+         (NumericFold::Empty, _) => ExactMerge::Merged(b, b_bound),
+         (NumericFold::Dur { .. }, NumericFold::Int { .. } | NumericFold::Ok { .. })
+@@ -4128,83 +3793,92 @@
+         }
+         (NumericFold::Int { .. }, NumericFold::Int { .. }) => {
+             let bound = a_bound.merge(b_bound);
+-            NumericFold::combine_owned(a, b).map_or(ExactMerge::Unproven, |merged| {
++            NumericFold::combine_admitted(a, b, workspace)?.map_or(ExactMerge::Unproven, |merged| {
+                 ExactMerge::Merged(merged, bound)
+             })
+         }
+         _ => {
+             let bound = a_bound.merge(b_bound);
+-            if !bound.fits() {
+-                return ExactMerge::Unproven;
+-            }
+-            NumericFold::combine_owned(a, b).map_or(ExactMerge::Unproven, |merged| {
++            if !bound.fits() { return Ok(ExactMerge::Unproven); }
++            NumericFold::combine_admitted(a, b, workspace)?.map_or(ExactMerge::Unproven, |merged| {
+                 ExactMerge::Merged(merged, bound)
+             })
+         }
+-    }
++    })
+ }
+ 
+ impl NumericSummary {
++    fn new(workspace: &crate::WorkspaceCapability) -> Self {
++        Self {
++            head: NumericFold::Empty,
++            poisoned: false,
++            bound: MagnitudeBound::default(),
++            absorbed: 0,
++            stopped: false,
++            tail: AdmittedVec::new(workspace),
++            workspace: workspace.clone(),
++        }
++    }
++
+     /// Rows this summary covers.
+-    fn rows(&self) -> usize {
+-        self.absorbed + self.tail.len()
++    fn rows(&self) -> Result<usize, EvalError> {
++        self.absorbed.checked_add(self.tail.len()).ok_or(EvalError::WorkspaceBoundOverflow)
+     }
+ 
+-    /// Fold one row of the chunk this summary is folding.
+-    fn step(&mut self, value: &TermValue) {
+-        self.push(xsd_of(value));
++    /// Parse one row through the same admitted native parser as the chain.
++    fn step(&mut self, value: &TermValue) -> Result<(), EvalError> {
++        self.push(parse_numeric_fold_value(value, &self.workspace)?)
+     }
+ 
+-    /// Fold one parsed row: absorb it exactly if the fold has not stopped and
+-    /// the value is exact-tier and accepted, else stop and record it.
+-    fn push(&mut self, parsed: Option<XsdValue>) {
++    /// Exact accepted rows enter the head; every later carrier enters the tail.
++    /// Shared cloning keeps the input owner alive while a native result is built.
++    fn push(&mut self, parsed: Option<ParsedValue>) -> Result<(), EvalError> {
+         if !self.stopped {
+             if let Some(xv) = &parsed
+-                && !matches!(xv, XsdValue::Float(_) | XsdValue::Double(_))
+-                && self.head.step_xsd(xv)
++                && !matches!(&**xv, XsdValue::Float(_) | XsdValue::Double(_))
++                && self.head.step_parsed(xv.clone(), &self.workspace)?
+             {
+                 self.bound.add(xv);
+-                self.absorbed += 1;
+-                return;
++                self.absorbed = self.absorbed.checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?;
++                return Ok(());
+             }
+             self.stopped = true;
+         }
+-        self.tail.push(parsed);
++        self.tail.push(parsed)
+     }
+ 
+-    /// Append `next`, the summary of the chunk that immediately follows the
+-    /// rows `self` covers; `values` is the whole group, so `next`'s absorbed
+-    /// rows are `values[self.rows()..][..next.absorbed]`.
+-    fn append(&mut self, next: Self, values: &[TermValue]) {
+-        if self.poisoned {
+-            return;
+-        }
+-        let start = self.rows();
+-        let next_absorbed = &values[start..start + next.absorbed];
++    /// Append an adjacent summary in source order. An unproven mathematical
++    /// merge replays; a physical refusal is propagated immediately.
++    fn append(&mut self, next: Self, values: &[TermValue]) -> Result<(), EvalError> {
++        if self.poisoned { return Ok(()); }
++        let start = self.rows()?;
++        let end = start.checked_add(next.absorbed).ok_or(EvalError::WorkspaceBoundOverflow)?;
++        let next_absorbed = values.get(start..end).ok_or(EvalError::WorkspaceBoundOverflow)?;
+         if self.stopped {
+-            self.tail.extend(next_absorbed.iter().map(xsd_of));
++            for value in next_absorbed {
++                let parsed = parse_numeric_fold_value(value, &self.workspace)?;
++                self.tail.push(parsed)?;
++            }
+             #[cfg(test)]
+             note_numeric_replay(next.absorbed);
+         } else {
+             let head = std::mem::replace(&mut self.head, NumericFold::Empty);
+-            match merge_exact(head.clone(), self.bound, next.head, next.bound) {
++            match merge_exact(head.clone(), self.bound, next.head, next.bound, &self.workspace)? {
+                 ExactMerge::Merged(merged, bound) => {
+                     self.head = merged;
+                     self.bound = bound;
+-                    self.absorbed += next.absorbed;
++                    self.absorbed = self.absorbed.checked_add(next.absorbed)
++                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                     #[cfg(test)]
+                     note_numeric_exact_merge();
+                 }
+                 ExactMerge::Poisoned => {
+-                    // The chain is `None` from inside `next`'s rows on.
+                     self.poisoned = true;
+-                    return;
++                    return Ok(());
+                 }
+                 ExactMerge::Unproven => {
+                     self.head = head;
+-                    for value in next_absorbed {
+-                        self.step(value);
+-                    }
++                    for value in next_absorbed { self.step(value)?; }
+                     #[cfg(test)]
+                     note_numeric_replay(next.absorbed);
+                 }
+@@ -4212,22 +3886,20 @@
+         }
+         if next.stopped {
+             self.stopped = true;
+-            self.tail.extend(next.tail);
++            for parsed in next.tail { self.tail.push(parsed)?; }
+         }
++        Ok(())
+     }
+ 
+-    /// The chain's final state: `tail` replayed onto `head`.
+-    fn finish(self) -> Option<NumericFold> {
+-        if self.poisoned {
+-            return None;
+-        }
++    /// The chain's final state; the tail iterator keeps metadata admission alive.
++    fn finish(self) -> Result<Option<NumericFold>, EvalError> {
++        if self.poisoned { return Ok(None); }
+         let mut fold = self.head;
+-        for parsed in &self.tail {
+-            if !parsed.as_ref().is_some_and(|xv| fold.step_xsd(xv)) {
+-                return None;
+-            }
++        for parsed in self.tail {
++            let Some(value) = parsed else { return Ok(None); };
++            if !fold.step_parsed(value, &self.workspace)? { return Ok(None); }
+         }
+-        Some(fold)
++        Ok(Some(fold))
+     }
+ }
+ 
+diff --git a/crates/sparql-eval/src/expr.rs b/crates/sparql-eval/src/expr.rs
+--- a/crates/sparql-eval/src/expr.rs
++++ b/crates/sparql-eval/src/expr.rs
+@@ -6096,42 +6096,52 @@
+     ctx: &mut EvalCtx<'_, D>,
+     v: &XsdValue,
+ ) -> Result<SolutionTerm<D::Id>, EvalError> {
+-    let capability = ctx.growth.clone();
+-    let mut frame = crate::native_numeric::NumericFrame::new(&capability);
+-    let prepared = purrdf_xsd::numeric::prepare_numeric_text(v, &mut |layout| frame.admit(layout));
+-    let Some(text) = frame.finish_text(prepared)? else {
+-        let text = purrdf_xsd::value::canonical_non_numeric(v).ok_or(EvalError::WorkspaceBoundOverflow)?;
+-        return borrowed_xsd_text_to_term(ctx, &text, v.datatype().iri())?
+-            .ok_or(EvalError::WorkspaceBoundOverflow);
+-    };
+-    numeric_text_to_term(ctx, text, v.datatype().iri())?.ok_or(EvalError::WorkspaceBoundOverflow)
++    let value = xsd_workspace_value(v, &ctx.growth)?;
++    ctx.intern_workspace_term(value)?.ok_or(EvalError::WorkspaceBoundOverflow)
+ }
+ 
+-
++/// One canonical producer for expressions and aggregate results. Borrowed native
++/// inputs and render groups remain owned until the final literal is admitted.
++pub(crate) fn xsd_workspace_value(
++    value: &XsdValue, workspace: &crate::WorkspaceCapability,
++) -> Result<crate::WorkspaceTerm, EvalError> {
++    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
++    let prepared = purrdf_xsd::numeric::prepare_numeric_text(value, &mut |layout| frame.admit(layout));
++    match frame.finish_text(prepared)? {
++        Some(text) => numeric_text_value(text, value.datatype().iri(), workspace),
++        None => {
++            let text = purrdf_xsd::value::canonical_non_numeric(value)
++                .ok_or(EvalError::WorkspaceBoundOverflow)?;
++            workspace.literal(text, value.datatype().iri())
++        }
++    }
++}
+ 
+ fn borrowed_xsd_text_to_term<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>, text: &impl core::fmt::Display, datatype: &str,
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+-    let length = crate::workspace::display_len(text)?;
+-    let bytes = length.checked_add(datatype.len()).ok_or(EvalError::WorkspaceBoundOverflow)?;
+-    // Physical destination arithmetic is checked before its admission/allocation.
+-    std::alloc::Layout::array::<u8>(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+-    let admission = ctx.growth.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+-    let lexical = crate::workspace::format_exact(text, length, "XSD canonical lexical destination")?;
+-    let value = TermValue::Literal {
+-        lexical_form: lexical,
+-        datatype: crate::workspace::string(datatype, "XSD canonical datatype")?,
+-        language: None, direction: None,
+-    };
+-    ctx.intern_workspace_term(crate::WorkspaceTerm::new(value, admission))
++    let value = ctx.growth.literal(text, datatype)?;
++    ctx.intern_workspace_term(value)
+ }
+ 
+ /// Final lexical output consumes its original producer grant on interning.
+ fn numeric_text_to_term<D: DatasetView + Sync>(
+     ctx: &mut EvalCtx<'_, D>, text: crate::native_numeric::NumericText, datatype: &str,
+ ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
++    let value = numeric_text_value(text, datatype, &ctx.growth)?;
++    ctx.intern_workspace_term(value)
++}
++
++/// The exact writer owns its admitted groups; destination sizing precedes
++/// allocation, and the returned immutable literal keeps its final payload grant.
++fn numeric_text_value(
++    text: crate::native_numeric::NumericText, datatype: &str,
++    workspace: &crate::WorkspaceCapability,
++) -> Result<crate::WorkspaceTerm, EvalError> {
++    std::alloc::Layout::array::<u8>(text.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++    std::alloc::Layout::array::<u8>(datatype.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+     let bytes = text.len().checked_add(datatype.len()).ok_or(EvalError::WorkspaceBoundOverflow)?;
+-    let admission = ctx.growth.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
++    let admission = workspace.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+     let mut lexical = String::new();
+     lexical.try_reserve_exact(text.len()).map_err(|_| EvalError::AllocationFailed { construct: "numeric lexical destination" })?;
+     text.write_to(&mut lexical)?;
+@@ -6139,10 +6149,9 @@
+     let value = TermValue::Literal {
+         lexical_form: lexical,
+         datatype: crate::workspace::string(datatype, "numeric literal datatype")?,
+-        language: None,
+-        direction: None,
++        language: None, direction: None,
+     };
+-    ctx.intern_workspace_term(crate::WorkspaceTerm::new(value, admission))
++    Ok(crate::WorkspaceTerm::new(value, admission))
+ }
+ 
+ fn xpath_value_to_term<D: DatasetView + Sync>(
+diff --git a/crates/sparql-eval/src/parallel.rs b/crates/sparql-eval/src/parallel.rs
+--- a/crates/sparql-eval/src/parallel.rs
++++ b/crates/sparql-eval/src/parallel.rs
+@@ -1458,6 +1458,26 @@
+     T: Sync,
+     S: Send,
+ {
++    par_chunk_reduce_init_admitted(
++        sequential, items, &crate::WorkspaceCapability::resident(), init, step, combine,
++    )
++}
++
++/// The same indexed fold with execution-owned native chunk collection.
++/// The preallocated array is admitted before rayon writes it and remains owned
++/// through ordered reduction, including the first chunk-index error.
++pub(crate) fn par_chunk_reduce_init_admitted<T, S>(
++    sequential: bool,
++    items: &[T],
++    workspace: &crate::WorkspaceCapability,
++    init: impl Fn() -> Result<S, EvalError> + Sync,
++    step: impl Fn(&mut S, &T) -> Result<(), EvalError> + Sync,
++    combine: impl Fn(&mut S, S) -> Result<(), EvalError>,
++) -> Result<S, EvalError>
++where
++    T: Sync,
++    S: Send,
++{
+     let run_sequentially = || {
+         let mut state = init()?;
+         for item in items {
+@@ -1472,7 +1492,15 @@
+     use rayon::prelude::*;
+ 
+     let size = aggregate_chunk_size_for(items.len());
+-    let per_chunk: Vec<Result<S, EvalError>> = items
++    let count = items.chunks(size).len();
++    let layout = std::alloc::Layout::array::<Result<S, EvalError>>(count)
++        .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++    // Declared before the array/iterator so their complete payload dies first.
++    let _collection = workspace.charge(
++        u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
++    )?;
++    let mut per_chunk: Vec<Result<S, EvalError>> = crate::workspace::vector(count, "aggregate chunk collection")?;
++    items
+         .par_chunks(size)
+         .map(|chunk| {
+             let mut state = init()?;
+@@ -1481,7 +1509,7 @@
+             }
+             Ok(state)
+         })
+-        .collect();
++        .collect_into_vec(&mut per_chunk);
+ 
+     // Reduce strictly in chunk-index order: the first `Err` **by chunk index**
+     // wins (via `?` on the sequential `for` below), regardless of which worker
+diff --git a/crates/sparql-eval/src/modifier.rs b/crates/sparql-eval/src/modifier.rs
+--- a/crates/sparql-eval/src/modifier.rs
++++ b/crates/sparql-eval/src/modifier.rs
+@@ -7623,20 +7623,29 @@
+         chunk: usize,
+         aggregate: ValueAggregate,
+     ) -> Option<TermValue> {
++
++        let workspace = crate::WorkspaceCapability::resident();
+         let mut acc = Some(NumericFold::Empty);
+         for part in values.chunks(chunk.max(1)) {
+-            acc = match (acc, numeric_chain(part)) {
+-                (Some(a), Some(b)) => NumericFold::combine_owned(a, b),
++            let next = numeric_chain_admitted(part, &workspace).expect("resident chain");
++            acc = match (acc, next) {
++                (Some(a), Some(b)) => NumericFold::combine_admitted(a, b, &workspace)
++                    .expect("resident partial tree"),
+                 _ => None,
+             };
+         }
+-        acc.and_then(|fold| match aggregate {
+-            ValueAggregate::Avg => fold.finish_avg(DivisionPolicy::xsd_default(), &mut |code| {
+-                panic!("the default policy never refuses: {code:?}")
+-            }),
+-            _ => fold.finish_sum(),
+-        })
+-    }
++        let fold = acc?;
++        let value = match aggregate {
++            ValueAggregate::Avg => fold.finish_avg_admitted(
++                DivisionPolicy::xsd_default(),
++                &mut |code| panic!("the default policy never refuses: {code:?}"),
++                &workspace,
++            ),
++            _ => fold.finish_sum_admitted(&workspace),
++        }.expect("resident aggregate rendering")?;
++        Some(value.into_parts().0)
++    
++}
+ 
+     fn double_bits(value: Option<&TermValue>) -> u64 {
+         match value.and_then(xsd_of) {
+

@@ -1,0 +1,87 @@
+--- a/helpers-ledger.toml
++++ b/helpers-ledger.toml
+@@ -1734,16 +1734,6 @@
+ 
+ [[distinct]]
+ members = [
+-    "purrdf_iri::base::BaseScope::empty",
+-    "purrdf_sparql_algebra::tree::Args::new",
+-]
+-kind = "shim"
+-criterion = "b"
+-anchor = "helper_census::normalize::shim_form"
+-reason = "The empty value of two unrelated newtypes over a `Vec`, a base-resolution scope and an algebra argument list; they share the spelling `Self(Vec::new())`, not a job."
+-
+-[[distinct]]
+-members = [
+     "purrdf_deflate::gzip::decompress",
+     "purrdf_deflate::inflate::decompress",
+ ]
+@@ -1844,16 +1834,6 @@
+ 
+ [[distinct]]
+ members = [
+-    "purrdf_columnar::plain_bench::PlainInt64::from_rows",
+-    "purrdf_sparql_algebra::tree::Args::from_iter",
+-]
+-kind = "shim"
+-criterion = "b"
+-anchor = "helper_census::normalize::shim_form"
+-reason = "Collecting constructors of two unrelated newtypes, a plain benchmark column and an algebra argument list; they share the spelling `Self(iter.into_iter().collect())`, not a job."
+-
+-[[distinct]]
+-members = [
+     "purrdf_hash::arch::aarch64::sha1_blocks",
+     "purrdf_hash::arch::x86_64::sha1_blocks",
+ ]
+@@ -1891,16 +1871,6 @@
+ criterion = "b"
+ anchor = "purrdf_rdf::projections::skos::mapping::project_skos"
+ reason = "The public entry points of two projections, OKF bundles and SKOS views, each running its own module's `Projector` under its own configuration."
+-
+-[[distinct]]
+-members = [
+-    "purrdf_shex::lexer::tokenize",
+-    "purrdf_sparql_algebra::lexer::tokenize",
+-]
+-kind = "shim"
+-criterion = "a"
+-anchor = "purrdf_shex::lexer::tokenize"
+-reason = "The ShExC and SPARQL grammars have different terminals, so each crate's `tokenize` runs its own `Lexer`; they share only the spelling `Lexer::new(input).run()`."
+ 
+ [[distinct]]
+ members = [
+@@ -2464,16 +2434,6 @@
+ 
+ [[distinct]]
+ members = [
+-    "purrdf_sparql_eval::expr::string_arg_value",
+-    "purrdf_sparql_eval::expr::string_arg_value_owned",
+-]
+-kind = "body"
+-criterion = "b"
+-anchor = "purrdf_sparql_eval::expr::string_arg_value_owned"
+-reason = "The by-value twin moves the lexical form and language out of a `TermValue` the caller is about to drop instead of cloning them, which its documentation states saves two `String` clones per evaluated string argument; the borrowed one serves callers that keep the value."
+-
+-[[distinct]]
+-members = [
+     "purrdf_sparql_eval::knn::metric::Kernel::distance_bounded",
+     "purrdf_sparql_eval::knn::metric::Kernel::distance_bounded_reassociated",
+ ]
+@@ -2501,16 +2461,6 @@
+ criterion = "b"
+ anchor = "purrdf_sparql_conformance::ledger::LedgeredCase"
+ reason = "Each corpus's `GradedCase` adapts its own gap enum (OWL 2 or OWL 2 RL) to the shared `LedgeredCase` trait, where the counting lives once; the adapter is the per-type seam, not a second implementation."
+-
+-[[distinct]]
+-members = [
+-    "purrdf_shapes::shapes::ClosedTypeIndex::entries",
+-    "purrdf_sparql_eval::witness::RelationWitness::iter",
+-]
+-kind = "body"
+-criterion = "b"
+-anchor = "purrdf_sparql_eval::witness::RelationWitness::iter"
+-reason = "Two unrelated types' ordered iterators over their own maps (closed-by-types properties, relation attestations), each borrowing its value in the form its callers read; they share an iterator-adapter shape, not a job."
+ 
+ [[distinct]]
+ members = [

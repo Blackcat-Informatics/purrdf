@@ -1,0 +1,89 @@
+pub(crate) fn invocation_mode(
+    call: &PropertyFunctionCall,
+    bound: &DetHashSet<Variable>,
+) -> BindingPattern {
+    invocation_mode_with_memory(
+        call,
+        &|variable| bound.contains(variable),
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .expect("resident invocation-mode traversal allocation failed")
+}
+
+/// The same invocation law under the original physical walk admission.
+/// Membership borrows the caller's certainty owner rather than copying its set.
+pub(crate) fn invocation_mode_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    call: &PropertyFunctionCall,
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<BindingPattern, purrdf_lex::allocation::StorageError> {
+    // The existing BindingPattern contract is a 64-bit pure value. Its positions
+    // need no heap storage while each argument's traversal admits actual spill.
+    let mut bits = [false; BindingPattern::MAX_ARITY];
+    let mut arity = 0usize;
+    for (position, term) in call
+        .subject_args
+        .iter()
+        .chain(&call.object_args)
+        .enumerate()
+    {
+        assert!(
+            position < BindingPattern::MAX_ARITY,
+            "BindingPattern arity exceeds its bitset"
+        );
+        bits[position] = term_is_bound_with_memory(term, bound, memory)?;
+        arity = position + 1;
+    }
+    Ok(BindingPattern::from_bools(bits[..arity].iter().copied()))
+}
+
+/// Resident test entry for the same native term-boundness body.
+#[cfg(test)]
+fn term_is_bound(term: &TermPattern, bound: &DetHashSet<Variable>) -> bool {
+    term_is_bound_with_memory(
+        term,
+        &|variable| bound.contains(variable),
+        &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .expect("resident term-boundness traversal allocation failed")
+}
+
+/// Whether a term denotes a known value under the borrowed membership law.
+///
+/// Blank nodes remain non-distinguished variables. Every quoted-triple component
+/// must be bound; the original walk order uses the shared inline/spill work list.
+fn term_is_bound_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    term: &TermPattern,
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<bool, purrdf_lex::allocation::StorageError> {
+    let mut pending: purrdf_lex::walk::WorkList<_, 8> = purrdf_lex::walk::WorkList::with(term);
+    let mut answer = true;
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
+            TermPattern::BlankNode(_) => {
+                answer = false;
+                break;
+            }
+            TermPattern::Variable(variable) => {
+                if !bound(variable) {
+                    answer = false;
+                    break;
+                }
+            }
+            TermPattern::Triple(triple) => {
+                if let NamedNodePattern::Variable(variable) = &triple.predicate
+                    && !bound(variable)
+                {
+                    answer = false;
+                    break;
+                }
+                pending.try_push_admitted(&triple.object, memory)?;
+                pending.try_push_admitted(&triple.subject, memory)?;
+            }
+        }
+    }
+    pending.release_admitted(memory)?;
+    Ok(answer)
+}

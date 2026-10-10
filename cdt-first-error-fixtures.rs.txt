@@ -1,0 +1,85 @@
+
+#[cfg(test)]
+mod original_failure_cleanup_regressions {
+    use super::{Admission, Memory, StorageError};
+    use core::cell::Cell;
+
+    struct Payload<'a> { destroyed: &'a Cell<bool> }
+    impl Drop for Payload<'_> {
+        fn drop(&mut self) { self.destroyed.set(true); }
+    }
+    struct RefuseShrink<'a> {
+        destroyed: &'a Cell<bool>,
+        live: usize,
+        attempted: Option<usize>,
+    }
+    impl Admission for RefuseShrink<'_> {
+        fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+            if next < self.live {
+                assert!(self.destroyed.get(), "original payload dies before the refund callback");
+                self.attempted = Some(next);
+                return Err(StorageError::AdmissionFailed);
+            }
+            self.live = next;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn native_scope_preserves_checked_layout_failure_when_shrink_refuses() {
+        let destroyed = Cell::new(false);
+        let mut storage = RefuseShrink { destroyed: &destroyed, live: 0, attempted: None };
+        let (baseline, surviving, result) = {
+            let mut memory = Memory::new(&mut storage);
+            let parent = memory.string("parent").unwrap();
+            let baseline = memory.live_bytes();
+            let result: Result<(), StorageError> = memory.scope(|memory| {
+                let mut children = Vec::new();
+                memory.push(&mut children, Payload { destroyed: &destroyed })?;
+                let mut impossible = Vec::<u64>::new();
+                memory.reserve(&mut impossible, usize::MAX)?;
+                Ok(())
+            });
+            assert_eq!(parent, "parent", "original outside payload remains intact");
+            let surviving = memory.live_bytes();
+            drop(parent);
+            (baseline, surviving, result)
+        };
+        assert_eq!(result, Err(StorageError::SizeOverflow), "first concrete native layout error remains authoritative");
+        assert!(destroyed.get());
+        assert_eq!(storage.attempted, Some(baseline));
+        assert_eq!(storage.live, surviving, "failed shrink retains the original grant rather than releasing it early");
+    }
+
+    #[test]
+    fn array_refund_preserves_original_error_after_destroying_actual_elements() {
+        let destroyed = Cell::new(false);
+        let mut storage = RefuseShrink { destroyed: &destroyed, live: 0, attempted: None };
+        let result = {
+            let mut memory = Memory::new(&mut storage);
+            let mut values = Vec::new();
+            memory.push(&mut values, Payload { destroyed: &destroyed }).unwrap();
+            let mut impossible = Vec::<u64>::new();
+            let original = memory.reserve(&mut impossible, usize::MAX);
+            memory.release_vec_after(values, original)
+        };
+        assert_eq!(result, Err(StorageError::SizeOverflow));
+        assert!(destroyed.get());
+        assert_eq!(storage.attempted, Some(0));
+    }
+
+    #[test]
+    fn array_refund_failure_is_hard_when_original_operation_succeeded() {
+        let destroyed = Cell::new(false);
+        let mut storage = RefuseShrink { destroyed: &destroyed, live: 0, attempted: None };
+        let result = {
+            let mut memory = Memory::new(&mut storage);
+            let mut values = Vec::new();
+            memory.push(&mut values, Payload { destroyed: &destroyed }).unwrap();
+            memory.release_vec_after(values, Ok(37))
+        };
+        assert_eq!(result, Err(StorageError::AdmissionFailed));
+        assert!(destroyed.get());
+        assert_eq!(storage.attempted, Some(0));
+    }
+}

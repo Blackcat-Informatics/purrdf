@@ -1,0 +1,62 @@
+[
+  {
+    "path": "crates/sparql-eval/src/eval.rs",
+    "source_sha256": "aed07d5df5307dae79ef1c40cb69f36180ed2a66f47bec138bb6a77b4bbb3dd8",
+    "postimage_sha256": "c3cbd231d4e9249aee7eff33e3757c8ee4673890c747a2185f34dac88e84e14e"
+  },
+  {
+    "path": "crates/sparql-eval/src/expr.rs",
+    "source_sha256": "0c9e4d7612785299589c089678e4e4c52fb2e6e0111dc50a5807dc9a6c61bfa8",
+    "postimage_sha256": "d15d837736fc1c303f552c027e35bd38ccc6964343e680978d4b0a590cbe40e5"
+  },
+  {
+    "path": "crates/sparql-eval/src/binop.rs",
+    "source_sha256": "2c201681d3e0cc95cdb53cefa2bf0a0f5a1cd4fc966eaf8b0e45e8d1f0d06810",
+    "postimage_sha256": "b9938fc7132b3bbd80cab8fe537b6f97658a94233c1dd42c5cc96ab0f48d2cb5"
+  },
+  {
+    "path": "crates/sparql-eval/src/deferred_exists.rs",
+    "source_sha256": "c4218df1f40c7294c8a85b3f041121bf04ec80ff65b2415540afde46efd10ba5",
+    "postimage_sha256": "806f1b5f482d81bb46ca56bda0ea376b14340b0cc45ec4f53e794424f719e54f"
+  },
+  {
+    "path": "crates/sparql-eval/src/enf.rs",
+    "source_sha256": "0addecd9477397f91cd89fca1e741dca2b05a8db2ac596cee06049cfb72d42b8",
+    "postimage_sha256": "1654ad8020744d125f375b663adff3bef108613b849dfde464e1151a23bd798d"
+  },
+  {
+    "path": "crates/sparql-eval/src/substitute.rs",
+    "source_sha256": "3a335d41e4cbd3c6afb79960c62e9896c92cbfbde1ec2cc66f49a4a7ac7be111",
+    "postimage_sha256": "c28e6704ce4870da1f4b6a37fc58df3e0d36289bf359d8822a5627319119e86d"
+  },
+  {
+    "path": "crates/sparql-eval/src/remote.rs",
+    "source_sha256": "6eb216aacd1a72e96a66a0b7fc366f206eebf82f96a31d4d8d639e46ba0bca6a",
+    "postimage_sha256": "2ad3acf1a8831e3369822df0f510ff5a81ff2838f0290f75e74b22313b73170a"
+  },
+  {
+    "path": "crates/sparql-eval/src/remote_http.rs",
+    "source_sha256": "178c1dc1ee954785be70ce1493abf9f81ca7c79d5586a27c11ebae07a40d9f1a",
+    "postimage_sha256": "4a58523e9427c6d725aa00492d8d9f480d61916d9bb08cae99ed2d21aa5564c4"
+  },
+  {
+    "path": "crates/sparql-eval/src/service_endpoints.rs",
+    "source_sha256": "7c5c3d0f1b4590eac9dda13b6440a079446b52861b18e09eecdeda39a972f60b",
+    "postimage_sha256": "18e795767671ab89bb2ed233a1e096c2cf222e32132cd45704d01aefa9a1afe0"
+  },
+  {
+    "path": "crates/sparql-eval/src/xpath_regex.rs",
+    "source_sha256": "3bc1b1622a4f141baace72fa2f40caf351dd820a10962ebeaef51443b97dfc63",
+    "postimage_sha256": "85f86e409a9a9b51b9af0ee6fff3c79d15de0fbfdec6a2d64036610cc6930fbb"
+  },
+  {
+    "path": "crates/sparql-eval/src/parallel.rs",
+    "source_sha256": "b690111e245870f97fe2f48d45f10f1c2f95c831039a5acaa832a0b289924bd2",
+    "postimage_sha256": "5069ef084b2bc03efe437bb6e61653982bf5f9b4dd144c08fff44deaa895ef87"
+  },
+  {
+    "path": "crates/sparql-eval/src/scratch.rs",
+    "source_sha256": "3b00911599ac1c15ec73ff7e7bc17b25800486980a8418131205fad6bccc8739",
+    "postimage_sha256": "cad551a46352f305d900dcf772f03952239e56c5c1bd308029a2be2a26b4dc09"
+  }
+]

@@ -1,0 +1,78 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The CDT lexical diagnostic and caller-supplied fallible box factories.
+
+use alloc::boxed::Box;
+use core::alloc::Layout;
+use core::fmt;
+use crate::{CdtError, CdtTripleTerm, CdtValue};
+
+pub use purrdf_lex::allocation::{Admission, StorageError};
+pub(crate) type Memory<'a> = purrdf_lex::allocation::Memory<'a, dyn Storage + 'a>;
+
+/// The leaf's lexical diagnostic or a physical failure.
+#[derive(Debug)]
+pub enum ReadError {
+    /// The existing exact diagnostic, including its original offset and text.
+    Lexical(CdtError),
+    /// Physical failure; must never be collapsed into a malformed literal.
+    Storage(StorageError),
+}
+
+impl From<CdtError> for ReadError {
+    fn from(error: CdtError) -> Self { Self::Lexical(error) }
+}
+
+impl From<StorageError> for ReadError {
+    fn from(error: StorageError) -> Self { Self::Storage(error) }
+}
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lexical(error) => fmt::Display::fmt(error, f),
+            Self::Storage(error) => fmt::Display::fmt(error, f),
+        }
+    }
+}
+
+/// A caller's concrete storage owner and fallible native box factory.
+/// `resize` covers live requested layouts, including both buffers during replacement.
+/// Parse success transfers the surviving payload to a caller retaining its original
+/// admission. Diagnostics and call locals die before admission is released on error.
+/// Factories run only after `Layout::new::<Payload>()` admission and must allocate
+/// exactly that payload fallibly, with no unpriced alternate destination.
+pub trait Storage: Admission {
+    /// Fallibly allocate the already admitted nested composite payload.
+    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError>;
+    /// Fallibly allocate the already admitted nested triple payload.
+    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError>;
+}
+
+pub(crate) struct Resident;
+
+impl Admission for Resident {
+    fn resize(&mut self, _live_bytes: usize) -> Result<(), StorageError> { Ok(()) }
+}
+
+impl Storage for Resident {
+    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> { Ok(Box::new(value)) }
+    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> { Ok(Box::new(value)) }
+}
+
+pub(crate) trait CdtMemory {
+    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError>;
+    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError>;
+}
+
+impl CdtMemory for Memory<'_> {
+    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
+        self.add_bytes(Layout::new::<CdtValue>().size())?;
+        self.admission_mut().boxed_value(value)
+    }
+    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
+        self.add_bytes(Layout::new::<CdtTripleTerm>().size())?;
+        self.admission_mut().boxed_triple(value)
+    }
+}

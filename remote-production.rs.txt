@@ -1,0 +1,134 @@
+fn invocation_error(error: RemoteError, workspace: &crate::WorkspaceCapability) -> Result<ServiceResolutionError, EvalError> {
+    Ok(ServiceResolutionError::Invocation(AdmittedRemoteError::native(error, crate::workspace::LexicalFrame::new(workspace))?))
+}
+
+fn service_evaluation_error(error: crate::engine::EvaluationFailure, workspace: &crate::WorkspaceCapability) -> ServiceResolutionError {
+    match error {
+        crate::engine::EvaluationFailure::Evaluation(EvalError::RetainedServiceFailure(error)) => ServiceResolutionError::Invocation(error.error),
+        crate::engine::EvaluationFailure::Evaluation(error) if error.diagnostic_code().is_some_and(EvalError::diagnostic_requires_propagation) => ServiceResolutionError::Operational(error),
+        other => {
+            let result = match other {
+                crate::engine::EvaluationFailure::Diagnostic(error) => AdmittedRemoteError::message(purrdf_core::SilencedKind::Decode, error, workspace),
+                crate::engine::EvaluationFailure::RetainedDiagnostic(error) => AdmittedRemoteError::message(purrdf_core::SilencedKind::Decode, error.diagnostic(), workspace),
+                crate::engine::EvaluationFailure::Evaluation(error) => AdmittedRemoteError::message(purrdf_core::SilencedKind::Decode, error, workspace),
+            };
+            match result { Ok(error) => ServiceResolutionError::Invocation(error), Err(error) => ServiceResolutionError::Operational(error) }
+        }
+    }
+}
+
+fn ingest_admitted<D: DatasetView + Sync>(
+    resolved: AdmittedResolvedBindings, ctx: &mut EvalCtx<'_, D>,
+) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
+    let response = resolved.bindings();
+    let schema = VarSchema::from_vars_admitted(response.variables.iter().cloned(), &ctx.growth)?.shared_admitted(&ctx.growth)?;
+    let ingest = crate::row_ingest::GovernedRowIngest::new(ctx, schema.len(), Some(crate::governor::ChargePoint::RemoteRowIngested));
+    let mut rows = crate::solution::RowsBuilder::from_storage(crate::AdmittedVec::with_capacity(ingest.capacity_for(response.rows.len()), &ctx.growth)?, &ctx.growth);
+    let mut blanks = ResponseBlanks::default();
+    let mut tripped = None;
+    'bindings: for binding in &response.rows {
+        match ingest.admit(ctx, rows.len()) {
+            crate::row_ingest::IngestVerdict::Abandoned(governor) => { tripped = governor; break; },
+            crate::row_ingest::IngestVerdict::Admitted => {},
+        }
+        let mut cells = crate::AdmittedVec::with_capacity(binding.len().min(schema.len()), &ctx.growth)?;
+        for value in binding.iter().take(schema.len()) {
+            let value = match value {
+                None => None,
+                Some(value) => {
+                    let value = ctx.growth.clone_term(value)?;
+                    let Some(value) = response_blank_value_admitted(value, &mut blanks, ctx)? else { tripped = ctx.expression_barrier.observed(); break 'bindings; };
+                    Some(value)
+                }
+            };
+            cells.push(value)?;
+        }
+        rows.push_row(ingest.intern_row(ctx, cells)?)?;
+    }
+    if tripped.is_none() && let Some(attempted) = response.cell_limit_exceeded_at { tripped = ctx.observe_cell_count(attempted).err(); }
+    Ok((SolutionSeq { schema, rows: rows.finish()? }, tripped))
+}
+
+#[cfg(test)]
+fn ingest<D: DatasetView + Sync>(resolved: ResolvedBindings, ctx: &mut EvalCtx<'_, D>) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
+    assert!(!ctx.growth.is_bounded(), "caller-owned fixtures are resident only");
+    let response = AdmittedResolvedBindings { bindings: resolved, term_owners: crate::AdmittedVec::new(&ctx.growth), storage: ServiceStorage::Native(crate::workspace::LexicalFrame::new(&ctx.growth)) };
+    ingest_admitted(response, ctx)
+}
+
+/// The same native parser, blank-scope and normalization producers, sharing the
+/// calling query's original capability through output and every error path.
+pub(crate) fn evaluate_in_memory_admitted(
+    dataset: &RdfDataset, request: ServiceRequest<'_>, nested: &(dyn ServiceResolver + Sync), workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
+    use crate::workspace::LexicalFrame;
+    use purrdf_lex::allocation::Memory;
+    let parsed = crate::engine::parse_admitted_query(request.query_text, &purrdf_sparql_algebra::ParserOptions::default(), None, &[], workspace)
+        .map_err(|error| service_evaluation_error(error, workspace))?;
+    let (mut query, allocation, live) = parsed.into_parts();
+    let mut frame = LexicalFrame::from_allocation(workspace, allocation, live);
+    {
+        let mut memory = Memory::resume(&mut frame, live);
+        let prepared = crate::property_fn_plan::plan_query_with_memory(&query, &crate::property_fn::PropertyFunctionRegistry::new(), &crate::aggregate::AggregateRegistry::new(), &[], &mut memory)
+            .map_err(|error| service_evaluation_error(error, workspace))?;
+        if let Some(prepared) = prepared { query = prepared; memory.release_bytes(live).map_err(|error| memory.admission_mut().storage_error(error, "SERVICE old parsed query"))?; }
+    }
+    let mut ctx = EvalCtx::new_admitted(dataset, workspace)?.with_remote(nested);
+    ctx.growth = workspace.clone();
+    if request.stop.is_some() || request.max_intermediate_cells.is_some() {
+        let mut governors = QueryGovernors::UNBOUNDED;
+        if let Some(stop) = request.stop { governors = governors.with_stop_signal(Arc::clone(stop)); }
+        if let Some(cells) = request.max_intermediate_cells { governors = governors.with_max_intermediate_cells(cells); }
+        let state = crate::workspace::SharedWorkspace::new_admitted(GovernorState::new(&governors), workspace)?;
+        ctx = ctx.with_governor_owner(state);
+    }
+    let outcome = crate::eval::evaluate_query_evaluated(&query, &mut ctx).map_err(|error| service_evaluation_error(error.into(), workspace))?;
+    // Query destruction precedes its ORIGINAL frame release, including failed
+    // output publication. Intrinsic leaf grants are independently shared.
+    drop(query);
+    drop(frame);
+    match outcome {
+        EvaluatedOutcome::Complete(Outcome::Solutions(seq)) => {
+            let mut frame = LexicalFrame::new(workspace);
+            let mut owners = crate::AdmittedVec::new(workspace);
+            let bindings = {
+                let mut memory = Memory::new(&mut frame);
+                let mut variables = Vec::new();
+                for variable in seq.schema.vars() { memory.push(&mut variables, variable.clone()).map_err(|error| memory.admission_mut().storage_error(error, "SERVICE response variables"))?; }
+                let mut rows = Vec::new();
+                for row in &seq.rows {
+                    let mut cells = Vec::new();
+                    memory.reserve(&mut cells, variables.len()).map_err(|error| memory.admission_mut().storage_error(error, "SERVICE response row"))?;
+                    for cell in row.iter().take(variables.len()) {
+                        let value = match cell {
+                            None => None,
+                            Some(term) => {
+                                let workspace_source = ctx.workspace.clone();
+                                let value = ctx.scratch.try_owned_value_of(ctx.dataset, *term, workspace, |error| workspace_source.source_error(error))?;
+                                owners.reserve(owners.len().checked_add(1).ok_or(EvalError::WorkspaceBoundOverflow)?)?;
+                                let (value, allocation) = value.into_parts();
+                                // The vector is pre-reserved before detaching the
+                                // payload: the original guard cannot be lost here.
+                                owners.push(allocation)?;
+                                Some(value)
+                            }
+                        };
+                        cells.push(value);
+                    }
+                    memory.push(&mut rows, cells).map_err(|error| memory.admission_mut().storage_error(error, "SERVICE response bag"))?;
+                }
+                ResolvedBindings { variables, rows, cell_limit_exceeded_at: None }
+            };
+            Ok(AdmittedResolvedBindings { bindings, term_owners: owners, storage: ServiceStorage::Native(frame) })
+        }
+        EvaluatedOutcome::Complete(_) => Err(ServiceResolutionError::Invocation(AdmittedRemoteError::message(purrdf_core::SilencedKind::Decode, "SERVICE expects a SELECT query", workspace)?)),
+        EvaluatedOutcome::Truncated { outcome: Outcome::Solutions(seq), certificate } if matches!(certificate.tripped(), TrippedGovernor::Budget { dimension: purrdf_core::ResourceDimension::IntermediateCells, .. }) => {
+            let attempted = match certificate.tripped() { TrippedGovernor::Budget { consumed, .. } => Some(consumed), _ => None };
+            AdmittedResolvedBindings::try_build(workspace, |memory| {
+                let variables = memory.collect(seq.schema.vars().iter().cloned())?;
+                Ok(ResolvedBindings { variables, rows: Vec::new(), cell_limit_exceeded_at: attempted })
+            })
+        }
+        EvaluatedOutcome::Truncated { certificate, .. } => Err(invocation_error(RemoteError::Governed(certificate.tripped()), workspace)?),
+    }
+}

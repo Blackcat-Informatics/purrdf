@@ -1,0 +1,90 @@
+    #[test]
+    fn resident_view_native_copy_needs_no_dictionary_certificate_and_keeps_original_payload_grant() {
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/s");
+        let predicate = builder.intern_iri("http://example.org/p");
+        let literal = builder.intern_literal(purrdf_core::RdfLiteral::simple("original lexical value"));
+        let nested = builder.intern_triple(subject, predicate, literal);
+        let root = builder.intern_triple(subject, predicate, nested);
+        builder.push_quad(subject, predicate, root, None);
+        let dataset = builder.freeze().expect("valid RDF 1.2 object nesting");
+        assert!(purrdf_core::DatasetView::max_owned_term_bytes(dataset.as_ref()).is_none());
+        let expected = purrdf_core::DatasetView::term_value(dataset.as_ref(), root).unwrap();
+        let (workspace, ledger, base) = account(262_144);
+        let capability = workspace.capability();
+        let scratch = crate::scratch::ScratchInterner::default();
+        let value = scratch.try_owned_value_of(
+            dataset.as_ref(), crate::scratch::SolutionTerm::Existing(root), &capability,
+            |error| match error {},
+        ).expect("native source copy uses actual owners");
+        assert_eq!(&*value, &expected);
+        assert!(ledger.live.load(Ordering::Relaxed) > base);
+        drop(capability);
+        drop(workspace);
+        assert!(ledger.live.load(Ordering::Relaxed) > 0);
+        assert_eq!(&*value, &expected);
+        drop(value);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn native_term_copy_refusal_destroys_partial_strings_boxes_and_work_before_refund() {
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/s");
+        let predicate = builder.intern_iri("http://example.org/p");
+        let literal = builder.intern_literal(purrdf_core::RdfLiteral::simple("large original lexical value".repeat(8192)));
+        let nested = builder.intern_triple(subject, predicate, literal);
+        let root = builder.intern_triple(subject, predicate, nested);
+        builder.push_quad(subject, predicate, root, None);
+        let dataset = builder.freeze().expect("valid RDF 1.2 object nesting");
+        let base = QueryWorkspace::<Refusal>::control_bytes().expect("original account layout");
+        for extra in [0, 1, 64, 512, 1024] {
+            let (workspace, ledger, _) = account(base + extra);
+            let capability = workspace.capability();
+            let scratch = crate::scratch::ScratchInterner::default();
+            let error = scratch.try_owned_value_of(
+                dataset.as_ref(), crate::scratch::SolutionTerm::Existing(root), &capability,
+                |error| match error {},
+            ).err().expect("actual payload cannot fit this original account");
+            assert!(matches!(error, EvalError::WorkspaceStopped));
+            drop(error);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+            assert_eq!(workspace.take_failure().expect("exact first cause").identity, 7);
+            assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+            assert!(workspace.take_failure().is_none());
+            drop(capability);
+            drop(workspace);
+            assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+        }
+    }
+
+    #[test]
+    fn native_existing_copy_preserves_typed_datatype_read_failure_without_a_view_maximum() {
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("http://example.org/s");
+        let predicate = builder.intern_iri("http://example.org/p");
+        let datatype = builder.intern_iri(purrdf_xsd::datatype::XSD_STRING);
+        let literal = builder.intern_literal(purrdf_core::RdfLiteral::simple("original lexical"));
+        let root = builder.intern_triple(subject, predicate, literal);
+        builder.push_quad(subject, predicate, root, None);
+        let dataset = builder.freeze().expect("valid RDF 1.2 terms");
+        let (workspace, ledger, base) = account(262_144);
+        let capability = workspace.capability();
+        let view = GroundFaultView {
+            inner: dataset.as_ref(), failed_id: datatype, clones: ledger.clones.clone(),
+        };
+        assert!(purrdf_core::DatasetView::max_owned_term_bytes(&view).is_none());
+        let scratch = crate::scratch::ScratchInterner::default();
+        let error = scratch.try_owned_value_of(
+            &view, crate::scratch::SolutionTerm::Existing(root), &capability,
+            |error| workspace.source_error(error),
+        ).err().expect("exact datatype read fails after completed leaves");
+        assert!(matches!(error, EvalError::WorkspaceStopped));
+        drop(error);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), base);
+        assert_eq!(workspace.take_failure().expect("original source cause").identity, 7);
+        assert_eq!(ledger.clones.load(Ordering::Relaxed), 0);
+        drop(capability);
+        drop(workspace);
+        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+    }

@@ -1,0 +1,12 @@
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/lex)
+    Finished `test` profile [optimized] target(s) in 18.02s
+     Running unittests src/lib.rs (/opt/purrdf-508-qualification/build/debug/build/purrdf-lex/81a90a2eebecb165/out/purrdf_lex-81a90a2eebecb165)
+
+running 3 tests
+test unicode::casing::tests::frozen_final_sigma_and_full_mapping_vectors ... ok
+test unicode::casing::tests::long_ignorable_run_uses_the_original_context_without_a_work_buffer ... ok
+test unicode::casing::tests::generated_context_range_boundaries_match_the_existing_whole_string_law ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 287 filtered out; finished in 0.01s
+

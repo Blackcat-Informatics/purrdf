@@ -1,0 +1,55 @@
+--- a/crates/rdf-core/src/xsd_regex/xpath/match.rs
++++ b/crates/rdf-core/src/xsd_regex/xpath/match.rs
+@@ -250,6 +250,7 @@
+         fallback: bool,
+     },
+     /// The thread machine alone, from every start.
++    #[cfg(all(test, not(target_arch = "wasm32")))]
+     Pike(Pike<'a>),
+     /// The set machine finds where a match starts; the thread machine walks
+     /// that one start for the priority match and its captures.
+@@ -288,6 +289,7 @@
+     pub(super) fn into_budget(self) -> Result<Budget<'a>, Error> {
+         match self.machine {
+             Machine::Backtrack { machine, .. } => Ok(machine.abandon()?.budget),
++            #[cfg(all(test, not(target_arch = "wasm32")))]
+             Machine::Pike(machine) => machine.into_budget(),
+             Machine::Linear(machine) => machine.into_budget(),
+             Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+@@ -296,8 +298,11 @@
+ 
+     fn with_context(ctx: Ctx<'a>) -> Self {
+         if ctx.program.law.is_compatibility() {
++            // Compatibility has no backreferences. Boolean matching needs no
++            // capture histories; capture matching first certifies the leftmost
++            // viable start, then keeps the compatibility thread-priority law.
+             return Self {
+-                machine: Machine::Pike(Pike::new(ctx)),
++                machine: Machine::Linear(Pike::new(ctx)),
+             };
+         }
+         let fallback = !ctx.program.links.backreferences;
+@@ -370,6 +375,7 @@
+     pub(super) fn budget(&mut self) -> &mut Budget<'a> {
+         match &mut self.machine {
+             Machine::Backtrack { machine, .. } => &mut machine.ctx.budget,
++            #[cfg(all(test, not(target_arch = "wasm32")))]
+             Machine::Pike(machine) => &mut machine.ctx.budget,
+             Machine::Linear(pike) => &mut pike.ctx.budget,
+             Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+@@ -393,6 +399,7 @@
+                 }
+                 decided => Ok(decided?.is_some()),
+             },
++            #[cfg(all(test, not(target_arch = "wasm32")))]
+             Machine::Pike(machine) => Ok(machine.find_from(start)?.is_some()),
+             Machine::Linear(pike) => Self::linear_is_match(pike, start),
+             Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+@@ -466,6 +473,7 @@
+                 }
+                 decided => decided,
+             },
++            #[cfg(all(test, not(target_arch = "wasm32")))]
+             Machine::Pike(machine) => machine.find_from(start),
+             Machine::Linear(pike) => Self::linear_find(pike, start),
+             Machine::Exchanging => unreachable!("the machines are exchanged within one call"),

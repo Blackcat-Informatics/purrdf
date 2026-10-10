@@ -1,0 +1,87 @@
+diff --git a/crates/sparql-eval/src/workspace.rs b/crates/sparql-eval/src/workspace.rs
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -63,6 +63,83 @@
+     }
+ }
+ 
++/// One original grant for native lexical buffers and controls. Native Memory
++/// admits every replacement while old buffers remain alive; the frame stores
++/// the first typed evaluator refusal independently of its static leaf marker.
++#[derive(Debug)]
++pub(crate) struct LexicalFrame {
++    workspace: WorkspaceCapability,
++    allocation: Option<WorkspaceAllocation>,
++    live: usize,
++    failure: Option<EvalError>,
++}
++
++impl LexicalFrame {
++    pub(crate) fn new(workspace: &WorkspaceCapability) -> Self {
++        Self { workspace: workspace.clone(), allocation: None, live: 0, failure: None }
++    }
++
++    pub(crate) const fn live_bytes(&self) -> usize { self.live }
++    pub(crate) const fn workspace(&self) -> &WorkspaceCapability { &self.workspace }
++    pub(crate) fn take_failure(&mut self) -> Option<EvalError> { self.failure.take() }
++
++    pub(crate) fn resize_live(&mut self, live: usize) -> Result<(), EvalError> {
++        if self.failure.is_some() { return Err(EvalError::WorkspaceStopped); }
++        let resized = (|| {
++            let bytes = u64::try_from(live).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
++            match &mut self.allocation {
++                Some(allocation) => allocation.resize(bytes)?,
++                None if live != 0 => self.allocation = Some(self.workspace.charge(bytes)?),
++                None => {}
++            }
++            self.live = live;
++            Ok(())
++        })();
++        if let Err(error) = &resized {
++            // These resize failures are fixed-layout/static control errors.
++            // The provider's original typed cause remains in QueryWorkspace.
++            self.failure = Some(error.clone());
++        }
++        resized
++    }
++
++    pub(crate) fn storage_error(
++        &mut self,
++        error: purrdf_lex::allocation::StorageError,
++        construct: &'static str,
++    ) -> EvalError {
++        self.take_failure().unwrap_or(match error {
++            purrdf_lex::allocation::StorageError::SizeOverflow => EvalError::WorkspaceBoundOverflow,
++            purrdf_lex::allocation::StorageError::AllocationFailed => EvalError::AllocationFailed { construct },
++            purrdf_lex::allocation::StorageError::AdmissionFailed => EvalError::WorkspaceStopped,
++            purrdf_lex::allocation::StorageError::FormattingFailed => EvalError::UnstableNativeDiagnostic,
++        })
++    }
++
++    /// Trusted native publications move their buffers without allocating.
++    /// Every refusal is selected before the factory materializes the value.
++    pub(crate) fn finish_term(
++        &mut self,
++        factory: impl FnOnce() -> purrdf_core::TermValue,
++    ) -> Result<WorkspaceTerm, EvalError> {
++        if let Some(error) = self.take_failure() { return Err(error); }
++        if self.allocation.is_none() { return Err(EvalError::WorkspaceBoundOverflow); }
++        let allocation = self.allocation.take().expect("original native grant checked before publication");
++        let value = factory();
++        Ok(WorkspaceTerm::new(value, allocation))
++    }
++
++    /// Transfer the native surviving layout's original grant with its payload.
++    /// No raw public buffer or mutable admitted owner is exposed.
++    pub(crate) fn into_allocation(self) -> Option<WorkspaceAllocation> { self.allocation }
++}
++
++impl purrdf_lex::allocation::Admission for LexicalFrame {
++    fn resize(&mut self, live: usize) -> Result<(), purrdf_lex::allocation::StorageError> {
++        self.resize_live(live).map_err(|_| purrdf_lex::allocation::StorageError::AdmissionFailed)
++    }
++}
++
+ trait GrowthAdmission: std::fmt::Debug + Send + Sync {
+     fn has_failed(&self) -> bool;
+     fn charge(&self, bytes: u64) -> Result<WorkspaceAllocation, EvalError>;

@@ -1,0 +1,52 @@
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -1806,6 +1806,49 @@
+             ledger,
+             base,
+         )
++    }
++
++    #[test]
++    fn witness_clone_retains_original_arrays_and_shared_mutation_preserves_receipt() {
++        use crate::property_fn::{IndexGeneration, ServiceLevel};
++        let generation = IndexGeneration::Declared(Arc::from("generation-seven"));
++        let service = ServiceLevel::Incomplete { reason: "shard three is rebuilding".to_owned() };
++        let (workspace, ledger, base) = account(65_536);
++        let capability = workspace.capability();
++        let mut witness = crate::RelationWitness::default();
++        witness.try_record("http://example.org/first", &generation, &service, &capability).expect("native receipt");
++        let retained = ledger.live.load(Ordering::Relaxed);
++        assert!(retained > base);
++        let old_receipt = witness.clone();
++        assert_eq!(ledger.live.load(Ordering::Relaxed), retained, "clone shares the original buffer and payload grants");
++        witness.try_record("http://example.org/second", &generation, &ServiceLevel::Undeclared, &capability).expect("native shared mutation");
++        assert_eq!(witness.len(), 2);
++        assert_eq!(old_receipt.len(), 1);
++        assert!(old_receipt.get("http://example.org/second").is_none());
++        assert_eq!(old_receipt.get("http://example.org/first").expect("original attestation").incompleteness.first().map(String::as_str), Some("shard three is rebuilding"));
++        drop(witness);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), retained, "the prior receipt still owns exactly its original allocations");
++        drop(old_receipt);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), base, "last receipt owner releases every original payload and array grant");
++        drop(capability);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
++    }
++
++    #[test]
++    fn native_witness_refusal_preserves_original_provider_failure_before_copying_iri() {
++        use crate::property_fn::{IndexGeneration, ServiceLevel};
++        let base = QueryWorkspace::<Refusal>::control_bytes().expect("original account layout");
++        let (workspace, ledger, _) = account(base + 1);
++        let mut witness = crate::RelationWitness::default();
++        let refused = witness.try_record("http://example.org/long-iri-must-not-be-copied", &IndexGeneration::Undeclared, &ServiceLevel::Undeclared, &workspace.capability());
++        assert!(refused.is_err());
++        assert!(witness.is_empty());
++        assert_eq!(ledger.live.load(Ordering::Relaxed), base, "the original account is the only live allocation");
++        assert_eq!(workspace.take_failure().expect("original typed provider refusal").identity, 7);
++        drop(witness);
++        drop(workspace);
++        assert_eq!(ledger.live.load(Ordering::Relaxed), 0);
+     }
+ 
+     #[test]

@@ -1,0 +1,52 @@
+/// Semantic or physical carrier refusal, preserving original lexical errors.
+#[derive(Debug)]
+pub enum CarrierError {
+    /// Original carrier identity/surface-language refusal.
+    Parse(crate::ParseError),
+    /// Original before-allocation storage refusal.
+    Storage(StorageError),
+}
+impl From<StorageError> for CarrierError { fn from(error: StorageError) -> Self { Self::Storage(error) } }
+impl core::fmt::Display for CarrierError { fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result { match self { Self::Parse(error) => error.fmt(f), Self::Storage(error) => error.fmt(f) } } }
+impl std::error::Error for CarrierError {}
+fn resident_carrier(pattern: &GraphPattern, predicates: PredicateRendering<'_>) -> crate::Result<String> {
+    let mut memory = Memory::new(&mut Resident);
+    match validate_carrier_pattern_with_memory(pattern, &mut memory).and_then(|()| select_query_with_memory(pattern, predicates, &mut memory)) {
+        Ok(text) => Ok(text),
+        Err(CarrierError::Parse(error)) => Err(error),
+        Err(CarrierError::Storage(error)) => panic!("resident carrier allocation: {error}"),
+    }
+}
+/// Render the same complete carrier under the original native allocation owner.
+/// # Errors
+/// Returns original carrier refusal or physical storage failure before growth.
+pub fn try_pattern_to_select_query_with_memory<S: Admission + ?Sized>(pattern: &GraphPattern, memory: &mut Memory<'_, S>) -> Result<String, CarrierError> {
+    validate_carrier_pattern_with_memory(pattern, memory)?;
+    select_query_with_memory(pattern, PredicateRendering::Independent, memory)
+}
+pub(crate) fn validate_carrier_pattern(pattern: &GraphPattern) -> crate::Result<()> {
+    match validate_carrier_pattern_with_memory(pattern, &mut Memory::new(&mut Resident)) {
+        Ok(()) => Ok(()), Err(CarrierError::Parse(error)) => Err(error),
+        Err(CarrierError::Storage(error)) => panic!("resident carrier validation storage: {error}"),
+    }
+}
+fn validate_carrier_pattern_with_memory<S: Admission + ?Sized>(pattern: &GraphPattern, memory: &mut Memory<'_, S>) -> Result<(), CarrierError> {
+    match crate::scope::validate_pattern_with_memory(pattern, memory) {
+        Ok(()) => {},
+        Err(crate::scope::ScopeValidationError::Scope(error)) => return Err(CarrierError::Parse(error.into())),
+        Err(crate::scope::ScopeValidationError::Storage(error)) => return Err(error.into()),
+    }
+    let mut error = None;
+    crate::walk::walk_pre_post_with_memory(NodeRef::Pattern(pattern), |visit, node, memory| {
+        if visit == Visit::Enter && matches!(node, NodeRef::Pattern(GraphPattern::Apply { .. })) {
+            error = Some(crate::ParseError::Unsupported(memory.string("explicit contextual application has no SPARQL query-text representation")?));
+            return Ok::<_, StorageError>(Flow::Stop);
+        }
+        if visit == Visit::Enter && let NodeRef::Ground(GroundTerm::BlankNode(blank)) = node {
+            error = Some(crate::ParseError::Unsupported(memory.format(&format_args!("concrete blank {:?} in VALUES has no SPARQL DataBlockValue representation; execute the injected algebra locally or remove its concrete blank binding before forwarding", blank.as_str()))?));
+            return Ok(Flow::Stop);
+        }
+        Ok(Flow::Descend)
+    }, memory)?;
+    error.map_or(Ok(()), |error| Err(CarrierError::Parse(error)))
+}

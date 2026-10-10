@@ -1,0 +1,439 @@
+diff --git a/crates/sparql-eval/src/engine/bounded_workspace.rs b/crates/sparql-eval/src/engine/bounded_workspace.rs
+--- a/crates/sparql-eval/src/engine/bounded_workspace.rs
++++ b/crates/sparql-eval/src/engine/bounded_workspace.rs
+@@ -64,6 +64,14 @@
+             Self::Bounded(owner) => owner.capability(),
+         }
+     }
++    /// Reporting and execution charge the same account and latch the same
++    /// first typed source refusal. The borrowed resident guard stays at ingress.
++    pub(super) fn execution(&self) -> QueryWorkspace<E> {
++        match self {
++            Self::Resident { .. } => QueryWorkspace::resident(),
++            Self::Bounded(owner) => owner.clone(),
++        }
++    }
+     pub(super) fn failure(&self) -> Option<E> {
+         match self { Self::Resident { .. } => None, Self::Bounded(owner) => owner.take_failure() }
+     }
+@@ -80,13 +88,11 @@
+     // Only concrete engine controls belong to this initial certificate. The
+     // provider's owned factory self-accounts its erased reservation box. Variable
+     // request metadata and invocation records use child grants before growth.
+-    let bytes = crate::workspace::shared_layout::<crate::GovernorState>()?;
+-    let total = bytes.checked_add(QueryWorkspace::<D::ReadError>::control_bytes()?)
+-        .ok_or(EvalError::WorkspaceBoundOverflow)?;
++    let total = QueryWorkspace::<D::ReadError>::control_bytes()?;
+     let reservation = view.reserve_owned_workspace(total)
+         .ok_or(EvalError::WorkspaceUnpriced("a view without owned reporting admission"))?
+         .map_err(AdmissionError::Operational)?;
+-    Ok(ReportingWorkspace::Bounded(QueryWorkspace::owned(reservation, bytes)?))
++    Ok(ReportingWorkspace::Bounded(QueryWorkspace::owned(reservation, 0)?))
+ }
+ 
+ /// Admit before converting even a query constant to an owned lookup key. Every
+diff --git a/crates/sparql-eval/src/governor/mod.rs b/crates/sparql-eval/src/governor/mod.rs
+--- a/crates/sparql-eval/src/governor/mod.rs
++++ b/crates/sparql-eval/src/governor/mod.rs
+@@ -909,12 +909,24 @@
+     }
+ 
+     /// Record an invocation a `SILENT` clause absorbed.
++    #[cfg(test)]
+     pub(crate) fn record_silenced(&self, invocation: SilencedInvocation) -> Result<(), crate::EvalError> {
++        self.record_silenced_admitted(invocation, &self.workspace)
++    }
++
++    /// A shared operation state's records may outlive this query. Each admitted
++    /// immutable record retains the producing query's original account.
++    pub(crate) fn record_silenced_admitted(
++        &self,
++        invocation: SilencedInvocation,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<(), crate::EvalError> {
++        let workspace = if workspace.is_bounded() { workspace } else { &self.workspace };
+         let mut current = self.silenced.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+         let bytes = current.insertion_bytes::<crate::WorkspaceAllocation>(&invocation)
+             .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+-        let admission = self.workspace.charge(u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?)?;
+-        let insertion = if self.workspace.is_bounded() {
++        let admission = workspace.charge(u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?)?;
++        let insertion = if workspace.is_bounded() {
+             current.insert_admitted(invocation, admission)
+         } else {
+             current.insert_resident(invocation)
+diff --git a/crates/sparql-eval/src/eval.rs b/crates/sparql-eval/src/eval.rs
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -1746,7 +1746,7 @@
+     /// record, so there it is not kept.
+     pub(crate) fn record_silenced(&self, invocation: purrdf_core::SilencedInvocation) -> Result<(), EvalError> {
+         if let Some(state) = self.governors.as_ref() {
+-            state.record_silenced(invocation)?;
++            state.record_silenced_admitted(invocation, &self.growth)?;
+         }
+         Ok(())
+     }
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -2487,8 +2487,9 @@
+         &'d self,
+         dataset: &'d D,
+         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+-    ) -> EvalCtx<'d, D> {
+-        let mut ctx = EvalCtx::new(dataset).with_eval_options(self.eval_options);
++    ) -> Result<EvalCtx<'d, D>, crate::EvalError> {
++        let mut ctx = EvalCtx::new_admitted(dataset, &workspace.capability())?
++            .with_eval_options(self.eval_options);
+         ctx.xpath_regex = self.xpath_regex;
+         ctx.bounded_workspace = crate::eval::WorkspaceAdmission::Admitted;
+         ctx.workspace = workspace.clone();
+@@ -2504,7 +2505,7 @@
+         if let Some(vocab) = &self.loss_vocabulary {
+             ctx = ctx.with_loss_vocabulary(vocab.clone());
+         }
+-        ctx
++        Ok(ctx)
+     }
+ 
+     /// Explain what the engine will do with `query_text` against `dataset`, and what it
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -1658,8 +1658,8 @@
+         dataset: &'d D,
+         options: QueryOptions<'d>,
+         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+-    ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
+-        apply_query_options(self.eval_ctx(dataset, workspace), options)
++    ) -> Result<EvalCtx<'d, D>, EvaluationFailure> {
++        Ok(apply_query_options(self.eval_ctx(dataset, workspace)?, options)?)
+     }
+ 
+     /// The context every governed lane evaluates in: governors attached, `options`
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -1681,13 +1681,13 @@
+     fn governed_ctx<'d, D: DatasetView + Sync>(
+         &'d self,
+         dataset: &'d D,
+-        state: &Arc<GovernorState>,
++        state: impl Into<crate::workspace::SharedWorkspace<GovernorState>>,
+         options: QueryOptions<'d>,
+         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+-    ) -> Result<EvalCtx<'d, D>, RdfDiagnostic> {
++    ) -> Result<EvalCtx<'d, D>, EvaluationFailure> {
+         let mut ctx = self
+             .query_ctx(dataset, options, workspace)?
+-            .with_governors(Arc::clone(state));
++            .with_governor_owner(state.into());
+         ctx.witnessing = true;
+         Ok(ctx)
+     }
+@@ -1729,7 +1729,7 @@
+                 prepared,
+                 substitutions,
+                 options,
+-                state,
++                &crate::workspace::SharedWorkspace::from(state.clone()),
+                 sequencing,
+                 &workspace,
+             )
+@@ -1747,7 +1747,7 @@
+         prepared: &PreparedQuery,
+         substitutions: &AdmittedSubstitutions<'_>,
+         options: QueryOptions<'d>,
+-        state: &Arc<GovernorState>,
++        state: &crate::workspace::SharedWorkspace<GovernorState>,
+         sequencing: Sequencing,
+         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+     ) -> Result<GovernedOutcome, EvaluationFailure> {
+@@ -1765,7 +1765,7 @@
+         ) {
+             return refused.map(GovernedOutcome::BudgetExhausted).map_err(EvaluationFailure::Diagnostic);
+         }
+-        let mut ctx = self.governed_ctx(dataset, state, options, workspace)?;
++        let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
+         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+         let evaluated = evaluate_governed_with_substitutions(
+             prepared,
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -1979,7 +1979,18 @@
+         // Built before the preflight so that a view that failed on the way in still
+         // reports a (zeroed, honest) governor receipt beside its root cause.
+         let reporting = reserve_governed_reporting(dataset, governors)?;
+-        let state = Arc::new(GovernorState::with_workspace(governors, reporting.capability()));
++        let state = crate::workspace::SharedWorkspace::new_admitted(
++            GovernorState::with_workspace(governors, reporting.capability()),
++            &reporting.capability(),
++        ).map_err(|error| {
++            let failure = reporting.failure().map_or_else(
++                || bounded_workspace::AdmissionError::from(error),
++                bounded_workspace::AdmissionError::Operational,
++            );
++            let zero = GovernorState::new(governors).evidence();
++            fallible_admission_failure(dataset, failure)
++                .map_evidence(|view| GovernedEvidence::new(view, zero))
++        })?;
+         prepared_fallible::preflight_governed_fallible_view(dataset, &state)?;
+         let admitted = AdmittedSubstitutions::requested_admitted(
+             request.substitutions, options.declared_prebound, &reporting.capability(),
+@@ -2003,7 +2014,7 @@
+             }
+         };
+         self.query_prepared_governed_fallible_admitted(
+-            dataset, &prepared, &admitted, options, &state,
++            dataset, &prepared, &admitted, options, &state, &reporting.execution(),
+         )
+     }
+ 
+diff --git a/crates/sparql-eval/src/engine/prepared_fallible.rs b/crates/sparql-eval/src/engine/prepared_fallible.rs
+--- a/crates/sparql-eval/src/engine/prepared_fallible.rs
++++ b/crates/sparql-eval/src/engine/prepared_fallible.rs
+@@ -40,7 +40,18 @@
+         governors: &QueryGovernors,
+     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
+         let reporting = super::reserve_governed_reporting(dataset, governors)?;
+-        let state = Arc::new(GovernorState::with_workspace(governors, reporting.capability()));
++        let state = crate::workspace::SharedWorkspace::new_admitted(
++            GovernorState::with_workspace(governors, reporting.capability()),
++            &reporting.capability(),
++        ).map_err(|error| {
++            let failure = reporting.failure().map_or_else(
++                || super::bounded_workspace::AdmissionError::from(error),
++                super::bounded_workspace::AdmissionError::Operational,
++            );
++            let zero = GovernorState::new(governors).evidence();
++            super::fallible_admission_failure(dataset, failure)
++                .map_evidence(|view| GovernedEvidence::new(view, zero))
++        })?;
+         preflight_governed_fallible_view(dataset, &state)?;
+         self.query_prepared_governed_fallible_admitted(
+             dataset,
+@@ -48,6 +59,7 @@
+             &AdmittedSubstitutions::prepared(substitutions),
+             options,
+             &state,
++            &reporting.execution(),
+         )
+     }
+ 
+@@ -75,7 +87,7 @@
+         state: &Arc<GovernorState>,
+     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
+         preflight_governed_fallible_view(dataset, state)?;
+-        let _reporting = super::reserve_fallible_reporting(dataset).map_err(|error| {
++        let reporting = super::reserve_fallible_reporting(dataset).map_err(|error| {
+             error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
+         })?;
+         self.query_prepared_governed_fallible_admitted(
+@@ -83,7 +95,8 @@
+             prepared,
+             &AdmittedSubstitutions::prepared(substitutions),
+             options,
+-            state,
++            &crate::workspace::SharedWorkspace::from(state.clone()),
++            &reporting.execution(),
+         )
+     }
+ 
+@@ -98,17 +111,9 @@
+         prepared: &PreparedQuery,
+         substitutions: &AdmittedSubstitutions<'_>,
+         options: QueryOptions<'d>,
+-        state: &Arc<GovernorState>,
++        state: &crate::workspace::SharedWorkspace<GovernorState>,
++        workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+     ) -> FallibleSparqlResult<D::Error, GovernedEvidence<D::Evidence>> {
+-        let workspace = super::reserve_fallible_workspace(
+-            dataset,
+-            &prepared.query,
+-            !substitutions.values.is_empty(),
+-            options,
+-        )
+-        .map_err(|error| {
+-            error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
+-        })?;
+         let publication = crate::user_fn::RefusalPublication::default();
+         let options = publication
+             .options(dataset, options)
+@@ -126,10 +131,10 @@
+             options,
+             state,
+             super::Sequencing::for_view::<D>(),
+-            &workspace,
++            workspace,
+         );
+         publication.finish(
+-            finish_governed_fallible_query(dataset, state, evaluation, Some(&workspace)),
++            finish_governed_fallible_query(dataset, state, evaluation, Some(workspace)),
+             |error| matches!(error, FallibleSparqlError::Query { .. }),
+         )
+     }
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -3425,7 +3425,7 @@
+             ).into());
+         }
+         check_prepared_registries_unchanged(&execution.prepared, options)?;
+-        let ctx = self.eval_ctx(dataset, workspace);
++        let ctx = self.eval_ctx(dataset, workspace)?;
+         let mut ctx = apply_query_options(ctx, options)?;
+         ctx.witnessing = witnessing;
+         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -3622,7 +3622,7 @@
+                 !request.substitutions.is_empty(),
+                 options,
+             )?;
+-            let ctx = self.eval_ctx(dataset, &workspace);
++            let ctx = self.eval_ctx(dataset, &workspace)?;
+             let mut ctx = apply_query_options(ctx, options)?;
+             let outcome = evaluate_with_substitutions(
+                 &prepared,
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -3530,7 +3530,7 @@
+                     .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)))
+                     .map_err(EvaluationFailure::Diagnostic);
+             }
+-            let mut ctx = self.governed_ctx(dataset, state, options, &workspace)?;
++            let mut ctx = self.governed_ctx(dataset, state.clone(), options, &workspace)?;
+             // The retained workspace, exactly as on the ungoverned twin — and taken
+             // here rather than inside `governed_ctx` so both lanes spell it at the same
+             // level, beside the `substituted` call whose borrow it has to sit outside.
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -3688,7 +3688,7 @@
+                     .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)))
+                     .map_err(EvaluationFailure::Diagnostic);
+             }
+-            let mut ctx = self.governed_ctx(dataset, state, options, &workspace)?;
++            let mut ctx = self.governed_ctx(dataset, state.clone(), options, &workspace)?;
+             let evaluated = evaluate_governed_with_substitutions(
+                 &prepared,
+                 Prebindings::Borrowed(request.substitutions),
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -2838,7 +2838,7 @@
+         };
+         let state = Arc::new(GovernorState::new(&governors));
+         let mut ctx = self
+-            .eval_ctx(dataset, workspace)
++            .eval_ctx(dataset, workspace)?
+             .with_governors(Arc::clone(&state))
+             .with_charge_ledger(Arc::clone(&ledger))
+             .with_user_functions(options.functions)
+diff --git a/crates/sparql-eval/src/engine.rs b/crates/sparql-eval/src/engine.rs
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -4024,11 +4024,11 @@
+ where
+     D: FallibleDatasetView + Sync,
+ {
++    let governors = state.evidence();
+     if let Some(error) = workspace.and_then(crate::workspace::QueryWorkspace::take_failure) {
+         return Err(fallible_admission_failure(dataset, bounded_workspace::AdmissionError::Operational(error))
+-            .map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence())));
++            .map_evidence(|evidence| GovernedEvidence::new(evidence, governors.clone())));
+     }
+-    let governors = state.evidence();
+     match dataset.operation_status() {
+         ViewOperationStatus::Failed { error, evidence } => Err(FallibleSparqlError::Operational {
+             error,
+@@ -4041,12 +4041,12 @@
+                 // carried twice.
+                 Ok(GovernedOutcome::Complete { result, .. }) => {
+                     let (result, owner) = retain_query_result(dataset, result, workspace)
+-                        .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, state.evidence())))?;
++                        .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, governors.clone())))?;
+                     let ((result, _owner), view) = finish_fallible_read(dataset, Ok((result, owner)))
+-                        .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, state.evidence())))?;
++                        .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, governors.clone())))?;
+                     Ok(CompleteSparqlResult {
+                         result,
+-                        evidence: crate::RetainedEvidence::backend(GovernedEvidence::new(view, state.evidence())),
++                        evidence: crate::RetainedEvidence::backend(GovernedEvidence::new(view, governors.clone())),
+                     })
+                 }
+                 Ok(GovernedOutcome::BudgetExhausted(exhausted)) => {
+@@ -4054,7 +4054,7 @@
+                         let positional = partial.is_positional_prefix();
+                         retain_query_result(dataset, partial.into_result(), workspace)
+                             .map(|(result, _owner)| crate::RetainedPartialSparqlResult::new(result, positional))
+-                            .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, state.evidence())))
++                            .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, governors.clone())))
+                     };
+                     let partial = match exhausted.partial {
+                         PartialAnswers::Certain(partial) => PartialAnswers::Certain(retain(partial)?),
+@@ -4062,11 +4062,11 @@
+                         PartialAnswers::Unknown(barrier) => PartialAnswers::Unknown(barrier),
+                     };
+                     let (partial, view) = finish_fallible_read(dataset, Ok(partial))
+-                        .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, state.evidence())))?;
++                        .map_err(|error| error.map_evidence(|view| GovernedEvidence::new(view, governors.clone())))?;
+                     Err(FallibleSparqlError::BudgetExhausted {
+                         tripped: exhausted.tripped,
+                         partial,
+-                        evidence: GovernedEvidence::new(view, state.evidence()),
++                        evidence: GovernedEvidence::new(view, governors.clone()),
+                     })
+                 }
+                 Err(diagnostic) => finish_fallible_read::<D, ()>(dataset, Err(diagnostic))
+diff --git a/crates/sparql-eval/src/engine/graph_build.rs b/crates/sparql-eval/src/engine/graph_build.rs
+--- a/crates/sparql-eval/src/engine/graph_build.rs
++++ b/crates/sparql-eval/src/engine/graph_build.rs
+@@ -35,6 +35,8 @@
+ pub enum GraphBuildError {
+     /// Admission, substitution, evaluation or RDF validation failed.
+     Query(RdfDiagnostic),
++    /// A native control allocation failed before diagnostic publication.
++    Evaluation(crate::EvalError),
+     /// A shared operation governor stopped before complete publication.
+     BudgetExhausted {
+         /// The ceiling or stop signal that ended evaluation.
+@@ -52,6 +54,7 @@
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         match self {
+             Self::Query(diagnostic) => std::fmt::Display::fmt(diagnostic, f),
++            Self::Evaluation(error) => std::fmt::Display::fmt(error, f),
+             Self::BudgetExhausted { tripped, .. } => {
+                 write!(f, "graph publication stopped: {tripped:?}")
+             }
+diff --git a/crates/sparql-eval/src/engine/graph_build.rs b/crates/sparql-eval/src/engine/graph_build.rs
+--- a/crates/sparql-eval/src/engine/graph_build.rs
++++ b/crates/sparql-eval/src/engine/graph_build.rs
+@@ -227,5 +227,10 @@
+                         evidence,
+                     }),
++                    Err(GraphBuildError::Evaluation(error)) => super::finish_fallible_read::<D, ()>(
++                        dataset, Err(error.into()),
++                    ).map_err(|error| error.map_evidence(|view| {
++                        GovernedEvidence::new(view, state.evidence())
++                    })).map(|()| unreachable!("a native failure cannot publish a graph")),
+                     Err(GraphBuildError::BudgetExhausted { tripped, .. }) => {
+                         let (result, _) = super::retain_query_result(
+                             dataset, empty_result_for(&prepared.query), Some(&workspace),
+diff --git a/crates/sparql-eval/src/engine/graph_build.rs b/crates/sparql-eval/src/engine/graph_build.rs
+--- a/crates/sparql-eval/src/engine/graph_build.rs
++++ b/crates/sparql-eval/src/engine/graph_build.rs
+@@ -318,7 +318,8 @@
+                 crate::substitute::Prebindings::Owned(substitutions),
+             )?)
+         };
+-        let mut ctx = apply_query_options(self.eval_ctx(dataset, workspace), options)?;
++        let ctx = self.eval_ctx(dataset, workspace).map_err(GraphBuildError::Evaluation)?;
++        let mut ctx = apply_query_options(ctx, options)?;
+         if let Some(state) = state {
+             ctx = ctx.with_governors(Arc::clone(state));
+         }

@@ -1,0 +1,397 @@
+--- a/crates/sparql-eval/src/agg_fn.rs
++++ b/crates/sparql-eval/src/agg_fn.rs
+@@ -235,7 +235,7 @@
+ ///
+ /// Object-safe and boxed: one instance per `GROUP BY` group (or, for an implicit
+ /// single-group aggregate with no `GROUP BY` at all, one instance for the query),
+-/// created by `init_contained`, driven by `step_contained`/`combine_contained`,
++/// created by `init_admitted`, driven by `step_admitted`/`combine_admitted`,
+ /// and consumed exactly once by `finish_contained`. Never shared across groups and
+ /// never read after `finish` — the accumulator is the aggregate's entire mutable
+ /// state, and the trait's three methods are the entire lifecycle.
+@@ -618,6 +618,7 @@
+     value: Box<dyn AggregateAccumulator>,
+     allocation: crate::WorkspaceAllocation,
+ }
++purrdf_hash::debug_non_exhaustive!(WorkspaceAccumulator { allocation });
+ impl WorkspaceAccumulator {
+     /// Box the actual concrete native state after admitting its exact layout.
+     /// State payloads must already retain their own original producer grants.
+@@ -800,6 +801,7 @@
+ ///
+ /// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of the boxed
+ /// accumulator.
++#[cfg(test)]
+ pub(crate) fn init_contained(
+     agg: &dyn CustomAggregate,
+     iri: &str,
+@@ -817,6 +819,7 @@
+ ///
+ /// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
+ /// failure. More specific typed causes propagate unchanged.
++#[cfg(test)]
+ pub(crate) fn step_contained(
+     accumulator: &mut dyn AggregateAccumulator,
+     iri: &str,
+@@ -833,6 +836,7 @@
+ ///
+ /// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
+ /// failure. More specific typed causes propagate unchanged.
++#[cfg(test)]
+ pub(crate) fn combine_contained(
+     accumulator: &mut dyn AggregateAccumulator,
+     iri: &str,
+@@ -886,6 +890,7 @@
+ ///
+ /// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
+ /// failure. More specific typed causes propagate unchanged.
++#[cfg(test)]
+ pub(crate) fn finish_contained(
+     accumulator: Box<dyn AggregateAccumulator>,
+     iri: &str,
+@@ -910,64 +915,9 @@
+ /// # Errors
+ ///
+ /// [`EvalError::FunctionOperational`] on a caught panic.
++#[cfg(test)]
+ pub(crate) fn arity_contained(agg: &dyn CustomAggregate, iri: &str) -> Result<Arity, EvalError> {
+     crate::contain::declaration_contained(KIND, iri, "arity", || agg.arity())
+-}
+-
+-/// [`arity_contained`]'s twin for [`CustomAggregate::volatility`].
+-///
+-/// # Errors
+-///
+-/// [`EvalError::FunctionOperational`] on a caught panic.
+-pub(crate) fn volatility_contained(
+-    agg: &dyn CustomAggregate,
+-    iri: &str,
+-) -> Result<Volatility, EvalError> {
+-    crate::contain::declaration_contained(KIND, iri, "determinism class", || agg.volatility())
+-}
+-
+-/// [`arity_contained`]'s twin for [`CustomAggregate::algebraic_class`].
+-///
+-/// # Errors
+-///
+-/// [`EvalError::FunctionOperational`] on a caught panic.
+-pub(crate) fn algebraic_class_contained(
+-    agg: &dyn CustomAggregate,
+-    iri: &str,
+-) -> Result<AlgebraicClass, EvalError> {
+-    crate::contain::declaration_contained(KIND, iri, "algebraic class", || agg.algebraic_class())
+-}
+-
+-/// Read `agg`'s declared per-accumulator [`CustomAggregate::state_bound`] with
+-/// the panic contained — the one declaration `crate::modifier::eval_custom_aggregate`
+-/// reads directly (to meter it), so it gets its own named entry point rather
+-/// than only being reachable through [`AggregateRegistry::describe`].
+-///
+-/// # Errors
+-///
+-/// [`EvalError::FunctionOperational`] on a caught panic.
+-pub(crate) fn state_bound_contained(
+-    agg: &dyn CustomAggregate,
+-    iri: &str,
+-) -> Result<u64, EvalError> {
+-    crate::contain::declaration_contained(KIND, iri, "state bound", || agg.state_bound())
+-}
+-
+-/// [`CustomAggregate::exact_numeric_cost`] with the host call contained.
+-///
+-/// # Errors
+-///
+-/// [`EvalError::Function`] on a caught panic.
+-pub(crate) fn exact_numeric_cost_contained(
+-    agg: &dyn CustomAggregate,
+-    iri: &str,
+-    survivors: &[Vec<TermValue>],
+-    scalarvals: &[(String, TermValue)],
+-    division: purrdf_xsd::exact::DivisionPolicy,
+-) -> Result<purrdf_xsd::exact::Cost, EvalError> {
+-    crate::contain::declaration_contained(KIND, iri, "exact numeric cost", || {
+-        agg.exact_numeric_cost_under(survivors, scalarvals, division)
+-    })
+ }
+ 
+ /// [`arity_contained`]'s twin for [`CustomAggregate::scalarvals`] — read by
+@@ -977,6 +927,7 @@
+ /// # Errors
+ ///
+ /// [`EvalError::FunctionOperational`] on a caught panic.
++#[cfg(test)]
+ pub(crate) fn scalarvals_contained(
+     agg: &dyn CustomAggregate,
+     iri: &str,
+@@ -984,6 +935,7 @@
+     scalarvals_borrowed(agg, iri).map(<[ScalarvalSpec]>::to_vec)
+ }
+ 
++#[cfg(test)]
+ fn scalarvals_borrowed<'a>(
+     agg: &'a dyn CustomAggregate,
+     iri: &str,
+--- a/crates/sparql-eval/src/engine.rs
++++ b/crates/sparql-eval/src/engine.rs
+@@ -676,14 +676,6 @@
+ /// `parameters` are the variables a prepared execution will bind on every run — see
+ /// [`NativeSparqlEngine::prepare_execution`] — and are counted as bound where that
+ /// binding lands. Every other admission passes the empty set and assumes nothing.
+-fn admit_algebra(
+-    query: &Query,
+-    relations: &crate::property_fn::PropertyFunctionRegistry,
+-    aggregates: &crate::agg_fn::AggregateRegistry,
+-    parameters: &crate::DetHashSet<Variable>,
+-) -> Result<Option<Query>, RdfDiagnostic> {
+-    admit_algebra_with::<true>(query, relations, aggregates, parameters)
+-}
+ 
+ fn admit_algebra_with<const CONTEXTUAL: bool>(
+     query: &Query,
+@@ -3011,7 +3003,7 @@
+     ///
+     /// It lives on the engine because the engine owns the [`PlanCache`], and a body
+     /// is a SPARQL text like any other: memoized on the same key, admitted by the
+-    /// same `admit_algebra`, feasibility-ordered by the same pass, and accounted
++    /// same `admit_algebra_with`, feasibility-ordered by the same pass, and accounted
+     /// against the same eviction and memory ceilings. A private cache for function
+     /// bodies would have been a second, unevicted, unaccounted copy of machinery
+     /// that already exists and is already correct.
+@@ -3466,34 +3458,6 @@
+             registered_aggregates,
+             state.evidence(),
+         ))
+-    }
+-
+-    /// Walk `query`'s plan against `dataset`'s statistics without evaluating it: the join
+-    /// order the cost model chooses for every BGP, and the cardinality it predicts.
+-    ///
+-    /// One walk feeds both consumers — admission control, which refuses a plan whose
+-    /// predicted peak already exceeds the caller's ceiling, and the ledger, which prints
+-    /// that prediction beside the count that materialised.
+-    ///
+-    /// `relations` is the caller's property-function registry, when it supplied one. It is
+-    /// what lets a call node be priced at all: a relation's declared row bound is the only
+-    /// prediction there is for a bag no index sized.
+-    fn survey_plan<D: DatasetView + Sync>(
+-        &self,
+-        dataset: &D,
+-        query: &Query,
+-        relations: &crate::property_fn::PropertyFunctionRegistry,
+-    ) -> Result<crate::bgp::PlanSurvey, RdfDiagnostic> {
+-        let publication = crate::user_fn::RefusalPublication::default();
+-        checked_query_read(dataset, &publication, || {
+-            self.survey_plan_admitted(
+-                dataset,
+-                query,
+-                relations,
+-                &crate::workspace::QueryWorkspace::resident(),
+-            )
+-            .map_err(EvaluationFailure::Evaluation)
+-        })
+     }
+ 
+     fn survey_plan_admitted<D: DatasetView + Sync>(
+@@ -5638,20 +5602,6 @@
+         admit_structure_with_memory::<true>(&prepared.query, &mut memory)?;
+         check_plan_matches_registries_with_memory(prepared, options, &self.names, &mut memory)
+     }
+-
+-    /// Re-check `prepared` against `options` under these parameters — see
+-    /// [`check_plan_matches_relations`].
+-    fn check(
+-        &self,
+-        prepared: &PreparedQuery,
+-        options: QueryOptions<'_>,
+-    ) -> Result<(), RdfDiagnostic> {
+-        check_plan_matches_relations(
+-            prepared,
+-            options,
+-            &crate::property_fn_plan::parameter_set(&self.names),
+-        )
+-    }
+ }
+ 
+ /// A request's owned substitutions together with the parameters its plan was admitted
+@@ -5678,14 +5628,6 @@
+                 workspace,
+             )?,
+         })
+-    }
+-    /// A text request's substitutions: its plan is admitted with every name they bind
+-    /// — see [`NativeSparqlEngine::prepare_request`].
+-    fn requested(values: &'a [(String, TermValue)], declared: &'a [&'a str]) -> Self {
+-        Self {
+-            values,
+-            parameters: RequestParameters::of(Prebindings::Owned(values), declared),
+-        }
+     }
+ 
+     /// Substitutions handed to a plan the caller prepared, which was admitted with no
+@@ -5844,7 +5786,7 @@
+ /// Acceptance is unchanged by the removal, which is the property that matters:
+ /// every entry that reached this walk goes on to evaluate, and evaluation still
+ /// refuses the same trees with the same diagnostic. It is refused once instead of
+-/// twice. It is deliberately NOT relocated to [`admit_algebra`] — see there for the
++/// twice. It is deliberately NOT relocated to [`admit_algebra_with`] — see there for the
+ /// acceptance boundary that forbids it.
+ ///
+ /// # Errors
+@@ -9340,7 +9282,7 @@
+     /// evaluation of a `&PreparedQuery`, and [`crate::eval::prepare_query_context`]
+     /// ran it again inside that same evaluation. One of the two went, and the survivor
+     /// is the one inside the evaluation, which is the only place the stack the plan is
+-    /// walked on can be measured. Relocating the walk to [`admit_algebra`] once turned
++    /// walked on can be measured. Relocating the walk to [`admit_algebra_with`] once turned
+     /// PREPARING a flat `OPTIONAL {} OPTIONAL {} …` spine into a refusal —
+     /// `prepared_admission.rs` states that spine as an acceptance the crate keeps. So
+     /// this test drives the boundary through the door that decides it, EVALUATION, on
+--- a/crates/sparql-eval/src/plan_cache.rs
++++ b/crates/sparql-eval/src/plan_cache.rs
+@@ -191,6 +191,7 @@
+         self.insert_with_eviction(key, value, bytes, |_| {});
+     }
+ 
++    #[cfg(test)]
+     pub(crate) fn insert_with_eviction(
+         &mut self,
+         key: K,
+--- a/crates/sparql-eval/src/contain.rs
++++ b/crates/sparql-eval/src/contain.rs
+@@ -45,6 +45,7 @@
+ /// # Errors
+ ///
+ /// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of `read`'s result.
++#[cfg(test)]
+ pub(crate) fn declaration_contained<T>(
+     kind: &str,
+     iri: &str,
+@@ -91,7 +92,7 @@
+ /// Run a fallible host **call** (`open`, `step`, `finish`, …) with the panic
+ /// contained, producing a fixed, payload-free error naming what panicked.
+ ///
+-/// The [`declaration_contained`] twin for a call that returns its own
++/// The declaration-containment twin for a call that returns its own
+ /// [`Result`] rather than an infallible value.
+ ///
+ /// # Errors
+--- a/crates/sparql-eval/src/property_fn.rs
++++ b/crates/sparql-eval/src/property_fn.rs
+@@ -1761,16 +1761,6 @@
+             .iter()
+             .flat_map(|term| term.placements.iter())
+     }
+-}
+-
+-/// Append a length-framed canonical field to `out`.
+-///
+-/// `pub(crate)` rather than private because [`crate::witness`] encodes its own
+-/// canonical record with the identical framing: one length-framed-field discipline for
+-/// the whole crate means two encodings written years apart cannot come to disagree
+-/// about what "framed" means.
+-pub(crate) fn push_canonical_field(out: &mut String, value: &str) {
+-    write_canonical_field(out, value).expect("String formatting is infallible");
+ }
+ 
+ fn write_canonical_field(out: &mut impl core::fmt::Write, value: &str) -> core::fmt::Result {
+--- a/crates/sparql-eval/src/property_fn_eval.rs
++++ b/crates/sparql-eval/src/property_fn_eval.rs
+@@ -1174,13 +1174,6 @@
+         format_args!("property function <{iri}>: a unified row left an argument slot unbound"),
+         workspace,
+     )
+-}
+-
+-/// The failure of the invariant "a row that unified fills every slot".
+-fn unbound_slot_internal(iri: &str) -> EvalError {
+-    EvalError::internal(format!(
+-        "property function <{iri}>: a unified row left an argument slot unbound"
+-    ))
+ }
+ 
+ /// The value of one argument position for this invocation, or `None` when the position
+@@ -3694,61 +3687,24 @@
+ // The forwarding refusal
+ // ---------------------------------------------------------------------------
+ 
+-/// Whether `pattern` reaches a property-function call anywhere — including inside an
+-/// expression-embedded `EXISTS`, which the algebra crate's own serialization-facing
+-/// walk deliberately does not descend into.
+-///
+-/// Used at the `SERVICE` forwarding boundary: a call serializes as an ordinary triple,
+-/// so a remote endpoint would silently match it against ITS data and return rows that
+-/// are not the relation's. That is a wrong answer with no symptom, so the forwarding
+-/// refuses instead.
+-pub(crate) fn pattern_reaches_property_function(pattern: &GraphPattern) -> bool {
+-    reaches(ReachNode::Pattern(pattern), ReachKind::PropertyFunction)
+-}
+-
+-/// [`pattern_reaches_property_function`] through an expression's embedded patterns.
++/// [`pattern_reaches_property_function_with_memory`] through an expression's embedded patterns.
++#[cfg(test)]
+ pub(crate) fn expression_reaches_property_function(expr: &Expression) -> bool {
+     reaches(ReachNode::Expression(expr), ReachKind::PropertyFunction)
+ }
+ 
+-/// Whether `pattern` reaches a `GROUP BY` with an [`AggregateFunction::Custom`]
+-/// aggregate anywhere — including inside an expression-embedded `EXISTS`.
+-///
+-/// Shares the soundness-visitor idiom [`pattern_reaches_property_function`]
+-/// establishes, but for a different reason at each of its two call sites:
+-///
+-/// * `crate::property_fn_plan::plan_query`'s prepare-time walk uses it to decide
+-///   whether a query needs planning AT ALL when it carries no property-function
+-///   call either — without this check, a query with a `Custom` aggregate and NO
+-///   property function would skip `plan_query`'s whole walk via its
+-///   `pattern_reaches_property_function`-only short-circuit, and the unregistered-
+-///   IRI/arity admission [`crate::property_fn_plan::plan_aggregate`] performs
+-///   would never run.
+-/// * `crate::remote::eval_service` uses it for the SAME reason
+-///   [`pattern_reaches_property_function`] exists: a `Custom` aggregate inside a
+-///   `SERVICE` body would serialize as an ordinary `AGG`-shaped call the endpoint
+-///   cannot know, or worse, an `AGG(<iri>, …)` textual form it silently mishandles
+-///   — either way a wrong answer with no local symptom.
+-pub(crate) fn pattern_reaches_custom_aggregate(pattern: &GraphPattern) -> bool {
+-    reaches(ReachNode::Pattern(pattern), ReachKind::Aggregate)
+-}
+-
+-/// [`pattern_reaches_custom_aggregate`] through an expression's embedded patterns
++/// [`pattern_reaches_custom_aggregate_with_memory`] through an expression's embedded patterns
+ /// (an `EXISTS`'s inner `GROUP BY`, e.g. `FILTER EXISTS { SELECT (AGG(<iri>,?x)
+ /// AS ?v) WHERE {...} GROUP BY ?g }`).
+ ///
+ /// `pub(crate)`: also read directly by `crate::property_fn_plan`'s expression planning
+ /// short-circuit, for the identical reason `plan_where_pattern` reads
+-/// [`pattern_reaches_custom_aggregate`] — an expression containing an `EXISTS`
++/// [`pattern_reaches_custom_aggregate_with_memory`] — an expression containing an `EXISTS`
+ /// whose inner pattern has a `Custom` aggregate but no property-function call
+ /// must not skip the walk that reaches that aggregate's prepare-time admission.
++#[cfg(test)]
+ pub(crate) fn expression_reaches_custom_aggregate(expr: &Expression) -> bool {
+     reaches(ReachNode::Expression(expr), ReachKind::Aggregate)
+-}
+-
+-/// Whether the admission pass has any registered call to check.
+-pub(crate) fn pattern_needs_admission(pattern: &GraphPattern) -> bool {
+-    reaches(ReachNode::Pattern(pattern), ReachKind::Admission)
+ }
+ 
+ /// The existing declaration reachability law with admitted spill storage.
+@@ -3814,6 +3770,7 @@
+ // Use the exhaustive shallow visitors with a borrowed work stack. Flat parser
+ // combinator spines can be much deeper than brace nesting; recursive visitor
+ // callbacks consumed the native stack before the preparation pass could return.
++#[cfg(test)]
+ fn reaches(root: ReachNode<'_>, kind: ReachKind) -> bool {
+     let capability = crate::WorkspaceCapability::resident();
+     let mut frame = crate::workspace::LexicalFrame::new(&capability);
+--- a/crates/sparql-eval/src/witness.rs
++++ b/crates/sparql-eval/src/witness.rs
+@@ -445,6 +445,7 @@
+     }
+ }
+ /// A borrowed declaration iterator keeps its original set owner borrowed.
++#[derive(Debug)]
+ pub struct WitnessSetIter<'a, T>(core::slice::Iter<'a, purrdf_lex::allocation::SharedOwned<T>>);
+ impl<'a, T> Iterator for WitnessSetIter<'a, T> {
+     type Item = &'a T;

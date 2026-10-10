@@ -1,0 +1,419 @@
+diff --git a/crates/sparql-eval/src/plan/mod.rs b/crates/sparql-eval/src/plan/mod.rs
+--- a/crates/sparql-eval/src/plan/mod.rs
++++ b/crates/sparql-eval/src/plan/mod.rs
+@@ -44,6 +44,8 @@
+ };
+ use crate::service_endpoints::EndpointScan;
+ use crate::vm::ExprProgram;
++use crate::workspace::{AdmittedVec, SharedWorkspace};
++use crate::governor::soundness::{walk_spine_admitted, visit_exists_patterns_admitted};
+ 
+ /// A node of one tree: its ordinal in the tree's pre-order.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+@@ -208,9 +210,9 @@
+ /// from, so it is shared by [`Arc`] with forked workers and with the charge ledger.
+ pub(crate) struct PlanShape {
+     /// Each node's row, indexed by [`NodeId`].
+-    rows: Vec<NodeRow>,
++    rows: AdmittedVec<NodeRow>,
+     /// Each attached expression's owner and compiled program, indexed by [`ExprId`].
+-    exprs: Vec<ExprSlot>,
++    exprs: AdmittedVec<ExprSlot>,
+     /// Each property-path node, indexed by [`PathId`].
+     #[cfg_attr(
+         not(test),
+@@ -219,9 +221,9 @@
+             reason = "the pre-order test asserts it; no evaluator path reads it"
+         )
+     )]
+-    paths: Vec<NodeId>,
++    paths: AdmittedVec<NodeId>,
+     /// Every `EXISTS` body, indexed by [`SiteId`]; ascending by body id.
+-    sites: Vec<ExistsSite>,
++    sites: AdmittedVec<ExistsSite>,
+     /// The tree's variable-endpoint `SERVICE` analysis, indexed by node.
+     endpoints: EndpointScan,
+     /// The address the root lives at for the evaluation running over this shape. The
+@@ -245,7 +247,7 @@
+     /// kept. Empty when no body is.
+     volatile_sites: Vec<bool>,
+     /// Pure UNION regions, derived once from the numbered kinds and parent edges.
+-    positive_regions: OnceLock<Vec<bool>>,
++    positive_regions: AdmittedVec<bool>,
+ }
+ 
+ impl PlanShape {
+@@ -278,37 +280,11 @@
+     /// The reverse fold touches each edge once, so suffixes of a deep join chain
+     /// do not repeatedly scan the same descendants.
+     pub(crate) fn positive_region(&self, node: NodeId) -> bool {
+-        self.positive_regions
+-            .get_or_init(|| {
+-                if !self.rows.iter().any(|row| row.kind.label() == "Union") {
+-                    return Vec::new();
+-                }
+-                let mut facts: Vec<(bool, bool)> = self
+-                    .rows
+-                    .iter()
+-                    .map(|row| {
+-                        let label = row.kind.label();
+-                        (matches!(label, "Bgp" | "Join" | "Union"), label == "Union")
+-                    })
+-                    .collect();
+-                for index in (1..self.rows.len()).rev() {
+-                    if let Some(parent) = self.rows[index].parent {
+-                        let child = facts[index];
+-                        let parent = &mut facts[parent.index()];
+-                        parent.0 &= child.0;
+-                        parent.1 |= child.1;
+-                    }
+-                }
+-                facts
+-                    .into_iter()
+-                    .map(|(pure, union)| pure && union)
+-                    .collect()
+-            })
+-            .get(node.index())
+-            .copied()
+-            .unwrap_or(false)
+-    }
+ 
++        self.positive_regions.get(node.index()).copied().unwrap_or(false)
++
++}
++
+     /// `node`'s depth below the root.
+     pub(crate) fn depth(&self, node: NodeId) -> u32 {
+         self.rows[node.index()].depth
+@@ -397,7 +373,7 @@
+ /// numbers so the nodes stay alive and unmoved at the addresses the shape recorded.
+ pub(crate) struct Tree<'q> {
+     key: TreeKey,
+-    shape: Arc<PlanShape>,
++    shape: SharedWorkspace<PlanShape>,
+     numbered: std::marker::PhantomData<&'q GraphPattern>,
+ }
+ 
+@@ -406,7 +382,7 @@
+ #[derive(Clone)]
+ pub(crate) struct PlanHandle {
+     key: TreeKey,
+-    shape: Arc<PlanShape>,
++    shape: SharedWorkspace<PlanShape>,
+ }
+ 
+ impl PlanHandle {
+@@ -416,7 +392,7 @@
+     }
+ 
+     /// The tree's shape.
+-    pub(crate) const fn shape(&self) -> &Arc<PlanShape> {
++    pub(crate) const fn shape(&self) -> &SharedWorkspace<PlanShape> {
+         &self.shape
+     }
+ 
+@@ -433,7 +409,7 @@
+     id: NodeId,
+     depth: usize,
+     visited: usize,
+-    children: purrdf_core::SmallVec<[(ChildEdge, Option<ExprId>); 4]>,
++    children: AdmittedVec<(ChildEdge, Option<ExprId>)>,
+ }
+ 
+ impl<'q> Tree<'q> {
+@@ -447,28 +423,61 @@
+     /// decomposition. The walk runs over a work list, so a tree of any height costs heap
+     /// and never stack.
+     pub(crate) fn build(root: &'q GraphPattern) -> Self {
+-        // A first walk counts the nodes and their attached expressions, so each table is
+-        // allocated once at its final size.
++
++        let shape = Self::build_shape(root, &crate::WorkspaceCapability::resident())
++            .expect("resident plan shape");
++        Self { key: TreeKey::fresh(), shape: Arc::new(shape).into(), numbered: std::marker::PhantomData }
++    }
++
++    /// Native numbering and control acquire their original owners before growth.
++    pub(crate) fn build_admitted(
++        root: &'q GraphPattern,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Self, crate::EvalError> {
++        let shape = Self::build_shape(root, workspace)?;
++        Ok(Self {
++            key: TreeKey::fresh(),
++            shape: SharedWorkspace::new_admitted(shape, workspace)?,
++            numbered: std::marker::PhantomData,
++        })
++    }
++
++    fn build_shape(
++        root: &'q GraphPattern,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<PlanShape, crate::EvalError> {
+         let (mut node_count, mut expr_count) = (0_usize, 0_usize);
+-        walk_spine(root, &mut |node, _context, _level| {
+-            node_count += 1;
++        walk_spine_admitted(root, workspace, &mut |node, _, _| {
++            node_count = node_count.checked_add(1).ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
++            let mut overflow = false;
+             visit_pattern_parts(node, &mut |part| {
+-                expr_count += usize::from(matches!(part, PatternPart::Expression(_)));
+-                false
++                if matches!(part, PatternPart::Expression(_)) {
++                    match expr_count.checked_add(1) {
++                        Some(next) => expr_count = next,
++                        None => overflow = true,
++                    }
++                }
++                overflow
+             });
+-        });
+-        let mut rows: Vec<NodeRow> = Vec::with_capacity(node_count);
+-        let mut exprs: Vec<ExprSlot> = Vec::with_capacity(expr_count);
+-        let mut paths = Vec::new();
+-        let mut sites = Vec::new();
+-        // The walk's open ancestors are inline up to a shallow tree's depth.
+-        let mut open: purrdf_core::SmallVec<[Open; 8]> = purrdf_core::SmallVec::new();
+-        walk_spine(root, &mut |node, _context, level| {
+-            while open.last().is_some_and(|ancestor| ancestor.depth >= level) {
++            if overflow { return Err(crate::EvalError::WorkspaceBoundOverflow); }
++            Ok(())
++        })?;
++        // Id end positions and attached-expression ranges use this exact domain.
++        u32::try_from(node_count).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
++        u32::try_from(expr_count).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
++        let mut rows = AdmittedVec::<NodeRow>::with_capacity(node_count, workspace)?;
++        let mut exprs = AdmittedVec::<ExprSlot>::with_capacity(expr_count, workspace)?;
++        let mut paths = AdmittedVec::new(workspace);
++        let mut sites = AdmittedVec::new(workspace);
++        let mut storage = crate::workspace::LexicalFrame::new(workspace);
++        let mut open = purrdf_lex::walk::WorkList::<Open, 8>::new();
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
++        walk_spine_admitted(root, workspace, &mut |node, _, level| {
++            while open.iter().next_back().is_some_and(|ancestor| ancestor.depth >= level) {
+                 open.pop();
+             }
+             let id = NodeId::from_index(rows.len());
+-            let (up, edge, via) = match open.last_mut() {
++            let (up, edge, via) = match open.top_mut() {
+                 Some(ancestor) => {
+                     let (edge, via) = ancestor.children[ancestor.visited];
+                     ancestor.visited += 1;
+@@ -476,95 +485,78 @@
+                 }
+                 None => (None, ChildEdge::MONOTONE, None),
+             };
+-            if matches!(node, GraphPattern::Path { .. }) {
+-                paths.push(id);
+-            }
++            if matches!(node, GraphPattern::Path { .. }) { paths.push(id)?; }
+             if let Some(expr) = via {
+-                sites.push(ExistsSite {
+-                    body: id,
+-                    expr,
+-                    prepared: OnceLock::new(),
+-                });
++                sites.push(ExistsSite { body: id, expr, prepared: OnceLock::new() })?;
+             }
+-            let first_expr = exprs.len() as u32;
+-            let mut children = purrdf_core::SmallVec::new();
++            let first_expr = u32::try_from(exprs.len()).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
++            let mut children = AdmittedVec::new(workspace);
++            let mut failure = None;
+             visit_pattern_parts(node, &mut |part| {
+-                match part {
+-                    PatternPart::Child(_, edge) => children.push((edge, None)),
+-                    PatternPart::Expression(expr) => {
+-                        let expr_id = ExprId(exprs.len() as u32);
+-                        exprs.push(ExprSlot {
+-                            owner: id,
+-                            program: OnceLock::new(),
+-                        });
+-                        visit_exists_patterns(expr, &mut |_| {
+-                            children.push((ChildEdge::OPAQUE, Some(expr_id)));
+-                            false
+-                        });
++                let result = (|| {
++                    match part {
++                        PatternPart::Child(_, edge) => children.push((edge, None))?,
++                        PatternPart::Expression(expr) => {
++                            let expr_id = ExprId(u32::try_from(exprs.len())
++                                .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?);
++                            exprs.push_reserved(ExprSlot { owner: id, program: OnceLock::new() });
++                            visit_exists_patterns_admitted(expr, workspace, &mut |_| {
++                                children.push((ChildEdge::OPAQUE, Some(expr_id)))?;
++                                Ok(false)
++                            })?;
++                        }
+                     }
+-                }
+-                false
++                    Ok::<_, crate::EvalError>(())
++                })();
++                if let Err(error) = result { failure = Some(error); true } else { false }
+             });
+-            rows.push(NodeRow {
++            if let Some(error) = failure { return Err(error); }
++            rows.push_reserved(NodeRow {
+                 kind: NodeKind::of(node),
+-                depth: level as u32,
+-                // Every subtree is sized by the reverse sweep below; a leaf keeps this.
+-                subtree_end: NodeId::from_index(id.index() + 1),
+-                exprs: first_expr..exprs.len() as u32,
++                depth: u32::try_from(level).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
++                subtree_end: NodeId::from_index(id.index().checked_add(1)
++                    .ok_or(crate::EvalError::WorkspaceBoundOverflow)?),
++                exprs: first_expr..u32::try_from(exprs.len()).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+                 parent: up,
+                 address: std::ptr::from_ref(node) as usize,
+                 by_address: id,
+                 edge_in: edge,
+             });
+-            open.push(Open {
+-                id,
+-                depth: level,
+-                visited: 0,
+-                children,
+-            });
+-        });
++            open.try_push_admitted(Open { id, depth: level, visited: 0, children }, &mut memory)
++                .map_err(|error| memory.admission_mut().storage_error(error, "plan open ancestors"))?;
++            Ok(())
++        })?;
++        open.release_admitted(&mut memory)
++            .map_err(|error| memory.admission_mut().storage_error(error, "plan open ancestors"))?;
++        drop(memory);
++        drop(storage);
+ 
+-        // Pre-order puts every node after its parent and its subtree contiguously after
+-        // it, so one reverse sweep extends each parent's subtree end over its children's.
+         for index in (1..rows.len()).rev() {
+-            if let Some(p) = rows[index].parent {
++            if let Some(parent) = rows[index].parent {
+                 let end = rows[index].subtree_end;
+-                let parent = &mut rows[p.index()].subtree_end;
++                let parent = &mut rows.as_mut_slice()[parent.index()].subtree_end;
+                 *parent = (*parent).max(end);
+             }
+         }
+-        // The address order, ranked in a scratch list inline up to a small tree's size and
+-        // written into the rows' `by_address` column.
+-        let mut ranked: purrdf_core::SmallVec<[(usize, NodeId); 16]> = rows
+-            .iter()
+-            .map(|row| (row.address, row.by_address))
+-            .collect();
+-        ranked.sort_unstable_by_key(|(address, _)| *address);
+-        for (row, (_, id)) in rows.iter_mut().zip(ranked) {
+-            row.by_address = id;
+-        }
++        let mut ranked = AdmittedVec::with_capacity(rows.len(), workspace)?;
++        for row in rows.iter() { ranked.push_reserved((row.address, row.by_address)); }
++        ranked.as_mut_slice().sort_unstable_by_key(|(address, _)| *address);
++        for (row, (_, id)) in rows.as_mut_slice().iter_mut().zip(ranked.iter()) { row.by_address = *id; }
++        drop(ranked);
+ 
+-        let endpoints = crate::service_endpoints::scan(root, &AddressIndex(&rows), rows.len());
+-        Self {
+-            key: TreeKey::fresh(),
+-            shape: Arc::new(PlanShape {
+-                rows,
+-                exprs,
+-                paths,
+-                sites,
+-                endpoints,
+-                root: AtomicUsize::new(std::ptr::from_ref(root) as usize),
+-                volatile_exprs: Vec::new(),
+-                recycled: Vec::new(),
+-                volatile_sites: Vec::new(),
+-                positive_regions: OnceLock::new(),
+-            }),
+-            numbered: std::marker::PhantomData,
+-        }
+-    }
++        let positive_regions = positive_region_table(&rows, workspace)?;
++        let endpoints = crate::service_endpoints::scan_admitted(root, &AddressIndex(&rows), rows.len(), workspace)?;
++        Ok(PlanShape {
++            rows, exprs, paths, sites, endpoints,
++            root: AtomicUsize::new(std::ptr::from_ref(root) as usize),
++            volatile_exprs: Vec::new(), recycled: Vec::new(), volatile_sites: Vec::new(),
++            positive_regions,
++        })
+ 
++}
++
+     /// The tree's shape.
+-    pub(crate) const fn shape(&self) -> &Arc<PlanShape> {
++    pub(crate) const fn shape(&self) -> &SharedWorkspace<PlanShape> {
+         &self.shape
+     }
+ 
+@@ -572,11 +564,36 @@
+     pub(crate) fn handle(&self) -> PlanHandle {
+         PlanHandle {
+             key: self.key,
+-            shape: Arc::clone(&self.shape),
++            shape: self.shape.clone(),
+         }
+     }
+ }
+ 
++/// The existing reverse fold, prepared before publication so a bounded lazy
++/// classification never allocates on an evaluator path after refusal.
++fn positive_region_table(
++    rows: &[NodeRow],
++    workspace: &crate::WorkspaceCapability,
++) -> Result<AdmittedVec<bool>, crate::EvalError> {
++    if !rows.iter().any(|row| row.kind.label() == "Union") { return Ok(AdmittedVec::new(workspace)); }
++    let mut facts = AdmittedVec::with_capacity(rows.len(), workspace)?;
++    for row in rows {
++        let label = row.kind.label();
++        facts.push_reserved((matches!(label, "Bgp" | "Join" | "Union"), label == "Union"));
++    }
++    for index in (1..rows.len()).rev() {
++        if let Some(parent) = rows[index].parent {
++            let child = facts[index];
++            let parent = &mut facts.as_mut_slice()[parent.index()];
++            parent.0 &= child.0;
++            parent.1 |= child.1;
++        }
++    }
++    let mut regions = AdmittedVec::with_capacity(rows.len(), workspace)?;
++    for (pure, union) in facts { regions.push_reserved(pure && union); }
++    Ok(regions)
++}
++
+ /// The expressions attached directly to `node`, in the order the shape numbers them.
+ fn attached(node: &GraphPattern) -> purrdf_core::SmallVec<[&Expression; 4]> {
+     let mut exprs = purrdf_core::SmallVec::new();
+@@ -670,7 +687,7 @@
+         }
+         drop((nodes, others));
+         let Tree { key, mut shape, .. } = tree;
+-        let table = Arc::get_mut(&mut shape).expect("a tree just built shares its shape with none");
++        let table = shape.caller_unique_mut().expect("a resident tree just built shares its shape with none");
+         if !exprs.is_empty() {
+             table.recycled = exprs.iter().map(|_| Mutex::new(None)).collect();
+             table.volatile_exprs = exprs;
+@@ -719,20 +736,11 @@
+         }
+         let tree = Tree::build(&pattern);
+         let shape = tree.shape();
+-        assert!(shape.positive_regions.get().is_none());
++        assert!(shape.positive_regions.is_empty());
+         for index in 0..shape.len() {
+             assert!(!shape.positive_region(NodeId::from_index(index)));
+         }
+-        let cached = shape
+-            .positive_regions
+-            .get()
+-            .expect("classification is cached");
+-        assert_eq!(cached, &Vec::new());
+-        assert_eq!(
+-            cached.capacity(),
+-            0,
+-            "a tree without UNION needs no bitmap allocation"
+-        );
++        assert!(shape.positive_regions.is_empty(), "a tree without UNION needs no bitmap allocation");
+     }
+ 
+     impl PlanShape {

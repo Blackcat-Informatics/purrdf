@@ -1,0 +1,103 @@
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-eval)
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/query_completion.rs:957:21
+    |
+951 |                 QueryRoute::Owned => assert_complete_query(
+    |                                      --------------------- arguments to this function are incorrect
+...
+957 |                     prepared,
+    |                     ^^^^^^^^ expected `PreparedQuery`, found `Arc<PreparedQuery>`
+    |
+    = note: expected struct `PreparedQuery`
+               found struct `Arc<PreparedQuery>`
+note: function defined here
+   --> crates/sparql-eval/tests/query_completion.rs:906:4
+    |
+906 | fn assert_complete_query<V: ViewReceipt>(
+    |    ^^^^^^^^^^^^^^^^^^^^^
+...
+910 |     prepared: PreparedQuery,
+    |     -----------------------
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/query_completion.rs:966:21
+    |
+960 |                 QueryRoute::Prepared => assert_complete_query(
+    |                                         --------------------- arguments to this function are incorrect
+...
+966 |                     prepared,
+    |                     ^^^^^^^^ expected `PreparedQuery`, found `Arc<PreparedQuery>`
+    |
+    = note: expected struct `PreparedQuery`
+               found struct `Arc<PreparedQuery>`
+note: function defined here
+   --> crates/sparql-eval/tests/query_completion.rs:906:4
+    |
+906 | fn assert_complete_query<V: ViewReceipt>(
+    |    ^^^^^^^^^^^^^^^^^^^^^
+...
+910 |     prepared: PreparedQuery,
+    |     -----------------------
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/query_completion.rs:980:21
+    |
+969 |                 QueryRoute::Governed => assert_complete_query(
+    |                                         --------------------- arguments to this function are incorrect
+...
+980 |                     prepared,
+    |                     ^^^^^^^^ expected `PreparedQuery`, found `Arc<PreparedQuery>`
+    |
+    = note: expected struct `PreparedQuery`
+               found struct `Arc<PreparedQuery>`
+note: function defined here
+   --> crates/sparql-eval/tests/query_completion.rs:906:4
+    |
+906 | fn assert_complete_query<V: ViewReceipt>(
+    |    ^^^^^^^^^^^^^^^^^^^^^
+...
+910 |     prepared: PreparedQuery,
+    |     -----------------------
+
+error[E0308]: mismatched types
+   --> crates/sparql-eval/tests/query_completion.rs:995:21
+    |
+983 |                 QueryRoute::PreparedGoverned => assert_complete_query(
+    |                                                 --------------------- arguments to this function are incorrect
+...
+995 |                     prepared,
+    |                     ^^^^^^^^ expected `PreparedQuery`, found `Arc<PreparedQuery>`
+    |
+    = note: expected struct `PreparedQuery`
+               found struct `Arc<PreparedQuery>`
+note: function defined here
+   --> crates/sparql-eval/tests/query_completion.rs:906:4
+    |
+906 | fn assert_complete_query<V: ViewReceipt>(
+    |    ^^^^^^^^^^^^^^^^^^^^^
+...
+910 |     prepared: PreparedQuery,
+    |     -----------------------
+
+error[E0308]: mismatched types
+    --> crates/sparql-eval/tests/query_completion.rs:1009:68
+     |
+1009 |                     assert_complete_query(&source, answer, engine, prepared, state);
+     |                     ---------------------                          ^^^^^^^^ expected `PreparedQuery`, found `Arc<PreparedQuery>`
+     |                     |
+     |                     arguments to this function are incorrect
+     |
+     = note: expected struct `PreparedQuery`
+                found struct `Arc<PreparedQuery>`
+note: function defined here
+    --> crates/sparql-eval/tests/query_completion.rs:906:4
+     |
+ 906 | fn assert_complete_query<V: ViewReceipt>(
+     |    ^^^^^^^^^^^^^^^^^^^^^
+...
+ 910 |     prepared: PreparedQuery,
+     |     -----------------------
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (test "query_completion") due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...

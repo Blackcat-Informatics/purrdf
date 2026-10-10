@@ -1,0 +1,67 @@
+--- a/crates/sparql-eval/src/binop.rs
++++ b/crates/sparql-eval/src/binop.rs
+@@ -104,9 +104,9 @@
+             }
+         });
+     }
+-    if let Some(evaluated) = eval_values_restricted_join(node, left, right, ctx)? {
+-        return Ok(evaluated);
+-    }
++    // Values Insertion keeps the authored leaf on the left and its row on the
++    // right. Preserve that ordinary join: seeding the leaf would change the
++    // actual work its governor and source-node ledger record.
+     let mut lift = Lift::at_admitted(node, &ctx.growth)?;
+     // A join is commutative, so a variable-endpoint `SERVICE` in the LEFT operand whose
+     // endpoint the right operand binds (`{ SERVICE ?e { … } ?s ex:endpoint ?e }`) is
+@@ -139,35 +139,6 @@
+         return Ok(lift.finish(SolutionSeq::empty(l.schema)));
+     }
+     finish_join(lift, l, right, ctx)
+-}
+-
+-/// Values Insertion keeps the authored leaf on the left and its singleton
+-/// restriction on the right. Bulk and delivered execution enter this same
+-/// child-role/schema law before reading the native restricted relation.
+-fn eval_values_restricted_join<D: DatasetView + Sync>(
+-    node: &GraphPattern,
+-    left: &GraphPattern,
+-    right: &GraphPattern,
+-    ctx: &mut EvalCtx<'_, D>,
+-) -> Result<Option<Evaluated<D::Id>>, EvalError> {
+-    if !ctx.in_substituted_exists
+-        || !matches!(right, GraphPattern::Values { bindings, .. } if bindings.len() == 1)
+-    {
+-        return Ok(None);
+-    }
+-    let driver_schema = crate::eval::syntactic_schema_admitted(right, &ctx.growth)?;
+-    if !crate::bgp::PositivePlan::seed_eligible_admitted(left, &driver_schema, &ctx.growth)? {
+-        return Ok(None);
+-    }
+-    let output = crate::eval::syntactic_schema_admitted(node, &ctx.growth)?;
+-    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
+-    let Some(driver) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
+-        return Ok(Some(lift.withheld()));
+-    };
+-    if lift.is_truncated() {
+-        return Ok(Some(lift.finish(SolutionSeq::empty(output))));
+-    }
+-    finish_seeded_join(lift, driver, left, 0, Some(&output), ctx).map(Some)
+ }
+ 
+ // Erase the static mode wrapper while preserving the native kernel call boundary.
+@@ -181,15 +152,6 @@
+     ctx: &mut EvalCtx<'_, D>,
+ ) -> Result<Evaluated<D::Id>, EvalError> {
+     if M::ACTIVE {
+-        // BGP already materializes before RowDelivery. Keep that delivery law,
+-        // but seed its scan instead of reading an unrestricted bag for every
+-        // correlated row. Compound streamed arms keep their existing delivery.
+-        if matches!(left, GraphPattern::Bgp { .. })
+-            && let Some(evaluated) = eval_values_restricted_join(node, left, right, ctx)?
+-        {
+-            crate::eval::deliver_evaluated(&evaluated, delivery, ctx)?;
+-            return Ok(evaluated);
+-        }
+         eval_binary_yielding::<D, false, M>(node, left, right, delivery, ctx)
+     } else {
+         eval_join(node, left, right, ctx)

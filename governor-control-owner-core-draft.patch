@@ -1,0 +1,326 @@
+diff --git a/crates/sparql-eval/src/workspace.rs b/crates/sparql-eval/src/workspace.rs
+--- a/crates/sparql-eval/src/workspace.rs
++++ b/crates/sparql-eval/src/workspace.rs
+@@ -9,6 +9,60 @@
+ 
+ use crate::EvalError;
+ 
++/// Shared execution controls keep their actual payload and admission together.
++/// A caller-provided Arc remains caller-owned; native controls use the same
++/// immutable, fallible Shared home as rows and parsed values.
++#[derive(Debug)]
++pub(crate) struct SharedWorkspace<T>(SharedWorkspaceStorage<T>);
++
++#[derive(Debug)]
++enum SharedWorkspaceStorage<T> {
++    Caller(std::sync::Arc<T>),
++    Native(Shared<SharedWorkspacePayload<T>>),
++}
++
++#[derive(Debug)]
++struct SharedWorkspacePayload<T> {
++    value: T,
++    // The payload must die before its original grant.
++    _allocation: WorkspaceAllocation,
++}
++
++impl<T> Clone for SharedWorkspace<T> {
++    fn clone(&self) -> Self {
++        Self(match &self.0 {
++            SharedWorkspaceStorage::Caller(value) => SharedWorkspaceStorage::Caller(value.clone()),
++            SharedWorkspaceStorage::Native(value) => SharedWorkspaceStorage::Native(value.clone()),
++        })
++    }
++}
++
++impl<T> std::ops::Deref for SharedWorkspace<T> {
++    type Target = T;
++    fn deref(&self) -> &T {
++        match &self.0 {
++            SharedWorkspaceStorage::Caller(value) => value,
++            SharedWorkspaceStorage::Native(value) => &value.value,
++        }
++    }
++}
++
++impl<T> From<std::sync::Arc<T>> for SharedWorkspace<T> {
++    fn from(value: std::sync::Arc<T>) -> Self {
++        Self(SharedWorkspaceStorage::Caller(value))
++    }
++}
++
++impl<T> SharedWorkspace<T> {
++    pub(crate) fn new_admitted(value: T, workspace: &WorkspaceCapability) -> Result<Self, EvalError> {
++        let bytes = fallible_shared_layout::<SharedWorkspacePayload<T>>()?;
++        let allocation = workspace.charge(bytes)?;
++        let payload = Shared::try_new(SharedWorkspacePayload { value, _allocation: allocation })
++            .map_err(|_| EvalError::AllocationFailed { construct: "shared execution control" })?;
++        Ok(Self(SharedWorkspaceStorage::Native(payload)))
++    }
++}
++
+ trait GrowthAdmission: std::fmt::Debug + Send + Sync {
+     fn has_failed(&self) -> bool;
+     fn charge(&self, bytes: u64) -> Result<WorkspaceAllocation, EvalError>;
+diff --git a/crates/sparql-eval/src/governor/lift.rs b/crates/sparql-eval/src/governor/lift.rs
+--- a/crates/sparql-eval/src/governor/lift.rs
++++ b/crates/sparql-eval/src/governor/lift.rs
+@@ -574,15 +574,27 @@
+ /// its row loop is done and withholds its whole output — which is exactly what
+ /// [`ChildRole::Opaque`] licenses and all it licenses.
+ ///
+-/// Shared through an [`Arc`], so an observation made on a forked parallel worker's
++/// Shared through its immutable owner, so an observation made on a forked parallel worker's
+ /// context reaches the parent that forked it. A worker's own context is dropped the
+ /// instant its closure returns, so a non-shared cell would silently lose the barrier and
+ /// the operator would emit rows whose `EXISTS` booleans were computed over a truncated
+ /// bag.
+-#[derive(Debug, Clone, Default)]
+-pub(crate) struct ExpressionBarrier(Arc<OnceLock<TrippedGovernor>>);
++#[derive(Debug, Clone)]
++pub(crate) struct ExpressionBarrier(crate::workspace::SharedWorkspace<OnceLock<TrippedGovernor>>);
+ 
++impl Default for ExpressionBarrier {
++    fn default() -> Self {
++        Self::admitted(&crate::WorkspaceCapability::resident())
++            .expect("resident expression barrier allocation")
++    }
++}
++
+ impl ExpressionBarrier {
++    /// The actual one-shot control is admitted before its native allocation.
++    pub(crate) fn admitted(workspace: &crate::WorkspaceCapability) -> Result<Self, crate::EvalError> {
++        Ok(Self(crate::workspace::SharedWorkspace::new_admitted(OnceLock::new(), workspace)?))
++    }
++
+     /// Record that an expression-embedded pattern truncated. Write-once: the first trip
+     /// is the reported trip, matching the governor state's own latching.
+     pub(crate) fn record(&self, tripped: TrippedGovernor) {
+diff --git a/crates/sparql-eval/src/eval.rs b/crates/sparql-eval/src/eval.rs
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -769,13 +769,13 @@
+     /// fire, so [`Self::stop_check`] short-circuits on one null test and evaluation does
+     /// exactly the work it did before governors existed.
+     ///
+-    /// Held behind an [`Arc`] rather than by value so a forked worker shares the ONE
++    /// Held behind an immutable shared owner rather than by value so a forked worker shares the ONE
+     /// live accounting state instead of a copy: a per-worker copy would multiply the
+     /// budget by the thread count, invisibly.
+-    pub(crate) governors: Option<Arc<GovernorState>>,
++    pub(crate) governors: Option<crate::workspace::SharedWorkspace<GovernorState>>,
+     /// The one-shot cell through which a governor trip inside an expression-embedded
+     /// `EXISTS` reaches the operator that owns the expression (see
+-    /// [`ExpressionBarrier`]). Shared by [`Arc`] with every forked worker context, so a
++    /// [`ExpressionBarrier`]). Shared with every forked worker context, so a
+     /// worker's observation is not lost when the worker's context is dropped.
+     pub(crate) expression_barrier: ExpressionBarrier,
+     /// The answer-cap / `LIMIT` pushdown for the plan being evaluated: the row ceiling
+@@ -797,7 +797,7 @@
+     pub(crate) cap_at: Option<(crate::plan::TreeKey, crate::plan::NodeId)>,
+     /// The per-node charge ledger, when one is installed. `None` on every ordinary query;
+     /// the EXPLAIN path installs one.
+-    pub(crate) ledger: Option<Arc<ChargeLedger>>,
++    pub(crate) ledger: Option<crate::workspace::SharedWorkspace<ChargeLedger>>,
+     /// The ledger ordinal of the nearest enclosing **plan** node.
+     ///
+     /// A plain `Copy` value so that a fork copies it: a worker charges the node its parent
+diff --git a/crates/sparql-eval/src/eval.rs b/crates/sparql-eval/src/eval.rs
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -1087,6 +1087,30 @@
+     /// the materialised lane does. [`Self::new`] is this with the wall clock and a
+     /// fresh seed.
+     pub(crate) fn at(dataset: &'d D, now_val: purrdf_xsd::XsdValue, rng_seed: u64) -> Self {
++        Self::at_with_barrier(dataset, now_val, rng_seed, ExpressionBarrier::default())
++    }
++
++    /// Bounded constructors admit their one-shot expression control before
++    /// constructing any context. The ordinary constructor uses the same body.
++    pub(crate) fn new_admitted(
++        dataset: &'d D,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<Self, EvalError> {
++        let barrier = ExpressionBarrier::admitted(workspace)?;
++        Ok(Self::at_with_barrier(
++            dataset,
++            purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()),
++            crate::clock::entropy_seed(),
++            barrier,
++        ))
++    }
++
++    fn at_with_barrier(
++        dataset: &'d D,
++        now_val: purrdf_xsd::XsdValue,
++        rng_seed: u64,
++        expression_barrier: ExpressionBarrier,
++    ) -> Self {
+         // `static`, not a bare `&Registry::EMPTY` temporary: the returned `Self` must
+         // outlive this function body, and a `HashMap`-backed registry's drop glue
+         // blocks Rust's rvalue static promotion for a reference that has to live that
+@@ -1151,7 +1175,7 @@
+             exact_deferral: None,
+             focus_graph: None,
+             governors: None,
+-            expression_barrier: ExpressionBarrier::default(),
++            expression_barrier,
+             cap_pushdown: None,
+             cap_at: None,
+             ledger: None,
+diff --git a/crates/sparql-eval/src/eval.rs b/crates/sparql-eval/src/eval.rs
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -1425,11 +1425,18 @@
+     /// which is where a trip is an outcome carrying the certified partial answers rather
+     /// than a refusal.
+     #[must_use]
+-    pub fn with_governors(mut self, governors: Arc<GovernorState>) -> Self {
++    pub fn with_governors(self, governors: Arc<GovernorState>) -> Self {
++        self.with_governor_owner(governors.into())
++    }
++
++    pub(crate) fn with_governor_owner(
++        mut self,
++        governors: crate::workspace::SharedWorkspace<GovernorState>,
++    ) -> Self {
+         if self
+             .governors
+             .as_ref()
+-            .is_none_or(|previous| !Arc::ptr_eq(previous, &governors))
++            .is_none_or(|previous| !std::ptr::eq(&**previous, &*governors))
+         {
+             self.scratch.reset_charged_growth();
+         }
+@@ -1440,8 +1447,11 @@
+     /// Install the per-node charge ledger for this evaluation, and start its cursor at the
+     /// plan root.
+     #[must_use]
+-    pub(crate) fn with_charge_ledger(mut self, ledger: Arc<ChargeLedger>) -> Self {
+-        self.ledger = Some(ledger);
++    pub(crate) fn with_charge_ledger(
++        mut self,
++        ledger: impl Into<crate::workspace::SharedWorkspace<ChargeLedger>>,
++    ) -> Self {
++        self.ledger = Some(ledger.into());
+         self.ledger_node = crate::plan::NodeId::ROOT;
+         self.ledger_counts_rows = true;
+         self
+diff --git a/crates/sparql-eval/src/eval.rs b/crates/sparql-eval/src/eval.rs
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -1647,7 +1647,7 @@
+     ///
+     /// Handed to seams that charge below the operator boundary and therefore cannot use
+     /// [`Self::note_fuel`] — the property-path traversal is the one that exists today.
+-    pub(crate) const fn charge_ledger(&self) -> Option<&Arc<ChargeLedger>> {
++    pub(crate) const fn charge_ledger(&self) -> Option<&crate::workspace::SharedWorkspace<ChargeLedger>> {
+         self.ledger.as_ref()
+     }
+ 
+diff --git a/crates/sparql-eval/src/eval.rs b/crates/sparql-eval/src/eval.rs
+--- a/crates/sparql-eval/src/eval.rs
++++ b/crates/sparql-eval/src/eval.rs
+@@ -1901,7 +1901,7 @@
+     /// charge helper below short-circuits on this one null test, so an ungoverned query
+     /// performs no atomic operation, no allocation, and no counter update anywhere on
+     /// the hot path.
+-    pub(crate) const fn governor_state(&self) -> Option<&Arc<GovernorState>> {
++    pub(crate) const fn governor_state(&self) -> Option<&crate::workspace::SharedWorkspace<GovernorState>> {
+         self.governors.as_ref()
+     }
+ 
+diff --git a/crates/sparql-eval/src/path.rs b/crates/sparql-eval/src/path.rs
+--- a/crates/sparql-eval/src/path.rs
++++ b/crates/sparql-eval/src/path.rs
+@@ -336,13 +336,13 @@
+     /// by [`Arc`] with the evaluation context rather than copied — a traversal that
+     /// spent its own copy of the budget would let a query with `N` property paths spend
+     /// `N` budgets.
+-    governors: Option<Arc<crate::governor::GovernorState>>,
++    governors: Option<crate::workspace::SharedWorkspace<crate::governor::GovernorState>>,
+     /// The per-node charge ledger and the ordinal of the path node being evaluated, when
+     /// one is installed. A traversal's fuel is spent well below the operator boundary, so
+     /// without this the single most graph-dependent cost in the evaluator would be the one
+     /// cost an EXPLAIN could not attribute.
+     ledger: Option<(
+-        Arc<crate::governor::ledger::ChargeLedger>,
++        crate::workspace::SharedWorkspace<crate::governor::ledger::ChargeLedger>,
+         crate::plan::NodeId,
+     )>,
+ }
+diff --git a/crates/sparql-eval/src/path.rs b/crates/sparql-eval/src/path.rs
+--- a/crates/sparql-eval/src/path.rs
++++ b/crates/sparql-eval/src/path.rs
+@@ -435,10 +435,10 @@
+         scope,
+         program: PathProgram::compile(path, dataset),
+         reach_cache: RefCell::new(DetHashMap::default()),
+-        governors: ctx.governor_state().map(Arc::clone),
++        governors: ctx.governor_state().cloned(),
+         ledger: ctx
+             .charge_ledger()
+-            .map(|ledger| (Arc::clone(ledger), ctx.ledger_node)),
++            .map(|ledger| (ledger.clone(), ctx.ledger_node)),
+     };
+ 
+     // SPARQL 1.1 §18.3: a path with NO repetition operator (`*`/`+`/`?`/`{n,m}`)
+diff --git a/crates/sparql-eval/src/path.rs b/crates/sparql-eval/src/path.rs
+--- a/crates/sparql-eval/src/path.rs
++++ b/crates/sparql-eval/src/path.rs
+@@ -2300,7 +2300,7 @@
+             scope: GraphScope::One(purrdf_core::GraphMatch::Default),
+             program: PathProgram::compile(&path, &*ds),
+             reach_cache: RefCell::new(DetHashMap::default()),
+-            governors: Some(Arc::clone(&state)),
++            governors: Some(Arc::clone(&state).into()),
+             ledger: None,
+         };
+ 
+diff --git a/crates/sparql-eval/src/path.rs b/crates/sparql-eval/src/path.rs
+--- a/crates/sparql-eval/src/path.rs
++++ b/crates/sparql-eval/src/path.rs
+@@ -3823,7 +3823,7 @@
+             scope: GraphScope::One(GraphMatch::Default),
+             program: PathProgram::compile(&case.path, &*case.dataset),
+             reach_cache: RefCell::new(DetHashMap::default()),
+-            governors,
++            governors: governors.map(Into::into),
+             ledger: None,
+         }
+     }
+diff --git a/crates/sparql-eval/src/governor/charge_points.rs b/crates/sparql-eval/src/governor/charge_points.rs
+--- a/crates/sparql-eval/src/governor/charge_points.rs
++++ b/crates/sparql-eval/src/governor/charge_points.rs
+@@ -634,7 +634,7 @@
+     for context in [&parent, &worker, &callee] {
+         assert!(
+             std::ptr::eq(
+-                Arc::as_ptr(context.governor_state().expect("governed")),
++                &**context.governor_state().expect("governed"),
+                 Arc::as_ptr(&state)
+             ),
+             "a per-worker copy would multiply the budget by the thread count"
+diff --git a/crates/sparql-eval/src/governor/lift.rs b/crates/sparql-eval/src/governor/lift.rs
+--- a/crates/sparql-eval/src/governor/lift.rs
++++ b/crates/sparql-eval/src/governor/lift.rs
+@@ -114,7 +114,7 @@
+ //! contract. The charges that bound *work* (a `FILTER` predicate not yet run, a `BIND`
+ //! expression not yet evaluated) still cut, because there the refusal is the bound.
+ 
+-use std::sync::{Arc, OnceLock};
++use std::sync::OnceLock;
+ 
+ use purrdf_core::{TrippedGovernor, ViewTermId};
+ use purrdf_sparql_algebra::GraphPattern;
+diff --git a/crates/sparql-eval/src/path.rs b/crates/sparql-eval/src/path.rs
+--- a/crates/sparql-eval/src/path.rs
++++ b/crates/sparql-eval/src/path.rs
+@@ -55,6 +55,7 @@
+ use std::collections::BTreeMap;
+ use std::collections::BTreeSet;
+ use std::rc::Rc;
++#[cfg(test)]
+ use std::sync::Arc;
+ 
+ use purrdf_core::{DatasetView, TermId, TermRef, TermValue, ViewTermId};

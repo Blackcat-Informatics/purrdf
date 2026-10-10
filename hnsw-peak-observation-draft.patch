@@ -1,0 +1,29 @@
+diff --git a/crates/hnsw/tests/sparql_e2e.rs b/crates/hnsw/tests/sparql_e2e.rs
+index ce0549368..cc065073c 100644
+--- a/crates/hnsw/tests/sparql_e2e.rs
++++ b/crates/hnsw/tests/sparql_e2e.rs
+@@ -324,7 +324,10 @@ mod bounded_native_workspace {
+                 let peak = source.evidence().peak_bytes();
+                 assert!(
+                     u64::try_from(measured.peak_working_bytes).unwrap() <= peak,
+-                    "case {case}: native allocations exceeded admitted peak"
++                    "case {case}, route {}: allocator peak {} exceeded source peak {peak}; \
++                     requested {}, retained {}",
++                    route as u8, measured.peak_working_bytes,
++                    measured.requested_bytes, measured.retained_bytes,
+                 );
+                 assert!(peak <= CEILING);
+                 assert_eq!(result.solutions().unwrap().1, expected.as_slice());
+@@ -442,7 +445,11 @@ mod bounded_native_workspace {
+                 error: SegmentedError::Residency { requested, limit }, ..
+             } if requested > limit && *limit == low
+         ));
+-        assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
++        assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes(),
++            "beam refusal: allocator peak {}, source peak {}, ceiling {low}, \
++             opening {opening_live}, requested {}, retained {}",
++            measured.peak_working_bytes, source.evidence().peak_bytes(),
++            measured.requested_bytes, measured.retained_bytes);
+         assert!(source.evidence().peak_bytes() <= low);
+         drop(error);
+         assert_eq!(

@@ -1,0 +1,164 @@
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/sparql-results)
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/rdf-core)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/508-sparql-eval-complete-bounded-workspace/crates/datalog)
+error[E0282]: type annotations needed
+   --> crates/sparql-results/benches/graph_serialize.rs:106:68
+    |
+106 |         aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into().into(),
+    |                                                                    ^^^^
+    |
+help: try using a fully qualified path to specify the expected types
+    |
+106 -         aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into().into(),
+106 +         aux: <Arc<purrdf_core::RdfDataset> as Into<T>>::into(RdfDatasetBuilder::new().freeze().expect("empty aux")).into(),
+    |
+
+error[E0308]: mismatched types
+   --> crates/sparql-results/benches/graph_serialize.rs:295:38
+    |
+295 |     let result = SparqlResult::Graph(dataset);
+    |                  ------------------- ^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |                  |
+    |                  arguments to this enum variant are incorrect
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+note: tuple variant defined here
+   --> crates/rdf-core/src/backend.rs:225:5
+    |
+225 |     Graph(DatasetHandle),
+    |     ^^^^^
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+295 |     let result = SparqlResult::Graph(dataset.into());
+    |                                             +++++++
+
+Some errors have detailed explanations: E0282, E0308.
+For more information about an error, try `rustc --explain E0282`.
+error: could not compile `purrdf-sparql-results` (bench "graph_serialize") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0282]: type annotations needed
+   --> crates/sparql-results/tests/results_corpus.rs:111:68
+    |
+111 |         aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into().into(),
+    |                                                                    ^^^^
+    |
+help: try using a fully qualified path to specify the expected types
+    |
+111 -         aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into().into(),
+111 +         aux: <Arc<purrdf_core::RdfDataset> as Into<T>>::into(RdfDatasetBuilder::new().freeze().expect("empty aux")).into(),
+    |
+
+error[E0308]: mismatched types
+   --> crates/sparql-results/tests/results_corpus.rs:310:25
+    |
+310 |     SparqlResult::Graph(dataset)
+    |     ------------------- ^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |     |
+    |     arguments to this enum variant are incorrect
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+note: tuple variant defined here
+   --> crates/rdf-core/src/backend.rs:225:5
+    |
+225 |     Graph(DatasetHandle),
+    |     ^^^^^
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+310 |     SparqlResult::Graph(dataset.into())
+    |                                +++++++
+
+error[E0282]: type annotations needed
+   --> crates/sparql-results/tests/results_corpus.rs:466:68
+    |
+466 |         aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into().into(),
+    |                                                                    ^^^^
+    |
+help: try using a fully qualified path to specify the expected types
+    |
+466 -         aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into().into(),
+466 +         aux: <Arc<purrdf_core::RdfDataset> as Into<T>>::into(RdfDatasetBuilder::new().freeze().expect("empty aux")).into(),
+    |
+
+error: could not compile `purrdf-sparql-results` (test "results_corpus") due to 3 previous errors
+error[E0308]: mismatched types
+   --> crates/sparql-results/tests/results_streaming_is_bounded.rs:77:25
+    |
+ 77 |     SparqlResult::Graph(b.freeze().expect("dataset freezes"))
+    |     ------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |     |
+    |     arguments to this enum variant are incorrect
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+note: tuple variant defined here
+   --> crates/rdf-core/src/backend.rs:225:5
+    |
+225 |     Graph(DatasetHandle),
+    |     ^^^^^
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+ 77 |     SparqlResult::Graph(b.freeze().expect("dataset freezes").into())
+    |                                                             +++++++
+
+error[E0282]: type annotations needed
+   --> crates/sparql-results/tests/results_streaming_is_bounded.rs:104:42
+    |
+104 |             .expect("empty aux dataset").into().into(),
+    |                                          ^^^^
+    |
+help: try using a fully qualified path to specify the expected types
+    |
+102 ~         aux: <Arc<purrdf_core::RdfDataset> as Into<T>>::into(RdfDatasetBuilder::new()
+103 |             .freeze()
+104 ~             .expect("empty aux dataset")).into(),
+    |
+
+error: could not compile `purrdf-sparql-results` (test "results_streaming_is_bounded") due to 2 previous errors
+error[E0282]: type annotations needed
+  --> crates/sparql-results/tests/blank_label_egress.rs:48:68
+   |
+48 |         aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into().into(),
+   |                                                                    ^^^^
+   |
+help: try using a fully qualified path to specify the expected types
+   |
+48 -         aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into().into(),
+48 +         aux: <Arc<purrdf_core::RdfDataset> as Into<T>>::into(RdfDatasetBuilder::new().freeze().expect("empty aux")).into(),
+   |
+
+error[E0308]: mismatched types
+   --> crates/sparql-results/tests/blank_label_egress.rs:60:25
+    |
+ 60 |     SparqlResult::Graph(Arc::clone(&b.freeze().expect("dataset freezes")))
+    |     ------------------- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `DatasetHandle`, found `Arc<RdfDataset>`
+    |     |
+    |     arguments to this enum variant are incorrect
+    |
+    = note: expected struct `DatasetHandle`
+               found struct `Arc<purrdf_core::RdfDataset>`
+note: tuple variant defined here
+   --> crates/rdf-core/src/backend.rs:225:5
+    |
+225 |     Graph(DatasetHandle),
+    |     ^^^^^
+help: call `Into::into` on this expression to convert `Arc<purrdf_core::RdfDataset>` into `DatasetHandle`
+    |
+ 60 |     SparqlResult::Graph(Arc::clone(&b.freeze().expect("dataset freezes")).into())
+    |                                                                          +++++++
+
+error[E0282]: type annotations needed
+   --> crates/sparql-results/tests/blank_label_egress.rs:213:68
+    |
+213 |         aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into().into(),
+    |                                                                    ^^^^
+    |
+help: try using a fully qualified path to specify the expected types
+    |
+213 -         aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into().into(),
+213 +         aux: <Arc<purrdf_core::RdfDataset> as Into<T>>::into(RdfDatasetBuilder::new().freeze().expect("empty aux")).into(),
+    |
+
+error: could not compile `purrdf-sparql-results` (test "blank_label_egress") due to 3 previous errors

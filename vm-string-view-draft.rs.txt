@@ -1,0 +1,29 @@
+/// Constants are borrowed from the authored program; runtime operands preserve
+/// their own original term lease. Neither representation deep-clones on a pop.
+enum StrArg<'p> {
+    Borrowed(&'p helpers::StringArg),
+    Owned(helpers::OwnedStringArg),
+}
+
+impl StrArg<'_> {
+    fn parts(&self) -> (&str, Option<&str>, Option<purrdf_core::RdfTextDirection>) {
+        match self {
+            Self::Borrowed(value) => (&value.0, value.1.as_deref(), value.2),
+            Self::Owned(value) => value.parts(),
+        }
+    }
+}
+
+/// The flags an omitted REGEX argument reads as, without an allocation.
+static NO_FLAGS: helpers::StringArg = (String::new(), None, None);
+
+fn pop_str<'p, I: Copy>(
+    stack: &mut ValStack<I>, strs: &'p [helpers::StringArg],
+) -> Result<Option<StrArg<'p>>, EvalError> {
+    match stack.pop() {
+        Some(Val::Str(value)) => Ok(value.map(StrArg::Owned)),
+        Some(Val::StrConst(k)) => Ok(Some(StrArg::Borrowed(&strs[k as usize]))),
+        Some(_) => Err(mistyped("a string argument")),
+        None => Err(underflow()),
+    }
+}
