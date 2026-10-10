@@ -1,0 +1,92 @@
+{
+  "issue": 472,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "Turtle writer: deep blank-node chains recurse on the native stack",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "related": [
+    {
+      "number": 366,
+      "title": "Centralize overlapping helpers: one home per job, gates against regrowth, and the defects the survey found",
+      "state": "CLOSED"
+    },
+    {
+      "number": 181,
+      "title": "SHACL 1.2 Rules SPARQLRule: blank nodes not serialized correctly",
+      "state": "CLOSED"
+    },
+    {
+      "number": 287,
+      "title": "fix(sparql): non-ASCII whitespace is absorbed into names and silently changes query results",
+      "state": "CLOSED"
+    },
+    {
+      "number": 330,
+      "title": "Serializers build one whole-output allocation; offer an incremental io::Write sink",
+      "state": "CLOSED"
+    },
+    {
+      "number": 356,
+      "title": "SHACL Processor does not distinguish between built-in and custom functions",
+      "state": "CLOSED"
+    },
+    {
+      "number": 192,
+      "title": "SEP-0008 SHA-3 builtins",
+      "state": "CLOSED"
+    },
+    {
+      "number": 190,
+      "title": "CONSTRUCT GRAPH (quads) + CONSTRUCT/DESCRIBE conformance corpora",
+      "state": "CLOSED"
+    },
+    {
+      "number": 317,
+      "title": "perf(shapes): restore prepared SHACL products across processes without reparsing",
+      "state": "CLOSED"
+    },
+    {
+      "number": 110,
+      "title": "epic(rdf): graph & tabular projections (LPG, CSVW, OBO-Graphs, SKOS)",
+      "state": "CLOSED"
+    },
+    {
+      "number": 284,
+      "title": "purrdf-markdown: a structural Markdown-to-RDF 1.2 slicer under a caller-supplied vocabulary",
+      "state": "CLOSED"
+    },
+    {
+      "number": 14,
+      "title": "ShEx phase 2: imports, semantic actions (Test extension), query shape maps",
+      "state": "CLOSED"
+    },
+    {
+      "number": 9,
+      "title": "Full W3C conformance (SPARQL 1.1/1.2 \u00b7 RDFC-1.0 \u00b7 IRI \u00b7 syntax) + rdflib test-suite gate",
+      "state": "CLOSED"
+    },
+    {
+      "number": 358,
+      "title": "Expose async SERVICE resolution to JavaScript/Wasm hosts",
+      "state": "CLOSED"
+    },
+    {
+      "number": 48,
+      "title": "SARIF 2.1.0 reporting: source-traced, actionable diagnostics and validation reports (Task 12)",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 22,
+    "performance": 2,
+    "semantic-identity-loss": 1
+  },
+  "coverage": [
+    "issue #472 + 2 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['Turtle', 'writer:', 'blank-node']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}

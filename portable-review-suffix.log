@@ -1,0 +1,83 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/hash)
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/lex)
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling const-oid v0.10.2
+   Compiling quote v1.0.46
+   Compiling crossbeam-utils v0.8.21
+   Compiling cfg-if v1.0.4
+   Compiling digest v0.11.3
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/xsd)
+   Compiling rustversion v1.0.22
+   Compiling regex-syntax v0.8.11
+   Compiling sha2 v0.11.0
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf-events)
+   Compiling ctutils v0.4.2
+   Compiling crossbeam-epoch v0.9.18
+   Compiling syn v2.0.118
+   Compiling regex-automata v0.4.14
+   Compiling bumpalo v3.20.3
+   Compiling rayon-core v1.13.0
+   Compiling cpubits v0.1.1
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling wasm-bindgen v0.2.125
+   Compiling regex v1.12.4
+   Compiling crossbeam-deque v0.8.6
+   Compiling universal-hash v0.6.1
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/cdt)
+   Compiling cipher v0.5.2
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf-core)
+   Compiling polyval v0.7.3
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling hashbrown v0.17.1
+   Compiling once_cell v1.21.4
+   Compiling either v1.16.0
+   Compiling rayon v1.12.0
+   Compiling ctr v0.10.1
+   Compiling aes v0.9.3
+   Compiling ghash v0.6.0
+   Compiling aead v0.6.1
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling structured-zstd v0.0.49
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/sparql-algebra)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/stack)
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/gts)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/testkit)
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/jsonschema)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/alloc-probe)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 5m 32s
+     Running tests/turtle_chains.rs (/opt/.cargo/slots/244368b5b6cea901/2/build/wasm32-unknown-unknown/debug/build/purrdf-rdf/381c29da78c8e419/out/turtle_chains-381c29da78c8e419.wasm)
+
+running 7 tests
+test blank_chains_at_one_hundred_thousand ... packed/100000: 33094118 938071ed811f977dad0bb575dae44701c657a74fc12dea4af80518613201208b
+turtle/100000: 4878216 5ab357ea2c8db6c837529ec198b8b37359d7d4ad8f1ecfba721877b05dc6f630
+trig/100000: 5078161 f48e53d4b763e58c34c191f7d717e12abc9c5869468a8897c8e3d2f28f38085e
+ok
+test blank_chains_at_one_million ... packed/1000000: 330994118 8dcbafdf63c599dcc6bc781de652d70c6f7dae9cb35127dafb28a1b1a203f72a
+turtle/1000000: 50778216 fb165514a50a577964997db5bc344863d25928f8fe3ec232efa55ea3d7eb7384
+trig/1000000: 52778161 8ac01ee650c82b0054aa54fc03e75250346bf3728a7180e0198964bc5e373094
+ok
+test exact_guard_neighbors_and_permuted_interning ... ok
+test cycles_shared_and_quoted_blanks_preserve_statements ... ok
+test tied_guarded_branches_keep_order_under_permutation ... ok
+test a_long_collection_keeps_every_member ... ok
+test continuation_objects_saturate_at_the_same_indent_guard ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.69s
+

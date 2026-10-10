@@ -1,0 +1,23 @@
+[package]
+name = "turtle-baseline-probe"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[[bin]]
+name = "turtle-baseline-probe"
+path = "../capture-baseline.rs"
+
+[dependencies]
+purrdf-core = { path = "../../../crates/rdf-core" }
+purrdf-hash = { path = "../../../crates/hash" }
+purrdf-iri = { path = "../../../crates/iri" }
+purrdf-lex = { path = "../../../crates/lex" }
+purrdf-xsd = { path = "../../../crates/xsd" }
+
+[profile.dev]
+opt-level = 3
+debug = 0
+debug-assertions = true
+overflow-checks = true

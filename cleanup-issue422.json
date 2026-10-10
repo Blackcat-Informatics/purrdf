@@ -1,0 +1,48 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Problem\n`purrdf-xsd` bounds `xsd:integer` to `i128` (about 38 digits) and `xsd:decimal` to an `i128` mantissa with at most 18 fractional digits (`MAX_DECIMAL_SCALE = 18`). XSD 1.1 lets a processor impose limits like these: at least 16 decimal digits, and the limits must be documented. So the bounds themselves are allowed.\n\nWhat XSD and F&O do not allow is hitting a limit silently. Today:\n- The limits are not documented as the conformance contract.\n- When a value exceeds them, it is not consistently reported as a typed error. Some paths round, some refuse, some treat the literal as not a value.\n- Comparison, value equality, `ORDER BY` and SHACL range constraints (`sh:minInclusive` and related) over literals beyond the bounds are not exact, even though exact comparison needs no big-number arithmetic.\n\nData round-trips unchanged regardless, because literals keep their lexical form. The defects are in interpretation and computation.\n\n## Proposed solution (3.x, additive)\n1. **Document the limits.** State the integer and decimal bounds, and how they relate to XSD's minimums, in the crate docs and the book, as the conformance contract.\n2. **Never silent.** Every arithmetic result, cast or lexical parse that exceeds a bound becomes a typed operational or expression error, per F&O: FOAR0002 overflow, FOCA0001 or FOCA0006 for casts. The only rounding allowed is where F&O explicitly permits \"closest representable\" (for example float/double\u2192decimal, and the division precision rule). Each such case is documented and tested.\n3. **Exact comparison at any size.** Numeric value comparison, value equality (D-entailment, SPARQL `=`, `sameTerm` vs value equality), `ORDER BY`, MIN/MAX and SHACL range constraints are exact for `xsd:integer` and `xsd:decimal` literals of any length and scale. Normalize the sign, integer digits and fractional digits, then compare; there is no need to represent the value for arithmetic.\n4. **Correctly rounded conversions** to float and double from literals of any size, so a 60-digit decimal literal converts to the correctly rounded double.\n\n## Acceptance\n- For every operation that can overflow or lose precision, a failing-first test that the typed error is raised, beside a neighbouring in-range case that succeeds.\n- Property tests against an exact big-integer oracle for comparison, equality and ordering of literals far beyond `i128`, and of decimals with more than 18 fractional digits.\n- W3C SPARQL and XSD numeric tests: no ledger regressions.\n- `cargo semver-checks` against rust-v3.0.1 passes.\n- Native and wasm32 results are byte-identical.\n\nFull arbitrary-precision arithmetic (exact reasoned math in SPARQL) is the separate v4.0 issue.\n",
+  "closedAt": "2026-10-07T02:42:42Z",
+  "comments": [
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABZLF9-Q",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Added acceptance cases (maintainer decision; found by PR #420's completion audit, pre-existing on main):\n1. **Decimal AVG over-refusal:** `AVG` over `xsd:decimal` values returns unbound when the running SUM exceeds the i128 mantissa, even though the mean is representable. Examples: AVG of decimals {170141183460469231731687303715884105727, 1}, {MAX, MAX-1} and {MIN, MIN+1} all return unbound. The same magnitudes as `xsd:integer` answer through the BigInt fold. Fix: give the decimal SUM/AVG fold a wide accumulator, so it refuses only when the mean itself is unrepresentable.\n2. **Integer AVG out of value space:** `AVG` over `xsd:integer` can emit an `xsd:decimal` literal outside PurRDF's own decimal value space, for example `\"170141183460469231731687303715884105726.5\"^^xsd:decimal` for {MAX, MAX-1}. `(?a + 0)` and `xsd:decimal(STR(?a))` on that value are then unbound, and `SUM(?v)/COUNT(?v)` on the same group is unbound, so AVG and SUM/COUNT disagree. The source is the `bigint_avg_decimal_lexical` text bypass in `finish_avg`. Fix: produce one representable result (truncate at the finest scale that fits, as `numeric_div` now does) and make AVG agree with SUM/COUNT.\nEach fix needs failing-first tests beside valid neighbours, plus a property test against the exact oracle (`purrdf_testkit::exact`).",
+      "createdAt": "2026-10-04T20:58:51Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/422#issuecomment-5984321017",
+      "viewerDidAuthor": true
+    }
+  ],
+  "createdAt": "2026-10-04T14:14:33Z",
+  "labels": [
+    {
+      "id": "LA_kwDOTKq-Ms8AAAACpuNxAw",
+      "name": "enhancement",
+      "description": "New feature or request",
+      "color": "a2eeef"
+    }
+  ],
+  "milestone": {
+    "number": 4,
+    "title": "v4.0",
+    "description": "",
+    "dueOn": "2026-10-12T00:00:00Z"
+  },
+  "number": 422,
+  "state": "CLOSED",
+  "title": "Bounded numerics that never fail silently: documented xsd:integer/xsd:decimal limits, typed overflow errors, exact comparison at any size",
+  "updatedAt": "2026-10-07T02:42:42Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/422"
+}

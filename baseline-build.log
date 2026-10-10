@@ -1,0 +1,39 @@
+error: only metadata stub found for `rlib` dependency `purrdf_core` please provide path to the corresponding .rmeta file with full metadata
+ --> .stage/turtle-writer-deep-blank-node-chains/capture-baseline.rs:1:9
+  |
+1 | pub use purrdf_core::{DatasetView, FastMap, GraphMatch, RdfDataset, TermId, TermRef};
+  |         ^^^^^^^^^^^
+
+error: only metadata stub found for `rlib` dependency `purrdf_hash` please provide path to the corresponding .rmeta file with full metadata
+  --> .stage/turtle-writer-deep-blank-node-chains/baseline-turtle-render.rs:28:5
+   |
+28 | use purrdf_hash::fnv;
+   |     ^^^^^^^^^^^
+
+error: only metadata stub found for `rlib` dependency `purrdf_iri` please provide path to the corresponding .rmeta file with full metadata
+  --> .stage/turtle-writer-deep-blank-node-chains/baseline-turtle-render.rs:32:5
+   |
+32 | use purrdf_iri::{PrefixMap, contract_where};
+   |     ^^^^^^^^^^
+
+error: only metadata stub found for `rlib` dependency `purrdf_lex` please provide path to the corresponding .rmeta file with full metadata
+  --> .stage/turtle-writer-deep-blank-node-chains/baseline-turtle-render.rs:33:5
+   |
+33 | use purrdf_lex::literal_escape::{self, Carrier};
+   |     ^^^^^^^^^^
+
+error[E0433]: cannot find module or crate `purrdf_xsd` in this scope
+  --> .stage/turtle-writer-deep-blank-node-chains/baseline-turtle-render.rs:37:5
+   |
+37 | use purrdf_xsd::datatype::XSD_NS as XSD;
+   |     ^^^^^^^^^^ use of unresolved module or unlinked crate `purrdf_xsd`
+   |
+help: there is a crate or module with a similar name
+   |
+37 - use purrdf_xsd::datatype::XSD_NS as XSD;
+37 + use purrdf_iri::datatype::XSD_NS as XSD;
+   |
+
+error: aborting due to 5 previous errors
+
+For more information about this error, try `rustc --explain E0433`.

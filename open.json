@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 472,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains",
+  "branch": "paudley/472-turtle-writer-deep-blank-node-chains",
+  "slug": "turtle-writer-deep-blank-node-chains",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/.stage/turtle-writer-deep-blank-node-chains",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "a4bb1232d3b4bdf682eab126504dd942ce2b3d5b",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains",
+    "branch:paudley/472-turtle-writer-deep-blank-node-chains",
+    "stage:/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/.stage/turtle-writer-deep-blank-node-chains",
+    "issue:/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/.stage/turtle-writer-deep-blank-node-chains/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-10T12:27:47-0600"
+}

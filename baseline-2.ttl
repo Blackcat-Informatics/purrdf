@@ -1,0 +1,13 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix ex: <http://example.org/> .
+
+ex:reifier
+    rdf:reifies <<( ex:end ex:p ex:end )>> ;
+    ex:note ex:end .
+
+ex:root
+    ex:p [
+        ex:p [
+            ex:p ex:end ;
+        ] ;
+    ] .

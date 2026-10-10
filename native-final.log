@@ -1,0 +1,5 @@
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 1.67s
+     Running tests/turtle_chains.rs (/opt/.cargo/slots/244368b5b6cea901/0/build/debug/build/purrdf-rdf/8d68708733a317a3/out/turtle_chains-8d68708733a317a3)
+error: PURRDF_TEST_REQUIRE_EXACT requires --exact and nonempty filters to run
+error: test failed, to rerun pass `-p purrdf-rdf --test turtle_chains`

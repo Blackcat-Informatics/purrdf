@@ -1,0 +1,78 @@
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/hash)
+   Compiling hybrid-array v0.4.15
+   Compiling cpufeatures v0.3.0
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/lex)
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling digest v0.11.3
+   Compiling regex-syntax v0.8.11
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/xsd)
+   Compiling sha2 v0.11.0
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf-events)
+   Compiling regex-automata v0.4.14
+   Compiling libc v0.2.186
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/cdt)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/deflate)
+   Compiling regex v1.12.4
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf-core)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/alloc-probe)
+   Compiling crossbeam-utils v0.8.21
+   Compiling inout v0.2.2
+   Compiling cmov v0.5.4
+   Compiling ctutils v0.4.2
+   Compiling crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+   Compiling cpubits v0.1.1
+   Compiling crossbeam-deque v0.8.6
+   Compiling universal-hash v0.6.1
+   Compiling cipher v0.5.2
+   Compiling polyval v0.7.3
+   Compiling either v1.16.0
+   Compiling getrandom v0.3.4
+   Compiling rayon v1.12.0
+   Compiling ghash v0.6.0
+   Compiling aes v0.9.3
+   Compiling ctr v0.10.1
+   Compiling aead v0.6.1
+   Compiling fastrand v2.4.1
+   Compiling twox-hash v2.1.2
+   Compiling structured-zstd v0.0.49
+   Compiling aes-gcm v0.11.1
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/sparql-algebra)
+   Compiling purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/ed25519)
+   Compiling visual-hashing v1.0.0
+   Compiling purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/gts)
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling syn v2.0.118
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/jsonschema)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf)
+error[E0308]: mismatched types
+   --> crates/rdf/tests/turtle_chains.rs:24:34
+    |
+ 24 |         purrdf_hash::hex::encode(&purrdf_hash::blake3::hash(bytes))
+    |         ------------------------ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&[u8]`, found `&Hash`
+    |         |
+    |         arguments to this function are incorrect
+    |
+    = note: expected reference `&[u8]`
+               found reference `&purrdf_hash::blake3::Hash`
+note: function defined here
+   --> crates/hash/src/hex.rs:311:8
+    |
+311 | pub fn encode(bytes: &[u8]) -> String {
+    |        ^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-rdf` (test "turtle_chains") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

@@ -1,0 +1,24 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf-core)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/sparql-eval)
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf)
+    Finished `test` profile [optimized] target(s) in 5m 41s
+     Running tests/turtle_chains.rs (/opt/.cargo/slots/244368b5b6cea901/0/build/debug/build/purrdf-rdf/8d68708733a317a3/out/turtle_chains-8d68708733a317a3)
+
+running 7 tests
+test continuation_objects_saturate_at_the_same_indent_guard ... ok
+test cycles_shared_and_quoted_blanks_preserve_statements ... ok
+test tied_guarded_branches_keep_order_under_permutation ... ok
+test exact_guard_neighbors_and_permuted_interning ... ok
+packed/100000: 33094118 938071ed811f977dad0bb575dae44701c657a74fc12dea4af80518613201208b
+turtle/100000: 4878216 5ab357ea2c8db6c837529ec198b8b37359d7d4ad8f1ecfba721877b05dc6f630
+trig/100000: 5078161 f48e53d4b763e58c34c191f7d717e12abc9c5869468a8897c8e3d2f28f38085e
+test blank_chains_at_one_hundred_thousand ... ok
+test a_long_collection_keeps_every_member ... ok
+packed/1000000: 330994118 8dcbafdf63c599dcc6bc781de652d70c6f7dae9cb35127dafb28a1b1a203f72a
+turtle/1000000: 50778216 fb165514a50a577964997db5bc344863d25928f8fe3ec232efa55ea3d7eb7384
+trig/1000000: 52778161 8ac01ee650c82b0054aa54fc03e75250346bf3728a7180e0198964bc5e373094
+test blank_chains_at_one_million ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.04s
+

@@ -1,0 +1,12 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 1m 27s
+     Running unittests src/lib.rs (/opt/.cargo/slots/244368b5b6cea901/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test turtle_render::tests::object_key_equality_and_order_agree_for_singletons_and_competitors ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1243 filtered out; finished in 0.00s
+

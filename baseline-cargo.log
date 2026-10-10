@@ -1,0 +1,35 @@
+    Updating crates.io index
+     Locking 24 packages to highest Rust 1.100.0-nightly compatible versions
+   Compiling typenum v1.20.1
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/hash)
+   Compiling hybrid-array v0.4.15
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling const-oid v0.10.2
+   Compiling regex-syntax v0.8.11
+   Compiling regex-automata v0.4.18
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/lex)
+   Compiling digest v0.11.3
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf-core)
+   Compiling cfg-if v1.0.5
+   Compiling cpufeatures v0.3.1
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/rdf-events)
+   Compiling sha2 v0.11.0
+   Compiling regex v1.13.1
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/deflate)
+   Compiling hashbrown v0.17.1
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/crates/cdt)
+   Compiling turtle-baseline-probe v0.0.0 (/home/paudley/Active/purrdf/.worktrees/472-turtle-writer-deep-blank-node-chains/.stage/turtle-writer-deep-blank-node-chains/baseline-probe)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1m 25s
+     Running `/opt/.cargo/slots/167455dcca614b8e/0/target/debug/turtle-baseline-probe`
+depth=0 original=202 current=202 equal=true
+depth=1 original=225 current=225 equal=true
+depth=2 original=256 current=256 equal=true
+depth=31 original=4635 current=4635 equal=true
+depth=32 original=4906 current=4906 equal=true
+depth=33 original=5185 current=5185 equal=true
+depth=39 original=7027 current=7027 equal=true
+depth=40 original=7362 current=7358 equal=false
+depth=41 original=7705 current=7689 equal=false
