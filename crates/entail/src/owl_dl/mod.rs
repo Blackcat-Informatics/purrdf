@@ -3,14 +3,16 @@
 
 //! The native OWL-Direct (Description-Logic) reasoner core.
 //!
-//! Eight layers compose here: [`concept`] is the DL syntax and its structural
+//! The layers compose here: [`concept`] is the DL syntax and its structural
 //! interner; [`data`] is the CONCRETE domain — the data ranges and literal values a
 //! datatype map fixes rather than the ontology; [`parser`] reverse-maps a [`DatasetView`]
 //! into a [`Kb`] (TBox, RBox, ABox, plus anonymous class expressions); [`absorb`] decides,
 //! per general concept inclusion, whether it becomes a GUARDED CLAUSE or is internalized into
 //! every node's label; [`clause`] compiles the concept table and that decision into
 //! DL-clauses; [`graph`] is the completion graph and the two-domain
-//! semantics of a node; [`hyper`] is the `SHOIQ(D)` HYPERTABLEAU that decides consistency
+//! semantics of a node; [`roles`] admits theorem-backed regular SROIQ role
+//! inclusions and compiles their languages and finite universal-state obligations;
+//! [`hyper`] is the HYPERTABLEAU that decides consistency
 //! over those clauses; and [`saturate`] is the consequence-based
 //! calculus that derives the WHOLE named-class subsumption relation in one fixpoint,
 //! so classification is not a loop over the decision procedure. [`Kb`] ties them together and
@@ -64,6 +66,7 @@ pub(crate) mod parser;
 /// Independently replayable tableau PROOF TERMS, and the checker that re-derives them.
 pub(crate) mod proof;
 pub(crate) mod query;
+pub(crate) mod roles;
 pub(crate) mod saturate;
 pub(crate) mod support;
 /// The concept-tree tableau [`hyper`] replaced, kept as its differential reference.
@@ -156,6 +159,9 @@ pub(crate) struct Kb {
     pub(crate) inverses: BTreeMap<u32, BTreeSet<u32>>,
     /// Role hierarchy: super-property term id → its sub-property term ids.
     pub(crate) role_sub: BTreeMap<u32, BTreeSet<u32>>,
+    /// Regular role languages and their finite universal-state blocking closure.
+    /// Absent on the legacy chain-free path.
+    pub(crate) role_program: Option<roles::RoleProgram>,
     /// Concept assertions `a : C` — `(individual term id, concept id)`.
     pub(crate) abox_types: Vec<(u32, u32)>,
     /// Role assertions `a r b` — `(subject, property, object)` term ids.
@@ -303,6 +309,7 @@ impl Kb {
             generating: Vec::new(),
             inverses: BTreeMap::new(),
             role_sub: BTreeMap::new(),
+            role_program: None,
             abox_types: Vec::new(),
             abox_roles: Vec::new(),
             same_as: Vec::new(),
@@ -403,7 +410,7 @@ impl Kb {
             self.keys_applied = true;
             return Ok(());
         }
-        self.finalize();
+        self.finalize()?;
         let named: Vec<u32> = self.individuals.iter().copied().collect();
         let mut forced: Vec<(u32, u32)> = Vec::new();
         for (class, properties) in &self.keys {
@@ -486,7 +493,7 @@ impl Kb {
     /// Finalize the knowledge base for DECIDING: clausify the TBox, and disclose the
     /// completeness limit the finished terminology forces. Call once after all axioms and
     /// assertions are in place.
-    pub(crate) fn finalize(&mut self) {
+    pub(crate) fn finalize(&mut self) -> Result<(), EntailError> {
         // The concept-tree `NN`-rule (the `cfg(test)` differential reference) adds a GUESSED
         // `≤m S.C` to a nominal node's label, and the concept table is immutable during a search,
         // so those sub-cardinalities must be interned now, before encoding. The production
@@ -494,10 +501,7 @@ impl Kb {
         // and its concept table is left byte-for-byte as it was.
         #[cfg(test)]
         self.intern_sub_cardinalities();
-        match self.encode_until(|| Ok::<(), std::convert::Infallible>(())) {
-            Ok(()) => {}
-            Err(never) => match never {},
-        }
+        self.encode_until(|| Ok::<(), EntailError>(()))
     }
 
     /// Clausify the TBox, polling a caller-supplied fallible work boundary.
@@ -531,7 +535,7 @@ impl Kb {
     /// interns MORE concepts — a named class, a query concept, a refutation witness — that
     /// need negation-cache entries of their own, and [`ConceptTable::finalize_until`] is
     /// already cheap for a concept it has already covered (a single `is_none` check per id).
-    pub(crate) fn encode_until<E>(
+    pub(crate) fn encode_until<E: From<roles::RoleHierarchyError>>(
         &mut self,
         mut poll: impl FnMut() -> Result<(), E>,
     ) -> Result<(), E> {
@@ -555,6 +559,17 @@ impl Kb {
             }
         }
         self.table.finalize_until(&mut poll)?;
+        if let Some(program) = &mut self.role_program {
+            let mut resident = purrdf_lex::allocation::Resident;
+            let mut memory =
+                purrdf_lex::allocation::Memory::resume(&mut resident, program.admitted_bytes);
+            let result =
+                program.extend_obligations(&mut self.table, self.stop.as_deref(), &mut memory);
+            // Original producer metadata, including a retained replacement
+            // capacity on refusal. No recount of the constructed payload.
+            program.admitted_bytes = memory.admitted_bytes();
+            result.map_err(E::from)?;
+        }
         // LAST, over the finished table: the closure reads the absorbed clauses just derived,
         // and the negation pass above interned the residual concepts a partial absorption or a
         // `≤n` restriction's decided filler puts into a case split. Cheap even when the middle
@@ -1101,7 +1116,7 @@ mod tests {
         ));
         kb.abox_types.push((dudley, dudley_all));
 
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         (kb, ids)
     }
 
@@ -1179,7 +1194,7 @@ mod tests {
         // finalize again.
         let acls = kb.iri_id(&format!("{NS}A")).unwrap();
         kb.table.intern(Concept::Named(acls));
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         assert_eq!(
             kb.absorb_calls, 1,
             "Kb::tbox did not change, so the second finalize() must not re-absorb it"
@@ -1188,7 +1203,7 @@ mod tests {
         // Growing the TBox is the one thing that must force a re-absorption, proving the
         // skip is conditional on `Kb::tbox` rather than a blanket no-op after the first call.
         kb.push_gci(Concept::Named(acls), Concept::Top);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         assert_eq!(
             kb.absorb_calls, 2,
             "a grown Kb::tbox must be re-absorbed on the next finalize()"
@@ -1406,10 +1421,10 @@ mod boundary_tests {
     /// axiom's RDF list head, so the knowledge base held `chained(chained, _:cell0)` — a
     /// statement the ontology does not make, about an individual that does not exist.
     ///
-    /// This asserts all three halves of the repair: the boundary is RAISED, the list head
-    /// is NOT an individual, and no role assertion was invented.
+    /// The regular inclusion is compiled, its list head is not an individual,
+    /// and no role assertion is invented from the structural predicate.
     #[test]
-    fn a_property_chain_is_bounded_rather_than_ingested_as_a_role_assertion() {
+    fn a_regular_property_chain_is_compiled_without_inventing_a_role_assertion() {
         let mut b = RdfDatasetBuilder::new();
         let chained = b.intern_iri(EX_CHAINED);
         let chain = b.intern_iri(OWL_PROPERTYCHAINAXIOM);
@@ -1428,11 +1443,8 @@ mod boundary_tests {
         let ds = b.freeze().expect("freeze");
 
         let kb = Kb::from_dataset(&ds).expect("the chain axiom parses");
-        assert!(
-            kb.boundaries().contains(&Construct::PropertyChain),
-            "a chain axiom must raise its boundary: {:?}",
-            kb.boundaries()
-        );
+        assert!(!kb.boundaries().contains(&Construct::PropertyChain));
+        assert!(kb.role_program.is_some());
         assert!(
             kb.abox_roles.is_empty(),
             "a chain axiom must not become a role assertion: {:?}",
@@ -1444,23 +1456,14 @@ mod boundary_tests {
             kb.individuals
         );
 
-        // …and the boundary reaches the caller, with the completeness narrowed to match.
+        // A regular role inclusion no longer narrows the completeness contract.
         let (_, report) = materialize_dl_reported(&ds, &[] as &[QTriple]).expect("consistent");
         assert_eq!(
             report.completeness(),
-            Completeness::ExactWithinBoundaries,
-            "a run that met a boundary is not exact"
+            Completeness::Exact,
+            "a regular role inclusion is part of the exact calculus"
         );
-        let constructs: Vec<Construct> = report
-            .boundaries()
-            .iter()
-            .map(|boundary| boundary.construct())
-            .collect();
-        assert_eq!(constructs, vec![Construct::PropertyChain]);
-        assert!(
-            report.boundaries()[0].reason().contains("REGULARITY"),
-            "the reason must name the check that is missing"
-        );
+        assert_eq!(report.boundaries(), []);
     }
 
     /// OWL 2 DL forbids a number restriction over a NON-SIMPLE role, and the condition is

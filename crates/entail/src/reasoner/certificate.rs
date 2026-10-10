@@ -40,7 +40,7 @@
 //!   [`Verdict::Unknown`] and drives the certificate to
 //!   [`DlCompleteness::BudgetExhausted`] whichever cap it was.
 //!
-//! A search the caller's stop signal ended, rather than a cap, is not a fourth state: it
+//! A search the caller's stop signal ended, rather than a cap, adds no separate state: it
 //! reaches the same [`DlCompleteness::BudgetExhausted`] a capped search does, because
 //! `consistent` is exactly as meaningless under either — see
 //! the crate-private search decision record. [`DlCertificate::stopped`] is where the two stay
@@ -56,9 +56,10 @@
 //! reader of such a certificate cannot tell which half to believe.
 //!
 //! That state is not detected here. It is UNREPRESENTABLE: [`DlCertificate`] stores no
-//! completeness field at all, only the exhausted flag, the stopped flag and the boundary
-//! list the reasoning session actually measured. [`DlCertificate::completeness`] COMPUTES
-//! the verdict from those three on every call, so `Decided` beside a non-empty boundary
+//! completeness field at all, only the original storage/preparation refusals, the
+//! exhausted/stopped flags and the boundary list the session actually measured.
+//! [`DlCertificate::completeness`] computes the verdict from those fields on every
+//! call, so `Decided` beside a non-empty boundary
 //! list is a value no caller — inside this crate or outside it — has a constructor for.
 //! This crate's tests exercise the derivation over every reachable combination rather than
 //! gating a predicate that could only ever answer `false`.
@@ -167,6 +168,9 @@ pub enum DlCompleteness {
     /// are the same fact about the ANSWER: neither leaves a decided result, so both drive
     /// this one variant. [`DlCertificate::stopped`] is where the two are told apart.
     BudgetExhausted,
+    /// A native destination refused before allocation. The original cause is
+    /// retained by [`DlCertificate::storage_refusal`], separately from work caps.
+    StorageRefused,
 }
 
 impl DlCompleteness {
@@ -189,6 +193,7 @@ impl std::fmt::Display for DlCompleteness {
             Self::Decided => "decided",
             Self::DecidedWithinBoundaries => "decided-within-boundaries",
             Self::BudgetExhausted => "budget-exhausted",
+            Self::StorageRefused => "storage-refused",
         })
     }
 }
@@ -203,11 +208,12 @@ impl std::fmt::Display for DlCompleteness {
 pub struct DlCertificate {
     /// Source preparation refusal, kept distinct from tableau work exhaustion.
     schema_obstruction: Option<super::SchemaObstruction>,
+    storage_refusal: Option<purrdf_lex::allocation::StorageError>,
     /// Whether any decision this run made reached its round cap or its work cap.
     ///
-    /// Together with [`Self::boundaries`] and [`Self::stopped`], this is the minimal state
-    /// [`Self::completeness`] derives its verdict from — there is deliberately no
-    /// separately stored completeness for the three to disagree with.
+    /// Together with the original refusals, [`Self::boundaries`] and [`Self::stopped`],
+    /// this is the state [`Self::completeness`] derives its verdict from; there is
+    /// deliberately no separately stored completeness to disagree with those fields.
     exhausted: bool,
     /// Whether any decision this run made ended because the caller's stop signal fired,
     /// rather than because it reached a cap.
@@ -288,6 +294,7 @@ impl DlCertificate {
         Self {
             schema_obstruction: None,
             exhausted,
+            storage_refusal: None,
             stopped,
             boundaries,
             steps,
@@ -313,9 +320,10 @@ impl DlCertificate {
 
     /// How complete the answer is.
     ///
-    /// DERIVED on every call from [`Self::boundaries`] and the run's own exhausted flag,
-    /// never stored: an exhausted run is [`DlCompleteness::BudgetExhausted`] whatever else
-    /// happened; failing that, a non-empty boundary list is
+    /// Derived on every call from the original refusal, stop, preparation and boundary
+    /// fields, never stored: a physical refusal is [`DlCompleteness::StorageRefused`];
+    /// otherwise an exhausted, stopped or preparation-obstructed run is
+    /// [`DlCompleteness::BudgetExhausted`]. Failing those, a non-empty boundary list is
     /// [`DlCompleteness::DecidedWithinBoundaries`]; and only a run with neither is
     /// [`DlCompleteness::Decided`]. That is what makes a `Decided` verdict beside a
     /// non-empty boundary list a value nothing can construct — not the producer inside
@@ -324,7 +332,9 @@ impl DlCertificate {
     /// the two to disagree over.
     #[must_use]
     pub fn completeness(&self) -> DlCompleteness {
-        if self.exhausted || self.stopped || self.schema_obstruction.is_some() {
+        if self.storage_refusal.is_some() {
+            DlCompleteness::StorageRefused
+        } else if self.exhausted || self.stopped || self.schema_obstruction.is_some() {
             DlCompleteness::BudgetExhausted
         } else if self.boundaries.is_empty() {
             DlCompleteness::Decided
@@ -333,13 +343,29 @@ impl DlCertificate {
         }
     }
 
+    /// The first original native refusal, without a rendered replacement.
+    #[must_use]
+    pub const fn storage_refusal(&self) -> Option<purrdf_lex::allocation::StorageError> {
+        self.storage_refusal
+    }
+
+    /// Preserve a physical refusal read from a rendered certificate. This does
+    /// not make the stated counters measurements or permit proof publication.
+    #[must_use]
+    pub const fn with_stated_storage_refusal(
+        mut self,
+        error: purrdf_lex::allocation::StorageError,
+    ) -> Self {
+        self.storage_refusal = Some(error);
+        self
+    }
+
     /// Whether any decision this run made ended because the caller's stop signal fired
     /// rather than because it reached a cap.
     ///
-    /// `false` under every OTHER completeness, [`DlCompleteness::BudgetExhausted`]
-    /// included: that variant covers both a cap reached and a cancellation, and this is
-    /// the one bit that tells a reader which. See the field doc for why the two are folded
-    /// into one [`DlCompleteness`] variant rather than a fourth.
+    /// Budget exhaustion and cancellation share [`DlCompleteness::BudgetExhausted`],
+    /// and this bit distinguishes them. A physical refusal has its own completeness
+    /// and remains first priority even if another decision also observed cancellation.
     #[must_use]
     pub const fn stopped(&self) -> bool {
         self.stopped
@@ -610,7 +636,7 @@ impl Recording {
             self.truncated = true;
             (decide(kb, assumptions, budget), None)
         };
-        let answer = if decision.exhausted || decision.stopped {
+        let answer = if decision.undecided() {
             ProofAnswer::Undecided
         } else if decision.consistent {
             ProofAnswer::Consistent
@@ -646,6 +672,7 @@ impl Recording {
 /// [`DlCertificate`] — which is what makes a certificate that omits an exhausted run
 /// unconstructible rather than merely discouraged.
 pub(crate) struct Session<'a> {
+    storage_refusal: Option<purrdf_lex::allocation::StorageError>,
     /// The knowledge base every decision is made against.
     kb: &'a Kb,
     /// The per-decision budget: a round cap and a work cap.
@@ -677,6 +704,14 @@ pub(crate) struct Session<'a> {
 }
 
 impl<'a> Session<'a> {
+    /// Preserve the first original physical cause at Result-returning service
+    /// boundaries, before publishing any answer or proof payload.
+    pub(crate) fn check_storage(&self) -> Result<(), crate::EntailError> {
+        match self.storage_refusal {
+            Some(original) => Err(crate::RoleHierarchyError::Storage(original).into()),
+            None => Ok(()),
+        }
+    }
     /// Open a session over `kb` in which each decision may spend `budget`.
     ///
     /// `input` is the producer-independent identity of the ontology `kb` was reverse-mapped
@@ -695,6 +730,7 @@ impl<'a> Session<'a> {
         });
         Self {
             kb,
+            storage_refusal: None,
             budget,
             steps: 0,
             work: 0,
@@ -760,6 +796,9 @@ impl<'a> Session<'a> {
         self.decisions += 1;
         self.exhausted |= decision.exhausted;
         self.stopped |= decision.stopped;
+        if self.storage_refusal.is_none() {
+            self.storage_refusal = decision.storage_refusal;
+        }
         self.peak_nodes = self.peak_nodes.max(decision.peak_nodes);
         self.disjunctions = self.disjunctions.saturating_add(decision.disjunctions);
         self.peak_depth = self.peak_depth.max(decision.peak_depth);
@@ -774,11 +813,14 @@ impl<'a> Session<'a> {
     /// search is [`Verdict::Unknown`] — never `False`, which is the mistake this method
     /// exists to make impossible to write at a call site.
     pub(crate) fn refutes(&mut self, assumptions: &Assumptions<'_>) -> Verdict {
+        if self.storage_refusal.is_some() {
+            return Verdict::Unknown;
+        }
         let decision = self.decide(assumptions);
         // `stopped` is checked beside `exhausted` for the reason [`Decision`] documents: a
         // cancelled run is exactly as undecided as a capped one, and `decision.consistent`
         // is not a fact about the refutation under either.
-        if decision.exhausted || decision.stopped {
+        if decision.undecided() {
             Verdict::Unknown
         } else if decision.consistent {
             Verdict::False
@@ -802,6 +844,7 @@ impl<'a> Session<'a> {
             .collect();
         DlCertificate {
             schema_obstruction: self.kb.schema.stats.obstruction,
+            storage_refusal: self.storage_refusal,
             exhausted: self.exhausted,
             stopped: self.stopped,
             boundaries,
@@ -836,6 +879,11 @@ impl<'a> Session<'a> {
         certificate: &DlCertificate,
         bind: impl FnOnce() -> (Question, Vec<Claim>),
     ) -> Option<ServiceProof> {
+        // Physical refusal is not a fabricated work-limit proof or a completed
+        // model certificate. The certified Unknown retains its original cause.
+        if self.storage_refusal.is_some() {
+            return None;
+        }
         let recording = self.recording?;
         let (question, claims) = bind();
         // A receipt is attached exactly when a decision did not finish, which is the same

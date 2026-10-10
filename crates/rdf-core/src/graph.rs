@@ -16,6 +16,37 @@
 //! Mapping domain identities (slice IRIs, shape labels) onto that space, and
 //! back, is the caller's job — this module knows nothing about RDF.
 
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+
+/// A malformed dense graph or refusal of its original native workspace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GraphError {
+    /// An adjacency row points outside the declared dense node space.
+    InvalidEdge {
+        /// Source node.
+        from: usize,
+        /// Invalid destination node.
+        to: usize,
+    },
+    /// Native admission, layout or allocation refusal.
+    Storage(StorageError),
+}
+
+purrdf_lex::variant_from!(GraphError { Storage(StorageError) });
+
+impl core::fmt::Display for GraphError {
+    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidEdge { from, to } => {
+                write!(out, "graph edge {from} -> {to} leaves its dense node space")
+            }
+            Self::Storage(error) => error.fmt(out),
+        }
+    }
+}
+
+impl std::error::Error for GraphError {}
+
 /// Tarjan's strongly-connected components over an adjacency list, iteratively.
 ///
 /// `adjacency[n]` lists the nodes `n` has an edge to; the node space is
@@ -75,12 +106,33 @@
 /// assert_eq!(components, vec![vec![0, 1], vec![2]]);
 /// ```
 pub fn tarjan_scc(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
-    let mut components: Vec<Vec<usize>> = Vec::new();
-    // Members in the order they unwind off the Tarjan stack.
-    tarjan(adjacency, |component| {
-        components.push(component.iter().rev().copied().collect());
-    });
-    components
+    tarjan_scc_with_memory(adjacency, &mut Memory::new(&mut Resident))
+        .expect("resident strongly connected components over a valid dense graph")
+}
+
+/// The original Tarjan implementation under the caller's native admission.
+///
+/// The result owner retains its original grant through destruction of every
+/// returned component. Invalid edges are refused before any allocation.
+///
+/// # Errors
+/// Returns malformed dense references or native storage refusal.
+pub fn tarjan_scc_with_memory<S: Admission + ?Sized>(
+    adjacency: &[Vec<usize>],
+    memory: &mut Memory<'_, S>,
+) -> Result<Vec<Vec<usize>>, GraphError> {
+    validate_adjacency(adjacency)?;
+    // Own the result inside the scope: on failure it dies before its grant.
+    memory
+        .scope(|memory| {
+            let mut components = Vec::new();
+            tarjan(adjacency, memory, |component, memory| {
+                let members = memory.collect(component.iter().rev().copied())?;
+                memory.push(&mut components, members)
+            })?;
+            Ok(components)
+        })
+        .map_err(GraphError::from)
 }
 
 /// The strongly connected component of every node, as a dense component id:
@@ -117,29 +169,71 @@ pub fn scc_component_index<E>(adjacency: &[E]) -> Vec<usize>
 where
     for<'e> &'e E: IntoIterator<Item = &'e usize>,
 {
-    let mut index = vec![usize::MAX; adjacency.len()];
-    let mut next = 0;
-    tarjan(adjacency, |component| {
-        for &member in component {
-            index[member] = next;
+    scc_component_index_with_memory(adjacency, &mut Memory::new(&mut Resident))
+        .expect("resident component index over a valid dense graph")
+}
+
+/// The original component-index walk with fallible native storage.
+///
+/// # Errors
+/// Returns malformed dense references or native storage refusal. The caller
+/// retains the original result grant through destruction of the index array.
+pub fn scc_component_index_with_memory<E, S>(
+    adjacency: &[E],
+    memory: &mut Memory<'_, S>,
+) -> Result<Vec<usize>, GraphError>
+where
+    for<'e> &'e E: IntoIterator<Item = &'e usize>,
+    S: Admission + ?Sized,
+{
+    validate_adjacency(adjacency)?;
+    memory
+        .scope(|memory| {
+            let mut index = memory.collect(core::iter::repeat_n(usize::MAX, adjacency.len()))?;
+            let mut next = 0;
+            tarjan(adjacency, memory, |component, _memory| {
+                for &member in component {
+                    index[member] = next;
+                }
+                next += 1;
+                Ok(())
+            })?;
+            Ok(index)
+        })
+        .map_err(GraphError::from)
+}
+
+fn validate_adjacency<E>(adjacency: &[E]) -> Result<(), GraphError>
+where
+    for<'e> &'e E: IntoIterator<Item = &'e usize>,
+{
+    for (from, edges) in adjacency.iter().enumerate() {
+        for &to in edges {
+            if to >= adjacency.len() {
+                return Err(GraphError::InvalidEdge { from, to });
+            }
         }
-        next += 1;
-    });
-    index
+    }
+    Ok(())
 }
 
 /// Iterative Tarjan over any adjacency, handing each component to `emit` as
 /// the slice of the Tarjan stack it occupies (its root first), in the order
 /// the components finish.
-fn tarjan<'g, E>(adjacency: &'g [E], mut emit: impl FnMut(&[usize]))
+fn tarjan<'g, E, S>(
+    adjacency: &'g [E],
+    memory: &mut Memory<'_, S>,
+    mut emit: impl FnMut(&[usize], &mut Memory<'_, S>) -> Result<(), StorageError>,
+) -> Result<(), StorageError>
 where
     &'g E: IntoIterator<Item = &'g usize>,
+    S: Admission + ?Sized,
 {
     const UNSET: usize = usize::MAX;
     let n = adjacency.len();
-    let mut index = vec![UNSET; n];
-    let mut low = vec![0usize; n];
-    let mut on_stack = vec![false; n];
+    let mut index = memory.collect(core::iter::repeat_n(UNSET, n))?;
+    let mut low = memory.collect(core::iter::repeat_n(0usize, n))?;
+    let mut on_stack = memory.collect(core::iter::repeat_n(false, n))?;
     let mut stack: Vec<usize> = Vec::new();
     let mut next_index = 0usize;
     // Work frames: a node and the rest of its out-edges.
@@ -155,9 +249,9 @@ where
                 index[node] = next_index;
                 low[node] = next_index;
                 next_index += 1;
-                stack.push(node);
+                memory.push(&mut stack, node)?;
                 on_stack[node] = true;
-                work.push((node, adjacency[node].into_iter()));
+                memory.push(&mut work, (node, adjacency[node].into_iter()))?;
             }
             let Some((node, edges)) = work.last_mut() else {
                 break;
@@ -188,11 +282,17 @@ where
                 for &member in &stack[start..] {
                     on_stack[member] = false;
                 }
-                emit(&stack[start..]);
+                emit(&stack[start..], memory)?;
                 stack.truncate(start);
             }
         }
     }
+    memory.release_vec(work)?;
+    memory.release_vec(stack)?;
+    memory.release_vec(on_stack)?;
+    memory.release_vec(low)?;
+    memory.release_vec(index)?;
+    Ok(())
 }
 
 #[cfg(test)]

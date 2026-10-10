@@ -1215,6 +1215,7 @@ impl Budget {
 /// satisfaction test — hold the graph through `&self` and the state through `&State`, and
 /// threading `&mut` through them would turn a measurement into a refactor of every rule.
 pub(crate) struct Work {
+    storage_refusal: std::cell::Cell<Option<purrdf_lex::allocation::StorageError>>,
     /// Units charged so far, clamped at [`Self::cap`].
     spent: std::cell::Cell<u64>,
     /// The ceiling this meter stops at.
@@ -1225,6 +1226,7 @@ impl Work {
     /// A meter that stops at `cap`.
     const fn new(cap: u64) -> Self {
         Self {
+            storage_refusal: std::cell::Cell::new(None),
             spent: std::cell::Cell::new(0),
             cap,
         }
@@ -1253,7 +1255,7 @@ impl Work {
     /// the cap being reached and the search reporting it is bounded by one charge rather than
     /// by whatever the enumeration would have cost.
     pub(crate) fn exhausted(&self) -> bool {
-        self.spent.get() >= self.cap
+        self.spent.get() >= self.cap || self.storage_refusal.get().is_some()
     }
 }
 
@@ -1285,6 +1287,9 @@ impl Work {
 /// and on `wasm32` for exactly the reason `steps` is — nothing here reads a clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Decision {
+    /// Original physical refusal of a role-language read. Distinct from both
+    /// caller cancellation and a semantic work limit.
+    pub(crate) storage_refusal: Option<purrdf_lex::allocation::StorageError>,
     /// Whether a clash-free completion was found. Only meaningful when `!exhausted`.
     pub(crate) consistent: bool,
     /// Derivation rounds consumed, summed over every branch the search explored.
@@ -1335,6 +1340,12 @@ pub(crate) struct Decision {
     /// than its size: a search that is wide and shallow and one that is narrow and deep
     /// spend their rounds very differently, and only this number separates them.
     pub(crate) peak_depth: u64,
+}
+
+impl Decision {
+    pub(crate) fn undecided(&self) -> bool {
+        self.exhausted || self.stopped || self.storage_refusal.is_some()
+    }
 }
 
 /// The search reached one of its two caps. A private marker rather than an
@@ -1693,6 +1704,7 @@ impl Clique<'_> {
 /// through `&self` is what lets a scan charge itself without every rule in both calculi
 /// growing a `&mut`.
 pub(crate) struct Graph<'a> {
+    top_role: Option<u32>,
     /// The knowledge base (concept table, role hierarchy, inverses).
     kb: &'a Kb,
     /// The run's work meter — charged by every scan and enumeration below, and by the two
@@ -1774,6 +1786,9 @@ impl<'a> Graph<'a> {
             }
         }
         Self {
+            top_role: kb
+                .interner
+                .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY),
             kb,
             work: Work::new(work_cap),
             meta,
@@ -1792,10 +1807,19 @@ impl<'a> Graph<'a> {
         self.kb
     }
 
+    /// The fixed universal role is present even without an authored incident edge.
+    pub(crate) const fn has_universal_role(&self) -> bool {
+        self.top_role.is_some()
+    }
+
     /// The run's work meter — what both drivers charge their own scans and clones to, and
     /// read the run's work figure off.
     pub(crate) const fn work(&self) -> &Work {
         &self.work
+    }
+
+    pub(crate) fn storage_refusal(&self) -> Option<purrdf_lex::allocation::StorageError> {
+        self.work.storage_refusal.get()
     }
 
     /// A fresh label seeded with the internalized TBox.
@@ -1853,6 +1877,22 @@ impl<'a> Graph<'a> {
                 let ra = self.root(&mut st, a);
                 let rb = self.root(&mut st, b);
                 set_distinct(&mut st, ra, rb);
+            }
+        }
+        if self.top_role.is_some() {
+            // Every named nominal denotes an element, including a query's
+            // previously unmentioned object. The universal role reaches it
+            // even when no asserted edge or positive nominal needs that root.
+            for concept in 0..self.kb.table.len() {
+                if let Decomp::Nominal(members) | Decomp::NegNominal(members) = self
+                    .kb
+                    .table
+                    .decomp(u32::try_from(concept).expect("dense concept id"))
+                {
+                    for &individual in members {
+                        self.root(&mut st, individual);
+                    }
+                }
             }
         }
         for &(a, c) in extra {
@@ -2350,6 +2390,107 @@ impl<'a> Graph<'a> {
         }
     }
 
+    /// Evaluate the compiled language over the original completion edges and
+    /// equality representatives. Product identities are discovered before they
+    /// are queued; epsilon cycles and graph cycles therefore terminate without
+    /// imposing a path-length bound. All scratch dies before its original grant.
+    fn read_role_language(
+        &self,
+        st: &State,
+        x: usize,
+        machine: &super::roles::Automaton,
+        visit: &mut dyn FnMut(usize) -> bool,
+    ) -> Result<bool, purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::{Memory, Resident};
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        memory.scope(|memory| {
+            let mut pending = Vec::new();
+            let mut reached = Vec::new();
+            let mut emitted = Vec::new();
+            let initial = (find(st, x), machine.initial);
+            memory.push(&mut reached, initial)?;
+            memory.push(&mut pending, initial)?;
+            let mut answer = false;
+            while let Some((node, state)) = pending.pop() {
+                if self.work.exhausted() || self.kb.stopped() {
+                    break;
+                }
+                self.work.charge(1);
+                if state == machine.accepting
+                    && let Err(position) = emitted.binary_search(&node)
+                {
+                    memory.reserve_for_push(&mut emitted)?;
+                    emitted.insert(position, node);
+                    if visit(node) {
+                        answer = true;
+                        break;
+                    }
+                }
+                for transition in &machine.transitions {
+                    self.work.charge(1);
+                    if self.work.exhausted() || self.kb.stopped() {
+                        break;
+                    }
+                    if transition.from != state {
+                        continue;
+                    }
+                    let mut enqueue =
+                        |target: usize| -> Result<(), purrdf_lex::allocation::StorageError> {
+                            let next = (target, transition.to);
+                            if let Err(position) = reached.binary_search(&next) {
+                                memory.reserve_for_push(&mut reached)?;
+                                reached.insert(position, next);
+                                memory.push(&mut pending, next)?;
+                            }
+                            Ok(())
+                        };
+                    if let Some(letter) = transition.letter {
+                        let (Role::Named(property) | Role::Inv(property)) = letter;
+                        if self.top_role == Some(property) {
+                            if st.nodes[node].concrete {
+                                continue;
+                            }
+                            for target in 0..st.nodes.len() {
+                                if self.work.exhausted() || self.kb.stopped() {
+                                    break;
+                                }
+                                self.work.charge(1);
+                                if find(st, target) == target && !st.nodes[target].concrete {
+                                    enqueue(target)?;
+                                }
+                            }
+                            continue;
+                        }
+                        if !self.charge_step(st, node) {
+                            break;
+                        }
+                        for &edge in st.class_edges(node) {
+                            let (from, to, property) = st.edges[edge];
+                            let from = find(st, from);
+                            let to = find(st, to);
+                            match letter {
+                                Role::Named(wanted) if wanted == property && from == node => {
+                                    enqueue(to)?;
+                                }
+                                Role::Inv(wanted) if wanted == property && to == node => {
+                                    enqueue(from)?;
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else {
+                        enqueue(node)?;
+                    }
+                }
+            }
+            memory.release_vec(emitted)?;
+            memory.release_vec(reached)?;
+            memory.release_vec(pending)?;
+            Ok(answer)
+        })
+    }
+
     /// The one neighbourhood read: call `visit` on every `role`-neighbour of `x` in
     /// first-seen order, each once, and stop the moment it answers `true`. Returns whether it
     /// did.
@@ -2381,6 +2522,59 @@ impl<'a> Graph<'a> {
         // cannot see.
         if self.work.exhausted() {
             return false;
+        }
+        // The fixed universal role ranges over every current object-domain
+        // representative, including isolated roots and newly minted witnesses.
+        // It is not approximated by paths through authored top-role assertions.
+        let (Role::Named(property) | Role::Inv(property)) = role;
+        if self.top_role == Some(property)
+            || self.top_role.is_some_and(|top| {
+                let achievers = self.achievers(role);
+                realizes(&achievers, (top, true)) || realizes(&achievers, (top, false))
+            })
+            || self.kb.role_program.as_ref().is_some_and(|program| {
+                program.top.is_some_and(|top| {
+                    match (
+                        program.roles.binary_search(&top),
+                        program.roles.binary_search(&role),
+                    ) {
+                        (Ok(top), Ok(role)) => {
+                            program.machine_for[top] == program.machine_for[role]
+                        }
+                        _ => false,
+                    }
+                })
+            })
+        {
+            if st.nodes[find(st, x)].concrete {
+                return false;
+            }
+            for node in 0..st.nodes.len() {
+                if self.work.exhausted() || self.kb.stopped() {
+                    return false;
+                }
+                self.work.charge(1);
+                if find(st, node) == node && !st.nodes[node].concrete && visit(node) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if let Some(program) = &self.kb.role_program
+            && let Some(machine) = program.machine(role)
+        {
+            return match self.read_role_language(st, x, machine, visit) {
+                Ok(found) => found,
+                Err(original) => {
+                    if self.work.storage_refusal.get().is_none() {
+                        self.work.storage_refusal.set(Some(original));
+                    }
+                    // Stop at the original work poll without inventing work to
+                    // reach its cap. Decision retains the physical cause and
+                    // the exact work consumed before that failure.
+                    false
+                }
+            };
         }
         let ach = self.achievers(role);
         let x = find(st, x);

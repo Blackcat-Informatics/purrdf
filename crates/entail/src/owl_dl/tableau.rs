@@ -136,6 +136,7 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> 
     let st = t.g.init_state(assumptions);
     match t.solve(st) {
         Ok(consistent) => Decision {
+            storage_refusal: t.g.storage_refusal(),
             consistent,
             steps: t.steps,
             work: t.g.work().spent(),
@@ -146,10 +147,11 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) -> 
             peak_depth: t.peak_depth,
         },
         Err(Exhausted) => Decision {
+            storage_refusal: t.g.storage_refusal(),
             consistent: false,
             steps: t.steps,
             work: t.g.work().spent(),
-            exhausted: !t.stopped,
+            exhausted: !t.stopped && t.g.storage_refusal().is_none(),
             stopped: t.stopped,
             peak_nodes: t.peak_nodes,
             disjunctions: t.disjunctions,
@@ -1104,7 +1106,7 @@ mod tests {
         }
 
         fn finish(mut self) -> Kb {
-            self.kb.finalize();
+            self.kb.finalize().expect("fixture preparation");
             self.kb
         }
     }

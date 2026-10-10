@@ -435,10 +435,10 @@ pub(crate) const OWL2_CONSTRUCTS: &[OwlConstruct] = &[
         Shape::AxiomNode,
         "the pairwise role disjointness of the axiom's owl:members list",
     ),
-    bounded(
+    handled(
         OWL_PROPERTYCHAINAXIOM,
         Shape::ListPredicate,
-        Construct::PropertyChain,
+        "regular signed object-property languages, admitted by the source-order and mixed-dependency decision before completion reasoning",
     ),
     // --- OWL 2: individual axioms ------------------------------------------------------
     handled(
@@ -899,6 +899,9 @@ mod tests {
             + kb.asymmetric.len()
             + kb.disjoint_roles.len()
             + kb.keys.len()
+            + kb.role_program
+                .as_ref()
+                .map_or(0, |program| program.source.chains.len())
     }
 
     /// THE INVENTORY GATE: every OWL 2 construct either reaches the knowledge base or
@@ -1082,7 +1085,6 @@ mod tests {
         // OWL-Direct boundary must have at least one term that raises it, or it is a
         // boundary nothing can reach.
         for boundary in [
-            Construct::PropertyChain,
             Construct::DataRange,
             Construct::BuiltinRole,
             Construct::UnresolvedOntologyImport,
