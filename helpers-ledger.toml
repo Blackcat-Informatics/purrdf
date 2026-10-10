@@ -1826,11 +1826,12 @@ reason = "Both already call the one validate-then-return, `validated`; what rema
 members = [
     "purrdf_json::profile::Vocabulary::standard",
     "purrdf_markdown::profile::Vocabulary::standard",
+    "purrdf_mime::profile::Vocabulary::standard",
 ]
 kind = "shim"
 criterion = "b"
 anchor = "purrdf_markdown::profile::Vocabulary::standard"
-reason = "Each codec crate names its own vocabulary under its own designated namespace: two different vocabularies with no shared job, whose constructors share only the `Self::under(STANDARD_NAMESPACE)` spelling."
+reason = "Each codec crate names its own vocabulary under its own designated namespace: three different vocabularies with no shared job, whose constructors share only the `Self::under(STANDARD_NAMESPACE)` spelling."
 
 [[distinct]]
 members = [

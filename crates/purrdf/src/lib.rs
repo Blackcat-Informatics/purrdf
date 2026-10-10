@@ -340,6 +340,12 @@ pub mod markdown {
     pub use purrdf_markdown::*;
 }
 
+/// Original-byte MIME carrier with explicit profiles, ordered RDF occurrences
+/// and reconstruction through the shared kernel cover law.
+pub mod mime {
+    pub use purrdf_mime::*;
+}
+
 /// Ordered JSON as a verified RDF 1.2 byte cover with queryable occurrences.
 pub mod json {
     pub use purrdf_json::*;

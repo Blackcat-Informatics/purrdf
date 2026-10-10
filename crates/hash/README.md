@@ -566,6 +566,8 @@ source on every run.
 | `b"purrdf-hnsw/space-generation-v1"` | `SPACE_GENERATION_DOMAIN` | `crates/hnsw/src/relation.rs` |
 | `b"purrdf-json-document-v1"` | `DOCUMENT_DOMAIN` | `crates/json/src/profile.rs` |
 | `b"purrdf-json-profile-v1"` | `PROFILE_DOMAIN` | `crates/json/src/profile.rs` |
+| `b"purrdf-mime/document/v1"` | `DOCUMENT_DOMAIN` | `crates/mime/src/profile.rs` |
+| `b"purrdf-mime/profile/v1"` | `PROFILE_DOMAIN` | `crates/mime/src/profile.rs` |
 | `b"purrdf-owl-dl-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/entail/src/owl_dl/proof.rs` |
 | `b"purrdf-owl-dl-proof-v3"` | `PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
 | `b"purrdf-segmented-block-v1\0"` | `SEGMENTED_BLOCK_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
