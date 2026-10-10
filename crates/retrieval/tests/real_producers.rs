@@ -42,10 +42,11 @@ use purrdf_core::{
     TargetId, TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
 };
 use purrdf_retrieval::{
-    AdmissionEnvironment, Completeness, DecayRule, Fixed, FusionError, FusionProfile, Iri,
-    OrderFidelity, ProtocolError, RankFidelity, RankedStreamAdapter, ReadSchedule, RequestTerm,
-    RetrievalRequest, ScoreExactness, SearchError, SearchResult, Statistics, Term, TopK, compile,
-    contribution, execute, execute_within, fuse, plan, search,
+    AdmissionEnvironment, CandidateDepths, Completeness, DecayRule, Fixed, FusionError,
+    FusionProfile, Iri, OrderFidelity, ProtocolError, RankFidelity, RankedStreamAdapter,
+    ReadSchedule, RequestTerm, RetrievalRequest, ScoreExactness, SearchError, SearchResult,
+    Statistics, Term, TopK, compile, compile_candidates, contribution, execute, execute_within,
+    fuse, plan, plan_candidates, search, union,
 };
 use purrdf_sparql_eval::{
     BindingPattern, CandidateDomains, DuplicatePolicy, EmbeddingKnnRelation, EmbeddingSpace,
@@ -84,6 +85,94 @@ const K: u32 = 60;
 /// this file holds a handful of rows, all well below this, so nothing here is
 /// decided by it.
 const TOP_K: TopK = TopK::new(16);
+
+#[test]
+fn independent_candidate_depths_keep_real_text_and_knn_ranks_without_fusion() {
+    let registry = registry();
+    let depths = CandidateDepths::new([(iri(TEXT_STRATUM), 2), (iri(KNN_STRATUM), 3)]).unwrap();
+    let request = request();
+    let data = dataset();
+    let planned = plan_candidates(&request.terms, &depths, &registry, &NoStatistics).unwrap();
+    let compiled = compile_candidates(
+        &planned,
+        &AdmissionEnvironment {
+            registry: &registry,
+            statistics: &NoStatistics,
+            fusion_profile: None,
+        },
+    )
+    .unwrap();
+    for unit in compiled.units() {
+        assert_eq!(Some(unit.depth()), depths.get(&unit.stratum));
+        assert!(
+            unit.sparql()
+                .contains(&format!("LIMIT {}", unit.depth() + 1))
+        );
+    }
+    let mut previous = None;
+    for schedule in [ReadSchedule::Materialised, ReadSchedule::OnDemand] {
+        // The oracle is the actual separate native reads, not a fusion score or
+        // a hand-created candidate list. The same sealed indexes answer twice.
+        let independent = block_on(execute_within(&compiled, &registry, &data, schedule)).unwrap();
+        let mut expected: BTreeMap<Term, BTreeMap<Iri, Vec<u64>>> = BTreeMap::new();
+        let mut evidence = BTreeMap::new();
+        for mut read in independent.streams {
+            let mut count = 0;
+            while let Some((rank, subject, _)) = block_on(read.stream.next()).unwrap() {
+                count += 1;
+                expected
+                    .entry(subject)
+                    .or_default()
+                    .entry(read.stratum.clone())
+                    .or_default()
+                    .push(rank);
+            }
+            let receipt = block_on(read.stream.receipt()).unwrap();
+            let settled = block_on(read.stream.settle()).unwrap();
+            evidence.insert(
+                read.stratum,
+                (
+                    count,
+                    read.stream.rows_materialised(),
+                    receipt,
+                    read.attestation,
+                    settled,
+                ),
+            );
+        }
+        let executed = block_on(execute_within(&compiled, &registry, &data, schedule)).unwrap();
+        let candidates = block_on(union(executed, &depths)).unwrap();
+        assert!(candidates.completed_prefix);
+        let actual: BTreeMap<_, _> = candidates
+            .candidates
+            .iter()
+            .map(|(subject, entry)| (subject.clone(), entry.ranks.clone()))
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 3);
+        let both = &actual[&Term::new(format!("<{}>", ex("b")))];
+        assert_eq!(
+            both.len(),
+            2,
+            "the real lexical/vector overlap is one subject"
+        );
+        for stratum in [iri(TEXT_STRATUM), iri(KNN_STRATUM)] {
+            let actual = &candidates.producers[&stratum];
+            let (pulled, materialised, receipt, announced, settled) = &evidence[&stratum];
+            assert_eq!(actual.requested_depth, depths.get(&stratum).unwrap());
+            assert_eq!(actual.rows_pulled, *pulled);
+            assert_eq!(actual.rows_materialised, Some(*materialised));
+            assert_eq!(actual.status, Some(receipt.clone().into()));
+            assert_eq!(actual.announced.as_ref(), Some(announced));
+            assert_eq!(actual.settled.as_ref(), settled.as_ref());
+            assert!(actual.receipt_verified && actual.completed_prefix);
+        }
+        if let Some(previous) = &previous {
+            assert_eq!(previous, &candidates.canonical_bytes());
+        }
+        previous = Some(candidates.canonical_bytes());
+    }
+}
 
 fn ex(local: &str) -> String {
     format!("https://example.org/{local}")

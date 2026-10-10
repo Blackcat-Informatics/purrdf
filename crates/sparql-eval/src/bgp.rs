@@ -10,11 +10,10 @@
 //!    (a variable column) or a [`Pos::Bound`] (a ground constant resolved once via
 //!    `term_id_by_value`, the reverse index). If a ground constant is absent from
 //!    the dataset the whole BGP is empty — that constant cannot match.
-//! 2. **Order** the patterns cheapest-first with a cost-based join planner
-//!    ([`cost_based_order`]): probe each pattern's real cardinality through the
-//!    lazy permutation index and search join orders (exhaustive left-deep DP for a
-//!    small BGP, greedy beyond) to minimise the estimated total intermediate
-//!    cardinality, keeping the join connected.
+//! 2. **Order** the patterns cheapest-first with the native cost-based planner:
+//!    read host access work beside cardinality and search join orders (exhaustive
+//!    left-deep DP for a small BGP, greedy beyond) to minimize estimated work,
+//!    keeping the join connected. The default surrogate is unchanged cardinality.
 //! 3. **Index-nested-loop join** in that order; for each partial solution, substitute
 //!    its already-bound variables into the next pattern's positions and call the
 //!    indexed `quads_for_pattern`, then extend. Repeated variables (`?x p ?x`) and
@@ -707,7 +706,7 @@ fn structural_order<I: ViewTermId>(compiled: &[CompiledPattern<I>]) -> Vec<usize
 /// The BGP-size ceiling for exhaustive join-order search. At or below this many
 /// patterns the planner runs a left-deep Selinger DP over all `2^n` subsets
 /// (`n ≤ 8 ⇒ ≤ 256` states — trivial); above it, a greedy minimum-cardinality walk.
-/// Both minimise the same estimated-intermediate-cardinality cost.
+/// Both minimize estimated access work; default work is unchanged cardinality.
 const COST_DP_MAX_PATTERNS: usize = 8;
 
 /// Return the join order for `compiled`, served from the engine's dataset-aware cache
@@ -870,16 +869,14 @@ fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
     }
 }
 
-/// Order compiled BGP patterns cheapest-first with a cost-based join planner. Unlike a structural heuristic, this probes the dataset's
-/// real per-pattern cardinalities (the lazy permutation index, via
-/// [`RdfDataset::cardinality_estimate`]) and searches join orders to minimise the
-/// estimated total intermediate cardinality.
+/// Order compiled BGP patterns cheapest-first through the existing native planner.
+/// Host-measured access work ranks reads beside their output cardinalities; the
+/// default work surrogate preserves the original intermediate-cardinality objective.
 ///
-/// Cost model (left-deep, uniform-independence): a pattern's base size is its
-/// constants-only cardinality `|p|`; appending one that shares `j` already-bound
-/// positions multiplies the running estimate by `|p| / T^j`, where `T` is the
-/// distinct-term count (the standard `1/T` equality-join selectivity). An order's
-/// cost is the sum of the running estimates (the Selinger proxy); lower is better.
+/// Cardinality advances the prefix through the original uniform-independence
+/// model. The next read's host work scales by the same running cardinality and
+/// join-domain divisor; accumulated read work ranks the order. When host work is
+/// the default cardinality, the exact original Binary64 computations are reused.
 /// The connectivity rule is preserved — a pattern is only scheduled once it shares a
 /// bound variable with the prefix (no accidental Cartesian product) unless no
 /// connected pattern remains.
@@ -890,7 +887,7 @@ fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
 /// order is only slower, never wrong. It does not preserve the observable row
 /// *sequence* of a `SELECT` without `ORDER BY`, which is spec-permitted (SPARQL §11
 /// leaves solution order unspecified absent `ORDER BY`), so any golden over an
-/// un-`ORDER BY`-ed query must be order-tolerant. Determinism: cardinality probes are
+/// un-`ORDER BY`-ed query must be order-tolerant. Determinism: statistics callbacks are
 /// pure, the cost arithmetic is order-stable `f64`, each operation correctly rounded on
 /// every target (`purrdf_xsd::ieee`), compared via `total_cmp`, and
 /// ties break on the lexicographically smallest order (lowest original index first) —
@@ -916,13 +913,7 @@ fn cost_based_order_from<D: DatasetView>(
         return (0..n).collect();
     }
 
-    // Per-pattern base cardinality (constants only — slots/quoted-triples are free),
-    // the exact stat a structural heuristic ignores. `f64` so the multiplicative join
-    // selectivities never truncate to zero mid-estimate.
-    let base: Vec<f64> = compiled
-        .iter()
-        .map(|cp| base_cardinality(dataset, cp, scope) as f64)
-        .collect();
+    let base = cost_base(compiled, dataset, scope);
     // Distinct-term count as the equality-join domain size (`1/T` per join axis).
     let t = dataset.term_count().max(1) as f64;
 
@@ -936,10 +927,101 @@ fn cost_based_order_from<D: DatasetView>(
     }
 
     if n <= COST_DP_MAX_PATTERNS {
-        cost_order_dp_from(compiled, &base, t, n_cols, initial)
+        cost_order_dp_costs_from(compiled, &base, t, n_cols, initial)
     } else {
-        cost_order_greedy_from(compiled, &base, t, n_cols, initial)
+        cost_order_greedy_costs_from(compiled, &base, t, n_cols, initial)
     }
+}
+
+/// Output cardinality advances the prefix; host access work ranks the read.
+#[derive(Clone, Copy)]
+struct PatternCost {
+    rows: f64,
+    work: f64,
+    cardinality_only: bool,
+}
+
+fn cost_base<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+) -> Vec<PatternCost> {
+    compiled
+        .iter()
+        .map(|pattern| {
+            let s = constant_of(&pattern.s);
+            let p = constant_of(&pattern.p);
+            let o = constant_of(&pattern.o);
+            let mut rows = 0_u64;
+            let mut work = 0_u128;
+            let mut cardinality_only = true;
+            let mut add_graph = |g| {
+                let probe = purrdf_core::ProbePattern { s, p, o, g };
+                let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+                let cost = dataset.cost(probe, &plan);
+                cardinality_only &= cost.cardinality_fallback().is_some();
+                let cardinality = cost
+                    .cardinality_fallback()
+                    .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, g));
+                // Preserve the existing cardinality sum, including its profile's
+                // overflow behavior. Host work is a separate statistic: every
+                // physically representable graph slice on 32/64-bit targets has
+                // a sum of u64 work estimates below u128::MAX.
+                rows += cardinality;
+                work = work
+                    .checked_add(u128::from(cost.work()))
+                    .expect("physically representable graph work sum fits u128");
+            };
+            match scope {
+                GraphScope::One(g) => add_graph(*g),
+                GraphScope::Merge(graphs) => {
+                    for &graph in graphs {
+                        add_graph(GraphMatch::Named(graph));
+                    }
+                }
+            }
+            PatternCost {
+                rows: rows as f64,
+                cardinality_only,
+                work: if cardinality_only {
+                    rows as f64
+                } else {
+                    statistic_f64(work)
+                },
+            }
+        })
+        .collect()
+}
+
+fn statistic_f64(value: u128) -> f64 {
+    u64::try_from(value).map_or(value as f64, |value| value as f64)
+}
+
+fn step_cost(
+    ops: Binary64<'_>,
+    running: f64,
+    base: PatternCost,
+    joins: usize,
+    t: f64,
+) -> (f64, f64) {
+    let rows = step_size(ops, running, base.rows, joins, t);
+    let work = if base.cardinality_only {
+        rows
+    } else {
+        step_size(ops, running, base.work, joins, t)
+    };
+    (rows, work)
+}
+
+#[cfg(test)]
+fn cardinality_cost_base(base: &[f64]) -> Vec<PatternCost> {
+    base.iter()
+        .map(|&rows| PatternCost {
+            rows,
+            work: rows,
+            cardinality_only: true,
+        })
+        .collect()
 }
 
 /// The constants-only cardinality of a compiled pattern under `scope`: pass each
@@ -1012,9 +1094,9 @@ fn power(ops: Binary64<'_>, base: f64, exponent: usize) -> f64 {
     }
 }
 
-/// Greedy minimum-cardinality join order for a large BGP (`n > COST_DP_MAX_PATTERNS`):
-/// repeatedly schedule the connected pattern whose appended intermediate-size estimate
-/// is smallest, lowest-index on ties. Connectivity is enforced exactly as in the DP.
+/// Greedy minimum-work join order for a large BGP (`n > COST_DP_MAX_PATTERNS`):
+/// repeatedly schedule the connected pattern with the smallest next-read work,
+/// lowest-index on ties. Cardinality advances the prefix; connectivity is unchanged.
 #[cfg(test)]
 fn cost_order_greedy<I: ViewTermId>(
     compiled: &[CompiledPattern<I>],
@@ -1025,9 +1107,20 @@ fn cost_order_greedy<I: ViewTermId>(
     cost_order_greedy_from(compiled, base, t, n_cols, &[])
 }
 
+#[cfg(test)]
 fn cost_order_greedy_from<I: ViewTermId>(
     compiled: &[CompiledPattern<I>],
     base: &[f64],
+    t: f64,
+    n_cols: usize,
+    initial: &[bool],
+) -> Vec<usize> {
+    cost_order_greedy_costs_from(compiled, &cardinality_cost_base(base), t, n_cols, initial)
+}
+
+fn cost_order_greedy_costs_from<I: ViewTermId>(
+    compiled: &[CompiledPattern<I>],
+    base: &[PatternCost],
     t: f64,
     n_cols: usize,
     initial: &[bool],
@@ -1049,6 +1142,7 @@ fn cost_order_greedy_from<I: ViewTermId>(
             (0..n).any(|i| !scheduled[i] && pattern_connected(&compiled[i], &bound));
         let mut best: Option<usize> = None;
         let mut best_size = f64::INFINITY;
+        let mut best_work = f64::INFINITY;
         for i in 0..n {
             if scheduled[i] {
                 continue;
@@ -1057,11 +1151,12 @@ fn cost_order_greedy_from<I: ViewTermId>(
                 continue;
             }
             let joins = join_positions(&compiled[i], &bound);
-            let size = step_size(ops, running, base[i], joins, t);
+            let (size, work) = step_cost(ops, running, base[i], joins, t);
             // Strict `<` over an index-order scan ⇒ lowest original index wins ties.
-            if best.is_none() || size < best_size {
+            if best.is_none() || work < best_work {
                 best = Some(i);
                 best_size = size;
+                best_work = work;
             }
         }
         let chosen = best.expect("an unscheduled pattern always remains");
@@ -1073,8 +1168,8 @@ fn cost_order_greedy_from<I: ViewTermId>(
     order
 }
 
-/// One left-deep plan in the subset DP: its accumulated cost (sum of intermediate
-/// sizes), the running size of its last stage, and the pattern order encoded as a
+/// One left-deep plan in the subset DP: its accumulated access work, the running
+/// cardinality of its last stage, and the pattern order encoded as a
 /// nibble-packed `u64`.
 ///
 /// The order is stored as a sequence of 4-bit nibbles packed into `order_bits`, with
@@ -1130,9 +1225,20 @@ fn cost_order_dp<I: ViewTermId>(
     cost_order_dp_from(compiled, base, t, n_cols, &[])
 }
 
+#[cfg(test)]
 fn cost_order_dp_from<I: ViewTermId>(
     compiled: &[CompiledPattern<I>],
     base: &[f64],
+    t: f64,
+    n_cols: usize,
+    initial: &[bool],
+) -> Vec<usize> {
+    cost_order_dp_costs_from(compiled, &cardinality_cost_base(base), t, n_cols, initial)
+}
+
+fn cost_order_dp_costs_from<I: ViewTermId>(
+    compiled: &[CompiledPattern<I>],
+    base: &[PatternCost],
     t: f64,
     n_cols: usize,
     initial: &[bool],
@@ -1190,8 +1296,8 @@ fn cost_order_dp_from<I: ViewTermId>(
                 continue;
             }
             let joins = join_positions(&compiled[i], &bound);
-            let size = step_size(ops, plan.size, base[i], joins, t);
-            let cost = ops.add(plan.cost, size);
+            let (size, work) = step_cost(ops, plan.size, base[i], joins, t);
+            let cost = ops.add(plan.cost, work);
             // Append pattern index `i` as a new LSB nibble (1-based so index 0 ≠ empty).
             let order_bits = (plan.order_bits << 4) | (i as u64 + 1);
             let len = plan.len + 1;
@@ -2651,8 +2757,8 @@ mod tests {
 
     /// Run a BGP over `ds` and materialize each row's bindings for the given
     /// variables as `TermValue`s, sorted for order-insensitive comparison.
-    fn run(
-        ds: &RdfDataset,
+    fn run<D: DatasetView<Id = TermId, ReadError = core::convert::Infallible> + Sync>(
+        ds: &D,
         patterns: &[TriplePattern],
         vars: &[&str],
     ) -> Vec<Vec<Option<TermValue>>> {
@@ -3471,6 +3577,342 @@ mod tests {
                 }
             }
         }
+    }
+    /// Caller-provided statistics in this fixture's comparable work unit. They
+    /// describe a resident hot access path and a cold rare access path; no
+    /// library conversion from pages or residency participates in the ranking.
+    struct HostCost<'a> {
+        inner: &'a RdfDataset,
+        predicates: [TermId; 3],
+        measured: Option<[purrdf_core::AccessCost; 3]>,
+        cardinalities: Option<[u64; 3]>,
+        first_probe: std::sync::Mutex<Option<TermId>>,
+    }
+
+    impl<'a> HostCost<'a> {
+        fn over(graph: &'a Skewed, measured: bool) -> Self {
+            use purrdf_core::{AccessCost, ReadResidency};
+            Self {
+                inner: &graph.ds,
+                predicates: [graph.hot, graph.mid, graph.rare],
+                measured: measured.then_some([
+                    AccessCost::new(1, 20, 1, ReadResidency::Resident),
+                    AccessCost::new(100, 5, 4, ReadResidency::Mixed),
+                    AccessCost::new(1_000, 1, 64, ReadResidency::NonResident),
+                ]),
+                cardinalities: None,
+                first_probe: std::sync::Mutex::new(None),
+            }
+        }
+
+        fn take_first_probe(&self) -> Option<TermId> {
+            self.first_probe
+                .lock()
+                .expect("probe observation lock")
+                .take()
+        }
+    }
+
+    impl DatasetView for HostCost<'_> {
+        type Id = TermId;
+        type ReadError = std::convert::Infallible;
+        type TermGuard<'a>
+            = TermRef<'a, Self::Id>
+        where
+            Self: 'a;
+        type ProbePlan = purrdf_core::QuadProbePlan;
+
+        fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+            self.inner.quads()
+        }
+
+        fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+            Ok(self.inner.resolve(id))
+        }
+
+        fn term_id_by_value(&self, value: &TermValue) -> Result<Option<TermId>, Self::ReadError> {
+            Ok(self.inner.term_id_by_value(value))
+        }
+
+        fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+            self.inner.capabilities()
+        }
+
+        fn probe_plan(&self, s: bool, p: bool, o: bool, g: GraphMatch) -> Self::ProbePlan {
+            RdfDataset::probe_plan(s, p, o, g)
+        }
+
+        fn quads_for_pattern_with_plan(
+            &self,
+            plan: &Self::ProbePlan,
+            s: Option<TermId>,
+            p: Option<TermId>,
+            o: Option<TermId>,
+            g: GraphMatch,
+        ) -> impl Iterator<Item = QuadIds> + '_ {
+            let mut first = self.first_probe.lock().expect("probe observation lock");
+            if first.is_none() {
+                *first = p;
+            }
+            drop(first);
+            self.inner.quads_for_pattern_with_plan(plan, s, p, o, g)
+        }
+
+        fn cardinality_estimate(
+            &self,
+            s: Option<TermId>,
+            p: Option<TermId>,
+            o: Option<TermId>,
+            g: GraphMatch,
+        ) -> u64 {
+            if let Some(cardinalities) = self.cardinalities
+                && let Some(index) = self.predicates.iter().position(|id| Some(*id) == p)
+            {
+                return cardinalities[index];
+            }
+            u64::try_from(self.inner.cardinality_estimate(s, p, o, g))
+                .expect("fixture cardinality fits")
+        }
+
+        fn cost(
+            &self,
+            pattern: purrdf_core::ProbePattern,
+            _plan: &Self::ProbePlan,
+        ) -> purrdf_core::AccessCost {
+            self.measured
+                .and_then(|costs| {
+                    self.predicates
+                        .iter()
+                        .position(|id| Some(*id) == pattern.p)
+                        .map(|index| costs[index])
+                })
+                .unwrap_or_else(|| {
+                    purrdf_core::AccessCost::from_cardinality(
+                        self.cardinality_estimate(pattern.s, pattern.p, pattern.o, pattern.g),
+                    )
+                })
+        }
+
+        fn term_count(&self) -> u64 {
+            u64::try_from(self.inner.term_count()).expect("fixture term count fits")
+        }
+
+        fn stats_fingerprint(&self) -> u64 {
+            purrdf_hash::fixed::hash_one(&(self.inner.stats_fingerprint(), self.measured))
+        }
+    }
+
+    fn cost_spokes(graph: &Skewed, count: usize) -> Vec<CompiledPattern> {
+        let predicates = [graph.hot, graph.mid, graph.rare];
+        (0..count)
+            .map(|index| {
+                cp(
+                    Pos::Slot(0),
+                    Pos::Bound(predicates[index % 3]),
+                    Pos::Slot(index + 1),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn measured_host_work_inverts_native_subset_and_greedy_orders() {
+        let graph = skewed_graph();
+        let host = Arc::new(HostCost::over(&graph, true));
+        let scope = GraphScope::One(GraphMatch::Default);
+        let small = cost_spokes(&graph, 3);
+        assert_eq!(cost_based_order(&small, &*graph.ds, &scope), [2, 1, 0]);
+        assert_eq!(cost_based_order(&small, &host, &scope), [0, 1, 2]);
+
+        let large = cost_spokes(&graph, COST_DP_MAX_PATTERNS + 1);
+        assert_eq!(cost_based_order(&large, &*graph.ds, &scope)[0], 2);
+        let selected = cost_based_order(&large, &host, &scope);
+        assert_eq!(selected[0], 0);
+        for _ in 0..8 {
+            assert_eq!(cost_based_order(&large, &host, &scope), selected);
+        }
+        let mut permutation = selected;
+        permutation.sort_unstable();
+        assert_eq!(permutation, (0..large.len()).collect::<Vec<_>>());
+
+        let probe = purrdf_core::ProbePattern {
+            s: None,
+            p: Some(graph.hot),
+            o: None,
+            g: GraphMatch::Default,
+        };
+        let physical = host.cost(probe, &host.probe_plan(false, true, false, probe.g));
+        assert_eq!(physical.work(), 1);
+        assert_eq!(physical.rows(), 20);
+        assert_eq!(physical.pages(), Some(1));
+        assert_eq!(
+            physical.residency(),
+            Some(purrdf_core::ReadResidency::Resident)
+        );
+    }
+
+    #[test]
+    fn cardinality_default_preserves_merge_graph_statistic_boundaries() {
+        let graph = skewed_graph();
+        let compiled = cost_spokes(&graph, 3);
+        let scope = GraphScope::Merge(vec![graph.hub, graph.hot]);
+        for statistic in [
+            0_u64,
+            (1 << 52) - 1,
+            (1 << 52) + 1,
+            u64::MAX / 2,
+            u64::MAX / 2 + 1,
+            u64::MAX,
+        ] {
+            let mut host = HostCost::over(&graph, false);
+            host.cardinalities = Some([statistic; 3]);
+            let original = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                compiled
+                    .iter()
+                    .map(|pattern| base_cardinality(&host, pattern, &scope) as f64)
+                    .collect::<Vec<_>>()
+            }));
+            let actual = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cost_base(&compiled, &host, &scope)
+            }));
+            match (original, actual) {
+                (Ok(original), Ok(actual)) => {
+                    for (original, actual) in original.iter().zip(actual) {
+                        assert_eq!(actual.rows.to_bits(), original.to_bits());
+                        assert_eq!(actual.work.to_bits(), original.to_bits());
+                    }
+                }
+                (Err(_), Err(_)) => {}
+                _ => panic!("default host cost changed merge-graph overflow behavior"),
+            }
+        }
+    }
+
+    #[test]
+    fn cardinality_default_preserves_existing_plans_and_prefix_ties() {
+        let graph = skewed_graph();
+        for count in [0, 1, 3, COST_DP_MAX_PATTERNS, COST_DP_MAX_PATTERNS + 1] {
+            let compiled = cost_spokes(&graph, count);
+            let columns = if count == 0 { 0 } else { count + 1 };
+            for scope in [
+                GraphScope::One(GraphMatch::Any),
+                GraphScope::One(GraphMatch::Default),
+                GraphScope::One(GraphMatch::Named(graph.hub)),
+            ] {
+                let base: Vec<f64> = compiled
+                    .iter()
+                    .map(|pattern| base_cardinality(&*graph.ds, pattern, &scope) as f64)
+                    .collect();
+                let native = cost_base(&compiled, &*graph.ds, &scope);
+                for (native, original) in native.iter().zip(&base) {
+                    assert_eq!(native.rows.to_bits(), original.to_bits());
+                    assert_eq!(native.work.to_bits(), original.to_bits());
+                }
+                for initial in [vec![], vec![true; columns]] {
+                    let expected = if count <= COST_DP_MAX_PATTERNS {
+                        cost_order_dp_from(
+                            &compiled,
+                            &base,
+                            graph.ds.term_count().max(1) as f64,
+                            columns,
+                            &initial,
+                        )
+                    } else {
+                        cost_order_greedy_from(
+                            &compiled,
+                            &base,
+                            graph.ds.term_count().max(1) as f64,
+                            columns,
+                            &initial,
+                        )
+                    };
+                    assert_eq!(
+                        cost_based_order_from(&compiled, &*graph.ds, &scope, &initial),
+                        expected,
+                    );
+                }
+            }
+        }
+        for statistic in [0_u64, 1, (1 << 53) - 1, 1 << 53, (1 << 53) + 1, u64::MAX] {
+            assert_eq!(
+                statistic_f64(u128::from(statistic)).to_bits(),
+                (statistic as f64).to_bits()
+            );
+        }
+        let fallback = purrdf_core::AccessCost::from_cardinality(20);
+        assert_eq!(fallback.work(), 20);
+        assert_eq!(fallback.rows(), 20);
+        assert_eq!(fallback.pages(), None);
+        assert_eq!(fallback.residency(), None);
+        assert_eq!(fallback.cardinality_fallback(), Some(20));
+    }
+
+    #[test]
+    fn actual_bgp_reads_host_cheaper_path_and_preserves_solution_bag() {
+        let graph = skewed_graph();
+        let ordinary = HostCost::over(&graph, false);
+        let host = HostCost::over(&graph, true);
+        let patterns = [graph.hot, graph.mid, graph.rare]
+            .into_iter()
+            .zip(["hot", "mid", "rare"])
+            .map(|(id, variable)| {
+                let Ok(TermRef::Iri(iri)) = graph.ds.resolve(id) else {
+                    panic!("fixture predicate is an IRI");
+                };
+                triple(var_pos("hub"), pred(iri), var_pos(variable))
+            })
+            .collect::<Vec<_>>();
+        let columns = ["hub", "hot", "mid", "rare"];
+        let expected = run(&ordinary, &patterns, &columns);
+        assert_eq!(ordinary.take_first_probe(), Some(graph.rare));
+        let actual = run(&host, &patterns, &columns);
+        assert_eq!(host.take_first_probe(), Some(graph.hot));
+        assert_eq!(expected.len(), 100);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn work_ranking_does_not_become_cardinality_or_physical_admission() {
+        let graph = skewed_graph();
+        let host = HostCost::over(&graph, true);
+        let compiled = cost_spokes(&graph, 3);
+        let scope = GraphScope::One(GraphMatch::Default);
+        let order = [0, 1, 2];
+        let expected = replay_cost_estimate_from(&compiled, &*graph.ds, &scope, &order, &[], 7);
+        let actual = replay_cost_estimate_from(&compiled, &host, &scope, &order, &[], 7);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn host_statistic_snapshot_keeps_order_cache_deterministic_and_current() {
+        let graph = skewed_graph();
+        let cheap_hot = HostCost::over(&graph, true);
+        let mut cheap_rare = HostCost::over(&graph, true);
+        cheap_rare
+            .measured
+            .as_mut()
+            .expect("measured statistics")
+            .swap(0, 2);
+        assert_ne!(
+            cheap_hot.stats_fingerprint(),
+            cheap_rare.stats_fingerprint()
+        );
+        let compiled = cost_spokes(&graph, 3);
+        let scope = GraphScope::One(GraphMatch::Default);
+        let cache = crate::eval::BgpOrderCache::default();
+        for (view, expected) in [(&cheap_hot, [0, 1, 2]), (&cheap_rare, [2, 1, 0])] {
+            for _ in 0..2 {
+                let order = plan_or_cached_order(
+                    &compiled,
+                    view,
+                    &scope,
+                    &[],
+                    Some(crate::plan_cache::OrderCacheRef::Legacy(&cache)),
+                );
+                assert_eq!(&*order, &expected);
+            }
+        }
+        assert_eq!(cache.read().expect("order cache lock").len(), 2);
     }
 }
 

@@ -2237,6 +2237,7 @@ reason = "The AST snapshot test labels each golden entry by the grammar it was r
 [[distinct]]
 members = [
     "purrdf_retrieval::bench_crate::on_demand_read::Producer::arity",
+    "purrdf_retrieval::test_crate::candidate_union::FaultingProducer::arity",
     "purrdf_retrieval::test_crate::on_demand_receipt::IndexedProducer::arity",
     "purrdf_retrieval::test_crate::seed_whitespace::Silent::arity",
     "purrdf_shapes::test_crate::blank_focus_relation_prebinding::SelfRelation::arity",
@@ -2262,7 +2263,7 @@ members = [
 kind = "shim"
 criterion = "a"
 anchor = "purrdf_sparql_eval::PropertyFunction::arity"
-reason = "PropertyFunction::arity is a required method with no default: every relation type declares its own positional arity. These are twenty-two different relation types (test and bench mocks, the conformance harness's bound-subject lookup, the one-row fixture) that each happen to take one subject and one object argument."
+reason = "PropertyFunction::arity is a required method with no default: every relation type declares its own positional arity. These are twenty-three different relation types (test and bench mocks, including the candidate union's faulting producer, the conformance harness's bound-subject lookup, the one-row fixture) that each happen to take one subject and one object argument."
 
 [[distinct]]
 members = [
