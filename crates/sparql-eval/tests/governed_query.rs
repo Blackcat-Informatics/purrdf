@@ -227,7 +227,8 @@ fn subjects(result: &SparqlResult) -> Vec<String> {
             out.sort();
             out
         }
-        other => panic!("expected SELECT solutions, got: {other:?}"),
+        SparqlResult::Boolean(_) => panic!("expected SELECT solutions, got a boolean result"),
+        SparqlResult::Graph(_) => panic!("expected SELECT solutions, got a graph result"),
     }
 }
 
