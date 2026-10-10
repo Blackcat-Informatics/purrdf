@@ -18,7 +18,7 @@ use super::proof::{MAX_RECORDED_STEPS, SchemaClashEvidence};
 use core::convert::Infallible;
 use purrdf_lex::walk::VecReserve;
 
-/// Disabled recording or the latest admitted predecessor on this branch.
+/// Disabled recording or the latest admitted predecessor in this tableau arm.
 #[derive(Clone, Copy)]
 pub(crate) enum Cursor {
     /// No prepared support was requested, or its first physical refusal occurred.
