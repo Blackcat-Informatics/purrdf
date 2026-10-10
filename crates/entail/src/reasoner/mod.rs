@@ -385,7 +385,7 @@ impl Reasoner {
             .map(|&c| (c, kb.table.intern(class_concept(&vocab, c))))
             .collect();
         let individuals: Vec<u32> = kb.individuals.iter().copied().collect();
-        kb.finalize();
+        kb.finalize()?;
         let budget = Budget::for_kb(&kb);
         let boundaries = kb.boundaries().clone();
         let fresh = FreshSymbols::for_interner(&kb.interner);
@@ -413,15 +413,15 @@ impl Reasoner {
     /// `RefutationEncoding` entry: the consumer re-derives the question's encoding from the
     /// question they hold, rather than from anything the producer shipped. It runs no search
     /// and opens no session.
-    pub fn prepare(&mut self, question: &Question) {
+    pub fn prepare(&mut self, question: &Question) -> Result<(), EntailError> {
         match question {
             Question::ClassSatisfiability { class } | Question::InstanceRetrieval { class } => {
-                self.concept_of(class);
+                self.concept_of(class)?;
             }
             Question::AxiomEntailment { axiom } => {
                 // The plan itself is discarded: what is wanted is the INTERNING it performed,
                 // which is exactly what `Reasoner::entails` does before it reasons.
-                let _plan = self.plan(axiom);
+                let _plan = self.plan(axiom)?;
             }
             // Consistency, classification and realization range over the ontology's own
             // vocabulary, which `Reasoner::new` already interned; module extraction opens no
@@ -431,6 +431,7 @@ impl Reasoner {
             | Question::Realization { .. }
             | Question::ModuleExtraction { .. } => {}
         }
+        Ok(())
     }
 
     /// A CHECKING CONTEXT for the proof terms this reasoner's services issue.
@@ -474,7 +475,7 @@ impl Reasoner {
     ///
     /// // The consumer checks with a reasoner of their OWN, over their own copy of the data.
     /// let mut checker = Reasoner::with_proofs(&ds).expect("reverse-map");
-    /// checker.prepare(&question);
+    /// checker.prepare(&question).expect("prepare the checking question");
     /// let ctx = checker.proof_context().expect("a recording reasoner checks proofs");
     /// let certificate = answer.certificate();
     /// let replay = answer
@@ -609,7 +610,7 @@ impl Reasoner {
         // `stopped` is checked beside `exhausted`: a run the caller cancelled has closed
         // some branches and not others, exactly like a capped one, and `decision.consistent`
         // is meaningless under either — see [`Decision`].
-        let answer = if decision.exhausted || decision.stopped {
+        let answer = if decision.undecided() {
             Verdict::Unknown
         } else if decision.consistent {
             Verdict::True
@@ -674,7 +675,7 @@ impl Reasoner {
         &mut self,
         class: &TermValue,
     ) -> Result<Certified<Verdict>, EntailError> {
-        let concept = self.concept_of(class);
+        let concept = self.concept_of(class)?;
         let (mut session, usable) = self.open()?;
         let mut basis = Basis::NotDecided;
         let answer = if usable {
@@ -686,7 +687,7 @@ impl Reasoner {
             // See [`Reasoner::consistency`]: `stopped` is read beside `exhausted` for the
             // same reason. Satisfiability is witnessed by a MODEL, so a `True` here rests on
             // the run's clash-free completion rather than on a closed refutation.
-            if decision.exhausted || decision.stopped {
+            if decision.undecided() {
                 basis = Basis::Undecided { run };
                 Verdict::Unknown
             } else if decision.consistent {
@@ -699,6 +700,7 @@ impl Reasoner {
         } else {
             Verdict::Unknown
         };
+        session.check_storage()?;
         Ok(self.seal(session, answer, || {
             (
                 Question::ClassSatisfiability {
@@ -733,12 +735,13 @@ impl Reasoner {
     pub fn classify(&self) -> Result<Certified<ClassHierarchy>, EntailError> {
         let (mut session, usable) = self.open()?;
         let (answer, matrix) = if usable {
-            let matrix = Subsumptions::decide(&mut session, &self.classes);
+            let matrix = Subsumptions::decide(&mut session, &self.classes)?;
             let answer = ClassHierarchy::derive(&self.kb, &self.classes, &matrix);
             (answer, Some(matrix))
         } else {
             (ClassHierarchy::default(), None)
         };
+        session.check_storage()?;
         Ok(self.seal(session, answer, || {
             let claims =
                 matrix.map_or_else(Vec::new, |matrix| matrix.claims(&self.kb, &self.classes));
@@ -758,11 +761,12 @@ impl Reasoner {
     pub fn realize(&self) -> Result<Certified<Realization>, EntailError> {
         let (mut session, usable) = self.open()?;
         let (answer, claims) = if usable {
-            let matrix = Subsumptions::decide(&mut session, &self.classes);
+            let matrix = Subsumptions::decide(&mut session, &self.classes)?;
             Realization::decide(&mut session, &self.individuals, &self.classes, &matrix)
         } else {
             (Realization::default(), Vec::new())
         };
+        session.check_storage()?;
         Ok(self.seal(session, answer, || (self.realization_question(), claims)))
     }
 
@@ -776,7 +780,7 @@ impl Reasoner {
         &mut self,
         class: &TermValue,
     ) -> Result<Certified<Vec<TermValue>>, EntailError> {
-        let concept = self.concept_of(class);
+        let concept = self.concept_of(class)?;
         let (mut session, usable) = self.open()?;
         let records = session.records();
         let mut answer: Vec<TermValue> = Vec::new();
@@ -806,6 +810,7 @@ impl Reasoner {
             }
         }
         answer.sort();
+        session.check_storage()?;
         Ok(self.seal(session, answer, || {
             (
                 Question::InstanceRetrieval {
@@ -827,7 +832,7 @@ impl Reasoner {
     /// [`EntailError::Unsatisfiable`] if the ontology has no model, in which case every
     /// axiom is entailed and the answer would be worthless.
     pub fn entails(&mut self, axiom: &DlAxiom) -> Result<Certified<Verdict>, EntailError> {
-        let plan = self.plan(axiom);
+        let plan = self.plan(axiom)?;
         let (mut session, usable) = self.open()?;
         let mut runs = Vec::new();
         let answer = if usable {
@@ -835,6 +840,7 @@ impl Reasoner {
         } else {
             Verdict::Unknown
         };
+        session.check_storage()?;
         Ok(self.seal(session, answer, || {
             (
                 Question::AxiomEntailment {
@@ -856,26 +862,26 @@ impl Reasoner {
     /// Separated from [`Reasoner::entails`] because interning needs `&mut self` while the
     /// session borrows `&self`, and because it puts every axiom's encoding in one readable
     /// place instead of spreading eight of them through a borrow-juggling function.
-    fn plan(&mut self, axiom: &DlAxiom) -> Refutation {
-        match axiom {
+    fn plan(&mut self, axiom: &DlAxiom) -> Result<Refutation, EntailError> {
+        Ok(match axiom {
             DlAxiom::SubClassOf { sub, sup } => {
-                let sub = self.concept_of(sub);
-                let sup = self.concept_of(sup);
+                let sub = self.concept_of(sub)?;
+                let sup = self.concept_of(sup)?;
                 Refutation::Subsumption { sub, sup }
             }
             DlAxiom::EquivalentClasses { left, right } => {
-                let left = self.concept_of(left);
-                let right = self.concept_of(right);
+                let left = self.concept_of(left)?;
+                let right = self.concept_of(right)?;
                 Refutation::Equivalence { left, right }
             }
             DlAxiom::DisjointClasses { left, right } => {
-                let left = self.concept_of(left);
-                let right = self.concept_of(right);
+                let left = self.concept_of(left)?;
+                let right = self.concept_of(right)?;
                 Refutation::Disjointness { left, right }
             }
             DlAxiom::ClassAssertion { individual, class } => {
                 let individual = self.term_of(individual);
-                let concept = self.concept_of(class);
+                let concept = self.concept_of(class)?;
                 Refutation::Membership {
                     individual,
                     concept,
@@ -889,7 +895,7 @@ impl Reasoner {
                 let subject = self.term_of(subject);
                 let property = self.term_of(property);
                 let object = self.term_of(object);
-                let negated_reach = self.negated(reaches(property, object));
+                let negated_reach = self.negated(reaches(property, object))?;
                 Refutation::RoleAssertion {
                     subject,
                     negated_reach,
@@ -901,7 +907,7 @@ impl Reasoner {
             DlAxiom::SameIndividual { left, right } => {
                 let left = self.term_of(left);
                 let right = self.term_of(right);
-                let concept = self.interned(Concept::nominal(vec![right]));
+                let concept = self.interned(Concept::nominal(vec![right]))?;
                 Refutation::Membership {
                     individual: left,
                     concept,
@@ -912,7 +918,7 @@ impl Reasoner {
             DlAxiom::DifferentIndividuals { left, right } => {
                 let left = self.term_of(left);
                 let right = self.term_of(right);
-                let concept = self.negated(Concept::nominal(vec![right]));
+                let concept = self.negated(Concept::nominal(vec![right]))?;
                 Refutation::Membership {
                     individual: left,
                     concept,
@@ -923,7 +929,7 @@ impl Reasoner {
                 let sup = self.term_of(sup);
                 let x = self.fresh.mint(&mut self.kb.interner);
                 let y = self.fresh.mint(&mut self.kb.interner);
-                let negated_reach = self.negated(reaches(sup, y));
+                let negated_reach = self.negated(reaches(sup, y))?;
                 Refutation::RoleInclusion {
                     x,
                     sub,
@@ -931,20 +937,20 @@ impl Reasoner {
                     negated_reach,
                 }
             }
-        }
+        })
     }
 
-    /// Intern `concept` and finalize the negation cache, returning its id.
-    fn interned(&mut self, concept: Concept) -> u32 {
+    /// Intern `concept` and finalize the complete blocking closure, returning its id.
+    fn interned(&mut self, concept: Concept) -> Result<u32, EntailError> {
         let id = self.kb.table.intern(concept);
-        self.kb.table.finalize();
-        id
+        self.kb.finalize()?;
+        Ok(id)
     }
 
     /// Intern `concept`, finalize the negation cache, and return the id of its NEGATION.
-    fn negated(&mut self, concept: Concept) -> u32 {
-        let id = self.interned(concept);
-        self.kb.table.negate(id)
+    fn negated(&mut self, concept: Concept) -> Result<u32, EntailError> {
+        let id = self.interned(concept)?;
+        Ok(self.kb.table.negate(id))
     }
 
     /// The concept id a class term denotes, interning it if the ontology never used it.
@@ -952,11 +958,11 @@ impl Reasoner {
     /// `owl:Thing` and `owl:Nothing` become `⊤` and `⊥` rather than opaque atomic classes,
     /// which is what makes the boundary answers of every service correct without a special
     /// case at each one.
-    fn concept_of(&mut self, class: &TermValue) -> u32 {
+    fn concept_of(&mut self, class: &TermValue) -> Result<u32, EntailError> {
         let term = self.kb.interner.intern(class.clone());
         let id = self.kb.table.intern(class_concept(&self.vocab, term));
-        self.kb.finalize();
-        id
+        self.kb.finalize()?;
+        Ok(id)
     }
 
     /// The term id an individual or property term denotes, interning it if new.
@@ -977,10 +983,13 @@ impl Reasoner {
     fn open(&self) -> Result<(Session<'_>, bool), EntailError> {
         let mut session = self.open_session();
         let decision = session.decide(&Assumptions::of_kb());
+        if let Some(original) = decision.storage_refusal {
+            return Err(crate::RoleHierarchyError::Storage(original).into());
+        }
         // A stopped consistency check is exactly as unusable as an exhausted one: neither
         // tells the caller whether the ontology has a model, so both leave the session
         // unusable rather than falling through to `!decision.consistent`.
-        if decision.exhausted || decision.stopped {
+        if decision.undecided() {
             return Ok((session, false));
         }
         if !decision.consistent {

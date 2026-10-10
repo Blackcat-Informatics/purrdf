@@ -163,6 +163,7 @@ impl std::fmt::Display for ProfileViolation {
 /// on: a certification proves membership, a violation does not prove non-membership.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileCertificate {
+    role_hierarchy_refusal: Option<crate::RoleHierarchyError>,
     /// Every violation found, sorted.
     violations: Vec<ProfileViolation>,
 }
@@ -173,10 +174,18 @@ impl ProfileCertificate {
     /// [`OwlProfile::Full`] is always certified; see the [module docs](self).
     #[must_use]
     pub fn certifies(&self, profile: OwlProfile) -> bool {
-        !self
-            .violations
-            .iter()
-            .any(|violation| violation.profile == profile)
+        (profile == OwlProfile::Full || self.role_hierarchy_refusal.is_none())
+            && !self
+                .violations
+                .iter()
+                .any(|violation| violation.profile == profile)
+    }
+
+    /// The original regular-role decision refusal, including malformed syntax
+    /// and physical storage failures. A refused scan certifies no DL profile.
+    #[must_use]
+    pub const fn role_hierarchy_refusal(&self) -> Option<&crate::RoleHierarchyError> {
+        self.role_hierarchy_refusal.as_ref()
     }
 
     /// Every certified profile, most restrictive first.
@@ -229,23 +238,64 @@ impl ProfileCertificate {
 #[must_use]
 pub fn profile(ds: &RdfDataset) -> ProfileCertificate {
     let mut interner = Interner::default();
-    let v = Vocab::intern(&mut interner);
+    let mut v = Vocab::intern(&mut interner);
     let extra = Extra {
         chain: interner.intern_iri(OWL_PROPERTYCHAINAXIOM),
         object_property: interner.intern_iri(OWL_OBJECTPROPERTY),
         data_property: interner.intern_iri(OWL_DATATYPEPROPERTY),
     };
     let index = build_data_index(ds, &mut interner);
+    v.property_chain = Some(extra.chain);
+    let role_hierarchy_refusal = if index
+        .values()
+        .any(|predicates| predicates.contains_key(&extra.chain))
+    {
+        let reader = crate::owl_dl::roles::RoleReader {
+            index: &index,
+            interner: &interner,
+            vocab: &v,
+            stop: None,
+        };
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        memory
+            .try_scope(|memory| {
+                let hierarchy = reader.hierarchy(memory)?;
+                hierarchy.validate(
+                    interner
+                        .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
+                        .map(crate::owl_dl::concept::Role::Named),
+                    None,
+                    memory,
+                )?;
+                hierarchy.release(memory)?;
+                Ok::<_, crate::RoleHierarchyError>(())
+            })
+            .err()
+            .map(|error| error.with_source(&interner))
+    } else {
+        None
+    };
     let scan = Scan::of(&index, &v);
     let mut violations = Vec::new();
     scan.class_expressions(&interner, &v, &index, &mut violations);
     scan.axioms(&interner, &v, extra.chain, &index, &mut violations);
-    scan.description_logic(&interner, &v, &extra, &index, &mut violations);
+    scan.description_logic(
+        &interner,
+        &v,
+        &extra,
+        &index,
+        role_hierarchy_refusal.as_ref(),
+        &mut violations,
+    );
     violations.sort_by(|a, b| {
         (a.profile, &a.term, &a.subject, a.reason).cmp(&(b.profile, &b.term, &b.subject, b.reason))
     });
     violations.dedup();
-    ProfileCertificate { violations }
+    ProfileCertificate {
+        role_hierarchy_refusal,
+        violations,
+    }
 }
 
 /// A class expression occurs on the SUBCLASS side of an inclusion.
@@ -380,6 +430,7 @@ impl Scan {
         v: &Vocab,
         extra: &Extra,
         index: &TripleIndex,
+        role_refusal: Option<&crate::RoleHierarchyError>,
         out: &mut Vec<ProfileViolation>,
     ) {
         let Extra {
@@ -416,9 +467,9 @@ impl Scan {
             {
                 deny(count, NON_SIMPLE_COUNT);
             }
-            // A chain axiom needs SROIQ's regularity condition decided before the ontology
-            // is OWL 2 DL, and nothing here decides it.
-            if preds.contains_key(&chain) {
+            // The actual same-home regular-role decision, not a blanket chain
+            // boundary or a finite graph-closure approximation.
+            if preds.contains_key(&chain) && role_refusal.is_some() {
                 deny(chain, CHAIN_REGULARITY);
             }
             // Object and data properties are disjoint in OWL 2 DL.
@@ -791,10 +842,8 @@ const NO_DATA_RANGE: &str = "no OWL 2 profile admits a constructed data range (o
 const NON_SIMPLE_COUNT: &str = "OWL 2 DL requires the role of a number restriction to be SIMPLE — not transitive, not \
      above a transitive role, and not the head of a property chain — because counting the \
      successors of a composite role is undecidable";
-/// A property chain whose regularity is undecided.
-const CHAIN_REGULARITY: &str = "OWL 2 DL requires the complex role inclusions to be REGULAR (SROIQ's acyclicity \
-     condition on the chain order), and this certifier does not decide regularity; the \
-     ontology may well be DL, and the check declines to say so rather than guessing";
+/// A refused regular-role hierarchy; the certificate retains its typed witness.
+const CHAIN_REGULARITY: &str = "the object-property hierarchy was refused by the regular SROIQ source-order and mixed-dependency decision; role_hierarchy_refusal carries the original syntax, order, recursion or physical-storage witness";
 /// Object and data properties overlap.
 const PROPERTY_TYPE_SEPARATION: &str = "OWL 2 DL requires the object, data and annotation properties to be pairwise disjoint, \
      and this IRI is declared both an owl:ObjectProperty and an owl:DatatypeProperty";

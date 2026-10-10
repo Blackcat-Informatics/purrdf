@@ -718,6 +718,24 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				a_long_collection_keeps_every_member tied_guarded_branches_keep_order_under_permutation \
 				continuation_objects_saturate_at_the_same_indent_guard \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test regular_role_chains -- --exact \
+				all_nine_consumer_shapes_are_exact_and_contradictions_are_detected \
+				inverse_heads_nested_dependencies_and_simple_equivalence_cycles \
+				universal_obligations_clash_after_recursive_paths_and_blocking \
+				cyclic_existentials_with_role_obligations_have_a_finite_blocking_closure \
+				printed_order_counterexample_and_inverse_endpoint_typo_do_not_pass \
+				literal_recursive_endpoint_is_not_replaced_by_an_equivalent_name \
+				recorded_chain_consequence_replays_against_the_original_rbox \
+				chain_derived_types_reach_all_query_services_and_materialization \
+				fixed_top_is_universal_and_bottom_chain_clashes \
+				fixed_top_aliases_without_a_chain_reach_query_only_individuals \
+				non_simple_characteristics_and_malformed_chain_lists_hard_refuse \
+				role_language_work_exhaustion_is_unknown_never_a_consistency_proof \
+				cancelling_an_existing_regular_role_owner_cannot_publish_a_decision \
+				nominal_merges_and_simple_functionality_preserve_role_obligations \
+				top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling \
+				stopping_during_regular_role_reads_never_publishes_a_completed_answer \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
 				the_reassociated_path_is_the_one_this_build_was_made_for \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \

@@ -327,7 +327,7 @@ mod tests {
             },
         )];
         let mut checker = Reasoner::with_proofs(&dataset).unwrap();
-        checker.prepare(&question);
+        checker.prepare(&question).expect("query preparation");
         assert!(
             forged
                 .verify(&dataset, &question, None, &checker.proof_context().unwrap())

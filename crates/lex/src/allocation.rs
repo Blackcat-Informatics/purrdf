@@ -160,6 +160,18 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
         &mut self,
         body: impl FnOnce(&mut Self) -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
+        self.try_scope(body)
+    }
+
+    /// Scope native construction while preserving its original typed domain error.
+    /// Failed local payloads die before their original grant delta is released.
+    ///
+    /// # Errors
+    /// Returns the first domain failure; a refund refusal never replaces it.
+    pub fn try_scope<T, E>(
+        &mut self,
+        body: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
         let baseline = self.live;
         match body(self) {
             Ok(value) => Ok(value),

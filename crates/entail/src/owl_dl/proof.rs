@@ -175,7 +175,10 @@ const CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-owl-dl-contract-v1");
 /// the same one [`purrdf_datalog::cache::contract_hash`] states: anything that can change an
 /// answer must change the digest, while two calculi that happen to agree may still differ.
 /// Over-invalidation is never the bug.
-pub const CALCULUS_VERSION: &str = "purrdf-owl-dl-hypertableau-v1";
+/// Version 2 binds regular-role automata and their universal-state blocking
+/// obligations. Every tableau proof changes contract, including chain-free
+/// inputs; a runless syntactic module proof has no tableau contract to change.
+pub const CALCULUS_VERSION: &str = "purrdf-owl-dl-hypertableau-regular-roles-v2";
 
 /// The declared ceiling on recorded steps of each kind.
 ///
@@ -1685,8 +1688,9 @@ impl ProofAnswer {
 
 /// Why a [`DlProof`] is not a proof of what it states.
 ///
-/// Every variant is a NORMAL rejection of an invalid proof, never an engine fault: a checker
-/// that could not tell a forged proof from a genuine one would defeat the point of having one.
+/// Structural and semantic variants reject an invalid proof. Operational variants
+/// retain cancellation, preparation and physical refusal separately: interrupted
+/// independent checking neither validates nor disproves the claimed proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DlProofError {
@@ -1702,6 +1706,8 @@ pub enum DlProofError {
         /// Typed operational cause; it is not a malformed or unknown datatype.
         obstruction: super::bounds::SchemaObstruction,
     },
+    /// Original native storage refusal while independently checking role facts.
+    Storage(purrdf_lex::allocation::StorageError),
     /// The proof is not a well-formed term: truncated, mis-tagged, or carrying an unknown
     /// node kind or an out-of-range step index.
     Malformed {
@@ -2008,6 +2014,7 @@ impl std::fmt::Display for DlProofError {
                 "OWL-DL current-support recording refused: {obstruction:?}"
             ),
             Self::Stopped => f.write_str("OWL-DL proof checking stopped"),
+            Self::Storage(error) => error.fmt(f),
             Self::Malformed { detail } => write!(f, "malformed OWL-DL proof term: {detail}"),
             Self::InputMismatch { expected, stated } => write!(
                 f,
@@ -2216,6 +2223,7 @@ impl std::error::Error for DlProofError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Canonicalization(error) => Some(error),
+            Self::Storage(error) => Some(error),
             _ => None,
         }
     }
@@ -2667,22 +2675,33 @@ impl std::fmt::Debug for DlProofContext {
     }
 }
 
+fn proof_source_error(error: EntailError) -> DlProofError {
+    match error {
+        EntailError::RoleHierarchy(crate::RoleHierarchyError::Storage(error)) => {
+            DlProofError::Storage(error)
+        }
+        EntailError::Stopped => DlProofError::Stopped,
+        error => DlProofError::Ontology {
+            detail: error.to_string(),
+        },
+    }
+}
+
 impl DlProofContext {
     /// Read `ontology` into a checking context.
     ///
     /// # Errors
     ///
     /// [`DlProofError::Ontology`] if the dataset is not a well-formed OWL graph;
+    /// [`DlProofError::Storage`] or [`DlProofError::Stopped`] if native source
+    /// preparation is physically refused or cancelled;
     /// [`DlProofError::Canonicalization`] if computing its producer-independent identity
     /// is refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
     /// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
     /// [`purrdf_core::canonicalize`] would raise for the same input.
     pub fn of_ontology(ontology: &RdfDataset) -> Result<Self, DlProofError> {
-        let mut kb =
-            Kb::from_dataset(ontology).map_err(|error: EntailError| DlProofError::Ontology {
-                detail: error.to_string(),
-            })?;
-        kb.finalize();
+        let mut kb = Kb::from_dataset(ontology).map_err(proof_source_error)?;
+        kb.finalize().map_err(proof_source_error)?;
         let clauses = derive(&kb);
         let contract = contract_digest(&clauses, &kb.schema);
         let input = try_input_digest(ontology).map_err(DlProofError::Canonicalization)?;
@@ -4120,11 +4139,11 @@ impl DlProof {
 pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof), EntailError> {
     let input = try_input_digest(ontology).map_err(EntailError::Canonicalization)?;
     let mut kb = Kb::from_dataset(ontology)?;
-    kb.finalize();
+    kb.finalize()?;
     let contract = contract_of(&kb);
     let (decision, recorder) =
         crate::owl_dl::hyper::decide_recording(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
-    let answer = if decision.exhausted || decision.stopped {
+    let answer = if decision.undecided() {
         ProofAnswer::Undecided
     } else if decision.consistent {
         ProofAnswer::Consistent
@@ -4148,7 +4167,7 @@ pub(crate) fn prove_consistency_of_kb(kb: &Kb) -> (ProofAnswer, DlProof) {
     let contract = contract_of(kb);
     let (decision, recorder) =
         crate::owl_dl::hyper::decide_recording(kb, &Assumptions::of_kb(), Budget::for_kb(kb));
-    let answer = if decision.exhausted || decision.stopped {
+    let answer = if decision.undecided() {
         ProofAnswer::Undecided
     } else if decision.consistent {
         ProofAnswer::Consistent
@@ -4402,7 +4421,19 @@ fn check_introduced(
 /// recomputed from the caller's role axioms rather than taken from the producer, precisely so
 /// that a completion recorded with a wrong edge set cannot pass by supplying its own reading
 /// of it.
+enum FiniteRoleRefusal {
+    Budget,
+    Storage(purrdf_lex::allocation::StorageError),
+}
+
+purrdf_lex::variant_from!(FiniteRoleRefusal { Storage(purrdf_lex::allocation::StorageError) });
+
 struct CompletionView<'a> {
+    /// Universal object property resolved once from the original term table.
+    top_role: Option<u32>,
+    /// Least closure of original RBox inclusions on this finite proof graph.
+    /// Computed independently of the producer's automaton states and traversal.
+    role_relation: Option<Vec<(Role, usize, usize)>>,
     /// The caller's own knowledge base — the concept table, the ABox and the role axioms.
     kb: &'a Kb,
     /// The recorded nodes, in the graph's ascending index order.
@@ -4482,14 +4513,48 @@ impl<'a> CompletionView<'a> {
                 blocked[x] = true;
             }
         }
+        let work = Cell::new(0u64);
+        let top_role = kb
+            .interner
+            .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY);
+        let role_relation = if let Some(program) = &kb.role_program {
+            let mut resident = purrdf_lex::allocation::Resident;
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+            match program.source.close_edges(
+                &edges,
+                (completion.nodes.len(), top_role.map(Role::Named)),
+                |node| !completion.nodes[node].concrete,
+                || {
+                    work.set(work.get().saturating_add(1).min(cap));
+                    if work.get() >= cap {
+                        Err(FiniteRoleRefusal::Budget)
+                    } else {
+                        Ok(())
+                    }
+                },
+                &mut memory,
+            ) {
+                Ok(relation) => Some(relation),
+                Err(FiniteRoleRefusal::Storage(original)) => {
+                    return Err(DlProofError::Storage(original));
+                }
+                // The original cap is now exhausted; the checker will leave all
+                // unvisited clauses explicitly unattested, never satisfied.
+                Err(FiniteRoleRefusal::Budget) => Some(Vec::new()),
+            }
+        } else {
+            None
+        };
         Ok(Self {
+            top_role,
+            role_relation,
             kb,
             nodes: &completion.nodes,
             edges,
             blocked,
             achievers: RefCell::new(BTreeMap::new()),
             neighbours: RefCell::new(BTreeMap::new()),
-            work: Cell::new(0),
+            work,
             cap,
         })
     }
@@ -4552,6 +4617,41 @@ impl<'a> CompletionView<'a> {
     /// The `role`-neighbours of `x`, closed over the role hierarchy, the inverse declarations
     /// and the transitive-role closure — the calculus's own `r`-neighbourhood, recomputed.
     fn neighbors(&self, x: usize, role: Role) -> Vec<usize> {
+        if self.top_role.is_some_and(|top| {
+            matches!(role, Role::Named(p) | Role::Inv(p) if p == top)
+                || self
+                    .achievers(role)
+                    .iter()
+                    .any(|&(property, _)| property == top)
+        }) {
+            if self.nodes[x].concrete {
+                return Vec::new();
+            }
+            let mut out = Vec::new();
+            for (node, value) in self.nodes.iter().enumerate() {
+                self.charge(1);
+                if self.spent() {
+                    break;
+                }
+                if !value.concrete {
+                    out.push(node);
+                }
+            }
+            return out;
+        }
+        if let Some(relation) = &self.role_relation {
+            let first =
+                relation.partition_point(|&(member, subject, _)| (member, subject) < (role, x));
+            let mut out = Vec::new();
+            for &(member, subject, target) in &relation[first..] {
+                self.charge(1);
+                if self.spent() || (member, subject) != (role, x) {
+                    break;
+                }
+                out.push(target);
+            }
+            return out;
+        }
         if let Some(cached) = self.neighbours.borrow().get(&(x, role)) {
             return cached.clone();
         }
@@ -6032,12 +6132,12 @@ mod tests {
         let (_, proof, _) = refutation();
         assert_eq!(
             proof.digest_hex(),
-            "ea40ad68088874796ccb64b6521d89d677a826858cc39cdef0dda82fb58b22a8",
+            "a0d268999d7768251ed3b0244cb8f7aee0af0a2d24d8470a2a6a19b5fede85dc",
             "the proof digest moved"
         );
         assert_eq!(
             purrdf_hash::hex::Lower(&proof.contract()).to_string(),
-            "521a1c7e7b2f6e27b2df2e16744077fa5df333aa5554d64b68e388d09bddb361",
+            "642edf53bbd91f2d1b601b475dfe50a806bbea727c6e9224524b947a075e17a2",
             "the calculus contract moved"
         );
     }
@@ -7747,7 +7847,7 @@ mod tests {
     fn a_branching_and_a_completing_proof_are_byte_identical_run_to_run() {
         let mut kb = Kb::empty();
         let ontologies = [closing_disjunction(), subclass_consistent()];
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         for ontology in ontologies {
             let (_, first) = prove_consistency(&ontology).expect("reverse-maps");
             let (_, again) = prove_consistency(&ontology).expect("reverse-maps");
@@ -7863,7 +7963,7 @@ mod tests {
             Concept::Some(Role::Named(20), Box::new(Concept::Top)),
         );
         kb.individuals.insert(30);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 
@@ -7944,7 +8044,7 @@ mod tests {
         kb.abox_types.push((30, first));
         kb.abox_types.push((30, second));
         kb.individuals.insert(30);
-        kb.finalize();
+        kb.finalize().expect("fixture preparation");
         kb
     }
 

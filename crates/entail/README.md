@@ -27,7 +27,7 @@ external reasoner, no `tokio`, and no string round-trip.
 | Entry point | Regime(s) | Engine |
 | --- | --- | --- |
 | `materialize(ds, plan)` | **all seven** | Forward materialization ("chase") of `calculus_program(regime)` through `purrdf-datalog`'s native semi-naive fixpoint — the declared rule set *is* the executable, so the contract hash a report carries names the clauses that ran. Returns `(closure, ReasoningReport)` — the report is not optional. `plan` is a `Materialization`, which carries each regime's own input, so the function is TOTAL: `OwlDirect(&[QTriple])` and `Rif(&RuleSet)` delegate to the two entry points below rather than being refused. |
-| `materialize_dl_reported(ds, bgp)` | `OWL-Direct` | Open-world OWL DL over a SHOIQ(D) hypertableau, directed by the query's class expressions — what `materialize(ds, Materialization::OwlDirect(bgp))` delegates to. Answers a BGP whose variables are all distinguished; a query blank node is a non-distinguished variable and raises the `NonDistinguishedVariable` boundary rather than being answered incompletely in silence. |
+| `materialize_dl_reported(ds, bgp)` | `OWL-Direct` | Open-world OWL DL over the hypertableau with regular SROIQ role languages, directed by the query's class expressions — what `materialize(ds, Materialization::OwlDirect(bgp))` delegates to. Answers a BGP whose variables are all distinguished; a query blank node is a non-distinguished variable and raises the `NonDistinguishedVariable` boundary rather than being answered incompletely in silence. |
 | `Reasoner::new(ds)` | `OWL-Direct` | The Description-Logic services — consistency, class satisfiability, classification, realization, instance retrieval and axiom entailment. Each answer arrives as a `Certified<T>` carrying a `DlCertificate`: the DL lane's own completeness notion, which reports both the constructs the reverse mapping could not read and a search that ran out of deterministic steps. Records no proof term: `Certified::proof()` is `None`. |
 | `Reasoner::with_proofs(ds)` | `OWL-Direct` | The same services, each answer additionally carrying a `ServiceProof` a consumer replays against their own copy of the data. Opt-in because it costs an RDFC-1.0 canonicalization of the dataset, a clausification contract per call, and one instrumented tableau trace per run; the verdict and every `DlCertificate` counter are identical either way. |
 | `extract_module(ds, signature, method)` | — | Syntactic locality module extraction (`BOT` / `TOP` / `STAR`). Sound, not minimal: a construct whose locality is not decided exactly is kept conservatively and the keep is reported. |
@@ -95,6 +95,27 @@ what `ReasoningReport::regime()` names, what `rules()`/`implemented()` are index
 by, and what `Regime::from_iri` parses a `sparql:entailmentRegime` IRI into.
 `Materialization::regime()` is the map from the input to the identity.
 
+Regular role chains use the original SROIQ automaton obligations in the
+hypertableau, including its blocking labels, rather than treating finite ABox
+closure as a decision procedure. Admission first checks the authored OWL 2
+Structural Specification §11.2 order (literal recursive endpoints are checked
+before equivalent-property normalization), then checks the mixed simple/complex
+dependency condition after genuine simple equivalences are quotiented. Passing
+the printed order alone does not establish a regular language: Stefanoni's
+[Example 12.2 and Theorem 12.4](https://www.cs.ox.ac.uk/files/7941/paper.pdf)
+give the counterexample and regular-calculus condition. A cycle through a complex
+dependency refuses with `RoleHierarchyError`; ordinary simple equivalence cycles
+remain legal. Inverse heads reverse the whole inclusion, and top/bottom properties
+retain their fixed semantics. Native storage refusal and cancellation remain
+operational causes, never a decided consistency verdict.
+
+Semantic hierarchy refusals retain the original source terms in their typed
+diagnostic presentation, so a caller can identify an offending property after
+the private interner has been destroyed. `RoleHierarchyError::classification()`
+borrows the original syntax/order/dependency refusal; `presentation()` exposes
+the retained arguments and `Display` includes their original term spellings.
+Allocation failures while constructing that witness remain typed storage errors.
+
 ## Rule coverage
 
 The rule tables are data, not prose. `rules(regime)` is what the specification
@@ -109,7 +130,7 @@ difference is the gap, and it is also what a `ReasoningReport` reports as
 | `RDFS` | RDF 1.2 Semantics §8.1.1 + §9.2.1 | 18 | 18 |
 | `OWL-RL` | OWL 2 Profiles §4.3 Tables 4–9 | 78 | 78 |
 | `D` | OWL 2 Profiles §4.3 Table 8 | 5 | 5 |
-| `OWL-Direct` | — (SHOIQ(D) hypertableau, not a fixed table) | 0 | 0 |
+| `OWL-Direct` | — (hypertableau with regular role languages, not a fixed table) | 0 | 0 |
 | `RIF` | — (caller-supplied rule set) | 0 | 0 |
 
 The per-rule table is generated from this crate's own API and drift-guarded:

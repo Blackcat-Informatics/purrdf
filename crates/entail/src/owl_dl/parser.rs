@@ -93,15 +93,15 @@ use crate::vocab::{
     OWL_MAXCARDINALITY, OWL_MAXQUALIFIEDCARDINALITY, OWL_MEMBERS, OWL_MINCARDINALITY,
     OWL_MINQUALIFIEDCARDINALITY, OWL_NAMEDINDIVIDUAL, OWL_NEGATIVEPROPERTYASSERTION, OWL_NOTHING,
     OWL_OBJECTPROPERTY, OWL_ONCLASS, OWL_ONDATARANGE, OWL_ONDATATYPE, OWL_ONEOF, OWL_ONPROPERTIES,
-    OWL_ONPROPERTY, OWL_ONTOLOGY, OWL_ONTOLOGYPROPERTY, OWL_PROPERTYDISJOINTWITH,
-    OWL_QUALIFIEDCARDINALITY, OWL_RATIONAL, OWL_REAL, OWL_REFLEXIVEPROPERTY, OWL_RESTRICTION,
-    OWL_SAMEAS, OWL_SOMEVALUESFROM, OWL_SOURCEINDIVIDUAL, OWL_SYMMETRICPROPERTY,
-    OWL_TARGETINDIVIDUAL, OWL_TARGETVALUE, OWL_THING, OWL_TRANSITIVEPROPERTY, OWL_UNIONOF,
-    OWL_WITHRESTRICTIONS, RDF_DIRLANGSTRING, RDF_FIRST, RDF_LANGRANGE, RDF_LANGSTRING, RDF_NIL,
-    RDF_PROPERTY, RDF_REST, RDF_TYPE, RDFS_CLASS, RDFS_DATATYPE, RDFS_DOMAIN, RDFS_LITERAL,
-    RDFS_RANGE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF, XSD_LENGTH, XSD_MAXEXCLUSIVE,
-    XSD_MAXINCLUSIVE, XSD_MAXLENGTH, XSD_MINEXCLUSIVE, XSD_MININCLUSIVE, XSD_MINLENGTH, XSD_NS,
-    XSD_PATTERN,
+    OWL_ONPROPERTY, OWL_ONTOLOGY, OWL_ONTOLOGYPROPERTY, OWL_PROPERTYCHAINAXIOM,
+    OWL_PROPERTYDISJOINTWITH, OWL_QUALIFIEDCARDINALITY, OWL_RATIONAL, OWL_REAL,
+    OWL_REFLEXIVEPROPERTY, OWL_RESTRICTION, OWL_SAMEAS, OWL_SOMEVALUESFROM, OWL_SOURCEINDIVIDUAL,
+    OWL_SYMMETRICPROPERTY, OWL_TARGETINDIVIDUAL, OWL_TARGETVALUE, OWL_THING,
+    OWL_TRANSITIVEPROPERTY, OWL_UNIONOF, OWL_WITHRESTRICTIONS, RDF_DIRLANGSTRING, RDF_FIRST,
+    RDF_LANGRANGE, RDF_LANGSTRING, RDF_NIL, RDF_PROPERTY, RDF_REST, RDF_TYPE, RDFS_CLASS,
+    RDFS_DATATYPE, RDFS_DOMAIN, RDFS_LITERAL, RDFS_RANGE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF,
+    XSD_LENGTH, XSD_MAXEXCLUSIVE, XSD_MAXINCLUSIVE, XSD_MAXLENGTH, XSD_MINEXCLUSIVE,
+    XSD_MININCLUSIVE, XSD_MINLENGTH, XSD_NS, XSD_PATTERN,
 };
 
 /// How deeply a class expression or a data range may nest before the parser refuses.
@@ -187,6 +187,9 @@ pub(crate) struct Vocab {
     pub(crate) inverse_of: u32,
     pub(crate) equiv_prop: u32,
     pub(crate) sub_prop: u32,
+    pub(crate) property_chain: Option<u32>,
+    pub(crate) datatype_property: u32,
+    pub(crate) annotation_property: u32,
     pub(crate) property_disjoint_with: u32,
     pub(crate) functional: u32,
     pub(crate) inverse_functional: u32,
@@ -314,6 +317,9 @@ impl Vocab {
             inverse_of: i.intern_iri(OWL_INVERSEOF),
             equiv_prop: i.intern_iri(OWL_EQUIVALENTPROPERTY),
             sub_prop: i.intern_iri(RDFS_SUBPROPERTYOF),
+            property_chain: i.id_of_iri(OWL_PROPERTYCHAINAXIOM),
+            datatype_property: i.intern_iri(OWL_DATATYPEPROPERTY),
+            annotation_property: i.intern_iri(OWL_ANNOTATIONPROPERTY),
             property_disjoint_with: i.intern_iri(OWL_PROPERTYDISJOINTWITH),
             functional: i.intern_iri(OWL_FUNCTIONALPROPERTY),
             inverse_functional: i.intern_iri(OWL_INVERSEFUNCTIONALPROPERTY),
@@ -891,7 +897,7 @@ impl<'a> CeExtractor<'a> {
         {
             self.boundaries.insert(construct);
         }
-        let role = self.role_of(r);
+        let role = self.role_of(r)?;
         if let Some(c) = self.get(node, self.v.some_values) {
             return Ok(Concept::Some(role, Box::new(self.expr(c)?)));
         }
@@ -902,6 +908,7 @@ impl<'a> CeExtractor<'a> {
             return Ok(Concept::Some(role, Box::new(Concept::Nominal(vec![a]))));
         }
         if let Some(lit) = self.get(node, self.v.has_self) {
+            self.counted_roles.insert(role);
             return Ok(self.self_restriction(role, lit));
         }
         if let Some(lit) = self.get(node, self.v.min_qcard) {
@@ -997,13 +1004,27 @@ impl<'a> CeExtractor<'a> {
     }
 
     /// The role denoted by property node `r` (`Inv` for an anonymous inverse).
-    fn role_of(&self, r: u32) -> Role {
-        if matches!(self.interner.value(r), TermValue::Blank { .. })
-            && let Some(inv) = self.get(r, self.v.inverse_of)
+    fn role_of(&self, r: u32) -> Result<Role, EntailError> {
+        // A named data property remains a data-restriction operand. Anonymous
+        // object inverses share the RBox's exact two-form decoder; a missing or
+        // repeated inverse target cannot silently become a fresh named role.
+        if matches!(self.interner.value(r), TermValue::Iri(_))
+            && self
+                .index
+                .get(&r)
+                .and_then(|p| p.get(&self.v.ty))
+                .is_some_and(|types| types.contains(&self.v.datatype_property))
         {
-            return Role::Inv(inv);
+            return Ok(Role::Named(r));
         }
-        Role::Named(r)
+        super::roles::RoleReader {
+            index: self.index,
+            interner: self.interner,
+            vocab: self.v,
+            stop: self.stop,
+        }
+        .role(r)
+        .map_err(Into::into)
     }
 
     /// Parse a cardinality literal (an `xsd:nonNegativeInteger`/`integer`) as `u32`.
@@ -1105,7 +1126,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
     ds.checked_read(|ds| {
         poll(stop)?;
         let mut interner = Interner::default();
-        let v = Vocab::intern(&mut interner);
+        let mut v = Vocab::intern(&mut interner);
         let mut table = ConceptTable::default();
         let top = table.top();
         let bottom = table.bottom();
@@ -1124,6 +1145,43 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             triples.push((s, p, o));
             index_insert(&mut index, s, p, o);
         }
+        // This predicate is source-driven. Looking it up after the source pass
+        // avoids minting a new vocabulary term on the legacy chain-free path.
+        v.property_chain = interner.id_of_iri(OWL_PROPERTYCHAINAXIOM);
+
+        // Role languages are compiled only for an actual complex inclusion.
+        // Merely mentioning the vocabulary IRI does not change the chain-free
+        // encoding or allocate a second copy of its ordinary role hierarchy.
+        let role_program = if v.property_chain.is_some_and(|predicate| {
+            index
+                .values()
+                .any(|predicates| predicates.contains_key(&predicate))
+        }) {
+            let reader = super::roles::RoleReader {
+                index: &index,
+                interner: &interner,
+                vocab: &v,
+                stop,
+            };
+            let mut resident = purrdf_lex::allocation::Resident;
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+            Some(
+                memory
+                    .try_scope(|memory| {
+                        let hierarchy = reader.hierarchy(memory)?;
+                        let top = interner
+                            .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
+                            .map(Role::Named);
+                        let mut program = hierarchy.compile(top, stop, memory)?;
+                        program.source = hierarchy;
+                        program.admitted_bytes = memory.admitted_bytes();
+                        Ok::<_, super::roles::RoleHierarchyError>(program)
+                    })
+                    .map_err(|error| error.with_source(&interner))?,
+            )
+        } else {
+            None
+        };
 
         let mut acc = Accums::default();
         let mut ranges = DataRangeTable::default();
@@ -1163,11 +1221,67 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             // OWL 2 DL forbids a number restriction over a NON-SIMPLE role. The transitivity
             // axioms are only all known now, so the condition is checked here rather than
             // while the restriction was being decoded.
+            let top = interner.id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY);
             for &role in ce.counted_roles() {
                 ce.poll()?;
-                if is_non_simple(role, &acc, stop)? {
+                let (Role::Named(property) | Role::Inv(property)) = role;
+                if top.is_some() && subrole_satisfies(role, &acc, stop, |id| top == Some(id))?
+                    || role_program
+                        .as_ref()
+                        .is_some_and(|program| program.non_simple.contains(&role))
+                {
+                    return Err(
+                        super::roles::RoleHierarchyError::NonSimpleProperty { property }
+                            .with_source(&interner)
+                            .into(),
+                    );
+                }
+                if subrole_satisfies(role, &acc, stop, |id| acc.transitive.contains(&id))? {
                     acc.boundaries.insert(Construct::NonSimpleRole);
                     break;
+                }
+            }
+        }
+
+        {
+            let top = interner.id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY);
+            let non_simple = |property| -> Result<bool, EntailError> {
+                Ok((top.is_some()
+                    && subrole_satisfies(Role::Named(property), &acc, stop, |id| top == Some(id))?)
+                    || role_program
+                        .as_ref()
+                        .is_some_and(|program| program.non_simple.contains(&Role::Named(property))))
+            };
+            for (&property, predicates) in &index {
+                poll(stop)?;
+                let restricted = predicates.get(&v.ty).is_some_and(|types| {
+                    types.iter().any(|&kind| {
+                        [
+                            v.functional,
+                            v.inverse_functional,
+                            v.irreflexive,
+                            v.asymmetric,
+                        ]
+                        .contains(&kind)
+                    })
+                });
+                if restricted && non_simple(property)? {
+                    return Err(
+                        super::roles::RoleHierarchyError::NonSimpleProperty { property }
+                            .with_source(&interner)
+                            .into(),
+                    );
+                }
+            }
+            for &pair in &acc.disjoint_roles {
+                for property in <[u32; 2]>::from(pair) {
+                    if non_simple(property)? {
+                        return Err(super::roles::RoleHierarchyError::NonSimpleProperty {
+                            property,
+                        }
+                        .with_source(&interner)
+                        .into());
+                    }
                 }
             }
         }
@@ -1218,6 +1332,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
             generating: Vec::new(),
             inverses: acc.inverses,
             role_sub: acc.role_sub,
+            role_program,
             abox_types: acc.abox_types,
             abox_roles: acc.abox_roles,
             same_as: acc.same_as,
@@ -1381,15 +1496,16 @@ pub(crate) fn register_literals(
     Ok(classes.class_of)
 }
 
-/// Whether `role` is NON-SIMPLE — transitive, or the super-role of a transitive role.
+/// Whether any sub-role or inverse partner has the requested characteristic.
 ///
 /// A role's inverse is simple exactly when the role is, so `Role::Inv(p)` is decided on
 /// `p`. The sub-role closure walks [`Accums::role_sub`], which is the same hierarchy the
 /// tableau's `achievers` walks, so the two agree on what a role's extension contains.
-fn is_non_simple(
+fn subrole_satisfies(
     role: Role,
     acc: &Accums,
     stop: Option<&dyn StopSignal>,
+    predicate: impl Fn(u32) -> bool,
 ) -> Result<bool, EntailError> {
     let (Role::Named(head) | Role::Inv(head)) = role;
     let mut seen: BTreeSet<u32> = BTreeSet::new();
@@ -1399,8 +1515,14 @@ fn is_non_simple(
         if !seen.insert(current) {
             continue;
         }
-        if acc.transitive.contains(&current) {
+        if predicate(current) {
             return Ok(true);
+        }
+        if let Some(partners) = acc.inverses.get(&current) {
+            for &partner in partners {
+                poll(stop)?;
+                stack.push(partner);
+            }
         }
         if let Some(subs) = acc.role_sub.get(&current) {
             for &sub in subs {
@@ -1676,7 +1798,9 @@ fn disjoint_union(
 /// * a term outside the reserved namespaces is the caller's own vocabulary and becomes a
 ///   role assertion.
 fn role_or_boundary(acc: &mut Accums, interner: &Interner, v: &Vocab, s: u32, p: u32, o: u32) {
-    if bottom_role_index(interner, p).is_some() {
+    if bottom_role_index(interner, p).is_some()
+        || matches!(interner.value(p), TermValue::Iri(iri) if iri == purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
+    {
         acc.abox_roles.push((s, p, o));
         acc.name(interner, s);
         acc.name(interner, o);

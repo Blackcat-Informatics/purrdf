@@ -25,6 +25,7 @@
 use std::hash::{BuildHasher, Hash};
 
 use hashbrown::HashTable;
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
 
 /// A DL role: a named object property, or its inverse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -97,6 +98,19 @@ pub(crate) enum Concept {
     /// `owl:ReflexiveProperty` (`⊤ ⊑ ∃r.Self`) and `owl:IrreflexiveProperty`
     /// (`⊤ ⊑ ¬∃r.Self`) are ordinary GCIs here rather than a second mechanism.
     SelfRestriction(Role),
+    /// An internal positive role-automaton obligation. This is not a user-visible
+    /// class or RDF term: the role calculus supplies its transition/acceptance
+    /// implications, and its identity participates in ordinary node blocking.
+    RoleState {
+        /// The compiled role-language machine.
+        machine: usize,
+        /// The local automaton state.
+        state: usize,
+        /// The original universal restriction's filler concept.
+        filler: u32,
+        /// The classical complement of this internal state atom.
+        negated: bool,
+    },
 }
 
 impl Concept {
@@ -197,6 +211,7 @@ impl Concept {
             Self::Top
             | Self::Bottom
             | Self::Named(_)
+            | Self::RoleState { .. }
             | Self::SelfRestriction(_)
             | Self::Data(_) => self,
             Self::Nominal(ids) => Self::nominal(ids),
@@ -221,6 +236,17 @@ impl Concept {
         match c {
             Self::Top => Self::Bottom,
             Self::Bottom => Self::Top,
+            Self::RoleState {
+                machine,
+                state,
+                filler,
+                negated,
+            } => Self::RoleState {
+                machine,
+                state,
+                filler,
+                negated: !negated,
+            },
             Self::Named(_) | Self::SelfRestriction(_) | Self::Data(_) => Self::Not(Box::new(c)),
             Self::Nominal(ids) => Self::Not(Box::new(Self::nominal(ids))),
             Self::Not(inner) => inner.nnf(),
@@ -331,12 +357,13 @@ impl ConceptTable {
         let decomp = match c {
             Concept::Top => Decomp::Top,
             Concept::Bottom => Decomp::Bottom,
-            Concept::Named(_) => Decomp::Named,
+            Concept::Named(_) | Concept::RoleState { negated: false, .. } => Decomp::Named,
+            Concept::RoleState { negated: true, .. } => Decomp::NegNamed,
             Concept::Nominal(ids) => Decomp::Nominal(ids.clone()),
             Concept::SelfRestriction(role) => Decomp::SelfRestriction(*role),
             Concept::Data(range) => Decomp::Data(*range),
             Concept::Not(inner) => match inner.as_ref() {
-                Concept::Named(_) => Decomp::NegNamed,
+                Concept::Named(_) | Concept::RoleState { .. } => Decomp::NegNamed,
                 Concept::Nominal(ids) => Decomp::NegNominal(ids.clone()),
                 Concept::SelfRestriction(role) => Decomp::NegSelfRestriction(*role),
                 Concept::Data(range) => Decomp::NegData(*range),
@@ -350,14 +377,117 @@ impl ConceptTable {
             Concept::Min(n, r, c) => Decomp::Min(*n, *r, self.intern_nnf(c)),
             Concept::Max(n, r, c) => Decomp::Max(*n, *r, self.intern_nnf(c)),
         };
-        let id = u32::try_from(self.concepts.len()).expect("concept count fits u32");
-        self.concepts.push(c.clone());
+        self.append(c.clone(), decomp, hash, |_| Ok(()))
+            .expect("resident concept count fits u32")
+    }
+
+    /// Intern a stack-only automaton-state identity. The reasoner is a resident
+    /// owner, so its existing containers already belong to the unlimited resident
+    /// admission; every replacement is nevertheless fallible before allocation.
+    /// This is not a certificate for a bounded caller's pre-existing raw table.
+    pub(crate) fn try_role_state(
+        &mut self,
+        machine: usize,
+        state: usize,
+        filler: u32,
+    ) -> Result<u32, StorageError> {
+        let concept = Concept::RoleState {
+            machine,
+            state,
+            filler,
+            negated: false,
+        };
+        let hash = purrdf_core::FastHasher::default().hash_one(&concept);
+        let existing = self
+            .index
+            .find(hash, |&id| self.concepts[id as usize] == concept)
+            .copied();
+        if let Some(id) = existing
+            && self.neg[id as usize].is_some()
+        {
+            return Ok(id);
+        }
+        let positive = match existing {
+            Some(id) => id,
+            None => self.append(concept, Decomp::Named, hash, Self::reserve_state)?,
+        };
+        let complement = Concept::RoleState {
+            machine,
+            state,
+            filler,
+            negated: true,
+        };
+        let complement_hash = purrdf_core::FastHasher::default().hash_one(&complement);
+        let negative = self.append(
+            complement,
+            Decomp::NegNamed,
+            complement_hash,
+            Self::reserve_state,
+        )?;
+        self.neg[positive as usize] = Some(negative);
+        self.neg[negative as usize] = Some(positive);
+        Ok(positive)
+    }
+
+    fn reserve_state(table: &mut Self) -> Result<(), StorageError> {
+        let old = table
+            .concepts
+            .capacity()
+            .checked_mul(size_of::<Concept>())
+            .and_then(|n| {
+                table
+                    .decomp
+                    .capacity()
+                    .checked_mul(size_of::<Decomp>())
+                    .and_then(|m| n.checked_add(m))
+            })
+            .and_then(|n| {
+                table
+                    .neg
+                    .capacity()
+                    .checked_mul(size_of::<Option<u32>>())
+                    .and_then(|m| n.checked_add(m))
+            })
+            .and_then(|n| {
+                purrdf_core::hash::hash_table_allocation_bound::<u32>(table.index.capacity())
+                    .and_then(|m| n.checked_add(m))
+            })
+            .ok_or(StorageError::SizeOverflow)?;
+        let required = table
+            .concepts
+            .len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        let mut resident = Resident;
+        let mut memory = Memory::resume(&mut resident, old);
+        memory.reserve_for_push(&mut table.concepts)?;
+        memory.reserve_for_push(&mut table.decomp)?;
+        memory.reserve_for_push(&mut table.neg)?;
+        purrdf_core::hash::reserve_table_with_memory(
+            &mut table.index,
+            required,
+            |&id| purrdf_core::FastHasher::default().hash_one(&table.concepts[id as usize]),
+            &mut memory,
+        )
+    }
+
+    /// One dense publication body, after its caller's original growth policy.
+    fn append(
+        &mut self,
+        concept: Concept,
+        decomp: Decomp,
+        hash: u64,
+        reserve: impl FnOnce(&mut Self) -> Result<(), StorageError>,
+    ) -> Result<u32, StorageError> {
+        let id = u32::try_from(self.concepts.len()).map_err(|_| StorageError::SizeOverflow)?;
+        reserve(self)?;
+        self.concepts.push(concept);
         self.decomp.push(decomp);
         self.neg.push(None);
         self.index.insert_unique(hash, id, |&id| {
             purrdf_core::FastHasher::default().hash_one(&self.concepts[id as usize])
         });
-        id
+        Ok(id)
     }
 
     /// The decomposed structure behind a concept id.
@@ -432,6 +562,7 @@ impl ConceptTable {
 
     /// Populate the negation id of every interned concept (a fixpoint, since
     /// negating one concept may intern a new one whose own negation is then filled).
+    #[cfg(test)]
     pub(crate) fn finalize(&mut self) {
         match self.finalize_until(|| Ok::<(), std::convert::Infallible>(())) {
             Ok(()) => {}
