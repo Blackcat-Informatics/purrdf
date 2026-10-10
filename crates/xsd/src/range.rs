@@ -115,6 +115,7 @@
 //! # Ok::<(), purrdf_xsd::XsdError>(())
 //! ```
 
+use purrdf_lex::walk::VecReserve;
 use std::cmp::Ordering;
 
 use crate::datatype::XsdDatatype;
@@ -123,6 +124,16 @@ use crate::numeric::Decimal;
 use crate::ops::{value_cmp, value_eq};
 use crate::temporal::Time;
 use crate::value::XsdValue;
+
+mod storage;
+use storage::{CloneOwned, Memory, OwnedBytes};
+pub use storage::{Storage, StorageError};
+
+fn resident<T>(owned: usize, body: impl FnOnce(&mut Memory<'_>) -> Result<T, StorageError>) -> T {
+    let mut storage = storage::Resident;
+    let mut memory = Memory::with_resident_input(&mut storage, owned);
+    body(&mut memory).expect("resident range storage")
+}
 
 // ── Public surface ───────────────────────────────────────────────────────────────
 
@@ -332,6 +343,21 @@ pub fn cardinality(range: &DataRange) -> Cardinality {
     extent(range).cardinality()
 }
 
+/// Count a range through the same native algebra with before-growth admission.
+/// The borrowed input remains caller-owned; every construction product is gone
+/// before the operation releases its storage total.
+/// # Errors
+/// Returns the original admission or physical allocation refusal, never `Undecided`.
+pub fn try_cardinality(
+    range: &DataRange,
+    storage: &mut dyn Storage,
+) -> Result<Cardinality, StorageError> {
+    let mut memory = Memory::new(storage);
+    memory.scope(0, |memory| {
+        extent_with(range, memory)?.cardinality_with(memory)
+    })
+}
+
 /// Whether every question this module answers about `range` is answered exactly — no
 /// [`Satisfiability::Undecided`] can arise from `range`, nor from any boolean
 /// combination of it with other exactly-decided ranges.
@@ -405,7 +431,33 @@ pub fn is_exactly_decided(range: &DataRange) -> bool {
 /// ```
 #[must_use]
 pub fn containment(sub: &DataRange, sup: &DataRange) -> Satisfiability {
-    satisfiability(&counterexample(sub, sup))
+    resident(0, |memory| containment_with(sub, sup, memory))
+}
+
+/// Exact native counterexample emptiness with every temporary admitted before birth.
+/// # Errors
+/// Returns a typed refusal rather than weakening containment into an unknown result.
+pub fn try_containment(
+    sub: &DataRange,
+    sup: &DataRange,
+    storage: &mut dyn Storage,
+) -> Result<Satisfiability, StorageError> {
+    let mut memory = Memory::new(storage);
+    memory.scope(0, |memory| containment_with(sub, sup, memory))
+}
+
+fn containment_with(
+    sub: &DataRange,
+    sup: &DataRange,
+    memory: &mut Memory<'_>,
+) -> Result<Satisfiability, StorageError> {
+    memory.scope(0, |memory| {
+        let sub = extent_with(sub, memory)?;
+        let sup = extent_with(sup, memory)?;
+        let not_sup = sup.complement_with(memory)?;
+        let difference = sub.intersect_with(&not_sup, memory)?;
+        difference.satisfiability_with(memory)
+    })
 }
 
 /// The range a counterexample to `sub ⊆ sup` would have to inhabit.
@@ -468,15 +520,35 @@ pub fn counterexample(sub: &DataRange, sup: &DataRange) -> DataRange {
 /// ```
 #[must_use]
 pub fn same_value(a: &XsdValue, b: &XsdValue) -> bool {
-    if space_of_value(a) != space_of_value(b) {
-        return false;
+    resident(0, |memory| same_value_with(a, b, memory))
+}
+
+fn same_value_with(
+    left: &XsdValue,
+    right: &XsdValue,
+    memory: &mut Memory<'_>,
+) -> Result<bool, StorageError> {
+    memory.step()?;
+    if space_of_value(left) != space_of_value(right) {
+        return Ok(false);
     }
-    match (a, b) {
-        (XsdValue::Float(x), XsdValue::Float(y)) => same_float(f64::from(*x), f64::from(*y)),
-        (XsdValue::Double(x), XsdValue::Double(y)) => same_float(*x, *y),
-        (XsdValue::Time(x), XsdValue::Time(y)) => same_time(x, y),
-        _ => value_eq(a, b),
+    if space_of_value(left) == Space::Decimal {
+        return memory.scope(0, |memory| {
+            let left = memory.decimal_of(left)?.expect("decimal space value");
+            let right = memory.decimal_of(right)?.expect("decimal space value");
+            Ok(memory.decimal_cmp(&left, &right)? == Ordering::Equal)
+        });
     }
+    Ok(match (left, right) {
+        (XsdValue::Float(left), XsdValue::Float(right)) => {
+            same_float(f64::from(*left), f64::from(*right))
+        }
+        (XsdValue::Double(left), XsdValue::Double(right)) => same_float(*left, *right),
+        (XsdValue::Time(left), XsdValue::Time(right)) => same_time(left, right),
+        // Every nondecimal carrier here is an inline temporal/Boolean value or
+        // borrowed lexical/byte sequence; its native equality allocates nothing.
+        _ => value_eq(left, right),
+    })
 }
 
 /// Float identity: the value space holds exactly one NaN, and the two zeros share the
@@ -773,6 +845,17 @@ enum Point {
 }
 
 impl Point {
+    fn cmp_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Ordering, StorageError> {
+        memory.step()?;
+        Ok(match (self, other) {
+            (Self::Dec(left), Self::Dec(right)) => return memory.decimal_cmp(left, right),
+            (Self::Float(left), Self::Float(right)) => {
+                left.partial_cmp(right).unwrap_or(Ordering::Equal)
+            }
+            (Self::Len(left), Self::Len(right)) => left.cmp(right),
+            _ => self.stratum().cmp(&other.stratum()),
+        })
+    }
     /// A float endpoint with the two zeros collapsed onto one point.
     fn float(x: f64) -> Self {
         Self::Float(if x == 0.0 { 0.0 } else { x })
@@ -815,13 +898,7 @@ impl Point {
 
 impl Ord for Point {
     fn cmp(&self, other: &Self) -> Ordering {
-        match (self, other) {
-            (Self::Dec(a), Self::Dec(b)) => a.cmp(b),
-            // `NaN` is excluded by construction, so `partial_cmp` is total here.
-            (Self::Float(a), Self::Float(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
-            (Self::Len(a), Self::Len(b)) => a.cmp(b),
-            _ => self.stratum().cmp(&other.stratum()),
-        }
+        resident(0, |memory| self.cmp_with(other, memory))
     }
 }
 
@@ -838,6 +915,24 @@ impl PartialEq for Point {
 }
 
 impl Eq for Point {}
+
+impl OwnedBytes for Point {
+    fn owned_bytes(&self) -> usize {
+        match self {
+            Self::Dec(value) => value.owned_bytes(),
+            _ => 0,
+        }
+    }
+}
+impl CloneOwned for Point {
+    fn clone_owned(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(match self {
+            Self::Dec(value) => Self::Dec(value.clone_owned(memory)?),
+            Self::Float(value) => Self::Float(*value),
+            Self::Len(value) => Self::Len(*value),
+        })
+    }
+}
 
 /// The lower end of an interval.
 #[derive(Clone)]
@@ -861,18 +956,33 @@ enum Hi {
     Excl(Point),
 }
 
+macro_rules! endpoint_ownership { ($($ty:ident),+ $(,)?) => {$(
+    impl OwnedBytes for $ty { fn owned_bytes(&self) -> usize { match self { Self::Unbounded => 0, Self::Incl(value) | Self::Excl(value) => value.owned_bytes() } } }
+    impl CloneOwned for $ty {
+        fn clone_owned(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+            Ok(match self { Self::Unbounded => Self::Unbounded, Self::Incl(value) => Self::Incl(value.clone_owned(memory)?), Self::Excl(value) => Self::Excl(value.clone_owned(memory)?) })
+        }
+    }
+)+}; }
+endpoint_ownership!(Lo, Hi);
+
 impl Lo {
-    /// Where this lower end sits relative to another: `Unbounded` is least, and at one
-    /// endpoint the inclusive end is the lower of the two.
-    fn cmp_lo(&self, other: &Self) -> Ordering {
-        match (self, other) {
+    fn cmp_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Ordering, StorageError> {
+        Ok(match (self, other) {
             (Self::Unbounded, Self::Unbounded) => Ordering::Equal,
             (Self::Unbounded, _) => Ordering::Less,
             (_, Self::Unbounded) => Ordering::Greater,
-            (Self::Incl(a) | Self::Excl(a), Self::Incl(b) | Self::Excl(b)) => {
-                a.cmp(b).then_with(|| self.rank().cmp(&other.rank()))
-            }
-        }
+            (Self::Incl(left) | Self::Excl(left), Self::Incl(right) | Self::Excl(right)) => left
+                .cmp_with(right, memory)?
+                .then_with(|| self.rank().cmp(&other.rank())),
+        })
+    }
+    fn admits_with(&self, value: &Point, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        Ok(match self {
+            Self::Unbounded => true,
+            Self::Incl(bound) => value.cmp_with(bound, memory)? != Ordering::Less,
+            Self::Excl(bound) => value.cmp_with(bound, memory)? == Ordering::Greater,
+        })
     }
 
     /// Sort key at one endpoint: inclusive is the lower end.
@@ -883,29 +993,25 @@ impl Lo {
             Self::Excl(_) => 2,
         }
     }
-
-    /// Whether `v` clears this lower end.
-    fn admits(&self, v: &Point) -> bool {
-        match self {
-            Self::Unbounded => true,
-            Self::Incl(a) => v >= a,
-            Self::Excl(a) => v > a,
-        }
-    }
 }
 
 impl Hi {
-    /// Where this upper end sits relative to another: `Unbounded` is greatest, and at
-    /// one endpoint the exclusive end is the lower of the two.
-    fn cmp_hi(&self, other: &Self) -> Ordering {
-        match (self, other) {
+    fn cmp_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Ordering, StorageError> {
+        Ok(match (self, other) {
             (Self::Unbounded, Self::Unbounded) => Ordering::Equal,
             (Self::Unbounded, _) => Ordering::Greater,
             (_, Self::Unbounded) => Ordering::Less,
-            (Self::Incl(a) | Self::Excl(a), Self::Incl(b) | Self::Excl(b)) => {
-                a.cmp(b).then_with(|| self.rank().cmp(&other.rank()))
-            }
-        }
+            (Self::Incl(left) | Self::Excl(left), Self::Incl(right) | Self::Excl(right)) => left
+                .cmp_with(right, memory)?
+                .then_with(|| self.rank().cmp(&other.rank())),
+        })
+    }
+    fn admits_with(&self, value: &Point, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        Ok(match self {
+            Self::Unbounded => true,
+            Self::Incl(bound) => value.cmp_with(bound, memory)? != Ordering::Greater,
+            Self::Excl(bound) => value.cmp_with(bound, memory)? == Ordering::Less,
+        })
     }
 
     /// Sort key at one endpoint: exclusive is the lower end.
@@ -914,15 +1020,6 @@ impl Hi {
             Self::Excl(_) => 0,
             Self::Incl(_) => 1,
             Self::Unbounded => 2,
-        }
-    }
-
-    /// Whether `v` clears this upper end.
-    fn admits(&self, v: &Point) -> bool {
-        match self {
-            Self::Unbounded => true,
-            Self::Incl(a) => v <= a,
-            Self::Excl(a) => v < a,
         }
     }
 }
@@ -936,6 +1033,20 @@ struct Interval {
     hi: Hi,
 }
 
+impl OwnedBytes for Interval {
+    fn owned_bytes(&self) -> usize {
+        self.lo.owned_bytes() + self.hi.owned_bytes()
+    }
+}
+impl CloneOwned for Interval {
+    fn clone_owned(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            lo: self.lo.clone_owned(memory)?,
+            hi: self.hi.clone_owned(memory)?,
+        })
+    }
+}
+
 impl Interval {
     /// The whole domain.
     fn full() -> Self {
@@ -947,33 +1058,36 @@ impl Interval {
 
     /// A single point, both ends inclusive.
     fn point(v: Point) -> Self {
-        Self {
-            lo: Lo::Incl(v.clone()),
-            hi: Hi::Incl(v),
-        }
+        resident(v.owned_bytes(), |memory| Self::point_with(v, memory))
     }
-
-    /// Whether the interval spans any of the ORDER — a weaker property than holding a
-    /// member of a stratum's carrier, which each stratum decides for itself.
-    fn spans_order(&self) -> bool {
-        match (&self.lo, &self.hi) {
+    fn point_with(value: Point, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        memory.scope(value.owned_bytes(), |memory| {
+            Ok(Self {
+                lo: Lo::Incl(value.clone_owned(memory)?),
+                hi: Hi::Incl(value),
+            })
+        })
+    }
+    fn spans_with(&self, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        Ok(match (&self.lo, &self.hi) {
             (Lo::Unbounded, _) | (_, Hi::Unbounded) => true,
-            (Lo::Incl(a), Hi::Incl(b)) => a <= b,
-            (Lo::Incl(a) | Lo::Excl(a), Hi::Excl(b)) | (Lo::Excl(a), Hi::Incl(b)) => a < b,
-        }
+            (Lo::Incl(left), Hi::Incl(right)) => left.cmp_with(right, memory)? != Ordering::Greater,
+            (Lo::Incl(left) | Lo::Excl(left), Hi::Excl(right))
+            | (Lo::Excl(left), Hi::Incl(right)) => left.cmp_with(right, memory)? == Ordering::Less,
+        })
     }
-
-    /// The single point this interval pins down, if it is a closed degenerate one.
-    fn degenerate_point(&self) -> Option<&Point> {
-        match (&self.lo, &self.hi) {
-            (Lo::Incl(a), Hi::Incl(b)) if a == b => Some(a),
+    fn degenerate_with(&self, memory: &mut Memory<'_>) -> Result<Option<&Point>, StorageError> {
+        Ok(match (&self.lo, &self.hi) {
+            (Lo::Incl(left), Hi::Incl(right))
+                if left.cmp_with(right, memory)? == Ordering::Equal =>
+            {
+                Some(left)
+            }
             _ => None,
-        }
+        })
     }
-
-    /// Whether `v` lies in the interval.
-    fn holds(&self, v: &Point) -> bool {
-        self.lo.admits(v) && self.hi.admits(v)
+    fn holds_with(&self, value: &Point, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        Ok(self.lo.admits_with(value, memory)? && self.hi.admits_with(value, memory)?)
     }
 }
 
@@ -984,7 +1098,190 @@ struct IntervalSet {
     intervals: Vec<Interval>,
 }
 
+impl OwnedBytes for IntervalSet {
+    fn owned_bytes(&self) -> usize {
+        self.intervals.owned_bytes()
+    }
+}
+impl CloneOwned for IntervalSet {
+    fn clone_owned(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            intervals: self.intervals.clone_owned(memory)?,
+        })
+    }
+}
+
 impl IntervalSet {
+    fn full_with(memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            intervals: memory.one(Interval::full())?,
+        })
+    }
+    fn point_with(value: Point, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        let interval = Interval::point_with(value, memory)?;
+        Ok(Self {
+            intervals: memory.one(interval)?,
+        })
+    }
+    fn canonical_with(
+        mut intervals: Vec<Interval>,
+        memory: &mut Memory<'_>,
+    ) -> Result<Self, StorageError> {
+        memory.scope(intervals.owned_bytes(), |memory| {
+            let mut first_error = None;
+            intervals.retain(|interval| match interval.spans_with(memory) {
+                Ok(spans) => spans,
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                    true
+                }
+            });
+            if let Some(error) = first_error {
+                return Err(error);
+            }
+            memory.sort(&mut intervals, |left, right, memory| {
+                let order = left.lo.cmp_with(&right.lo, memory)?;
+                if order == Ordering::Equal {
+                    left.hi.cmp_with(&right.hi, memory)
+                } else {
+                    Ok(order)
+                }
+            })?;
+            let mut merged: Vec<Interval> = Vec::new();
+            memory.reserve(&mut merged, intervals.len())?;
+            for interval in intervals {
+                let touching = match merged.last() {
+                    Some(last) => !gap_with(last, &interval, memory)?,
+                    None => false,
+                };
+                if touching {
+                    if let Some(last) = merged.last_mut()
+                        && last.hi.cmp_with(&interval.hi, memory)? == Ordering::Less
+                    {
+                        last.hi = interval.hi;
+                    }
+                } else {
+                    merged.push(interval);
+                }
+            }
+            Ok(Self { intervals: merged })
+        })
+    }
+    fn holds_with(&self, value: &Point, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        for interval in &self.intervals {
+            if interval.holds_with(value, memory)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    fn complement_with(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        memory.scope(0, |memory| {
+            let mut out: Vec<Interval> = Vec::new();
+            memory.reserve(
+                &mut out,
+                self.intervals
+                    .len()
+                    .checked_add(1)
+                    .ok_or(StorageError::Allocation)?,
+            )?;
+            let mut cursor = Lo::Unbounded;
+            let mut open = true;
+            for interval in &self.intervals {
+                let hi = match &interval.lo {
+                    Lo::Unbounded => None,
+                    Lo::Incl(value) => Some(Hi::Excl(value.clone_owned(memory)?)),
+                    Lo::Excl(value) => Some(Hi::Incl(value.clone_owned(memory)?)),
+                };
+                if let Some(hi) = hi {
+                    out.push(Interval {
+                        lo: cursor.clone_owned(memory)?,
+                        hi,
+                    });
+                }
+                let next = match &interval.hi {
+                    Hi::Unbounded => {
+                        open = false;
+                        break;
+                    }
+                    Hi::Incl(value) => Lo::Excl(value.clone_owned(memory)?),
+                    Hi::Excl(value) => Lo::Incl(value.clone_owned(memory)?),
+                };
+                memory.drop_value(cursor)?;
+                cursor = next;
+            }
+            if open {
+                out.push(Interval {
+                    lo: cursor,
+                    hi: Hi::Unbounded,
+                });
+            }
+            Self::canonical_with(out, memory)
+        })
+    }
+    fn intersect_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        memory.scope(0, |memory| {
+            let mut out = Vec::new();
+            for left in &self.intervals {
+                for right in &other.intervals {
+                    let lo = if left.lo.cmp_with(&right.lo, memory)? == Ordering::Greater {
+                        &left.lo
+                    } else {
+                        &right.lo
+                    };
+                    let hi = if left.hi.cmp_with(&right.hi, memory)? == Ordering::Less {
+                        &left.hi
+                    } else {
+                        &right.hi
+                    };
+                    let interval = Interval {
+                        lo: lo.clone_owned(memory)?,
+                        hi: hi.clone_owned(memory)?,
+                    };
+                    if interval.spans_with(memory)? {
+                        memory.push(&mut out, interval)?;
+                    } else {
+                        memory.drop_value(interval)?;
+                    }
+                }
+            }
+            Self::canonical_with(out, memory)
+        })
+    }
+    fn union_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        memory.scope(0, |memory| {
+            let mut out = self.intervals.clone_owned(memory)?;
+            memory.reserve(&mut out, other.intervals.len())?;
+            for interval in &other.intervals {
+                out.push(interval.clone_owned(memory)?);
+            }
+            Self::canonical_with(out, memory)
+        })
+    }
+    fn sample_with(&self, limit: usize, memory: &mut Memory<'_>) -> Result<Vec<u64>, StorageError> {
+        let mut out = Vec::new();
+        for interval in &self.intervals {
+            let mut cursor = match &interval.lo {
+                Lo::Unbounded => 0,
+                Lo::Incl(value) => value.as_len().unwrap_or(0),
+                Lo::Excl(value) => match value.as_len().unwrap_or(0).checked_add(1) {
+                    Some(next) => next,
+                    None => continue,
+                },
+            };
+            for _ in 0..limit {
+                if !interval.holds_with(&Point::Len(cursor), memory)? {
+                    break;
+                }
+                memory.push(&mut out, cursor)?;
+                match cursor.checked_add(1) {
+                    Some(next) => cursor = next,
+                    None => break,
+                }
+            }
+        }
+        Ok(out)
+    }
     /// The empty set.
     fn empty() -> Self {
         Self {
@@ -993,17 +1290,9 @@ impl IntervalSet {
     }
 
     /// The whole domain.
+    #[cfg(test)]
     fn full() -> Self {
-        Self {
-            intervals: vec![Interval::full()],
-        }
-    }
-
-    /// A single point.
-    fn point(v: Point) -> Self {
-        Self {
-            intervals: vec![Interval::point(v)],
-        }
+        resident(0, Self::full_with)
     }
 
     /// Canonicalize: drop order-empty intervals, sort, and merge every pair that leaves
@@ -1013,143 +1302,52 @@ impl IntervalSet {
     /// equal agree on both ends, and every reading of an endpoint afterwards is numeric
     /// (an order comparison, an integer rounding, a carrier test), so order-equal
     /// endpoints answer alike and the tie order cannot be observed.
-    fn canonical(mut intervals: Vec<Interval>) -> Self {
-        intervals.retain(Interval::spans_order);
-        intervals.sort_unstable_by(|a, b| a.lo.cmp_lo(&b.lo).then_with(|| a.hi.cmp_hi(&b.hi)));
-        let mut merged: Vec<Interval> = Vec::with_capacity(intervals.len());
-        for iv in intervals {
-            let touching = merged.last().is_some_and(|last| !gap_between(last, &iv));
-            if touching {
-                if let Some(last) = merged.last_mut()
-                    && last.hi.cmp_hi(&iv.hi) == Ordering::Less
-                {
-                    last.hi = iv.hi;
-                }
-            } else {
-                merged.push(iv);
-            }
-        }
-        Self { intervals: merged }
+    #[cfg(test)]
+    fn canonical(intervals: Vec<Interval>) -> Self {
+        resident(intervals.owned_bytes(), |memory| {
+            Self::canonical_with(intervals, memory)
+        })
     }
 
     /// Whether `v` lies in the set.
+    #[cfg(test)]
     fn holds(&self, v: &Point) -> bool {
-        self.intervals.iter().any(|iv| iv.holds(v))
+        resident(0, |memory| self.holds_with(v, memory))
     }
 
     /// The gaps — exactly the set-theoretic complement over the order.
+    #[cfg(test)]
     fn complement(&self) -> Self {
-        let mut out: Vec<Interval> = Vec::with_capacity(self.intervals.len() + 1);
-        let mut cursor = Lo::Unbounded;
-        let mut open = true;
-        for iv in &self.intervals {
-            match &iv.lo {
-                Lo::Unbounded => {}
-                Lo::Incl(v) => out.push(Interval {
-                    lo: cursor.clone(),
-                    hi: Hi::Excl(v.clone()),
-                }),
-                Lo::Excl(v) => out.push(Interval {
-                    lo: cursor.clone(),
-                    hi: Hi::Incl(v.clone()),
-                }),
-            }
-            cursor = match &iv.hi {
-                Hi::Unbounded => {
-                    open = false;
-                    break;
-                }
-                Hi::Incl(v) => Lo::Excl(v.clone()),
-                Hi::Excl(v) => Lo::Incl(v.clone()),
-            };
-        }
-        if open {
-            out.push(Interval {
-                lo: cursor,
-                hi: Hi::Unbounded,
-            });
-        }
-        Self::canonical(out)
+        resident(0, |memory| self.complement_with(memory))
     }
 
     /// Pairwise intersection.
+    #[cfg(test)]
     fn intersect(&self, other: &Self) -> Self {
-        let mut out = Vec::new();
-        for a in &self.intervals {
-            for b in &other.intervals {
-                let lo = if a.lo.cmp_lo(&b.lo) == Ordering::Greater {
-                    a.lo.clone()
-                } else {
-                    b.lo.clone()
-                };
-                let hi = if a.hi.cmp_hi(&b.hi) == Ordering::Less {
-                    a.hi.clone()
-                } else {
-                    b.hi.clone()
-                };
-                let iv = Interval { lo, hi };
-                if iv.spans_order() {
-                    out.push(iv);
-                }
-            }
-        }
-        Self::canonical(out)
-    }
-
-    /// Merge of the two sets.
-    fn union(&self, other: &Self) -> Self {
-        let mut out = self.intervals.clone();
-        out.extend_from_slice(&other.intervals);
-        Self::canonical(out)
-    }
-
-    /// Up to `limit` least lengths from each interval.
-    ///
-    /// Only a length-selected space samples its endpoints this way; the ordered strata
-    /// read theirs through their own [`Algebra`] impl.
-    fn sample(&self, limit: usize) -> Vec<u64> {
-        let mut out = Vec::new();
-        for iv in &self.intervals {
-            let mut cursor = match &iv.lo {
-                Lo::Unbounded => 0,
-                Lo::Incl(p) => p.as_len().unwrap_or(0),
-                Lo::Excl(p) => match p.as_len().unwrap_or(0).checked_add(1) {
-                    Some(next) => next,
-                    None => continue,
-                },
-            };
-            for _ in 0..limit {
-                if !iv.holds(&Point::Len(cursor)) {
-                    break;
-                }
-                out.push(cursor);
-                match cursor.checked_add(1) {
-                    Some(next) => cursor = next,
-                    None => break,
-                }
-            }
-        }
-        out
+        resident(0, |memory| self.intersect_with(other, memory))
     }
 }
 
-/// Whether an order gap separates `first` (the lower interval) from `second`.
-fn gap_between(first: &Interval, second: &Interval) -> bool {
-    let gap_lo = match &first.hi {
-        Hi::Unbounded => return false,
-        Hi::Incl(v) => Lo::Excl(v.clone()),
-        Hi::Excl(v) => Lo::Incl(v.clone()),
+fn gap_with(
+    first: &Interval,
+    second: &Interval,
+    memory: &mut Memory<'_>,
+) -> Result<bool, StorageError> {
+    let (left, left_excluded) = match &first.hi {
+        Hi::Unbounded => return Ok(false),
+        Hi::Incl(value) => (value, false),
+        Hi::Excl(value) => (value, true),
     };
-    let gap_hi = match &second.lo {
-        Lo::Unbounded => return false,
-        Lo::Incl(v) => Hi::Excl(v.clone()),
-        Lo::Excl(v) => Hi::Incl(v.clone()),
+    let (right, right_excluded) = match &second.lo {
+        Lo::Unbounded => return Ok(false),
+        Lo::Incl(value) => (value, false),
+        Lo::Excl(value) => (value, true),
     };
-    Interval {
-        lo: gap_lo,
-        hi: gap_hi,
-    }
-    .spans_order()
+    Ok(match left.cmp_with(right, memory)? {
+        Ordering::Less => true,
+        Ordering::Equal => left_excluded && right_excluded,
+        Ordering::Greater => false,
+    })
 }
 
 // ── Decimal endpoint arithmetic ──────────────────────────────────────────────────
@@ -1159,40 +1357,42 @@ const fn is_integral(d: &exact::Decimal) -> bool {
     d.is_integer()
 }
 
-/// The least integer greater than or equal to `d`.
-fn dec_ceil(d: &exact::Decimal) -> exact::Integer {
-    d.round_to_integer(exact::Rounding::Ceiling)
-}
-
-/// The greatest integer less than or equal to `d`.
-fn dec_floor(d: &exact::Decimal) -> exact::Integer {
-    d.round_to_integer(exact::Rounding::Floor)
-}
-
-/// The decimal-space endpoint a value denotes, of any size, or `None` when it is
-/// from another space.
-fn decimal_point(value: &XsdValue) -> Option<exact::Decimal> {
-    value.to_exact_decimal()
-}
-
 // ── The per-space closed algebras ────────────────────────────────────────────────
 
 /// A set exactly represented in one value space's own closed algebra.
-trait Algebra: Clone {
+trait Algebra: Clone + CloneOwned {
     /// The value identity this space accepts.
     type Value;
     /// The space's complement of this set.
-    fn complement(&self) -> Self;
-    /// Intersection.
-    fn intersect(&self, other: &Self) -> Self;
-    /// Union.
-    fn union(&self, other: &Self) -> Self;
+    #[cfg(test)]
+    fn complement(&self) -> Self {
+        resident(0, |memory| self.complement_with(memory))
+    }
     /// Whether the set holds no value. Exact — that is what makes the shape closed.
-    fn is_empty(&self) -> bool;
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
+        resident(0, |memory| self.empty_with(memory))
+    }
     /// How many values the set holds.
-    fn count(&self) -> Cardinality;
+    #[cfg(test)]
+    fn count(&self) -> Cardinality {
+        resident(0, |memory| self.count_with(memory))
+    }
     /// Whether the set holds `value`, which the caller has routed to this space.
-    fn holds(&self, value: &Self::Value) -> bool;
+    #[cfg(test)]
+    fn holds(&self, value: &Self::Value) -> bool {
+        resident(0, |memory| self.holds_with(value, memory))
+    }
+    fn complement_with(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError>;
+    fn intersect_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError>;
+    fn union_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError>;
+    fn empty_with(&self, memory: &mut Memory<'_>) -> Result<bool, StorageError>;
+    fn count_with(&self, memory: &mut Memory<'_>) -> Result<Cardinality, StorageError>;
+    fn holds_with(
+        &self,
+        value: &Self::Value,
+        memory: &mut Memory<'_>,
+    ) -> Result<bool, StorageError>;
 }
 
 /// The decimal space: the integers and the non-integral decimals, each an interval set
@@ -1214,13 +1414,127 @@ struct IntWindow {
     hi: Option<exact::Integer>,
 }
 
+impl OwnedBytes for IntWindow {
+    fn owned_bytes(&self) -> usize {
+        self.lo.owned_bytes() + self.hi.owned_bytes()
+    }
+}
+impl OwnedBytes for DecimalSet {
+    fn owned_bytes(&self) -> usize {
+        self.integral.owned_bytes() + self.fractional.owned_bytes()
+    }
+}
+impl CloneOwned for DecimalSet {
+    fn clone_owned(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            integral: self.integral.clone_owned(memory)?,
+            fractional: self.fractional.clone_owned(memory)?,
+        })
+    }
+}
+
 impl DecimalSet {
-    /// The whole space.
-    fn full() -> Self {
-        Self {
-            integral: IntervalSet::full(),
-            fractional: IntervalSet::full(),
-        }
+    fn full_with(memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            integral: IntervalSet::full_with(memory)?,
+            fractional: IntervalSet::full_with(memory)?,
+        })
+    }
+    fn point_with(value: exact::Decimal, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        let integral = is_integral(&value);
+        let set = IntervalSet::point_with(Point::Dec(value), memory)?;
+        Ok(if integral {
+            Self {
+                integral: set,
+                fractional: IntervalSet::empty(),
+            }
+        } else {
+            Self {
+                integral: IntervalSet::empty(),
+                fractional: set,
+            }
+        })
+    }
+    fn datatype_with(datatype: XsdDatatype, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        let Some((lo, hi)) = datatype.integer_range() else {
+            return Self::full_with(memory);
+        };
+        let lo = if lo == i128::MIN {
+            Lo::Unbounded
+        } else {
+            Lo::Incl(Point::Dec(exact::Decimal::from(lo)))
+        };
+        let hi = if hi == i128::MAX {
+            Hi::Unbounded
+        } else {
+            Hi::Incl(Point::Dec(exact::Decimal::from(hi)))
+        };
+        let intervals = memory.one(Interval { lo, hi })?;
+        Ok(Self {
+            integral: IntervalSet::canonical_with(intervals, memory)?,
+            fractional: IntervalSet::empty(),
+        })
+    }
+    fn interval_with(interval: Interval, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        let copy = interval.clone_owned(memory)?;
+        let integral = memory.one(copy)?;
+        let fractional = memory.one(interval)?;
+        Ok(Self {
+            integral: IntervalSet::canonical_with(integral, memory)?,
+            fractional: IntervalSet::canonical_with(fractional, memory)?,
+        })
+    }
+    fn window_with(
+        interval: &Interval,
+        memory: &mut Memory<'_>,
+    ) -> Result<Option<IntWindow>, StorageError> {
+        memory.scope(0, |memory| {
+            let lo = match &interval.lo {
+                Lo::Unbounded => None,
+                Lo::Incl(value) => match value.as_dec() {
+                    Some(value) => Some(memory.round(value, exact::Rounding::Ceiling)?),
+                    None => None,
+                },
+                Lo::Excl(value) => match value.as_dec() {
+                    Some(value) => {
+                        let rounded = memory.round(value, exact::Rounding::Ceiling)?;
+                        Some(if is_integral(value) {
+                            memory.integer_add(&rounded, &exact::Integer::ONE)?
+                        } else {
+                            rounded
+                        })
+                    }
+                    None => None,
+                },
+            };
+            let hi = match &interval.hi {
+                Hi::Unbounded => None,
+                Hi::Incl(value) => match value.as_dec() {
+                    Some(value) => Some(memory.round(value, exact::Rounding::Floor)?),
+                    None => None,
+                },
+                Hi::Excl(value) => match value.as_dec() {
+                    Some(value) => {
+                        let rounded = memory.round(value, exact::Rounding::Floor)?;
+                        Some(if is_integral(value) {
+                            memory.integer_sub(&rounded, &exact::Integer::ONE)?
+                        } else {
+                            rounded
+                        })
+                    }
+                    None => None,
+                },
+            };
+            Ok(
+                if let (Some(left), Some(right)) = (&lo, &hi)
+                    && left > right
+                {
+                    None
+                } else {
+                    Some(IntWindow { lo, hi })
+                },
+            )
+        })
     }
 
     /// The empty set.
@@ -1231,185 +1545,101 @@ impl DecimalSet {
         }
     }
 
-    /// A single value.
-    fn point(d: exact::Decimal) -> Self {
-        let integral = is_integral(&d);
-        let set = IntervalSet::point(Point::Dec(d));
-        if integral {
-            Self {
-                integral: set,
-                fractional: IntervalSet::empty(),
-            }
-        } else {
-            Self {
-                integral: IntervalSet::empty(),
-                fractional: set,
-            }
-        }
-    }
-
-    /// The value space of a decimal-space datatype.
-    ///
-    /// The `i128` extremes in [`XsdDatatype::integer_range`] mark the datatypes XSD
-    /// leaves unbounded (`xsd:integer`, `xsd:nonNegativeInteger`, …), so they become
-    /// unbounded ends rather than endpoints — the complement of `xsd:integer` inside the
-    /// integers is then exactly empty.
-    fn for_datatype(dt: XsdDatatype) -> Self {
-        match dt.integer_range() {
-            None => Self::full(),
-            Some((lo, hi)) => {
-                let lo = if lo == i128::MIN {
-                    Lo::Unbounded
-                } else {
-                    Lo::Incl(Point::Dec(exact::Decimal::from(lo)))
-                };
-                let hi = if hi == i128::MAX {
-                    Hi::Unbounded
-                } else {
-                    Hi::Incl(Point::Dec(exact::Decimal::from(hi)))
-                };
-                Self {
-                    integral: IntervalSet::canonical(vec![Interval { lo, hi }]),
-                    fractional: IntervalSet::empty(),
-                }
-            }
-        }
-    }
-
-    /// The half-line a bound facet admits, in both strata.
-    fn from_interval(iv: Interval) -> Self {
-        Self {
-            integral: IntervalSet::canonical(vec![iv.clone()]),
-            fractional: IntervalSet::canonical(vec![iv]),
-        }
-    }
-
     /// The integer window of one interval, or `None` when it holds no integer.
+    #[cfg(test)]
     fn window(iv: &Interval) -> Option<IntWindow> {
-        // An endpoint from another stratum cannot occur; reading it as unbounded keeps
-        // the impossible case on the widening side.
-        let lo = match &iv.lo {
-            Lo::Unbounded => None,
-            Lo::Incl(p) => p.as_dec().map(dec_ceil),
-            Lo::Excl(p) => p.as_dec().map(|d| {
-                if is_integral(d) {
-                    &dec_ceil(d) + &exact::Integer::ONE
-                } else {
-                    dec_ceil(d)
-                }
-            }),
-        };
-        let hi = match &iv.hi {
-            Hi::Unbounded => None,
-            Hi::Incl(p) => p.as_dec().map(dec_floor),
-            Hi::Excl(p) => p.as_dec().map(|d| {
-                if is_integral(d) {
-                    &dec_floor(d) - &exact::Integer::ONE
-                } else {
-                    dec_floor(d)
-                }
-            }),
-        };
-        if let (Some(a), Some(b)) = (&lo, &hi)
-            && a > b
-        {
-            return None;
-        }
-        Some(IntWindow { lo, hi })
-    }
-
-    /// Whether the integral stratum holds an integer.
-    fn integral_inhabited(&self) -> bool {
-        self.integral
-            .intervals
-            .iter()
-            .any(|iv| Self::window(iv).is_some())
-    }
-
-    /// Whether the fractional stratum holds a non-integral decimal.
-    ///
-    /// The stratum is dense with holes at the integers: an interval spanning more than
-    /// one point holds infinitely many decimals and only finitely many integers, so it
-    /// always holds a non-integral one; a degenerate interval holds its point alone.
-    fn fractional_inhabited(&self) -> bool {
-        self.fractional.intervals.iter().any(|iv| {
-            match iv.degenerate_point().and_then(Point::as_dec) {
-                Some(d) => !is_integral(d),
-                // Non-degenerate (or, impossibly, another stratum's endpoint).
-                None => true,
-            }
-        })
+        resident(0, |memory| Self::window_with(iv, memory))
     }
 }
 
 impl Algebra for DecimalSet {
     type Value = XsdValue;
-    fn complement(&self) -> Self {
-        Self {
-            integral: self.integral.complement(),
-            fractional: self.fractional.complement(),
-        }
+    fn complement_with(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            integral: self.integral.complement_with(memory)?,
+            fractional: self.fractional.complement_with(memory)?,
+        })
     }
-
-    fn intersect(&self, other: &Self) -> Self {
-        Self {
-            integral: self.integral.intersect(&other.integral),
-            fractional: self.fractional.intersect(&other.fractional),
-        }
+    fn intersect_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            integral: self.integral.intersect_with(&other.integral, memory)?,
+            fractional: self.fractional.intersect_with(&other.fractional, memory)?,
+        })
     }
-
-    fn union(&self, other: &Self) -> Self {
-        Self {
-            integral: self.integral.union(&other.integral),
-            fractional: self.fractional.union(&other.fractional),
-        }
+    fn union_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            integral: self.integral.union_with(&other.integral, memory)?,
+            fractional: self.fractional.union_with(&other.fractional, memory)?,
+        })
     }
-
-    fn is_empty(&self) -> bool {
-        !self.integral_inhabited() && !self.fractional_inhabited()
-    }
-
-    fn count(&self) -> Cardinality {
-        let mut total = Cardinality::Exactly(0);
-        for iv in &self.integral.intervals {
-            let Some(window) = Self::window(iv) else {
-                continue;
-            };
-            total = total.plus(match (window.lo, window.hi) {
-                (Some(a), Some(b)) => {
-                    // `b >= a` holds by construction, so the span is positive.
-                    let span = &(&b - &a) + &exact::Integer::ONE;
-                    // Through `i128`, so a span past `i64::MAX` and inside
-                    // `u64` (all of `xsd:unsignedLong`) is still counted exactly.
-                    span.as_i128()
-                        .and_then(|span| u64::try_from(span).ok())
-                        .map_or(Cardinality::AtLeast(u64::MAX), Cardinality::Exactly)
+    fn empty_with(&self, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        memory.scope(0, |memory| {
+            for interval in &self.integral.intervals {
+                let window = Self::window_with(interval, memory)?;
+                let inhabited = window.is_some();
+                memory.drop_value(window)?;
+                if inhabited {
+                    return Ok(false);
                 }
-                _ => Cardinality::Unbounded,
-            });
-        }
-        for iv in &self.fractional.intervals {
-            total = total.plus(match iv.degenerate_point().and_then(Point::as_dec) {
-                Some(d) if is_integral(d) => Cardinality::Exactly(0),
-                Some(_) => Cardinality::Exactly(1),
-                // Dense and non-degenerate: infinitely many non-integral decimals.
-                None => Cardinality::Unbounded,
-            });
-        }
-        total
+            }
+            for interval in &self.fractional.intervals {
+                if interval
+                    .degenerate_with(memory)?
+                    .and_then(Point::as_dec)
+                    .is_none_or(|value| !is_integral(value))
+                {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })
     }
-
-    fn holds(&self, value: &XsdValue) -> bool {
-        let Some(d) = decimal_point(value) else {
-            return false;
-        };
-        let integral = is_integral(&d);
-        let point = Point::Dec(d);
-        if integral {
-            self.integral.holds(&point)
-        } else {
-            self.fractional.holds(&point)
-        }
+    fn count_with(&self, memory: &mut Memory<'_>) -> Result<Cardinality, StorageError> {
+        memory.scope(0, |memory| {
+            let mut total = Cardinality::Exactly(0);
+            for interval in &self.integral.intervals {
+                let held = memory.scope(0, |memory| {
+                    let Some(window) = Self::window_with(interval, memory)? else {
+                        return Ok(Cardinality::Exactly(0));
+                    };
+                    Ok(match (window.lo, window.hi) {
+                        (Some(left), Some(right)) => {
+                            let difference = memory.integer_sub(&right, &left)?;
+                            let span = memory.integer_add(&difference, &exact::Integer::ONE)?;
+                            span.as_i128()
+                                .and_then(|span| u64::try_from(span).ok())
+                                .map_or(Cardinality::AtLeast(u64::MAX), Cardinality::Exactly)
+                        }
+                        _ => Cardinality::Unbounded,
+                    })
+                })?;
+                total = total.plus(held);
+            }
+            for interval in &self.fractional.intervals {
+                total = total.plus(
+                    match interval.degenerate_with(memory)?.and_then(Point::as_dec) {
+                        Some(value) if is_integral(value) => Cardinality::Exactly(0),
+                        Some(_) => Cardinality::Exactly(1),
+                        None => Cardinality::Unbounded,
+                    },
+                );
+            }
+            Ok(total)
+        })
+    }
+    fn holds_with(&self, value: &XsdValue, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        memory.scope(0, |memory| {
+            let Some(value) = memory.decimal_of(value)? else {
+                return Ok(false);
+            };
+            let integral = is_integral(&value);
+            let point = Point::Dec(value);
+            if integral {
+                self.integral.holds_with(&point, memory)
+            } else {
+                self.fractional.holds_with(&point, memory)
+            }
+        })
     }
 }
 
@@ -1433,14 +1663,64 @@ struct FloatSet {
     nan: bool,
 }
 
+impl OwnedBytes for FloatSet {
+    fn owned_bytes(&self) -> usize {
+        self.number.owned_bytes()
+    }
+}
+impl CloneOwned for FloatSet {
+    fn clone_owned(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            width: self.width,
+            number: self.number.clone_owned(memory)?,
+            nan: self.nan,
+        })
+    }
+}
+
 impl FloatSet {
-    /// The whole space.
-    fn full(width: FloatWidth) -> Self {
-        Self {
+    fn full_with(width: FloatWidth, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
             width,
-            number: IntervalSet::full(),
+            number: IntervalSet::full_with(memory)?,
             nan: true,
-        }
+        })
+    }
+    fn interval_with(
+        width: FloatWidth,
+        interval: Interval,
+        memory: &mut Memory<'_>,
+    ) -> Result<Self, StorageError> {
+        let intervals = memory.one(interval)?;
+        Ok(Self {
+            width,
+            number: IntervalSet::canonical_with(intervals, memory)?,
+            nan: false,
+        })
+    }
+    fn admits_with(
+        &self,
+        interval: &Interval,
+        memory: &mut Memory<'_>,
+    ) -> Result<bool, StorageError> {
+        let candidate = match &interval.lo {
+            Lo::Unbounded => f64::NEG_INFINITY,
+            Lo::Incl(value) => match value.as_float() {
+                Some(value) => value,
+                None => return Ok(true),
+            },
+            Lo::Excl(value) => {
+                let Some(value) = value.as_float() else {
+                    return Ok(true);
+                };
+                let next = self.next_up(value);
+                if next <= value {
+                    return Ok(false);
+                }
+                next
+            }
+        };
+        interval.hi.admits_with(&Point::float(candidate), memory)
     }
 
     /// The empty set.
@@ -1452,16 +1732,6 @@ impl FloatSet {
         }
     }
 
-    /// The numbers an interval admits, with NaN excluded — a bound facet cannot admit
-    /// NaN, which is not `>=` anything.
-    fn from_interval(width: FloatWidth, iv: Interval) -> Self {
-        Self {
-            width,
-            number: IntervalSet::canonical(vec![iv]),
-            nan: false,
-        }
-    }
-
     /// The immediate successor of `x` at this space's width.
     fn next_up(&self, x: f64) -> f64 {
         match self.width {
@@ -1469,101 +1739,73 @@ impl FloatSet {
             FloatWidth::Double => x.next_up(),
         }
     }
-
-    /// Whether an interval admits a number, witnessed by the least one it admits.
-    fn admits_number(&self, iv: &Interval) -> bool {
-        // An endpoint from another stratum cannot occur; reading it as admitting keeps
-        // the impossible case on the widening side.
-        let candidate = match &iv.lo {
-            Lo::Unbounded => f64::NEG_INFINITY,
-            Lo::Incl(p) => match p.as_float() {
-                Some(x) => x,
-                None => return true,
-            },
-            Lo::Excl(p) => {
-                let Some(x) = p.as_float() else {
-                    return true;
-                };
-                let next = self.next_up(x);
-                if next <= x {
-                    // `x` is already the greatest value: nothing lies above it.
-                    return false;
-                }
-                next
-            }
-        };
-        iv.hi.admits(&Point::float(candidate))
-    }
 }
 
 impl Algebra for FloatSet {
     type Value = XsdValue;
-    fn complement(&self) -> Self {
-        Self {
+    fn complement_with(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
             width: self.width,
-            number: self.number.complement(),
+            number: self.number.complement_with(memory)?,
             nan: !self.nan,
-        }
+        })
     }
-
-    fn intersect(&self, other: &Self) -> Self {
-        Self {
+    fn intersect_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
             width: self.width,
-            number: self.number.intersect(&other.number),
+            number: self.number.intersect_with(&other.number, memory)?,
             nan: self.nan && other.nan,
-        }
+        })
     }
-
-    fn union(&self, other: &Self) -> Self {
-        Self {
+    fn union_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
             width: self.width,
-            number: self.number.union(&other.number),
+            number: self.number.union_with(&other.number, memory)?,
             nan: self.nan || other.nan,
+        })
+    }
+    fn empty_with(&self, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        if self.nan {
+            return Ok(false);
         }
+        for interval in &self.number.intervals {
+            if self.admits_with(interval, memory)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
-
-    fn is_empty(&self) -> bool {
-        !self.nan
-            && !self
-                .number
-                .intervals
-                .iter()
-                .any(|iv| self.admits_number(iv))
-    }
-
-    fn count(&self) -> Cardinality {
+    fn count_with(&self, memory: &mut Memory<'_>) -> Result<Cardinality, StorageError> {
         let mut exact = true;
         let mut total: u64 = u64::from(self.nan);
-        for iv in &self.number.intervals {
-            if !self.admits_number(iv) {
+        for interval in &self.number.intervals {
+            if !self.admits_with(interval, memory)? {
                 continue;
             }
-            match iv.degenerate_point().and_then(Point::as_float) {
-                // The zero point stands for BOTH zeros of the value space.
-                Some(x) => total = total.saturating_add(if x == 0.0 { 2 } else { 1 }),
+            match interval.degenerate_with(memory)?.and_then(Point::as_float) {
+                Some(value) => total = total.saturating_add(if value == 0.0 { 2 } else { 1 }),
                 None => {
                     exact = false;
                     total = total.saturating_add(1);
                 }
             }
         }
-        if exact {
+        Ok(if exact {
             Cardinality::Exactly(total)
         } else {
             Cardinality::AtLeast(total)
-        }
+        })
     }
-
-    fn holds(&self, value: &XsdValue) -> bool {
-        let x = match value {
-            XsdValue::Float(x) => f64::from(*x),
-            XsdValue::Double(x) => *x,
-            _ => return false,
+    fn holds_with(&self, value: &XsdValue, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        let value = match value {
+            XsdValue::Float(value) => f64::from(*value),
+            XsdValue::Double(value) => *value,
+            _ => return Ok(false),
         };
-        if x.is_nan() {
-            self.nan
+        if value.is_nan() {
+            Ok(self.nan)
         } else {
-            self.number.holds(&Point::float(x))
+            self.number.holds_with(&Point::float(value), memory)
         }
     }
 }
@@ -1576,6 +1818,17 @@ struct BoolSet {
     has_false: bool,
     /// Whether `true` is a member.
     has_true: bool,
+}
+
+impl OwnedBytes for BoolSet {
+    fn owned_bytes(&self) -> usize {
+        0
+    }
+}
+impl CloneOwned for BoolSet {
+    fn clone_owned(&self, _: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(*self)
+    }
 }
 
 impl BoolSet {
@@ -1606,41 +1859,44 @@ impl BoolSet {
 
 impl Algebra for BoolSet {
     type Value = XsdValue;
-    fn complement(&self) -> Self {
-        Self {
+    fn complement_with(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        memory.step()?;
+        Ok(Self {
             has_false: !self.has_false,
             has_true: !self.has_true,
-        }
+        })
     }
-
-    fn intersect(&self, other: &Self) -> Self {
-        Self {
+    fn intersect_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        memory.step()?;
+        Ok(Self {
             has_false: self.has_false && other.has_false,
             has_true: self.has_true && other.has_true,
-        }
+        })
     }
-
-    fn union(&self, other: &Self) -> Self {
-        Self {
+    fn union_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        memory.step()?;
+        Ok(Self {
             has_false: self.has_false || other.has_false,
             has_true: self.has_true || other.has_true,
-        }
+        })
     }
-
-    fn is_empty(&self) -> bool {
-        !self.has_false && !self.has_true
+    fn empty_with(&self, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        memory.step()?;
+        Ok(!self.has_false && !self.has_true)
     }
-
-    fn count(&self) -> Cardinality {
-        Cardinality::Exactly(u64::from(self.has_false) + u64::from(self.has_true))
+    fn count_with(&self, memory: &mut Memory<'_>) -> Result<Cardinality, StorageError> {
+        memory.step()?;
+        Ok(Cardinality::Exactly(
+            u64::from(self.has_false) + u64::from(self.has_true),
+        ))
     }
-
-    fn holds(&self, value: &XsdValue) -> bool {
-        match value {
+    fn holds_with(&self, value: &XsdValue, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        memory.step()?;
+        Ok(match value {
             XsdValue::Boolean(true) => self.has_true,
             XsdValue::Boolean(false) => self.has_false,
             _ => false,
-        }
+        })
     }
 }
 
@@ -1684,15 +1940,121 @@ struct LengthSet {
     exceptions: Vec<XsdValue>,
 }
 
+impl OwnedBytes for LengthSet {
+    fn owned_bytes(&self) -> usize {
+        self.lengths.owned_bytes() + self.extras.owned_bytes() + self.exceptions.owned_bytes()
+    }
+}
+impl CloneOwned for LengthSet {
+    fn clone_owned(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            kind: self.kind,
+            lengths: self.lengths.clone_owned(memory)?,
+            extras: self.extras.clone_owned(memory)?,
+            exceptions: self.exceptions.clone_owned(memory)?,
+        })
+    }
+}
+
 impl LengthSet {
-    /// The whole space.
-    fn full(kind: LengthKind) -> Self {
-        Self {
+    fn full_with(kind: LengthKind, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
             kind,
-            lengths: IntervalSet::full(),
+            lengths: IntervalSet::full_with(memory)?,
             extras: Vec::new(),
             exceptions: Vec::new(),
+        })
+    }
+    fn singleton_with(
+        kind: LengthKind,
+        value: XsdValue,
+        memory: &mut Memory<'_>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            kind,
+            lengths: IntervalSet::empty(),
+            extras: memory.one(value)?,
+            exceptions: Vec::new(),
+        })
+    }
+    fn interval_with(
+        kind: LengthKind,
+        interval: Interval,
+        memory: &mut Memory<'_>,
+    ) -> Result<Self, StorageError> {
+        let intervals = memory.one(interval)?;
+        Ok(Self {
+            kind,
+            lengths: IntervalSet::canonical_with(intervals, memory)?,
+            extras: Vec::new(),
+            exceptions: Vec::new(),
+        })
+    }
+    fn membership_with(
+        &self,
+        value: &XsdValue,
+        memory: &mut Memory<'_>,
+    ) -> Result<bool, StorageError> {
+        let Some(length) = Self::length_of(value) else {
+            return Ok(false);
+        };
+        if self.lengths.holds_with(&Point::Len(length), memory)? {
+            Ok(!holds_same_with(&self.exceptions, value, memory)?)
+        } else {
+            holds_same_with(&self.extras, value, memory)
         }
+    }
+    fn probe_with(&self, memory: &mut Memory<'_>) -> Result<Vec<u64>, StorageError> {
+        memory.scope(0, |memory| {
+            let mut distinct = Vec::new();
+            for length in self.exceptions.iter().filter_map(Self::length_of) {
+                memory.step()?;
+                if !distinct.contains(&length) {
+                    memory.push(&mut distinct, length)?;
+                }
+            }
+            self.lengths.sample_with(
+                distinct
+                    .len()
+                    .checked_add(1)
+                    .ok_or(StorageError::Allocation)?,
+                memory,
+            )
+        })
+    }
+    fn selected_with(&self, memory: &mut Memory<'_>) -> Result<Cardinality, StorageError> {
+        memory.scope(0, |memory| {
+            if self.lengths_unbounded() {
+                return Ok(Cardinality::Unbounded);
+            }
+            let Some(maximum) = self.max_length() else {
+                return Ok(Cardinality::Exactly(0));
+            };
+            Ok(match self.kind {
+                LengthKind::Characters => {
+                    if maximum == 0 {
+                        Cardinality::Exactly(1)
+                    } else {
+                        Cardinality::AtLeast(saturating_pow(STRING_ALPHABET_FLOOR, maximum))
+                    }
+                }
+                LengthKind::Octets => {
+                    if maximum >= OCTET_SATURATION_LENGTH {
+                        Cardinality::AtLeast(u64::MAX)
+                    } else {
+                        let mut total = Cardinality::Exactly(0);
+                        for length in self.lengths.sample_with(
+                            usize::try_from(maximum).expect("below eight") + 1,
+                            memory,
+                        )? {
+                            total = total
+                                .plus(Cardinality::Exactly(saturating_pow(OCTET_ALPHABET, length)));
+                        }
+                        total
+                    }
+                }
+            })
+        })
     }
 
     /// The empty set.
@@ -1700,26 +2062,6 @@ impl LengthSet {
         Self {
             kind,
             lengths: IntervalSet::empty(),
-            extras: Vec::new(),
-            exceptions: Vec::new(),
-        }
-    }
-
-    /// A single value, carried as an extra over an empty length set.
-    fn singleton(kind: LengthKind, value: XsdValue) -> Self {
-        Self {
-            kind,
-            lengths: IntervalSet::empty(),
-            extras: vec![value],
-            exceptions: Vec::new(),
-        }
-    }
-
-    /// The values whose length the interval admits.
-    fn from_interval(kind: LengthKind, iv: Interval) -> Self {
-        Self {
-            kind,
-            lengths: IntervalSet::canonical(vec![iv]),
             extras: Vec::new(),
             exceptions: Vec::new(),
         }
@@ -1748,30 +2090,6 @@ impl LengthSet {
         }
     }
 
-    /// Whether `value` is a member.
-    fn membership(&self, value: &XsdValue) -> bool {
-        let Some(length) = Self::length_of(value) else {
-            return false;
-        };
-        if self.lengths.holds(&Point::Len(length)) {
-            !holds_same(&self.exceptions, value)
-        } else {
-            holds_same(&self.extras, value)
-        }
-    }
-
-    /// The admitted lengths that could still be exhausted by the exception list, plus
-    /// one admitted length beyond them if the length set reaches that far.
-    fn probe_lengths(&self) -> Vec<u64> {
-        let mut distinct: Vec<u64> = Vec::new();
-        for length in self.exceptions.iter().filter_map(Self::length_of) {
-            if !distinct.contains(&length) {
-                distinct.push(length);
-            }
-        }
-        self.lengths.sample(distinct.len() + 1)
-    }
-
     /// The greatest admitted length, or `None` when the set admits none.
     fn max_length(&self) -> Option<u64> {
         let last = self.lengths.intervals.last()?;
@@ -1791,161 +2109,140 @@ impl LengthSet {
             .last()
             .is_some_and(|iv| matches!(iv.hi, Hi::Unbounded))
     }
-
-    /// The count of the length-selected part alone, before extras and exceptions.
-    fn selected_count(&self) -> Cardinality {
-        if self.lengths_unbounded() {
-            // Every admitted length holds at least one value, and there are infinitely
-            // many admitted lengths.
-            return Cardinality::Unbounded;
-        }
-        let Some(max) = self.max_length() else {
-            return Cardinality::Exactly(0);
-        };
-        match self.kind {
-            LengthKind::Characters => {
-                if max == 0 {
-                    // Only the empty string has length 0.
-                    Cardinality::Exactly(1)
-                } else {
-                    Cardinality::AtLeast(saturating_pow(STRING_ALPHABET_FLOOR, max))
-                }
-            }
-            LengthKind::Octets => {
-                if max >= OCTET_SATURATION_LENGTH {
-                    Cardinality::AtLeast(u64::MAX)
-                } else {
-                    // At most eight admitted lengths remain, so the sum is exact.
-                    let mut total = Cardinality::Exactly(0);
-                    for length in self.lengths.sample(usize::try_from(max).unwrap_or(0) + 1) {
-                        total = total
-                            .plus(Cardinality::Exactly(saturating_pow(OCTET_ALPHABET, length)));
-                    }
-                    total
-                }
-            }
-        }
-    }
 }
 
 impl Algebra for LengthSet {
     type Value = XsdValue;
-    fn complement(&self) -> Self {
-        Self {
+    fn complement_with(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
             kind: self.kind,
-            lengths: self.lengths.complement(),
-            extras: self.exceptions.clone(),
-            exceptions: self.extras.clone(),
-        }
-    }
-
-    fn intersect(&self, other: &Self) -> Self {
-        let lengths = self.lengths.intersect(&other.lengths);
-        let mut exceptions: Vec<XsdValue> = Vec::new();
-        // A non-member of the intersection at an admitted length must be an exception of
-        // one operand, because each operand admits that length.
-        for value in self.exceptions.iter().chain(&other.exceptions) {
-            if length_admitted(&lengths, value) && !holds_same(&exceptions, value) {
-                exceptions.push(value.clone());
-            }
-        }
-        let mut extras: Vec<XsdValue> = Vec::new();
-        // A member at a length the intersection does not admit is an extra of the
-        // operand that does not admit it, so the candidates are the two extra lists.
-        for value in self.extras.iter().chain(&other.extras) {
-            if !length_admitted(&lengths, value)
-                && self.membership(value)
-                && other.membership(value)
-                && !holds_same(&extras, value)
-            {
-                extras.push(value.clone());
-            }
-        }
-        Self {
-            kind: self.kind,
-            lengths,
-            extras,
-            exceptions,
-        }
-    }
-
-    fn union(&self, other: &Self) -> Self {
-        let lengths = self.lengths.union(&other.lengths);
-        let mut extras: Vec<XsdValue> = Vec::new();
-        for value in self.extras.iter().chain(&other.extras) {
-            if !length_admitted(&lengths, value) && !holds_same(&extras, value) {
-                extras.push(value.clone());
-            }
-        }
-        let mut exceptions: Vec<XsdValue> = Vec::new();
-        for value in self.exceptions.iter().chain(&other.exceptions) {
-            if length_admitted(&lengths, value)
-                && !self.membership(value)
-                && !other.membership(value)
-                && !holds_same(&exceptions, value)
-            {
-                exceptions.push(value.clone());
-            }
-        }
-        Self {
-            kind: self.kind,
-            lengths,
-            extras,
-            exceptions,
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        if !self.extras.is_empty() {
-            return false;
-        }
-        !self.probe_lengths().into_iter().any(|length| {
-            let excluded = self
-                .exceptions
-                .iter()
-                .filter(|v| Self::length_of(v) == Some(length))
-                .count();
-            self.holds_more_than(length, excluded)
+            lengths: self.lengths.complement_with(memory)?,
+            extras: self.exceptions.clone_owned(memory)?,
+            exceptions: self.extras.clone_owned(memory)?,
         })
     }
-
-    fn count(&self) -> Cardinality {
-        self.selected_count()
+    fn intersect_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        memory.scope(0, |memory| {
+            let lengths = self.lengths.intersect_with(&other.lengths, memory)?;
+            let mut exceptions = Vec::new();
+            for value in self.exceptions.iter().chain(&other.exceptions) {
+                if length_admitted_with(&lengths, value, memory)?
+                    && !holds_same_with(&exceptions, value, memory)?
+                {
+                    let value = value.clone_owned(memory)?;
+                    memory.push(&mut exceptions, value)?;
+                }
+            }
+            let mut extras = Vec::new();
+            for value in self.extras.iter().chain(&other.extras) {
+                if !length_admitted_with(&lengths, value, memory)?
+                    && self.membership_with(value, memory)?
+                    && other.membership_with(value, memory)?
+                    && !holds_same_with(&extras, value, memory)?
+                {
+                    let value = value.clone_owned(memory)?;
+                    memory.push(&mut extras, value)?;
+                }
+            }
+            Ok(Self {
+                kind: self.kind,
+                lengths,
+                extras,
+                exceptions,
+            })
+        })
+    }
+    fn union_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        memory.scope(0, |memory| {
+            let lengths = self.lengths.union_with(&other.lengths, memory)?;
+            let mut extras = Vec::new();
+            for value in self.extras.iter().chain(&other.extras) {
+                if !length_admitted_with(&lengths, value, memory)?
+                    && !holds_same_with(&extras, value, memory)?
+                {
+                    let value = value.clone_owned(memory)?;
+                    memory.push(&mut extras, value)?;
+                }
+            }
+            let mut exceptions = Vec::new();
+            for value in self.exceptions.iter().chain(&other.exceptions) {
+                if length_admitted_with(&lengths, value, memory)?
+                    && !self.membership_with(value, memory)?
+                    && !other.membership_with(value, memory)?
+                    && !holds_same_with(&exceptions, value, memory)?
+                {
+                    let value = value.clone_owned(memory)?;
+                    memory.push(&mut exceptions, value)?;
+                }
+            }
+            Ok(Self {
+                kind: self.kind,
+                lengths,
+                extras,
+                exceptions,
+            })
+        })
+    }
+    fn empty_with(&self, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        if !self.extras.is_empty() {
+            return Ok(false);
+        }
+        memory.scope(0, |memory| {
+            for length in self.probe_with(memory)? {
+                memory.step()?;
+                let excluded = self
+                    .exceptions
+                    .iter()
+                    .filter(|value| Self::length_of(value) == Some(length))
+                    .count();
+                if self.holds_more_than(length, excluded) {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })
+    }
+    fn count_with(&self, memory: &mut Memory<'_>) -> Result<Cardinality, StorageError> {
+        Ok(self
+            .selected_with(memory)?
             .minus(u64::try_from(self.exceptions.len()).unwrap_or(u64::MAX))
-            .plus(exactly(self.extras.len()))
+            .plus(exactly(self.extras.len())))
     }
-
-    fn holds(&self, value: &XsdValue) -> bool {
-        self.membership(value)
+    fn holds_with(&self, value: &XsdValue, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        self.membership_with(value, memory)
     }
-}
-
-/// Whether a value's length is admitted by a length set.
-fn length_admitted(lengths: &IntervalSet, value: &XsdValue) -> bool {
-    LengthSet::length_of(value).is_some_and(|l| lengths.holds(&Point::Len(l)))
 }
 
 /// Whether a list already holds a value identical to `value`.
 /// Equality law of one listed value space.
-trait ListedValue: Clone {
-    /// Whether these denote one value in the same space.
-    fn same(&self, other: &Self) -> bool;
+trait ListedValue: Clone + CloneOwned {
+    fn same_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<bool, StorageError>;
 }
 
 impl ListedValue for XsdValue {
-    fn same(&self, other: &Self) -> bool {
-        same_value(self, other)
+    fn same_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        same_value_with(self, other, memory)
     }
 }
 
 impl ListedValue for u32 {
-    fn same(&self, other: &Self) -> bool {
-        self == other
+    fn same_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        memory.step()?;
+        Ok(self == other)
     }
 }
 
-fn holds_same<T: ListedValue>(values: &[T], value: &T) -> bool {
-    values.iter().any(|v| v.same(value))
+fn holds_same_with<T: ListedValue>(
+    values: &[T],
+    value: &T,
+    memory: &mut Memory<'_>,
+) -> Result<bool, StorageError> {
+    for held in values {
+        if held.same_with(value, memory)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// `base.pow(exp)`, saturating at `u64::MAX`.
@@ -1969,7 +2266,42 @@ struct ListedSet<T> {
     values: Vec<T>,
 }
 
+impl<T: OwnedBytes> OwnedBytes for ListedSet<T> {
+    fn owned_bytes(&self) -> usize {
+        self.values.owned_bytes()
+    }
+}
+impl<T: CloneOwned> CloneOwned for ListedSet<T> {
+    fn clone_owned(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            size: self.size,
+            negated: self.negated,
+            values: self.values.clone_owned(memory)?,
+        })
+    }
+}
+
 impl<T: ListedValue> ListedSet<T> {
+    fn listed_with(
+        size: Option<u64>,
+        values: Vec<T>,
+        memory: &mut Memory<'_>,
+    ) -> Result<Self, StorageError> {
+        memory.scope(values.owned_bytes(), |memory| {
+            let mut deduped = Vec::new();
+            memory.reserve(&mut deduped, values.len())?;
+            for value in values {
+                if !holds_same_with(&deduped, &value, memory)? {
+                    deduped.push(value);
+                }
+            }
+            Ok(Self {
+                size,
+                negated: false,
+                values: deduped,
+            })
+        })
+    }
     /// The whole space.
     fn full(size: Option<u64>) -> Self {
         Self {
@@ -1988,21 +2320,6 @@ impl<T: ListedValue> ListedSet<T> {
         }
     }
 
-    /// The set listing exactly `values`.
-    fn listed(size: Option<u64>, values: Vec<T>) -> Self {
-        let mut deduped: Vec<T> = Vec::with_capacity(values.len());
-        for value in values {
-            if !holds_same(&deduped, &value) {
-                deduped.push(value);
-            }
-        }
-        Self {
-            size,
-            negated: false,
-            values: deduped,
-        }
-    }
-
     /// A set over the same space with the given polarity and listed values.
     fn with(&self, negated: bool, values: Vec<T>) -> Self {
         Self {
@@ -2013,70 +2330,61 @@ impl<T: ListedValue> ListedSet<T> {
     }
 }
 
-/// The union of two value lists, deduplicated under [`same_value`].
-fn union_values<T: ListedValue>(a: &[T], b: &[T]) -> Vec<T> {
-    let mut out: Vec<T> = a.to_vec();
-    for value in b {
-        if !holds_same(&out, value) {
-            out.push(value.clone());
-        }
-    }
-    out
-}
-
-/// The values of `a` that also appear in `b`.
-fn common_values<T: ListedValue>(a: &[T], b: &[T]) -> Vec<T> {
-    a.iter()
-        .filter(|value| holds_same(b, value))
-        .cloned()
-        .collect()
-}
-
-/// The values of `a` that do not appear in `b`.
-fn other_values<T: ListedValue>(a: &[T], b: &[T]) -> Vec<T> {
-    a.iter()
-        .filter(|value| !holds_same(b, value))
-        .cloned()
-        .collect()
-}
-
 impl<T: ListedValue> Algebra for ListedSet<T> {
     type Value = T;
-
-    fn complement(&self) -> Self {
-        self.with(!self.negated, self.values.clone())
+    fn complement_with(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(self.with(!self.negated, self.values.clone_owned(memory)?))
     }
-
-    fn intersect(&self, other: &Self) -> Self {
-        match (self.negated, other.negated) {
-            (false, false) => self.with(false, common_values(&self.values, &other.values)),
-            (false, true) => self.with(false, other_values(&self.values, &other.values)),
-            (true, false) => self.with(false, other_values(&other.values, &self.values)),
-            (true, true) => self.with(true, union_values(&self.values, &other.values)),
-        }
+    fn intersect_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        let (negated, left, right, relation) = match (self.negated, other.negated) {
+            (false, false) => (false, &self.values, &other.values, ValueSelection::Common),
+            (false, true) => (
+                false,
+                &self.values,
+                &other.values,
+                ValueSelection::Difference,
+            ),
+            (true, false) => (
+                false,
+                &other.values,
+                &self.values,
+                ValueSelection::Difference,
+            ),
+            (true, true) => (true, &self.values, &other.values, ValueSelection::Union),
+        };
+        Ok(self.with(negated, select_values(left, right, relation, memory)?))
     }
-
-    fn union(&self, other: &Self) -> Self {
-        match (self.negated, other.negated) {
-            (false, false) => self.with(false, union_values(&self.values, &other.values)),
-            (false, true) => self.with(true, other_values(&other.values, &self.values)),
-            (true, false) => self.with(true, other_values(&self.values, &other.values)),
-            (true, true) => self.with(true, common_values(&self.values, &other.values)),
-        }
+    fn union_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        let (negated, left, right, relation) = match (self.negated, other.negated) {
+            (false, false) => (false, &self.values, &other.values, ValueSelection::Union),
+            (false, true) => (
+                true,
+                &other.values,
+                &self.values,
+                ValueSelection::Difference,
+            ),
+            (true, false) => (
+                true,
+                &self.values,
+                &other.values,
+                ValueSelection::Difference,
+            ),
+            (true, true) => (true, &self.values, &other.values, ValueSelection::Common),
+        };
+        Ok(self.with(negated, select_values(left, right, relation, memory)?))
     }
-
-    fn is_empty(&self) -> bool {
-        if self.negated {
-            // Only a finite space can be exhausted by a finite list of non-members.
+    fn empty_with(&self, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        memory.step()?;
+        Ok(if self.negated {
             self.size
                 .is_some_and(|size| size <= u64::try_from(self.values.len()).unwrap_or(u64::MAX))
         } else {
             self.values.is_empty()
-        }
+        })
     }
-
-    fn count(&self) -> Cardinality {
-        if self.negated {
+    fn count_with(&self, memory: &mut Memory<'_>) -> Result<Cardinality, StorageError> {
+        memory.step()?;
+        Ok(if self.negated {
             match self.size {
                 None => Cardinality::Unbounded,
                 Some(size) => Cardinality::Exactly(
@@ -2085,11 +2393,57 @@ impl<T: ListedValue> Algebra for ListedSet<T> {
             }
         } else {
             exactly(self.values.len())
+        })
+    }
+    fn holds_with(&self, value: &T, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        Ok(holds_same_with(&self.values, value, memory)? != self.negated)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ValueSelection {
+    Union,
+    Common,
+    Difference,
+}
+
+fn select_values<T: ListedValue>(
+    left: &[T],
+    right: &[T],
+    selection: ValueSelection,
+    memory: &mut Memory<'_>,
+) -> Result<Vec<T>, StorageError> {
+    let mut out = Vec::new();
+    memory.reserve(&mut out, left.len())?;
+    for value in left {
+        let keep = match selection {
+            ValueSelection::Union => true,
+            ValueSelection::Common => holds_same_with(right, value, memory)?,
+            ValueSelection::Difference => !holds_same_with(right, value, memory)?,
+        };
+        if keep {
+            out.push(value.clone_owned(memory)?);
         }
     }
+    if matches!(selection, ValueSelection::Union) {
+        for value in right {
+            if !holds_same_with(&out, value, memory)? {
+                let value = value.clone_owned(memory)?;
+                memory.push(&mut out, value)?;
+            }
+        }
+    }
+    Ok(out)
+}
 
-    fn holds(&self, value: &T) -> bool {
-        holds_same(&self.values, value) != self.negated
+fn length_admitted_with(
+    lengths: &IntervalSet,
+    value: &XsdValue,
+    memory: &mut Memory<'_>,
+) -> Result<bool, StorageError> {
+    match LengthSet::length_of(value) {
+        Some(length) => lengths.holds_with(&Point::Len(length), memory),
+        None => Ok(false),
     }
 }
 
@@ -2106,14 +2460,89 @@ enum SpaceSet<A> {
     Unknown,
 }
 
-impl<A: Algebra> SpaceSet<A> {
-    /// Whether a member is proved to exist.
-    fn is_inhabited(&self) -> bool {
+impl<A: OwnedBytes> OwnedBytes for SpaceSet<A> {
+    fn owned_bytes(&self) -> usize {
         match self {
-            Self::Exact(set) => !set.is_empty(),
+            Self::Exact(value) => value.owned_bytes(),
+            _ => 0,
+        }
+    }
+}
+impl<A: CloneOwned> CloneOwned for SpaceSet<A> {
+    fn clone_owned(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(match self {
+            Self::Exact(value) => Self::Exact(value.clone_owned(memory)?),
+            Self::Inhabited => Self::Inhabited,
+            Self::Unknown => Self::Unknown,
+        })
+    }
+}
+
+impl<A: Algebra> SpaceSet<A> {
+    fn inhabited_with(&self, memory: &mut Memory<'_>) -> Result<bool, StorageError> {
+        Ok(match self {
+            Self::Exact(value) => !value.empty_with(memory)?,
             Self::Inhabited => true,
             Self::Unknown => false,
+        })
+    }
+    fn complement_with(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(match self {
+            Self::Exact(value) => Self::Exact(value.complement_with(memory)?),
+            Self::Inhabited | Self::Unknown => Self::Unknown,
+        })
+    }
+    fn intersect_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(match (self, other) {
+            (Self::Exact(left), Self::Exact(right)) => {
+                Self::Exact(left.intersect_with(right, memory)?)
+            }
+            (Self::Exact(left), _) if left.empty_with(memory)? => {
+                Self::Exact(left.clone_owned(memory)?)
+            }
+            (_, Self::Exact(right)) if right.empty_with(memory)? => {
+                Self::Exact(right.clone_owned(memory)?)
+            }
+            _ => Self::Unknown,
+        })
+    }
+    fn union_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        if let (Self::Exact(left), Self::Exact(right)) = (self, other) {
+            return Ok(Self::Exact(left.union_with(right, memory)?));
         }
+        Ok(
+            if self.inhabited_with(memory)? || other.inhabited_with(memory)? {
+                Self::Inhabited
+            } else {
+                Self::Unknown
+            },
+        )
+    }
+    fn satisfiability_with(&self, memory: &mut Memory<'_>) -> Result<Satisfiability, StorageError> {
+        Ok(match self {
+            Self::Exact(value) if value.empty_with(memory)? => Satisfiability::Empty,
+            Self::Exact(_) | Self::Inhabited => Satisfiability::Inhabited,
+            Self::Unknown => Satisfiability::Undecided,
+        })
+    }
+    fn count_with(&self, memory: &mut Memory<'_>) -> Result<Cardinality, StorageError> {
+        match self {
+            Self::Exact(value) => value.count_with(memory),
+            Self::Inhabited => Ok(Cardinality::AtLeast(1)),
+            Self::Unknown => Ok(Cardinality::Undecided),
+        }
+    }
+    fn holds_with(&self, value: &A::Value, memory: &mut Memory<'_>) -> Result<Known, StorageError> {
+        Ok(match self {
+            Self::Exact(set) => {
+                if set.holds_with(value, memory)? {
+                    Known::Yes
+                } else {
+                    Known::No
+                }
+            }
+            Self::Inhabited | Self::Unknown => Known::Unknown,
+        })
     }
 
     /// Whether the set is exactly represented.
@@ -2121,66 +2550,9 @@ impl<A: Algebra> SpaceSet<A> {
         matches!(self, Self::Exact(_))
     }
 
-    /// Complement. Only an exact set has an exact complement — an exhibited member says
-    /// nothing about what the complement holds.
-    fn complement(&self) -> Self {
-        match self {
-            Self::Exact(set) => Self::Exact(set.complement()),
-            Self::Inhabited | Self::Unknown => Self::Unknown,
-        }
-    }
-
-    /// Intersection. An empty operand carries the answer whatever the other side is.
-    fn intersect(&self, other: &Self) -> Self {
-        match (self, other) {
-            (Self::Exact(a), Self::Exact(b)) => Self::Exact(a.intersect(b)),
-            (Self::Exact(a), _) if a.is_empty() => Self::Exact(a.clone()),
-            (_, Self::Exact(b)) if b.is_empty() => Self::Exact(b.clone()),
-            _ => Self::Unknown,
-        }
-    }
-
-    /// Union. A witness on either side survives an unknown operand.
-    fn union(&self, other: &Self) -> Self {
-        if let (Self::Exact(a), Self::Exact(b)) = (self, other) {
-            return Self::Exact(a.union(b));
-        }
-        if self.is_inhabited() || other.is_inhabited() {
-            return Self::Inhabited;
-        }
-        Self::Unknown
-    }
-
-    /// Whether this space's part of the range is empty.
-    fn satisfiability(&self) -> Satisfiability {
-        match self {
-            Self::Exact(set) if set.is_empty() => Satisfiability::Empty,
-            Self::Exact(_) | Self::Inhabited => Satisfiability::Inhabited,
-            Self::Unknown => Satisfiability::Undecided,
-        }
-    }
-
-    /// How many values this space contributes.
-    fn count(&self) -> Cardinality {
-        match self {
-            Self::Exact(set) => set.count(),
-            Self::Inhabited => Cardinality::AtLeast(1),
-            Self::Unknown => Cardinality::Undecided,
-        }
-    }
-
     /// Whether this space's part of the range holds `value`.
     fn holds(&self, value: &A::Value) -> Known {
-        match self {
-            Self::Exact(set) => {
-                if set.holds(value) {
-                    Known::Yes
-                } else {
-                    Known::No
-                }
-            }
-            Self::Inhabited | Self::Unknown => Known::Unknown,
-        }
+        resident(0, |memory| self.holds_with(value, memory))
     }
 }
 
@@ -2207,16 +2579,175 @@ struct Extent {
     remainder: Known,
 }
 
-/// Apply a binary set operation across two equal-length arrays of space sets.
-fn zip_spaces<A: Algebra, const N: usize>(
-    a: &[SpaceSet<A>; N],
-    b: &[SpaceSet<A>; N],
-    op: fn(&SpaceSet<A>, &SpaceSet<A>) -> SpaceSet<A>,
-) -> [SpaceSet<A>; N] {
-    std::array::from_fn(|i| op(&a[i], &b[i]))
+impl OwnedBytes for Extent {
+    fn owned_bytes(&self) -> usize {
+        self.decimal.owned_bytes()
+            + self.single.owned_bytes()
+            + self.double.owned_bytes()
+            + self.boolean.owned_bytes()
+            + self.text.owned_bytes()
+            + self.temporal.owned_bytes()
+            + self.term.owned_bytes()
+    }
+}
+
+fn zip_spaces_with<A: Algebra, const N: usize>(
+    left: &[SpaceSet<A>; N],
+    right: &[SpaceSet<A>; N],
+    mut operation: impl FnMut(
+        &SpaceSet<A>,
+        &SpaceSet<A>,
+        &mut Memory<'_>,
+    ) -> Result<SpaceSet<A>, StorageError>,
+    memory: &mut Memory<'_>,
+) -> Result<[SpaceSet<A>; N], StorageError> {
+    memory.array(|index, memory| operation(&left[index], &right[index], memory))
 }
 
 impl Extent {
+    fn full_with(memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            decimal: SpaceSet::Exact(DecimalSet::full_with(memory)?),
+            single: SpaceSet::Exact(FloatSet::full_with(FloatWidth::Single, memory)?),
+            double: SpaceSet::Exact(FloatSet::full_with(FloatWidth::Double, memory)?),
+            boolean: SpaceSet::Exact(BoolSet::full()),
+            text: memory.array(|index, memory| {
+                Ok(SpaceSet::Exact(LengthSet::full_with(
+                    TEXT_SPACES[index].kind(),
+                    memory,
+                )?))
+            })?,
+            temporal: std::array::from_fn(|index| {
+                SpaceSet::Exact(ListedSet::full(TEMPORAL_SPACES[index].size()))
+            }),
+            term: std::array::from_fn(|_| SpaceSet::Exact(ListedSet::full(None))),
+            remainder: Known::Yes,
+        })
+    }
+    fn complement_with(&self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            decimal: self.decimal.complement_with(memory)?,
+            single: self.single.complement_with(memory)?,
+            double: self.double.complement_with(memory)?,
+            boolean: self.boolean.complement_with(memory)?,
+            text: memory.array(|index, memory| self.text[index].complement_with(memory))?,
+            temporal: memory.array(|index, memory| self.temporal[index].complement_with(memory))?,
+            term: memory.array(|index, memory| self.term[index].complement_with(memory))?,
+            remainder: self.remainder.negate(),
+        })
+    }
+    fn intersect_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            decimal: self.decimal.intersect_with(&other.decimal, memory)?,
+            single: self.single.intersect_with(&other.single, memory)?,
+            double: self.double.intersect_with(&other.double, memory)?,
+            boolean: self.boolean.intersect_with(&other.boolean, memory)?,
+            text: zip_spaces_with(&self.text, &other.text, SpaceSet::intersect_with, memory)?,
+            temporal: zip_spaces_with(
+                &self.temporal,
+                &other.temporal,
+                SpaceSet::intersect_with,
+                memory,
+            )?,
+            term: zip_spaces_with(&self.term, &other.term, SpaceSet::intersect_with, memory)?,
+            remainder: self.remainder.conjoin(other.remainder),
+        })
+    }
+    fn union_with(&self, other: &Self, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
+        Ok(Self {
+            decimal: self.decimal.union_with(&other.decimal, memory)?,
+            single: self.single.union_with(&other.single, memory)?,
+            double: self.double.union_with(&other.double, memory)?,
+            boolean: self.boolean.union_with(&other.boolean, memory)?,
+            text: zip_spaces_with(&self.text, &other.text, SpaceSet::union_with, memory)?,
+            temporal: zip_spaces_with(
+                &self.temporal,
+                &other.temporal,
+                SpaceSet::union_with,
+                memory,
+            )?,
+            term: zip_spaces_with(&self.term, &other.term, SpaceSet::union_with, memory)?,
+            remainder: self.remainder.disjoin(other.remainder),
+        })
+    }
+    fn satisfiability_with(&self, memory: &mut Memory<'_>) -> Result<Satisfiability, StorageError> {
+        let verdicts = [
+            self.decimal.satisfiability_with(memory)?,
+            self.single.satisfiability_with(memory)?,
+            self.double.satisfiability_with(memory)?,
+            self.boolean.satisfiability_with(memory)?,
+            match self.remainder {
+                Known::Yes => Satisfiability::Inhabited,
+                Known::No => Satisfiability::Empty,
+                Known::Unknown => Satisfiability::Undecided,
+            },
+        ];
+        let mut undecided = false;
+        for verdict in verdicts {
+            match verdict {
+                Satisfiability::Inhabited => return Ok(Satisfiability::Inhabited),
+                Satisfiability::Undecided => undecided = true,
+                Satisfiability::Empty => {}
+            }
+        }
+        macro_rules! spaces {
+            ($sets:expr) => {
+                for set in &$sets {
+                    match set.satisfiability_with(memory)? {
+                        Satisfiability::Inhabited => return Ok(Satisfiability::Inhabited),
+                        Satisfiability::Undecided => undecided = true,
+                        Satisfiability::Empty => {}
+                    }
+                }
+            };
+        }
+        spaces!(self.text);
+        spaces!(self.temporal);
+        spaces!(self.term);
+        Ok(if undecided {
+            Satisfiability::Undecided
+        } else {
+            Satisfiability::Empty
+        })
+    }
+    fn cardinality_with(&self, memory: &mut Memory<'_>) -> Result<Cardinality, StorageError> {
+        let mut total = self
+            .decimal
+            .count_with(memory)?
+            .plus(self.single.count_with(memory)?)
+            .plus(self.double.count_with(memory)?)
+            .plus(self.boolean.count_with(memory)?);
+        macro_rules! spaces {
+            ($sets:expr) => {
+                for set in &$sets {
+                    total = total.plus(set.count_with(memory)?);
+                }
+            };
+        }
+        spaces!(self.text);
+        spaces!(self.temporal);
+        spaces!(self.term);
+        Ok(total.plus(match self.remainder {
+            Known::Yes => Cardinality::Unbounded,
+            Known::No => Cardinality::Exactly(0),
+            Known::Unknown => Cardinality::Undecided,
+        }))
+    }
+    fn contains_with(
+        &self,
+        value: &XsdValue,
+        memory: &mut Memory<'_>,
+    ) -> Result<Known, StorageError> {
+        match space_of_value(value) {
+            Space::Decimal => self.decimal.holds_with(value, memory),
+            Space::Float => self.single.holds_with(value, memory),
+            Space::Double => self.double.holds_with(value, memory),
+            Space::Boolean => self.boolean.holds_with(value, memory),
+            Space::Text(space) => self.text[space as usize].holds_with(value, memory),
+            Space::Temporal(space) => self.temporal[space as usize].holds_with(value, memory),
+        }
+    }
+
     /// The empty range.
     fn empty() -> Self {
         Self {
@@ -2230,22 +2761,6 @@ impl Extent {
             }),
             term: std::array::from_fn(|_| SpaceSet::Exact(ListedSet::empty(None))),
             remainder: Known::No,
-        }
-    }
-
-    /// The whole data domain, remainder included.
-    fn full() -> Self {
-        Self {
-            decimal: SpaceSet::Exact(DecimalSet::full()),
-            single: SpaceSet::Exact(FloatSet::full(FloatWidth::Single)),
-            double: SpaceSet::Exact(FloatSet::full(FloatWidth::Double)),
-            boolean: SpaceSet::Exact(BoolSet::full()),
-            text: std::array::from_fn(|i| SpaceSet::Exact(LengthSet::full(TEXT_SPACES[i].kind()))),
-            temporal: std::array::from_fn(|i| {
-                SpaceSet::Exact(ListedSet::full(TEMPORAL_SPACES[i].size()))
-            }),
-            term: std::array::from_fn(|_| SpaceSet::Exact(ListedSet::full(None))),
-            remainder: Known::Yes,
         }
     }
 
@@ -2264,105 +2779,15 @@ impl Extent {
         }
     }
 
-    /// The complement of the range within the whole data domain.
-    fn complement(&self) -> Self {
-        Self {
-            decimal: self.decimal.complement(),
-            single: self.single.complement(),
-            double: self.double.complement(),
-            boolean: self.boolean.complement(),
-            text: std::array::from_fn(|i| self.text[i].complement()),
-            temporal: std::array::from_fn(|i| self.temporal[i].complement()),
-            term: std::array::from_fn(|i| self.term[i].complement()),
-            remainder: self.remainder.negate(),
-        }
-    }
-
-    /// Intersection, space by space.
-    fn intersect(&self, other: &Self) -> Self {
-        Self {
-            decimal: self.decimal.intersect(&other.decimal),
-            single: self.single.intersect(&other.single),
-            double: self.double.intersect(&other.double),
-            boolean: self.boolean.intersect(&other.boolean),
-            text: zip_spaces(&self.text, &other.text, SpaceSet::intersect),
-            temporal: zip_spaces(&self.temporal, &other.temporal, SpaceSet::intersect),
-            term: zip_spaces(&self.term, &other.term, SpaceSet::intersect),
-            remainder: self.remainder.conjoin(other.remainder),
-        }
-    }
-
-    /// Union, space by space.
-    fn union(&self, other: &Self) -> Self {
-        Self {
-            decimal: self.decimal.union(&other.decimal),
-            single: self.single.union(&other.single),
-            double: self.double.union(&other.double),
-            boolean: self.boolean.union(&other.boolean),
-            text: zip_spaces(&self.text, &other.text, SpaceSet::union),
-            temporal: zip_spaces(&self.temporal, &other.temporal, SpaceSet::union),
-            term: zip_spaces(&self.term, &other.term, SpaceSet::union),
-            remainder: self.remainder.disjoin(other.remainder),
-        }
-    }
-
     /// Whether the range is empty: every space empty AND the remainder excluded. One
     /// witness anywhere settles the answer regardless of what stays unknown.
     fn satisfiability(&self) -> Satisfiability {
-        let verdicts = [
-            self.decimal.satisfiability(),
-            self.single.satisfiability(),
-            self.double.satisfiability(),
-            self.boolean.satisfiability(),
-            match self.remainder {
-                Known::Yes => Satisfiability::Inhabited,
-                Known::No => Satisfiability::Empty,
-                Known::Unknown => Satisfiability::Undecided,
-            },
-        ];
-        let mut undecided = false;
-        for verdict in verdicts
-            .into_iter()
-            .chain(self.text.iter().map(SpaceSet::satisfiability))
-            .chain(self.temporal.iter().map(SpaceSet::satisfiability))
-            .chain(self.term.iter().map(SpaceSet::satisfiability))
-        {
-            match verdict {
-                Satisfiability::Inhabited => return Satisfiability::Inhabited,
-                Satisfiability::Undecided => undecided = true,
-                Satisfiability::Empty => {}
-            }
-        }
-        if undecided {
-            Satisfiability::Undecided
-        } else {
-            Satisfiability::Empty
-        }
+        resident(0, |memory| self.satisfiability_with(memory))
     }
 
     /// The number of values, summed over the disjoint spaces.
     fn cardinality(&self) -> Cardinality {
-        let mut total = self
-            .decimal
-            .count()
-            .plus(self.single.count())
-            .plus(self.double.count())
-            .plus(self.boolean.count());
-        for set in &self.text {
-            total = total.plus(set.count());
-        }
-        for set in &self.temporal {
-            total = total.plus(set.count());
-        }
-        for set in &self.term {
-            total = total.plus(set.count());
-        }
-        total.plus(match self.remainder {
-            // The unmodelled part of the data domain is infinite (`xsd:anyURI` alone).
-            Known::Yes => Cardinality::Unbounded,
-            Known::No => Cardinality::Exactly(0),
-            Known::Unknown => Cardinality::Undecided,
-        })
+        resident(0, |memory| self.cardinality_with(memory))
     }
 
     /// Whether every space is exactly represented and the remainder is determined.
@@ -2380,129 +2805,274 @@ impl Extent {
     /// Whether the range holds `value`. A value belongs to exactly one space, so only
     /// that space's set is consulted.
     fn contains(&self, value: &XsdValue) -> Known {
-        match space_of_value(value) {
-            Space::Decimal => self.decimal.holds(value),
-            Space::Float => self.single.holds(value),
-            Space::Double => self.double.holds(value),
-            Space::Boolean => self.boolean.holds(value),
-            Space::Text(space) => self.text[space as usize].holds(value),
-            Space::Temporal(space) => self.temporal[space as usize].holds(value),
-        }
+        resident(0, |memory| self.contains_with(value, memory))
     }
 }
 
 // ── From a data range to its extent ──────────────────────────────────────────────
 
-/// The extent of a data range across the whole data domain.
-fn extent(range: &DataRange) -> Extent {
-    match range {
-        DataRange::Any => Extent::full(),
-        DataRange::Opaque => Extent::unknown(),
-        DataRange::Datatype(dt) => datatype_extent(*dt),
-        DataRange::TermDatatype(space) => {
-            let mut ex = Extent::empty();
-            ex.term[*space as usize] = SpaceSet::Exact(ListedSet::full(None));
-            ex
-        }
-        DataRange::TermOneOf { space, values } => {
-            let mut ex = Extent::empty();
-            ex.term[*space as usize] = SpaceSet::Exact(ListedSet::listed(None, values.clone()));
-            ex
-        }
-        DataRange::Restriction { base, facets } => restriction_extent(*base, facets),
-        DataRange::OneOf(values) => values
-            .iter()
-            .fold(Extent::empty(), |acc, v| acc.union(&value_extent(v))),
-        DataRange::Not(inner) => extent(inner).complement(),
-        DataRange::And(operands) => operands
-            .iter()
-            .fold(Extent::full(), |acc, r| acc.intersect(&extent(r))),
-        DataRange::Or(operands) => operands
-            .iter()
-            .fold(Extent::empty(), |acc, r| acc.union(&extent(r))),
-    }
+fn extent_with(range: &DataRange, memory: &mut Memory<'_>) -> Result<Extent, StorageError> {
+    memory.scope(0, |memory| {
+        memory.step()?;
+        Ok(match range {
+            DataRange::Any => Extent::full_with(memory)?,
+            DataRange::Opaque => Extent::unknown(),
+            DataRange::Datatype(datatype) => datatype_with(*datatype, memory)?,
+            DataRange::TermDatatype(space) => {
+                let mut extent = Extent::empty();
+                extent.term[*space as usize] = SpaceSet::Exact(ListedSet::full(None));
+                extent
+            }
+            DataRange::TermOneOf { space, values } => {
+                let mut extent = Extent::empty();
+                let values = memory.copy(values)?;
+                extent.term[*space as usize] =
+                    SpaceSet::Exact(ListedSet::listed_with(None, values, memory)?);
+                extent
+            }
+            DataRange::Restriction { base, facets } => restriction_with(*base, facets, memory)?,
+            DataRange::OneOf(values) => {
+                let mut accumulator = Extent::empty();
+                for value in values {
+                    let part = value_with(value, memory)?;
+                    let next = accumulator.union_with(&part, memory)?;
+                    memory.drop_value(accumulator)?;
+                    memory.drop_value(part)?;
+                    accumulator = next;
+                }
+                accumulator
+            }
+            DataRange::Not(inner) => {
+                let inner = extent_with(inner, memory)?;
+                let result = inner.complement_with(memory)?;
+                memory.drop_value(inner)?;
+                result
+            }
+            DataRange::And(operands) | DataRange::Or(operands) => {
+                let conjunction = matches!(range, DataRange::And(_));
+                let mut accumulator = if conjunction {
+                    Extent::full_with(memory)?
+                } else {
+                    Extent::empty()
+                };
+                for operand in operands {
+                    let part = extent_with(operand, memory)?;
+                    let next = if conjunction {
+                        accumulator.intersect_with(&part, memory)?
+                    } else {
+                        accumulator.union_with(&part, memory)?
+                    };
+                    memory.drop_value(accumulator)?;
+                    memory.drop_value(part)?;
+                    accumulator = next;
+                }
+                accumulator
+            }
+        })
+    })
 }
 
-/// The extent of a whole datatype value space.
-fn datatype_extent(dt: XsdDatatype) -> Extent {
-    let mut ex = Extent::empty();
-    match space_of_datatype(dt) {
-        Space::Decimal => ex.decimal = SpaceSet::Exact(DecimalSet::for_datatype(dt)),
-        Space::Float => ex.single = SpaceSet::Exact(FloatSet::full(FloatWidth::Single)),
-        Space::Double => ex.double = SpaceSet::Exact(FloatSet::full(FloatWidth::Double)),
-        Space::Boolean => ex.boolean = SpaceSet::Exact(BoolSet::full()),
+fn datatype_with(datatype: XsdDatatype, memory: &mut Memory<'_>) -> Result<Extent, StorageError> {
+    let mut extent = Extent::empty();
+    match space_of_datatype(datatype) {
+        Space::Decimal => {
+            extent.decimal = SpaceSet::Exact(DecimalSet::datatype_with(datatype, memory)?);
+        }
+        Space::Float => {
+            extent.single = SpaceSet::Exact(FloatSet::full_with(FloatWidth::Single, memory)?);
+        }
+        Space::Double => {
+            extent.double = SpaceSet::Exact(FloatSet::full_with(FloatWidth::Double, memory)?);
+        }
+        Space::Boolean => extent.boolean = SpaceSet::Exact(BoolSet::full()),
         Space::Text(space) => {
-            ex.text[space as usize] = SpaceSet::Exact(LengthSet::full(space.kind()));
+            extent.text[space as usize] =
+                SpaceSet::Exact(LengthSet::full_with(space.kind(), memory)?);
         }
         Space::Temporal(space) => {
-            ex.temporal[space as usize] = if covers_whole_space(dt) {
+            extent.temporal[space as usize] = if covers_whole_space(datatype) {
                 SpaceSet::Exact(ListedSet::full(space.size()))
             } else {
-                // A duration subtype is an infinite proper subspace of the shared
-                // duration space; the zero duration witnesses it.
                 SpaceSet::Inhabited
-            };
+            }
         }
     }
-    if dt == XsdDatatype::DateTime {
-        ex.temporal[TemporalSpace::DateTimeUnzoned as usize] =
+    if datatype == XsdDatatype::DateTime {
+        extent.temporal[TemporalSpace::DateTimeUnzoned as usize] =
             SpaceSet::Exact(ListedSet::full(None));
     }
-    ex
+    Ok(extent)
 }
 
-/// The extent of a single value.
-fn value_extent(value: &XsdValue) -> Extent {
-    let mut ex = Extent::empty();
+fn value_with(value: &XsdValue, memory: &mut Memory<'_>) -> Result<Extent, StorageError> {
+    let mut extent = Extent::empty();
     match space_of_value(value) {
-        Space::Decimal => match decimal_point(value) {
-            Some(d) => ex.decimal = SpaceSet::Exact(DecimalSet::point(d)),
-            None => return Extent::unknown(),
+        Space::Decimal => match memory.decimal_of(value)? {
+            Some(value) => extent.decimal = SpaceSet::Exact(DecimalSet::point_with(value, memory)?),
+            None => return Ok(Extent::unknown()),
         },
-        Space::Float => ex.single = float_point(FloatWidth::Single, value),
-        Space::Double => ex.double = float_point(FloatWidth::Double, value),
+        Space::Float => extent.single = float_point_with(FloatWidth::Single, value, memory)?,
+        Space::Double => extent.double = float_point_with(FloatWidth::Double, value, memory)?,
         Space::Boolean => match value {
-            XsdValue::Boolean(b) => ex.boolean = SpaceSet::Exact(BoolSet::point(*b)),
-            _ => return Extent::unknown(),
+            XsdValue::Boolean(value) => extent.boolean = SpaceSet::Exact(BoolSet::point(*value)),
+            _ => return Ok(Extent::unknown()),
         },
         Space::Text(space) => {
-            ex.text[space as usize] =
-                SpaceSet::Exact(LengthSet::singleton(space.kind(), value.clone()));
+            let value = value.clone_owned(memory)?;
+            extent.text[space as usize] =
+                SpaceSet::Exact(LengthSet::singleton_with(space.kind(), value, memory)?);
         }
         Space::Temporal(space) => {
-            ex.temporal[space as usize] =
-                SpaceSet::Exact(ListedSet::listed(space.size(), vec![value.clone()]));
+            let value = value.clone_owned(memory)?;
+            let values = memory.one(value)?;
+            extent.temporal[space as usize] =
+                SpaceSet::Exact(ListedSet::listed_with(space.size(), values, memory)?);
         }
     }
-    ex
+    Ok(extent)
 }
 
-/// The set holding exactly one float value.
-///
-/// A named zero is exhibited rather than exactly represented: the order this space
-/// carries cannot separate `positiveZero` from `negativeZero`, so a set that must hold
-/// one and not the other is outside the interval algebra.
-fn float_point(width: FloatWidth, value: &XsdValue) -> SpaceSet<FloatSet> {
-    let x = match value {
-        XsdValue::Float(x) => f64::from(*x),
-        XsdValue::Double(x) => *x,
-        _ => return SpaceSet::Unknown,
+fn float_point_with(
+    width: FloatWidth,
+    value: &XsdValue,
+    memory: &mut Memory<'_>,
+) -> Result<SpaceSet<FloatSet>, StorageError> {
+    let value = match value {
+        XsdValue::Float(value) => f64::from(*value),
+        XsdValue::Double(value) => *value,
+        _ => return Ok(SpaceSet::Unknown),
     };
-    if x.is_nan() {
+    Ok(if value.is_nan() {
         SpaceSet::Exact(FloatSet {
             width,
             number: IntervalSet::empty(),
             nan: true,
         })
-    } else if x == 0.0 {
+    } else if value == 0.0 {
         SpaceSet::Inhabited
     } else {
         SpaceSet::Exact(FloatSet {
             width,
-            number: IntervalSet::point(Point::float(x)),
+            number: IntervalSet::point_with(Point::float(value), memory)?,
             nan: false,
         })
+    })
+}
+
+fn restriction_with(
+    base: XsdDatatype,
+    facets: &[Facet],
+    memory: &mut Memory<'_>,
+) -> Result<Extent, StorageError> {
+    let mut extent = Extent::empty();
+    match space_of_datatype(base) {
+        Space::Decimal => extent.decimal = decimal_restriction_with(base, facets, memory)?,
+        Space::Float => extent.single = float_restriction_with(FloatWidth::Single, facets, memory)?,
+        Space::Double => {
+            extent.double = float_restriction_with(FloatWidth::Double, facets, memory)?;
+        }
+        Space::Boolean => {
+            extent.boolean = if facets.is_empty() {
+                SpaceSet::Exact(BoolSet::full())
+            } else {
+                SpaceSet::Unknown
+            }
+        }
+        Space::Text(space) => {
+            extent.text[space as usize] = length_restriction_with(space.kind(), facets, memory)?;
+        }
+        Space::Temporal(space) => {
+            extent.temporal[space as usize] =
+                temporal_restriction_with(base, space, facets, memory)?;
+        }
     }
+    if base == XsdDatatype::DateTime {
+        extent.temporal[TemporalSpace::DateTimeUnzoned as usize] =
+            temporal_restriction_with(base, TemporalSpace::DateTimeUnzoned, facets, memory)?;
+    }
+    Ok(extent)
+}
+
+fn decimal_restriction_with(
+    base: XsdDatatype,
+    facets: &[Facet],
+    memory: &mut Memory<'_>,
+) -> Result<SpaceSet<DecimalSet>, StorageError> {
+    memory.scope(0, |memory| {
+        let mut set = DecimalSet::datatype_with(base, memory)?;
+        for facet in facets {
+            memory.step()?;
+            let Some((side, value)) = BoundSide::of(facet) else {
+                return Ok(SpaceSet::Unknown);
+            };
+            let Some(value) = memory.decimal_of(value)? else {
+                return Ok(SpaceSet::Unknown);
+            };
+            let part = DecimalSet::interval_with(side.interval(Point::Dec(value)), memory)?;
+            let next = set.intersect_with(&part, memory)?;
+            memory.drop_value(set)?;
+            memory.drop_value(part)?;
+            set = next;
+        }
+        Ok(SpaceSet::Exact(set))
+    })
+}
+
+fn float_restriction_with(
+    width: FloatWidth,
+    facets: &[Facet],
+    memory: &mut Memory<'_>,
+) -> Result<SpaceSet<FloatSet>, StorageError> {
+    memory.scope(0, |memory| {
+        let mut set = FloatSet::full_with(width, memory)?;
+        for facet in facets {
+            memory.step()?;
+            let Some((side, value)) = BoundSide::of(facet) else {
+                return Ok(SpaceSet::Unknown);
+            };
+            let bound = match (width, value) {
+                (FloatWidth::Single, XsdValue::Float(value)) => f64::from(*value),
+                (FloatWidth::Double, XsdValue::Double(value)) => *value,
+                _ => return Ok(SpaceSet::Unknown),
+            };
+            if bound.is_nan() {
+                return Ok(SpaceSet::Unknown);
+            }
+            let part = FloatSet::interval_with(width, side.interval(Point::float(bound)), memory)?;
+            let next = set.intersect_with(&part, memory)?;
+            memory.drop_value(set)?;
+            memory.drop_value(part)?;
+            set = next;
+        }
+        Ok(SpaceSet::Exact(set))
+    })
+}
+
+fn length_restriction_with(
+    kind: LengthKind,
+    facets: &[Facet],
+    memory: &mut Memory<'_>,
+) -> Result<SpaceSet<LengthSet>, StorageError> {
+    memory.scope(0, |memory| {
+        let mut set = LengthSet::full_with(kind, memory)?;
+        for facet in facets {
+            memory.step()?;
+            let Some(interval) = length_interval(facet) else {
+                return Ok(SpaceSet::Unknown);
+            };
+            let part = LengthSet::interval_with(kind, interval, memory)?;
+            let next = set.intersect_with(&part, memory)?;
+            memory.drop_value(set)?;
+            memory.drop_value(part)?;
+            set = next;
+        }
+        Ok(SpaceSet::Exact(set))
+    })
+}
+
+/// The extent of a data range across the whole data domain.
+fn extent(range: &DataRange) -> Extent {
+    resident(0, |memory| extent_with(range, memory))
 }
 
 /// Which side of an interval a bound facet constrains.
@@ -2582,90 +3152,6 @@ fn length_interval(facet: &Facet) -> Option<Interval> {
     })
 }
 
-/// The extent of `owl:onDatatype` + `owl:withRestrictions`.
-fn restriction_extent(base: XsdDatatype, facets: &[Facet]) -> Extent {
-    let mut ex = Extent::empty();
-    match space_of_datatype(base) {
-        Space::Decimal => ex.decimal = decimal_restriction(base, facets),
-        Space::Float => ex.single = float_restriction(FloatWidth::Single, facets),
-        Space::Double => ex.double = float_restriction(FloatWidth::Double, facets),
-        Space::Boolean => {
-            // XSD gives `xsd:boolean` no ordering or length facet, so any facet here
-            // constrains nothing coherently.
-            ex.boolean = if facets.is_empty() {
-                SpaceSet::Exact(BoolSet::full())
-            } else {
-                SpaceSet::Unknown
-            };
-        }
-        Space::Text(space) => ex.text[space as usize] = length_restriction(space.kind(), facets),
-        Space::Temporal(space) => {
-            ex.temporal[space as usize] = temporal_restriction(base, space, facets);
-        }
-    }
-    if base == XsdDatatype::DateTime {
-        ex.temporal[TemporalSpace::DateTimeUnzoned as usize] =
-            temporal_restriction(base, TemporalSpace::DateTimeUnzoned, facets);
-    }
-    ex
-}
-
-/// A restriction over the decimal space.
-fn decimal_restriction(base: XsdDatatype, facets: &[Facet]) -> SpaceSet<DecimalSet> {
-    let mut set = DecimalSet::for_datatype(base);
-    for facet in facets {
-        let Some((side, value)) = BoundSide::of(facet) else {
-            // A length facet does not apply to a number.
-            return SpaceSet::Unknown;
-        };
-        let Some(bound) = decimal_point(value) else {
-            // The bound is from another value space.
-            return SpaceSet::Unknown;
-        };
-        set = set.intersect(&DecimalSet::from_interval(side.interval(Point::Dec(bound))));
-    }
-    SpaceSet::Exact(set)
-}
-
-/// A restriction over a float space. A bound facet restricts the numbers and empties
-/// the NaN stratum — NaN is not `>=` anything.
-fn float_restriction(width: FloatWidth, facets: &[Facet]) -> SpaceSet<FloatSet> {
-    let mut set = FloatSet::full(width);
-    for facet in facets {
-        let Some((side, value)) = BoundSide::of(facet) else {
-            return SpaceSet::Unknown;
-        };
-        let bound = match (width, value) {
-            (FloatWidth::Single, XsdValue::Float(x)) => f64::from(*x),
-            (FloatWidth::Double, XsdValue::Double(x)) => *x,
-            // A bound from another value space, at the other width included.
-            _ => return SpaceSet::Unknown,
-        };
-        if bound.is_nan() {
-            // Nothing compares with NaN, so a NaN bound constrains nothing coherently.
-            return SpaceSet::Unknown;
-        }
-        set = set.intersect(&FloatSet::from_interval(
-            width,
-            side.interval(Point::float(bound)),
-        ));
-    }
-    SpaceSet::Exact(set)
-}
-
-/// A restriction over a length-selected space.
-fn length_restriction(kind: LengthKind, facets: &[Facet]) -> SpaceSet<LengthSet> {
-    let mut set = LengthSet::full(kind);
-    for facet in facets {
-        let Some(interval) = length_interval(facet) else {
-            // A bound facet does not apply to a string or a byte sequence.
-            return SpaceSet::Unknown;
-        };
-        set = set.intersect(&LengthSet::from_interval(kind, interval));
-    }
-    SpaceSet::Exact(set)
-}
-
 /// What a set of bound facets over a temporal space settles.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TemporalBounds {
@@ -2679,19 +3165,13 @@ enum TemporalBounds {
     Indeterminate,
 }
 
-/// A restriction over a temporal space.
-///
-/// Bound facets here do NOT yield an exactly represented set: the XSD order on these
-/// spaces is partial, so an interval's complement is not a union of intervals. What
-/// remains decidable without assuming order completeness is a contradiction between two
-/// bounds (an exact empty set, which does close under complement) and an inclusive
-/// endpoint that satisfies every bound (a witness).
-fn temporal_restriction(
+fn temporal_restriction_with(
     base: XsdDatatype,
     space: TemporalSpace,
     facets: &[Facet],
-) -> SpaceSet<ListedSet<XsdValue>> {
-    match temporal_bounds(space, facets) {
+    memory: &mut Memory<'_>,
+) -> Result<SpaceSet<ListedSet<XsdValue>>, StorageError> {
+    Ok(match temporal_bounds_with(space, facets, memory)? {
         TemporalBounds::Contradiction => SpaceSet::Exact(ListedSet::empty(space.size())),
         TemporalBounds::Unconstrained => {
             if covers_whole_space(base) {
@@ -2702,62 +3182,75 @@ fn temporal_restriction(
         }
         TemporalBounds::Witnessed if covers_whole_space(base) => SpaceSet::Inhabited,
         TemporalBounds::Witnessed | TemporalBounds::Indeterminate => SpaceSet::Unknown,
-    }
+    })
 }
 
-/// Read a temporal space's bound facets for a contradiction or a witness.
-fn temporal_bounds(space: TemporalSpace, facets: &[Facet]) -> TemporalBounds {
-    let mut bounds: Vec<(BoundSide, &XsdValue)> = Vec::with_capacity(facets.len());
+fn temporal_bounds_with(
+    space: TemporalSpace,
+    facets: &[Facet],
+    memory: &mut Memory<'_>,
+) -> Result<TemporalBounds, StorageError> {
+    // The original bound list contains only borrowed source facets. Scan those
+    // facets directly; no copied value or metadata vector is needed.
     for facet in facets {
-        let Some((side, value)) = BoundSide::of(facet) else {
-            // A length facet does not apply to a temporal value.
-            return TemporalBounds::Indeterminate;
+        memory.step()?;
+        let Some((_, value)) = BoundSide::of(facet) else {
+            return Ok(TemporalBounds::Indeterminate);
         };
-        let value_space = space_of_value(value);
-        // dateTime's zoned and local strata share the same partial order.
-        // Contradictory endpoints refute both strata; an endpoint itself is
-        // a witness only in the stratum it inhabits.
-        if value_space != Space::Temporal(space)
+        if space_of_value(value) != Space::Temporal(space)
             && !(matches!(
                 space,
                 TemporalSpace::DateTime | TemporalSpace::DateTimeUnzoned
             ) && matches!(value, XsdValue::DateTime(_)))
         {
-            return TemporalBounds::Indeterminate;
+            return Ok(TemporalBounds::Indeterminate);
         }
-        bounds.push((side, value));
     }
-    if bounds.is_empty() {
-        return TemporalBounds::Unconstrained;
+    if facets.is_empty() {
+        return Ok(TemporalBounds::Unconstrained);
     }
-    for (lower_side, lower) in bounds.iter().filter(|(side, _)| side.is_lower()) {
-        for (upper_side, upper) in bounds.iter().filter(|(side, _)| !side.is_lower()) {
+    for (lower_side, lower) in facets
+        .iter()
+        .filter_map(BoundSide::of)
+        .filter(|(side, _)| side.is_lower())
+    {
+        for (upper_side, upper) in facets
+            .iter()
+            .filter_map(BoundSide::of)
+            .filter(|(side, _)| !side.is_lower())
+        {
+            memory.step()?;
             match value_cmp(lower, upper) {
-                Some(Ordering::Greater) => return TemporalBounds::Contradiction,
+                Some(Ordering::Greater) => return Ok(TemporalBounds::Contradiction),
                 Some(Ordering::Equal)
                     if !(lower_side.is_inclusive() && upper_side.is_inclusive()) =>
                 {
-                    return TemporalBounds::Contradiction;
+                    return Ok(TemporalBounds::Contradiction);
                 }
                 _ => {}
             }
         }
     }
-    let witnessed = bounds
+    for (_, candidate) in facets
         .iter()
+        .filter_map(BoundSide::of)
         .filter(|(side, candidate)| {
             side.is_inclusive() && space_of_value(candidate) == Space::Temporal(space)
         })
-        .any(|(_, candidate)| {
-            bounds
-                .iter()
-                .all(|(side, bound)| satisfies_bound(candidate, *side, bound) == Some(true))
-        });
-    if witnessed {
-        TemporalBounds::Witnessed
-    } else {
-        TemporalBounds::Indeterminate
+    {
+        let mut admitted = true;
+        for (side, bound) in facets.iter().filter_map(BoundSide::of) {
+            memory.step()?;
+            if satisfies_bound(candidate, side, bound) != Some(true) {
+                admitted = false;
+                break;
+            }
+        }
+        if admitted {
+            return Ok(TemporalBounds::Witnessed);
+        }
     }
+    Ok(TemporalBounds::Indeterminate)
 }
 
 /// Whether `candidate` satisfies one bound, or `None` when the two are incomparable.

@@ -308,6 +308,12 @@ impl Decimal {
     /// rounds to a multiple of `10^-precision`, as XPath F&O 3.1 defines.
     #[must_use]
     pub fn round(&self, precision: i32, rounding: Rounding) -> Self {
+        if precision == 0 {
+            return Self::from_integer(
+                self.round_to_integer_using(rounding, &crate::bigint::scratch::Unbounded)
+                    .expect("unbounded integer storage"),
+            );
+        }
         let precision_wide = i64::from(precision);
         let scale = i64::from(self.scale);
         if precision_wide >= scale {
@@ -540,10 +546,122 @@ impl Decimal {
         }
     }
 
-    /// The position of the leading digit: `|value| ∈ [10^(e−1), 10^e)` for the
-    /// returned `e` (a nonzero value only).
-    fn magnitude_exponent(&self) -> i64 {
-        i64::try_from(self.unscaled.decimal_digits()).unwrap_or(i64::MAX) - i64::from(self.scale)
+    pub(crate) fn copy_using(
+        &self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        Ok(Self {
+            unscaled: self.unscaled.copy_using(storage)?,
+            scale: self.scale,
+        })
+    }
+
+    /// The same total decimal order with every new magnitude in caller-owned storage.
+    pub(crate) fn cmp_using(
+        &self,
+        other: &Self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Ordering, crate::bigint::LimbScratchError> {
+        let (left_sign, right_sign) = (self.signum(), other.signum());
+        if left_sign != right_sign {
+            return Ok(left_sign.cmp(&right_sign));
+        }
+        if left_sign == 0 {
+            return Ok(Ordering::Equal);
+        }
+        if self.scale == other.scale {
+            return Ok(self.unscaled.cmp(&other.unscaled));
+        }
+        if let Some((left, right, _)) = self.aligned_small(other) {
+            return Ok(left.cmp(&right));
+        }
+        let (left_low, left_high) = self.shape().comparison_exponents();
+        let (right_low, right_high) = other.shape().comparison_exponents();
+        let separated = if left_low > right_high {
+            Some(Ordering::Greater)
+        } else if right_low > left_high {
+            Some(Ordering::Less)
+        } else {
+            None
+        };
+        if let Some(order) = separated {
+            return Ok(if left_sign < 0 {
+                order.reverse()
+            } else {
+                order
+            });
+        }
+        // Close magnitudes need the exact aligned coefficients; no decimal text or
+        // speculative scale cap enters the decision.
+        if self.scale < other.scale {
+            let aligned = self
+                .unscaled
+                .with_bigint(|value| value.mul_pow10_using(other.scale - self.scale, storage))?;
+            Ok(other.unscaled.with_bigint(|right| aligned.cmp(right)))
+        } else {
+            let aligned = other
+                .unscaled
+                .with_bigint(|value| value.mul_pow10_using(self.scale - other.scale, storage))?;
+            Ok(self.unscaled.with_bigint(|left| left.cmp(&aligned)))
+        }
+    }
+
+    pub(crate) fn round_to_integer_using(
+        &self,
+        rounding: Rounding,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Integer, crate::bigint::LimbScratchError> {
+        if self.scale == 0 {
+            return self.unscaled.copy_using(storage);
+        }
+        let negative = self.is_negative();
+        if u64::from(self.scale) > cost::digits_for_bits(self.unscaled.binary_bits()) {
+            return Ok(
+                if rounding.increments(negative, false, Ordering::Less, !self.is_zero()) {
+                    Integer::from_i128(if negative { -1 } else { 1 })
+                } else {
+                    Integer::ZERO
+                },
+            );
+        }
+        if let Some(value) = self.unscaled.as_i128()
+            && self.scale <= MAX_I128_POW10
+        {
+            let unit = POW10[self.scale as usize];
+            let magnitude = value.unsigned_abs();
+            let (kept, remainder) = (magnitude / unit, magnitude % unit);
+            let increment = rounding.increments(
+                negative,
+                kept & 1 == 1,
+                remainder.cmp(&(unit - remainder)),
+                remainder != 0,
+            );
+            let magnitude = kept + u128::from(increment);
+            let signed = i128::try_from(magnitude).expect("division by at least ten fits i128");
+            return Ok(Integer::from_i128(if negative { -signed } else { signed }));
+        }
+        let unit = BigInt::pow10_using(self.scale, storage)?;
+        let (kept, remainder) = self
+            .unscaled
+            .with_bigint(|value| value.div_rem_using(&unit, storage))?
+            .expect("power of ten is nonzero");
+        let remainder = remainder.with_sign(false);
+        let half = if remainder.is_zero() {
+            Ordering::Less
+        } else {
+            remainder.cmp(&unit.sub_using(&remainder, storage)?)
+        };
+        let increment = rounding.increments(negative, kept.is_odd(), half, !remainder.is_zero());
+        let kept = Integer::from_bigint(kept);
+        if increment {
+            if negative {
+                kept.sub_using(&Integer::ONE, storage)
+            } else {
+                kept.add_using(&Integer::ONE, storage)
+            }
+        } else {
+            Ok(kept)
+        }
     }
 
     // ----- resource governance ---------------------------------------------
@@ -1015,38 +1133,8 @@ impl fmt::Debug for Decimal {
 
 impl Ord for Decimal {
     fn cmp(&self, other: &Self) -> Ordering {
-        let (sa, sb) = (self.signum(), other.signum());
-        if sa != sb {
-            return sa.cmp(&sb);
-        }
-        if sa == 0 {
-            return Ordering::Equal;
-        }
-        // Same sign, both nonzero: the leading-digit position decides first, so
-        // two values of wildly different scale compare without aligning.
-        let (a_low, a_high) = self.shape().comparison_exponents();
-        let (b_low, b_high) = other.shape().comparison_exponents();
-        let separated = if a_low > b_high {
-            Some(Ordering::Greater)
-        } else if b_low > a_high {
-            Some(Ordering::Less)
-        } else {
-            None
-        };
-        let magnitude = match separated
-            .unwrap_or_else(|| self.magnitude_exponent().cmp(&other.magnitude_exponent()))
-        {
-            Ordering::Equal => {
-                let (a, b, _) = self.aligned(other);
-                a.abs().cmp(&b.abs())
-            }
-            unequal => unequal,
-        };
-        if sa < 0 {
-            magnitude.reverse()
-        } else {
-            magnitude
-        }
+        self.cmp_using(other, &crate::bigint::scratch::Unbounded)
+            .expect("unbounded integer storage")
     }
 }
 

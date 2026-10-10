@@ -900,10 +900,10 @@ def test_the_committed_proof_bytes_reproduce_through_this_host() -> None:
     host and verified on another would have had it move under them.
     """
     cases = _dl_proof_vectors()
-    assert len(cases) == 7, "one case per proof-bearing service"
-    # …and one case per service BY NAME, not merely seven of them. A count alone
-    # is satisfied by an artifact that duplicated one service and dropped another,
-    # which would leave a proof-bearing service checked on no host at all.
+    assert len(cases) == 16, "seven service cases and nine prepared-schema cases"
+    assert [case["case"] for case in cases[:7]] == entail.proof_services()
+    # Keep the original service prefix and check every appended case through PyO3.
+    # The service-set guard still rejects a lost or unrecognized proof service.
     assert {case["service"] for case in cases} == set(entail.proof_services()), (
         "every service that carries a proof term has a case, and the artifact "
         "names no service that does not"

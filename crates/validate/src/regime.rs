@@ -80,12 +80,14 @@
 //! and no dependency beyond `purrdf-entail` over what the crate already had.
 
 use core::fmt;
+mod schema_vectors;
 use core::fmt::Write as _;
 use purrdf_core::TermBox;
 
 use purrdf_core::{TermValue, write_term_value};
 use purrdf_datalog::chase::ChaseError;
 use purrdf_datalog::seminaive::{BudgetResource, EvalError, EvalOptions, render_capacity_refusal};
+use purrdf_entail::reasoner::SchemaObstruction;
 use purrdf_entail::{
     ChaseProof, ClaimSubject, Completeness, DlAxiom, DlCertificate, DlCompleteness, EntailError,
     EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, ImportMap, Justification,
@@ -1772,6 +1774,12 @@ fn write_axiom(axiom: &DlAxiom, out: &mut String) {
 /// tableau run reached its step cap, which is why a boolean service answers
 /// `unknown` rather than `false` — reporting a resource limit as an entailment is
 /// the defect this line exists to prevent.
+/// A source-preparation refusal additionally emits
+/// `schema-preparation work <spent> <limit>`,
+/// `schema-preparation storage <requested> <limit>`, or
+/// `schema-preparation allocation`. That optional line retains its typed cause
+/// for the independent stopping-receipt check; complete legacy certificates
+/// retain their original bytes.
 ///
 /// `steps` is a count of saturation rounds and `budget` the per-DECISION cap, so
 /// `steps` may legitimately exceed `budget` when `decisions` is greater than one.
@@ -1816,6 +1824,17 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
         DlCompleteness::BudgetExhausted => "budget-exhausted",
     };
     let _ = writeln!(out, "completeness {completeness}");
+    if let Some(obstruction) = certificate.schema_obstruction() {
+        match obstruction {
+            SchemaObstruction::Work { spent, limit } => {
+                let _ = writeln!(out, "schema-preparation work {spent} {limit}");
+            }
+            SchemaObstruction::Storage { requested, limit } => {
+                let _ = writeln!(out, "schema-preparation storage {requested} {limit}");
+            }
+            SchemaObstruction::Allocation => out.push_str("schema-preparation allocation\n"),
+        }
+    }
     for boundary in certificate.boundaries() {
         let _ = writeln!(
             out,
@@ -4297,6 +4316,7 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
         ));
     }
     let mut exhausted = None;
+    let mut schema_obstruction = None;
     let mut boundaries = Vec::new();
     let mut counters: [Option<u64>; 8] = [None; 8];
     const COUNTERS: [&str; 8] = [
@@ -4316,6 +4336,27 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
                 "budget-exhausted" => true,
                 other => return Err(format!("unknown DL completeness \"{other}\"")),
             });
+        } else if let Some(rest) = line.strip_prefix("schema-preparation ") {
+            if schema_obstruction.is_some() {
+                return Err("the certificate states `schema-preparation` twice".to_owned());
+            }
+            let mut words = rest.split_whitespace();
+            let obstruction = match words.next() {
+                Some("work") => SchemaObstruction::Work {
+                    spent: read_schema_counter(words.next())?,
+                    limit: read_schema_counter(words.next())?,
+                },
+                Some("storage") => SchemaObstruction::Storage {
+                    requested: read_schema_counter(words.next())?,
+                    limit: read_schema_counter(words.next())?,
+                },
+                Some("allocation") => SchemaObstruction::Allocation,
+                _ => return Err("unknown schema preparation obstruction".to_owned()),
+            };
+            if words.next().is_some() {
+                return Err("extra schema preparation obstruction arguments".to_owned());
+            }
+            schema_obstruction = Some(obstruction);
         } else if let Some(rest) = line.strip_prefix("boundary ") {
             let name = rest.split_once(' ').map_or(rest, |(name, _)| name);
             let construct = purrdf_entail::Construct::of_name(name)
@@ -4342,10 +4383,26 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
     for (at, value) in counters.iter().enumerate() {
         read[at] = value.ok_or_else(|| format!("the certificate states no `{}`", COUNTERS[at]))?;
     }
-    Ok(DlCertificate::stated(
+    if schema_obstruction.is_some() && !exhausted {
+        return Err(
+            "a schema preparation obstruction requires incomplete certification".to_owned(),
+        );
+    }
+    let certificate = DlCertificate::stated(
         exhausted, false, boundaries, read[0], read[1], read[2], read[3], read[4], read[5],
         read[6], read[7],
-    ))
+    );
+    Ok(match schema_obstruction {
+        Some(obstruction) => certificate.with_schema_obstruction(obstruction),
+        None => certificate,
+    })
+}
+
+/// One precisely typed obstruction argument in the existing certificate grammar.
+fn read_schema_counter<T: core::str::FromStr>(word: Option<&str>) -> Result<T, String> {
+    word.ok_or_else(|| "missing schema preparation obstruction argument".to_owned())?
+        .parse()
+        .map_err(|_| "invalid schema preparation obstruction counter".to_owned())
 }
 
 /// The two self-delimiting N-Triples terms a `<keyword> <s> <o>` answer line carries.
@@ -4865,6 +4922,7 @@ pub fn dl_proof_golden_vectors() -> Result<Vec<DlProofVector>, String> {
 /// A malformed artifact, a case that fails to prove or to check, a byte difference in any of
 /// the three outputs, or a service the artifact no longer covers.
 pub fn check_dl_proof_golden_vectors() -> Result<(), String> {
+    schema_vectors::check()?;
     let cases = dl_proof_golden_vectors()?;
     if cases.is_empty() {
         return Err("the DL proof golden vector artifact holds no cases".to_owned());

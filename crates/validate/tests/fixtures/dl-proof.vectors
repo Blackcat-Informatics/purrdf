@@ -525,3 +525,581 @@ unattested 0
 rests-on refutation-encoding
 answer checked 1
 @end
+
+@case schema-preparation-empty-consistency
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+@answer
+consistency true
+@proof
+purrdf-dl-proof 1
+service consistency
+availability recorded
+input 071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a219134fd23
+digest bd4af5a427cef14f04a85f32dbed8c6ca5e15df2b2c13db0ce291c65ae8b362d
+trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+runs 1
+traced 1
+claims 1
+truncated false
+receipt none
+bytes 447
+body 1a000000000000007075727264662d646c2d736572766963652d70726f6f662d
+body 7632071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a219134
+body fd23000006000000000000000000000000000000010000000000000002000000
+body 0000000003000000000000000400000000000000050000000000000000010000
+body 0000000000010000000000000000000000000000000000000000000000000001
+body 040100000000000016000000000000007075727264662d6f776c2d646c2d7072
+body 6f6f662d7633071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c099
+body 8a219134fd237f58e406ed149f3c7b22c5b3b9d063f4a8499565f9152e47d243
+body 8c6985585f690000060000000000000000000000000000000100000000000000
+body 0200000000000000030000000000000004000000000000000500000000000000
+body 0000000000000000000000000000000000000000000000000000000000000000
+body 0500000000000000000000000000000000010100000000000000020000000000
+body 0100000000000000000000000000000000000000000000000000000000000000
+body 00000000000000000000000001000000000000000001000000000000000000
+@check
+purrdf-dl-proof-check 1
+service consistency
+availability recorded
+digest bd4af5a427cef14f04a85f32dbed8c6ca5e15df2b2c13db0ce291c65ae8b362d
+input 071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a219134fd23
+runs 1
+replayed 1
+claims 1
+attested 5
+trusted 12
+unattested 0
+rests-on reverse-mapping,clausification,grounding,unravelling,refutation-encoding
+answer checked 1
+@end
+
+@case schema-preparation-empty-class
+@service class-satisfiability
+@argument
+<https://example.org/A>
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+@answer
+class-satisfiability false
+term <https://example.org/A>
+@proof
+purrdf-dl-proof 1
+service class-satisfiability
+availability recorded
+input 071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a219134fd23
+digest 2e2357415a282fffe1f9a383a32af7bb591bf41c5158df3ffa5d136d6fe04e63
+trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+runs 2
+traced 2
+claims 1
+truncated false
+receipt none
+bytes 887
+body 1a000000000000007075727264662d646c2d736572766963652d70726f6f662d
+body 7632071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a219134
+body fd23010006000000000000000000000000000000010000000000000002000000
+body 0000000003000000000000000400000000000000050000000000000001001500
+body 00000000000068747470733a2f2f6578616d706c652e6f72672f410200000000
+body 0000000100000000000000000000000000000000000000000000000000010401
+body 00000000000016000000000000007075727264662d6f776c2d646c2d70726f6f
+body 662d7633071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a21
+body 9134fd237f58e406ed149f3c7b22c5b3b9d063f4a8499565f9152e47d2438c69
+body 85585f6900000600000000000000000000000000000001000000000000000200
+body 0000000000000300000000000000040000000000000005000000000000000000
+body 0000000000000000000000000000000000000000000000000000000000000500
+body 0000000000000000000000000000000101000000000000000200000000000100
+body 0000000000000000000000000000000000000000000000000000000000000000
+body 0000000000000000000001010000000000000000000000000000000001000000
+body 0000000002000000014d0100000000000016000000000000007075727264662d
+body 6f776c2d646c2d70726f6f662d7634071544bada45d94446f53ce8d8d931ec7c
+body f73e1a9af8b882c0998a219134fd237f58e406ed149f3c7b22c5b3b9d063f4a8
+body 499565f9152e47d2438c6985585f690100000600000000000000000000000000
+body 0000010000000000000002000000000000000300000000000000040000000000
+body 00000500000000000000000000000000000001000000000000000a0000000000
+body 0000020000000001000000000000000200000000010000000000000000020000
+body 0000020000000102000000040000000005000000030000000000000002000000
+body 0004000000040000000000000000050000000401000000000000000000000000
+body 0000000001000000000000000000000000000000000000000000000000000000
+body 0000000000000000000000000000000000000000000000000000000000000100
+body 0000000000000100150000000000000068747470733a2f2f6578616d706c652e
+body 6f72672f41000100000000000000010000000000000000
+@check
+purrdf-dl-proof-check 1
+service class-satisfiability
+availability recorded
+digest 2e2357415a282fffe1f9a383a32af7bb591bf41c5158df3ffa5d136d6fe04e63
+input 071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a219134fd23
+runs 2
+replayed 2
+claims 1
+attested 9
+trusted 19
+unattested 0
+rests-on reverse-mapping,clausification,grounding,unravelling,refutation-encoding
+answer checked 0
+@end
+
+@case schema-preparation-asserted
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/i> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/A> .
+@answer
+consistency false
+@proof
+purrdf-dl-proof 1
+service consistency
+availability recorded
+input 6918cbdb0b80c9887073c72a13bb5161cf3b1dbb716885b9b7b3296d1236421c
+digest fcad831623e963062077b2ed5c29c1e534186d629098fa53735858a2f5e50e02
+trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+runs 1
+traced 1
+claims 1
+truncated false
+receipt none
+bytes 528
+body 1a000000000000007075727264662d646c2d736572766963652d70726f6f662d
+body 76326918cbdb0b80c9887073c72a13bb5161cf3b1dbb716885b9b7b3296d1236
+body 421c000006000000000000000000000000000000010000000000000002000000
+body 0000000003000000000000000400000000000000050000000000000000010000
+body 0000000000010100000000000000000000000000000000000000000000000001
+body 4d0100000000000016000000000000007075727264662d6f776c2d646c2d7072
+body 6f6f662d76346918cbdb0b80c9887073c72a13bb5161cf3b1dbb716885b9b7b3
+body 296d1236421c7f58e406ed149f3c7b22c5b3b9d063f4a8499565f9152e47d243
+body 8c6985585f690100000600000000000000000000000000000001000000000000
+body 0002000000000000000300000000000000040000000000000005000000000000
+body 00000000000000000001000000000000000a0000000000000000590000000100
+body 0000000000000059000000010000000000000000005900000002000000010200
+body 0000040000000005000000030000000000000002000000000400000004000000
+body 0000000000050000000401000000000000000000000000000000000100000000
+body 0000000000000000000000000000000000000000000000000000000000000000
+body 0000000000000000000000000000000000000000000100000000000000000001
+body 00000000000000000000000000000000
+@check
+purrdf-dl-proof-check 1
+service consistency
+availability recorded
+digest fcad831623e963062077b2ed5c29c1e534186d629098fa53735858a2f5e50e02
+input 6918cbdb0b80c9887073c72a13bb5161cf3b1dbb716885b9b7b3296d1236421c
+runs 1
+replayed 1
+claims 1
+attested 9
+trusted 6
+unattested 0
+rests-on reverse-mapping,clausification,grounding,refutation-encoding
+answer checked 0
+@end
+
+@case schema-preparation-largest-count
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "4294967294"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "0"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/i> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/A> .
+@answer
+consistency false
+@proof
+purrdf-dl-proof 1
+service consistency
+availability recorded
+input 7f53c332a1f9bfb91dc5e75fb83f10aefa9b451290b8d61eca1b493033ce9e3a
+digest c9d22309470476a709da0ac394f46ddc1d84dee068a4f5107e3684640bd6fdae
+trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+runs 1
+traced 1
+claims 1
+truncated false
+receipt none
+bytes 528
+body 1a000000000000007075727264662d646c2d736572766963652d70726f6f662d
+body 76327f53c332a1f9bfb91dc5e75fb83f10aefa9b451290b8d61eca1b493033ce
+body 9e3a000006000000000000000000000000000000010000000000000002000000
+body 0000000003000000000000000400000000000000050000000000000000010000
+body 0000000000010100000000000000000000000000000000000000000000000001
+body 4d0100000000000016000000000000007075727264662d6f776c2d646c2d7072
+body 6f6f662d76347f53c332a1f9bfb91dc5e75fb83f10aefa9b451290b8d61eca1b
+body 493033ce9e3a030e5c0011c66122f43a52c9bfae6f57efd10671713700f4cff7
+body 56472bec29090100000600000000000000000000000000000001000000000000
+body 0002000000000000000300000000000000040000000000000005000000000000
+body 00000000000000000001000000000000000e0000000000000000590000000100
+body 0000000000000059000000010000000000000000005900000002000000010200
+body 0000040000000005000000030000000000000002000000000400000004000000
+body 0000000000050000000401000000000000000000000000000000000100000000
+body 0000000000000000000000000000000000000000000000000000000000000000
+body 0000000000000000000000000000000000000000000100000000000000000001
+body 00000000000000000000000000000000
+@check
+purrdf-dl-proof-check 1
+service consistency
+availability recorded
+digest c9d22309470476a709da0ac394f46ddc1d84dee068a4f5107e3684640bd6fdae
+input 7f53c332a1f9bfb91dc5e75fb83f10aefa9b451290b8d61eca1b493033ce9e3a
+runs 1
+replayed 1
+claims 1
+attested 9
+trusted 6
+unattested 0
+rests-on reverse-mapping,clausification,grounding,refutation-encoding
+answer checked 0
+@end
+
+@case schema-preparation-derived
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/edge> <http://www.w3.org/2000/01/rdf-schema#range> <https://example.org/A> .
+<https://example.org/s> <https://example.org/edge> <https://example.org/i> .
+@answer
+consistency false
+@proof
+purrdf-dl-proof 1
+service consistency
+availability recorded
+input 07f6a2e74b2771352ba29edf3170cba391c2d85a51933ddb76f2d1704c2e500b
+digest 5a4cd4fba2105a71fa8485fb0ac34a1e134256d19c0100335f1fcccc84e82392
+trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+runs 1
+traced 1
+claims 1
+truncated false
+receipt none
+bytes 579
+body 1a000000000000007075727264662d646c2d736572766963652d70726f6f662d
+body 763207f6a2e74b2771352ba29edf3170cba391c2d85a51933ddb76f2d1704c2e
+body 500b000006000000000000000000000000000000010000000000000002000000
+body 0000000003000000000000000400000000000000050000000000000000010000
+body 0000000000010100000000000000000000000000000000000000000000000001
+body 800100000000000016000000000000007075727264662d6f776c2d646c2d7072
+body 6f6f662d763407f6a2e74b2771352ba29edf3170cba391c2d85a51933ddb76f2
+body d1704c2e500b5d5b6c7f4067b56e992b28733a96926fa11e5ba94d82031d6375
+body 1f3dd94477ee0100000600000000000000000000000000000001000000000000
+body 0002000000000000000300000000000000040000000000000005000000000000
+body 00000000000000000001000000000000000e00000000000000005b0000000100
+body 000000000000005b000000010000000000000000005b00000002000000010200
+body 0000040000000005000000030000000000000002000000000400000004000000
+body 0000000000050000000401000000000000000000000000000000000100000000
+body 000000010000000000000001000000000000000d000000000000000200000000
+body 0000000000000000000000010000000000000000010000000000000000020100
+body 0000020000000000000000000000000000000000000000000000000000000000
+body 0000000000000000010000000000000000000100000000000000000000000000
+body 000000
+@check
+purrdf-dl-proof-check 1
+service consistency
+availability recorded
+digest 5a4cd4fba2105a71fa8485fb0ac34a1e134256d19c0100335f1fcccc84e82392
+input 07f6a2e74b2771352ba29edf3170cba391c2d85a51933ddb76f2d1704c2e500b
+runs 1
+replayed 1
+claims 1
+attested 8
+trusted 8
+unattested 0
+rests-on reverse-mapping,clausification,grounding,refutation-encoding
+answer checked 0
+@end
+
+@case schema-preparation-existential
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:exists .
+_:exists <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/edge> .
+_:exists <http://www.w3.org/2002/07/owl#someValuesFrom> <https://example.org/A> .
+<https://example.org/s> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/B> .
+@answer
+consistency false
+@proof
+purrdf-dl-proof 1
+service consistency
+availability recorded
+input d9e058c5a509502dbff7a7d8d8606735400f3f9870d45af70b3ecc108913e33b
+digest 8ebbe52b8e6697a0c5a63ce11ffe2091b495bd46073eb95b8bec8641fbd6bdfc
+trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+runs 1
+traced 1
+claims 1
+truncated false
+receipt none
+bytes 623
+body 1a000000000000007075727264662d646c2d736572766963652d70726f6f662d
+body 7632d9e058c5a509502dbff7a7d8d8606735400f3f9870d45af70b3ecc108913
+body e33b000006000000000000000000000000000000010000000000000002000000
+body 0000000003000000000000000400000000000000050000000000000000010000
+body 0000000000010100000000000000000000000000000000000000000000000001
+body ac0100000000000016000000000000007075727264662d6f776c2d646c2d7072
+body 6f6f662d7634d9e058c5a509502dbff7a7d8d8606735400f3f9870d45af70b3e
+body cc108913e33b65cb11d91a18014d54ced85bb66116fcbd64feb65c85f46a646a
+body 034c68019b4e0100000600000000000000000000000000000001000000000000
+body 0002000000000000000300000000000000040000000000000005000000000000
+body 00000000000000000001000000000000000f0000000000000002010000000100
+body 0000000000000201000000010000000000000000020100000002000000010200
+body 0000040000000005000000030000000000000002000000000400000004000000
+body 0000000000050000000401000000000000000000000000000000000100000000
+body 000000010000000000000002000000000000000e000000000000000100000000
+body 0000000000000000000000000100000000000000000200000000070000000900
+body 0000000000000100000000000000000000000000000000010000000000000002
+body 0200000000010000005b00000000020000000000000000000000000000000000
+body 0000000000000000000000000000000000000000010000000000000000000100
+body 000000000000000000000000000000
+@check
+purrdf-dl-proof-check 1
+service consistency
+availability recorded
+digest 8ebbe52b8e6697a0c5a63ce11ffe2091b495bd46073eb95b8bec8641fbd6bdfc
+input d9e058c5a509502dbff7a7d8d8606735400f3f9870d45af70b3ecc108913e33b
+runs 1
+replayed 1
+claims 1
+attested 8
+trusted 9
+unattested 0
+rests-on reverse-mapping,clausification,grounding,refutation-encoding
+answer checked 0
+@end
+
+@case schema-preparation-data-extent
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onDataRange> <http://www.w3.org/2001/XMLSchema#boolean> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "3"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#DatatypeProperty> .
+<https://example.org/i> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/A> .
+@answer
+consistency false
+@proof
+purrdf-dl-proof 1
+service consistency
+availability recorded
+input d3404cd9feb0edbefa1a0e571ea14f9a1fa1874e68d91b583cd2ab55e784c573
+digest 475519448bc809c7a25d2f4ed118d1358b7172e0f4aa9f017afb7000f6df4668
+trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+runs 1
+traced 1
+claims 1
+truncated false
+receipt none
+bytes 519
+body 1a000000000000007075727264662d646c2d736572766963652d70726f6f662d
+body 7632d3404cd9feb0edbefa1a0e571ea14f9a1fa1874e68d91b583cd2ab55e784
+body c573000006000000000000000000000000000000010000000000000002000000
+body 0000000003000000000000000400000000000000050000000000000000010000
+body 0000000000010100000000000000000000000000000000000000000000000001
+body 440100000000000016000000000000007075727264662d6f776c2d646c2d7072
+body 6f6f662d7634d3404cd9feb0edbefa1a0e571ea14f9a1fa1874e68d91b583cd2
+body ab55e784c573706838234ad172001c3516ce4327b0fcf84758d6e9b584781a3f
+body e874f807f6000100000600000000000000000000000000000001000000000000
+body 0002000000000000000300000000000000040000000000000005000000000000
+body 0000000000000000000100000000000000090000000000000000570000000100
+body 0000000000000057000000010000000000000000005700000002000000010200
+body 0000040000000102000000000000000200000000000000020000000004000000
+body 0400000000000000000000000000000000000100000000000000000000000000
+body 0000000000000000000000000000000000000000000000000000000000000000
+body 0000000000000000000000000100000000000000000001000000000000000000
+body 00000000000000
+@check
+purrdf-dl-proof-check 1
+service consistency
+availability recorded
+digest 475519448bc809c7a25d2f4ed118d1358b7172e0f4aa9f017afb7000f6df4668
+input d3404cd9feb0edbefa1a0e571ea14f9a1fa1874e68d91b583cd2ab55e784c573
+runs 1
+replayed 1
+claims 1
+attested 8
+trusted 6
+unattested 0
+rests-on reverse-mapping,clausification,grounding,refutation-encoding
+answer checked 0
+@end
+
+@case schema-preparation-data-containment
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onDataRange> <http://www.w3.org/2001/XMLSchema#integer> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onDataRange> <http://www.w3.org/2001/XMLSchema#decimal> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/p> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#DatatypeProperty> .
+<https://example.org/i> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://example.org/A> .
+@answer
+consistency false
+@proof
+purrdf-dl-proof 1
+service consistency
+availability recorded
+input bb37b0707d71b8c9d3b58e27010f43efb42b60c6e1eb6b8bd2abe0e410025d03
+digest d6a786bf729a2f184e3fa2955a2279a348cdc9f8a69ab4e1bedc29da07d83e26
+trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+runs 1
+traced 1
+claims 1
+truncated false
+receipt none
+bytes 528
+body 1a000000000000007075727264662d646c2d736572766963652d70726f6f662d
+body 7632bb37b0707d71b8c9d3b58e27010f43efb42b60c6e1eb6b8bd2abe0e41002
+body 5d03000006000000000000000000000000000000010000000000000002000000
+body 0000000003000000000000000400000000000000050000000000000000010000
+body 0000000000010100000000000000000000000000000000000000000000000001
+body 4d0100000000000016000000000000007075727264662d6f776c2d646c2d7072
+body 6f6f662d7634bb37b0707d71b8c9d3b58e27010f43efb42b60c6e1eb6b8bd2ab
+body e0e410025d03d43a4b38aff00a3d3b4c1b7530f439a26eee72258bc6231657d9
+body 6048fd1bde870100000600000000000000000000000000000001000000000000
+body 0002000000000000000300000000000000040000000000000005000000000000
+body 00000000000000000001000000000000000f00000000000000005a0000000100
+body 000000000000005a000000010000000000000000005a00000002000000010200
+body 0000040000000006000000030000000000000002000000000400000004000000
+body 0000000000060000000401000000000000000300000000000000000100000000
+body 0000000000000000000000000000000000000000000000000000000000000000
+body 0000000000000000000000000000000000000000000100000000000000000001
+body 00000000000000000000000000000000
+@check
+purrdf-dl-proof-check 1
+service consistency
+availability recorded
+digest d6a786bf729a2f184e3fa2955a2279a348cdc9f8a69ab4e1bedc29da07d83e26
+input bb37b0707d71b8c9d3b58e27010f43efb42b60c6e1eb6b8bd2abe0e410025d03
+runs 1
+replayed 1
+claims 1
+attested 9
+trusted 6
+unattested 0
+rests-on reverse-mapping,clausification,grounding,refutation-encoding
+answer checked 0
+@end
+
+@case schema-preparation-union-neighbor
+@service consistency
+@argument
+
+@input
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:minimum .
+_:minimum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:minimum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:minimum <http://www.w3.org/2002/07/owl#minQualifiedCardinality> "2"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+<https://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> _:maximum .
+_:maximum <http://www.w3.org/2002/07/owl#onProperty> <https://example.org/p> .
+_:maximum <http://www.w3.org/2002/07/owl#onClass> <https://example.org/F> .
+_:maximum <http://www.w3.org/2002/07/owl#maxQualifiedCardinality> "1"^^<http://www.w3.org/2001/XMLSchema#nonNegativeInteger> .
+_:choice <http://www.w3.org/2002/07/owl#unionOf> _:first .
+_:first <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <https://example.org/A> .
+_:first <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> _:second .
+_:second <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> <https://example.org/Good> .
+_:second <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .
+<https://example.org/i> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> _:choice .
+@answer
+consistency true
+@proof
+purrdf-dl-proof 1
+service consistency
+availability recorded
+input a79a6bce276132c449ad392b894e5d2bcfac01867e928480efb99e222656343b
+digest 96e37ac28b4f0fd98d68aa914fafe43fd31dc1f3201902693f2624d3028b9609
+trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+runs 1
+traced 1
+claims 1
+truncated false
+receipt none
+bytes 563
+body 1a000000000000007075727264662d646c2d736572766963652d70726f6f662d
+body 7632a79a6bce276132c449ad392b894e5d2bcfac01867e928480efb99e222656
+body 343b000006000000000000000000000000000000010000000000000002000000
+body 0000000003000000000000000400000000000000050000000000000000010000
+body 0000000000010000000000000000000000000000000000000000000000000001
+body 780100000000000016000000000000007075727264662d6f776c2d646c2d7072
+body 6f6f662d7633a79a6bce276132c449ad392b894e5d2bcfac01867e928480efb9
+body 9e222656343bc5aab0da0ca53c7564b53fb62b2ecc4c4ffa9a9402c0fd315c5e
+body e122237d16960000060000000000000000000000000000000100000000000000
+body 0200000000000000030000000000000004000000000000000500000000000000
+body 0000000000000000000000000000000000000000000000000000000000000000
+body 03000000000000000001000000000000000900000000000000005d0000000100
+body 000000000000005d0000000200000000000000010000000000000000005d0000
+body 0006000000010000000000000000005d00000002000000000000000000000002
+body 0000000000000005000000000000000006000000000000000001010000000000
+body 0000005d00000000010000000200000000000000060000000700000001000000
+body 000000005d000000000000000000000000000000000000000000000000000000
+body 01000000000000000001000000000000000000
+@check
+purrdf-dl-proof-check 1
+service consistency
+availability recorded
+digest 96e37ac28b4f0fd98d68aa914fafe43fd31dc1f3201902693f2624d3028b9609
+input a79a6bce276132c449ad392b894e5d2bcfac01867e928480efb99e222656343b
+runs 1
+replayed 1
+claims 1
+attested 5
+trusted 16
+unattested 0
+rests-on reverse-mapping,clausification,grounding,unravelling,refutation-encoding
+answer checked 1
+@end

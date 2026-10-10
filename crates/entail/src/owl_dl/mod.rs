@@ -49,6 +49,7 @@ use crate::owl_dl::graph::Assumptions;
 use crate::report::Construct;
 
 pub(crate) mod absorb;
+pub(crate) mod bounds;
 pub(crate) mod clause;
 pub(crate) mod concept;
 pub(crate) mod constructs;
@@ -64,6 +65,7 @@ pub(crate) mod parser;
 pub(crate) mod proof;
 pub(crate) mod query;
 pub(crate) mod saturate;
+pub(crate) mod support;
 /// The concept-tree tableau [`hyper`] replaced, kept as its differential reference.
 ///
 /// Compiled only under `cfg(test)`: it decides no question this crate asks, so shipping it
@@ -79,9 +81,13 @@ pub(crate) mod tableau;
 /// `owl:Thing` as an opaque atomic class instead of `⊤` would make `C ⊑ owl:Thing`
 /// undecidable-looking and `owl:Nothing`'s emptiness a fact nobody stated.
 pub(crate) fn class_concept(v: &parser::Vocab, class: u32) -> Concept {
-    if class == v.thing {
+    class_concept_ids(class, v.thing, v.nothing)
+}
+
+pub(crate) fn class_concept_ids(class: u32, thing: u32, nothing: u32) -> Concept {
+    if class == thing {
         Concept::Top
-    } else if class == v.nothing {
+    } else if class == nothing {
         Concept::Bottom
     } else {
         Concept::Named(class)
@@ -91,15 +97,31 @@ pub(crate) fn class_concept(v: &parser::Vocab, class: u32) -> Concept {
 /// A Description-Logic knowledge base: the interned TBox/RBox/ABox plus the concept
 /// table needed to reason over it.
 ///
-/// A shipped build holds one flag ([`Kb::encoded`]); the other three are `cfg(test)`
+/// A shipped build holds encoding and key-application flags; the other switches are `cfg(test)`
 /// mutations the differential corpus runs, each an independent switch, so the bool count is
 /// the honest shape rather than a state machine in disguise.
 #[cfg_attr(test, allow(clippy::struct_excessive_bools))]
 pub(crate) struct Kb {
     /// The RDF-term interner (class/property/individual IRIs → dense ids).
     pub(crate) interner: Interner,
+    /// Term-id boundary before any query/refutation symbol is minted.
+    pub(crate) source_terms: u32,
     /// The structural concept interner.
     pub(crate) table: ConceptTable,
+    /// Source-owned class-bound products; invalidated only at TBox ingress.
+    pub(crate) schema: bounds::Preparation,
+    /// Preparation limits selected before the first encoding.
+    pub(crate) schema_budget: bounds::SchemaPreparationBudget,
+    /// Deferred only by an honest incomplete preparation, never silently omitted.
+    keys_applied: bool,
+    /// Same-producer uncached control; absent from every shipped build.
+    #[cfg(test)]
+    pub(crate) schema_reference: bool,
+    #[cfg(test)]
+    pub(crate) schema_reference_stats: std::cell::Cell<bounds::SchemaPreparationStats>,
+    /// Test-only admission at the actual observational current-support producer.
+    #[cfg(test)]
+    pub(crate) schema_recording_budget: Option<bounds::SchemaPreparationBudget>,
     /// `⊤` concept id.
     pub(crate) top: u32,
     /// `⊥` concept id.
@@ -262,7 +284,17 @@ impl Kb {
         let bottom = table.bottom();
         Self {
             interner: Interner::default(),
+            source_terms: 0,
             table,
+            schema: bounds::Preparation::default(),
+            schema_budget: bounds::SchemaPreparationBudget::default(),
+            keys_applied: false,
+            #[cfg(test)]
+            schema_reference: false,
+            #[cfg(test)]
+            schema_reference_stats: std::cell::Cell::default(),
+            #[cfg(test)]
+            schema_recording_budget: None,
             top,
             bottom,
             tbox: Vec::new(),
@@ -321,10 +353,18 @@ impl Kb {
         ds: &D,
         stop: Option<Arc<dyn StopSignal>>,
     ) -> Result<Self, EntailError> {
+        Self::from_dataset_with_preparation(ds, stop, bounds::SchemaPreparationBudget::default())
+    }
+
+    pub(crate) fn from_dataset_with_preparation<D: DatasetView>(
+        ds: &D,
+        stop: Option<Arc<dyn StopSignal>>,
+        budget: bounds::SchemaPreparationBudget,
+    ) -> Result<Self, EntailError> {
         if stop.as_deref().is_some_and(StopSignal::stopped) {
             return Err(EntailError::Stopped);
         }
-        let mut kb = parser::build_until(ds, stop.as_deref())?;
+        let mut kb = parser::build_with_preparation(ds, stop.as_deref(), budget)?;
         kb.stop = stop;
         if kb.stopped() {
             return Err(EntailError::Stopped);
@@ -355,8 +395,12 @@ impl Kb {
     /// # Errors
     ///
     /// Propagates [`Kb::entails_instance`]'s failures.
-    fn apply_keys(&mut self) -> Result<(), EntailError> {
+    pub(crate) fn apply_keys(&mut self) -> Result<(), EntailError> {
+        if self.keys_applied || self.schema.stats.obstruction.is_some() {
+            return Ok(());
+        }
         if self.keys.is_empty() {
+            self.keys_applied = true;
             return Ok(());
         }
         self.finalize();
@@ -382,6 +426,7 @@ impl Kb {
             }
         }
         self.same_as.extend(forced);
+        self.keys_applied = true;
         Ok(())
     }
 
@@ -425,6 +470,7 @@ impl Kb {
         let sup_id = self.table.intern(sup);
         self.tbox.push((sub_id, sup_id));
         self.encoded = false;
+        self.schema = bounds::Preparation::default();
     }
 
     /// Intern a query concept and refresh the negation cache so it can be negated by
@@ -516,7 +562,10 @@ impl Kb {
         // so it stays unconditional rather than adding a second flag to keep in step with the
         // first.
         self.generating = absorb::generating(&self.table, &self.absorbed);
-        Ok(())
+        let mut schema = core::mem::take(&mut self.schema);
+        let result = schema.extend_until(self, self.schema_budget, &mut poll);
+        self.schema = schema;
+        result
     }
 
     /// Whether holding `concept` forces witnesses to be minted — see [`Kb::generating`].

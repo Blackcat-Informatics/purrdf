@@ -562,6 +562,7 @@ source on every run.
 | `b"purrdf-datalog/never-derive-declarations/v1"` | `(inline)` | `crates/datalog/src/admission.rs` |
 | `b"purrdf-datalog/never-derive-plan/v1"` | `DOMAIN` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-dl-service-proof-v2"` | `SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
+| `b"purrdf-dl-service-proof-v3"` | `PREPARATION_SERVICE_ENCODING_TAG` | `crates/entail/src/reasoner/proof.rs` |
 | `b"purrdf-geo/index-source/v1"` | `DIGEST_DOMAIN` | `crates/geo/src/relation.rs` |
 | `b"purrdf-hnsw/space-generation-v1"` | `SPACE_GENERATION_DOMAIN` | `crates/hnsw/src/relation.rs` |
 | `b"purrdf-json-document-v1"` | `DOCUMENT_DOMAIN` | `crates/json/src/profile.rs` |
@@ -570,6 +571,7 @@ source on every run.
 | `b"purrdf-mime/profile/v1"` | `PROFILE_DOMAIN` | `crates/mime/src/profile.rs` |
 | `b"purrdf-owl-dl-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/entail/src/owl_dl/proof.rs` |
 | `b"purrdf-owl-dl-proof-v3"` | `PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
+| `b"purrdf-owl-dl-proof-v4"` | `SCHEMA_PROOF_ENCODING_TAG` | `crates/entail/src/owl_dl/proof.rs` |
 | `b"purrdf-segmented-block-v1\0"` | `SEGMENTED_BLOCK_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-segmented-node-v1\0"` | `SEGMENTED_NODE_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
 | `b"purrdf-segmented-requests-v1\0"` | `SEGMENTED_REQUESTS_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |

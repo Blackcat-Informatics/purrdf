@@ -86,6 +86,11 @@
 //! rather than clock readings, so two runs over one dataset produce byte-identical answers and
 //! byte-identical certificates, on native targets and on `wasm32` alike.
 
+pub use crate::owl_dl::bounds::{
+    SchemaBoundEvidence, SchemaObstruction, SchemaPreparationBudget, SchemaPreparationStats,
+    SchemaStep, SchemaUpperBound,
+};
+
 use std::collections::BTreeSet;
 
 use purrdf_core::{RdfDataset, TermValue};
@@ -105,6 +110,9 @@ pub mod module;
 pub mod profile;
 pub mod proof;
 pub mod realize;
+
+#[cfg(test)]
+pub(crate) mod schema_tests;
 
 pub use axiom::DlAxiom;
 pub use certificate::{Certified, DlCertificate, DlCompleteness, Verdict};
@@ -217,6 +225,12 @@ impl std::fmt::Debug for Reasoner {
 }
 
 impl Reasoner {
+    /// Refuse only the native recorder's products, leaving search accounting unchanged.
+    #[cfg(test)]
+    pub(crate) fn set_schema_recording_budget(&mut self, budget: SchemaPreparationBudget) {
+        self.kb.schema_recording_budget = Some(budget);
+    }
+
     /// Reverse-map `ds` into a knowledge base and open the reasoning services over it,
     /// RECORDING NOTHING.
     ///
@@ -271,6 +285,77 @@ impl Reasoner {
         Self::build(ds, Some(input))
     }
 
+    /// Construct with preparation resource ceilings selected before schema encoding.
+    /// A refused preparation is observable and every service remains undecided.
+    /// # Errors
+    /// The same source/ontology failures as [`Self::new`].
+    pub fn with_preparation_budget(
+        ds: &RdfDataset,
+        budget: SchemaPreparationBudget,
+    ) -> Result<Self, EntailError> {
+        Self::build_with_preparation(ds, None, budget, None)
+    }
+
+    /// Record proofs with the same before-preparation resource policy.
+    /// # Errors
+    /// The source/ontology and canonicalization failures of [`Self::with_proofs`].
+    pub fn with_proofs_and_preparation_budget(
+        ds: &RdfDataset,
+        budget: SchemaPreparationBudget,
+    ) -> Result<Self, EntailError> {
+        let input = crate::owl_dl::proof::try_ontology_identity(ds)
+            .map_err(EntailError::Canonicalization)?;
+        Self::build_with_preparation(ds, Some(input), budget, None)
+    }
+
+    /// Retain a caller's stop signal at the original parser and decision boundaries.
+    /// # Errors
+    /// Source/ontology failures or [`EntailError::Stopped`] during construction.
+    pub fn with_stop(
+        ds: &RdfDataset,
+        stop: std::sync::Arc<dyn purrdf_datalog::StopSignal>,
+    ) -> Result<Self, EntailError> {
+        Self::build_with_preparation(ds, None, SchemaPreparationBudget::default(), Some(stop))
+    }
+
+    /// The actual source-owned schema preparation's deterministic measurements.
+    #[must_use]
+    pub const fn schema_preparation(&self) -> SchemaPreparationStats {
+        self.kb.schema.stats
+    }
+
+    /// The selected class's source-owned contradictory bounds, when prepared.
+    #[must_use]
+    pub fn schema_bounds(&self, class: &TermValue) -> Option<&SchemaBoundEvidence> {
+        let term = self.kb.interner.id_of(class)?;
+        let concept = self.kb.table.id_of(&class_concept(&self.vocab, term))?;
+        self.kb.schema.evidence(concept)
+    }
+
+    /// Retry incomplete preparation with caller-selected new limits.
+    /// Completed entries retain their source owner; no incomplete entry is marked clear.
+    /// # Errors
+    /// A latched stop or an incomplete native key-membership decision.
+    pub fn retry_schema_preparation(
+        &mut self,
+        budget: SchemaPreparationBudget,
+    ) -> Result<(), EntailError> {
+        self.kb.schema_budget = budget;
+        self.kb.schema.stats.obstruction = None;
+        let stop = self.kb.stop.clone();
+        self.kb.encode_until(&mut || {
+            if stop
+                .as_deref()
+                .is_some_and(purrdf_datalog::StopSignal::stopped)
+            {
+                Err(EntailError::Stopped)
+            } else {
+                Ok(())
+            }
+        })?;
+        self.kb.apply_keys()
+    }
+
     /// Whether this reasoner records a proof term for each answer.
     ///
     /// Read off the presence of the recorded input identity, so it cannot disagree with what
@@ -282,7 +367,16 @@ impl Reasoner {
 
     /// The shared body of the two constructors: `input` present is recording on.
     fn build(ds: &RdfDataset, input: Option<[u8; 32]>) -> Result<Self, EntailError> {
-        let mut kb = Kb::from_dataset(ds)?;
+        Self::build_with_preparation(ds, input, SchemaPreparationBudget::default(), None)
+    }
+
+    fn build_with_preparation(
+        ds: &RdfDataset,
+        input: Option<[u8; 32]>,
+        preparation: SchemaPreparationBudget,
+        stop: Option<std::sync::Arc<dyn purrdf_datalog::StopSignal>>,
+    ) -> Result<Self, EntailError> {
+        let mut kb = Kb::from_dataset_with_preparation(ds, stop, preparation)?;
         let vocab = Vocab::intern(&mut kb.interner);
         let index = build_data_index(ds, &mut kb.interner);
         let named = collect_named_classes(&kb.interner, &index, &vocab);
@@ -861,7 +955,7 @@ impl Reasoner {
     fn concept_of(&mut self, class: &TermValue) -> u32 {
         let term = self.kb.interner.intern(class.clone());
         let id = self.kb.table.intern(class_concept(&self.vocab, term));
-        self.kb.table.finalize();
+        self.kb.finalize();
         id
     }
 

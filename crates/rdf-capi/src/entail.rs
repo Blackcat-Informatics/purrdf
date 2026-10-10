@@ -1795,7 +1795,7 @@ mod tests {
     use std::ffi::CString;
 
     use purrdf_validate::regime::{
-        check_absent_proof_is_not_verifiable, check_dl_proof_golden_vectors,
+        PROOF_SERVICE_NAMES, check_absent_proof_is_not_verifiable, check_dl_proof_golden_vectors,
         check_inconsistent_refusal, check_regime_golden_vectors,
     };
 
@@ -1864,7 +1864,29 @@ mod tests {
     #[test]
     fn the_golden_proof_bytes_survive_the_c_abi() {
         let cases = purrdf_validate::regime::dl_proof_golden_vectors().expect("the artifact");
-        assert_eq!(cases.len(), 7, "one case per proof-bearing service");
+        let schema_cases = [
+            "schema-preparation-empty-consistency",
+            "schema-preparation-empty-class",
+            "schema-preparation-asserted",
+            "schema-preparation-largest-count",
+            "schema-preparation-derived",
+            "schema-preparation-existential",
+            "schema-preparation-data-extent",
+            "schema-preparation-data-containment",
+            "schema-preparation-union-neighbor",
+        ];
+        assert_eq!(
+            cases.len(),
+            PROOF_SERVICE_NAMES.len() + schema_cases.len(),
+            "the original service cases and every prepared-schema case",
+        );
+        assert!(
+            cases
+                .iter()
+                .map(purrdf_validate::regime::DlProofVector::name)
+                .eq(PROOF_SERVICE_NAMES.into_iter().chain(schema_cases)),
+            "the original service prefix and all nine named schema cases stay present",
+        );
         for case in &cases {
             let document = CString::new(case.input()).expect("no NUL");
             let service = CString::new(case.service()).expect("no NUL");

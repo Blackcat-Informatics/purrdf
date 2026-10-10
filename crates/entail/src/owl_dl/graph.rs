@@ -1056,6 +1056,8 @@ fn realizes(achievers: &[(u32, bool)], pattern: (u32, bool)) -> bool {
 /// A completion graph under construction.
 #[derive(Clone)]
 pub(crate) struct State {
+    /// Observational transcript only for prepared-clash proof production.
+    pub(crate) support: super::support::Cursor,
     /// All nodes ever created (merged-away ones remain, forwarded via `merged`).
     pub(crate) nodes: NodeVec,
     /// Directed role edges `(from, to, property)`; endpoints resolved via [`find`]. Only
@@ -1810,6 +1812,7 @@ impl<'a> Graph<'a> {
             fresh_types,
         } = *assumptions;
         let mut st = State {
+            support: super::support::Cursor::Disabled,
             nodes: NodeVec::default(),
             edges: PVec::default(),
             adjacency: PVec::default(),
@@ -2970,6 +2973,7 @@ mod tests {
             generated_root_of: std::rc::Rc::default(),
             clash: false,
             clique_exhausted: std::cell::Cell::new(false),
+            support: crate::owl_dl::support::Cursor::Disabled,
         };
         st.nodes.push(bare_node(true));
         st.nodes.push(bare_node(true));

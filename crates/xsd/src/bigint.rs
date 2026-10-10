@@ -18,7 +18,7 @@ mod storage;
 mod tower_tests;
 use scratch::{Allocate, Unbounded};
 pub use scratch::{LimbScratch, LimbScratchError};
-use storage::Mag;
+pub(crate) use storage::Mag;
 
 /// Number of decimal digits processed per limb-sized chunk.
 ///
@@ -1234,6 +1234,18 @@ impl BigInt {
         ))
     }
 
+    pub(crate) fn copy_using(&self, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
+        Ok(Self::from_parts(
+            self.negative,
+            storage.copy(&self.magnitude)?,
+        ))
+    }
+
+    pub(crate) fn with_sign(mut self, negative: bool) -> Self {
+        self.negative = negative && !self.is_zero();
+        self
+    }
+
     /// Detach an immutable value from reusable destinations into ordinary owned
     /// storage. Numerical preparations admit this copy before calling it.
     #[must_use]
@@ -1345,14 +1357,23 @@ impl BigInt {
     /// Multiply by an exact power of ten.
     #[must_use]
     pub fn mul_pow10(&self, exp: u32) -> Self {
-        self.mul(&Self::pow10(exp))
+        self.mul_pow10_using(exp, &Unbounded)
+            .expect("unbounded integer storage")
     }
 
     /// Exact power-of-ten product with bounded reusable storage.
     /// # Errors
     /// Refuses scratch limb/destination exhaustion without allocating.
     pub fn mul_pow10_in(&self, exp: u32, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
-        self.mul_in(&Self::pow10_in(exp, scratch)?, scratch)
+        self.mul_pow10_using(exp, scratch)
+    }
+
+    pub(crate) fn mul_pow10_using(
+        &self,
+        exp: u32,
+        storage: &impl Allocate,
+    ) -> Result<Self, LimbScratchError> {
+        self.mul_using(&Self::pow10_using(exp, storage)?, storage)
     }
 
     /// Exact multiplication by a machine factor.

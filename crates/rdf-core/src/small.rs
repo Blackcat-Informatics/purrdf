@@ -1347,6 +1347,43 @@ macro_rules! smallvec {
 /// short frontiers) fit inline, avoiding a heap allocation.
 pub type IdVec = SmallVec<[crate::TermId; 4]>;
 
+/// A native single-value box could not be physically allocated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoxAllocationError;
+
+impl fmt::Display for BoxAllocationError {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.write_str("single-value box allocation failed")
+    }
+}
+
+impl std::error::Error for BoxAllocationError {}
+
+/// Construct the actual `Box<T>` with a fallible allocator entrance.
+///
+/// Caller admission must precede this operation. On refusal, `value` is destroyed
+/// before the error is returned; no partially initialized allocation escapes.
+///
+/// # Errors
+/// Returns [`BoxAllocationError`] when the physical allocator refuses its layout.
+pub fn try_boxed<T>(value: T) -> Result<Box<T>, BoxAllocationError> {
+    let layout = std::alloc::Layout::new::<T>();
+    if layout.size() == 0 {
+        return Ok(Box::new(value));
+    }
+    // SAFETY: the nonzero layout is exactly the one Box<T> allocates and frees.
+    let pointer = unsafe { std::alloc::alloc(layout) }.cast::<T>();
+    if pointer.is_null() {
+        return Err(BoxAllocationError);
+    }
+    // SAFETY: a fresh aligned allocation owns space for one T. Writing initializes
+    // it once; Box then acquires its sole ownership and the matching deallocation.
+    Ok(unsafe {
+        pointer.write(value);
+        Box::from_raw(pointer)
+    })
+}
+
 #[cfg(test)]
 #[path = "small_tests.rs"]
 mod tests;

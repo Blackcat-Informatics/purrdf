@@ -73,6 +73,51 @@ impl Integer {
         }
     }
 
+    pub(crate) fn with_bigint<T>(&self, f: impl FnOnce(&BigInt) -> T) -> T {
+        match &self.0 {
+            Repr::Small(value) => f(&BigInt::from_i128(*value)),
+            Repr::Big(value) => f(value),
+        }
+    }
+
+    pub(crate) fn copy_using(
+        &self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        match &self.0 {
+            Repr::Small(value) => Ok(Self::from_i128(*value)),
+            Repr::Big(value) => value.copy_using(storage).map(Self::from_bigint),
+        }
+    }
+
+    pub(crate) fn add_using(
+        &self,
+        rhs: &Self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        if let (Some(left), Some(right)) = (self.as_i128(), rhs.as_i128())
+            && let Some(value) = left.checked_add(right)
+        {
+            return Ok(Self::from_i128(value));
+        }
+        self.with_bigint(|left| rhs.with_bigint(|right| left.add_using(right, storage)))
+            .map(Self::from_bigint)
+    }
+
+    pub(crate) fn sub_using(
+        &self,
+        rhs: &Self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        if let (Some(left), Some(right)) = (self.as_i128(), rhs.as_i128())
+            && let Some(value) = left.checked_sub(right)
+        {
+            return Ok(Self::from_i128(value));
+        }
+        self.with_bigint(|left| rhs.with_bigint(|right| left.sub_using(right, storage)))
+            .map(Self::from_bigint)
+    }
+
     /// The XSD 1.1 canonical `xsd:integer` lexical form: an optional `-`, then
     /// digits with no leading zero (`"0"` for zero).
     #[must_use]
