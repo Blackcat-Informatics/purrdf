@@ -7,7 +7,7 @@
 //! # One fielded arithmetic path
 //!
 //! The immutable [`crate::RankingProfile`] identifies field weights, length
-//! normalization, predicate routing, bounds, rounding and query aggregation.
+//! normalization, predicate routing, the query-bound law, rounding and query aggregation.
 //! [`K1`] stays fixed at 1.2; [`B`] is the single-field profile's default 0.75.
 //! Every profile, including that single field, runs the same prepared BM25F
 //! scorer. Field frequencies are normalized and weighted before saturation;
@@ -106,7 +106,7 @@ use purrdf_core::TermValue;
 use crate::error::TextError;
 use crate::fixed::{Fixed, SCALE_DIGITS};
 use crate::index::{PartitionKey, TextIndex};
-use crate::ranking::{PreparedCorpus, PreparedQuery, QUERY_TERMS_MAX};
+use crate::ranking::{BoundedScore, PreparedCorpus, PreparedQuery, ScoreBound};
 
 /// The raw constants below are written at [`SCALE_DIGITS`] fractional digits, so
 /// the scale and the literals cannot drift apart unnoticed.
@@ -136,6 +136,8 @@ pub struct Scored {
     pub document: u32,
     /// The exact BM25 score, computed against this document's own partition.
     pub score: Fixed,
+    /// The actual query/corpus bound, including rounding, for host key sizing.
+    pub score_bound: ScoreBound,
     /// The 1-based position of this document **within its own partition**.
     ///
     /// Never a global position, and named so that it cannot be read as one. A
@@ -155,7 +157,7 @@ pub struct Scored {
     /// language a caller already has — a three-term needle restricted to
     /// documents holding all three is `FILTER(?matched = 3)` — rather than by
     /// PurRDF minting a boolean query dialect of its own.
-    pub matched: u32,
+    pub matched: usize,
 }
 
 /// One needle term's share of one document's score.
@@ -338,7 +340,7 @@ pub fn rank_partition(
     needle: &[String],
     limit: Option<u64>,
 ) -> Result<Vec<Scored>, TextError> {
-    let terms = distinct_terms(needle)?;
+    let terms = distinct_terms(needle);
     if terms.is_empty() {
         return Ok(Vec::new());
     }
@@ -387,7 +389,7 @@ pub(crate) fn select_counted(
     partition_rank: Option<u32>,
     work: &mut ScoringWork,
 ) -> Result<Vec<Scored>, TextError> {
-    let terms = distinct_terms(needle)?;
+    let terms = distinct_terms(needle);
     if terms.is_empty() {
         return Ok(Vec::new());
     }
@@ -431,7 +433,7 @@ pub fn explain(
     document: u32,
     needle: &[String],
 ) -> Result<Vec<TermContribution>, TextError> {
-    let terms = distinct_terms(needle)?;
+    let terms = distinct_terms(needle);
     let Some(partition) = index.partition_key_of(document) else {
         return Err(TextError::data(format!(
             "document {document} is not in this index, so there is nothing to explain"
@@ -468,8 +470,10 @@ struct Candidate {
     document: u32,
     /// The exact score.
     score: Fixed,
+    /// Original prepared-query certificate carried through selection and sorting.
+    score_bound: ScoreBound,
     /// How many distinct needle terms the document holds.
-    matched: u32,
+    matched: usize,
 }
 
 /// A [`Candidate`] ordered so that **greater means ranks later**.
@@ -509,17 +513,11 @@ impl PartialOrd for ByRank {
 /// Sorted by the same byte order the index's dictionary is sorted by, so "visit
 /// the query's terms in order" and "visit the dictionary in order" are the same
 /// traversal.
-pub(crate) fn distinct_terms(needle: &[String]) -> Result<Vec<&str>, TextError> {
+pub(crate) fn distinct_terms(needle: &[String]) -> Vec<&str> {
     let mut terms: Vec<&str> = needle.iter().map(String::as_str).collect();
     terms.sort_unstable();
     terms.dedup();
-    if terms.len() > QUERY_TERMS_MAX {
-        return Err(TextError::data(format!(
-            "the needle holds {} distinct terms, which exceeds the profile bound of 1024",
-            terms.len()
-        )));
-    }
-    Ok(terms)
+    terms
 }
 
 /// Rank one partition against already-distinct, already-sorted `terms`.
@@ -545,6 +543,7 @@ fn rank_terms(
         rows.push(Scored {
             document: candidate.document,
             score: candidate.score,
+            score_bound: candidate.score_bound,
             partition_rank,
             matched: candidate.matched,
         });
@@ -558,7 +557,7 @@ struct CandidateOccurrence<'a> {
     /// Canonical document identifier.
     document: u32,
     /// Ordinal of the sorted distinct query term.
-    ordinal: u32,
+    ordinal: usize,
     /// Borrowed predicate frequencies, avoiding per-candidate lookup or copying.
     counts: &'a [(u32, u64)],
 }
@@ -588,7 +587,7 @@ fn candidates(
         for (document, counts) in index.field_postings(partition, term) {
             occurrences.push(CandidateOccurrence {
                 document,
-                ordinal: ordinal as u32,
+                ordinal,
                 counts,
             });
         }
@@ -609,7 +608,7 @@ fn candidates(
             .count();
         let held = occurrences[at..at + run]
             .iter()
-            .map(|entry| (entry.ordinal as usize, entry.counts));
+            .map(|entry| (entry.ordinal, entry.counts));
         out.push(score_document(index, &query, document, held, work)?);
         at += run;
     }
@@ -652,7 +651,7 @@ fn score_document<'a>(
 ) -> Result<Candidate, TextError> {
     let field_count = index.ranking_profile().fields().len();
     let mut score = Fixed::ZERO;
-    let mut matched: u32 = 0;
+    let mut matched = 0;
     for (ordinal, counts) in held {
         let fields = index.field_inputs_from_counts(document, counts)?;
         score = score.checked_add(query.contribution(ordinal, &fields[..field_count])?)?;
@@ -661,7 +660,8 @@ fn score_document<'a>(
     work.documents_scored += 1;
     Ok(Candidate {
         document,
-        score: index.ranking_profile().validate_score(score)?,
+        score: query.score_bound().validate(score)?,
+        score_bound: query.score_bound(),
         matched,
     })
 }
@@ -707,7 +707,7 @@ pub(crate) fn score_located(
     terms: &[&str],
     located: &[(usize, &[(u32, u64)])],
     work: &mut ScoringWork,
-) -> Result<(Fixed, u32), TextError> {
+) -> Result<(BoundedScore, usize), TextError> {
     let partition = index.partition_key_of(document).ok_or_else(|| {
         TextError::data(format!(
             "document {document} is not in this index, so there is nothing to score"
@@ -716,7 +716,13 @@ pub(crate) fn score_located(
     let corpus = index.prepared_corpus(partition)?;
     let query = prepare_terms(index, partition, &corpus, terms)?;
     let scored = score_document(index, &query, document, located.iter().copied(), work)?;
-    Ok((scored.score, scored.matched))
+    Ok((
+        BoundedScore {
+            value: scored.score,
+            bound: scored.score_bound,
+        },
+        scored.matched,
+    ))
 }
 
 /// Every candidate, in rank order.
@@ -772,10 +778,7 @@ mod tests {
     #[test]
     fn the_needle_is_reduced_to_sorted_distinct_terms() {
         let needle = ["gamma", "alpha", "gamma", "beta"].map(str::to_owned);
-        assert_eq!(
-            distinct_terms(&needle).expect("a short needle"),
-            vec!["alpha", "beta", "gamma"]
-        );
+        assert_eq!(distinct_terms(&needle), vec!["alpha", "beta", "gamma"]);
     }
 
     /// An absent dimension is not the same as a present empty one, in either

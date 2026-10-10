@@ -712,19 +712,22 @@ struct Hit {
     /// The index document id.
     document: u32,
     /// The exact score.
-    score: crate::fixed::Fixed,
+    score: crate::ranking::BoundedScore,
     /// The per-partition rank, or `None` where `?rank` is unobserved and so was
     /// never computed.
     rank: Option<u32>,
     /// How many distinct needle terms the document holds.
-    matched: u32,
+    matched: usize,
 }
 
 impl From<Scored> for Hit {
     fn from(scored: Scored) -> Self {
         Self {
             document: scored.document,
-            score: scored.score,
+            score: crate::ranking::BoundedScore {
+                value: scored.score,
+                bound: scored.score_bound,
+            },
             rank: Some(scored.partition_rank),
             matched: scored.matched,
         }
@@ -1368,7 +1371,7 @@ impl PropertyFunction for TextSearchRelation {
             // basis for, and `open`'s documentation for the two ways a present
             // document is then answered.
             Some(subject) => {
-                let terms = distinct_terms(&analyzed)?;
+                let terms = distinct_terms(&analyzed);
                 let holdings = self.holdings(subject, &terms, &filter);
                 if holdings.is_empty() {
                     Vec::new()
@@ -1453,14 +1456,14 @@ impl SearchCursor {
         Ok(vec![
             document.subject().clone(),
             self.needle.clone(),
-            TermValue::typed_literal(hit.score.to_decimal_lexical(), XSD_DECIMAL),
+            TermValue::typed_literal(hit.score.value.to_decimal_lexical(), XSD_DECIMAL),
             // An uncomputed rank sits only at an unobserved position, whose value
             // the engine discards unread. Zero is outside the 1-based rank domain,
             // so it could never be mistaken for a rank even by a reader that
             // ignored that contract.
             TermValue::integer(hit.rank.unwrap_or(0)),
             language_term(document.language()),
-            TermValue::integer(hit.matched),
+            TermValue::integer(hit.matched as i128),
         ])
     }
 }

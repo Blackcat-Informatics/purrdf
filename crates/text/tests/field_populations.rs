@@ -3,46 +3,16 @@
 
 //! Carrier populations: exact independent arithmetic and validation boundaries.
 
-use purrdf_testkit::exact::Natural;
-use purrdf_text::{
-    B, DOCUMENTS_MAX, FIELD_LENGTH_MAX, FIELD_WEIGHT_MAX, FieldInput, Fixed, PreparedCorpus,
-    RankingField, RankingProfile,
-};
+use purrdf_text::{B, FieldInput, Fixed, PreparedCorpus, RankingField, RankingProfile};
 
-const SCALE: u128 = 1_000_000_000_000;
+#[path = "support/ranking_oracle.rs"]
+mod ranking_oracle;
 
-/// Schoolbook unbounded arithmetic from testkit, independent of Fixed/wide.
-fn product_quotient(left: u128, right: u128, divisor: u128) -> u128 {
-    Natural::from_u128(left)
-        .mul(&Natural::from_u128(right))
-        .div_rem(&Natural::from_u128(divisor))
-        .0
-        .to_u128()
-        .expect("the specified rounded value fits u128")
-}
-
-/// The published integer series, without calling the production logarithm.
-fn reference_log(mut raw: u128) -> u128 {
-    let mut exponent = 0;
-    while raw >= (2 * SCALE) << exponent {
-        // Reduce without rounding until after the exponent is known.
-        exponent += 1;
-    }
-    raw = product_quotient(raw, 1_000_000, 1 << exponent);
-    let z = product_quotient(
-        raw - 1_000_000_000_000_000_000,
-        1_000_000_000_000_000_000,
-        raw + 1_000_000_000_000_000_000,
-    );
-    let square = product_quotient(z, z, 1_000_000_000_000_000_000);
-    let mut power = z;
-    let mut series = 0;
-    for denominator in (1..40).step_by(2) {
-        series += power / denominator;
-        power = product_quotient(power, square, 1_000_000_000_000_000_000);
-    }
-    (exponent * 693_147_180_559_945_309 + 2 * series) / 1_000_000
-}
+// These values retain the published old boundary vectors; they are test data,
+// never admission limits of the new profile.
+const FROZEN_DOCUMENTS: u64 = 1 << 40;
+const FROZEN_LENGTH: u64 = 1 << 24;
+const FROZEN_WEIGHT: Fixed = Fixed::from_raw((1_i128 << 24) * 1_000_000_000_000);
 
 fn reference_score(
     documents: u64,
@@ -52,51 +22,26 @@ fn reference_score(
     profile: &RankingProfile,
     inputs: &[FieldInput],
 ) -> i128 {
-    let idf = reference_log(
-        SCALE
-            + product_quotient(
-                u128::from(2 * (documents - frequency) + 1),
-                SCALE,
-                u128::from(2 * frequency + 1),
-            ),
-    );
-    let mut pseudo = 0;
-    for (((input, field), &population), &total) in inputs
+    let parameters: Vec<_> = profile
+        .fields()
         .iter()
-        .zip(profile.fields())
-        .zip(populations)
-        .zip(totals)
-    {
-        if input.term_frequency != 0 {
-            let relative = product_quotient(
-                u128::from(input.length) * u128::from(population),
-                SCALE,
-                total,
-            );
-            let b = field.b().into_raw().unsigned_abs();
-            let normalization = SCALE - b + product_quotient(b, relative, SCALE);
-            let normalized = product_quotient(
-                u128::from(input.term_frequency) * SCALE,
-                SCALE,
-                normalization,
-            );
-            pseudo += product_quotient(normalized, field.weight().into_raw().unsigned_abs(), SCALE);
-        }
-    }
-    let k1 = 12 * SCALE / 10;
-    let saturated = product_quotient(
-        product_quotient(pseudo, k1 + SCALE, SCALE),
-        SCALE,
-        pseudo + k1,
-    );
-    i128::try_from(product_quotient(idf, saturated, SCALE)).expect("bounded score")
+        .map(|field| (field.weight().into_raw(), field.b().into_raw()))
+        .collect();
+    ranking_oracle::contribution(
+        documents,
+        frequency,
+        populations,
+        totals,
+        &parameters,
+        inputs,
+    )
 }
 
 fn profile() -> RankingProfile {
     RankingProfile::new(
         vec![
             RankingField::new("title", Fixed::from_raw(333_333_333_333), B).expect("field"),
-            RankingField::new("body", FIELD_WEIGHT_MAX, Fixed::ONE).expect("field"),
+            RankingField::new("body", FROZEN_WEIGHT, Fixed::ONE).expect("field"),
             RankingField::new("unused", Fixed::ZERO, B).expect("field"),
         ],
         Vec::new(),
@@ -143,12 +88,12 @@ fn dense_populations_preserve_every_raw_score_and_legacy_identity() {
 #[test]
 fn sparse_field_means_match_the_unbounded_reference() {
     let profile = profile().with_field_populations();
-    for documents in [3, 7, 23, DOCUMENTS_MAX] {
+    for documents in [3, 7, 23, FROZEN_DOCUMENTS] {
         for population in [1, 2, documents] {
             let populations = [population, documents, 0];
             let totals = [
                 u128::from(population) * 7,
-                u128::from(documents) * u128::from(FIELD_LENGTH_MAX),
+                u128::from(documents) * u128::from(FROZEN_LENGTH),
                 0,
             ];
             let corpus =
@@ -162,8 +107,8 @@ fn sparse_field_means_match_the_unbounded_reference() {
                         length: 7,
                     },
                     FieldInput {
-                        term_frequency: FIELD_LENGTH_MAX,
-                        length: FIELD_LENGTH_MAX,
+                        term_frequency: FROZEN_LENGTH,
+                        length: FROZEN_LENGTH,
                     },
                     FieldInput::default(),
                 ];
@@ -180,14 +125,9 @@ fn sparse_field_means_match_the_unbounded_reference() {
 fn populations_and_totals_are_checked_before_scoring() {
     let profile = profile().with_field_populations();
     for (documents, totals, populations) in [
-        (DOCUMENTS_MAX + 1, vec![0; 3], vec![0; 3]),
         (2, vec![1, 0, 0], vec![0; 3]),
         (2, vec![0; 3], vec![3, 0, 0]),
-        (
-            2,
-            vec![u128::from(FIELD_LENGTH_MAX) + 1, 0, 0],
-            vec![1, 0, 0],
-        ),
+        (2, vec![u128::from(u64::MAX) + 1, 0, 0], vec![1, 0, 0]),
         (0, vec![1, 0, 0], vec![0; 3]),
         (2, vec![0; 3], vec![0; 2]),
         (2, vec![0; 2], vec![0; 3]),
@@ -204,13 +144,14 @@ fn populations_and_totals_are_checked_before_scoring() {
             .prepare_query(&[])
             .expect("empty query")
             .score(&[])
-            .expect("zero score"),
+            .expect("zero score")
+            .value,
         Fixed::ZERO
     );
     let corpus = PreparedCorpus::with_field_populations(
         &profile,
         2,
-        &[u128::from(FIELD_LENGTH_MAX), 0, 0],
+        &[u128::from(FROZEN_LENGTH), 0, 0],
         &[1, 0, 0],
     )
     .expect("one carrier");
@@ -241,7 +182,7 @@ fn populations_and_totals_are_checked_before_scoring() {
     let all_carriers = PreparedCorpus::with_field_populations(
         &profile,
         2,
-        &[2 * u128::from(FIELD_LENGTH_MAX), 0, 0],
+        &[2 * u128::from(u64::MAX), 0, 0],
         &[2, 0, 0],
     )
     .expect("every document carries the first field");
@@ -258,17 +199,16 @@ fn populations_and_totals_are_checked_before_scoring() {
 #[test]
 fn sparse_shortest_normalization_and_bounds_match_the_reference() {
     let profile = RankingProfile::new(
-        vec![RankingField::new("text", FIELD_WEIGHT_MAX, Fixed::ONE).expect("field")],
+        vec![RankingField::new("text", FROZEN_WEIGHT, Fixed::ONE).expect("field")],
         Vec::new(),
         Some(0),
     )
     .expect("profile")
     .with_field_populations();
-    let population = DOCUMENTS_MAX - 1;
-    let total =
-        u128::from(population) * u128::from(FIELD_LENGTH_MAX) - u128::from(FIELD_LENGTH_MAX - 1);
+    let population = FROZEN_DOCUMENTS - 1;
+    let total = u128::from(population) * u128::from(FROZEN_LENGTH) - u128::from(FROZEN_LENGTH - 1);
     let corpus =
-        PreparedCorpus::with_field_populations(&profile, DOCUMENTS_MAX, &[total], &[population])
+        PreparedCorpus::with_field_populations(&profile, FROZEN_DOCUMENTS, &[total], &[population])
             .expect("bounded");
     let query = corpus.prepare_query(&[("cat", 1)]).expect("query");
     let input = [FieldInput {
@@ -277,7 +217,14 @@ fn sparse_shortest_normalization_and_bounds_match_the_reference() {
     }];
     assert_eq!(
         query.contribution(0, &input).expect("score").into_raw(),
-        reference_score(DOCUMENTS_MAX, 1, &[population], &[total], &profile, &input)
+        reference_score(
+            FROZEN_DOCUMENTS,
+            1,
+            &[population],
+            &[total],
+            &profile,
+            &input
+        )
     );
     assert!(
         query
@@ -296,12 +243,16 @@ fn sparse_shortest_normalization_and_bounds_match_the_reference() {
                 0,
                 &[FieldInput {
                     term_frequency: 0,
-                    length: FIELD_LENGTH_MAX + 1
+                    length: u64::MAX
                 }]
             )
             .is_err()
     );
-    assert!(corpus.prepare_query(&[("cat", DOCUMENTS_MAX + 1)]).is_err());
+    assert!(
+        corpus
+            .prepare_query(&[("cat", FROZEN_DOCUMENTS + 1)])
+            .is_err()
+    );
     let empty =
         PreparedCorpus::with_field_populations(&profile, 0, &[0], &[0]).expect("empty corpus");
     assert!(empty.prepare_query(&[]).expect("query").score(&[]).is_err());

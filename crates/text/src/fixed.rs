@@ -34,11 +34,13 @@
 //!
 //! # Overflow
 //!
-//! An intermediate that does not fit is a [`TextError::Overflow`], never a
-//! wrapped or saturated value. A wrapped score is a wrong ranking presented as a
-//! right one, which is precisely the failure this crate exists to rule out.
+//! Public [`Fixed`] operations report [`TextError::Overflow`] only when their
+//! result does not fit; products use the shared wide-integer home. Ranking
+//! intermediates additionally promote through the existing exact [`Integer`]
+//! home and return to [`Fixed`] under their prepared query's score certificate.
+//! Neither path wraps or saturates a score.
 
-use purrdf_xsd::wide::mul_div;
+use purrdf_xsd::{exact::Integer, wide::mul_div};
 
 use crate::error::TextError;
 
@@ -52,7 +54,7 @@ pub const SCALE_DIGITS: u32 = 12;
 
 /// `10^SCALE_DIGITS` — the divisor relating a [`Fixed`]'s raw integer to its
 /// value.
-const SCALE: i128 = 10_i128.pow(SCALE_DIGITS);
+pub(crate) const SCALE: i128 = 10_i128.pow(SCALE_DIGITS);
 
 /// `SCALE` as an unsigned value, for the magnitude arithmetic below.
 const SCALE_U: u128 = SCALE as u128;
@@ -169,9 +171,8 @@ impl Fixed {
     /// a helper that falls back to a 256-bit intermediate rather than reporting
     /// an overflow the answer does not have.
     pub fn checked_mul(self, other: Self) -> Result<Self, TextError> {
-        let magnitude = mul_div(self.0.unsigned_abs(), other.0.unsigned_abs(), SCALE_U)
-            .ok_or_else(|| TextError::overflow("multiplication left the fixed-point range"))?;
-        signed(magnitude, (self.0 < 0) != (other.0 < 0))
+        product_ratio(self.0, other.0, SCALE)
+            .ok_or_else(|| TextError::overflow("multiplication left the fixed-point range"))
     }
 
     /// `self ÷ other`, truncated toward zero.
@@ -186,9 +187,8 @@ impl Fixed {
         if other.0 == 0 {
             return Err(TextError::domain("division by zero"));
         }
-        let magnitude = mul_div(self.0.unsigned_abs(), SCALE_U, other.0.unsigned_abs())
-            .ok_or_else(|| TextError::overflow("division left the fixed-point range"))?;
-        signed(magnitude, (self.0 < 0) != (other.0 < 0))
+        product_ratio(self.0, SCALE, other.0)
+            .ok_or_else(|| TextError::overflow("division left the fixed-point range"))
     }
 
     /// The natural logarithm of `self`, exact to the last representable digit
@@ -294,7 +294,7 @@ const INTERNAL_TO_SCALE_U: u128 = INTERNAL_TO_SCALE as u128;
 /// inline so the asymmetry is visible at the one place it matters.
 const NEGATIVE_LIMIT_MAGNITUDE: u128 = i128::MIN.unsigned_abs();
 
-/// Reassemble a magnitude and a sign into a [`Fixed`], or report the overflow.
+/// Reassemble a magnitude and sign in the public raw representation.
 ///
 /// The `negative` branch is not symmetric with the positive one, and cannot be.
 /// `i128` spans `-2^127 ..= 2^127 - 1`, so the magnitude `2^127` is
@@ -306,13 +306,79 @@ const NEGATIVE_LIMIT_MAGNITUDE: u128 = i128::MIN.unsigned_abs();
 /// rather than a rounding detail — the arithmetic's usable range depended on the
 /// sign of the operands rather than on the answer — so the negative extreme is
 /// admitted here explicitly.
-fn signed(magnitude: u128, negative: bool) -> Result<Fixed, TextError> {
+fn signed_value(magnitude: u128, negative: bool) -> Option<i128> {
     if negative && magnitude == NEGATIVE_LIMIT_MAGNITUDE {
-        return Ok(Fixed::from_raw(i128::MIN));
+        return Some(i128::MIN);
     }
-    let raw = i128::try_from(magnitude)
-        .map_err(|_| TextError::overflow("result left the fixed-point range"))?;
-    Ok(Fixed::from_raw(if negative { -raw } else { raw }))
+    let raw = i128::try_from(magnitude).ok()?;
+    Some(if negative { -raw } else { raw })
+}
+
+/// One scaled-product kernel, including signed truncation toward zero.
+fn product_ratio(left: i128, right: i128, divisor: i128) -> Option<Fixed> {
+    let magnitude = mul_div(
+        left.unsigned_abs(),
+        right.unsigned_abs(),
+        divisor.unsigned_abs(),
+    )?;
+    signed_value(magnitude, (left < 0) ^ (right < 0) ^ (divisor < 0)).map(Fixed::from_raw)
+}
+
+/// Ranking intermediates at the same scale as Fixed. The existing exact
+/// Integer owns the canonical i128/BigInt representation; this adapter supplies
+/// only the original scaling and rounding boundaries, not an integer engine.
+pub(crate) struct Scaled(Integer);
+
+impl Scaled {
+    pub(crate) const ZERO: Self = Self(Integer::ZERO);
+
+    pub(crate) const fn from_fixed(value: Fixed) -> Self {
+        Self(Integer::from_i128(value.into_raw()))
+    }
+
+    pub(crate) fn add(&self, other: &Self) -> Self {
+        Self(&self.0 + &other.0)
+    }
+
+    pub(crate) fn mul(&self, other: &Self) -> Self {
+        Self(Self::quotient_product(
+            &self.0,
+            &other.0,
+            &Integer::from_i128(SCALE),
+        ))
+    }
+
+    pub(crate) fn div(&self, other: &Self) -> Result<Self, TextError> {
+        if other.0.is_zero() {
+            return Err(TextError::domain("division by zero"));
+        }
+        Ok(Self(Self::quotient_product(
+            &self.0,
+            &Integer::from_i128(SCALE),
+            &other.0,
+        )))
+    }
+
+    pub(crate) fn into_fixed(self) -> Result<Fixed, TextError> {
+        self.0
+            .as_i128()
+            .map(Fixed::from_raw)
+            .ok_or_else(|| TextError::overflow("result left the fixed-point range"))
+    }
+
+    /// Stay on the existing wide kernel when the rounded result fits, even if
+    /// the unscaled product exceeds i128; otherwise use exact Integer once.
+    fn quotient_product(left: &Integer, right: &Integer, divisor: &Integer) -> Integer {
+        if let (Some(a), Some(b), Some(c)) = (left.as_i128(), right.as_i128(), divisor.as_i128())
+            && let Some(value) = product_ratio(a, b, c)
+        {
+            return Integer::from_i128(value.into_raw());
+        }
+        (left * right)
+            .div_rem(divisor)
+            .expect("the caller verified a nonzero divisor")
+            .0
+    }
 }
 
 /// `floor(log2(raw / 10^SCALE_DIGITS))` for a strictly positive `raw`.

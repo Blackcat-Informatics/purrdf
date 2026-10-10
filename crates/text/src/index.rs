@@ -81,7 +81,7 @@ use purrdf_core::{DatasetView, FastMap, RdfTextDirection, TermValue};
 use crate::analysis::{Analyzer, UnicodeVersions, unicode_versions};
 use crate::error::TextError;
 use crate::fixed::Fixed;
-use crate::ranking::{FIELD_LENGTH_MAX, FieldInput, MAX_FIELDS, PreparedCorpus, RankingProfile};
+use crate::ranking::{FieldInput, FieldInputs, PreparedCorpus, RankingProfile};
 use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
 
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
@@ -738,12 +738,8 @@ impl TextIndex {
             .map(|doc| doc.predicate_lengths.as_slice())
     }
 
-    /// Fill a stack-allocated field input buffer for one document and term.
-    pub(crate) fn field_inputs(
-        &self,
-        document: u32,
-        term: &str,
-    ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
+    /// Fill an inline field buffer, spilling for the profile's actual field count.
+    pub(crate) fn field_inputs(&self, document: u32, term: &str) -> Result<FieldInputs, TextError> {
         if self.document(document).is_none() {
             return Err(TextError::data("field input names an absent document"));
         }
@@ -774,17 +770,24 @@ impl TextIndex {
         &self,
         document: u32,
         frequencies: &[(u32, u64)],
-    ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
+    ) -> Result<FieldInputs, TextError> {
         let lengths = self
             .field_lengths
             .get(document as usize)
             .ok_or_else(|| TextError::data("field input names an absent document"))?;
-        let mut fields = [FieldInput::default(); MAX_FIELDS];
-        for (input, &length) in fields.iter_mut().zip(lengths) {
-            input.length = length;
-        }
+        let mut fields: FieldInputs = lengths
+            .iter()
+            .map(|&length| FieldInput {
+                term_frequency: 0,
+                length,
+            })
+            .collect();
         for &(predicate, frequency) in frequencies {
-            fields[self.predicate_fields[predicate as usize]].term_frequency += frequency;
+            let input = &mut fields[self.predicate_fields[predicate as usize]];
+            input.term_frequency = input
+                .term_frequency
+                .checked_add(frequency)
+                .ok_or_else(|| TextError::overflow("merged field term frequency exceeds u64"))?;
         }
         Ok(fields)
     }
@@ -823,9 +826,6 @@ impl TextIndex {
                 lengths[field] = lengths[field]
                     .checked_add(length)
                     .ok_or_else(|| TextError::overflow("merged field length exceeds u64"))?;
-                if lengths[field] > FIELD_LENGTH_MAX {
-                    return Err(TextError::data("merged field length exceeds 2^24"));
-                }
             }
             for ((total, population), &length) in self.field_totals[document.partition as usize]
                 .iter_mut()
@@ -1625,7 +1625,7 @@ fn analyze_rows(
                 .predicates
                 .binary_search(&row.predicate)
                 .expect("walk selected configured predicates") as u32;
-            let analysis = analyzer.projections(&row.lexical_form)?;
+            let mut analysis = analyzer.projections(&row.lexical_form)?;
             let character;
             let projections = match config.projection {
                 IndexProjection::Lexical => &analysis.lexical,
@@ -1647,25 +1647,23 @@ fn analyze_rows(
                     }
                 };
                 tokens.push((ordinal, position, predicate));
-                let length = match predicate_lengths.last_mut() {
+                match predicate_lengths.last_mut() {
                     Some((prior, length)) if *prior == predicate => {
                         *length += 1;
-                        *length
                     }
                     _ => {
                         predicate_lengths.push((predicate, 1));
-                        1
                     }
-                };
-                if length > FIELD_LENGTH_MAX {
-                    return Err(TextError::data(
-                        "a predicate holds more than 2^24 analyzed tokens in one document",
-                    ));
                 }
                 position = position.checked_add(1).ok_or_else(|| {
                     TextError::data("document exceeds the u32 token position space")
                 })?;
             }
+            // The native token walk has consumed the lexical view. Han replay
+            // reads normalized text, while SurfaceIndex consumes surface/spans
+            // and their original source alignment. Release this actual scratch
+            // buffer, including capacity, before retaining the remaining views.
+            drop(core::mem::take(&mut analysis.lexical));
             analyses.push((digest_rows(std::slice::from_ref(row)), analysis));
         }
         // Retain auxiliary-only documents without admitting them into the
@@ -1746,11 +1744,8 @@ fn build_partitions(documents: &[AnalyzedDocument]) -> Result<Partitioning, Text
 
 /// `total / count`, exactly, in fixed point.
 fn exact_average(total: u64, count: u64) -> Result<Fixed, TextError> {
-    let widen = |value: u64| {
-        i64::try_from(value)
-            .map_err(|_| TextError::overflow(format!("{value} does not fit a fixed-point integer")))
-    };
-    Fixed::from_integer(widen(total)?)?.checked_div(Fixed::from_integer(widen(count)?)?)
+    Fixed::from_raw(i128::from(total) * crate::fixed::SCALE)
+        .checked_div(Fixed::from_raw(i128::from(count) * crate::fixed::SCALE))
 }
 
 /// Sort the dictionary, remap the token ordinals onto it, and build the postings.
