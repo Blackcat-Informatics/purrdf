@@ -4,7 +4,7 @@
 //! `PyRdfDataset` — a Python handle to a frozen, immutable [`crate::RdfDataset`]
 //! (C7 foundation).
 //!
-//! This pyclass wraps an `Arc<RdfDataset>` so a parsed RDF artifact can cross the
+//! This pyclass wraps a `DatasetHandle` so a parsed RDF artifact can cross the
 //! FFI boundary ONCE (as bytes), be frozen into the validated IR, and then be
 //! consumed natively (count, GTS emission) WITHOUT re-serializing back to text.
 //! A later commit (C7) migrates the text-exchange call sites onto this
@@ -14,7 +14,7 @@
 //! [`crate::dataset_from_bytes`] helper so Python and Rust ingress share one
 //! concrete-IR path.
 
-use std::sync::Arc;
+use purrdf_core::DatasetHandle;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -23,31 +23,31 @@ use pyo3::types::{PyBytes, PyDict, PyString};
 use crate::py_gts::rdf_format;
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs, serialize_frozen};
 use crate::py_store::PyRdfFormat;
-use crate::{
-    CanonHash, RdfDataset, RdfLookaside, ViewCanonError, gts_write, try_canonicalize_flat_view,
-};
+use crate::{CanonHash, RdfLookaside, ViewCanonError, gts_write, try_canonicalize_flat_view};
 
-/// A Python handle to a frozen [`RdfDataset`].
+/// A Python handle to a frozen [`crate::RdfDataset`].
 #[pyclass(name = "RdfDataset", frozen)]
 #[derive(Debug)]
 pub struct PyRdfDataset {
-    inner: Arc<RdfDataset>,
+    inner: DatasetHandle,
 }
 
 impl PyRdfDataset {
     /// Wrap an already-validated native dataset without reparsing bytes.
-    pub(crate) fn from_arc(inner: Arc<RdfDataset>) -> Self {
-        Self { inner }
+    pub(crate) fn from_frozen(inner: impl Into<DatasetHandle>) -> Self {
+        Self {
+            inner: inner.into(),
+        }
     }
 
     /// An owned handle on the frozen dataset.
     ///
-    /// An `Arc` clone rather than a borrow so callers (the entailment surface in
+    /// A storage-owner clone rather than a borrow so callers (the entailment surface in
     /// [`crate::py_entail`]) can carry the dataset across a `Python::detach`
     /// boundary without holding a reference to this Python-owned object while the
     /// GIL is released.
-    pub(crate) fn dataset(&self) -> Arc<RdfDataset> {
-        Arc::clone(&self.inner)
+    pub(crate) fn dataset(&self) -> DatasetHandle {
+        self.inner.clone()
     }
 }
 
@@ -75,7 +75,9 @@ impl PyRdfDataset {
                     .map_err(|e| format!("parse error: {e}"))
             })
             .map_err(PyValueError::new_err)?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner: inner.into(),
+        })
     }
 
     /// The number of deduplicated quads.
@@ -136,7 +138,7 @@ impl PyRdfDataset {
     /// `ValueError` via the typed [`try_canonicalize_flat_view`] path, never a process
     /// abort.
     fn to_nquads(&self, py: Python<'_>) -> PyResult<String> {
-        let dataset = Arc::clone(&self.inner);
+        let dataset = self.inner.clone();
         // Canonicalization + serialization run detached (GIL released).
         py.detach(
             || match try_canonicalize_flat_view(dataset.as_ref(), CanonHash::Sha256) {

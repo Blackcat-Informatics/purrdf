@@ -84,6 +84,8 @@
 
 use crate::error::{IriError, Result};
 use crate::parse::{Iri, IriForm, classify, parse};
+use crate::parse::{IriReadError, parse_with_memory};
+use purrdf_lex::allocation::{Admission, Memory, Resident};
 
 /// An [`Iri`] that is guaranteed to be **absolute** (to have a scheme).
 ///
@@ -120,10 +122,32 @@ impl BaseIri {
         Self::try_from(parse(s)?)
     }
 
+    /// Parse an absolute base under the original caller's storage account.
+    ///
+    /// # Errors
+    /// Returns the original lexical or nonabsolute error, or physical refusal.
+    pub fn parse_with_memory<S: Admission + ?Sized>(
+        s: &str,
+        memory: &mut Memory<'_, S>,
+    ) -> core::result::Result<Self, IriReadError> {
+        let iri = parse_with_memory(s, memory)?;
+        if iri.has_scheme() {
+            Ok(Self(iri))
+        } else {
+            Err(IriError::NonAbsoluteBase(iri.text).into())
+        }
+    }
+
     /// Borrow the underlying validated [`Iri`].
     #[must_use]
     pub fn as_iri(&self) -> &Iri {
         &self.0
+    }
+
+    /// Move the original validated IRI without copying its text.
+    #[must_use]
+    pub fn into_iri(self) -> Iri {
+        self.0
     }
 
     /// The base IRI text, verbatim.
@@ -258,7 +282,7 @@ impl TryFrom<Iri> for BaseIri {
         if iri.has_scheme() {
             Ok(Self(iri))
         } else {
-            Err(IriError::NonAbsoluteBase(iri.as_str().to_owned()))
+            Err(IriError::NonAbsoluteBase(iri.into_text()))
         }
     }
 }
@@ -440,7 +464,7 @@ impl core::fmt::Display for BaseOrigin {
 /// scope" is a first-class RFC-3986 §5.1.4 answer with its own rendering, not the
 /// absence of one, and this crate's `Option`-returning surfaces are a closed list of
 /// two ([`expand_curie`](crate::expand_curie) and [`BaseIri::relativize`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum BaseInScope {
     /// No base IRI was in scope at all — RFC-3986 §5.1.4.
     Absent,
@@ -453,7 +477,32 @@ pub enum BaseInScope {
     },
 }
 
+impl Clone for BaseInScope {
+    fn clone(&self) -> Self {
+        let mut resident = Resident;
+        self.clone_with_memory(&mut Memory::new(&mut resident))
+            .expect("resident diagnostic clone allocation")
+    }
+}
+
 impl BaseInScope {
+    /// Preserve the exact base and provenance through before-copy admission.
+    ///
+    /// # Errors
+    /// Returns the original physical refusal.
+    pub fn clone_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> core::result::Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(match self {
+            Self::Absent => Self::Absent,
+            Self::InForce { iri, origin } => Self::InForce {
+                iri: memory.string(iri)?,
+                origin: *origin,
+            },
+        })
+    }
+
     /// The state of the innermost base of `scope`.
     #[must_use]
     pub fn of(scope: &BaseScope) -> Self {
@@ -592,6 +641,66 @@ impl BaseScope {
         Ok(())
     }
 
+    /// Copy a scope's actual vector and text capacities under original admission.
+    ///
+    /// # Errors
+    /// Returns physical refusal or an invariant lexical failure.
+    pub fn clone_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> core::result::Result<Self, IriReadError> {
+        let mut bases = Vec::new();
+        memory.reserve(&mut bases, self.0.len())?;
+        for base in &self.0 {
+            bases.push(ScopedBase::new(
+                BaseIri::parse_with_memory(base.iri().as_str(), memory)?,
+                base.origin(),
+            ));
+        }
+        Ok(Self(bases))
+    }
+
+    /// Rebind through the original resolution law with fallible storage.
+    ///
+    /// # Errors
+    /// Returns the original IRI error or typed physical storage refusal.
+    pub fn rebind_with_memory<S: Admission + ?Sized>(
+        &mut self,
+        directive: &str,
+        origin: BaseOrigin,
+        memory: &mut Memory<'_, S>,
+    ) -> core::result::Result<(), IriReadError> {
+        let rebound = if self.current().is_some() {
+            BaseIri::try_from(self.resolve_with_memory(directive, memory)?)
+                .map_err(IriReadError::Lexical)?
+        } else {
+            BaseIri::parse_with_memory(directive, memory)?
+        };
+        let scoped = ScopedBase::new(rebound, origin);
+        if let Some(top) = self.0.last_mut() {
+            let old = core::mem::replace(top, scoped);
+            memory.release_string(old.iri.0.text)?;
+        } else {
+            memory.push(&mut self.0, scoped)?;
+        }
+        Ok(())
+    }
+
+    /// Destroy a scope before releasing its original admitted capacities.
+    ///
+    /// # Errors
+    /// Returns an accounting invariant failure or the original shrink refusal.
+    pub fn release_with_memory<S: Admission + ?Sized>(
+        mut self,
+        memory: &mut Memory<'_, S>,
+    ) -> core::result::Result<(), IriReadError> {
+        while let Some(base) = self.0.pop() {
+            memory.release_string(base.iri.0.text)?;
+        }
+        memory.release_vec(self.0)?;
+        Ok(())
+    }
+
     /// Resolve `reference` for a grammar that **admits relative references**
     /// (Turtle, TriG, N3, RDF/XML, JSON-LD, SPARQL).
     ///
@@ -615,18 +724,41 @@ impl BaseScope {
     /// # Ok::<(), IriError>(())
     /// ```
     pub fn resolve(&self, reference: &str) -> Result<Iri> {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        crate::resolve::resident_result(self.resolve_with_memory(reference, &mut memory))
+    }
+
+    /// Resolve relative references under their original physical account.
+    ///
+    /// Absolute references remain verbatim. The returned text or lexical error
+    /// remains charged until its caller destroys or publishes that payload.
+    ///
+    /// # Errors
+    /// Returns the original grammar/base error or typed physical refusal.
+    pub fn resolve_with_memory<S: Admission + ?Sized>(
+        &self,
+        reference: &str,
+        memory: &mut Memory<'_, S>,
+    ) -> core::result::Result<Iri, IriReadError> {
         // The EMPTY reference is the same-document reference (RFC-3986 §4.4), so it
         // is relative by definition — and `parse` would reject it as merely empty,
         // which would misreport the actual problem.
         if reference.is_empty() {
             return match self.current() {
-                Some(scoped) => scoped.iri().resolve(""),
+                Some(scoped) => scoped.iri().as_iri().resolve_with_memory("", memory),
                 None => Err(IriError::NoBase {
                     reference: String::new(),
-                }),
+                }
+                .into()),
             };
         }
-        match Reference::parse(reference)? {
+        let iri = parse_with_memory(reference, memory)?;
+        match if iri.has_scheme() {
+            Reference::Absolute(iri)
+        } else {
+            Reference::Relative(iri)
+        } {
             // Verbatim, whether or not a base is in scope. Which of these two
             // branches a document takes must never change the IRI it denotes:
             // resolving an absolute reference through §5.2.2 with a base but not
@@ -635,10 +767,15 @@ impl BaseScope {
             // bytes, two graphs, two RDFC-1.0 digests.
             Reference::Absolute(iri) => Ok(iri),
             Reference::Relative(iri) => match self.current() {
-                Some(scoped) => scoped.iri().as_iri().resolve_iri(&iri),
+                Some(scoped) => {
+                    let result = scoped.iri().as_iri().resolve_iri_with_memory(&iri, memory);
+                    memory.release_string(iri.text)?;
+                    result
+                }
                 None => Err(IriError::NoBase {
-                    reference: reference.to_owned(),
-                }),
+                    reference: iri.text,
+                }
+                .into()),
             },
         }
     }

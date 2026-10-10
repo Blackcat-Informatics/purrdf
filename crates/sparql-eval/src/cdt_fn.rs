@@ -35,13 +35,13 @@
 //! [`TermValue::Literal`] whose datatype is `cdt:List` or `cdt:Map`; there is no
 //! side table and no new term kind. Two directions, and they are not symmetric:
 //!
-//! * **In** ([`to_cdt_term`]) — a literal the query *authored* keeps its lexical
+//! * **In** ([`to_cdt_term_admitted`]) — a literal the query *authored* keeps its lexical
 //!   form byte for byte, so `"[  1 ,  2 ]"^^cdt:List` and `cdt:List(1,2)` stay
 //!   different RDF terms (`list-functions/sameterm-04.rq`). Only when a
 //!   `cdt:`-typed literal actually *parses* is it lifted to a
 //!   [`CdtTerm::Composite`], so nesting a composite inside a composite costs one
 //!   bracket level rather than a fresh round of string escaping.
-//! * **Out** ([`from_cdt_term`]) — a value PurRDF *computed* is spelled in
+//! * **Out** ([`from_cdt_term_admitted`]) — a value PurRDF *computed* is spelled in
 //!   `purrdf-cdt`'s canonical form. That is what makes two independent evaluations
 //!   of `cdt:List()` the SAME term (`sameterm-01.rq`), which they must be.
 //!
@@ -56,7 +56,7 @@
 //! label denote one node: `vectors/sparql-cdt/bnodes/bnodes-sparql-01.rq` binds
 //! `"[_:b, 42, _:b]"^^cdt:List` and requires `cdt:get(?list,1)` and
 //! `cdt:get(?list,3)` to be `=`. The label is carried through
-//! [`BlankScope::qualify_label`] / [`BlankScope::unqualify_label`] — the kernel's
+//! [`purrdf_core::BlankScope::qualify_label`] / [`purrdf_core::BlankScope::unqualify_label`] — the kernel's
 //! existing `(label, scope)` encoding, not a second scoping scheme — so the round
 //! trip is the identity on every `(label, scope)` pair and a `BNODE()` put into a
 //! list comes back out `sameTerm` with itself (`list-constructor-16.rq`).
@@ -72,13 +72,12 @@ use purrdf_cdt::{
     CDT_LIST, CDT_MAP, CdtDatatype, CdtError, CdtLiteral, CdtOutcome, CdtTerm, CdtTripleTerm,
     CdtValue, MapRemoval,
 };
-use purrdf_core::TermBox;
-use purrdf_core::{BlankScope, DatasetView, RdfTextDirection, TermValue};
+use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_algebra::CdtFn;
 
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
-use crate::expr::{intern, intern_boolean, intern_integer};
+use crate::expr::{intern_boolean, intern_integer};
 use crate::scratch::SolutionTerm;
 
 /// Evaluate a SEP-0009 composite-datatype function call.
@@ -97,248 +96,258 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
     vals: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match func {
-        CdtFn::ListConstructor => {
-            // A failed argument is the `null` element, not a failed call.
-            let items = vals
-                .iter()
-                .map(|value| argument_element(value.as_ref()))
-                .collect::<Result<Vec<_>, _>>()?;
-            value_result(ctx, purrdf_cdt::list_constructor(items))
+    use crate::workspace::{AdmittedVec, LexicalFrame};
+    let workspace = ctx.growth.clone();
+    let mut input_frame = LexicalFrame::new(&workspace);
+    let mut owners = AdmittedVec::new(&workspace);
+    let mut input = Vec::new();
+    if matches!(func, CdtFn::ListConstructor | CdtFn::MapConstructor) {
+        for value in vals {
+            let term = match value {
+                Some(value) => to_cdt_term_admitted(value, true, &workspace)?,
+                None => OwnedCdtTerm {
+                    value: CdtTerm::Null,
+                    _frame: LexicalFrame::new(&workspace),
+                },
+            };
+            owners.push(term)?;
+            let value = std::mem::replace(
+                &mut owners
+                    .as_mut_slice()
+                    .last_mut()
+                    .expect("constructor owner was just inserted")
+                    .value,
+                CdtTerm::Null,
+            );
+            let live = input_frame.admitted_bytes();
+            purrdf_lex::allocation::Memory::resume(&mut input_frame, live)
+                .push(&mut input, value)
+                .map_err(|error| {
+                    storage_error(&mut input_frame, error, "composite constructor arguments")
+                })?;
         }
-        CdtFn::MapConstructor => {
-            // The parser has already refused an odd argument count, so every chunk
-            // is a full key/value pair.
-            let mut pairs: Vec<(CdtTerm, CdtTerm)> = Vec::with_capacity(vals.len() / 2);
-            for [key, value] in vals.as_chunks::<2>().0 {
-                pairs.push((
-                    argument_element(key.as_ref())?,
-                    argument_element(value.as_ref())?,
-                ));
-            }
-            value_result(ctx, purrdf_cdt::map_constructor(&pairs))
+        if func == CdtFn::ListConstructor {
+            return kernel_value(ctx, |storage| {
+                purrdf_cdt::functions::list_constructor_admitted(input, storage)
+            });
         }
-
-        CdtFn::Concat => match composite_arguments(vals)? {
-            Some(values) => value_result(ctx, purrdf_cdt::concat(&values)),
-            None => Ok(None),
-        },
-        CdtFn::Merge => match composite_arguments(vals)? {
-            Some(values) => value_result(ctx, purrdf_cdt::merge(&values)),
-            None => Ok(None),
-        },
-
-        CdtFn::Size => match composite_argument(vals, 0)? {
-            Some(value) => Ok(Some(intern_integer(ctx, purrdf_cdt::size(&value) as u64)?)),
-            None => Ok(None),
-        },
-        CdtFn::Head => match composite_argument(vals, 0)? {
-            Some(value) => term_result(ctx, purrdf_cdt::head(&value)),
-            None => Ok(None),
-        },
-        CdtFn::Tail => match composite_argument(vals, 0)? {
-            Some(value) => value_result(ctx, purrdf_cdt::tail(&value)),
-            None => Ok(None),
-        },
-        CdtFn::Reverse => match composite_argument(vals, 0)? {
-            Some(value) => value_result(ctx, purrdf_cdt::reverse(&value)),
-            None => Ok(None),
-        },
-        CdtFn::Keys => match composite_argument(vals, 0)? {
-            Some(value) => value_result(ctx, purrdf_cdt::keys(&value)),
-            None => Ok(None),
-        },
-
-        CdtFn::Get => match (composite_argument(vals, 0)?, element_argument(vals, 1)?) {
-            (Some(value), Some(key)) => term_result(ctx, purrdf_cdt::get(&value, &key)),
-            _ => Ok(None),
-        },
-        CdtFn::Contains => match (composite_argument(vals, 0)?, element_argument(vals, 1)?) {
-            (Some(value), Some(term)) => bool_result(ctx, purrdf_cdt::contains(&value, &term)),
-            _ => Ok(None),
-        },
-        CdtFn::ContainsKey => match (composite_argument(vals, 0)?, element_argument(vals, 1)?) {
-            (Some(value), Some(key)) => bool_result(ctx, purrdf_cdt::contains_key(&value, &key)),
-            _ => Ok(None),
-        },
-        CdtFn::Subseq => {
-            let (Some(value), Some(start)) =
-                (composite_argument(vals, 0)?, element_argument(vals, 1)?)
-            else {
+        let mut pairs = Vec::new();
+        let mut input = input.into_iter();
+        while let (Some(key), Some(value)) = (input.next(), input.next()) {
+            let live = input_frame.admitted_bytes();
+            purrdf_lex::allocation::Memory::resume(&mut input_frame, live)
+                .push(&mut pairs, (key, value))
+                .map_err(|error| {
+                    storage_error(&mut input_frame, error, "composite map constructor pairs")
+                })?;
+        }
+        return kernel_value(ctx, |storage| {
+            purrdf_cdt::functions::map_constructor_admitted(&pairs, storage)
+        });
+    }
+    if matches!(func, CdtFn::Concat | CdtFn::Merge) {
+        let mut values = Vec::new();
+        for value in vals {
+            let Some(value) = value.as_ref() else {
                 return Ok(None);
             };
-            // The third argument is a LENGTH and is optional; supplied-but-failed is
-            // not the same as omitted, so it raises rather than running to the end.
+            let Some(value) = composite_argument_admitted(value, &workspace)? else {
+                return Ok(None);
+            };
+            let (value, _) = value
+                .clone_admitted(&mut CdtStorage::new(&mut input_frame))
+                .map_err(|error| {
+                    storage_error(&mut input_frame, error, "composite variadic argument")
+                })?;
+            let live = input_frame.admitted_bytes();
+            purrdf_lex::allocation::Memory::resume(&mut input_frame, live)
+                .push(&mut values, value)
+                .map_err(|error| {
+                    storage_error(&mut input_frame, error, "composite variadic argument array")
+                })?;
+        }
+        return kernel_value(ctx, |storage| match func {
+            CdtFn::Concat => purrdf_cdt::functions::concat_admitted(&values, storage),
+            _ => purrdf_cdt::functions::merge_admitted(&values, storage),
+        });
+    }
+    let Some(first) = vals.first().and_then(Option::as_ref) else {
+        return Ok(None);
+    };
+    let Some(value) = composite_argument_admitted(first, &workspace)? else {
+        return Ok(None);
+    };
+    match func {
+        CdtFn::Size => return intern_integer(ctx, purrdf_cdt::size(&value) as u64).map(Some),
+        CdtFn::Head => {
+            return kernel_term(ctx, |storage| {
+                purrdf_cdt::functions::head_admitted(&value, storage)
+            });
+        }
+        CdtFn::Tail => {
+            return kernel_value(ctx, |storage| {
+                purrdf_cdt::functions::tail_admitted(&value, storage)
+            });
+        }
+        CdtFn::Reverse => {
+            return kernel_value(ctx, |storage| {
+                purrdf_cdt::functions::reverse_admitted(&value, storage)
+            });
+        }
+        CdtFn::Keys => {
+            return kernel_value(ctx, |storage| {
+                purrdf_cdt::functions::keys_admitted(&value, storage)
+            });
+        }
+        _ => {}
+    }
+    let Some(second) = vals.get(1).and_then(Option::as_ref) else {
+        return Ok(None);
+    };
+    let key = to_cdt_term_admitted(second, true, &workspace)?;
+    match func {
+        CdtFn::Get => kernel_term(ctx, |storage| {
+            purrdf_cdt::functions::get_admitted(&value, &key.value, storage)
+        }),
+        CdtFn::Contains => kernel_bool(ctx, |storage| {
+            purrdf_cdt::functions::contains_admitted(&value, &key.value, storage)
+        }),
+        CdtFn::ContainsKey => kernel_bool(ctx, |storage| {
+            purrdf_cdt::functions::contains_key_admitted(&value, &key.value, storage)
+        }),
+        CdtFn::Subseq => {
             let length = match vals.get(2) {
                 None => None,
                 Some(None) => return Ok(None),
-                Some(Some(_)) => Some(element_argument(vals, 2)?.ok_or_else(|| {
-                    EvalError::internal("a bound cdt:subseq length argument yielded no element")
-                })?),
+                Some(Some(value)) => Some(to_cdt_term_admitted(value, true, &workspace)?),
             };
-            value_result(ctx, purrdf_cdt::subseq(&value, &start, length.as_ref()))
+            kernel_value(ctx, |storage| {
+                purrdf_cdt::functions::subseq_admitted(
+                    &value,
+                    &key.value,
+                    length.as_ref().map(|value| &value.value),
+                    storage,
+                )
+            })
         }
         CdtFn::Put => {
-            let (Some(value), Some(key)) =
-                (composite_argument(vals, 0)?, element_argument(vals, 1)?)
-            else {
-                return Ok(None);
+            let item = match vals.get(2).and_then(Option::as_ref) {
+                Some(value) => to_cdt_term_admitted(value, true, &workspace)?,
+                None => OwnedCdtTerm {
+                    value: CdtTerm::Null,
+                    _frame: LexicalFrame::new(&workspace),
+                },
             };
-            // An omitted OR failed value argument is the `null` entry
-            // (`map-functions/put-02.rq` and `put-03.rq`), which is why this is
-            // `argument_element` and not `element_argument`.
-            let item = argument_element(vals.get(2).and_then(Option::as_ref))?;
-            value_result(ctx, purrdf_cdt::put(&value, &key, &item))
+            kernel_value(ctx, |storage| {
+                purrdf_cdt::functions::put_admitted(&value, &key.value, &item.value, storage)
+            })
         }
         CdtFn::Remove => {
-            let (Some(value), Some(key)) =
-                (composite_argument(vals, 0)?, element_argument(vals, 1)?)
-            else {
-                return Ok(None);
-            };
-            match purrdf_cdt::remove(&value, &key) {
+            let mut frame = LexicalFrame::new(&workspace);
+            let (outcome, _) = purrdf_cdt::functions::remove_admitted(
+                &value,
+                &key.value,
+                &mut CdtStorage::new(&mut frame),
+            )
+            .map_err(|error| storage_error(&mut frame, error, "composite removal"))?;
+            match outcome {
                 CdtOutcome::Value(MapRemoval::Removed(value)) => {
-                    Ok(intern(ctx, composite_literal(&value))?)
+                    let term = composite_literal_admitted(&value, &workspace)?;
+                    ctx.intern_workspace_term(term)
                 }
-                // Nothing was removed, so the answer is the caller's OWN term, with
-                // its own lexical form — `map-functions/remove-01.rq` asserts it
-                // with `SAMETERM`, which a re-rendered equal map would fail.
                 CdtOutcome::Value(MapRemoval::Unchanged) => {
-                    let original = vals[0]
-                        .clone()
-                        .ok_or_else(|| EvalError::internal("cdt:remove lost its map argument"))?;
-                    Ok(intern(ctx, original)?)
+                    let original = workspace.clone_term(first)?;
+                    ctx.intern_workspace_term(original)
                 }
                 CdtOutcome::Error(_) => Ok(None),
-                CdtOutcome::Bound(error) => Err(bound(&error)),
+                CdtOutcome::Bound(error) => Err(bound_admitted(&error, &workspace)),
             }
+        }
+        CdtFn::ListConstructor
+        | CdtFn::MapConstructor
+        | CdtFn::Concat
+        | CdtFn::Merge
+        | CdtFn::Size
+        | CdtFn::Head
+        | CdtFn::Tail
+        | CdtFn::Reverse
+        | CdtFn::Keys => {
+            unreachable!("unary and variadic functions returned before strict arguments")
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// outcome plumbing
-// ---------------------------------------------------------------------------
-
-/// A refused mint: the value the function was asked to build crosses one of
-/// `purrdf-cdt`'s three bounds. A hard failure, never an expression error.
-pub(crate) fn bound(error: &CdtError) -> EvalError {
-    EvalError::composite_bound(error.to_string())
-}
-
-/// A [`CdtOutcome<CdtValue>`] as a solution term: the value is minted in canonical
-/// form.
-fn value_result<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    outcome: CdtOutcome<CdtValue>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match outcome {
-        CdtOutcome::Value(value) => Ok(intern(ctx, composite_literal(&value))?),
-        CdtOutcome::Error(_) => Ok(None),
-        CdtOutcome::Bound(error) => Err(bound(&error)),
-    }
-}
-
-/// A [`CdtOutcome<CdtTerm>`] as a solution term. A `null` element has no term to
-/// return, so it is an expression error — the same answer as an absent one, which
-/// is exactly what `list-functions/get-null-01.rq` and `get-null-02.rq` require.
-fn term_result<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    outcome: CdtOutcome<CdtTerm>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match outcome {
-        CdtOutcome::Value(term) => Ok(from_cdt_term(&term)
-            .map(|value| intern(ctx, value))
-            .transpose()?
-            .flatten()),
-        CdtOutcome::Error(_) => Ok(None),
-        CdtOutcome::Bound(error) => Err(bound(&error)),
-    }
-}
-
-/// A [`CdtOutcome<bool>`] as an `xsd:boolean` solution term.
-fn bool_result<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    outcome: CdtOutcome<bool>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match outcome {
-        CdtOutcome::Value(answer) => Ok(Some(intern_boolean(ctx, answer)?)),
-        CdtOutcome::Error(_) => Ok(None),
-        CdtOutcome::Bound(error) => Err(bound(&error)),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// argument shapes
-// ---------------------------------------------------------------------------
-
-/// A **constructor** argument: a failed one is the SEP-0009 `null` element rather
-/// than a failure of the call (`list-functions/list-constructor-null-01.rq`,
-/// `list-constructor-null-02.rq`, `map-functions/put-03.rq`).
-pub(crate) fn argument_element(value: Option<&TermValue>) -> Result<CdtTerm, EvalError> {
-    match value {
-        None => Ok(CdtTerm::Null),
-        Some(value) => to_cdt_term(value),
-    }
-}
-
-/// An ordinary (strict) element argument: `None` means the call raises.
-fn element_argument(
-    vals: &[Option<TermValue>],
-    index: usize,
-) -> Result<Option<CdtTerm>, EvalError> {
-    match vals.get(index).and_then(Option::as_ref) {
-        None => Ok(None),
-        Some(value) => to_cdt_term(value).map(Some),
-    }
-}
-
-/// A composite argument: the term must be a `cdt:List` / `cdt:Map` literal whose
-/// lexical form parses. Anything else — a plain string, an IRI, an ill-formed
-/// composite literal — yields `None`, i.e. a SPARQL expression error
-/// (`list-functions/size-error-01.rq`, `get-error-01.rq`).
-fn composite_argument(
-    vals: &[Option<TermValue>],
-    index: usize,
-) -> Result<Option<CdtValue>, EvalError> {
-    Ok(vals
-        .get(index)
-        .and_then(Option::as_ref)
-        .and_then(as_composite))
-}
-
-/// Every argument as a composite, or `None` if any one of them is not
-/// (`list-functions/concat-error-01.rq`: one non-list poisons the whole call).
-fn composite_arguments(vals: &[Option<TermValue>]) -> Result<Option<Vec<CdtValue>>, EvalError> {
-    let mut values = Vec::with_capacity(vals.len());
-    for value in vals {
-        let Some(value) = value.as_ref().and_then(as_composite) else {
-            return Ok(None);
-        };
-        values.push(value);
-    }
-    Ok(Some(values))
-}
-
-/// The composite value a term denotes, or `None` when it denotes none.
-pub(crate) fn as_composite(value: &TermValue) -> Option<CdtValue> {
+fn composite_argument_admitted(
+    value: &TermValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::composite_value::CompositeValue>, EvalError> {
     let TermValue::Literal {
         lexical_form,
         datatype,
-        language,
+        language: None,
         ..
     } = value
     else {
-        return None;
+        return Ok(None);
     };
-    // A language tag makes the literal an `rdf:langString` whatever else it
-    // carries, so it is not a composite.
-    if language.is_some() {
-        return None;
+    crate::composite_value::CompositeValue::parse(lexical_form, datatype, workspace)
+}
+
+fn kernel_value<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    call: impl FnOnce(
+        &mut CdtStorage<'_>,
+    ) -> Result<(CdtOutcome<CdtValue>, usize), purrdf_cdt::memory::StorageError>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let workspace = ctx.growth.clone();
+    let mut frame = crate::workspace::LexicalFrame::new(&workspace);
+    let (outcome, _) = call(&mut CdtStorage::new(&mut frame))
+        .map_err(|error| storage_error(&mut frame, error, "composite function output"))?;
+    match outcome {
+        CdtOutcome::Value(value) => {
+            let output = composite_literal_admitted(&value, &workspace)?;
+            ctx.intern_workspace_term(output)
+        }
+        CdtOutcome::Error(_) => Ok(None),
+        CdtOutcome::Bound(error) => Err(bound_admitted(&error, &workspace)),
     }
-    purrdf_cdt::parse_cdt_by_iri(lexical_form, datatype)
-        .ok()
-        .flatten()
+}
+
+fn kernel_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    call: impl FnOnce(
+        &mut CdtStorage<'_>,
+    ) -> Result<(CdtOutcome<CdtTerm>, usize), purrdf_cdt::memory::StorageError>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let workspace = ctx.growth.clone();
+    let mut frame = crate::workspace::LexicalFrame::new(&workspace);
+    let (outcome, _) = call(&mut CdtStorage::new(&mut frame))
+        .map_err(|error| storage_error(&mut frame, error, "composite element output"))?;
+    match outcome {
+        CdtOutcome::Value(value) => from_cdt_term_admitted(&value, &workspace)?
+            .map(|term| ctx.intern_workspace_term(term))
+            .transpose()
+            .map(Option::flatten),
+        CdtOutcome::Error(_) => Ok(None),
+        CdtOutcome::Bound(error) => Err(bound_admitted(&error, &workspace)),
+    }
+}
+
+fn kernel_bool<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    call: impl FnOnce(
+        &mut CdtStorage<'_>,
+    ) -> Result<(CdtOutcome<bool>, usize), purrdf_cdt::memory::StorageError>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let workspace = ctx.growth.clone();
+    let mut frame = crate::workspace::LexicalFrame::new(&workspace);
+    let (outcome, _) = call(&mut CdtStorage::new(&mut frame))
+        .map_err(|error| storage_error(&mut frame, error, "composite membership"))?;
+    match outcome {
+        CdtOutcome::Value(value) => intern_boolean(ctx, value).map(Some),
+        CdtOutcome::Error(_) => Ok(None),
+        CdtOutcome::Bound(error) => Err(bound_admitted(&error, &workspace)),
+    }
 }
 
 /// Whether a term is a `cdt:List` / `cdt:Map`-typed literal — **regardless of
@@ -367,26 +376,7 @@ pub(crate) fn is_composite_typed(value: &TermValue) -> bool {
 // the bridge: TermValue <-> CdtTerm
 // ---------------------------------------------------------------------------
 
-/// A composite value as the literal that carries it, in `purrdf-cdt`'s canonical
-/// lexical form.
-///
-/// Canonical because PurRDF *computed* this value: two independent evaluations of
-/// `cdt:List()` must be the same RDF term (`list-functions/sameterm-01.rq`), which
-/// only a deterministic spelling can give. A literal the query authored is never
-/// re-spelled — see [`to_cdt_term`].
-pub(crate) fn composite_literal(value: &CdtValue) -> TermValue {
-    TermValue::Literal {
-        lexical_form: value.canonical_lexical(),
-        datatype: match value.datatype() {
-            CdtDatatype::List => CDT_LIST.to_owned(),
-            CdtDatatype::Map => CDT_MAP.to_owned(),
-        },
-        language: None,
-        direction: None,
-    }
-}
-
-/// One step of the iterative [`to_cdt_term`] walk.
+/// One step of the iterative [`to_cdt_term_admitted`] walk.
 enum InJob<'a> {
     /// Convert this term and push the result.
     Visit(&'a TermValue),
@@ -394,73 +384,7 @@ enum InJob<'a> {
     Triple,
 }
 
-/// Convert an evaluator term into the composite element it stands for.
-///
-/// The mapping, and the two places it is not the obvious one:
-///
-/// * a **blank node** carries its `(label, scope)` pair through
-///   [`BlankScope::qualify_label`], so a blank from a non-default scope cannot
-///   collide with a same-labelled blank from another;
-/// * a `cdt:`-typed literal whose lexical form **parses** is lifted to a
-///   [`CdtTerm::Composite`], so nesting costs one bracket level rather than a
-///   fresh round of string escaping — and one whose lexical form does **not**
-///   parse stays a literal, verbatim, so the relations can report it as ill-typed
-///   rather than silently treating it as absent.
-///
-/// # Errors
-///
-/// [`EvalError::CompositeBound`] when the element could never appear in any
-/// composite — a nested value already at the nesting bound, or a triple term whose
-/// three components combine past one of the three bounds. That is a hard failure,
-/// not an expression error: the term exists, and there is no composite that can
-/// hold it.
-pub(crate) fn to_cdt_term(value: &TermValue) -> Result<CdtTerm, EvalError> {
-    let mut jobs: Vec<InJob<'_>> = vec![InJob::Visit(value)];
-    let mut done: Vec<CdtTerm> = Vec::new();
-    while let Some(job) = jobs.pop() {
-        match job {
-            InJob::Triple => {
-                // Pushed subject-first, so they pop object, predicate, subject.
-                let object = pop(&mut done)?;
-                let predicate = pop(&mut done)?;
-                let subject = pop(&mut done)?;
-                done.push(CdtTerm::triple(subject, predicate, object).map_err(|e| bound(&e))?);
-            }
-            InJob::Visit(TermValue::Iri(iri)) => done.push(CdtTerm::Iri(iri.clone())),
-            InJob::Visit(TermValue::Blank { label, scope }) => {
-                done.push(CdtTerm::Blank(scope.qualify_label(label).into_owned()));
-            }
-            InJob::Visit(
-                literal @ TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                },
-            ) => {
-                if let Some(composite) = as_composite(literal) {
-                    done.push(CdtTerm::composite(composite).map_err(|e| bound(&e))?);
-                } else {
-                    done.push(CdtTerm::Literal(cdt_literal(
-                        lexical_form,
-                        datatype,
-                        language.as_deref(),
-                        *direction,
-                    )));
-                }
-            }
-            InJob::Visit(TermValue::Triple { s, p, o }) => {
-                jobs.push(InJob::Triple);
-                jobs.push(InJob::Visit(o));
-                jobs.push(InJob::Visit(p));
-                jobs.push(InJob::Visit(s));
-            }
-        }
-    }
-    pop(&mut done)
-}
-
-/// One step of the iterative [`from_cdt_term`] walk.
+/// One step of the iterative [`from_cdt_term_admitted`] walk.
 enum OutJob<'a> {
     /// Convert this element and push the result.
     Visit(&'a CdtTerm),
@@ -468,78 +392,11 @@ enum OutJob<'a> {
     Triple,
 }
 
-/// Convert a composite element back into an evaluator term, or `None` when it is
-/// the SEP-0009 `null` element.
-///
-/// `null` is a position in a value that carries no term at all, so there is
-/// nothing to return and the caller turns it into a SPARQL expression error —
-/// `list-functions/get-null-01.rq`. That propagates out of a triple term too: a
-/// triple with a null component is not a term.
-///
-/// A [`CdtTerm::Composite`] becomes a `cdt:List` / `cdt:Map` literal carrying the
-/// value's canonical lexical form, and a [`CdtTerm::Blank`] becomes a real blank
-/// node, decoded back to its `(label, scope)` pair — the exact inverse of what
-/// [`to_cdt_term`] encoded.
-pub(crate) fn from_cdt_term(term: &CdtTerm) -> Option<TermValue> {
-    let mut jobs: Vec<OutJob<'_>> = vec![OutJob::Visit(term)];
-    let mut done: Vec<TermValue> = Vec::new();
-    while let Some(job) = jobs.pop() {
-        match job {
-            OutJob::Triple => {
-                let object = done.pop()?;
-                let predicate = done.pop()?;
-                let subject = done.pop()?;
-                done.push(TermValue::Triple {
-                    s: TermBox::new(subject),
-                    p: TermBox::new(predicate),
-                    o: TermBox::new(object),
-                });
-            }
-            OutJob::Visit(CdtTerm::Null) => return None,
-            OutJob::Visit(CdtTerm::Iri(iri)) => done.push(TermValue::Iri(iri.clone())),
-            OutJob::Visit(CdtTerm::Blank(qualified)) => {
-                let (label, scope) = BlankScope::unqualify_label(qualified);
-                done.push(TermValue::Blank {
-                    label: label.into_owned(),
-                    scope,
-                });
-            }
-            OutJob::Visit(CdtTerm::Literal(literal)) => done.push(TermValue::Literal {
-                lexical_form: literal.lexical.clone(),
-                datatype: literal.datatype.clone(),
-                language: literal.language.clone(),
-                direction: literal.direction,
-            }),
-            OutJob::Visit(CdtTerm::Composite(value)) => {
-                done.push(composite_literal(value.as_ref()));
-            }
-            OutJob::Visit(CdtTerm::TripleTerm(triple)) => {
-                let CdtTripleTerm {
-                    subject,
-                    predicate,
-                    object,
-                } = triple.as_ref();
-                jobs.push(OutJob::Triple);
-                jobs.push(OutJob::Visit(object));
-                jobs.push(OutJob::Visit(predicate));
-                jobs.push(OutJob::Visit(subject));
-            }
-        }
-    }
-    done.pop()
-}
-
-/// Pop the single converted element a completed walk step left behind.
-fn pop(done: &mut Vec<CdtTerm>) -> Result<CdtTerm, EvalError> {
-    done.pop()
-        .ok_or_else(|| EvalError::internal("the composite-element walk lost a converted component"))
-}
-
 // ---------------------------------------------------------------------------
 // comparison — SEP-0009 `=` and `<` over composite-typed operands
 // ---------------------------------------------------------------------------
 
-/// Which comparison a caller is asking [`compare`] for.
+/// Which comparison a caller is asking [`compare_admitted`] for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CdtRelation {
     /// SPARQL `=`.
@@ -571,120 +428,397 @@ pub(crate) enum CdtRelation {
 /// Every refusal is a `None` — a comparison with no answer is ordinary SPARQL
 /// three-valued logic, not a failure of the query — which is what lets the
 /// evaluator's `=` / `<` / `IN` paths all route through here uniformly.
+#[cfg(test)]
 pub(crate) fn compare(relation: CdtRelation, left: &TermValue, right: &TermValue) -> Option<bool> {
-    let (left, right) = (to_cdt_operand(left), to_cdt_operand(right));
+    compare_admitted(
+        relation,
+        left,
+        right,
+        &crate::WorkspaceCapability::resident(),
+    )
+    .expect("resident composite comparison")
+}
+
+pub(crate) fn compare_admitted(
+    relation: CdtRelation,
+    left: &TermValue,
+    right: &TermValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<bool>, EvalError> {
+    let left = to_cdt_term_admitted(left, false, workspace)?;
+    let right = to_cdt_term_admitted(right, false, workspace)?;
     let (first, second) = match relation {
-        // `a > b` is `b < a`, and `a >= b` is `b <= a`; SEP-0009 defines only `<`.
-        CdtRelation::Greater | CdtRelation::GreaterOrEqual => (&right, &left),
-        CdtRelation::Equal | CdtRelation::Less | CdtRelation::LessOrEqual => (&left, &right),
+        CdtRelation::Greater | CdtRelation::GreaterOrEqual => (&right.value, &left.value),
+        _ => (&left.value, &right.value),
     };
-    let answer = match relation {
-        CdtRelation::Equal => purrdf_cdt::term_equal(first, second),
-        CdtRelation::Less | CdtRelation::Greater => purrdf_cdt::term_less_than(first, second),
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let result = match relation {
+        CdtRelation::Equal => {
+            purrdf_cdt::ops::try_term_equal(first, second, &mut CdtStorage::new(&mut frame))
+        }
+        CdtRelation::Less | CdtRelation::Greater => {
+            purrdf_cdt::ops::try_term_less_than(first, second, &mut CdtStorage::new(&mut frame))
+        }
         CdtRelation::LessOrEqual | CdtRelation::GreaterOrEqual => {
-            match purrdf_cdt::term_less_than(first, second) {
-                Ok(true) => Ok(true),
-                Ok(false) => purrdf_cdt::term_equal(first, second),
-                Err(error) => Err(error),
+            match purrdf_cdt::ops::try_term_less_than(
+                first,
+                second,
+                &mut CdtStorage::new(&mut frame),
+            ) {
+                Ok(Ok(false)) => {
+                    purrdf_cdt::ops::try_term_equal(first, second, &mut CdtStorage::new(&mut frame))
+                }
+                other => other,
             }
         }
     };
-    answer.ok()
-}
-
-/// One step of the iterative [`to_cdt_operand`] walk.
-enum OperandJob<'a> {
-    /// Convert this term and push the result.
-    Visit(&'a TermValue),
-    /// Pop three converted components and combine them into a triple term.
-    Triple,
-}
-
-/// A comparison **operand**, as an element the SEP-0009 relations can read.
-///
-/// Deliberately NOT [`to_cdt_term`], in two ways, and both matter:
-///
-/// * a `cdt:`-typed literal is left as a literal rather than lifted to a
-///   [`CdtTerm::Composite`]. The relations already see through both spellings
-///   ([`purrdf_cdt::term_equal`] and [`purrdf_cdt::term_less_than`] resolve a
-///   composite-typed literal themselves, which is what makes
-///   `list-functions/contains-07.rq` and `contains-08.rq` agree), and lifting
-///   would make a comparison *fail* — a value already at the nesting bound has no
-///   element form — where SEP-0009 says it simply has an answer;
-/// * a triple term is assembled from the variant directly rather than through the
-///   bounds-checking [`CdtTerm::triple`]. Nothing built here is ever placed inside
-///   a [`CdtValue`], so it carries no bound to establish: it is read once by a
-///   relation and dropped, and its depth is the depth of a term that is already in
-///   the dataset.
-///
-/// Total, allocation-bounded by the input term, and iterative — comparison
-/// operands come from literals, so a recursive walk here would be a stack overflow
-/// an attacker chooses the depth of.
-fn to_cdt_operand(value: &TermValue) -> CdtTerm {
-    let mut jobs: Vec<OperandJob<'_>> = vec![OperandJob::Visit(value)];
-    let mut done: Vec<CdtTerm> = Vec::new();
-    while let Some(job) = jobs.pop() {
-        match job {
-            OperandJob::Triple => {
-                // Pushed subject-first, so they pop object, predicate, subject. The
-                // walk pushes exactly three `Visit`s before each `Triple`, so the
-                // three pops are always available; `Null` is unreachable as a
-                // component because no `TermValue` denotes it.
-                let (Some(object), Some(predicate), Some(subject)) =
-                    (done.pop(), done.pop(), done.pop())
-                else {
-                    return CdtTerm::Null;
-                };
-                done.push(CdtTerm::TripleTerm(Box::new(CdtTripleTerm {
-                    subject,
-                    predicate,
-                    object,
-                })));
-            }
-            OperandJob::Visit(TermValue::Iri(iri)) => done.push(CdtTerm::Iri(iri.clone())),
-            OperandJob::Visit(TermValue::Blank { label, scope }) => {
-                done.push(CdtTerm::Blank(scope.qualify_label(label).into_owned()));
-            }
-            OperandJob::Visit(TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            }) => done.push(CdtTerm::Literal(cdt_literal(
-                lexical_form,
-                datatype,
-                language.as_deref(),
-                *direction,
-            ))),
-            OperandJob::Visit(TermValue::Triple { s, p, o }) => {
-                jobs.push(OperandJob::Triple);
-                jobs.push(OperandJob::Visit(o));
-                jobs.push(OperandJob::Visit(p));
-                jobs.push(OperandJob::Visit(s));
-            }
-        }
-    }
-    done.pop().unwrap_or(CdtTerm::Null)
-}
-
-/// An evaluator literal as a composite-element literal, verbatim.
-fn cdt_literal(
-    lexical: &str,
-    datatype: &str,
-    language: Option<&str>,
-    direction: Option<RdfTextDirection>,
-) -> CdtLiteral {
-    CdtLiteral {
-        lexical: lexical.to_owned(),
-        datatype: datatype.to_owned(),
-        language: language.map(str::to_owned),
-        direction,
-    }
+    result
+        .map(Result::ok)
+        .map_err(|error| storage_error(&mut frame, error, "composite comparison"))
 }
 
 // ---------------------------------------------------------------------------
 // interning helpers
 // ---------------------------------------------------------------------------
+
+/// A nested CDT kernel updates the same original grant while the enclosing
+/// converted arguments remain live.
+pub(crate) struct CdtStorage<'a> {
+    frame: &'a mut crate::workspace::LexicalFrame,
+    base: usize,
+}
+
+/// Native kernels return the original physical error even when their subsequent
+/// refund fails. Only admission errors need the original frame's typed cause;
+/// an explicit allocator/layout error must not become cleanup-only refusal.
+pub(crate) fn storage_error(
+    frame: &mut crate::workspace::LexicalFrame,
+    error: purrdf_cdt::memory::StorageError,
+    construct: &'static str,
+) -> EvalError {
+    if let Some(first) = frame.take_failure() {
+        match (error, first) {
+            (purrdf_cdt::memory::StorageError::AdmissionFailed, first) => return first,
+            (
+                purrdf_cdt::memory::StorageError::AllocationFailed,
+                first @ EvalError::AllocationFailed { .. },
+            ) => return first,
+            (
+                purrdf_cdt::memory::StorageError::SizeOverflow,
+                first @ EvalError::WorkspaceBoundOverflow,
+            ) => return first,
+            (
+                purrdf_cdt::memory::StorageError::FormattingFailed,
+                first @ EvalError::UnstableNativeDiagnostic,
+            ) => return first,
+            _ => {}
+        }
+    }
+    frame.storage_error(error, construct)
+}
+
+pub(crate) struct OwnedCdtTerm {
+    pub(crate) value: CdtTerm,
+    pub(crate) _frame: crate::workspace::LexicalFrame,
+}
+
+/// Construct a bridge operand with its original lexical and child-box owner.
+pub(crate) fn to_cdt_term_admitted(
+    value: &TermValue,
+    lift: bool,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<OwnedCdtTerm, EvalError> {
+    use crate::workspace::{AdmittedVec, LexicalFrame};
+    let mut frame = LexicalFrame::new(workspace);
+    let mut jobs = AdmittedVec::new(workspace);
+    let mut done = AdmittedVec::new(workspace);
+    jobs.push(InJob::Visit(value))?;
+    while let Some(job) = jobs.pop() {
+        let value = match job {
+            InJob::Triple => {
+                let object = done.pop().ok_or(EvalError::WorkspaceBoundOverflow)?;
+                let predicate = done.pop().ok_or(EvalError::WorkspaceBoundOverflow)?;
+                let subject = done.pop().ok_or(EvalError::WorkspaceBoundOverflow)?;
+                if lift {
+                    match CdtTerm::triple_admitted(
+                        subject,
+                        predicate,
+                        object,
+                        &mut CdtStorage::new(&mut frame),
+                    ) {
+                        Ok((value, _)) => value,
+                        Err(purrdf_cdt::memory::ReadError::Storage(error)) => {
+                            return Err(storage_error(
+                                &mut frame,
+                                error,
+                                "composite triple element",
+                            ));
+                        }
+                        Err(purrdf_cdt::memory::ReadError::Lexical(error)) => {
+                            return Err(bound_admitted(&error, workspace));
+                        }
+                    }
+                } else {
+                    let live = frame.admitted_bytes();
+                    let boxed = purrdf_lex::allocation::Memory::resume(&mut frame, live).boxed(
+                        CdtTripleTerm {
+                            subject,
+                            predicate,
+                            object,
+                        },
+                    );
+                    CdtTerm::TripleTerm(boxed.map_err(|error| {
+                        storage_error(&mut frame, error, "composite comparison triple")
+                    })?)
+                }
+            }
+            InJob::Visit(TermValue::Triple { s, p, o }) => {
+                jobs.push(InJob::Triple)?;
+                jobs.push(InJob::Visit(o))?;
+                jobs.push(InJob::Visit(p))?;
+                jobs.push(InJob::Visit(s))?;
+                continue;
+            }
+            InJob::Visit(TermValue::Iri(iri)) => {
+                let live = frame.admitted_bytes();
+                let copied = purrdf_lex::allocation::Memory::resume(&mut frame, live).string(iri);
+                CdtTerm::Iri(
+                    copied.map_err(|error| {
+                        storage_error(&mut frame, error, "composite IRI operand")
+                    })?,
+                )
+            }
+            InJob::Visit(TermValue::Blank { label, scope }) => {
+                let result = (|| {
+                    let live = frame.admitted_bytes();
+                    let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, live);
+                    let label = purrdf_core::blank_label::encode_blank_label_with_memory(
+                        label,
+                        *scope,
+                        purrdf_core::blank_label::LabelAlphabet::Unconstrained,
+                        &mut memory,
+                    )?;
+                    match label {
+                        std::borrow::Cow::Owned(label) => Ok(label),
+                        std::borrow::Cow::Borrowed(label) => memory.string(label),
+                    }
+                })();
+                CdtTerm::Blank(
+                    result.map_err(|error| {
+                        storage_error(&mut frame, error, "composite blank operand")
+                    })?,
+                )
+            }
+            InJob::Visit(TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            }) => {
+                if lift
+                    && language.is_none()
+                    && let Some(value) = crate::composite_value::CompositeValue::parse(
+                        lexical_form,
+                        datatype,
+                        workspace,
+                    )?
+                {
+                    let (value, _) = value
+                        .clone_admitted(&mut CdtStorage::new(&mut frame))
+                        .map_err(|error| {
+                            storage_error(&mut frame, error, "composite argument copy")
+                        })?;
+                    match CdtTerm::composite_admitted(value, &mut CdtStorage::new(&mut frame)) {
+                        Ok((value, _)) => {
+                            done.push(value)?;
+                            continue;
+                        }
+                        Err(purrdf_cdt::memory::ReadError::Storage(error)) => {
+                            return Err(storage_error(&mut frame, error, "composite element box"));
+                        }
+                        Err(purrdf_cdt::memory::ReadError::Lexical(error)) => {
+                            return Err(bound_admitted(&error, workspace));
+                        }
+                    }
+                }
+                let result = (|| {
+                    let live = frame.admitted_bytes();
+                    let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, live);
+                    Ok::<_, purrdf_cdt::memory::StorageError>(CdtLiteral {
+                        lexical: memory.string(lexical_form)?,
+                        datatype: memory.string(datatype)?,
+                        language: language
+                            .as_deref()
+                            .map(|language| memory.string(language))
+                            .transpose()?,
+                        direction: *direction,
+                    })
+                })();
+                CdtTerm::Literal(result.map_err(|error| {
+                    storage_error(&mut frame, error, "composite literal operand")
+                })?)
+            }
+        };
+        done.push(value)?;
+    }
+    Ok(OwnedCdtTerm {
+        value: done.pop().ok_or(EvalError::WorkspaceBoundOverflow)?,
+        _frame: frame,
+    })
+}
+
+pub(crate) fn bound_admitted(
+    error: &CdtError,
+    workspace: &crate::WorkspaceCapability,
+) -> EvalError {
+    crate::error::NativeDiagnostic::error(
+        crate::error::NativeDiagnosticKind::CompositeBound,
+        error,
+        workspace,
+    )
+}
+impl<'a> CdtStorage<'a> {
+    pub(crate) fn new(frame: &'a mut crate::workspace::LexicalFrame) -> Self {
+        let base = frame.admitted_bytes();
+        Self { frame, base }
+    }
+    fn boxed<T>(
+        &mut self,
+        value: T,
+        construct: &'static str,
+    ) -> Result<Box<T>, purrdf_cdt::memory::StorageError> {
+        purrdf_lex::allocation::try_boxed(value).map_err(|_| {
+            self.frame
+                .latch_failure(EvalError::AllocationFailed { construct });
+            purrdf_cdt::memory::StorageError::AllocationFailed
+        })
+    }
+}
+impl purrdf_cdt::memory::Admission for CdtStorage<'_> {
+    fn resize(&mut self, bytes: usize) -> Result<(), purrdf_cdt::memory::StorageError> {
+        let total = self
+            .base
+            .checked_add(bytes)
+            .ok_or(purrdf_cdt::memory::StorageError::SizeOverflow)?;
+        purrdf_lex::allocation::Admission::resize(self.frame, total)
+    }
+}
+impl purrdf_cdt::memory::Storage for CdtStorage<'_> {
+    fn boxed_value(
+        &mut self,
+        value: CdtValue,
+    ) -> Result<Box<CdtValue>, purrdf_cdt::memory::StorageError> {
+        self.boxed(value, "native composite value box")
+    }
+    fn boxed_triple(
+        &mut self,
+        value: CdtTripleTerm,
+    ) -> Result<Box<CdtTripleTerm>, purrdf_cdt::memory::StorageError> {
+        self.boxed(value, "native composite triple box")
+    }
+}
+
+pub(crate) fn composite_literal_admitted(
+    value: &CdtValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::WorkspaceTerm, EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let rendered =
+        purrdf_cdt::render::try_canonical_lexical(value, &mut CdtStorage::new(&mut frame));
+    let (lexical_form, _) =
+        rendered.map_err(|error| storage_error(&mut frame, error, "composite lexical output"))?;
+    let result = (|| {
+        let mut memory =
+            purrdf_lex::allocation::Memory::resume(&mut frame, lexical_form.capacity());
+        let datatype = memory.string(match value.datatype() {
+            CdtDatatype::List => CDT_LIST,
+            CdtDatatype::Map => CDT_MAP,
+        })?;
+        Ok::<_, purrdf_cdt::memory::StorageError>(TermValue::Literal {
+            lexical_form,
+            datatype,
+            language: None,
+            direction: None,
+        })
+    })();
+    let term =
+        result.map_err(|error| storage_error(&mut frame, error, "composite literal datatype"))?;
+    frame.finish_term(|| term)
+}
+
+pub(crate) fn from_cdt_term_admitted(
+    term: &CdtTerm,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+    use crate::workspace::AdmittedVec;
+    let mut jobs = AdmittedVec::new(workspace);
+    let mut done = AdmittedVec::new(workspace);
+    jobs.push(OutJob::Visit(term))?;
+    while let Some(job) = jobs.pop() {
+        match job {
+            OutJob::Triple => {
+                let object = done.pop().ok_or(EvalError::WorkspaceBoundOverflow)?;
+                let predicate = done.pop().ok_or(EvalError::WorkspaceBoundOverflow)?;
+                let subject = done.pop().ok_or(EvalError::WorkspaceBoundOverflow)?;
+                done.push(crate::WorkspaceTerm::triple(
+                    subject, predicate, object, workspace,
+                )?)?;
+            }
+            OutJob::Visit(CdtTerm::Null) => return Ok(None),
+            OutJob::Visit(CdtTerm::Iri(iri)) => done.push(workspace.iri(iri)?)?,
+            OutJob::Visit(CdtTerm::Blank(qualified)) => {
+                let mut frame = crate::workspace::LexicalFrame::new(workspace);
+                let decoded = purrdf_core::blank_label::decode_blank_label_with_memory(
+                    qualified,
+                    purrdf_core::blank_label::LabelAlphabet::Unconstrained,
+                    &mut purrdf_lex::allocation::Memory::new(&mut frame),
+                );
+                let (label, scope) = decoded.map_err(|error| {
+                    storage_error(&mut frame, error, "composite blank decoding")
+                })?;
+                let result = workspace.blank(&label, scope)?;
+                drop(label);
+                done.push(result)?;
+            }
+            OutJob::Visit(CdtTerm::Literal(literal)) => {
+                done.push(cdt_literal_admitted(literal, workspace)?)?;
+            }
+            OutJob::Visit(CdtTerm::Composite(value)) => {
+                done.push(composite_literal_admitted(value, workspace)?)?;
+            }
+            OutJob::Visit(CdtTerm::TripleTerm(triple)) => {
+                jobs.push(OutJob::Triple)?;
+                jobs.push(OutJob::Visit(&triple.object))?;
+                jobs.push(OutJob::Visit(&triple.predicate))?;
+                jobs.push(OutJob::Visit(&triple.subject))?;
+            }
+        }
+    }
+    Ok(done.pop())
+}
+
+pub(crate) fn cdt_literal_admitted(
+    literal: &CdtLiteral,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::WorkspaceTerm, EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let result = (|| {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        Ok::<_, purrdf_cdt::memory::StorageError>(TermValue::Literal {
+            lexical_form: memory.string(&literal.lexical)?,
+            datatype: memory.string(&literal.datatype)?,
+            language: literal
+                .language
+                .as_deref()
+                .map(|language| memory.string(language))
+                .transpose()?,
+            direction: literal.direction,
+        })
+    })();
+    let term =
+        result.map_err(|error| storage_error(&mut frame, error, "composite literal output"))?;
+    frame.finish_term(|| term)
+}
 
 #[cfg(test)]
 mod tests {
@@ -1122,7 +1256,7 @@ mod tests {
         }
         let error = ask_err(&format!("{binds} FILTER(BOUND(?m{steps}))"));
         assert!(
-            matches!(error, EvalError::CompositeBound(_)),
+            error.diagnostic_code() == Some(EvalError::COMPOSITE_BOUND_CODE),
             "got {error:?}"
         );
         assert!(error.to_string().contains("elements"), "got {error}");

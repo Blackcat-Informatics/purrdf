@@ -61,20 +61,24 @@
 //! see [`is_joined_blank`]. Joins elsewhere cannot meet it, because no other
 //! basic graph pattern carries that spine's number.
 
-use std::sync::Arc;
-
 use purrdf_core::ViewTermId;
-use purrdf_sparql_algebra::scope::{
-    LabelSource, joins_blank_scope as is_spine, spine_leaves, visit_leaf_labels,
-    visit_spine_leaves as any_spine_leaf, visit_term_labels,
-};
+use purrdf_sparql_algebra::scope::{LabelSource, joins_blank_scope as is_spine};
 use purrdf_sparql_algebra::{
     AggregateExpression, Expression, GraphPattern, OrderExpression, Query, TermPattern,
     TriplePattern, Variable,
 };
 
-use crate::DetHashMap;
+use crate::property_fn_plan::{PrepResult, PreparationError};
 use crate::solution::{SolutionSeq, VarSchema};
+use crate::workspace::{AdmittedMap, AdmittedVec, LexicalFrame};
+use purrdf_lex::allocation::Memory;
+#[cfg(test)]
+use purrdf_sparql_algebra::scope::{
+    spine_leaves, visit_leaf_labels, visit_spine_leaves as any_spine_leaf,
+};
+use purrdf_sparql_algebra::scope::{
+    visit_leaf_labels_with_memory, visit_spine_leaves_with_memory, visit_term_labels_with_memory,
+};
 
 /// Whether `variable` is a shared blank this pass renamed: a non-distinguished
 /// variable that must never be observed as part of a solution. Its canonical
@@ -86,38 +90,53 @@ pub(crate) fn is_joined_blank(variable: &Variable) -> bool {
 /// The columns of `schema` that are not renamed shared blanks, in order — or `None`
 /// when there is no renamed blank to leave out, which is every schema outside a
 /// basic graph pattern whose pieces share a label.
-pub(crate) fn visible_columns(schema: &VarSchema) -> Option<Vec<usize>> {
+/// The same hidden-column identity law, with actual admitted array growth.
+pub(crate) fn visible_columns_admitted(
+    schema: &VarSchema,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<AdmittedVec<usize>>, crate::EvalError> {
     if !schema.vars().iter().any(is_joined_blank) {
-        return None;
+        return Ok(None);
     }
-    Some(
-        schema
-            .vars()
-            .iter()
-            .enumerate()
-            .filter_map(|(column, variable)| (!is_joined_blank(variable)).then_some(column))
-            .collect(),
-    )
+    let mut columns = AdmittedVec::new(workspace);
+    for (column, variable) in schema.vars().iter().enumerate() {
+        if !is_joined_blank(variable) {
+            columns.push(column)?;
+        }
+    }
+    Ok(Some(columns))
 }
 
 /// `seq` without its renamed shared-blank columns: the solutions as SPARQL defines
 /// them, over the pattern's variables only. Rows are kept one for one — dropping a
 /// non-distinguished variable never merges two of them — and `seq` is returned as it
 /// is when it carries no such column.
-pub(crate) fn without_joined_blanks<I: ViewTermId>(seq: SolutionSeq<I>) -> SolutionSeq<I> {
-    let Some(keep) = visible_columns(&seq.schema) else {
-        return seq;
-    };
-    let schema = VarSchema::from_vars(keep.iter().map(|&column| seq.schema.vars()[column].clone()));
-    let rows = seq
-        .rows
-        .into_iter()
-        .map(|row| keep.iter().map(|&column| row[column]).collect())
-        .collect();
-    SolutionSeq {
-        schema: Arc::new(schema),
-        rows,
+pub(crate) fn without_joined_blanks_admitted<I: ViewTermId>(
+    seq: SolutionSeq<I>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<SolutionSeq<I>, crate::EvalError> {
+    if !seq.schema.vars().iter().any(is_joined_blank) {
+        return Ok(seq);
     }
+    let mut keep = AdmittedVec::new(workspace);
+    for (column, variable) in seq.schema.vars().iter().enumerate() {
+        if !is_joined_blank(variable) {
+            keep.push(column)?;
+        }
+    }
+    let schema = VarSchema::from_vars_admitted(
+        keep.iter().map(|&column| seq.schema.vars()[column].clone()),
+        workspace,
+    )?
+    .shared_admitted(workspace)?;
+    let mut rows = crate::solution::RowsBuilder::new(workspace);
+    for row in seq.rows {
+        rows.push_cells(keep.len(), keep.iter().map(|&column| row[column]))?;
+    }
+    Ok(SolutionSeq {
+        schema,
+        rows: rows.finish()?,
+    })
 }
 
 /// `pattern` with every blank node label shared between the leaves of one basic
@@ -129,237 +148,328 @@ pub(crate) fn without_joined_blanks<I: ViewTermId>(seq: SolutionSeq<I>) -> Solut
 /// Idempotent: the output shares no label between leaves, so a second pass
 /// returns `None`.
 pub(crate) fn join_shared_blanks(pattern: &GraphPattern) -> Option<GraphPattern> {
-    if !pattern_needs(pattern) {
-        return None;
-    }
-    let mut next_spine = 0_usize;
-    Some(rewrite_pattern(pattern.clone(), &mut next_spine))
+    let capability = crate::WorkspaceCapability::resident();
+    join_shared_blanks_with_memory(
+        pattern,
+        &mut Memory::new(&mut LexicalFrame::new(&capability)),
+    )
+    .expect("resident blank-scope preparation")
 }
 
-/// [`join_shared_blanks`] over a whole query's `WHERE` pattern, for a query that is
-/// evaluated without passing through admission (`crate::property_fn_plan`, which
-/// applies it to every admitted one). `None` when nothing is shared.
+pub(crate) fn join_shared_blanks_with_memory(
+    pattern: &GraphPattern,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Option<GraphPattern>> {
+    if !needs_with_memory(Node::Pattern(pattern), memory)? {
+        return Ok(None);
+    }
+    let owned = pattern.clone_with_memory(memory)?;
+    rewrite_pattern_with_memory(owned, &mut 0usize, memory).map(Some)
+}
+
+/// The shared-blank pass over a whole resident query.
 pub(crate) fn join_shared_blanks_in_query(query: &Query) -> Option<Query> {
-    let (Query::Select { pattern, .. }
-    | Query::Ask { pattern, .. }
-    | Query::Construct { pattern, .. }
-    | Query::Describe { pattern, .. }) = query;
-    let joined = join_shared_blanks(pattern)?;
-    Some(query_with_pattern(query, joined))
+    let capability = crate::WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&capability);
+    let mut memory = Memory::new(&mut frame);
+    let joined = join_shared_blanks_with_memory(query.pattern(), &mut memory)
+        .expect("resident shared-blank traversal")?;
+    Some(
+        query_with_pattern_with_memory(query, joined, &mut memory)
+            .expect("resident query head copy"),
+    )
 }
 
-/// Carry a replacement WHERE pattern without cloning the discarded original.
-/// Query heads, templates and prologue metadata remain byte-identical.
-pub(crate) fn query_with_pattern(query: &Query, pattern: GraphPattern) -> Query {
-    let dataset = query.dataset().clone();
-    let base_iri = query.base_iri().cloned();
-    let version = query.version().cloned();
-    match query {
-        Query::Select { .. } => Query::Select {
-            pattern,
-            dataset,
-            base_iri,
-            version,
-        },
-        Query::Ask { .. } => Query::Ask {
-            pattern,
-            dataset,
-            base_iri,
-            version,
-        },
-        Query::Construct { template, .. } => Query::Construct {
-            template: template.clone(),
-            pattern,
-            dataset,
-            base_iri,
-            version,
-        },
-        Query::Describe { targets, .. } => Query::Describe {
-            targets: targets.clone(),
-            pattern,
-            dataset,
-            base_iri,
-            version,
-        },
-    }
+/// Carry a replacement WHERE without cloning the discarded original.
+pub(crate) fn query_with_pattern_with_memory(
+    query: &Query,
+    pattern: GraphPattern,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Query> {
+    Ok(query.clone_with_pattern_with_memory(pattern, memory)?)
 }
 
 // ---------------------------------------------------------------------------
 // The spine
 // ---------------------------------------------------------------------------
 
-/// [`spine_leaves`], mutably.
-fn spine_leaves_mut<'a>(pattern: &'a mut GraphPattern, out: &mut Vec<&'a mut GraphPattern>) {
-    let mut pending: Vec<&'a mut GraphPattern> = vec![pattern];
+/// Mutable leaves in the same written order.
+fn spine_leaves_mut_with_memory<'a>(
+    pattern: &'a mut GraphPattern,
+    out: &mut AdmittedVec<&'a mut GraphPattern>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<()> {
+    let mut pending = purrdf_lex::walk::WorkList::<&'a mut GraphPattern, 8>::with(pattern);
     while let Some(node) = pending.pop() {
         if !is_spine(node) {
-            out.push(node);
+            out.push(node)?;
             continue;
         }
         match node {
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
             | GraphPattern::Apply { left, right, .. } => {
-                pending.push(right);
-                pending.push(left);
+                pending.try_push_admitted(&mut **right, memory)?;
+                pending.try_push_admitted(&mut **left, memory)?;
             }
-            _ => unreachable!("is_spine admits only a Join or a Lateral"),
+            _ => unreachable!("is_spine admits only a Join or Lateral"),
         }
     }
+    pending.release_admitted(memory)?;
+    Ok(())
 }
 
-/// Push every blank node label a leaf writes: a `Bgp`'s triples, a `Path`'s two
-/// endpoints, a call's arguments — quoted triples included. Any other leaf is
-/// another basic graph pattern (or none) and contributes nothing.
-fn leaf_labels<'a>(leaf: &'a GraphPattern, out: &mut Vec<&'a str>) {
-    leaf_labels_with(leaf, out, LabelSource::All);
+fn leaf_has_blank_with_memory(
+    leaf: &GraphPattern,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<bool> {
+    visit_leaf_labels_with_memory(
+        leaf,
+        LabelSource::All,
+        &mut |_, _| Ok::<_, PreparationError>(true),
+        memory,
+    )
+}
+fn leaf_has_raw_blank_with_memory(
+    leaf: &GraphPattern,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<bool> {
+    visit_leaf_labels_with_memory(
+        leaf,
+        LabelSource::Raw,
+        &mut |_, _| Ok::<_, PreparationError>(true),
+        memory,
+    )
 }
 
-fn leaf_labels_with<'a>(leaf: &'a GraphPattern, out: &mut Vec<&'a str>, source: LabelSource) {
-    visit_leaf_labels(leaf, source, &mut |label| {
-        out.push(label);
-        false
-    });
-}
-
-fn term_labels_with<'a>(term: &'a TermPattern, out: &mut Vec<&'a str>, source: LabelSource) {
-    visit_term_labels(term, source, &mut |label| {
-        out.push(label);
-        false
-    });
-}
-
-/// The labels written in more than one of `leaves`, sorted.
-fn shared_labels(leaves: &[&GraphPattern]) -> Vec<String> {
-    // A canonical-only spine is already settled. In particular, do not rescan
-    // nested UNION subtrees at each enclosing sequence join during preparation.
-    if !leaves.iter().any(|leaf| leaf_has_raw_blank(leaf)) {
-        return Vec::new();
-    }
-    let mut per_leaf: Vec<Vec<&str>> = Vec::new();
-    let mut raw = crate::DetHashSet::default();
+/// One original shared-label counting law; borrowed labels avoid copying during detection.
+fn shared_label_names<'a>(
+    leaves: &[&'a GraphPattern],
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<AdmittedVec<&'a str>> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let mut output = AdmittedVec::new(&workspace);
+    let mut any_raw = false;
     for leaf in leaves {
-        let mut original = Vec::new();
+        if leaf_has_raw_blank_with_memory(leaf, memory)? {
+            any_raw = true;
+            break;
+        }
+    }
+    if !any_raw {
+        return Ok(output);
+    }
+    let mut per_leaf = AdmittedVec::new(&workspace);
+    let mut raw = AdmittedMap::default();
+    for leaf in leaves {
+        let mut original = AdmittedVec::new(&workspace);
         match leaf {
             GraphPattern::Bgp { patterns } => {
                 for triple in patterns {
-                    term_labels_with(&triple.subject, &mut original, LabelSource::Raw);
-                    term_labels_with(&triple.object, &mut original, LabelSource::Raw);
+                    for term in [&triple.subject, &triple.object] {
+                        visit_term_labels_with_memory(
+                            term,
+                            LabelSource::Raw,
+                            &mut |label, _| {
+                                original.push(label)?;
+                                Ok::<_, PreparationError>(false)
+                            },
+                            memory,
+                        )?;
+                    }
                 }
             }
             GraphPattern::Path {
                 subject, object, ..
             } => {
-                term_labels_with(subject, &mut original, LabelSource::Raw);
-                term_labels_with(object, &mut original, LabelSource::Raw);
+                for term in [subject, object] {
+                    visit_term_labels_with_memory(
+                        term,
+                        LabelSource::Raw,
+                        &mut |label, _| {
+                            original.push(label)?;
+                            Ok::<_, PreparationError>(false)
+                        },
+                        memory,
+                    )?;
+                }
             }
             GraphPattern::PropertyFunction(call) => {
                 for term in call.subject_args.iter().chain(&call.object_args) {
-                    term_labels_with(term, &mut original, LabelSource::Raw);
+                    visit_term_labels_with_memory(
+                        term,
+                        LabelSource::Raw,
+                        &mut |label, _| {
+                            original.push(label)?;
+                            Ok::<_, PreparationError>(false)
+                        },
+                        memory,
+                    )?;
                 }
             }
             _ => {}
         }
-        raw.extend(original);
-        let mut labels = Vec::new();
-        leaf_labels(leaf, &mut labels);
+        for label in original.iter().copied() {
+            raw.insert_admitted(label, (), &workspace)?;
+        }
+        let mut labels = AdmittedVec::new(&workspace);
+        visit_leaf_labels_with_memory(
+            leaf,
+            LabelSource::All,
+            &mut |label, _| {
+                labels.push(label)?;
+                Ok::<_, PreparationError>(false)
+            },
+            memory,
+        )?;
         if !labels.is_empty() {
-            labels.sort_unstable();
-            labels.dedup();
-            per_leaf.push(labels);
+            labels.as_mut_slice().sort_unstable();
+            // De-duplicate borrowed labels without changing original array ownership.
+            let mut previous = None;
+            labels.retain(|label| {
+                let keep = previous != Some(*label);
+                previous = Some(*label);
+                keep
+            });
+            per_leaf.push(labels)?;
         }
     }
-    // A label can only be shared if two leaves write blanks at all.
     if per_leaf.len() < 2 {
-        return Vec::new();
+        return Ok(output);
     }
-    let mut leaf_counts: DetHashMap<&str, usize> = DetHashMap::default();
+    let mut leaf_counts = AdmittedMap::<&str, usize>::default();
     for labels in &per_leaf {
-        for label in labels {
-            *leaf_counts.entry(label).or_insert(0) += 1;
+        for &label in labels {
+            if let Some(count) = leaf_counts.get_mut(label) {
+                *count = count
+                    .checked_add(1)
+                    .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+            } else {
+                leaf_counts.insert_admitted(label, 1, &workspace)?;
+            }
         }
     }
-    let mut shared: Vec<String> = leaf_counts
-        .into_iter()
-        .filter(|(label, leaves)| *leaves > 1 && raw.contains(*label))
-        .map(|(label, _)| label.to_owned())
-        .collect();
-    shared.sort_unstable();
-    shared
+    for (&label, &leaves) in leaf_counts.iter() {
+        if leaves > 1 && raw.get(label).is_some() {
+            output.push(label)?;
+        }
+    }
+    output.as_mut_slice().sort_unstable();
+    Ok(output)
 }
 
+#[cfg(test)]
+fn shared_labels(leaves: &[&GraphPattern]) -> Vec<String> {
+    let capability = crate::WorkspaceCapability::resident();
+    shared_label_names(
+        leaves,
+        &mut Memory::new(&mut LexicalFrame::new(&capability)),
+    )
+    .expect("resident shared-label counting")
+    .iter()
+    .map(|name| (*name).to_owned())
+    .collect()
+}
+
+#[cfg(test)]
+fn leaf_has_blank(leaf: &GraphPattern) -> bool {
+    visit_leaf_labels(leaf, LabelSource::All, &mut |_| true)
+}
 // ---------------------------------------------------------------------------
 // Detection (read-only)
 // ---------------------------------------------------------------------------
 
-/// Whether a leaf writes any blank node at all.
-fn leaf_has_blank(leaf: &GraphPattern) -> bool {
-    visit_leaf_labels(leaf, LabelSource::All, &mut |_| true)
-}
-
-fn leaf_has_raw_blank(leaf: &GraphPattern) -> bool {
-    visit_leaf_labels(leaf, LabelSource::Raw, &mut |_| true)
-}
-
-/// One node the detection walk has still to look at.
 enum Node<'a> {
     Pattern(&'a GraphPattern),
     Expression(&'a Expression),
 }
 
-/// Whether `pattern`, or any pattern under it — through every operator and through
-/// the `EXISTS` bodies of its expressions — is a spine whose leaves share a label.
-fn pattern_needs(pattern: &GraphPattern) -> bool {
-    needs(Node::Pattern(pattern))
-}
-
-fn order_needs(order: &OrderExpression) -> bool {
-    match order {
-        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expression_needs(expr),
+fn extend_pending<'a>(
+    pending: &mut purrdf_lex::walk::WorkList<Node<'a>, 16>,
+    nodes: impl IntoIterator<Item = Node<'a>>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<()> {
+    for node in nodes {
+        pending.try_push_admitted(node, memory)?;
     }
+    Ok(())
 }
 
-fn aggregate_needs(aggregate: &AggregateExpression) -> bool {
-    aggregate.args().iter().any(expression_needs) || aggregate.order_by().iter().any(order_needs)
+fn aggregate_needs_with_memory(
+    aggregate: &AggregateExpression,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<bool> {
+    for expression in aggregate.args() {
+        if needs_with_memory(Node::Expression(expression), memory)? {
+            return Ok(true);
+        }
+    }
+    for order in aggregate.order_by() {
+        if needs_with_memory(Node::Expression(order.expression()), memory)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
-fn expression_needs(expr: &Expression) -> bool {
-    needs(Node::Expression(expr))
+#[cfg(test)]
+fn pattern_needs(pattern: &GraphPattern) -> bool {
+    let capability = crate::WorkspaceCapability::resident();
+    needs_with_memory(
+        Node::Pattern(pattern),
+        &mut Memory::new(&mut LexicalFrame::new(&capability)),
+    )
+    .expect("resident blank-scope detection")
 }
 
-/// The detection walk: every node under `root` is examined once, spines by their
-/// leaves' labels and everything else by its parts, over a work list. The answer is
-/// the same whichever order the nodes are examined in, and the walk stops at the
-/// first spine that shares a label.
-fn needs(root: Node<'_>) -> bool {
-    let mut pending: purrdf_core::SmallVec<[Node<'_>; 16]> = purrdf_core::smallvec![root];
+fn needs_with_memory(root: Node<'_>, memory: &mut Memory<'_, LexicalFrame>) -> PrepResult<bool> {
+    let mut pending = purrdf_lex::walk::WorkList::<Node<'_>, 16>::with(root);
     while let Some(node) = pending.pop() {
         match node {
             Node::Pattern(pattern) if is_spine(pattern) => {
-                // Only a spine with blanks in two of its leaves can share a label, and
-                // only that one pays for collecting them.
-                let mut blank_leaves = 0_usize;
-                if any_spine_leaf(pattern, &mut leaf_has_raw_blank) {
-                    any_spine_leaf(pattern, &mut |leaf| {
-                        blank_leaves += usize::from(leaf_has_blank(leaf));
-                        false
-                    });
+                let mut blank_leaves = 0usize;
+                if visit_spine_leaves_with_memory(
+                    pattern,
+                    &mut |leaf, memory| leaf_has_raw_blank_with_memory(leaf, memory),
+                    memory,
+                )? {
+                    visit_spine_leaves_with_memory(
+                        pattern,
+                        &mut |leaf, memory| {
+                            blank_leaves = blank_leaves
+                                .checked_add(usize::from(leaf_has_blank_with_memory(leaf, memory)?))
+                                .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+                            Ok::<_, PreparationError>(false)
+                        },
+                        memory,
+                    )?;
                 }
                 if blank_leaves > 1 {
-                    let mut leaves = Vec::new();
-                    spine_leaves(pattern, &mut leaves);
-                    if !shared_labels(&leaves).is_empty() {
-                        return true;
+                    let capability = memory.admission_mut().workspace().clone();
+                    let mut leaves = AdmittedVec::new(&capability);
+                    visit_spine_leaves_with_memory(
+                        pattern,
+                        &mut |leaf, _| {
+                            leaves.push(leaf)?;
+                            Ok::<_, PreparationError>(false)
+                        },
+                        memory,
+                    )?;
+                    if !shared_label_names(&leaves, memory)?.is_empty() {
+                        pending.release_admitted(memory)?;
+                        return Ok(true);
                     }
                 }
-                // The leaves go on the work list leftmost on top, so they are examined
-                // in written order.
                 let first = pending.len();
-                any_spine_leaf(pattern, &mut |leaf| {
-                    pending.push(Node::Pattern(leaf));
-                    false
-                });
-                pending[first..].reverse();
+                visit_spine_leaves_with_memory(
+                    pattern,
+                    &mut |leaf, memory| {
+                        pending.try_push_admitted(Node::Pattern(leaf), memory)?;
+                        Ok::<_, PreparationError>(false)
+                    },
+                    memory,
+                )?;
+                pending.reverse_top(pending.len() - first);
             }
             Node::Pattern(pattern) => match pattern {
                 GraphPattern::Bgp { .. }
@@ -371,14 +481,14 @@ fn needs(root: Node<'_>) -> bool {
                 GraphPattern::Join { left, right }
                 | GraphPattern::Lateral { left, right }
                 | GraphPattern::Minus { left, right } => {
-                    pending.push(Node::Pattern(right));
-                    pending.push(Node::Pattern(left));
+                    pending.try_push_admitted(Node::Pattern(right), memory)?;
+                    pending.try_push_admitted(Node::Pattern(left), memory)?;
                 }
                 GraphPattern::Apply { left, right, policy: _ } => {
-                    pending.push(Node::Pattern(right)); pending.push(Node::Pattern(left));
+                    pending.try_push_admitted(Node::Pattern(right), memory)?; pending.try_push_admitted(Node::Pattern(left), memory)?;
                 }
                 GraphPattern::Union { arms } => {
-                    pending.extend(arms.iter().rev().map(Node::Pattern));
+                    extend_pending(&mut pending, arms.iter().rev().map(Node::Pattern), memory)?;
                 }
                 GraphPattern::LeftJoin {
                     left,
@@ -386,14 +496,14 @@ fn needs(root: Node<'_>) -> bool {
                     expression,
                 } => {
                     if let Some(expr) = expression {
-                        pending.push(Node::Expression(expr));
+                        pending.try_push_admitted(Node::Expression(expr), memory)?;
                     }
-                    pending.push(Node::Pattern(right));
-                    pending.push(Node::Pattern(left));
+                    pending.try_push_admitted(Node::Pattern(right), memory)?;
+                    pending.try_push_admitted(Node::Pattern(left), memory)?;
                 }
                 GraphPattern::Filter { expr, inner } => {
-                    pending.push(Node::Pattern(inner));
-                    pending.push(Node::Expression(expr));
+                    pending.try_push_admitted(Node::Pattern(inner), memory)?;
+                    pending.try_push_admitted(Node::Expression(expr), memory)?;
                 }
                 GraphPattern::Extend {
                     inner, expression, ..
@@ -401,52 +511,58 @@ fn needs(root: Node<'_>) -> bool {
                 | GraphPattern::Unfold {
                     inner, expression, ..
                 } => {
-                    pending.push(Node::Pattern(inner));
-                    pending.push(Node::Expression(expression));
+                    pending.try_push_admitted(Node::Pattern(inner), memory)?;
+                    pending.try_push_admitted(Node::Expression(expression), memory)?;
                 }
                 GraphPattern::Graph { inner, .. }
                 | GraphPattern::Project { inner, .. }
                 | GraphPattern::Distinct { inner }
                 | GraphPattern::Reduced { inner }
-                | GraphPattern::Slice { inner, .. } => pending.push(Node::Pattern(inner)),
+                | GraphPattern::Slice { inner, .. } => { pending.try_push_admitted(Node::Pattern(inner), memory)?; },
                 GraphPattern::OrderBy { inner, expression } => {
-                    pending.extend(
+                    extend_pending(&mut pending,
                         expression
                             .iter()
                             .rev()
-                            .map(|key| Node::Expression(key.expression())),
-                    );
-                    pending.push(Node::Pattern(inner));
+                            .map(|key| Node::Expression(key.expression())), memory)?;
+                    pending.try_push_admitted(Node::Pattern(inner), memory)?;
                 }
                 GraphPattern::Group {
                     inner, aggregates, ..
                 } => {
                     for (_, aggregate) in aggregates.iter().rev() {
-                        pending.extend(
+                        extend_pending(&mut pending,
                             aggregate
                                 .order_by()
                                 .iter()
                                 .rev()
-                                .map(|key| Node::Expression(key.expression())),
-                        );
-                        pending.extend(aggregate.args().iter().rev().map(Node::Expression));
+                                .map(|key| Node::Expression(key.expression())), memory)?;
+                        extend_pending(&mut pending, aggregate.args().iter().rev().map(Node::Expression), memory)?;
                     }
-                    pending.push(Node::Pattern(inner));
+                    pending.try_push_admitted(Node::Pattern(inner), memory)?;
                 }
             },
             Node::Expression(expr) => match expr {
-                Expression::Exists(pattern) => pending.push(Node::Pattern(pattern)),
+                Expression::Exists(pattern) => {
+                    pending.try_push_admitted(Node::Pattern(pattern), memory)?;
+                }
                 Expression::Or(operands) | Expression::And(operands) => {
-                    pending.extend(operands.iter().rev().map(Node::Expression));
+                    extend_pending(
+                        &mut pending,
+                        operands.iter().rev().map(Node::Expression),
+                        memory,
+                    )?;
                 }
                 Expression::Arithmetic(first, steps) => {
-                    pending.extend(
+                    extend_pending(
+                        &mut pending,
                         steps
                             .iter()
                             .rev()
                             .map(|(_, operand)| Node::Expression(operand)),
-                    );
-                    pending.push(Node::Expression(first));
+                        memory,
+                    )?;
+                    pending.try_push_admitted(Node::Expression(first), memory)?;
                 }
                 Expression::Equal(a, b)
                 | Expression::SameTerm(a, b)
@@ -454,23 +570,31 @@ fn needs(root: Node<'_>) -> bool {
                 | Expression::GreaterOrEqual(a, b)
                 | Expression::Less(a, b)
                 | Expression::LessOrEqual(a, b) => {
-                    pending.push(Node::Expression(b));
-                    pending.push(Node::Expression(a));
+                    pending.try_push_admitted(Node::Expression(b), memory)?;
+                    pending.try_push_admitted(Node::Expression(a), memory)?;
                 }
                 Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-                    pending.push(Node::Expression(a));
+                    pending.try_push_admitted(Node::Expression(a), memory)?;
                 }
                 Expression::If(c, t, e) => {
-                    pending.push(Node::Expression(e));
-                    pending.push(Node::Expression(t));
-                    pending.push(Node::Expression(c));
+                    pending.try_push_admitted(Node::Expression(e), memory)?;
+                    pending.try_push_admitted(Node::Expression(t), memory)?;
+                    pending.try_push_admitted(Node::Expression(c), memory)?;
                 }
                 Expression::In(needle, haystack) => {
-                    pending.extend(haystack.iter().rev().map(Node::Expression));
-                    pending.push(Node::Expression(needle));
+                    extend_pending(
+                        &mut pending,
+                        haystack.iter().rev().map(Node::Expression),
+                        memory,
+                    )?;
+                    pending.try_push_admitted(Node::Expression(needle), memory)?;
                 }
                 Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
-                    pending.extend(items.iter().rev().map(Node::Expression));
+                    extend_pending(
+                        &mut pending,
+                        items.iter().rev().map(Node::Expression),
+                        memory,
+                    )?;
                 }
                 Expression::NamedNode(_)
                 | Expression::Literal(_)
@@ -479,9 +603,9 @@ fn needs(root: Node<'_>) -> bool {
             },
         }
     }
-    false
+    pending.release_admitted(memory)?;
+    Ok(false)
 }
-
 // ---------------------------------------------------------------------------
 // The rewrite
 // ---------------------------------------------------------------------------
@@ -651,7 +775,7 @@ struct TakenAggregate {
     /// How many arguments it has.
     args: usize,
     /// Its own `ORDER BY` keys' directions, in order.
-    descending: Vec<bool>,
+    descending: AdmittedVec<bool>,
 }
 
 /// Take the expressions of every aggregate of a `GROUP BY` node that reaches a
@@ -660,67 +784,79 @@ struct TakenAggregate {
 /// mutable in place, so one that reaches a shared blank is rebuilt with the same
 /// function, scalar values, sort keys and `DISTINCT` flag. Only expressions change,
 /// never their count, so the rebuilt aggregate is as valid as the original.
-fn take_aggregates(
+fn take_aggregates_with_memory(
     node: &mut GraphPattern,
-    out: &mut Vec<Expression>,
+    out: &mut AdmittedVec<Expression>,
     all: bool,
-) -> Vec<TakenAggregate> {
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<AdmittedVec<TakenAggregate>> {
+    let capability = memory.admission_mut().workspace().clone();
+    let mut taken = AdmittedVec::new(&capability);
     let GraphPattern::Group { aggregates, .. } = node else {
-        return Vec::new();
+        return Ok(taken);
     };
-    let mut taken = Vec::new();
     for (index, (_, aggregate)) in aggregates.iter_mut().enumerate() {
-        if !all && !aggregate_needs(aggregate) {
+        if !all && !aggregate_needs_with_memory(aggregate, memory)? {
             continue;
         }
-        let (function, args, scalarvals, order_by, distinct) =
+        let (function, mut args, scalarvals, mut order_by, distinct) =
             std::mem::replace(aggregate, count_star()).into_parts();
+        let mut descending = AdmittedVec::with_capacity(order_by.len(), &capability)?;
+        for order in &order_by {
+            descending.push(matches!(order, OrderExpression::Desc(_)))?;
+        }
+        let args_len = args.len();
         taken.push(TakenAggregate {
             index,
             function,
             scalarvals,
             distinct,
-            args: args.len(),
-            descending: order_by
-                .iter()
-                .map(|key| matches!(key, OrderExpression::Desc(_)))
-                .collect(),
-        });
-        out.extend(args);
-        out.extend(order_by.into_iter().map(|key| match key {
-            OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
-        }));
+            args: args_len,
+            descending,
+        })?;
+        #[expect(
+            clippy::iter_with_drain,
+            reason = "The original vector stays allocated until Memory destroys it and refunds its grant; drain preserves authored transfer order."
+        )]
+        for argument in args.drain(..) {
+            out.push(argument)?;
+        }
+        memory.release_vec(args)?;
+        #[expect(
+            clippy::iter_with_drain,
+            reason = "The original vector stays allocated until Memory destroys it and refunds its grant; drain preserves authored transfer order."
+        )]
+        for order in order_by.drain(..) {
+            let (OrderExpression::Asc(expression) | OrderExpression::Desc(expression)) = order;
+            out.push(expression)?;
+        }
+        memory.release_vec(order_by)?;
     }
-    taken
+    Ok(taken)
 }
 
-/// Put the rewritten expressions of [`take_aggregates`]'s aggregates back, rebuilding
-/// each aggregate in its place.
-fn restore_aggregates(
+fn restore_aggregates_with_memory(
     node: &mut GraphPattern,
-    taken: Vec<TakenAggregate>,
+    taken: AdmittedVec<TakenAggregate>,
     rewritten: &mut impl Iterator<Item = Expression>,
-) {
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<()> {
     let GraphPattern::Group { aggregates, .. } = node else {
-        debug_assert!(taken.is_empty(), "only a GROUP BY has aggregates taken");
-        return;
+        debug_assert!(taken.is_empty(), "only GROUP BY has taken aggregates");
+        return Ok(());
     };
     for aggregate in taken {
-        let args: Vec<Expression> = rewritten.take(aggregate.args).collect();
-        let order_by: Vec<OrderExpression> = aggregate
-            .descending
-            .iter()
-            .map(|&descending| {
-                let expr = rewritten
-                    .next()
-                    .expect("every sort key taken from an aggregate comes back");
-                if descending {
-                    OrderExpression::Desc(expr)
-                } else {
-                    OrderExpression::Asc(expr)
-                }
-            })
-            .collect();
+        let args = memory.collect(rewritten.by_ref().take(aggregate.args))?;
+        let mut order_by = Vec::new();
+        memory.reserve(&mut order_by, aggregate.descending.len())?;
+        for &descending in &aggregate.descending {
+            let expression = rewritten.next().expect("each taken sort key comes back");
+            order_by.push(if descending {
+                OrderExpression::Desc(expression)
+            } else {
+                OrderExpression::Asc(expression)
+            });
+        }
         aggregates[aggregate.index].1 = AggregateExpression::new(
             aggregate.function,
             args,
@@ -728,8 +864,9 @@ fn restore_aggregates(
             order_by,
             aggregate.distinct,
         )
-        .expect("rewriting an argument's patterns keeps the argument count");
+        .expect("rewriting preserves original argument count");
     }
+    Ok(())
 }
 
 /// A rewritten subtree, waiting for its parent to be reassembled.
@@ -739,16 +876,10 @@ enum Rewritten {
 }
 
 /// A node whose children are away being rewritten, and how many of them there are.
-enum Shell {
-    Pattern {
-        node: GraphPattern,
-        children: usize,
-        aggregates: Vec<TakenAggregate>,
-    },
-    Expression {
-        node: Expression,
-        children: usize,
-    },
+struct Shell {
+    node: Rewritten,
+    children: usize,
+    aggregates: AdmittedVec<TakenAggregate>,
 }
 
 /// One step of the rewrite.
@@ -772,62 +903,193 @@ enum Step {
 /// leaves rewritten in written order. A `GROUP BY`'s aggregates cannot be written
 /// through, so their expressions are taken out with the node's other children and
 /// each aggregate is rebuilt as they come back.
+#[cfg(test)]
 fn rewrite_pattern(pattern: GraphPattern, next_spine: &mut usize) -> GraphPattern {
-    map_patterns(pattern, false, &mut |node, in_spine| {
-        let spine = is_spine(node);
-        if spine && !in_spine && any_spine_leaf(node, &mut leaf_has_raw_blank) {
-            let mut leaves = Vec::new();
-            spine_leaves(node, &mut leaves);
-            let shared = shared_labels(&leaves);
-            if !shared.is_empty() {
-                let mut carried = Vec::new();
-                for leaf in &leaves {
-                    leaf_labels_with(leaf, &mut carried, LabelSource::Carried);
-                }
-                let mut canonical = crate::DetHashSet::default();
-                for label in carried {
-                    if !canonical.contains(label) {
-                        canonical.insert(label.to_owned());
+    resident_owned_pattern(pattern, |pattern, memory| {
+        rewrite_pattern_with_memory(pattern, next_spine, memory)
+    })
+}
+
+fn copy_label_names(
+    names: &[&str],
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Vec<String>> {
+    let mut copied = Vec::new();
+    memory.reserve(&mut copied, names.len())?;
+    for name in names {
+        let text = memory.string(name)?;
+        copied.push(text);
+    }
+    Ok(copied)
+}
+fn release_label_names(
+    mut names: Vec<String>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<()> {
+    #[expect(
+        clippy::iter_with_drain,
+        reason = "The original vector stays allocated until Memory destroys it and refunds its grant; drain preserves authored transfer order."
+    )]
+    for text in names.drain(..) {
+        memory.release_string(text)?;
+    }
+    memory.release_vec(names)?;
+    Ok(())
+}
+
+fn rewrite_pattern_with_memory(
+    pattern: GraphPattern,
+    next_spine: &mut usize,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<GraphPattern> {
+    map_patterns_with_memory(
+        pattern,
+        false,
+        &mut |node, in_spine, memory| {
+            let spine = is_spine(node);
+            if spine
+                && !in_spine
+                && visit_spine_leaves_with_memory(
+                    node,
+                    &mut |leaf, memory| leaf_has_raw_blank_with_memory(leaf, memory),
+                    memory,
+                )?
+            {
+                let capability = memory.admission_mut().workspace().clone();
+                let (shared, canonical) = {
+                    let mut leaves = AdmittedVec::new(&capability);
+                    visit_spine_leaves_with_memory(
+                        node,
+                        &mut |leaf, _| {
+                            leaves.push(leaf)?;
+                            Ok::<_, PreparationError>(false)
+                        },
+                        memory,
+                    )?;
+                    let shared = shared_label_names(&leaves, memory)?;
+                    let mut carried = AdmittedVec::new(&capability);
+                    if !shared.is_empty() {
+                        for leaf in leaves.iter().copied() {
+                            visit_leaf_labels_with_memory(
+                                leaf,
+                                LabelSource::Carried,
+                                &mut |label, _| {
+                                    carried.push(label)?;
+                                    Ok::<_, PreparationError>(false)
+                                },
+                                memory,
+                            )?;
+                        }
+                        carried.as_mut_slice().sort_unstable();
+                        let mut previous = None;
+                        carried.retain(|label| {
+                            let keep = previous != Some(*label);
+                            previous = Some(*label);
+                            keep
+                        });
+                    }
+                    (
+                        copy_label_names(&shared, memory)?,
+                        copy_label_names(&carried, memory)?,
+                    )
+                };
+                if !shared.is_empty() {
+                    let number = *next_spine;
+                    *next_spine = next_spine
+                        .checked_add(1)
+                        .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+                    let mut leaves = AdmittedVec::new(&capability);
+                    spine_leaves_mut_with_memory(node, &mut leaves, memory)?;
+                    for leaf in leaves {
+                        rename_labels_with_memory(
+                            leaf,
+                            &shared,
+                            &mut |label, memory| {
+                                let workspace = memory.admission_mut().workspace();
+                                if canonical
+                                    .binary_search_by(|name| name.as_str().cmp(label))
+                                    .is_ok()
+                                {
+                                    Ok(Variable::try_hidden_blank(label, |name| {
+                                        workspace.authored_text(name)
+                                    })?)
+                                } else {
+                                    Ok(Variable::try_hidden(
+                                        &format_args!("{number}:{label}"),
+                                        |name| workspace.authored_text(name),
+                                    )?)
+                                }
+                            },
+                            memory,
+                        )?;
                     }
                 }
-                let number = *next_spine;
-                *next_spine += 1;
-                let mut leaves = Vec::new();
-                spine_leaves_mut(node, &mut leaves);
-                for leaf in leaves {
-                    rename_labels(leaf, &shared, &mut |label| {
-                        if canonical.contains(label) {
-                            Variable::hidden_blank(label)
-                        } else {
-                            Variable::hidden(format!("{number}:{label}"))
-                        }
-                    });
-                }
+                release_label_names(shared, memory)?;
+                release_label_names(canonical, memory)?;
             }
-        }
-        spine
-    })
+            Ok(spine)
+        },
+        memory,
+    )
+}
+
+/// Only the explicitly resident raw adapter adopts already caller-owned storage.
+#[cfg(test)]
+fn resident_owned_pattern(
+    pattern: GraphPattern,
+    body: impl FnOnce(GraphPattern, &mut Memory<'_, LexicalFrame>) -> PrepResult<GraphPattern>,
+) -> GraphPattern {
+    let capability = crate::WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&capability);
+    let mut memory = Memory::new(&mut frame);
+    let query = Query::Ask {
+        pattern,
+        dataset: purrdf_sparql_algebra::QueryDataset::default(),
+        base_iri: None,
+        version: None,
+    };
+    let bytes = query
+        .raw_owned_bytes_with_memory(&mut memory)
+        .expect("resident destruction layout");
+    memory
+        .add_bytes(bytes)
+        .expect("resident ownership adoption");
+    let Query::Ask { pattern, .. } = query else {
+        unreachable!()
+    };
+    body(pattern, &mut memory).expect("resident pattern rewrite")
 }
 
 /// Map every pattern, including expression and aggregate EXISTS bodies, before
 /// its children, using the same iterative reconstruction as blank scoping.
 /// The callback's returned context is passed to its immediate pattern children.
-pub(crate) fn map_patterns(
+pub(crate) fn map_patterns_with_memory(
     pattern: GraphPattern,
     all_aggregates: bool,
-    transform: &mut impl FnMut(&mut GraphPattern, bool) -> bool,
-) -> GraphPattern {
-    let mut steps = vec![Step::Pattern(pattern, false)];
-    let mut done: Vec<Rewritten> = Vec::new();
+    transform: &mut impl FnMut(
+        &mut GraphPattern,
+        bool,
+        &mut Memory<'_, LexicalFrame>,
+    ) -> PrepResult<bool>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<GraphPattern> {
+    let capability = memory.admission_mut().workspace().clone();
+    let mut steps = AdmittedVec::new(&capability);
+    steps.push(Step::Pattern(pattern, false))?;
+    let mut done: AdmittedVec<Rewritten> = AdmittedVec::new(&capability);
     // The children of the node being taken apart, in visit order, before they are
     // pushed onto `steps` in reverse.
-    let mut children: Vec<Step> = Vec::new();
+    let mut children: AdmittedVec<Step> = AdmittedVec::new(&capability);
     while let Some(step) = steps.pop() {
         match step {
             Step::Pattern(mut node, in_spine) => {
-                let spine = transform(&mut node, in_spine);
+                let spine = transform(&mut node, in_spine, memory)?;
+                let mut failure = None;
                 for_each_child_mut(&mut node, &mut |child| {
-                    children.push(match child {
+                    if failure.is_some() {
+                        return;
+                    }
+                    if let Err(error) = children.push(match child {
                         ChildMut::Pattern(inner) => Step::Pattern(
                             std::mem::replace(inner, GraphPattern::empty_bgp()),
                             spine,
@@ -835,21 +1097,39 @@ pub(crate) fn map_patterns(
                         ChildMut::Expression(expr) => {
                             Step::Expression(std::mem::replace(expr, expression_hole()))
                         }
-                    });
+                    }) {
+                        failure = Some(error);
+                    }
                 });
-                let mut aggregate_exprs = Vec::new();
-                let aggregates = take_aggregates(&mut node, &mut aggregate_exprs, all_aggregates);
-                children.extend(aggregate_exprs.into_iter().map(Step::Expression));
-                steps.push(Step::Assemble(Shell::Pattern {
-                    node,
+                if let Some(error) = failure {
+                    return Err(error.into());
+                }
+                let mut aggregate_exprs = AdmittedVec::new(&capability);
+                let aggregates = take_aggregates_with_memory(
+                    &mut node,
+                    &mut aggregate_exprs,
+                    all_aggregates,
+                    memory,
+                )?;
+                for expression in aggregate_exprs {
+                    children.push(Step::Expression(expression))?;
+                }
+                steps.push(Step::Assemble(Shell {
+                    node: Rewritten::Pattern(node),
                     children: children.len(),
                     aggregates,
-                }));
-                steps.extend(std::iter::from_fn(|| children.pop()));
+                }))?;
+                while let Some(child) = children.pop() {
+                    steps.push(child)?;
+                }
             }
             Step::Expression(mut node) => {
+                let mut failure = None;
                 for_each_operand_mut(&mut node, &mut |child| {
-                    children.push(match child {
+                    if failure.is_some() {
+                        return;
+                    }
+                    if let Err(error) = children.push(match child {
                         ChildMut::Pattern(inner) => Step::Pattern(
                             std::mem::replace(inner, GraphPattern::empty_bgp()),
                             false,
@@ -857,21 +1137,30 @@ pub(crate) fn map_patterns(
                         ChildMut::Expression(expr) => {
                             Step::Expression(std::mem::replace(expr, expression_hole()))
                         }
-                    });
+                    }) {
+                        failure = Some(error);
+                    }
                 });
-                steps.push(Step::Assemble(Shell::Expression {
-                    node,
+                if let Some(error) = failure {
+                    return Err(error.into());
+                }
+                steps.push(Step::Assemble(Shell {
+                    node: Rewritten::Expression(node),
                     children: children.len(),
-                }));
-                steps.extend(std::iter::from_fn(|| children.pop()));
+                    aggregates: AdmittedVec::new(&capability),
+                }))?;
+                while let Some(child) = children.pop() {
+                    steps.push(child)?;
+                }
             }
             Step::Assemble(shell) => {
-                let count = match &shell {
-                    Shell::Pattern { children, .. } | Shell::Expression { children, .. } => {
-                        *children
-                    }
-                };
-                let mut rewritten = done.drain(done.len() - count..);
+                let Shell {
+                    node,
+                    children: count,
+                    aggregates,
+                } = shell;
+                let start = done.len() - count;
+                let mut rewritten = done.drain_from(start);
                 let mut refill = |child: ChildMut<'_>| match (child, rewritten.next()) {
                     (ChildMut::Pattern(slot), Some(Rewritten::Pattern(value))) => *slot = value,
                     (ChildMut::Expression(slot), Some(Rewritten::Expression(value))) => {
@@ -879,12 +1168,8 @@ pub(crate) fn map_patterns(
                     }
                     _ => unreachable!("every child comes back as the kind it was taken as"),
                 };
-                match shell {
-                    Shell::Pattern {
-                        mut node,
-                        aggregates,
-                        ..
-                    } => {
+                match node {
+                    Rewritten::Pattern(mut node) => {
                         for_each_child_mut(&mut node, &mut refill);
                         drop(refill);
                         let mut expressions = rewritten.map(|child| match child {
@@ -893,26 +1178,31 @@ pub(crate) fn map_patterns(
                                 unreachable!("an aggregate's expressions come back as expressions")
                             }
                         });
-                        restore_aggregates(&mut node, aggregates, &mut expressions);
+                        restore_aggregates_with_memory(
+                            &mut node,
+                            aggregates,
+                            &mut expressions,
+                            memory,
+                        )?;
                         let leftover = expressions.next();
                         debug_assert!(leftover.is_none(), "every child taken comes back");
                         drop(expressions);
-                        done.push(Rewritten::Pattern(node));
+                        done.push(Rewritten::Pattern(node))?;
                     }
-                    Shell::Expression { mut node, .. } => {
+                    Rewritten::Expression(mut node) => {
                         for_each_operand_mut(&mut node, &mut refill);
                         drop(refill);
                         let leftover = rewritten.next();
                         debug_assert!(leftover.is_none(), "every operand taken comes back");
                         drop(rewritten);
-                        done.push(Rewritten::Expression(node));
+                        done.push(Rewritten::Expression(node))?;
                     }
                 }
             }
         }
     }
     match done.pop() {
-        Some(Rewritten::Pattern(pattern)) if done.is_empty() => pattern,
+        Some(Rewritten::Pattern(pattern)) if done.is_empty() => Ok(pattern),
         _ => unreachable!("the root's rewrite is the last value assembled"),
     }
 }
@@ -926,37 +1216,60 @@ fn rename_leaf(leaf: &mut GraphPattern, shared: &[String], spine: usize) {
     });
 }
 
+#[cfg(test)]
 fn rename_labels(
     leaf: &mut GraphPattern,
     shared: &[String],
     mint: &mut impl FnMut(&str) -> Variable,
 ) {
+    let capability = crate::WorkspaceCapability::resident();
+    rename_labels_with_memory(
+        leaf,
+        shared,
+        &mut |label, _| Ok(mint(label)),
+        &mut Memory::new(&mut LexicalFrame::new(&capability)),
+    )
+    .expect("resident blank rename");
+}
+
+fn rename_labels_with_memory(
+    leaf: &mut GraphPattern,
+    shared: &[String],
+    mint: &mut impl FnMut(&str, &mut Memory<'_, LexicalFrame>) -> PrepResult<Variable>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<()> {
     match leaf {
         GraphPattern::Bgp { patterns } => {
             for triple in patterns {
-                rename_term(&mut triple.subject, shared, mint);
-                rename_term(&mut triple.object, shared, mint);
+                rename_term_with_memory(&mut triple.subject, shared, mint, memory)?;
+                rename_term_with_memory(&mut triple.object, shared, mint, memory)?;
             }
         }
         GraphPattern::Path {
             subject, object, ..
         } => {
-            rename_term(subject, shared, mint);
-            rename_term(object, shared, mint);
+            rename_term_with_memory(subject, shared, mint, memory)?;
+            rename_term_with_memory(object, shared, mint, memory)?;
         }
         GraphPattern::PropertyFunction(call) => {
             for term in call.subject_args.iter_mut().chain(&mut call.object_args) {
-                rename_term(term, shared, mint);
+                rename_term_with_memory(term, shared, mint, memory)?;
             }
         }
         _ => {}
     }
+    Ok(())
 }
 
 /// [`rename_leaf`] for one term position, a quoted triple's subject and object
 /// included at every level, over a work list.
-fn rename_term(term: &mut TermPattern, shared: &[String], mint: &mut impl FnMut(&str) -> Variable) {
-    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
+fn rename_term_with_memory(
+    term: &mut TermPattern,
+    shared: &[String],
+    mint: &mut impl FnMut(&str, &mut Memory<'_, LexicalFrame>) -> PrepResult<Variable>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<()> {
+    let mut pending = purrdf_lex::walk::WorkList::<_, 8>::with(term);
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::BlankNode(blank)
@@ -964,12 +1277,12 @@ fn rename_term(term: &mut TermPattern, shared: &[String], mint: &mut impl FnMut(
                     .binary_search_by(|label| label.as_str().cmp(blank.as_str()))
                     .is_ok() =>
             {
-                *term = TermPattern::Variable(mint(blank.as_str()));
+                *term = TermPattern::Variable(mint(blank.as_str(), memory)?);
             }
             TermPattern::Triple(triple) => {
                 let triple: &mut TriplePattern = triple;
-                pending.push(&mut triple.object);
-                pending.push(&mut triple.subject);
+                pending.try_push_admitted(&mut triple.object, memory)?;
+                pending.try_push_admitted(&mut triple.subject, memory)?;
             }
             TermPattern::BlankNode(_)
             | TermPattern::NamedNode(_)
@@ -977,8 +1290,9 @@ fn rename_term(term: &mut TermPattern, shared: &[String], mint: &mut impl FnMut(
             | TermPattern::Variable(_) => {}
         }
     }
+    pending.release_admitted(memory)?;
+    Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use purrdf_sparql_algebra::SparqlParser;

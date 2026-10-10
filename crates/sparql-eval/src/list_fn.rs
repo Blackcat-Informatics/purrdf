@@ -24,29 +24,29 @@
 //!   [`materialize_list`].
 //!
 //! The walk is cycle-guarded: a cyclic or torn `rdf:List` is malformed input and
-//! hard-fails ([`EvalError::Data`]) rather than looping forever.
+//! hard-fails with the native data diagnostic rather than looping forever.
 
-use purrdf_core::collections::{ListVocab, SoleObject, try_build_rdf_list, walk_rdf_list};
+use purrdf_core::collections::{
+    ListVocab, SoleObject, try_build_rdf_list_with_copy, walk_rdf_list_with_memory,
+};
 use purrdf_core::{BlankScope, DatasetView, ListError, ListErrorKind, TermValue};
+use purrdf_lex::allocation::Memory;
 use purrdf_sparql_algebra::PurrdfFn;
-use purrdf_xsd::XsdValue;
+use purrdf_xsd::{XsdDatatype, XsdValue};
 
-use crate::error::EvalError;
+use crate::error::{EvalError, NativeDiagnostic, NativeDiagnosticKind};
 use crate::eval::EvalCtx;
-use crate::expr::{arg, intern, intern_boolean, intern_integer, xsd_of};
-use crate::scratch::{SolutionTerm, try_term_id_to_value};
+use crate::expr::{arg, intern_boolean, xsd_to_term};
+use crate::parsed_value::ParsedValue;
+use crate::scratch::SolutionTerm;
+use crate::workspace::{AdmittedVec, LexicalFrame, WorkspaceDebug};
+use crate::{WorkspaceCapability, WorkspaceTerm};
 
 use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
 use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
 use purrdf_iri::vocab::rdf::REST as RDF_REST;
 
-/// Evaluate a PurRDF `rdf:List` extension function.
-///
-/// The parser has already resolved the call to a [`PurrdfFn`] variant, so this is a
-/// total dispatch over the six list functions. The result follows the usual
-/// expression contract: `Ok(Some)` is a value, `Ok(None)` is a SPARQL error/unbound,
-/// and `Err` is a hard failure. The non-list [`PurrdfFn::HeldIn`] is handled by its
-/// own arm in [`crate::expr`] and never reaches here (defensively an internal error).
+/// Evaluate the same six list functions through their original native owners.
 pub(crate) fn dispatch<D: DatasetView + Sync>(
     func: PurrdfFn,
     vals: &[Option<TermValue>],
@@ -59,12 +59,30 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
         PurrdfFn::ListContains => list_contains(ctx, vals),
         PurrdfFn::ListSlice => list_slice(ctx, vals),
         PurrdfFn::ListConcat => list_concat(ctx, vals),
-        PurrdfFn::HeldIn => Err(EvalError::internal("heldIn is not an rdf:List function")),
+        PurrdfFn::HeldIn => Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Internal,
+            "heldIn is not an rdf:List function",
+            &ctx.growth,
+        )),
     }
 }
 
-/// `listLength(list)` → the number of members, as `xsd:integer`. A non-list
-/// argument yields a SPARQL error (`Ok(None)`).
+/// Return the cardinality without narrowing a native usize through i64.
+fn intern_count<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    count: usize,
+) -> Result<SolutionTerm<D::Id>, EvalError> {
+    let value = i128::try_from(count).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+    xsd_to_term(
+        ctx,
+        &XsdValue::Integer {
+            value,
+            datatype: XsdDatatype::Integer,
+        },
+    )
+}
+
+/// A valid list's exact number of members.
 fn list_length<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -73,13 +91,12 @@ fn list_length<D: DatasetView + Sync>(
         return Ok(None);
     };
     match walk(ctx, head)? {
-        Some(members) => Ok(Some(intern_integer(ctx, members.len() as i64)?)),
+        Some(members) => intern_count(ctx, members.len()).map(Some),
         None => Ok(None),
     }
 }
 
-/// `listGet(list, index)` → the zero-based member, or a SPARQL error when the
-/// index is out of range / not an integer.
+/// Move the selected member with its original lexical/box admission.
 fn list_get<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -87,25 +104,22 @@ fn list_get<D: DatasetView + Sync>(
     let (Some(head), Some(index)) = (arg(vals, 0), arg(vals, 1)) else {
         return Ok(None);
     };
-    let Some(idx) = as_index(index) else {
+    let Some(index) = as_index(index, &ctx.growth)? else {
         return Ok(None);
     };
     let Some(members) = walk(ctx, head)? else {
         return Ok(None);
     };
-    if idx < 0 {
+    let Ok(index) = usize::try_from(index) else {
         return Ok(None);
+    };
+    match members.into_iter().nth(index) {
+        Some(value) => ctx.intern_workspace_term(value),
+        None => Ok(None),
     }
-    Ok(members
-        .into_iter()
-        .nth(idx as usize)
-        .map(|value| intern(ctx, value))
-        .transpose()?
-        .flatten())
 }
 
-/// `listIndexOf(list, value)` → the zero-based index of the first occurrence,
-/// or a SPARQL error when the value is absent.
+/// RDF identity comparisons retain the original term comparison work-list.
 fn list_index_of<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -116,14 +130,14 @@ fn list_index_of<D: DatasetView + Sync>(
     let Some(members) = walk(ctx, head)? else {
         return Ok(None);
     };
-    match members.iter().position(|m| m == value) {
-        Some(pos) => Ok(Some(intern_integer(ctx, pos as i64)?)),
-        None => Ok(None),
+    for (position, member) in members.iter().enumerate() {
+        if ctx.growth.terms_equal(member, value)? {
+            return intern_count(ctx, position).map(Some);
+        }
     }
+    Ok(None)
 }
 
-/// `listContains(list, value)` → `xsd:boolean`. A non-list argument yields a
-/// SPARQL error (`Ok(None)`); membership over a valid (possibly empty) list is total.
 fn list_contains<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -134,17 +148,22 @@ fn list_contains<D: DatasetView + Sync>(
     let Some(members) = walk(ctx, head)? else {
         return Ok(None);
     };
-    Ok(Some(intern_boolean(
-        ctx,
-        members.iter().any(|m| m == value),
-    )?))
+    let mut contains = false;
+    for member in &members {
+        if ctx.growth.terms_equal(member, value)? {
+            contains = true;
+            break;
+        }
+    }
+    intern_boolean(ctx, contains).map(Some)
 }
 
-/// `listSlice(list, start, end)` → a fresh `rdf:List` of the members in the
-/// half-open index range `[start, end)`. Indices are clamped to the list bounds
-/// (negatives to 0), so an out-of-range or inverted range yields `rdf:nil`. The new
-/// cells are buffered on [`EvalCtx`] and surface at the result boundary (see
-/// [`materialize_list`]). A non-list / non-integer argument yields a SPARQL error.
+/// Clamping a nonnegative i64 beyond the target's usize range yields the end
+/// of the list, as the original half-open slice law requires.
+fn clamped_index(index: i64, len: usize) -> usize {
+    usize::try_from(index.max(0)).unwrap_or(usize::MAX).min(len)
+}
+
 fn list_slice<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -152,25 +171,21 @@ fn list_slice<D: DatasetView + Sync>(
     let (Some(head), Some(start), Some(end)) = (arg(vals, 0), arg(vals, 1), arg(vals, 2)) else {
         return Ok(None);
     };
-    let (Some(start), Some(end)) = (as_index(start), as_index(end)) else {
+    let (Some(start), Some(end)) = (as_index(start, &ctx.growth)?, as_index(end, &ctx.growth)?)
+    else {
         return Ok(None);
     };
     let Some(members) = walk(ctx, head)? else {
         return Ok(None);
     };
-    let len = members.len() as i64;
-    let lo = start.clamp(0, len);
-    let hi = end.clamp(lo, len); // also enforces hi >= lo → inverted ranges are empty
-    let slice: Vec<TermValue> = members[lo as usize..hi as usize].to_vec();
-    let Some(value) = materialize_list(ctx, slice)? else {
+    let lo = clamped_index(start, members.len());
+    let hi = clamped_index(end, members.len()).max(lo);
+    let Some(value) = materialize_list(ctx, members.into_iter().skip(lo).take(hi - lo))? else {
         return Ok(None);
     };
-    intern(ctx, value)
+    ctx.intern_workspace_term(value)
 }
 
-/// `listConcat(listA, listB)` → a fresh `rdf:List` of A's members followed by
-/// B's. The new cells are buffered on [`EvalCtx`] and surface at the result boundary
-/// (see [`materialize_list`]). A non-list argument yields a SPARQL error.
 fn list_concat<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
@@ -178,53 +193,55 @@ fn list_concat<D: DatasetView + Sync>(
     let (Some(a), Some(b)) = (arg(vals, 0), arg(vals, 1)) else {
         return Ok(None);
     };
+    // The original left-then-right walk order is observable on source failure.
     let (Some(mut left), Some(right)) = (walk(ctx, a)?, walk(ctx, b)?) else {
         return Ok(None);
     };
-    left.extend(right);
+    left.try_extend(right)?;
     let Some(value) = materialize_list(ctx, left)? else {
         return Ok(None);
     };
-    intern(ctx, value)
+    ctx.intern_workspace_term(value)
 }
 
-/// Invent a fresh `rdf:List` carrying `members` in order, returning its head term
-/// ([`try_build_rdf_list`]).
-///
-/// Each cell is a fresh blank node (minted from the shared `bnode_counter`, so
-/// labels never collide with CONSTRUCT-template or `BNODE()` blanks). The cell quads
-/// `cell rdf:first member` / `cell rdf:rest next` are pushed onto
-/// [`EvalCtx::constructed`] to surface at the result boundary; the empty list is
-/// simply `rdf:nil` (no cells).
+/// Use the sole core construction algorithm, supplying before-copy native term
+/// owners and fallible metadata destinations. Partial cell emission is rolled
+/// back on every stop/refusal, so an incomplete auxiliary list cannot escape.
 fn materialize_list<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
-    members: Vec<TermValue>,
-) -> Result<Option<TermValue>, EvalError> {
+    members: impl IntoIterator<Item = WorkspaceTerm>,
+) -> Result<Option<WorkspaceTerm>, EvalError> {
     enum Aborted {
         Stopped,
         Failed(EvalError),
     }
+    let workspace = ctx.growth.clone();
+    let vocab = ListVocab {
+        first: workspace.iri(RDF_FIRST)?,
+        rest: workspace.iri(RDF_REST)?,
+        nil: workspace.iri(RDF_NIL)?,
+    };
     let committed = ctx.constructed.len();
     let mut constructed = std::mem::take(&mut ctx.constructed);
-    let head = try_build_rdf_list(
+    let head = try_build_rdf_list_with_copy(
         members,
-        &ListVocab::term_values(),
+        &vocab,
         |_| {
-            let Some(label) = ctx.try_mint_blank_label("lc").map_err(Aborted::Failed)? else {
+            let Some(label) = ctx.try_mint_blank_text("lc").map_err(Aborted::Failed)? else {
                 return Err(Aborted::Stopped);
             };
-            Ok(TermValue::Blank {
-                label,
-                scope: BlankScope::DEFAULT,
-            })
+            workspace
+                .blank(label.as_str(), BlankScope::DEFAULT)
+                .map_err(Aborted::Failed)
         },
+        |value| workspace.clone_term(value).map_err(Aborted::Failed),
         |cell, predicate, object| {
-            constructed.push((cell, predicate, object));
-            Ok(())
+            constructed
+                .push_admitted((cell, predicate, object), &workspace)
+                .map_err(Aborted::Failed)
         },
     );
     if head.is_err() {
-        // No incomplete list can escape as a constructed auxiliary graph.
         constructed.truncate(committed);
     }
     ctx.constructed = constructed;
@@ -235,76 +252,75 @@ fn materialize_list<D: DatasetView + Sync>(
     }
 }
 
-// ---------------------------------------------------------------------------
-// internals
-// ---------------------------------------------------------------------------
-
-/// Extract a zero-based index from an `xsd:integer`-derived literal.
-fn as_index(value: &TermValue) -> Option<i64> {
-    match xsd_of(value)? {
-        XsdValue::Integer { value, .. } => i64::try_from(value).ok(),
+/// The original integer-derived-only index law, with shared native parse owner.
+fn as_index(value: &TermValue, workspace: &WorkspaceCapability) -> Result<Option<i64>, EvalError> {
+    let TermValue::Literal {
+        lexical_form,
+        datatype,
+        ..
+    } = value
+    else {
+        return Ok(None);
+    };
+    let Some(datatype) = XsdDatatype::from_iri(datatype) else {
+        return Ok(None);
+    };
+    let Some(value) = ParsedValue::parse(lexical_form, datatype, false, workspace)? else {
+        return Ok(None);
+    };
+    Ok(match &*value {
+        XsdValue::Integer { value, .. } => i64::try_from(*value).ok(),
         _ => None,
-    }
+    })
 }
 
-/// Walk an `rdf:List` from `head`, returning its member values in order.
-///
-/// Reads from the active dataset first, then from the per-query constructed buffer,
-/// so a list freshly minted by `listSlice`/`listConcat` is readable by another list
-/// function within the same query (e.g. `g:listLength(g:listSlice(?l, 1, 3))`).
-///
-/// * `Ok(Some(members))` — a well-formed list (an empty list, i.e. `rdf:nil`, gives
-///   `[]`).
-/// * `Ok(None)` — `head` is not a list node we can read: it is `rdf:nil`-free, not
-///   interned in the active dataset nor minted in this query, or has no `rdf:first`
-///   (a SPARQL error — the function yields unbound).
-/// * `Err(EvalError::Data)` — a cyclic, torn, or multi-edge list (a cell revisited,
-///   an interior cell missing `rdf:first`/`rdf:rest`, or a cell carrying two of
-///   either edge): malformed input, a hard fail.
+/// Read dataset lists first and this query's minted lists second, unchanged.
 fn walk<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     head: &TermValue,
-) -> Result<Option<Vec<TermValue>>, EvalError> {
-    // The empty list is `rdf:nil`, whether or not it happens to be interned.
+) -> Result<Option<AdmittedVec<WorkspaceTerm>>, EvalError> {
     if is_nil(head) {
-        return Ok(Some(Vec::new()));
+        return Ok(Some(AdmittedVec::new(&ctx.growth)));
     }
     if let Some(members) = walk_dataset(ctx, head)? {
         return Ok(Some(members));
     }
-    // Not a dataset list — it may be a list minted earlier in THIS query, whose cells
-    // live only in the per-query constructed buffer (value-constructing functions used
-    // nested, e.g. `g:listLength(g:listConcat(?a, ?b))`).
     walk_constructed(ctx, head)
 }
 
-/// Walk a list interned in the active dataset (the common case), under the
-/// query's active graph scope — one graph, or the merge a `FROM` clause names —
-/// with the strict walker ([`walk_rdf_list`]).
+/// Keep the strict walk's actual native ID vector alive until every stored
+/// member has been copied through the source's before-allocation term door.
 fn walk_dataset<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     head: &TermValue,
-) -> Result<Option<Vec<TermValue>>, EvalError> {
+) -> Result<Option<AdmittedVec<WorkspaceTerm>>, EvalError> {
     let Some(head_id) = ctx
         .dataset
         .term_id_by_value(head)
-        .map_err(EvalError::source_read)?
+        .map_err(|error| ctx.workspace.source_error(error))?
     else {
         return Ok(None);
     };
+    let [first_value, rest_value, nil_value] = [
+        ctx.growth.iri(RDF_FIRST)?,
+        ctx.growth.iri(RDF_REST)?,
+        ctx.growth.iri(RDF_NIL)?,
+    ];
     let first = ctx
         .dataset
-        .term_id_by_value(&iri(RDF_FIRST))
-        .map_err(EvalError::source_read)?;
+        .term_id_by_value(&first_value)
+        .map_err(|error| ctx.workspace.source_error(error))?;
     let rest = ctx
         .dataset
-        .term_id_by_value(&iri(RDF_REST))
-        .map_err(EvalError::source_read)?;
+        .term_id_by_value(&rest_value)
+        .map_err(|error| ctx.workspace.source_error(error))?;
     let nil = ctx
         .dataset
-        .term_id_by_value(&iri(RDF_NIL))
-        .map_err(EvalError::source_read)?;
+        .term_id_by_value(&nil_value)
+        .map_err(|error| ctx.workspace.source_error(error))?;
     let scope = ctx.active_dataset.scope_for(ctx.active_graph);
+    let mut frame = LexicalFrame::new(&ctx.growth);
+    let mut memory = Memory::new(&mut frame);
     let walked = ctx
         .dataset
         .checked_read(|dataset| {
@@ -317,33 +333,61 @@ fn walk_dataset<D: DatasetView + Sync>(
                 }
                 sole
             };
-            walk_rdf_list(
+            walk_rdf_list_with_memory(
                 head_id,
                 nil,
                 |cell| objects(cell, first),
                 |cell| objects(cell, rest),
+                &mut memory,
             )
         })
-        .map_err(EvalError::source_read)?;
-    list_members(head_id, walked)?
-        .map(|ids| {
-            ids.into_iter()
-                .map(|id| try_term_id_to_value(ctx.dataset, id))
-                .collect()
-        })
-        .transpose()
+        .map_err(|error| ctx.workspace.source_error(error))?
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "rdf:List member IDs")
+        })?;
+    let Some(ids) = list_members(head_id, walked, |error| {
+        NativeDiagnostic::error(
+            NativeDiagnosticKind::Data,
+            format_args!("{error}"),
+            &ctx.growth,
+        )
+    })?
+    else {
+        return Ok(None);
+    };
+    let mut members = AdmittedVec::with_capacity(ids.len(), &ctx.growth)?;
+    for id in &ids {
+        let value = ctx.scratch.try_owned_value_of(
+            ctx.dataset,
+            SolutionTerm::Existing(*id),
+            &ctx.growth,
+            |error| ctx.workspace.source_error(error),
+        )?;
+        members.push(value)?;
+    }
+    memory.release_vec(ids).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "rdf:List member IDs")
+    })?;
+    Ok(Some(members))
 }
 
-/// Walk a list whose cells live only in the per-query constructed buffer
-/// (`ctx.constructed`) — a list minted by `listSlice`/`listConcat` and read again
-/// within the same query — with the same strict walker as [`walk_dataset`].
-/// `Ok(None)` when `head` is not a constructed-list head (the caller then treats it
-/// as a non-list / unbound).
+/// Only list construction writes this buffer: its cell/rest identities are
+/// minted flat blanks or rdf:nil. The strict iterator's identity/cycle checks
+/// therefore cannot grow a nested term work-list. Member equality still uses
+/// the independently admitted native term comparator above.
 fn walk_constructed<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     head: &TermValue,
-) -> Result<Option<Vec<TermValue>>, EvalError> {
-    let [first, rest, nil] = [RDF_FIRST, RDF_REST, RDF_NIL].map(iri);
+) -> Result<Option<AdmittedVec<WorkspaceTerm>>, EvalError> {
+    let [first, rest, nil] = [
+        ctx.growth.iri(RDF_FIRST)?,
+        ctx.growth.iri(RDF_REST)?,
+        ctx.growth.iri(RDF_NIL)?,
+    ];
     let objects = |cell: &TermValue, predicate: &TermValue| {
         SoleObject::of(
             ctx.constructed
@@ -352,24 +396,55 @@ fn walk_constructed<D: DatasetView + Sync>(
                 .map(|(_, _, o)| o),
         )
     };
-    let walked = walk_rdf_list(
+    let mut frame = LexicalFrame::new(&ctx.growth);
+    let mut memory = Memory::new(&mut frame);
+    let walked = walk_rdf_list_with_memory(
         head,
-        Some(&nil),
+        Some(&*nil),
         |cell| objects(cell, &first),
         |cell| objects(cell, &rest),
-    );
-    list_members(head, walked)
-        .map(|members| members.map(|terms| terms.into_iter().cloned().collect()))
+        &mut memory,
+    )
+    .map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "constructed list members")
+    })?;
+    let Some(terms) = list_members(head, walked, |error| {
+        let node = WorkspaceDebug::new(error.node, &ctx.growth);
+        let diagnostic = NativeDiagnostic::error(
+            NativeDiagnosticKind::Data,
+            format_args!(
+                "malformed rdf:List: {} (at {:?}, after {} member(s))",
+                error.kind,
+                node,
+                error.members.len()
+            ),
+            &ctx.growth,
+        );
+        node.take_failure().unwrap_or(diagnostic)
+    })?
+    else {
+        return Ok(None);
+    };
+    let mut members = AdmittedVec::with_capacity(terms.len(), &ctx.growth)?;
+    for term in &terms {
+        members.push(ctx.growth.clone_term(term)?)?;
+    }
+    memory.release_vec(terms).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "constructed list members")
+    })?;
+    Ok(Some(members))
 }
 
-/// A strict walk's outcome as a list function reads it: the members of a
-/// well-formed list; `None` when `head` itself carries no `rdf:first`, so it is not
-/// a list (a SPARQL error, unbound); and every malformed list
-/// (a cycle, a torn cell, a cell with two of either edge, or an `rdf:nil` carrying
-/// an edge) a hard [`EvalError::Data`].
-fn list_members<Id: Copy + Eq + std::fmt::Debug>(
+/// Missing rdf:first at the head is unbound; every other strict-walk fault
+/// keeps the original malformed-list message and native data classification.
+fn list_members<Id: Copy + Eq>(
     head: Id,
     walked: Result<Vec<Id>, ListError<Id>>,
+    diagnostic: impl FnOnce(&ListError<Id>) -> EvalError,
 ) -> Result<Option<Vec<Id>>, EvalError> {
     match walked {
         Ok(members) => Ok(Some(members)),
@@ -380,25 +455,19 @@ fn list_members<Id: Copy + Eq + std::fmt::Debug>(
         {
             Ok(None)
         }
-        Err(error) => Err(EvalError::data(error.to_string())),
+        Err(error) => Err(diagnostic(&error)),
     }
 }
 
-/// An IRI value.
-fn iri(s: &str) -> TermValue {
-    TermValue::Iri(s.to_owned())
-}
-
-/// Whether a term is `rdf:nil`.
 fn is_nil(value: &TermValue) -> bool {
-    matches!(value, TermValue::Iri(i) if i == RDF_NIL)
+    matches!(value, TermValue::Iri(iri) if iri == RDF_NIL)
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
+    use purrdf_core::{DatasetHandle, RdfDataset, RdfDatasetBuilder, TermValue};
 
     use crate::error::EvalError;
     use crate::eval::{EvalCtx, Outcome, evaluate_query};
@@ -644,7 +713,10 @@ mod tests {
 
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
         let err = eval_err(&ds, &q);
-        assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
+        assert!(
+            matches!(&err, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data),
+            "got {err:?}"
+        );
         assert!(err.to_string().contains("rdf:rest chain returns"));
     }
 
@@ -713,7 +785,10 @@ mod tests {
 
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
         let err = eval_err(&ds, &q);
-        assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
+        assert!(
+            matches!(&err, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data),
+            "got {err:?}"
+        );
         assert!(err.to_string().contains("has no rdf:rest"), "got {err}");
     }
 
@@ -736,7 +811,10 @@ mod tests {
 
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
         let err = eval_err(&ds, &q);
-        assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
+        assert!(
+            matches!(&err, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data),
+            "got {err:?}"
+        );
         assert!(err.to_string().contains("has no rdf:first"), "got {err}");
     }
 
@@ -758,7 +836,10 @@ mod tests {
 
         let q = format!("{PREFIX} SELECT ?n WHERE {{ BIND(g:listLength(<http://ex/l0>) AS ?n) }}");
         let err = eval_err(&ds, &q);
-        assert!(matches!(err, EvalError::Data(_)), "got {err:?}");
+        assert!(
+            matches!(&err, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == crate::error::NativeDiagnosticKind::Data),
+            "got {err:?}"
+        );
         assert!(
             err.to_string().contains("more than one rdf:first"),
             "got {err}"
@@ -867,12 +948,13 @@ mod tests {
             &QueryGovernors::UNBOUNDED.with_max_scratch_bytes(69),
         ));
         let mut ctx = EvalCtx::new(ds.as_ref()).with_governors(Arc::clone(&state));
-        let result = super::materialize_list(
-            &mut ctx,
-            vec![TermValue::iri("http://ex/x"), TermValue::iri("http://ex/y")],
-        )
-        .expect("a mint trip is not an EvalError");
-        assert_eq!(result, None);
+        let members = vec![
+            ctx.growth.iri("http://ex/x").unwrap(),
+            ctx.growth.iri("http://ex/y").unwrap(),
+        ];
+        let result =
+            super::materialize_list(&mut ctx, members).expect("a mint trip is not an EvalError");
+        assert!(result.is_none());
         assert!(
             ctx.constructed.is_empty(),
             "no torn list survives the failed constructor"
@@ -927,7 +1009,7 @@ mod tests {
     fn run_constructed(
         ds: &Arc<RdfDataset>,
         query: &str,
-    ) -> (Vec<Vec<Option<TermValue>>>, Arc<RdfDataset>) {
+    ) -> (Vec<Vec<Option<TermValue>>>, DatasetHandle) {
         let env = crate::extension_env::ExtensionEnv::over_options(ext_options())
             .expect("environment over declared parser options");
         let engine = NativeSparqlEngine::new();
@@ -952,7 +1034,7 @@ mod tests {
     }
 
     /// Run a CONSTRUCT and return its output graph.
-    fn run_graph(ds: &Arc<RdfDataset>, query: &str) -> Arc<RdfDataset> {
+    fn run_graph(ds: &Arc<RdfDataset>, query: &str) -> DatasetHandle {
         let env = crate::extension_env::ExtensionEnv::over_options(ext_options())
             .expect("environment over declared parser options");
         let engine = NativeSparqlEngine::new();
@@ -1159,7 +1241,7 @@ mod tests {
     fn run_constructed_interned(
         ds: &Arc<RdfDataset>,
         query: &str,
-    ) -> (Vec<String>, Arc<RdfDataset>) {
+    ) -> (Vec<String>, crate::RetainedGraph) {
         let env = crate::extension_env::ExtensionEnv::over_options(ext_options())
             .expect("environment over declared parser options");
         let engine = NativeSparqlEngine::new();

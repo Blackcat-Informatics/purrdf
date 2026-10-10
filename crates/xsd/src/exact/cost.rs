@@ -95,6 +95,566 @@ impl Cost {
     }
 }
 
+/// Which integer kernel a checked physical destination layout describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegerOperation {
+    /// Sum of two signed integers.
+    Add,
+    /// Difference of two signed integers.
+    Subtract,
+    /// Product of two signed integers.
+    Multiply,
+}
+
+/// Temporary/result native heap bound, separate from saturating governor fuel.
+#[derive(Debug, Clone, Copy)]
+pub struct NumericOperationLayout {
+    peak_bytes: usize,
+    retained_bytes: usize,
+}
+
+impl NumericOperationLayout {
+    /// A proven machine/inline operation with no heap destination.
+    pub const INLINE: Self = Self {
+        peak_bytes: 0,
+        retained_bytes: 0,
+    };
+    /// Peak new bytes while the already-admitted inputs remain live.
+    #[must_use]
+    pub const fn required_bytes(self) -> usize {
+        self.peak_bytes
+    }
+    /// Upper bound of surviving native destination capacity.
+    #[must_use]
+    pub const fn retained_bytes(self) -> usize {
+        self.retained_bytes
+    }
+
+    pub(crate) fn bytes(
+        peak_bytes: usize,
+        retained_bytes: usize,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        use crate::bigint::LimbScratchError::SizeOverflow;
+        std::alloc::Layout::array::<u8>(peak_bytes).map_err(|_| SizeOverflow)?;
+        std::alloc::Layout::array::<u8>(retained_bytes).map_err(|_| SizeOverflow)?;
+        Ok(Self {
+            peak_bytes,
+            retained_bytes,
+        })
+    }
+
+    /// Include surviving new intermediates around a fresh destination kernel.
+    /// Already-admitted borrowed input owners are excluded by the caller.
+    /// # Errors
+    /// Refuses checked byte/address-space overflow before allocation.
+    pub fn with_live(self, live_bytes: usize) -> Result<Self, crate::bigint::LimbScratchError> {
+        let peak = live_bytes
+            .checked_add(self.peak_bytes)
+            .ok_or(crate::bigint::LimbScratchError::SizeOverflow)?;
+        Self::bytes(peak, self.retained_bytes)
+    }
+
+    pub(crate) fn words(peak: u64, retained: u64) -> Result<Self, crate::bigint::LimbScratchError> {
+        use crate::bigint::LimbScratchError::SizeOverflow;
+        let checked = |words: u64| -> Result<usize, crate::bigint::LimbScratchError> {
+            let words = usize::try_from(words).map_err(|_| SizeOverflow)?;
+            Ok(std::alloc::Layout::array::<u64>(words)
+                .map_err(|_| SizeOverflow)?
+                .size())
+        };
+        Ok(Self {
+            peak_bytes: checked(peak)?,
+            retained_bytes: checked(retained)?,
+        })
+    }
+}
+
+/// Checked physical counterpart for the existing integer destination kernels.
+/// This does not treat a governor Cost::ZERO as an allocation certificate.
+///
+/// # Errors
+/// Refuses checked length/byte overflow before creating any native destination.
+pub fn integer_operation_layout(
+    la: u64,
+    lb: u64,
+    negative_a: bool,
+    negative_b: bool,
+    op: IntegerOperation,
+) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
+    use crate::bigint::LimbScratchError::SizeOverflow;
+    match op {
+        IntegerOperation::Add | IntegerOperation::Subtract => {
+            let add_magnitudes =
+                (negative_a == negative_b) ^ matches!(op, IntegerOperation::Subtract);
+            let capacity = la
+                .max(lb)
+                .checked_add(u64::from(add_magnitudes))
+                .ok_or(SizeOverflow)?;
+            // These kernels initialize the complete destination; four words
+            // really allocate even if canonical trimming later returns inline.
+            let heap = if capacity <= 3 { 0 } else { capacity };
+            NumericOperationLayout::words(heap, heap)
+        }
+        IntegerOperation::Multiply => {
+            if la == 0 || lb == 0 || (la <= 1 && lb <= 1) {
+                return Ok(NumericOperationLayout::INLINE);
+            }
+            let result = la.checked_add(lb).ok_or(SizeOverflow)?;
+            if result <= 3 {
+                return Ok(NumericOperationLayout::INLINE);
+            }
+            if la.min(lb) < crate::bigint::KARATSUBA_THRESHOLD as u64 {
+                return NumericOperationLayout::words(result, result);
+            }
+            // Native Karatsuba's established eight-result working law. The
+            // fallible shared body retains exact-capacity destinations; the
+            // original numerical recursion and threshold are unchanged.
+            let peak = result.checked_mul(8).ok_or(SizeOverflow)?;
+            // Recombination adds one explicit carry word to the output.
+            let retained = result.checked_add(1).ok_or(SizeOverflow)?;
+            NumericOperationLayout::words(peak, retained)
+        }
+    }
+}
+
+pub(crate) fn live_integer_bytes(
+    values: &[&super::Integer],
+) -> Result<usize, crate::bigint::LimbScratchError> {
+    use crate::bigint::LimbScratchError::SizeOverflow;
+    values.iter().try_fold(0_usize, |sum, value| {
+        sum.checked_add(usize::try_from(value.heap_bytes()).map_err(|_| SizeOverflow)?)
+            .ok_or(SizeOverflow)
+    })
+}
+
+fn checked_sum_words(values: &[u64]) -> Result<u64, crate::bigint::LimbScratchError> {
+    values.iter().try_fold(0_u64, |sum, value| {
+        sum.checked_add(*value)
+            .ok_or(crate::bigint::LimbScratchError::SizeOverflow)
+    })
+}
+
+fn owned_words(limbs: u64) -> u64 {
+    if limbs <= 3 { 0 } else { limbs }
+}
+
+// Mirrors the actual destination families of mag_div_rem, not saturated fuel.
+// The <=8-limb normalized branch uses stack scratch; larger division retains
+// normalized numerator/divisor and quotient before returning its remainder.
+fn division_words(la: u64, lb: u64) -> Result<u64, crate::bigint::LimbScratchError> {
+    if la <= 8 {
+        checked_sum_words(&[owned_words(la), owned_words(la.min(lb))])
+    } else {
+        checked_sum_words(&[
+            owned_words(
+                la.checked_add(1)
+                    .ok_or(crate::bigint::LimbScratchError::SizeOverflow)?,
+            ),
+            owned_words(lb),
+            owned_words(la),
+        ])
+    }
+}
+
+/// Complete destination family of the existing quotient/remainder kernel.
+/// Inputs are borrowed and already owned by the calling frame.
+/// # Errors
+/// Refuses machine byte overflow before any normalized destination allocation.
+pub fn integer_division_layout(
+    numerator_limbs: u64,
+    denominator_limbs: u64,
+) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
+    let destinations = division_words(numerator_limbs, denominator_limbs)?;
+    NumericOperationLayout::words(destinations, destinations)
+}
+
+/// Initial exact-division storage before the actual reduced factor/exponent
+/// is known. Final coefficient and scale growth are admitted separately.
+pub(crate) fn decimal_exact_initial_layout(
+    la: u64,
+    lb: u64,
+) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
+    let (a, b, g) = (owned_words(la), owned_words(lb), owned_words(la.min(lb)));
+    let gcd = checked_sum_words(&[a, b, a, b, g])?;
+    let reduce_a = checked_sum_words(&[a, b, g, division_words(la, la.min(lb))?])?;
+    let reduce_b = checked_sum_words(&[a, b, g, a, division_words(lb, la.min(lb))?])?;
+    let factor = checked_sum_words(&[a, b, b])?;
+    let peak = gcd.max(reduce_a).max(reduce_b).max(factor);
+    NumericOperationLayout::words(peak, peak)
+}
+
+/// Actual original/shifted coefficient overlap for a native binary shift.
+pub(crate) fn binary_shift_layout(
+    bits: u64,
+    shift: u32,
+    current_bytes: usize,
+) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
+    use crate::bigint::LimbScratchError::SizeOverflow;
+    let result = bits
+        .checked_add(u64::from(shift))
+        .ok_or(SizeOverflow)?
+        .div_ceil(64);
+    let output = owned_words(result);
+    let bytes = usize::try_from(output)
+        .map_err(|_| SizeOverflow)?
+        .checked_mul(size_of::<u64>())
+        .ok_or(SizeOverflow)?;
+    let peak = current_bytes.checked_add(bytes).ok_or(SizeOverflow)?;
+    NumericOperationLayout::bytes(peak, bytes)
+}
+
+/// Pow5 uses the existing word-chunk multiply body. Its original operand and
+/// both old/new exact-capacity destinations coexist; no exponent-size guess.
+pub(crate) fn pow5_layout(
+    bits: u64,
+    exponent: u32,
+    current_bytes: usize,
+) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
+    use crate::bigint::LimbScratchError::SizeOverflow;
+    let added = (u128::from(log2_upper_q16(5)) * u128::from(exponent)).div_ceil(65_536);
+    let bits = u128::from(bits).checked_add(added).ok_or(SizeOverflow)?;
+    let limbs = u64::try_from(bits.div_ceil(64)).map_err(|_| SizeOverflow)?;
+    let destination = limbs.checked_add(1).ok_or(SizeOverflow)?;
+    let words = if limbs <= 3 { 0 } else { destination };
+    let bytes = usize::try_from(words)
+        .map_err(|_| SizeOverflow)?
+        .checked_mul(size_of::<u64>())
+        .ok_or(SizeOverflow)?;
+    let peak = bytes
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(current_bytes))
+        .ok_or(SizeOverflow)?;
+    NumericOperationLayout::bytes(peak, bytes)
+}
+
+/// Checked old/new destination overlap of the native word-chunk 10^digits body.
+pub(crate) fn power_of_ten_layout(
+    digits: u64,
+) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
+    use crate::bigint::LimbScratchError::SizeOverflow;
+    if digits == 0 {
+        return Ok(NumericOperationLayout::INLINE);
+    }
+    let limbs = limbs_for_digits(digits);
+    let capacity = limbs.checked_add(1).ok_or(SizeOverflow)?;
+    let heap = if limbs <= 3 { 0 } else { capacity };
+    NumericOperationLayout::words(heap.checked_mul(2).ok_or(SizeOverflow)?, heap)
+}
+
+/// Native power-of-ten creation and borrowed-coefficient product. The caller
+/// adds every still-live temporary outside this kernel before admitting it.
+pub(crate) fn scale_up_layout(
+    coefficient: &super::Integer,
+    digits: u32,
+) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
+    use crate::bigint::LimbScratchError::SizeOverflow;
+    if coefficient.is_zero() {
+        return Ok(NumericOperationLayout::INLINE);
+    }
+    if digits == 0 {
+        let bytes = usize::try_from(coefficient.heap_bytes()).map_err(|_| SizeOverflow)?;
+        return NumericOperationLayout::bytes(bytes, bytes);
+    }
+    if let Some(value) = coefficient.as_i128()
+        && let Some(power) = 10_i128.checked_pow(digits)
+        && value.checked_mul(power).is_some()
+    {
+        return Ok(NumericOperationLayout::INLINE);
+    }
+    let la = coefficient.limb_len();
+    let power = limbs_for_digits(u64::from(digits));
+    let power_capacity = power.checked_add(1).ok_or(SizeOverflow)?;
+    let power_words = if power <= 3 { 0 } else { power_capacity };
+    let result = la.checked_add(power).ok_or(SizeOverflow)?;
+    let result_words = owned_words(result);
+    let power_peak = power_words.checked_mul(2).ok_or(SizeOverflow)?;
+    let product_peak = checked_sum_words(&[power_words, result_words])?;
+    NumericOperationLayout::words(power_peak.max(product_peak), result_words)
+}
+
+/// Native normalization's factor stripping and actual power/division families,
+/// excluding the already-live coefficient capacity.
+pub(crate) fn normalization_extra_words(
+    limbs: u64,
+) -> Result<u64, crate::bigint::LimbScratchError> {
+    if limbs <= 3 {
+        return Ok(0);
+    }
+    let l = owned_words(limbs);
+    let power = limbs
+        .checked_add(1)
+        .ok_or(crate::bigint::LimbScratchError::SizeOverflow)?;
+    let two_copies = checked_sum_words(&[l, l])?;
+    let power_divide = checked_sum_words(&[owned_words(power), division_words(limbs, power)?])?;
+    Ok(two_copies.max(power_divide))
+}
+
+pub(crate) fn normalize_layout(
+    coefficient: &super::Integer,
+    scale: u32,
+) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
+    use crate::bigint::LimbScratchError::SizeOverflow;
+    let current = usize::try_from(coefficient.heap_bytes()).map_err(|_| SizeOverflow)?;
+    if scale == 0 || coefficient.as_i128().is_some() {
+        return NumericOperationLayout::bytes(current, current);
+    }
+    let extra = usize::try_from(normalization_extra_words(coefficient.limb_len())?)
+        .map_err(|_| SizeOverflow)?
+        .checked_mul(size_of::<u64>())
+        .ok_or(SizeOverflow)?;
+    NumericOperationLayout::bytes(current.checked_add(extra).ok_or(SizeOverflow)?, current)
+}
+
+/// Checked physical layout of native decimal group conversion and final lexical.
+#[derive(Debug, Clone, Copy)]
+pub struct NumericRenderLayout {
+    temporary_bytes: usize,
+    output_bytes: usize,
+    group_capacity: usize,
+}
+
+impl NumericRenderLayout {
+    /// All live quotient/group storage while converting; source is already owned.
+    #[must_use]
+    pub const fn temporary_bytes(self) -> usize {
+        self.temporary_bytes
+    }
+    /// Complete sign/point/padding output capacity, before output allocation.
+    #[must_use]
+    pub const fn output_bytes(self) -> usize {
+        self.output_bytes
+    }
+    /// Requested native group buffer capacity.
+    #[must_use]
+    pub const fn group_capacity(self) -> usize {
+        self.group_capacity
+    }
+    /// Peak new conversion temporaries and output while input owners stay live.
+    /// # Errors
+    /// Refuses checked composition overflow.
+    pub fn required_bytes(self) -> Result<usize, crate::bigint::LimbScratchError> {
+        self.temporary_bytes
+            .checked_add(self.output_bytes)
+            .ok_or(crate::bigint::LimbScratchError::SizeOverflow)
+    }
+}
+
+/// Native checked layout for the shared 10^19 group renderer.
+/// # Errors
+/// Refuses byte/address-space overflow before any parser or render allocation.
+pub fn numeric_render_layout(
+    bits: u64,
+    limbs: usize,
+    scale: u32,
+    negative: bool,
+) -> Result<NumericRenderLayout, crate::bigint::LimbScratchError> {
+    use crate::bigint::LimbScratchError::SizeOverflow;
+    let digits = usize::try_from(digits_for_bits(bits)).map_err(|_| SizeOverflow)?;
+    let groups = digits.div_ceil(19);
+    let group_words = if groups <= 3 { 0 } else { groups };
+    let quotient_words = if limbs <= 3 { 0 } else { limbs };
+    // Native division retains old/new quotient destinations beside groups.
+    let words = quotient_words
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(group_words))
+        .ok_or(SizeOverflow)?;
+    let temporary_bytes = std::alloc::Layout::array::<u64>(words)
+        .map_err(|_| SizeOverflow)?
+        .size();
+    let scale = usize::try_from(scale).map_err(|_| SizeOverflow)?;
+    let body = if scale == 0 {
+        digits
+    } else if digits > scale {
+        digits.checked_add(1).ok_or(SizeOverflow)?
+    } else {
+        scale.checked_add(2).ok_or(SizeOverflow)?
+    };
+    let output_bytes = body
+        .checked_add(usize::from(negative))
+        .ok_or(SizeOverflow)?;
+    std::alloc::Layout::array::<u8>(output_bytes).map_err(|_| SizeOverflow)?;
+    Ok(NumericRenderLayout {
+        temporary_bytes,
+        output_bytes,
+        group_capacity: groups,
+    })
+}
+
+/// Checked physical layout of the existing fallible native numeric parse.
+/// This is separate from governor fuel and never rounds an overflow down.
+#[derive(Debug, Clone, Copy)]
+pub struct NumericParseLayout {
+    peak_bytes: usize,
+    retained_bytes: usize,
+    invalid: bool,
+    error_code: Option<crate::ErrorCode>,
+}
+
+impl NumericParseLayout {
+    /// Temporary and resulting heap that can coexist during parsing.
+    #[must_use]
+    pub const fn required_bytes(self) -> usize {
+        self.peak_bytes
+    }
+    /// Maximum retained magnitude payload, excluding the consumer's header.
+    #[must_use]
+    pub const fn retained_bytes(self) -> usize {
+        self.retained_bytes
+    }
+    /// A lexical/value-space refusal is already known, without owned text.
+    #[must_use]
+    pub const fn is_invalid(self) -> bool {
+        self.invalid
+    }
+    /// The known F&O code, if this layout represents a lexical refusal.
+    #[must_use]
+    pub const fn error_code(self) -> Option<crate::ErrorCode> {
+        self.error_code
+    }
+}
+
+fn inline_parse_layout() -> NumericParseLayout {
+    NumericParseLayout {
+        peak_bytes: 0,
+        retained_bytes: 0,
+        invalid: false,
+        error_code: None,
+    }
+}
+
+fn invalid_parse_layout(error_code: Option<crate::ErrorCode>) -> NumericParseLayout {
+    NumericParseLayout {
+        peak_bytes: 0,
+        retained_bytes: 0,
+        invalid: true,
+        error_code,
+    }
+}
+
+/// The two native decimal-chunk destinations. Each asks for previous len + 1;
+/// original and replacement buffers coexist. Three-limb magnitudes stay inline.
+fn magnitude_parse_layout(
+    digits: usize,
+) -> Result<NumericParseLayout, crate::bigint::LimbScratchError> {
+    use crate::bigint::LimbScratchError::SizeOverflow;
+    let digits = u64::try_from(digits).map_err(|_| SizeOverflow)?;
+    let limbs = limbs_for_digits(digits);
+    if limbs <= 3 {
+        return Ok(inline_parse_layout());
+    }
+    let words = usize::try_from(limbs)
+        .map_err(|_| SizeOverflow)?
+        .checked_add(1)
+        .ok_or(SizeOverflow)?;
+    let retained_bytes = words.checked_mul(size_of::<u64>()).ok_or(SizeOverflow)?;
+    let peak_bytes = retained_bytes
+        .checked_add(retained_bytes)
+        .ok_or(SizeOverflow)?;
+    Ok(NumericParseLayout {
+        peak_bytes,
+        retained_bytes,
+        invalid: false,
+        error_code: None,
+    })
+}
+
+/// Physical storage for the fallible native numeric reader
+/// [`crate::value::try_parse_numeric`]. Invalid classification is part of this
+/// plan; the caller must not invoke an owned-error parser for an invalid plan.
+/// Returns None for another datatype, whose native layout remains required.
+///
+/// # Errors
+/// Refuses checked layout overflow before the native parser allocates.
+pub fn numeric_parse_layout(
+    lexical: &str,
+    datatype: crate::XsdDatatype,
+    xsd10: bool,
+) -> Result<Option<NumericParseLayout>, crate::bigint::LimbScratchError> {
+    use crate::bigint::LimbScratchError::SizeOverflow;
+    use crate::numeric::NumericReadError;
+    use crate::{ErrorCode, XsdDatatype as D};
+    if datatype.is_integer_family() {
+        match crate::numeric::read_integer_typed(lexical, datatype) {
+            Ok(_) => return Ok(Some(inline_parse_layout())),
+            Err(NumericReadError::Invalid(_)) => {
+                return Ok(Some(invalid_parse_layout(Some(ErrorCode::Forg0001))));
+            }
+            Err(NumericReadError::OutOfRange(reason)) => {
+                if lexical.parse::<i128>().is_ok() {
+                    return Ok(Some(invalid_parse_layout(crate::value::reason::classify(
+                        datatype, reason,
+                    ))));
+                }
+            }
+        }
+        let negative = lexical.starts_with('-');
+        let accepted = match datatype {
+            D::Integer => true,
+            D::NonNegativeInteger | D::PositiveInteger => !negative,
+            D::NonPositiveInteger | D::NegativeInteger => negative,
+            _ => false,
+        };
+        if !accepted {
+            return Ok(Some(invalid_parse_layout(crate::value::reason::classify(
+                datatype,
+                crate::value::reason::OUTSIDE_DATATYPE,
+            ))));
+        }
+        let digits = lexical
+            .strip_prefix(['+', '-'])
+            .unwrap_or(lexical)
+            .trim_start_matches('0')
+            .len();
+        return magnitude_parse_layout(digits).map(Some);
+    }
+    match datatype {
+        D::Decimal => {
+            match crate::numeric::read_decimal(lexical) {
+                Ok(_) => return Ok(Some(inline_parse_layout())),
+                Err(NumericReadError::Invalid(_)) => {
+                    return Ok(Some(invalid_parse_layout(Some(ErrorCode::Forg0001))));
+                }
+                Err(NumericReadError::OutOfRange(_)) => {}
+            }
+            let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
+            let (whole, fraction) = body.split_once('.').unwrap_or((body, ""));
+            if u32::try_from(fraction.len()).is_err() {
+                return Ok(Some(invalid_parse_layout(Some(ErrorCode::Foar0002))));
+            }
+            let whole = whole.trim_start_matches('0');
+            let fraction = fraction.trim_end_matches('0');
+            let digits = if whole.is_empty() {
+                fraction.trim_start_matches('0').len()
+            } else {
+                whole
+                    .len()
+                    .checked_add(fraction.len())
+                    .ok_or(SizeOverflow)?
+            };
+            magnitude_parse_layout(digits).map(Some)
+        }
+        D::Float | D::Double => {
+            let special =
+                matches!(lexical, "INF" | "-INF" | "NaN") || (!xsd10 && lexical == "+INF");
+            let letters = lexical
+                .bytes()
+                .any(|byte| byte.is_ascii_alphabetic() && byte != b'e' && byte != b'E');
+            let valid = special
+                || (!letters
+                    && match datatype {
+                        D::Float => lexical.parse::<f32>().is_ok(),
+                        _ => lexical.parse::<f64>().is_ok(),
+                    });
+            Ok(Some(if valid {
+                inline_parse_layout()
+            } else {
+                invalid_parse_layout(Some(ErrorCode::Forg0001))
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// The cost of parsing a lexical form of `len` bytes into any exact value.
 #[must_use]
 pub const fn parse(len: u64) -> Cost {
@@ -772,16 +1332,25 @@ pub(crate) const fn decimal_div(a: Shape, b: Shape, policy: super::DivisionPolic
             } else {
                 (la, lb.saturating_add(limbs_for_digits(digits)))
             };
-            let shifted = if la < lb { la } else { lb };
+            let shifted = if shift >= 0 { la } else { lb };
             shift10(shifted, digits).saturating_add(div(numerator, denominator))
         }
         super::DivisionPolicy::Exact => {
             let strip = lb.saturating_mul(128).saturating_mul(lb.saturating_add(1));
-            gcd(la, lb)
+            let reduction = gcd(la, lb)
                 .saturating_add(div(la, 1))
                 .saturating_add(div(lb, 1))
                 .saturating_add(Cost::new(strip, 0))
-                .saturating_add(mul(la, lb.saturating_mul(3)))
+                .saturating_add(mul(la, lb.saturating_mul(3)));
+            // div_exact finishes coefficient * 10^(sb - sa - k) when the
+            // exponent is positive. k >= 0, and the coefficient before that
+            // scale-up occupies at most la + 3*lb limbs.
+            let gap = b.scale.saturating_sub(a.scale);
+            if gap == 0 {
+                reduction
+            } else {
+                reduction.saturating_add(shift10(la.saturating_add(lb.saturating_mul(3)), gap))
+            }
         }
     }
 }
@@ -870,13 +1439,22 @@ impl SumChain {
 /// alone, and is free.
 #[must_use]
 pub fn compare_chain(values: &[Shape], rounds: u64) -> Cost {
-    let mut keyed: Vec<(i32, i64, i64, Shape)> = values
-        .iter()
-        .map(|shape| {
-            let (lower, upper) = shape.comparison_exponents();
-            (shape.sign, lower, upper, *shape)
-        })
-        .collect();
+    let mut keyed: Vec<_> = comparison_keys(values).collect();
+    compare_keyed(&mut keyed, rounds)
+}
+
+/// Native comparison-domain tuples, without allocation. Operational callers
+/// collect these into a buffer whose actual layout has already been admitted.
+pub fn comparison_keys(values: &[Shape]) -> impl Iterator<Item = (i32, i64, i64, Shape)> + '_ {
+    values.iter().map(|shape| {
+        let (lower, upper) = shape.comparison_exponents();
+        (shape.sign, lower, upper, *shape)
+    })
+}
+
+/// The same comparison-chain kernel on caller-owned tuples. Sorting cannot grow
+/// or retain the supplied array and allocates no additional scratch.
+pub fn compare_keyed(keyed: &mut [(i32, i64, i64, Shape)], rounds: u64) -> Cost {
     keyed.sort_unstable_by_key(|&(sign, lower, _, _)| (sign, lower));
     let mut total = Cost::ZERO;
     let mut start = 0;

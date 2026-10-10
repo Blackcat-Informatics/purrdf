@@ -4,7 +4,7 @@
 //! The copy-on-write, suppression-delta **mutable dataset**.
 //!
 //! A [`MutableDataset`] branches cheaply off a shared, frozen
-//! [`Arc<RdfDataset>`](RdfDataset) base and records mutations as an *append delta*
+//! [`DatasetHandle`] base and records mutations as an *append delta*
 //! plus a *suppression set* — GTS's append+suppression model held in memory. The
 //! effective contents are
 //!
@@ -48,6 +48,8 @@ use crate::TermBox;
 use std::convert::Infallible;
 use std::ops::ControlFlow;
 use std::sync::Arc;
+
+use crate::backend::DatasetHandle;
 
 use purrdf_iri::IriError;
 
@@ -235,13 +237,13 @@ impl DeltaBuilder {
 /// shared frozen base; records mutations as an append delta + a suppression set; and
 /// compacts back to a frozen [`RdfDataset`] via [`freeze`](Self::freeze).
 ///
-/// Many `MutableDataset`s may branch off ONE shared `base: Arc<RdfDataset>` (a clone
-/// of the `Arc`), mutate independently, and never disturb each other or the base —
+/// Many `MutableDataset`s may branch off ONE shared `base: DatasetHandle` (a clone
+/// of the shared owner), mutate independently, and never disturb each other or the base —
 /// branching invalidates no externally-visible handle.
 #[derive(Debug)]
 pub struct MutableDataset {
-    /// The shared, immutable COW base. Cloning the `Arc` is the cheap branch.
-    base: Arc<RdfDataset>,
+    /// The shared, immutable COW base. Cloning its owner is the cheap branch.
+    base: DatasetHandle,
     graph_existence: GraphExistenceMode,
     /// The delta's own term interner (mints `Delta` ids for brand-new terms).
     delta: DeltaBuilder,
@@ -301,11 +303,11 @@ pub struct MutableDataset {
 
 impl MutableDataset {
     /// Branch a fresh mutable dataset off a shared frozen `base`. O(1): only the
-    /// `Arc` refcount is touched; no quad/term is copied.
+    /// storage-owner refcount is touched; no quad/term is copied.
     #[must_use]
-    pub fn new(base: Arc<RdfDataset>) -> Self {
+    pub fn new(base: impl Into<DatasetHandle>) -> Self {
         Self {
-            base,
+            base: base.into(),
             graph_existence: GraphExistenceMode::Implicit,
             delta: DeltaBuilder::default(),
             added: FastSet::default(),
@@ -332,7 +334,10 @@ impl MutableDataset {
     /// [`Self::new`] keeps [`GraphExistenceMode::Implicit`] in 3.x; remembered
     /// empty graphs are expected to become the default in v4.0.
     #[must_use]
-    pub fn new_with_graph_existence(base: Arc<RdfDataset>, mode: GraphExistenceMode) -> Self {
+    pub fn new_with_graph_existence(
+        base: impl Into<DatasetHandle>,
+        mode: GraphExistenceMode,
+    ) -> Self {
         Self {
             graph_existence: mode,
             ..Self::new(base)
@@ -449,7 +454,7 @@ impl MutableDataset {
 
     /// The shared frozen base this dataset branched from.
     #[must_use]
-    pub fn base(&self) -> &Arc<RdfDataset> {
+    pub fn base(&self) -> &DatasetHandle {
         &self.base
     }
 
@@ -1234,7 +1239,7 @@ impl MutableDataset {
         &mut self,
         mut checkpoint: impl FnMut() -> Result<(), E>,
     ) -> Result<(), E> {
-        let base = Arc::clone(&self.base);
+        let base = self.base.clone();
         for graph in base.named_graphs() {
             checkpoint()?;
             self.withdraw_base_graph(graph);
@@ -1447,7 +1452,7 @@ impl MutableDataset {
             })
             .collect();
         let view = DeltaDatasetView::new(
-            Arc::clone(&self.base),
+            self.base.clone(),
             delta,
             suppressed,
             converted,
@@ -4004,5 +4009,57 @@ mod term_walk_tests {
             assert!(check_value_absolute(&relative).is_err());
         })
         .expect("the thread starts");
+    }
+}
+
+#[cfg(test)]
+mod admitted_base_lifetime_tests {
+    use super::MutableDataset;
+    use crate::{DatasetHandle, GraphMatch, QuadPatternCursor, RdfDatasetBuilder, RetentionLedger};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[derive(Debug)]
+    struct Owner(Arc<AtomicUsize>);
+    impl Drop for Owner {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn native_base_owner_survives_cursor_branch_and_snapshot() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let resident = RdfDatasetBuilder::new()
+            .freeze()
+            .expect("empty frozen dataset");
+        let value = Arc::try_unwrap(resident).expect("unique dataset");
+        let native =
+            DatasetHandle::try_from_admitted(value, Owner(drops.clone())).expect("native owner");
+        let identity = std::ptr::from_ref(native.as_ref());
+        let cursor = QuadPatternCursor::new(native.clone(), None, None, None, GraphMatch::Any);
+        let branch = MutableDataset::new(native.clone());
+        let snapshot = branch.snapshot_view().expect("snapshot");
+        let ledger = RetentionLedger::new();
+        let receipt = ledger.retain_dataset_handle(snapshot.base());
+        let same_owner = ledger.retain_dataset_handle(&native);
+        assert_eq!(receipt.owner_key(), same_owner.owner_key());
+        assert_eq!(ledger.snapshot().distinct_owners, 1);
+        assert_eq!(std::ptr::from_ref(cursor.dataset()), identity);
+        assert_eq!(std::ptr::from_ref(branch.base().as_ref()), identity);
+        assert_eq!(std::ptr::from_ref(snapshot.base().as_ref()), identity);
+        drop(native);
+        drop(branch);
+        drop(cursor);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(snapshot);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(receipt);
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(same_owner);
+        assert_eq!(ledger.snapshot().distinct_owners, 0);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
     }
 }

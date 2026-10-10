@@ -470,6 +470,7 @@ dependencies = [
 name = "purrdf-cdt"
 version = "3.0.1"
 dependencies = [
+ "purrdf-alloc-probe",
  "purrdf-events",
  "purrdf-hash",
  "purrdf-iri",
@@ -673,6 +674,7 @@ dependencies = [
 name = "purrdf-hnsw"
 version = "3.0.1"
 dependencies = [
+ "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
  "purrdf-lex",
@@ -921,7 +923,6 @@ dependencies = [
  "purrdf-testkit",
  "purrdf-xsd",
  "rayon",
- "regex",
  "sha2",
  "wasm-bindgen",
 ]

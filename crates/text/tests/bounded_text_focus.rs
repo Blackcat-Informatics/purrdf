@@ -1,0 +1,302 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Native ranked/positional TEXT and supplied focus configuration over actual storage.
+
+use std::sync::Arc;
+
+use purrdf_alloc_probe::CurrentThreadWindow;
+use purrdf_core::{
+    DatasetView, QuadIds, RdfDataset, RdfDatasetBuilder, SegmentedBuildLimits, SegmentedBuilder,
+    SegmentedError, SegmentedImage, SegmentedReadLimits, SegmentedSession, SparqlRequest,
+    TermValue,
+};
+use purrdf_sparql_eval::{
+    Arity, ExtensionEnv, FallibleSparqlError, NativeSparqlEngine, PropertyFunctionRegistry,
+    QueryGovernors, QueryOptions, UserFunctionRegistry,
+};
+use purrdf_text::{
+    Analyzer, GraphSelector, TermOccurrenceRelation, TextIndex, TextIndexConfig, TextSearchRelation,
+};
+
+#[global_allocator]
+static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+const CEILING: u64 = 8_000_000;
+const NOTE: &str = "http://example.org/note";
+const SEARCH: &str = "http://example.org/search";
+const OCCURS: &str = "http://example.org/occurs";
+const FOCUS: &str = "http://example.org/focus-count";
+
+fn fixture(wide: bool) -> (SegmentedImage, Arc<RdfDataset>, Arc<TextIndex>) {
+    let mut persistent =
+        SegmentedBuilder::new(SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4).unwrap());
+    let mut resident = RdfDatasetBuilder::new();
+    for (name, lexical) in [
+        ("a", "quick quick brown fox"),
+        ("b", "quick brown fox jumps"),
+        ("c", "lazy dog sleeps late"),
+    ] {
+        let triple = [
+            TermValue::iri(format!("http://example.org/{name}")),
+            TermValue::iri(NOTE),
+            TermValue::simple_literal(lexical),
+        ];
+        let mut ids = Vec::new();
+        persistent
+            .intern_batch(&triple, |_, id| ids.push(id))
+            .unwrap();
+        persistent
+            .push_quad(QuadIds {
+                s: ids[0],
+                p: ids[1],
+                o: ids[2],
+                g: None,
+            })
+            .unwrap();
+        let s = purrdf_core::term_fixture::intern_value(&mut resident, &triple[0]);
+        let p = purrdf_core::term_fixture::intern_value(&mut resident, &triple[1]);
+        let o = purrdf_core::term_fixture::intern_value(&mut resident, &triple[2]);
+        resident.push_quad(s, p, o, None);
+    }
+    let resident = resident.freeze().unwrap();
+    let config = TextIndexConfig::new(
+        vec![TermValue::iri(NOTE)],
+        GraphSelector::Any,
+        Analyzer::empty_lexicon(),
+    )
+    .unwrap();
+    let mut index = TextIndex::from_dataset(&*resident, &config).unwrap();
+    if wide {
+        let fields = (0..17)
+            .map(|at| {
+                purrdf_text::RankingField::new(
+                    format!("field-{at}"),
+                    purrdf_text::Fixed::from_raw(i128::MAX / 2),
+                    purrdf_text::B,
+                )
+                .unwrap()
+            })
+            .collect();
+        let profile =
+            purrdf_text::RankingProfile::new(fields, vec![(TermValue::iri(NOTE), 16)], None)
+                .unwrap();
+        index = index.with_ranking_profile(profile).unwrap();
+    }
+    let index = Arc::new(index);
+    (persistent.seal().unwrap(), resident, index)
+}
+
+fn non_cache_live(source: &SegmentedSession) -> u64 {
+    let evidence = source.evidence();
+    evidence.live_bytes() - evidence.unpinned_cache_bytes()
+}
+
+#[test]
+fn native_text_search_occurrence_and_focus_keep_exact_answers_and_original_owners() {
+    for wide in [false, true] {
+        run_text_focus(wide);
+    }
+}
+
+fn run_text_focus(wide: bool) {
+    let (image, resident, index) = fixture(wide);
+    let mut relations = PropertyFunctionRegistry::new();
+    relations.register(
+        SEARCH.to_owned(),
+        Arc::new(TextSearchRelation::new(Arc::clone(&index))),
+    );
+    relations.register(
+        OCCURS.to_owned(),
+        Arc::new(TermOccurrenceRelation::new(index)),
+    );
+    let env = ExtensionEnv::over_relations(relations).unwrap();
+    let mut functions = UserFunctionRegistry::default();
+    functions.register_expr_admitted(
+        FOCUS,
+        Arity::Exact(0),
+        Arc::new(|call, capability| {
+            capability
+                .literal(
+                    call.focus_graph.quads().count(),
+                    purrdf_core::datatype::XSD_INTEGER,
+                )
+                .map(Some)
+        }),
+    );
+    let binding_engine = NativeSparqlEngine::new();
+    let functions = binding_engine.bind_functions(functions, &env).unwrap();
+    // The actual focus graph differs from the query source: the count must be one.
+    let mut focus = RdfDatasetBuilder::new();
+    let s = focus.intern_iri("http://example.org/focus");
+    let p = focus.intern_iri(NOTE);
+    let o = focus.intern_literal(purrdf_core::RdfLiteral::simple("focus only"));
+    focus.push_quad(s, p, o, None);
+    let focus = focus.freeze().unwrap();
+    let options = QueryOptions::new()
+        .with_env(&env)
+        .with_functions(&functions)
+        .with_focus_graph(Some(&focus));
+    for (query, count) in [
+        (
+            format!(
+                "SELECT ?doc ?score ?rank ?matched (<{FOCUS}>() AS ?focus) WHERE {{ ?doc <{SEARCH}> (\"quick brown\" ?score ?rank ?lang ?matched) . ?doc <{NOTE}> ?body }} ORDER BY ?rank ?doc"
+            ),
+            2,
+        ),
+        (
+            format!(
+                "SELECT ?doc ?position (<{FOCUS}>() AS ?focus) WHERE {{ ?doc <{OCCURS}> (\"quick\" ?lang ?position) . ?doc <{NOTE}> ?body }} ORDER BY ?doc ?position"
+            ),
+            3,
+        ),
+    ] {
+        let request = || SparqlRequest {
+            query: &query,
+            base_iri: None,
+            substitutions: &[],
+        };
+        let expected = binding_engine
+            .query_with_options_view(&*resident, request(), options)
+            .unwrap();
+        let expected_rows = expected.solutions().unwrap().1;
+        assert_eq!(expected_rows.len(), count);
+        for row in expected_rows {
+            assert!(
+                matches!(row.last().unwrap(), Some(TermValue::Literal { lexical_form, .. }) if lexical_form == "1")
+            );
+        }
+        for route in 0..4 {
+            let engine = NativeSparqlEngine::new();
+            let prepared = engine
+                .prepare_query_with_options(&query, None, options)
+                .unwrap();
+            let source = image
+                .open_session(SegmentedReadLimits::new(CEILING, 2, 16_384, 20_000_000, 8))
+                .unwrap();
+            let baseline = non_cache_live(&source);
+            let before_requests = source.evidence().request_count();
+            let window = CurrentThreadWindow::open();
+            let found = match route {
+                0 => {
+                    engine
+                        .query_fallible_view(&source, request(), options)
+                        .unwrap()
+                        .result
+                }
+                1 => {
+                    engine
+                        .query_prepared_fallible_view(&source, &prepared, &[], options)
+                        .unwrap()
+                        .result
+                }
+                2 => {
+                    engine
+                        .query_governed_fallible_view(
+                            &source,
+                            request(),
+                            options,
+                            &QueryGovernors::METERED,
+                        )
+                        .unwrap()
+                        .result
+                }
+                _ => {
+                    engine
+                        .query_prepared_governed_fallible_view(
+                            &source,
+                            &prepared,
+                            &[],
+                            options,
+                            &QueryGovernors::METERED,
+                        )
+                        .unwrap()
+                        .result
+                }
+            };
+            let measured = window.close();
+            assert!(
+                u64::try_from(measured.peak_working_bytes).unwrap()
+                    <= source.evidence().peak_bytes()
+            );
+            assert!(source.evidence().peak_bytes() <= CEILING);
+            assert!(source.read_error().is_none());
+            assert!(
+                source.evidence().request_count() > before_requests,
+                "native RDF/TEXT graph correlation must read the bounded source"
+            );
+            assert_eq!(found.solutions().unwrap().1, expected_rows);
+            let live = source.evidence().live_bytes();
+            let window = CurrentThreadWindow::open();
+            let retained = found.clone();
+            drop(found);
+            assert_eq!(window.close().allocations, 0);
+            assert_eq!(source.evidence().live_bytes(), live);
+            drop(prepared);
+            drop(engine);
+            assert_eq!(retained.solutions().unwrap().1, expected_rows);
+            assert!(non_cache_live(&source) > baseline);
+            drop(retained);
+            assert_eq!(non_cache_live(&source), baseline);
+        }
+        // Independently zero headroom: native control must refuse before any row probe.
+        let initial = image
+            .open_session(SegmentedReadLimits::new(CEILING, 2, 16_384, 20_000_000, 8))
+            .unwrap();
+        let ceiling = initial.evidence().live_bytes();
+        drop(initial);
+        for route in 0..4 {
+            let source = image
+                .open_session(SegmentedReadLimits::new(ceiling, 2, 16_384, 20_000_000, 8))
+                .unwrap();
+            let baseline = non_cache_live(&source);
+            let engine = NativeSparqlEngine::new();
+            let prepared = engine
+                .prepare_query_with_options(&query, None, options)
+                .unwrap();
+            let before_requests = source.evidence().request_count();
+            macro_rules! physical {
+                ($result:expr) => {
+                    matches!(
+                        $result,
+                        Err(FallibleSparqlError::Operational {
+                            error: SegmentedError::Residency { .. },
+                            ..
+                        })
+                    )
+                };
+            }
+            let window = CurrentThreadWindow::open();
+            let refused = match route {
+                0 => physical!(engine.query_fallible_view(&source, request(), options)),
+                1 => {
+                    physical!(engine.query_prepared_fallible_view(&source, &prepared, &[], options))
+                }
+                2 => physical!(engine.query_governed_fallible_view(
+                    &source,
+                    request(),
+                    options,
+                    &QueryGovernors::METERED
+                )),
+                _ => physical!(engine.query_prepared_governed_fallible_view(
+                    &source,
+                    &prepared,
+                    &[],
+                    options,
+                    &QueryGovernors::METERED
+                )),
+            };
+            let measured = window.close();
+            assert!(refused);
+            assert!(
+                u64::try_from(measured.peak_working_bytes).unwrap()
+                    <= source.evidence().peak_bytes()
+            );
+            assert!(source.evidence().peak_bytes() <= ceiling);
+            assert_eq!(source.evidence().request_count(), before_requests);
+            drop(prepared);
+            drop(engine);
+            assert_eq!(non_cache_live(&source), baseline);
+        }
+    }
+}

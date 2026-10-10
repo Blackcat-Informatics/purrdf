@@ -169,7 +169,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/watdiv-queries.py --offline-self-test
 	python3 scripts/lubm-queries.py --offline-self-test
 	python3 crates/text/tests/reference/bm25f.py --check
-	cargo test --workspace --locked
+	cargo test --workspace --locked --no-fail-fast
 	cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
@@ -272,17 +272,18 @@ node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance
 test: node-prerequisite binaryen-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..4).
+test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..5).
 	@case "$(SHARD)" in \
 		lib) $(MAKE) binaryen-prerequisite || exit $$?; set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
 		doc) set -x; cargo test --workspace --locked --doc \
 			&& cargo build --workspace --locked --examples --profile test \
 			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture --example text_relevance ;; \
 		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
-		integration-2) set -x; cargo test --workspace --locked --test '[e-o]*' ;; \
+		integration-2) set -x; cargo test --workspace --locked --test '[e-j]*' ;; \
 		integration-3) set -x; cargo test --workspace --locked --test '[p-r]*' ;; \
 		integration-4) set -x; cargo test --workspace --locked --test '[!a-r]*' ;; \
-		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..4" >&2; exit 1 ;; \
+		integration-5) set -x; cargo test --workspace --locked --test '[k-o]*' ;; \
+		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..5" >&2; exit 1 ;; \
 	esac
 
 lint-gts-selected-blobs: ## Lint the selected native-import production and test surfaces only.

@@ -411,9 +411,7 @@ fn failed_and_lossy_short_producers_remain_distinct_from_completed_prefixes() {
     execution.contracts.insert(iri("scripted"), contract);
     execution.streams[0].attestation = PfAttestation {
         generation: IndexGeneration::declared("g7"),
-        service: ServiceLevel::Incomplete {
-            reason: "missing shard".to_owned(),
-        },
+        service: ServiceLevel::incomplete_static("missing shard"),
     };
     // Caller streams settle no native witness; this stays an explicit absence.
     let result = block_on(union(execution, &depths)).unwrap();
@@ -432,9 +430,7 @@ fn failed_and_lossy_short_producers_remain_distinct_from_completed_prefixes() {
             .as_ref()
             .unwrap()
             .service,
-        ServiceLevel::Incomplete {
-            reason: "missing shard".to_owned()
-        }
+        ServiceLevel::incomplete_static("missing shard")
     );
     assert!(result.producers[&iri("scripted")].settled.is_none());
     let (mut execution, depths) =

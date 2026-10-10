@@ -131,6 +131,74 @@ impl<T, const N: usize> WorkList<T, N> {
         Ok(())
     }
 
+    /// Push through the caller's exact physical spill admission.
+    ///
+    /// Inline entries keep the ordinary work-list path. Spill growth uses the
+    /// shared native Memory body and preserves the original entries on refusal.
+    ///
+    /// # Errors
+    /// Returns the original storage, layout or allocator refusal.
+    pub fn try_push_admitted<S: crate::allocation::Admission + ?Sized>(
+        &mut self,
+        value: T,
+        memory: &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<(), crate::allocation::StorageError> {
+        if self.held == N {
+            memory.push(&mut self.spill, value)?;
+        } else {
+            self.push(value);
+        }
+        Ok(())
+    }
+
+    /// Destroy entries and the actual spill allocation before shrinking its grant.
+    ///
+    /// Element payloads retain their own independent native admission.
+    ///
+    /// # Errors
+    /// Returns the original caller's shrink refusal or layout overflow.
+    pub fn release_admitted<S: crate::allocation::Admission + ?Sized>(
+        self,
+        memory: &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<(), crate::allocation::StorageError> {
+        let Self { inline, spill, .. } = self;
+        drop(inline);
+        memory.release_vec(spill)
+    }
+
+    /// Heap spill capacity, excluding the inline entries.
+    #[must_use]
+    pub fn heap_capacity(&self) -> usize {
+        self.spill.capacity()
+    }
+
+    /// Reserve an exact spill capacity after its owner admits the replacement
+    /// layout. Existing inline entries never move into the heap.
+    ///
+    /// # Errors
+    /// Returns the actual allocator refusal before changing entries.
+    pub fn try_reserve_heap_exact(
+        &mut self,
+        capacity: usize,
+    ) -> Result<(), std::collections::TryReserveError> {
+        if capacity > self.spill.capacity() {
+            self.spill.try_reserve_exact(capacity - self.spill.len())?;
+        }
+        Ok(())
+    }
+
+    /// Reserve the spill through the original exact physical account.
+    ///
+    /// # Errors
+    /// Returns checked layout, admission or native allocator refusal.
+    pub fn try_reserve_heap_admitted<S: crate::allocation::Admission + ?Sized>(
+        &mut self,
+        capacity: usize,
+        memory: &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<(), crate::allocation::StorageError> {
+        memory.reserve(&mut self.spill, capacity)
+    }
+
     /// Read entries from the bottom, without copying or allocating.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
         self.inline[..self.held]
@@ -238,6 +306,77 @@ pub trait Dismantle: Sized {
     fn dismantle(node: Box<Self>);
 }
 
+/// Child-slot access for allocation-free destruction through existing boxes.
+/// Both selectors borrow slots inside the live node: next_child selects the
+/// first populated child; last_child selects the most recently emptied child.
+pub trait DismantleTree: Dismantle {
+    /// The next owned child, or None after every child has been removed.
+    fn next_child(&mut self) -> Option<&mut Nested<Self>>;
+    /// The most recently removed child carrying the ancestor continuation.
+    fn last_child(&mut self) -> Option<&mut Nested<Self>>;
+}
+
+/// Dismantle existing nested boxes without a destructor worklist allocation.
+/// The emptied child stores the older ancestor while the loop owns the parent.
+/// Every continuation is removed before ordinary drop; no cycle survives.
+pub fn dismantle_tree<T: DismantleTree>(node: Box<T>) {
+    dismantle_owned(DismantlingBox(node));
+}
+
+/// Destructive child/ancestor access using only a node's existing vacant slots.
+/// An implementation removes one child, stores an older parent in the vacancy,
+/// and recovers that continuation when resumed. No link may survive normal drop.
+pub trait DismantleOwned: Sized {
+    /// Remove the next owned child, leaving its slot available for a parent.
+    fn take_child(&mut self) -> Option<Self>;
+    /// Store the older ancestor in the most recently evacuated child slot.
+    fn store_parent(&mut self, parent: Option<Self>);
+    /// Remove that continuation before the node resumes normal destruction.
+    fn take_parent(&mut self) -> Option<Self>;
+}
+
+/// The one allocation-free iterative destruction loop for existing owned trees.
+pub fn dismantle_owned<T: DismantleOwned>(mut node: T) {
+    let mut parent = None;
+    loop {
+        if let Some(child) = node.take_child() {
+            node.store_parent(parent.take());
+            parent = Some(node);
+            node = child;
+            continue;
+        }
+        drop(node);
+        let Some(mut resumed) = parent.take() else {
+            break;
+        };
+        parent = resumed.take_parent();
+        node = resumed;
+    }
+}
+
+struct DismantlingBox<T: DismantleTree>(Box<T>);
+
+impl<T: DismantleTree> DismantleOwned for DismantlingBox<T> {
+    fn take_child(&mut self) -> Option<Self> {
+        self.0
+            .next_child()
+            .map(|slot| Self(slot.take().expect("selected a populated dismantling child")))
+    }
+    fn store_parent(&mut self, parent: Option<Self>) {
+        self.0
+            .last_child()
+            .expect("removed a child")
+            .set_dismantle_parent(parent.map(|node| node.0));
+    }
+    fn take_parent(&mut self) -> Option<Self> {
+        self.0
+            .last_child()
+            .expect("the resumed node removed a child")
+            .take_dismantle_parent()
+            .map(Self)
+    }
+}
+
 /// One boxed nested value of a recursive type — a triple term's component, an
 /// operator's operand — whose drop takes the nesting apart over a work list
 /// ([`Dismantle`]) instead of recursing.
@@ -249,9 +388,9 @@ pub trait Dismantle: Sized {
 /// implements `Drop` cannot be destructured by value, and matching a node by
 /// value to move its fields out is how every consumer takes one apart: what that
 /// moves out is a box, whose drop — or [`Nested::into_inner`] — takes over.
-pub struct Nested<T: Dismantle>(Option<Box<T>>);
+pub struct Nested<T: Dismantle, C = Box<T>>(Option<Box<T>>, Option<C>);
 
-impl<T: Dismantle> Nested<T> {
+impl<T: Dismantle, C> Nested<T, C> {
     /// Box `value` as a nested value.
     #[must_use]
     pub fn new(value: T) -> Self {
@@ -277,6 +416,37 @@ impl<T: Dismantle> Nested<T> {
         self.0.take()
     }
 
+    /// Whether a dismantling walk has already removed this child.
+    #[must_use]
+    pub const fn is_taken(&self) -> bool {
+        self.0.is_none()
+    }
+
+    /// The vacant edge's continuation storage for a destructive walk.
+    /// This storage must be empty again before ordinary destruction.
+    ///
+    /// # Panics
+    /// Panics if the owning child has not been evacuated first.
+    pub fn dismantle_continuation(&mut self) -> &mut Option<C> {
+        assert!(
+            self.0.is_none(),
+            "a continuation requires an evacuated child"
+        );
+        &mut self.1
+    }
+
+    /// Admit the exact boxed payload layout before fallible construction.
+    /// The caller retains this memory's original grant with the returned tree.
+    ///
+    /// # Errors
+    /// Returns layout, admission or physical allocation refusal.
+    pub fn try_new<S: crate::allocation::Admission + ?Sized>(
+        value: T,
+        memory: &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<Self, crate::allocation::StorageError> {
+        memory.boxed(value).map(Self::from)
+    }
+
     fn take_box(&mut self) -> Box<T> {
         self.0
             .take()
@@ -290,15 +460,19 @@ impl<T: Dismantle> Nested<T> {
     }
 }
 
-impl<T: Dismantle> Drop for Nested<T> {
+impl<T: Dismantle, C> Drop for Nested<T, C> {
     fn drop(&mut self) {
+        assert!(
+            self.1.is_none(),
+            "a dismantling continuation must be removed before drop"
+        );
         if let Some(node) = self.0.take() {
             T::dismantle(node);
         }
     }
 }
 
-impl<T: Dismantle> core::ops::Deref for Nested<T> {
+impl<T: Dismantle, C> core::ops::Deref for Nested<T, C> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -306,7 +480,7 @@ impl<T: Dismantle> core::ops::Deref for Nested<T> {
     }
 }
 
-impl<T: Dismantle> core::ops::DerefMut for Nested<T> {
+impl<T: Dismantle, C> core::ops::DerefMut for Nested<T, C> {
     fn deref_mut(&mut self) -> &mut T {
         self.0
             .as_deref_mut()
@@ -314,71 +488,91 @@ impl<T: Dismantle> core::ops::DerefMut for Nested<T> {
     }
 }
 
-impl<T: Dismantle> AsRef<T> for Nested<T> {
+impl<T: Dismantle, C> AsRef<T> for Nested<T, C> {
     fn as_ref(&self) -> &T {
         self.get()
     }
 }
 
-impl<T: Dismantle> AsMut<T> for Nested<T> {
+impl<T: Dismantle, C> AsMut<T> for Nested<T, C> {
     fn as_mut(&mut self) -> &mut T {
         self
     }
 }
 
-impl<T: Dismantle> core::borrow::Borrow<T> for Nested<T> {
+impl<T: Dismantle, C> core::borrow::Borrow<T> for Nested<T, C> {
     fn borrow(&self) -> &T {
         self.get()
     }
 }
 
-impl<T: Dismantle> From<T> for Nested<T> {
+impl<T: Dismantle, C> From<T> for Nested<T, C> {
     fn from(value: T) -> Self {
         Self::new(value)
     }
 }
 
-impl<T: Dismantle> From<Box<T>> for Nested<T> {
+impl<T: Dismantle, C> From<Box<T>> for Nested<T, C> {
     fn from(value: Box<T>) -> Self {
-        Self(Some(value))
+        Self(Some(value), None)
     }
 }
 
-impl<T: Dismantle + Clone> Clone for Nested<T> {
+impl<T: Dismantle + Clone, C> Clone for Nested<T, C> {
     fn clone(&self) -> Self {
         Self::new(self.get().clone())
     }
 }
 
-impl<T: Dismantle + PartialEq> PartialEq for Nested<T> {
+impl<T: Dismantle + PartialEq, C> PartialEq for Nested<T, C> {
     fn eq(&self, other: &Self) -> bool {
         self.get() == other.get()
     }
 }
 
-impl<T: Dismantle + Eq> Eq for Nested<T> {}
+impl<T: Dismantle + Eq, C> Eq for Nested<T, C> {}
 
-impl<T: Dismantle + PartialOrd> PartialOrd for Nested<T> {
+impl<T: Dismantle + PartialOrd, C> PartialOrd for Nested<T, C> {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         self.get().partial_cmp(other.get())
     }
 }
 
-impl<T: Dismantle + Ord> Ord for Nested<T> {
+impl<T: Dismantle + Ord, C> Ord for Nested<T, C> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.get().cmp(other.get())
     }
 }
 
-impl<T: Dismantle + core::hash::Hash> core::hash::Hash for Nested<T> {
+impl<T: Dismantle + core::hash::Hash, C> core::hash::Hash for Nested<T, C> {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.get().hash(state);
     }
 }
 
-impl<T: Dismantle + fmt::Debug> fmt::Debug for Nested<T> {
+impl<T: Dismantle + fmt::Debug, C> fmt::Debug for Nested<T, C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.get().fmt(f)
+    }
+}
+
+impl<T: Dismantle> Nested<T> {
+    /// Store an ancestor in an evacuated homogeneous child edge.
+    ///
+    /// # Panics
+    /// Panics if either the child or its continuation slot is populated.
+    pub fn set_dismantle_parent(&mut self, parent: Option<Box<T>>) {
+        let slot = self.dismantle_continuation();
+        assert!(slot.is_none(), "dismantling links require an empty slot");
+        *slot = parent;
+    }
+
+    /// Remove the homogeneous continuation before ordinary destruction.
+    ///
+    /// # Panics
+    /// Panics if the owning child has not been evacuated first.
+    pub fn take_dismantle_parent(&mut self) -> Option<Box<T>> {
+        self.dismantle_continuation().take()
     }
 }
 
@@ -428,26 +622,78 @@ pub enum Tok<N, L> {
 pub fn write_debug<N, L: fmt::Debug, const K: usize>(
     f: &mut fmt::Formatter<'_>,
     root: N,
-    script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>),
+    mut script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>),
 ) -> fmt::Result {
-    let pretty = f.alternate();
-    write_debug_with(f, root, script, |leaf, out| {
-        if pretty {
-            write!(out, "{leaf:#?}")
-        } else {
-            write!(out, "{leaf:?}")
-        }
-    })
+    write_debug_with(
+        f,
+        root,
+        |node, pending, _| {
+            script(node, pending);
+            Ok(())
+        },
+        render_debug_leaf,
+        &mut crate::allocation::Memory::new(&mut crate::allocation::Resident),
+        false,
+    )
+    .map_err(|_| fmt::Error)
+}
+fn render_debug_leaf<L: fmt::Debug>(leaf: L, out: &mut Pad<'_, '_>) -> fmt::Result {
+    if out.pretty {
+        write!(out, "{leaf:#?}")
+    } else {
+        write!(out, "{leaf:?}")
+    }
+}
+
+/// Failure in native Debug presentation, retaining physical refusal separately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugWriteError {
+    /// The output formatter failed.
+    Format(fmt::Error),
+    /// Original work-list storage could not be grown.
+    Storage(crate::allocation::StorageError),
+}
+crate::variant_from!(DebugWriteError {
+    Format(fmt::Error),
+    Storage(crate::allocation::StorageError),
+});
+
+/// Write the same derive-compatible bytes through original native storage.
+///
+/// # Errors
+/// Returns a formatter failure or the first physical work-list refusal.
+pub fn write_debug_with_memory<
+    N,
+    L: fmt::Debug,
+    const K: usize,
+    S: crate::allocation::Admission + ?Sized,
+>(
+    f: &mut fmt::Formatter<'_>,
+    root: N,
+    script: impl FnMut(
+        N,
+        &mut WorkList<Tok<N, L>, K>,
+        &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<(), crate::allocation::StorageError>,
+    memory: &mut crate::allocation::Memory<'_, S>,
+) -> Result<(), DebugWriteError> {
+    write_debug_with(f, root, script, render_debug_leaf, memory, true)
 }
 
 /// The sole traversal and container writer; each entry supplies only its leaves,
 /// written at the current position of the indenting writer.
-fn write_debug_with<N, L, const K: usize>(
+fn write_debug_with<N, L, const K: usize, S: crate::allocation::Admission + ?Sized>(
     f: &mut fmt::Formatter<'_>,
     root: N,
-    mut script: impl FnMut(N, &mut WorkList<Tok<N, L>, K>),
+    mut script: impl FnMut(
+        N,
+        &mut WorkList<Tok<N, L>, K>,
+        &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<(), crate::allocation::StorageError>,
     mut render_leaf: impl FnMut(L, &mut Pad<'_, '_>) -> fmt::Result,
-) -> fmt::Result {
+    memory: &mut crate::allocation::Memory<'_, S>,
+    admitted_stack: bool,
+) -> Result<(), DebugWriteError> {
     let pretty = f.alternate();
     let mut out = Pad {
         f,
@@ -455,7 +701,12 @@ fn write_debug_with<N, L, const K: usize>(
         depth: 0,
         line_start: false,
     };
-    let mut stack: WorkList<Tok<N, L>, K> = WorkList::with(Tok::Node(root));
+    let mut stack: WorkList<Tok<N, L>, K> = WorkList::new();
+    if admitted_stack {
+        stack.try_push_admitted(Tok::Node(root), memory)?;
+    } else {
+        stack.push(Tok::Node(root));
+    }
     let mut open: WorkList<Open, 16> = WorkList::new();
     while let Some(tok) = stack.pop() {
         match tok {
@@ -463,18 +714,19 @@ fn write_debug_with<N, L, const K: usize>(
                 // The node's script replaces its token, reversed so that its first
                 // token is popped next.
                 let before = stack.len();
-                script(node, &mut stack);
+                script(node, &mut stack, memory)?;
                 stack.reverse_top(stack.len() - before);
             }
-            Tok::Struct(name) => out.open(&mut open, name, OpenKind::Struct)?,
+            Tok::Struct(name) => out.open(&mut open, name, OpenKind::Struct, memory)?,
             Tok::Tuple(name) => out.open(
                 &mut open,
                 name,
                 OpenKind::Tuple {
                     bare: name.is_empty(),
                 },
+                memory,
             )?,
-            Tok::List(_) => out.open(&mut open, "[", OpenKind::List)?,
+            Tok::List(_) => out.open(&mut open, "[", OpenKind::List, memory)?,
             Tok::Field(name) => {
                 let container = open
                     .top_mut()
@@ -508,6 +760,12 @@ fn write_debug_with<N, L, const K: usize>(
             }
         }
     }
+    if admitted_stack {
+        stack.release_admitted(memory)?;
+    } else {
+        drop(stack);
+    }
+    open.release_admitted(memory)?;
     Ok(())
 }
 
@@ -570,15 +828,16 @@ enum OpenKind {
 impl Pad<'_, '_> {
     /// A container starts as a value of the innermost open one: write what
     /// separates it, then its opening (`name` for a struct or tuple, `[` for a list).
-    fn open(
+    fn open<S: crate::allocation::Admission + ?Sized>(
         &mut self,
         open: &mut WorkList<Open, 16>,
         opening: &str,
         kind: OpenKind,
-    ) -> fmt::Result {
+        memory: &mut crate::allocation::Memory<'_, S>,
+    ) -> Result<(), DebugWriteError> {
         self.begin(open)?;
         self.write_str(opening)?;
-        open.push(Open { kind, entries: 0 });
+        open.try_push_admitted(Open { kind, entries: 0 }, memory)?;
         Ok(())
     }
 
@@ -741,7 +1000,7 @@ mod tests {
         assert_eq!(chain.clone(), chain);
         assert_eq!(format!("{chain:?}"), "Link(End)");
         assert!(Chain::End < chain);
-        let owned = Nested::from(Box::new(Chain::End));
+        let owned: Nested<Chain> = Nested::from(Box::new(Chain::End));
         assert_eq!(owned.clone().into_inner(), Chain::End);
         assert_eq!(*owned.into_box(), Chain::End);
     }

@@ -28,8 +28,6 @@
 //! plain object that must not be shared between threads; `run` takes `&mut self`, so
 //! two concurrent calls on one object raise rather than interleave.
 
-use std::sync::Arc;
-
 use purrdf_core::TermValue;
 use purrdf_sparql_eval::{
     AggregateRegistry, DivisionPolicy, ExtensionEnv, InternedOutcome, NativeSparqlEngine,
@@ -421,7 +419,7 @@ fn materialize_interned<
 ) -> purrdf_core::SparqlResult {
     match outcome {
         InternedOutcome::Boolean(value) => purrdf_core::SparqlResult::Boolean(*value),
-        InternedOutcome::Graph(graph) => purrdf_core::SparqlResult::Graph(Arc::clone(graph)),
+        InternedOutcome::Graph(graph) => purrdf_core::SparqlResult::Graph(graph.dataset_handle()),
         InternedOutcome::Solutions(solutions) => {
             let variables = solutions
                 .variables()
@@ -440,7 +438,7 @@ fn materialize_interned<
             purrdf_core::SparqlResult::Solutions {
                 variables,
                 rows,
-                aux: solutions.constructed_dataset(),
+                aux: solutions.constructed_dataset().dataset_handle(),
             }
         }
     }

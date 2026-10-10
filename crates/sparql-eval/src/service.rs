@@ -76,7 +76,10 @@ use std::time::Duration;
 use purrdf_core::RdfDataset;
 
 use crate::DetHashMap;
-use crate::remote::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver};
+use crate::remote::{
+    AdmittedRemoteError, AdmittedResolvedBindings, RemoteError, ResolvedBindings,
+    ServiceBuildError, ServiceRequest, ServiceResolutionError, ServiceResolver,
+};
 
 // ── Capabilities ─────────────────────────────────────────────────────────────────
 
@@ -231,21 +234,43 @@ impl ServiceCredential {
     /// encodes normally.
     #[must_use]
     pub fn header(&self) -> (String, String) {
-        match self {
-            Self::Bearer(token) => ("Authorization".to_owned(), format!("Bearer {token}")),
+        self.header_with_memory(&mut purrdf_lex::allocation::Memory::new(
+            &mut purrdf_lex::allocation::Resident,
+        ))
+        .expect("resident credential rendering allocation")
+    }
+
+    /// Render the same credential through its original before-growth owner.
+    /// # Errors
+    /// Returns physical layout, admission or allocator refusal.
+    /// # Panics
+    /// Panics for a Basic user id containing a colon, as `header` does.
+    pub fn header_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(String, String), purrdf_lex::allocation::StorageError> {
+        let name = memory.string(match self {
+            Self::Header { name, .. } => name.as_str(),
+            _ => "Authorization",
+        })?;
+        let value = match self {
+            Self::Bearer(token) => memory.format(&format_args!("Bearer {token}"))?,
             Self::Basic { username, password } => {
                 assert!(
                     !username.contains(':'),
-                    "an HTTP Basic user id may not contain a colon (RFC 7617 §2): the colon is \
-                     the field separator, so encoding one would move part of the user id into \
-                     the password"
+                    "an HTTP Basic user id may not contain a colon (RFC 7617 §2): the colon is the field separator, so encoding one would move part of the user id into the password"
                 );
-                let encoded =
-                    purrdf_xsd::canonical_base64(format!("{username}:{password}").as_bytes());
-                ("Authorization".to_owned(), format!("Basic {encoded}"))
+                let secret = memory.format(&format_args!("{username}:{password}"))?;
+                let value = memory.format(&format_args!(
+                    "Basic {}",
+                    purrdf_xsd::binary::Base64(secret.as_bytes())
+                ))?;
+                memory.release_string(secret)?;
+                value
             }
-            Self::Header { name, value } => (name.clone(), value.clone()),
-        }
+            Self::Header { value, .. } => memory.string(value)?,
+        };
+        Ok((name, value))
     }
 }
 
@@ -491,13 +516,32 @@ impl ServiceProfile {
     /// credential quietly missing.
     #[must_use]
     pub fn request_headers(&self) -> Vec<(String, String)> {
-        let mut headers = self.headers.clone();
+        self.request_headers_with_memory(&mut purrdf_lex::allocation::Memory::new(
+            &mut purrdf_lex::allocation::Resident,
+        ))
+        .expect("resident request header allocation")
+    }
+
+    /// Copy the configured header sequence, including its credential, through
+    /// the original request owner before handing it to a transport.
+    /// # Errors
+    /// Returns physical layout, admission or allocator refusal.
+    pub fn request_headers_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Vec<(String, String)>, purrdf_lex::allocation::StorageError> {
+        let mut headers = Vec::new();
+        for (name, value) in &self.headers {
+            let pair = (memory.string(name)?, memory.string(value)?);
+            memory.push(&mut headers, pair)?;
+        }
         if self.capabilities.allows(ServiceCapability::Credentials)
             && let Some(credential) = &self.credential
         {
-            headers.push(credential.header());
+            let pair = credential.header_with_memory(memory)?;
+            memory.push(&mut headers, pair)?;
         }
-        headers
+        Ok(headers)
     }
 }
 
@@ -558,6 +602,29 @@ impl ServiceCatalog {
         endpoint: &str,
         needs: ServiceCapabilities,
     ) -> Result<&ServiceProfile, ServiceDenial> {
+        self.authorization_decision(endpoint, needs)
+            .map_err(|(withheld, detail)| ServiceDenial::new(endpoint, withheld, detail))
+    }
+
+    pub(crate) fn authorize_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        endpoint: &str,
+        needs: ServiceCapabilities,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<&ServiceProfile, ServiceBuildError> {
+        match self.authorization_decision(endpoint, needs) {
+            Ok(profile) => Ok(profile),
+            Err((withheld, detail)) => Err(ServiceBuildError::Remote(RemoteError::Denied(
+                ServiceDenial::new(memory.string(endpoint)?, withheld, memory.string(detail)?),
+            ))),
+        }
+    }
+
+    fn authorization_decision(
+        &self,
+        endpoint: &str,
+        needs: ServiceCapabilities,
+    ) -> Result<&ServiceProfile, (ServiceCapability, &'static str)> {
         let Some(profile) = self.profile_for(endpoint) else {
             // No profile grants anything, so the first capability the request needs is the
             // one withheld; a request that needs none is still refused by a catalog that
@@ -566,26 +633,20 @@ impl ServiceCatalog {
             let withheld = needs
                 .first_withheld_by(ServiceCapabilities::NONE)
                 .unwrap_or(ServiceCapability::Query);
-            return Err(ServiceDenial::new(
-                endpoint,
+            return Err((
                 withheld,
                 "no profile is configured for this service, and the catalog has no fallback",
             ));
         };
         if let Some(withheld) = needs.first_withheld_by(profile.capabilities()) {
-            return Err(ServiceDenial::new(
-                endpoint,
-                withheld,
-                "the service profile does not grant it",
-            ));
+            return Err((withheld, "the service profile does not grant it"));
         }
         if profile.credential().is_some()
             && !profile
                 .capabilities()
                 .allows(ServiceCapability::Credentials)
         {
-            return Err(ServiceDenial::new(
-                endpoint,
+            return Err((
                 ServiceCapability::Credentials,
                 "the service profile carries a credential but withholds the capability that \
                  would let it be sent; the request is refused rather than issued \
@@ -667,6 +728,7 @@ impl InProcessServiceResolver {
 }
 
 impl ServiceResolver for InProcessServiceResolver {
+    crate::remote::resident_service_resolve!(
     /// # The forwarded evaluation is governed by the caller's signal
     ///
     /// The forwarded query is a whole evaluation of its own, and an in-memory endpoint is
@@ -682,24 +744,43 @@ impl ServiceResolver for InProcessServiceResolver {
     /// no *charge* ceilings: fuel spent here is already charged at the calling seam, per
     /// request and per ingested row, and charging it twice would make one query's budget
     /// depend on how a federation happened to be split up.
-    fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
+    );
+    fn resolve_admitted(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: crate::WorkspaceCapability,
+    ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
         if let Some(trip) = request.stop_trip() {
-            return Err(trip);
+            return Err(crate::remote::invocation_error(trip, &workspace)?);
         }
-        // The governor above outranks the policy below deliberately: a stop that has
-        // already fired is a fact about this execution that `SILENT` never swallows, so
-        // reporting it keeps the certificate naming the governor that actually ended the
-        // query rather than a denial `SILENT` would erase.
-        if let Some(catalog) = &self.catalog {
-            catalog.authorize(
-                request.endpoint,
-                ServiceCapabilities::granting([ServiceCapability::Query]),
-            )?;
+        let mut frame = crate::workspace::LexicalFrame::new(&workspace);
+        let result = {
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+            if let Some(catalog) = &self.catalog {
+                catalog
+                    .authorize_with_memory(
+                        request.endpoint,
+                        ServiceCapabilities::granting([ServiceCapability::Query]),
+                        &mut memory,
+                    )
+                    .map(|_| ())
+            } else {
+                Ok(())
+            }
+        };
+        if let Err(error) = result {
+            return Err(crate::remote::build_error(error, frame));
         }
-        let dataset = self.datasets.get(request.endpoint).ok_or_else(|| {
-            RemoteError::Transport(format!("no in-memory endpoint <{}>", request.endpoint))
-        })?;
-        crate::remote::evaluate_in_memory(dataset, request, self)
+        let Some(dataset) = self.datasets.get(request.endpoint) else {
+            return Err(ServiceResolutionError::Invocation(
+                AdmittedRemoteError::message(
+                    purrdf_core::SilencedKind::Transport,
+                    format_args!("no in-memory endpoint <{}>", request.endpoint),
+                    &workspace,
+                )?,
+            ));
+        };
+        crate::remote::evaluate_in_memory_admitted(dataset, request, self, &workspace)
     }
 }
 
@@ -761,23 +842,30 @@ impl<'a> ServiceRouter<'a> {
 }
 
 impl ServiceResolver for ServiceRouter<'_> {
-    fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
+    crate::remote::resident_service_resolve!();
+    fn resolve_admitted(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: crate::WorkspaceCapability,
+    ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
         if let Some(trip) = request.stop_trip() {
-            return Err(trip);
+            return Err(crate::remote::invocation_error(trip, &workspace)?);
         }
-        let resolver = self
-            .routes
-            .get(request.endpoint)
-            .copied()
-            .or(self.fallback)
-            .ok_or_else(|| {
-                RemoteError::Denied(ServiceDenial::new(
-                    request.endpoint,
-                    ServiceCapability::Query,
-                    "no resolver is routed to this service, and the router has no fallback",
-                ))
-            })?;
-        resolver.resolve(request)
+        let resolver = self.routes.get(request.endpoint).copied().or(self.fallback);
+        let Some(resolver) = resolver else {
+            return AdmittedResolvedBindings::try_build(&workspace, |memory| {
+                Err(ServiceBuildError::Remote(RemoteError::Denied(
+                    ServiceDenial::new(
+                        memory.string(request.endpoint)?,
+                        ServiceCapability::Query,
+                        memory.string(
+                            "no resolver is routed to this service, and the router has no fallback",
+                        )?,
+                    ),
+                )))
+            });
+        };
+        resolver.resolve_admitted(request, workspace)
     }
 }
 

@@ -24,6 +24,7 @@ use purrdf::{
     serialize_dataset_to_format_with_jsonld_options, serialize_dataset_to_writer_with,
     serialize_dataset_with, try_canonicalize_flat_view,
 };
+use purrdf_core::DatasetHandle;
 use purrdf_lex::json::{self, Value};
 use wasm_bindgen::prelude::*;
 
@@ -404,7 +405,9 @@ impl Dataset {
     }
 
     /// A new dataset over a frozen base, with a fresh identity at generation zero.
-    pub(crate) fn from_frozen(frozen: Arc<RdfDataset>) -> Result<Self, JsError> {
+    /// The mutable base retains the original native admission through this host
+    /// object; resident parser and sink owners enter through `Arc::into`.
+    pub(crate) fn from_frozen(frozen: DatasetHandle) -> Result<Self, JsError> {
         Self::from_mutable(MutableDataset::new(frozen))
     }
 
@@ -482,7 +485,7 @@ impl Dataset {
         let media_type = resolve_media_type(format).map_err(|e| JsError::new(&e))?;
         let dataset = parse_dataset(input.as_bytes(), media_type, base.as_deref())
             .map_err(|e| diag_to_err(&e))?;
-        Self::from_frozen(dataset)
+        Self::from_frozen(dataset.into())
     }
 
     /// `serialize(format, base?)` → the dataset rendered in `format` (a UTF-8 string).
@@ -746,7 +749,7 @@ impl Dataset {
     #[wasm_bindgen(js_name = snapshot)]
     pub fn snapshot(&self) -> Result<Self, JsError> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        Self::from_frozen(frozen)
+        Self::from_frozen(frozen.into())
     }
 
     /// `generation` — how many mutations this dataset's content has seen.
@@ -978,7 +981,7 @@ impl Dataset {
 /// `String` error — the shape the asynchronous lane records on a job rather than
 /// throwing across a suspended frame. The words are the synchronous method's.
 pub(crate) fn serialize_frozen_with_options(
-    frozen: &Arc<RdfDataset>,
+    frozen: &RdfDataset,
     format: &str,
     options: &JsonLdSerializeOptions,
     base: Option<&str>,

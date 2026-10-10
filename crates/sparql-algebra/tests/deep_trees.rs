@@ -49,12 +49,6 @@ const STACK: usize = 128 * 1024;
 /// One tree a million levels deep at a time: they are large.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
-fn empty() -> GraphPattern {
-    GraphPattern::Bgp {
-        patterns: Vec::new(),
-    }
-}
-
 fn filtered(expr: Expression) -> GraphPattern {
     GraphPattern::Filter {
         expr,
@@ -112,7 +106,7 @@ fn optional_spine() -> GraphPattern {
     for _ in 0..LEVELS {
         pattern = GraphPattern::LeftJoin {
             left: Child::new(pattern),
-            right: Child::new(empty()),
+            right: Child::new(GraphPattern::empty_bgp()),
             expression: None,
         };
     }
@@ -124,7 +118,7 @@ fn union_nest() -> GraphPattern {
     let mut pattern = patterns::triple_bgp("s", iri("p"), "o");
     for _ in 0..LEVELS {
         pattern = GraphPattern::Union {
-            arms: Chain::new(empty(), pattern, []),
+            arms: Chain::new(GraphPattern::empty_bgp(), pattern, []),
         };
     }
     pattern
@@ -136,7 +130,7 @@ fn exists_nest() -> GraphPattern {
     for _ in 0..LEVELS {
         pattern = GraphPattern::Filter {
             expr: Expression::Exists(Child::new(pattern)),
-            inner: Child::new(empty()),
+            inner: Child::new(GraphPattern::empty_bgp()),
         };
     }
     pattern
@@ -261,4 +255,43 @@ deep_tests! {
     nested_path_sequences_are_walked_without_recursion => nested_path_sequences;
     nested_triple_terms_are_walked_without_recursion => nested_triple_terms;
     nested_ground_triple_terms_are_walked_without_recursion => nested_ground_triple_terms;
+}
+
+/// Releasing either quoted child shape needs no new buffer after refusal.
+#[test]
+fn quoted_ground_and_pattern_children_drop_without_allocations() {
+    let _serial = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    purrdf_stack::on_stack(STACK, || {
+        let mut ground = GroundTerm::NamedNode(iri("leaf"));
+        let mut pattern = TermPattern::Variable(var("leaf"));
+        for _ in 0..100_000 {
+            ground = GroundTerm::Triple(Child::new(GroundTriple {
+                subject: ground,
+                predicate: iri("p"),
+                object: GroundTerm::Triple(Child::new(GroundTriple {
+                    subject: GroundTerm::NamedNode(iri("s")),
+                    predicate: iri("p"),
+                    object: GroundTerm::Literal(Literal::new_simple("o")),
+                })),
+            }));
+            pattern = TermPattern::Triple(Child::new(TriplePattern {
+                subject: pattern,
+                predicate: NamedNodePattern::NamedNode(iri("p")),
+                object: TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::Variable(var("s")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: TermPattern::Variable(var("o")),
+                })),
+            }));
+        }
+        let window = CurrentThreadWindow::open();
+        drop(ground);
+        drop(pattern);
+        let released = window.close();
+        assert_eq!(released.allocations, 0);
+        assert!(released.retained_bytes < 0, "all original trees were freed");
+    })
+    .expect("the native small-stack thread starts");
 }

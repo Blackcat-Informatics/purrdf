@@ -300,13 +300,13 @@ jobs:
       - name: Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
         run: make rdf-core-hygiene
 
-  # `cargo test --workspace --locked` (`make test`), as six parallel shards. As one
+  # `cargo test --workspace --locked` (`make test`), as seven parallel shards. As one
   # job it compiled for 25 minutes before running a test and was cancelled at its
   # timeout; nearly all of that is first-party test targets, so a dependency cache
   # alone could not bring it back under budget. `make test-shard` defines the
   # shards and carries the proof that together they are exactly the old command:
   # every shard selects `--workspace`, so dependency features resolve as they did,
-  # and the lib / doc / four integration-test shards partition its default target
+  # and the lib / doc / five integration-test shards partition its default target
   # selection. The one test removed from this lane is c_abi_smoke, which the `capi`
   # job below already runs through `make capi-check`.
   test-shard:
@@ -318,7 +318,7 @@ jobs:
       # the suite, and a cancelled slice is a slice nobody saw.
       fail-fast: false
       matrix:
-        shard: [lib, doc, integration-1, integration-2, integration-3, integration-4]
+        shard: [lib, doc, integration-1, integration-2, integration-3, integration-4, integration-5]
     # Debug-info policy is not set here any more. `[profile.dev]` in Cargo.toml
     # owns it (line tables for our crates, none for dependencies), so this job
     # gets the artifact saving it used to buy with CARGO_PROFILE_TEST_DEBUG on
@@ -357,7 +357,7 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # One cache for all six shards. Every shard resolves features over the whole
+      # One cache for all seven shards. Every shard resolves features over the whole
       # workspace, so each compiles its dependencies identically and one saved set
       # serves them all; the lib shard, which builds every package's dev-dependencies,
       # is the one that saves it. First-party crates are never cached (the action
@@ -378,12 +378,12 @@ jobs:
         uses: ./.github/actions/binaryen-toolchain
 
       - name: Provision the owned native profiling fixture parent
-        if: matrix.shard == 'integration-2'
+        if: matrix.shard == 'integration-5'
         run: |
           sudo mkdir -p /opt/purrdf-native-profile-tests
           sudo chown "$(id -u):$(id -g)" /opt/purrdf-native-profile-tests
 
-      - name: Run workspace tests (this shard; the six include the doc tests)
+      - name: Run workspace tests (this shard; the seven include the doc tests)
         # A hosted x86_64 runner guarantees only the SSE2 baseline, so SSE2 is the one
         # vector path of each family this job requires; the distance, kNN and HNSW
         # tests still assert they executed every path the runner reports, and every
@@ -1797,6 +1797,39 @@ jobs:
           PROFILE_CASE: after-integration-4
           PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_after_integration_4.outputs.artifact-id }}
           PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_after_integration_4.outputs.artifact-digest }}
+        run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
+      - name: Execute validated cold and unchanged warm after-integration-5
+        env:
+          PROFILE_CASE: after-integration-5
+        run: |
+          set -o pipefail
+          campaign="/opt/purrdf-native-profile/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$campaign/$PROFILE_CASE"
+          cp "$campaign/setup-start.txt" "$campaign/$PROFILE_CASE/setup-start.txt"
+          cp "$campaign/resources/setup-disk-before.txt" "$campaign/$PROFILE_CASE/setup-disk-before.txt"
+          cp "$campaign/resources/setup-disk-after.txt" "$campaign/$PROFILE_CASE/setup-disk-after.txt"
+          cp "$campaign/resources/actual-rustc.txt" "$campaign/$PROFILE_CASE/actual-rustc.txt"
+          cp "$campaign/resources/actual-cargo.txt" "$campaign/$PROFILE_CASE/actual-cargo.txt"
+          "$PURRDF_HOSTED_CONTROLLER" hosted-run "$PROFILE_CASE" 2>&1 | tee "$campaign/$PROFILE_CASE/hosted-run.txt"
+      - name: Retain after-integration-5 source-bound evidence even on failure
+        id: upload_after_integration_5
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-profile-${{ github.run_id }}-${{ github.run_attempt }}-arm-after-integration-5
+          path: |
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-5/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-5/*.txt
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-5/*.diff
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-5/*-cargo/*.json
+            /opt/purrdf-native-profile/${{ github.run_id }}-${{ github.run_attempt }}/after-integration-5/*-cargo/*.html
+          if-no-files-found: error
+          retention-days: 30
+      - name: Revalidate uploaded after-integration-5 evidence and reclaim only private build trees
+        env:
+          PROFILE_CASE: after-integration-5
+          PURRDF_HOSTED_UPLOAD_ID: ${{ steps.upload_after_integration_5.outputs.artifact-id }}
+          PURRDF_HOSTED_UPLOAD_DIGEST: ${{ steps.upload_after_integration_5.outputs.artifact-digest }}
         run: '"$PURRDF_HOSTED_CONTROLLER" hosted-reclaim "$PROFILE_CASE"'
       - name: Execute validated cold and unchanged warm after-capi
         env:

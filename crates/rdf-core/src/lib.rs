@@ -152,8 +152,8 @@ pub mod turtle_render;
 pub mod xsd_regex;
 
 pub use backend::{
-    RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer, SerializeGraph,
-    SolutionRow, SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
+    DatasetHandle, RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer,
+    SerializeGraph, SolutionRow, SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
 };
 pub use bundle::{
     ArtifactIndex, ArtifactRecord, BundleError, RdfBundle, SegmentUnitMap, UnitCatalog,
@@ -167,9 +167,9 @@ pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{
     AccessCost, DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView,
-    GraphMatch, GraphMatchValue, GraphSelector, NoopReservation, ProbePattern, ReadResidency,
-    ResolvedQuad, TermGuard, TermLookupError, ViewOperationStatus, ViewTermId,
-    WorkspaceReservation, checkpointed_drain,
+    GraphMatch, GraphMatchValue, GraphSelector, NoopReservation, OwnedWorkspaceReservation,
+    ProbePattern, ReadResidency, ResolvedQuad, TermGuard, TermLookupError, ViewOperationStatus,
+    ViewTermId, WorkspaceReservation, checkpointed_drain,
 };
 pub use describe::{Describer, describe};
 pub use diagnostic::{
@@ -181,8 +181,9 @@ pub use fno::{
     to_ntriples as fno_to_ntriples, to_quads as fno_to_quads,
 };
 pub use governor::{
-    GovernorEvidence, ResourceDimension, ResourceVector, SilencedInvocation, SilencedKind,
-    SilencedTarget, StopCause, TrippedGovernor,
+    EvidenceLease, ExpressionErrorEvidence, GovernorEvidence, ResourceDimension, ResourceVector,
+    SilencedEvidence, SilencedEvidenceBuilder, SilencedInvocation, SilencedKind, SilencedTarget,
+    StopCause, TrippedGovernor,
 };
 pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 /// Deterministic embedding companions bound to exact PurRDF packs.
@@ -202,24 +203,25 @@ pub use ir::{
     CanonicalPagedError, CanonicalRelabeling, Canonicalized, CountingDemandProvider, DatasetDiff,
     DatasetSink, DatasetStateDigest, DatasetStateError, DeltaDatasetView, DeltaViewId,
     FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary, GlobalTermId, GraphExistenceMode,
-    GraphLayer, GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider, MutableDataset, Nested,
-    NonIriPredicate, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind, PageGeneration, PageId,
-    PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
-    PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
-    PagedQueryView, PagedStack, PagedStackError, PagedStackEvidence, PagedStackQueryView,
-    PagedStackSnapshot, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle,
-    QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT,
-    RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, RecordKind,
-    RecordValues, ReservedVocabulary, SkolemError, StackPageOrigin, StackSource,
-    SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue, TermVisit,
-    ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view, canonical_paged_seal,
-    canonical_relabel, canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view,
-    canonicalize_view, canonicalize_with, check_admissible, check_admissible_flat_view,
-    check_admissible_view, dataset_diff, datasets_isomorphic, deskolemize, fold_term,
-    graph_digest_view, skolemize, try_blank_count_view, try_canonicalize,
-    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
-    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_fold_nested,
-    try_graph_digest_view, visit_nested,
+    GraphLayer, GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider, MutableDataset,
+    NativeBuildError, Nested, NonIriPredicate, OwnedTermFoldError, PIPELINE_ROOT_DOMAIN, PageFault,
+    PageFaultKind, PageGeneration, PageId, PageMaterialization, PagePart, PageProvider,
+    PageTranslation, PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable,
+    PagedQueryError, PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PagedStack,
+    PagedStackError, PagedStackEvidence, PagedStackQueryView, PagedStackSnapshot, PipelineBundle,
+    PipelineBundleError, PipelineViewBundle, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan,
+    QuadRef, QuadValues, QueryIndexAllocationError, RDFC_CALL_LIMIT, RESERVED_NAMESPACE,
+    RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, RecordKind, RecordValues,
+    ReservedVocabulary, SkolemError, StackPageOrigin, StackSource, SubsetPageProvider, TermBox,
+    TermId, TermPosition, TermRef, TermValue, TermVisit, ValidatedRdfDatasetBuilder,
+    ViewCanonError, blank_count_view, canonical_paged_seal, canonical_relabel,
+    canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
+    canonicalize_with, check_admissible, check_admissible_flat_view, check_admissible_view,
+    dataset_diff, datasets_isomorphic, deskolemize, fold_term, graph_digest_view, skolemize,
+    try_blank_count_view, try_canonicalize, try_canonicalize_flat_graph_view,
+    try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_view,
+    try_canonicalize_with, try_flat_digest_view, try_fold_nested, try_graph_digest_view,
+    visit_nested,
 };
 pub use ir::{
     PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
@@ -296,7 +298,7 @@ pub use sssom::{
     SssomMeta, SssomSetComment,
 };
 pub use store::RdfStoreCapabilities;
-pub use term_writer::write_term_value;
+pub use term_writer::{write_term_value, write_term_value_with_memory};
 pub use turtle::{
     display_term, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri,
     write_dataset_annotation, write_dataset_annotation_nquad, write_dataset_nquad,
@@ -311,8 +313,8 @@ pub use turtle_render::render as render_canonical_turtle;
 /// for first.
 pub mod prelude {
     pub use crate::backend::{
-        RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer, SerializeGraph,
-        SolutionRow, SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
+        DatasetHandle, RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer,
+        SerializeGraph, SolutionRow, SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
     };
     pub use crate::dataset_view::{DatasetView, GraphMatch, TermLookupError};
     pub use crate::diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};

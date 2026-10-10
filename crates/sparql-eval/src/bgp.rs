@@ -34,51 +34,94 @@ use purrdf_core::{DatasetView, GraphMatch, QuadIds, TermId, TermRef, ViewTermId}
 use purrdf_lex::term_syntax::{
     TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
 };
+use purrdf_lex::text_out::TextOut;
 use purrdf_sparql_algebra::{
     GraphPattern, NamedNodePattern, PropertyFunctionCall, TermPattern, TriplePattern, Variable,
 };
 use purrdf_xsd::ieee::{Binary64, Binary64Scope};
 
-use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
 use crate::dataset_spec::{ActiveDataset, GraphScope};
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::governor::ledger::PlanEstimate;
 use crate::plan::PlanShape;
 use crate::scratch::SolutionTerm;
-use crate::solution::{Solution, SolutionSeq, VarSchema};
+use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
 use crate::statement_layer::{self, StatementProbe};
-use crate::{DetHashMap, DetHashSet};
+use crate::workspace::{AdmittedRecords, AdmittedVec, SharedWorkspace};
 use std::sync::Arc;
 
 mod positive;
 pub(crate) use positive::PositivePlan;
 
+/// A selected BGP order carrying its original native array/control admission.
+/// The resident variant borrows the caller-owned cache's immutable Arc.
+#[derive(Clone, Debug)]
+pub(crate) enum BgpOrder {
+    Static(&'static [usize]),
+    Caller(Arc<[usize]>),
+    Native(SharedWorkspace<AdmittedVec<usize>>),
+}
+
+impl BgpOrder {
+    pub(crate) fn from_admitted(
+        order: AdmittedVec<usize>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Ok(Self::Native(SharedWorkspace::new_admitted(
+            order, workspace,
+        )?))
+    }
+}
+
+impl std::ops::Deref for BgpOrder {
+    type Target = [usize];
+    fn deref(&self) -> &[usize] {
+        match self {
+            Self::Static(order) => order,
+            Self::Caller(order) => order,
+            Self::Native(order) => order,
+        }
+    }
+}
+
+impl AsRef<[usize]> for BgpOrder {
+    fn as_ref(&self) -> &[usize] {
+        self
+    }
+}
+
 /// The guaranteed incoming bindings and row forecast of a positive driver.
 #[derive(Clone)]
 pub(crate) struct SeedEstimate {
     pub(crate) schema: VarSchema,
-    pub(crate) bound: DetHashSet<Variable>,
+    pub(crate) bound: VarSchema,
     pub(crate) rows: u64,
 }
 
 impl SeedEstimate {
     /// Price exactly the binding mask the indexed kernel can rely on for a bag.
-    pub(crate) fn from_rows<I: ViewTermId>(input: &SolutionSeq<I>) -> Self {
-        Self {
+    pub(crate) fn from_rows_admitted<I: ViewTermId>(
+        input: &SolutionSeq<I>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Ok(Self {
             schema: (*input.schema).clone(),
-            bound: input
-                .schema
-                .vars()
-                .iter()
-                .enumerate()
-                .filter(|(column, _)| {
-                    !input.rows.is_empty() && input.rows.iter().all(|row| row[*column].is_some())
-                })
-                .map(|(_, variable)| variable.clone())
-                .collect(),
-            rows: input.rows.len() as u64,
-        }
+            bound: VarSchema::from_vars_admitted(
+                input
+                    .schema
+                    .vars()
+                    .iter()
+                    .enumerate()
+                    .filter(|(column, _)| {
+                        !input.rows.is_empty()
+                            && input.rows.iter().all(|row| row[*column].is_some())
+                    })
+                    .map(|(_, variable)| variable.clone()),
+                workspace,
+            )?,
+            rows: u64::try_from(input.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+        })
     }
 }
 
@@ -86,7 +129,7 @@ impl Default for SeedEstimate {
     fn default() -> Self {
         Self {
             schema: VarSchema::default(),
-            bound: DetHashSet::default(),
+            bound: VarSchema::default(),
             rows: 1,
         }
     }
@@ -117,36 +160,126 @@ enum Pos<I: ViewTermId = TermId> {
     /// one variable (a fully-ground quoted triple resolves to a single [`Pos::Bound`]
     /// id instead). Binding descends into the candidate row's triple-term value,
     /// unifying the inner positions and enforcing repeated-variable consistency.
-    Triple(Box<TriplePos<I>>),
+    Triple(OwnedTriplePos<I>),
 }
 
-/// Release a position without descending into it: a nested quoted triple's components
-/// are moved onto a work list and released from there, so a position nested to any
-/// depth is dropped on constant machine stack.
-impl<I: ViewTermId> Drop for Pos<I> {
-    fn drop(&mut self) {
-        let Self::Triple(triple) = self else {
-            return;
-        };
-        if !matches!(triple.s, Self::Triple(_))
-            && !matches!(triple.p, Self::Triple(_))
-            && !matches!(triple.o, Self::Triple(_))
-        {
-            return;
+/// One compiled box and its original admission. The grant follows the box,
+/// so it covers physical deallocation as well as the node's child payloads.
+struct OwnedTriplePos<I: ViewTermId> {
+    node: Option<Box<TriplePos<I>>>,
+    allocation: Option<crate::workspace::WorkspaceAllocation>,
+    parent: Option<Box<TriplePos<I>>>,
+    parent_allocation: Option<crate::workspace::WorkspaceAllocation>,
+}
+
+struct DetachedTriplePos<I: ViewTermId> {
+    node: Box<TriplePos<I>>,
+    allocation: Option<crate::workspace::WorkspaceAllocation>,
+}
+
+impl<I: ViewTermId> OwnedTriplePos<I> {
+    fn new_admitted(
+        value: TriplePos<I>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let allocation = workspace.charge(
+            u64::try_from(size_of::<TriplePos<I>>())
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        let node =
+            purrdf_core::small::try_boxed(value).map_err(|_| EvalError::AllocationFailed {
+                construct: "compiled triple position",
+            })?;
+        Ok(Self {
+            node: Some(node),
+            allocation: Some(allocation),
+            parent: None,
+            parent_allocation: None,
+        })
+    }
+
+    fn take(&mut self) -> Option<DetachedTriplePos<I>> {
+        self.node.take().map(|node| DetachedTriplePos {
+            node,
+            allocation: self.allocation.take(),
+        })
+    }
+}
+
+impl<I: ViewTermId> From<Box<TriplePos<I>>> for OwnedTriplePos<I> {
+    fn from(node: Box<TriplePos<I>>) -> Self {
+        Self {
+            node: Some(node),
+            allocation: None,
+            parent: None,
+            parent_allocation: None,
         }
-        let mut pending: Vec<Self> = vec![
-            std::mem::replace(&mut triple.s, Self::Slot(0)),
-            std::mem::replace(&mut triple.p, Self::Slot(0)),
-            std::mem::replace(&mut triple.o, Self::Slot(0)),
-        ];
-        while let Some(mut position) = pending.pop() {
-            if let Self::Triple(inner) = &mut position {
-                pending.extend([
-                    std::mem::replace(&mut inner.s, Self::Slot(0)),
-                    std::mem::replace(&mut inner.p, Self::Slot(0)),
-                    std::mem::replace(&mut inner.o, Self::Slot(0)),
-                ]);
+    }
+}
+
+impl<I: ViewTermId> std::ops::Deref for OwnedTriplePos<I> {
+    type Target = TriplePos<I>;
+    fn deref(&self) -> &Self::Target {
+        self.node.as_deref().expect("live compiled position")
+    }
+}
+
+impl<I: ViewTermId> purrdf_lex::walk::DismantleOwned for DetachedTriplePos<I> {
+    fn take_child(&mut self) -> Option<Self> {
+        for position in [&mut self.node.s, &mut self.node.p, &mut self.node.o] {
+            if let Pos::Triple(child) = position
+                && let Some(node) = child.take()
+            {
+                return Some(node);
             }
+        }
+        None
+    }
+
+    fn store_parent(&mut self, parent: Option<Self>) {
+        let child = self
+            .node
+            .last_taken_child()
+            .expect("the selected child slot is vacant");
+        if let Some(parent) = parent {
+            child.parent = Some(parent.node);
+            child.parent_allocation = parent.allocation;
+        }
+    }
+
+    fn take_parent(&mut self) -> Option<Self> {
+        let child = self
+            .node
+            .last_taken_child()
+            .expect("the resumed parent has a vacant child");
+        child.parent.take().map(|node| Self {
+            node,
+            allocation: child.parent_allocation.take(),
+        })
+    }
+}
+
+impl<I: ViewTermId> TriplePos<I> {
+    fn last_taken_child(&mut self) -> Option<&mut OwnedTriplePos<I>> {
+        for position in [&mut self.o, &mut self.p, &mut self.s] {
+            if let Pos::Triple(child) = position
+                && child.node.is_none()
+            {
+                return Some(child);
+            }
+        }
+        None
+    }
+}
+
+impl<I: ViewTermId> Drop for OwnedTriplePos<I> {
+    fn drop(&mut self) {
+        assert!(
+            self.parent.is_none() && self.parent_allocation.is_none(),
+            "a compiled dismantling continuation is removed before ordinary drop"
+        );
+        if let Some(node) = self.take() {
+            purrdf_lex::walk::dismantle_owned(node);
         }
     }
 }
@@ -172,24 +305,40 @@ struct CompiledPattern<I: ViewTermId = TermId> {
 /// to each occurrence. A missing ground term retains the full empty header.
 pub(crate) struct CompiledBgp<I: ViewTermId> {
     working: VarSchema,
-    compiled: Option<Vec<CompiledPattern<I>>>,
+    compiled: Option<AdmittedVec<CompiledPattern<I>>>,
     projection: Option<BgpProjection>,
 }
 
 impl<I: ViewTermId> CompiledBgp<I> {
     /// Keep every real output column even when compilation or a scan yields no row.
-    fn empty(&self) -> SolutionSeq<I> {
+    fn empty(&self, workspace: &crate::WorkspaceCapability) -> Result<SolutionSeq<I>, EvalError> {
         self.projection.as_ref().map_or_else(
-            || empty_over_real_vars(&self.working),
-            |projection| SolutionSeq::empty(Arc::clone(&projection.schema)),
+            || {
+                Ok(SolutionSeq::empty(
+                    VarSchema::from_vars_admitted(
+                        self.working
+                            .vars()
+                            .iter()
+                            .filter(|variable| !is_blank_var(variable))
+                            .cloned(),
+                        workspace,
+                    )?
+                    .shared_admitted(workspace)?,
+                ))
+            },
+            |projection| Ok(SolutionSeq::empty(projection.schema.clone())),
         )
     }
 
     /// Remove only BGP-local blank slots; retain row order and multiplicity.
-    fn project(&self, rows: Vec<Solution<I>>) -> SolutionSeq<I> {
+    fn project(
+        &self,
+        rows: AdmittedVec<RetainedRow<I>>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<SolutionSeq<I>, EvalError> {
         match &self.projection {
-            Some(projection) => projection.apply(rows),
-            None => project_out_blanks(&self.working, rows),
+            Some(projection) => projection.apply(rows, workspace),
+            None => BgpProjection::new_admitted(&self.working, workspace)?.apply(rows, workspace),
         }
     }
 }
@@ -221,11 +370,14 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
 pub(crate) fn eval_bgp_seeded<D: DatasetView + Sync>(
     patterns: &[TriplePattern],
     input: Option<crate::eval::PositiveInput<'_, D::Id>>,
-    selected_order: Option<Arc<[usize]>>,
+    selected_order: Option<BgpOrder>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
     if patterns.is_empty() {
-        return Ok(input.map_or_else(SolutionSeq::unit, crate::eval::PositiveInput::into_sequence));
+        return input.map_or_else(
+            || SolutionSeq::unit_admitted(&ctx.growth),
+            |input| Ok(input.into_sequence()),
+        );
     }
     let schema = input.as_ref().map(|input| input.rows().schema.as_ref());
     let compiled = compile_bgp(patterns, schema, false, ctx)?;
@@ -268,21 +420,20 @@ fn compile_bgp<D: DatasetView + Sync>(
 ) -> Result<CompiledBgp<D::Id>, EvalError> {
     // Pass 1: collect every slot variable (real + synthetic blank) in first-seen
     // (subject, predicate, object) order — the working column layout.
-    let mut working = input.cloned().unwrap_or_default();
-    for pattern in patterns {
-        for key in slot_keys(pattern) {
-            working.push(key);
-        }
-    }
+    let working = collect_slots_admitted(patterns, input, &ctx.growth)?;
 
-    let projection = retain_projection.then(|| BgpProjection::new(&working));
+    let projection = retain_projection
+        .then(|| BgpProjection::new_admitted(&working, &ctx.growth))
+        .transpose()?;
 
     // Pass 2: compile each pattern; a ground constant absent from the dataset makes
     // the whole BGP empty.
-    let mut compiled = Vec::with_capacity(patterns.len());
+    let mut compiled = AdmittedVec::new(&ctx.growth);
     for pattern in patterns {
-        match compile_pattern(pattern, &working, ctx.dataset)? {
-            Some(cp) => compiled.push(cp),
+        match compile_pattern_admitted(pattern, &working, ctx.dataset, &ctx.growth, &|value| {
+            ctx.term_id_by_value(value)
+        })? {
+            Some(cp) => compiled.push(cp)?,
             None => {
                 return Ok(CompiledBgp {
                     working,
@@ -304,36 +455,32 @@ fn compile_bgp<D: DatasetView + Sync>(
 fn eval_compiled_bgp<D: DatasetView + Sync>(
     program: &CompiledBgp<D::Id>,
     input: Option<crate::eval::PositiveInput<'_, D::Id>>,
-    selected_order: Option<Arc<[usize]>>,
+    selected_order: Option<BgpOrder>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
     let working = &program.working;
     let borrowed = input.as_ref().map(crate::eval::PositiveInput::rows);
     let Some(compiled) = &program.compiled else {
-        return Ok(program.empty());
+        return program.empty(&ctx.growth);
     };
     // A singleton has only one order, regardless of nullable bindings. Retained
     // preparation needs no per-occurrence mask allocation for that fixed order.
-    let initial: Vec<bool> = if program.projection.is_some() && compiled.len() == 1 {
-        Vec::new()
-    } else {
-        borrowed.map_or_else(Vec::new, |input| {
-            working
-                .vars()
-                .iter()
-                .map(|variable| {
-                    input.schema.index_of(variable).is_some_and(|column| {
-                        !input.rows.is_empty() && input.rows.iter().all(|row| row[column].is_some())
-                    })
-                })
-                .collect()
-        })
-    };
+    let mut initial = AdmittedVec::new(&ctx.growth);
+    if !(program.projection.is_some() && compiled.len() == 1)
+        && let Some(input) = borrowed
+    {
+        initial = AdmittedVec::with_capacity(working.len(), &ctx.growth)?;
+        for variable in working.vars() {
+            initial.push_reserved(input.schema.index_of(variable).is_some_and(|column| {
+                !input.rows.is_empty() && input.rows.iter().all(|row| row[column].is_some())
+            }));
+        }
+    }
     // An empty producer cannot extend this relation. Keep the full logical
     // header, but do not charge or allocate the ordinary unit seed: there is no
     // intermediate row. Ground-term compilation above retains read failures.
     if borrowed.is_some_and(|input| input.rows.is_empty()) {
-        return Ok(program.empty());
+        return program.empty(&ctx.growth);
     }
 
     // The graph scope for this BGP (resolved once — `active_graph` is fixed across a
@@ -351,30 +498,39 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     // heuristic instead; because the reorder is still just a permutation, the result
     // multiset must stay identical.
     let order = if ctx.options.force_structural_bgp_order {
-        Arc::from(structural_order(compiled))
+        BgpOrder::from_admitted(
+            structural_order_admitted(compiled, &ctx.growth)?,
+            &ctx.growth,
+        )?
     } else if let Some(order) = selected_order.filter(|_| input.is_none()) {
         order
     } else {
-        plan_or_cached_order(compiled, ctx.dataset, &scope, &initial, ctx.bgp_order_cache)
+        plan_or_cached_order(
+            compiled,
+            ctx.dataset,
+            &scope,
+            &initial,
+            ctx.bgp_order_cache,
+            &ctx.growth,
+        )?
     };
 
     // The interned id of `rdf:reifies`, resolved once. `None` ⇒ the dataset has no
     // reifier layer at all (the predicate was never interned), so no virtual reifier
     // candidates exist for any pattern.
     //
-    // The lookup value is a process-wide `static`, not a fresh `TermValue::Iri` per
-    // BGP: `DatasetView::term_id_by_value` takes a borrowed value, the IRI is a
-    // constant, and minting it here charged one heap allocation to every BGP
-    // evaluation — a per-focus-node cost on the SHACL path, for a string that is the
-    // same bytes every time. `TermValue::Iri` owns a `String`, so it cannot be a
-    // `const`; a write-once `OnceLock` is the allocation-free-after-first-use form
-    // and needs no dependency (same shape as `SINGLETON` in `plan_or_cached_order`).
+    // Resident callers keep their existing process-wide borrowed lookup value.
+    // A bounded query admits its lexical input before first construction and
+    // retains the same native reverse identity through its query-owned memo.
     static REIFIES: std::sync::OnceLock<purrdf_core::TermValue> = std::sync::OnceLock::new();
-    let reifies_value = REIFIES.get_or_init(|| purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
-    let reifies_id = ctx
-        .dataset
-        .term_id_by_value(reifies_value)
-        .map_err(EvalError::source_read)?;
+    let reifies_id = if ctx.growth.is_bounded() {
+        let reifies_value = ctx.growth.iri(RDF_REIFIES)?;
+        ctx.term_id_by_value(&reifies_value)?
+    } else {
+        let reifies_value =
+            REIFIES.get_or_init(|| purrdf_core::TermValue::Iri(RDF_REIFIES.to_owned()));
+        ctx.term_id_by_value(reifies_value)?
+    };
 
     // Whether this execution charges fuel at all. Read once, outside the pattern loop:
     // an ungoverned run (and a run whose caller set only a deadline or only an answer
@@ -408,7 +564,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     let cell_ceiling = ctx.cell_row_ceiling(working.len());
     if cell_ceiling == Some(0) {
         let _ = ctx.observe_cells(1, working.len());
-        return Ok(program.empty());
+        return program.empty(&ctx.growth);
     }
     let input_rows = borrowed.map_or(1, |input| input.rows.len());
     if cell_ceiling.is_some_and(|ceiling| input_rows > ceiling) {
@@ -416,21 +572,29 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
             cell_ceiling.expect("a ceiling exists").saturating_add(1),
             working.len(),
         );
-        return Ok(program.empty());
+        return program.empty(&ctx.growth);
     }
     let unit_driven = input.is_none();
-    let mut rows: Vec<Solution<D::Id>> = match input {
+    let mut seed = AdmittedVec::new(&ctx.growth);
+    match input {
         Some(input) => {
-            let mut rows = input.into_rows();
-            for row in &mut rows {
-                row.resize(working.len(), None);
+            for row in input.into_rows() {
+                seed.push(RetainedRow::from_cells(
+                    working.len(),
+                    (0..working.len()).map(|column| row.get(column).copied().flatten()),
+                    &ctx.growth,
+                )?)?;
             }
-            rows
         }
-        None => vec![purrdf_core::smallvec![None; working.len()]],
-    };
+        None => seed.push(RetainedRow::from_cells(
+            working.len(),
+            std::iter::repeat_n(None, working.len()),
+            &ctx.growth,
+        )?)?,
+    }
+    let mut rows = seed;
     if rows.is_empty() {
-        return Ok(program.empty());
+        return program.empty(&ctx.growth);
     }
     for (stage, &i) in order.iter().enumerate() {
         let cp = &compiled[i];
@@ -449,9 +613,9 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
         } else {
             None
         };
-        let expand = |acc: &mut crate::parallel::RowSink<'_, Solution<D::Id>>,
+        let expand = |acc: &mut crate::parallel::RowSink<'_, RetainedRow<D::Id>>,
                       fuel: &mut u64,
-                      row: &Solution<D::Id>| {
+                      row: &RetainedRow<D::Id>| {
             // Scratch identities are absent from the dataset by the interner's
             // promotion law. Treating one as an unbound probe would scan a whole
             // index just to reject every candidate during unification. The same
@@ -459,9 +623,13 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
             if !unit_driven {
                 let mut absent = false;
                 for pos in [&cp.s, &cp.p, &cp.o] {
-                    for_each_slot(pos, &mut |column| {
+                    if let Err(error) = for_each_slot_admitted(pos, &ctx.growth, &mut |column| {
                         absent |= matches!(row[column], Some(SolutionTerm::Computed(_)));
-                    });
+                        Ok(())
+                    }) {
+                        acc.fail(error);
+                        return;
+                    }
                 }
                 if absent {
                     return;
@@ -488,8 +656,13 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                         // evaluator — a highly selective pattern scanned over a large
                         // index — cost nothing at all.
                         *fuel = fuel.saturating_add(1);
-                        if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                            acc.push(extended);
+                        match bind_row(row, cp, &quad, ctx.dataset, &ctx.growth) {
+                            Ok(Some(extended)) => acc.push(extended),
+                            Ok(None) => {}
+                            Err(error) => {
+                                acc.fail(error);
+                                return;
+                            }
                         }
                         // The pushed row ceiling, applied INSIDE the scan. This is the
                         // whole point of the pushdown: a `LIMIT 10` over a million-quad
@@ -510,8 +683,12 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                             return;
                         }
                         *fuel = fuel.saturating_add(1);
-                        if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                            acc.push(extended);
+                        match bind_row(row, cp, &quad, ctx.dataset, &ctx.growth) {
+                            Ok(Some(extended)) => acc.push(extended),
+                            Ok(None) => {}
+                            Err(error) => {
+                                acc.fail(error);
+                            }
                         }
                     });
                 }
@@ -523,18 +700,28 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
                 // local to this row's worker (each row gets its own), identical to the
                 // sequential path.
                 GraphScope::Merge(gs) => {
-                    let mut seen: DetHashSet<(D::Id, D::Id, D::Id)> = DetHashSet::default();
+                    let mut seen = crate::AdmittedMap::<(D::Id, D::Id, D::Id), ()>::default();
                     for &g in gs {
                         for quad in ctx.dataset.quads_for_pattern(s, p, o, GraphMatch::Named(g)) {
                             if ctx.stop_check().is_some() {
                                 return;
                             }
                             *fuel = fuel.saturating_add(1);
-                            if !seen.insert((quad.s, quad.p, quad.o)) {
+                            let key = (quad.s, quad.p, quad.o);
+                            if seen.get(&key).is_some() {
                                 continue;
                             }
-                            if let Some(extended) = bind_row(row, cp, &quad, ctx.dataset) {
-                                acc.push(extended);
+                            if let Err(error) = seen.insert_admitted(key, (), &ctx.growth) {
+                                acc.fail(error);
+                                return;
+                            }
+                            match bind_row(row, cp, &quad, ctx.dataset, &ctx.growth) {
+                                Ok(Some(extended)) => acc.push(extended),
+                                Ok(None) => {}
+                                Err(error) => {
+                                    acc.fail(error);
+                                    return;
+                                }
                             }
                             if acc.is_full() {
                                 return;
@@ -556,20 +743,31 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
         let cell_governs =
             cell_ceiling.filter(|cell| semantic_ceiling.is_none_or(|semantic| *cell < semantic));
         let (next, ledger, cell_overflowed) = if let Some(cell) = cell_governs {
-            crate::parallel::cell_bounded_chunk_map_metered(&rows, metered, cell, expand)
+            crate::parallel::cell_bounded_chunk_map_metered(
+                &rows,
+                metered,
+                cell,
+                &ctx.growth,
+                expand,
+            )?
         } else {
             let effective_ceiling =
                 semantic_ceiling.or_else(|| stop_observable.then_some(usize::MAX));
             let (next, ledger) = match effective_ceiling {
-                Some(ceiling) => {
-                    crate::parallel::bounded_chunk_map_metered(&rows, metered, ceiling, expand)
-                }
+                Some(ceiling) => crate::parallel::bounded_chunk_map_metered(
+                    &rows,
+                    metered,
+                    ceiling,
+                    &ctx.growth,
+                    expand,
+                )?,
                 None => crate::parallel::par_chunk_map_metered(
                     ctx.sequential_operation_required(),
                     &rows,
                     metered,
+                    &ctx.growth,
                     expand,
-                ),
+                )?,
             };
             (next, ledger, false)
         };
@@ -638,7 +836,7 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
         }
     }
 
-    Ok(program.project(rows))
+    program.project(rows, &ctx.growth)
 }
 
 /// The retired most-constrained-first STRUCTURAL heuristic, reproduced here as
@@ -648,59 +846,62 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
 ///
 /// This is the structural order `cost_based_order` replaced; it is intentionally
 /// deterministic and never materialises a plan as triples.
+#[cfg(test)]
 fn structural_order<I: ViewTermId>(compiled: &[CompiledPattern<I>]) -> Vec<usize> {
-    /// Whether every slot reachable from `pos` is already bound, over a work list of
-    /// the nested positions in `(s, p, o)` order, stopping at the first unbound slot.
-    fn constrained<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
-        let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
-        while let Some(pos) = pending.pop() {
-            match pos {
-                Pos::Bound(_) => {}
-                Pos::Slot(c) => {
-                    if !bound[*c] {
-                        return false;
-                    }
-                }
-                Pos::Triple(t) => pending.extend([&t.o, &t.p, &t.s]),
+    structural_order_admitted(compiled, &crate::WorkspaceCapability::resident())
+        .expect("resident structural order")
+        .try_into_resident()
+        .expect("resident structural order ownership")
+}
+
+fn structural_order_admitted<I: ViewTermId>(
+    compiled: &[CompiledPattern<I>],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<usize>, EvalError> {
+    let n = compiled.len();
+    let columns = cost_columns(compiled, workspace)?;
+    let mut bound = cost_bound_mask(&[], columns, workspace)?;
+    let mut scheduled = AdmittedVec::with_capacity(n, workspace)?;
+    for _ in 0..n {
+        scheduled.push_reserved(false);
+    }
+    let mut order = AdmittedVec::with_capacity(n, workspace)?;
+    for _ in 0..n {
+        let mut any_connected = false;
+        for index in 0..n {
+            if !scheduled[index] && pattern_connected_admitted(&compiled[index], &bound, workspace)?
+            {
+                any_connected = true;
+                break;
             }
         }
-        true
-    }
-    let n = compiled.len();
-    let mut n_cols = 0usize;
-    for cp in compiled {
-        for pos in [&cp.s, &cp.p, &cp.o] {
-            for_each_slot(pos, &mut |c| n_cols = n_cols.max(c + 1));
-        }
-    }
-    let mut bound = vec![false; n_cols];
-    let mut scheduled = vec![false; n];
-    let mut order = Vec::with_capacity(n);
-    for _ in 0..n {
-        let any_connected =
-            (0..n).any(|i| !scheduled[i] && pattern_connected(&compiled[i], &bound));
-        let mut best: Option<usize> = None;
-        let mut best_score = 0usize;
-        for i in 0..n {
-            if scheduled[i] || (any_connected && !pattern_connected(&compiled[i], &bound)) {
+        let mut best = None;
+        let mut best_score = 0;
+        for index in 0..n {
+            if scheduled[index]
+                || (any_connected
+                    && !pattern_connected_admitted(&compiled[index], &bound, workspace)?)
+            {
                 continue;
             }
-            let cp = &compiled[i];
-            let score = [&cp.s, &cp.p, &cp.o]
-                .into_iter()
-                .filter(|p| constrained(p, &bound))
-                .count();
+            let pattern = &compiled[index];
+            let mut score = 0;
+            for position in [&pattern.s, &pattern.p, &pattern.o] {
+                if !visit_slots_admitted(position, workspace, &mut |column| Ok(!bound[column]))? {
+                    score += 1;
+                }
+            }
             if best.is_none() || score > best_score {
-                best = Some(i);
+                best = Some(index);
                 best_score = score;
             }
         }
         let chosen = best.expect("an unscheduled pattern always remains");
-        scheduled[chosen] = true;
-        mark_bound(&compiled[chosen], &mut bound);
-        order.push(chosen);
+        scheduled.as_mut_slice()[chosen] = true;
+        mark_bound_admitted(&compiled[chosen], bound.as_mut_slice(), workspace)?;
+        order.push_reserved(chosen);
     }
-    order
+    Ok(order)
 }
 
 /// The BGP-size ceiling for exhaustive join-order search. At or below this many
@@ -721,32 +922,24 @@ fn plan_or_cached_order<D: DatasetView>(
     scope: &GraphScope<D::Id>,
     initial: &[bool],
     cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
-) -> Arc<[usize]> {
-    // A one-pattern BGP has exactly one join order, so there is nothing to plan and
-    // nothing worth remembering. Short-circuiting it is not a micro-optimisation of
-    // a cheap case: it is what keeps the cache USEFUL once a pre-bound variable has
-    // been pushed into the pattern.
-    //
-    // `bgp_shape_key` hashes a `Pos::Bound`'s interned ID, so `<c1> <p> ?o` and
-    // `<c2> <p> ?o` are different keys. That is right for a multi-pattern BGP, where
-    // which constant is bound really can change the best order. For the single
-    // pattern a SHACL-SPARQL constraint body usually is, it meant one fresh key per
-    // FOCUS NODE — a cache that could never hit, charged the full `cost_based_order`
-    // walk anyway, and then evicted a live entry to store an answer nobody would ask
-    // for again. The order-cache traffic was the largest term left in the per-focus
-    // cost after the pre-binding pushdown, and it was the only one that was not
-    // exactly linear in the focus count, because what a bounded cache evicts depends
-    // on how the focus nodes were chunked across workers.
-    if compiled.len() == 1 {
-        static SINGLETON: std::sync::OnceLock<Arc<[usize]>> = std::sync::OnceLock::new();
-        return Arc::clone(SINGLETON.get_or_init(|| Arc::from(vec![0_usize])));
+    workspace: &crate::WorkspaceCapability,
+) -> Result<BgpOrder, EvalError> {
+    if compiled.len() <= 1 {
+        return Ok(BgpOrder::Static(if compiled.is_empty() {
+            &[]
+        } else {
+            &[0]
+        }));
     }
     let Some(cache) = cache else {
-        return Arc::from(cost_based_order_from(compiled, dataset, scope, initial));
+        return BgpOrder::from_admitted(
+            cost_based_order_from_admitted(compiled, dataset, scope, initial, workspace)?,
+            workspace,
+        );
     };
     let key = (
         dataset.stats_fingerprint(),
-        bgp_shape_key_seeded(compiled, scope, initial),
+        bgp_shape_key_seeded_admitted(compiled, scope, initial, workspace)?,
     );
     use crate::plan_cache::OrderCacheRef;
     let cached = match cache {
@@ -754,36 +947,43 @@ fn plan_or_cached_order<D: DatasetView>(
             .read()
             .expect("order cache lock poisoned")
             .get(&key)
-            .cloned(),
+            .cloned()
+            .map(BgpOrder::Caller),
         OrderCacheRef::Bounded(cache) => cache.lock().expect("order cache lock poisoned").get(&key),
     };
-    if let Some(order) = cached {
-        // A shape-key collision is NOT licensed by the stats-fingerprint safety
-        // argument: a wrong-length order would index out of bounds in the join loop.
-        // Guard it — on a length mismatch fall through and re-plan.
-        if order.len() == compiled.len() {
-            return order;
-        }
+    if let Some(order) = cached
+        && order.len() == compiled.len()
+    {
+        return Ok(order);
     }
-    let order: Arc<[usize]> = Arc::from(cost_based_order_from(compiled, dataset, scope, initial));
+    let order = BgpOrder::from_admitted(
+        cost_based_order_from_admitted(compiled, dataset, scope, initial, workspace)?,
+        workspace,
+    )?;
     match cache {
-        OrderCacheRef::Legacy(cache) => {
+        OrderCacheRef::Legacy(cache) if !workspace.is_bounded() => {
+            // The caller's legacy cache owns resident Arc arrays. Native admitted
+            // orders are retained only by the ownership-carrying engine cache.
             cache
                 .write()
                 .expect("order cache lock poisoned")
-                .insert(key, Arc::clone(&order));
+                .insert(key, Arc::from(order.as_ref()));
         }
+        OrderCacheRef::Legacy(_) => {}
         OrderCacheRef::Bounded(cache) => {
-            let bytes = size_of_val(order.as_ref())
-                .saturating_add(2 * size_of::<usize>())
-                .saturating_add(2 * size_of_val(&key));
+            let bytes = std::alloc::Layout::array::<usize>(order.len())
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)?
+                .size()
+                .checked_add(size_of::<BgpOrder>())
+                .and_then(|bytes| bytes.checked_add(2 * size_of_val(&key)))
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
             cache
                 .lock()
                 .expect("order cache lock poisoned")
-                .insert(key, Arc::clone(&order), bytes);
+                .insert_admitted(key, order.clone(), bytes, workspace)?;
         }
     }
-    order
+    Ok(order)
 }
 
 /// A deterministic hash of a BGP's *shape* — its pattern count, every position's
@@ -791,26 +991,31 @@ fn plan_or_cached_order<D: DatasetView>(
 /// the order cache key. Encodes `compiled.len()` and the full positional structure so two
 /// structurally distinct BGPs cannot collide to one cached order, and folds in the scope
 /// because a pattern's cardinality (hence its best order) is scope-dependent.
-fn bgp_shape_key_seeded<I: ViewTermId>(
+fn bgp_shape_key_seeded_admitted<I: ViewTermId>(
     compiled: &[CompiledPattern<I>],
     scope: &GraphScope<I>,
     initial: &[bool],
-) -> u64 {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<u64, EvalError> {
     use std::hash::{Hash, Hasher};
     let mut hash = purrdf_hash::fixed::FixedHasher::default();
-    bgp_shape_key(compiled, scope).hash(&mut hash);
+    bgp_shape_key_admitted(compiled, scope, workspace)?.hash(&mut hash);
     initial.hash(&mut hash);
-    hash.finish()
+    Ok(hash.finish())
 }
 
-fn bgp_shape_key<I: ViewTermId>(compiled: &[CompiledPattern<I>], scope: &GraphScope<I>) -> u64 {
+fn bgp_shape_key_admitted<I: ViewTermId>(
+    compiled: &[CompiledPattern<I>],
+    scope: &GraphScope<I>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<u64, EvalError> {
     use std::hash::{Hash, Hasher};
     let mut h = purrdf_hash::fixed::FixedHasher::default();
     compiled.len().hash(&mut h);
     for cp in compiled {
-        hash_pos(&cp.s, &mut h);
-        hash_pos(&cp.p, &mut h);
-        hash_pos(&cp.o, &mut h);
+        hash_pos_admitted(&cp.s, &mut h, workspace)?;
+        hash_pos_admitted(&cp.p, &mut h, workspace)?;
+        hash_pos_admitted(&cp.o, &mut h, workspace)?;
     }
     match scope {
         GraphScope::One(gm) => {
@@ -832,7 +1037,7 @@ fn bgp_shape_key<I: ViewTermId>(compiled: &[CompiledPattern<I>], scope: &GraphSc
             }
         }
     }
-    h.finish()
+    Ok(h.finish())
 }
 
 /// Hash one compiled position structurally (tag + payload), descending into nested
@@ -842,9 +1047,28 @@ fn bgp_shape_key<I: ViewTermId>(compiled: &[CompiledPattern<I>], scope: &GraphSc
 /// whole of its subject, then its predicate, then its object — the sequence a
 /// recursive descent writes — so a position nested to any depth hashes on constant
 /// machine stack to the same value.
+#[cfg(test)]
 fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
+    hash_pos_admitted(pos, h, &crate::WorkspaceCapability::resident())
+        .expect("resident shape hash");
+}
+
+fn hash_pos_admitted<I: ViewTermId, H: std::hash::Hasher>(
+    pos: &Pos<I>,
+    h: &mut H,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
     use std::hash::Hash;
-    let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
+    let mut storage = crate::workspace::LexicalFrame::new(workspace);
+    let mut pending = purrdf_lex::walk::WorkList::<&Pos<I>, 8>::new();
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    pending
+        .try_push_admitted(pos, &mut memory)
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "BGP shape hash")
+        })?;
     while let Some(pos) = pending.pop() {
         match pos {
             Pos::Slot(c) => {
@@ -863,10 +1087,24 @@ fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
             }
             Pos::Triple(t) => {
                 2u8.hash(h);
-                pending.extend([&t.o, &t.p, &t.s]);
+                for child in [&t.o, &t.p, &t.s] {
+                    pending
+                        .try_push_admitted(child, &mut memory)
+                        .map_err(|error| {
+                            memory
+                                .admission_mut()
+                                .storage_error(error, "BGP shape hash")
+                        })?;
+                }
             }
         }
     }
+    pending.release_admitted(&mut memory).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "BGP shape hash")
+    })?;
+    Ok(())
 }
 
 /// Order compiled BGP patterns cheapest-first through the existing native planner.
@@ -894,6 +1132,7 @@ fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
 /// identical run to run, no hash-iteration leak.
 ///
 /// Returns a permutation of `0..compiled.len()`.
+#[cfg(test)]
 fn cost_based_order<D: DatasetView>(
     compiled: &[CompiledPattern<D::Id>],
     dataset: &D,
@@ -902,35 +1141,93 @@ fn cost_based_order<D: DatasetView>(
     cost_based_order_from(compiled, dataset, scope, &[])
 }
 
+#[cfg(test)]
 fn cost_based_order_from<D: DatasetView>(
     compiled: &[CompiledPattern<D::Id>],
     dataset: &D,
     scope: &GraphScope<D::Id>,
     initial: &[bool],
 ) -> Vec<usize> {
+    cost_based_order_from_admitted(
+        compiled,
+        dataset,
+        scope,
+        initial,
+        &crate::WorkspaceCapability::resident(),
+    )
+    .expect("resident cost order")
+    .try_into_resident()
+    .expect("resident cost order ownership")
+}
+
+fn cost_based_order_from_admitted<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    initial: &[bool],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<usize>, EvalError> {
     let n = compiled.len();
     if n <= 1 {
-        return (0..n).collect();
+        let mut order = AdmittedVec::with_capacity(n, workspace)?;
+        for index in 0..n {
+            order.push_reserved(index);
+        }
+        return Ok(order);
     }
+    let base = cost_base(compiled, dataset, scope, workspace)?;
+    let terms = dataset.term_count().max(1) as f64;
+    let columns = cost_columns(compiled, workspace)?;
+    if n <= COST_DP_MAX_PATTERNS {
+        cost_order_dp_costs_from(compiled, &base, terms, columns, initial, workspace)
+    } else {
+        cost_order_greedy_costs_from(compiled, &base, terms, columns, initial, workspace)
+    }
+}
 
-    let base = cost_base(compiled, dataset, scope);
-    // Distinct-term count as the equality-join domain size (`1/T` per join axis).
-    let t = dataset.term_count().max(1) as f64;
+fn cardinality_base<D: DatasetView>(
+    compiled: &[CompiledPattern<D::Id>],
+    dataset: &D,
+    scope: &GraphScope<D::Id>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<f64>, EvalError> {
+    let mut base = AdmittedVec::with_capacity(compiled.len(), workspace)?;
+    for pattern in compiled {
+        base.push_reserved(base_cardinality(dataset, pattern, scope) as f64);
+    }
+    Ok(base)
+}
 
-    // The dense bound-mask width: the highest slot column across all patterns. A
-    // position may be a nested triple, so descend through it to find every slot.
-    let mut n_cols = 0usize;
-    for cp in compiled {
-        for pos in [&cp.s, &cp.p, &cp.o] {
-            for_each_slot(pos, &mut |c| n_cols = n_cols.max(c + 1));
+fn cost_columns<I: ViewTermId>(
+    compiled: &[CompiledPattern<I>],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<usize, EvalError> {
+    let mut columns = 0_usize;
+    for pattern in compiled {
+        for position in [&pattern.s, &pattern.p, &pattern.o] {
+            for_each_slot_admitted(position, workspace, &mut |column| {
+                columns = columns.max(
+                    column
+                        .checked_add(1)
+                        .ok_or(EvalError::WorkspaceBoundOverflow)?,
+                );
+                Ok(())
+            })?;
         }
     }
+    Ok(columns)
+}
 
-    if n <= COST_DP_MAX_PATTERNS {
-        cost_order_dp_costs_from(compiled, &base, t, n_cols, initial)
-    } else {
-        cost_order_greedy_costs_from(compiled, &base, t, n_cols, initial)
+fn cost_bound_mask(
+    initial: &[bool],
+    columns: usize,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<bool>, EvalError> {
+    let mut bound = AdmittedVec::with_capacity(columns, workspace)?;
+    for column in 0..columns {
+        bound.push_reserved(initial.get(column).copied().unwrap_or(false));
     }
+    Ok(bound)
 }
 
 /// Output cardinality advances the prefix; host access work ranks the read.
@@ -945,52 +1242,52 @@ fn cost_base<D: DatasetView>(
     compiled: &[CompiledPattern<D::Id>],
     dataset: &D,
     scope: &GraphScope<D::Id>,
-) -> Vec<PatternCost> {
-    compiled
-        .iter()
-        .map(|pattern| {
-            let s = constant_of(&pattern.s);
-            let p = constant_of(&pattern.p);
-            let o = constant_of(&pattern.o);
-            let mut rows = 0_u64;
-            let mut work = 0_u128;
-            let mut cardinality_only = true;
-            let mut add_graph = |g| {
-                let probe = purrdf_core::ProbePattern { s, p, o, g };
-                let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
-                let cost = dataset.cost(probe, &plan);
-                cardinality_only &= cost.cardinality_fallback().is_some();
-                let cardinality = cost
-                    .cardinality_fallback()
-                    .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, g));
-                // Preserve the existing cardinality sum, including its profile's
-                // overflow behavior. Host work is a separate statistic: every
-                // physically representable graph slice on 32/64-bit targets has
-                // a sum of u64 work estimates below u128::MAX.
-                rows += cardinality;
-                work = work
-                    .checked_add(u128::from(cost.work()))
-                    .expect("physically representable graph work sum fits u128");
-            };
-            match scope {
-                GraphScope::One(g) => add_graph(*g),
-                GraphScope::Merge(graphs) => {
-                    for &graph in graphs {
-                        add_graph(GraphMatch::Named(graph));
-                    }
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<PatternCost>, EvalError> {
+    let mut base = AdmittedVec::with_capacity(compiled.len(), workspace)?;
+    for pattern in compiled {
+        let s = constant_of(&pattern.s);
+        let p = constant_of(&pattern.p);
+        let o = constant_of(&pattern.o);
+        let mut rows = 0_u64;
+        let mut work = 0_u128;
+        let mut cardinality_only = true;
+        let mut add_graph = |g| {
+            let probe = purrdf_core::ProbePattern { s, p, o, g };
+            let plan = dataset.probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+            let cost = dataset.cost(probe, &plan);
+            cardinality_only &= cost.cardinality_fallback().is_some();
+            let cardinality = cost
+                .cardinality_fallback()
+                .unwrap_or_else(|| dataset.cardinality_estimate(s, p, o, g));
+            // Preserve the existing cardinality sum, including its profile's
+            // overflow behavior. Host work is a separate statistic: every
+            // physically representable graph slice on 32/64-bit targets has
+            // a sum of u64 work estimates below u128::MAX.
+            rows += cardinality;
+            work = work
+                .checked_add(u128::from(cost.work()))
+                .expect("physically representable graph work sum fits u128");
+        };
+        match scope {
+            GraphScope::One(g) => add_graph(*g),
+            GraphScope::Merge(graphs) => {
+                for &graph in graphs {
+                    add_graph(GraphMatch::Named(graph));
                 }
             }
-            PatternCost {
-                rows: rows as f64,
-                cardinality_only,
-                work: if cardinality_only {
-                    rows as f64
-                } else {
-                    statistic_f64(work)
-                },
-            }
-        })
-        .collect()
+        }
+        base.push_reserved(PatternCost {
+            rows: rows as f64,
+            cardinality_only,
+            work: if cardinality_only {
+                rows as f64
+            } else {
+                statistic_f64(work)
+            },
+        });
+    }
+    Ok(base)
 }
 
 fn statistic_f64(value: u128) -> f64 {
@@ -1058,11 +1355,22 @@ fn constant_of<I: ViewTermId>(pos: &Pos<I>) -> Option<I> {
 /// earlier-scheduled pattern — each is an equality-join axis (selectivity ~`1/T`).
 /// Ground constants are excluded: their selectivity is already folded into the
 /// pattern's base cardinality.
+#[cfg(test)]
 fn join_positions<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &[bool]) -> usize {
-    [&cp.s, &cp.p, &cp.o]
-        .into_iter()
-        .filter(|pos| pos_has_bound_slot(pos, bound))
-        .count()
+    join_positions_admitted(cp, bound, &crate::WorkspaceCapability::resident())
+        .expect("resident join positions")
+}
+
+fn join_positions_admitted<I: ViewTermId>(
+    pattern: &CompiledPattern<I>,
+    bound: &[bool],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<usize, EvalError> {
+    let mut count = 0;
+    for position in [&pattern.s, &pattern.p, &pattern.o] {
+        count += usize::from(pos_has_bound_slot_admitted(position, bound, workspace)?);
+    }
+    Ok(count)
 }
 
 /// The running intermediate-size estimate after appending a pattern: scale by its
@@ -1115,7 +1423,17 @@ fn cost_order_greedy_from<I: ViewTermId>(
     n_cols: usize,
     initial: &[bool],
 ) -> Vec<usize> {
-    cost_order_greedy_costs_from(compiled, &cardinality_cost_base(base), t, n_cols, initial)
+    cost_order_greedy_costs_from(
+        compiled,
+        &cardinality_cost_base(base),
+        t,
+        n_cols,
+        initial,
+        &crate::WorkspaceCapability::resident(),
+    )
+    .expect("resident greedy order")
+    .try_into_resident()
+    .expect("resident greedy order ownership")
 }
 
 fn cost_order_greedy_costs_from<I: ViewTermId>(
@@ -1124,48 +1442,52 @@ fn cost_order_greedy_costs_from<I: ViewTermId>(
     t: f64,
     n_cols: usize,
     initial: &[bool],
-) -> Vec<usize> {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<usize>, EvalError> {
     let n = compiled.len();
     let precision = Binary64Scope::enter();
     let ops = precision.ops();
-    let mut bound = initial.to_vec();
-    bound.resize(n_cols, false);
-    let mut scheduled = vec![false; n];
-    let mut order = Vec::with_capacity(n);
-    let mut running = 1.0f64;
-
+    let mut bound = cost_bound_mask(initial, n_cols, workspace)?;
+    let mut scheduled = AdmittedVec::with_capacity(n, workspace)?;
     for _ in 0..n {
-        // While a connected pattern remains, only such patterns are eligible — never
-        // force a Cartesian product. (Round 1: nothing bound, nothing connected, so
-        // every pattern is eligible and the lowest-cardinality one seeds the join.)
-        let any_connected =
-            (0..n).any(|i| !scheduled[i] && pattern_connected(&compiled[i], &bound));
-        let mut best: Option<usize> = None;
+        scheduled.push_reserved(false);
+    }
+    let mut order = AdmittedVec::with_capacity(n, workspace)?;
+    let mut running = 1.0_f64;
+    for _ in 0..n {
+        let mut any_connected = false;
+        for index in 0..n {
+            if !scheduled[index] && pattern_connected_admitted(&compiled[index], &bound, workspace)?
+            {
+                any_connected = true;
+                break;
+            }
+        }
+        let mut best = None;
         let mut best_size = f64::INFINITY;
         let mut best_work = f64::INFINITY;
-        for i in 0..n {
-            if scheduled[i] {
+        for index in 0..n {
+            if scheduled[index] {
                 continue;
             }
-            if any_connected && !pattern_connected(&compiled[i], &bound) {
+            if any_connected && !pattern_connected_admitted(&compiled[index], &bound, workspace)? {
                 continue;
             }
-            let joins = join_positions(&compiled[i], &bound);
-            let (size, work) = step_cost(ops, running, base[i], joins, t);
-            // Strict `<` over an index-order scan ⇒ lowest original index wins ties.
+            let joins = join_positions_admitted(&compiled[index], &bound, workspace)?;
+            let (size, work) = step_cost(ops, running, base[index], joins, t);
             if best.is_none() || work < best_work {
-                best = Some(i);
+                best = Some(index);
                 best_size = size;
                 best_work = work;
             }
         }
-        let chosen = best.expect("an unscheduled pattern always remains");
-        scheduled[chosen] = true;
-        mark_bound(&compiled[chosen], &mut bound);
+        let chosen = best.expect("an unscheduled pattern remains");
+        scheduled.as_mut_slice()[chosen] = true;
+        mark_bound_admitted(&compiled[chosen], bound.as_mut_slice(), workspace)?;
         running = best_size;
-        order.push(chosen);
+        order.push_reserved(chosen);
     }
-    order
+    Ok(order)
 }
 
 /// One left-deep plan in the subset DP: its accumulated access work, the running
@@ -1233,7 +1555,17 @@ fn cost_order_dp_from<I: ViewTermId>(
     n_cols: usize,
     initial: &[bool],
 ) -> Vec<usize> {
-    cost_order_dp_costs_from(compiled, &cardinality_cost_base(base), t, n_cols, initial)
+    cost_order_dp_costs_from(
+        compiled,
+        &cardinality_cost_base(base),
+        t,
+        n_cols,
+        initial,
+        &crate::WorkspaceCapability::resident(),
+    )
+    .expect("resident subset order")
+    .try_into_resident()
+    .expect("resident subset order ownership")
 }
 
 fn cost_order_dp_costs_from<I: ViewTermId>(
@@ -1242,82 +1574,71 @@ fn cost_order_dp_costs_from<I: ViewTermId>(
     t: f64,
     n_cols: usize,
     initial: &[bool],
-) -> Vec<usize> {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<usize>, EvalError> {
     let n = compiled.len();
-    // Safety invariant: each pattern index must fit in a 4-bit nibble (values 1–15
-    // after the 1-based offset). COST_DP_MAX_PATTERNS == 8 satisfies this with margin.
-    debug_assert!(
-        n <= COST_DP_MAX_PATTERNS,
-        "cost_order_dp called with n={n} > COST_DP_MAX_PATTERNS={COST_DP_MAX_PATTERNS}"
-    );
+    debug_assert!(n <= COST_DP_MAX_PATTERNS);
     const {
-        assert!(
-            COST_DP_MAX_PATTERNS <= 15,
-            "COST_DP_MAX_PATTERNS must be ≤ 15 so every index fits in a 4-bit nibble"
-        );
-    };
-
-    let full: usize = (1usize << n) - 1;
+        assert!(COST_DP_MAX_PATTERNS <= 15);
+    }
+    let states = 1_usize
+        .checked_shl(u32::try_from(n).map_err(|_| EvalError::WorkspaceBoundOverflow)?)
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    let full = states - 1;
     let precision = Binary64Scope::enter();
     let ops = precision.ops();
-    let mut dp: Vec<Option<DpPlan>> = vec![None; full + 1];
-    dp[0] = Some(DpPlan {
+    let mut dp = AdmittedVec::<Option<DpPlan>>::with_capacity(states, workspace)?;
+    for _ in 0..states {
+        dp.push_reserved(None);
+    }
+    dp.as_mut_slice()[0] = Some(DpPlan {
         cost: 0.0,
         size: 1.0,
         order_bits: 0,
         len: 0,
     });
-
-    // Masks ascend, and every transition sets one more bit (a strictly larger mask),
-    // so `dp[mask]` is final by the time the loop reaches it.
     for mask in 0..=full {
         let Some(plan) = dp[mask] else {
             continue;
         };
-        // The slots bound after this prefix (the union of the set's slots).
-        // Decode order_bits MSB→LSB to recover the scheduled indices.
-        let mut bound = initial.to_vec();
-        bound.resize(n_cols, false);
-        for k in 0..plan.len {
-            let nibble_pos = plan.len - 1 - k; // 0 = least-significant occupied nibble
-            let idx = ((plan.order_bits >> (4 * nibble_pos)) & 0xF) as usize - 1;
-            mark_bound(&compiled[idx], &mut bound);
+        let mut bound = cost_bound_mask(initial, n_cols, workspace)?;
+        for position in 0..plan.len {
+            let nibble = plan.len - 1 - position;
+            let index = ((plan.order_bits >> (4 * nibble)) & 0xF) as usize - 1;
+            mark_bound_admitted(&compiled[index], bound.as_mut_slice(), workspace)?;
         }
-        let any_connected =
-            (0..n).any(|i| mask & (1usize << i) == 0 && pattern_connected(&compiled[i], &bound));
-
-        for i in 0..n {
-            if mask & (1usize << i) != 0 {
+        let mut any_connected = false;
+        for (index, pattern) in compiled.iter().enumerate() {
+            if mask & (1_usize << index) == 0
+                && pattern_connected_admitted(pattern, &bound, workspace)?
+            {
+                any_connected = true;
+                break;
+            }
+        }
+        for index in 0..n {
+            if mask & (1_usize << index) != 0 {
                 continue;
             }
-            // Seed (mask == 0) is free; afterwards prefer a connected pattern while one
-            // exists (no Cartesian product unless the BGP is genuinely disconnected).
-            if any_connected && !pattern_connected(&compiled[i], &bound) {
+            if any_connected && !pattern_connected_admitted(&compiled[index], &bound, workspace)? {
                 continue;
             }
-            let joins = join_positions(&compiled[i], &bound);
-            let (size, work) = step_cost(ops, plan.size, base[i], joins, t);
+            let joins = join_positions_admitted(&compiled[index], &bound, workspace)?;
+            let (size, work) = step_cost(ops, plan.size, base[index], joins, t);
             let cost = ops.add(plan.cost, work);
-            // Append pattern index `i` as a new LSB nibble (1-based so index 0 ≠ empty).
-            let order_bits = (plan.order_bits << 4) | (i as u64 + 1);
+            let order_bits = (plan.order_bits << 4) | (index as u64 + 1);
             let len = plan.len + 1;
-            let next = mask | (1usize << i);
-            let better = match &dp[next] {
+            let next = mask | (1_usize << index);
+            let better = match dp[next] {
                 None => true,
-                // `total_cmp` is a deterministic total order (and avoids comparing
-                // floats with `==`); ties fall through to the nibble-packed order
-                // comparison. Both candidates have the same `len` (identical popcount
-                // of `next`), so their packed words are the same width and `u64`
-                // comparison reads them left-to-right — exactly lexicographic order
-                // on the pattern-index sequence, lowest-index first.
-                Some(cur) => match cost.total_cmp(&cur.cost) {
+                Some(current) => match cost.total_cmp(&current.cost) {
                     std::cmp::Ordering::Less => true,
                     std::cmp::Ordering::Greater => false,
-                    std::cmp::Ordering::Equal => order_bits < cur.order_bits,
+                    std::cmp::Ordering::Equal => order_bits < current.order_bits,
                 },
             };
             if better {
-                dp[next] = Some(DpPlan {
+                dp.as_mut_slice()[next] = Some(DpPlan {
                     cost,
                     size,
                     order_bits,
@@ -1326,63 +1647,132 @@ fn cost_order_dp_costs_from<I: ViewTermId>(
             }
         }
     }
-
-    let best = dp[full].expect("the DP always reaches the full set");
-    // Decode MSB→LSB: the first-scheduled pattern is in the most-significant nibble.
-    (0..best.len)
-        .map(|k| {
-            let nibble_pos = best.len - 1 - k;
-            ((best.order_bits >> (4 * nibble_pos)) & 0xF) as usize - 1
-        })
-        .collect()
+    let best = dp[full].expect("the subset DP reaches the full set");
+    let mut order = AdmittedVec::with_capacity(usize::from(best.len), workspace)?;
+    for position in 0..best.len {
+        let nibble = best.len - 1 - position;
+        order.push_reserved(((best.order_bits >> (4 * nibble)) & 0xF) as usize - 1);
+    }
+    Ok(order)
 }
 
 /// Whether a pattern shares at least one already-bound variable with the bindings
 /// produced so far (so joining it cannot be a Cartesian product). Descends into nested
 /// quoted triples: a triple position is connected if any of its inner slots is bound.
-fn pattern_connected<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &[bool]) -> bool {
-    [&cp.s, &cp.p, &cp.o]
-        .into_iter()
-        .any(|pos| pos_has_bound_slot(pos, bound))
+fn pattern_connected_admitted<I: ViewTermId>(
+    pattern: &CompiledPattern<I>,
+    bound: &[bool],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    for position in [&pattern.s, &pattern.p, &pattern.o] {
+        if pos_has_bound_slot_admitted(position, bound, workspace)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Whether a position contains an already-bound slot anywhere, over a work list of
 /// the nested positions in `(s, p, o)` order, stopping at the first bound slot.
+#[cfg(test)]
 fn pos_has_bound_slot<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
-    let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
-    while let Some(pos) = pending.pop() {
-        match pos {
-            Pos::Bound(_) => {}
-            Pos::Slot(c) => {
-                if bound[*c] {
-                    return true;
-                }
-            }
-            Pos::Triple(t) => pending.extend([&t.o, &t.p, &t.s]),
-        }
-    }
-    false
+    pos_has_bound_slot_admitted(pos, bound, &crate::WorkspaceCapability::resident())
+        .expect("resident bound slot")
+}
+
+fn pos_has_bound_slot_admitted<I: ViewTermId>(
+    position: &Pos<I>,
+    bound: &[bool],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    visit_slots_admitted(position, workspace, &mut |column| Ok(bound[column]))
 }
 
 /// Record a scheduled pattern's slot columns as now-bound (descending into nested
 /// quoted triples).
+#[cfg(test)]
 fn mark_bound<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &mut [bool]) {
-    for pos in [&cp.s, &cp.p, &cp.o] {
-        for_each_slot(pos, &mut |c| bound[c] = true);
+    mark_bound_admitted(cp, bound, &crate::WorkspaceCapability::resident())
+        .expect("resident bound mask");
+}
+
+fn mark_bound_admitted<I: ViewTermId>(
+    pattern: &CompiledPattern<I>,
+    bound: &mut [bool],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
+    for position in [&pattern.s, &pattern.p, &pattern.o] {
+        for_each_slot_admitted(position, workspace, &mut |column| {
+            bound[column] = true;
+            Ok(())
+        })?;
     }
+    Ok(())
 }
 
 /// Visit every slot column reachable from a position (itself, or the inner positions
 /// of a nested quoted triple), in `(s, p, o)` pre-order over a work list.
+#[cfg(test)]
 fn for_each_slot<I: ViewTermId>(pos: &Pos<I>, f: &mut impl FnMut(usize)) {
-    let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
-    while let Some(pos) = pending.pop() {
-        match pos {
+    for_each_slot_admitted(
+        pos,
+        &crate::WorkspaceCapability::resident(),
+        &mut |column| {
+            f(column);
+            Ok(())
+        },
+    )
+    .expect("resident slot walk");
+}
+
+fn for_each_slot_admitted<I: ViewTermId>(
+    position: &Pos<I>,
+    workspace: &crate::WorkspaceCapability,
+    visit: &mut impl FnMut(usize) -> Result<(), EvalError>,
+) -> Result<(), EvalError> {
+    visit_slots_admitted(position, workspace, &mut |column| {
+        visit(column)?;
+        Ok(false)
+    })?;
+    Ok(())
+}
+
+fn visit_slots_admitted<I: ViewTermId>(
+    position: &Pos<I>,
+    workspace: &crate::WorkspaceCapability,
+    visit: &mut impl FnMut(usize) -> Result<bool, EvalError>,
+) -> Result<bool, EvalError> {
+    let mut storage = crate::workspace::LexicalFrame::new(workspace);
+    let mut pending = purrdf_lex::walk::WorkList::<&Pos<I>, 8>::new();
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    pending
+        .try_push_admitted(position, &mut memory)
+        .map_err(|error| memory.admission_mut().storage_error(error, "BGP slot walk"))?;
+    let mut stopped = false;
+    while let Some(position) = pending.pop() {
+        match position {
             Pos::Bound(_) => {}
-            Pos::Slot(c) => f(*c),
-            Pos::Triple(t) => pending.extend([&t.o, &t.p, &t.s]),
+            Pos::Slot(column) => {
+                if visit(*column)? {
+                    stopped = true;
+                    break;
+                }
+            }
+            Pos::Triple(triple) => {
+                for child in [&triple.o, &triple.p, &triple.s] {
+                    pending
+                        .try_push_admitted(child, &mut memory)
+                        .map_err(|error| {
+                            memory.admission_mut().storage_error(error, "BGP slot walk")
+                        })?;
+                }
+            }
         }
     }
+    pending
+        .release_admitted(&mut memory)
+        .map_err(|error| memory.admission_mut().storage_error(error, "BGP slot walk"))?;
+    Ok(stopped)
 }
 
 /// The slot variables a triple pattern introduces, in `(s, p, o)` order — descending
@@ -1391,6 +1781,7 @@ fn for_each_slot<I: ViewTermId>(pos: &Pos<I>, f: &mut impl FnMut(usize)) {
 ///
 /// Inline for a pattern of up to four slots, which every pattern without a quoted
 /// triple is.
+#[cfg(test)]
 pub(crate) fn slot_keys(pattern: &TriplePattern) -> purrdf_core::SmallVec<[Variable; 4]> {
     let mut keys = purrdf_core::SmallVec::new();
     collect_triple_slot_keys(pattern, &mut keys);
@@ -1399,6 +1790,7 @@ pub(crate) fn slot_keys(pattern: &TriplePattern) -> purrdf_core::SmallVec<[Varia
 
 /// Append a triple pattern's slot variables, through nested quoted triples, in
 /// `(s, p, o)` order.
+#[cfg(test)]
 fn collect_triple_slot_keys(pattern: &TriplePattern, keys: &mut impl Extend<Variable>) {
     visit_triple_slots(pattern, |key| {
         keys.extend([match key {
@@ -1417,15 +1809,73 @@ pub(crate) enum SlotKey<'a> {
 
 /// Read every slot without cloning variables or constructing blank identities.
 /// The same iterative walk supplies the indexed kernel's owning slot census.
-pub(crate) fn visit_triple_slots<'a>(pattern: &'a TriplePattern, visit: impl FnMut(SlotKey<'a>)) {
-    visit_slot_keys(
-        purrdf_core::smallvec![
-            SlotPosition::Term(&pattern.object),
-            SlotPosition::Predicate(&pattern.predicate),
-            SlotPosition::Term(&pattern.subject),
-        ],
-        visit,
-    );
+#[cfg(test)]
+pub(crate) fn visit_triple_slots<'a>(
+    pattern: &'a TriplePattern,
+    mut visit: impl FnMut(SlotKey<'a>),
+) {
+    visit_triple_slots_admitted(pattern, &crate::WorkspaceCapability::resident(), |slot| {
+        visit(slot);
+        Ok(())
+    })
+    .expect("resident triple slot walk");
+}
+
+pub(crate) fn visit_triple_slots_admitted<'a>(
+    pattern: &'a TriplePattern,
+    workspace: &crate::WorkspaceCapability,
+    mut visit: impl FnMut(SlotKey<'a>) -> Result<(), EvalError>,
+) -> Result<(), EvalError> {
+    let mut storage = crate::workspace::LexicalFrame::new(workspace);
+    let mut pending = purrdf_lex::walk::WorkList::<SlotPosition<'a>, 8>::new();
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    for position in [
+        SlotPosition::Term(&pattern.object),
+        SlotPosition::Predicate(&pattern.predicate),
+        SlotPosition::Term(&pattern.subject),
+    ] {
+        pending
+            .try_push_admitted(position, &mut memory)
+            .map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "triple slot walk")
+            })?;
+    }
+    while let Some(position) = pending.pop() {
+        match position {
+            SlotPosition::Predicate(NamedNodePattern::Variable(variable))
+            | SlotPosition::Term(TermPattern::Variable(variable)) => {
+                visit(SlotKey::Variable(variable))?;
+            }
+            SlotPosition::Term(TermPattern::BlankNode(blank)) => {
+                visit(SlotKey::Blank(blank.as_str()))?;
+            }
+            SlotPosition::Term(TermPattern::Triple(triple)) => {
+                for position in [
+                    SlotPosition::Term(&triple.object),
+                    SlotPosition::Predicate(&triple.predicate),
+                    SlotPosition::Term(&triple.subject),
+                ] {
+                    pending
+                        .try_push_admitted(position, &mut memory)
+                        .map_err(|error| {
+                            memory
+                                .admission_mut()
+                                .storage_error(error, "triple slot walk")
+                        })?;
+                }
+            }
+            SlotPosition::Predicate(NamedNodePattern::NamedNode(_))
+            | SlotPosition::Term(TermPattern::NamedNode(_) | TermPattern::Literal(_)) => {}
+        }
+    }
+    pending.release_admitted(&mut memory).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "triple slot walk")
+    })?;
+    Ok(())
 }
 
 /// One position of a triple pattern still to be read for its slot variables.
@@ -1434,28 +1884,58 @@ enum SlotPosition<'a> {
     Predicate(&'a NamedNodePattern),
 }
 
-/// Visit the borrowed slots on `pending`, with its top next in `(s, p, o)`
-/// order. Nested quoted triples use that same order; ground terms yield nothing.
-fn visit_slot_keys<'a>(
-    mut pending: purrdf_core::SmallVec<[SlotPosition<'a>; 8]>,
-    mut visit: impl FnMut(SlotKey<'a>),
-) {
-    while let Some(position) = pending.pop() {
-        match position {
-            SlotPosition::Predicate(NamedNodePattern::Variable(v))
-            | SlotPosition::Term(TermPattern::Variable(v)) => visit(SlotKey::Variable(v)),
-            SlotPosition::Term(TermPattern::BlankNode(b)) => {
-                visit(SlotKey::Blank(b.as_str()));
+/// Collect slots in the original subject/predicate/object first-seen order.
+/// The input keeps its original owner when no columns are added. New columns
+/// use one admitted builder, so immutable prefixes are not republished per slot.
+fn collect_slots_admitted(
+    patterns: &[TriplePattern],
+    input: Option<&VarSchema>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    let empty = VarSchema::default();
+    let input = input.unwrap_or(&empty);
+    let mut builder: Option<crate::solution::SchemaBuilder> = None;
+    for pattern in patterns {
+        visit_triple_slots_admitted(pattern, workspace, |slot| {
+            let variable = match slot {
+                SlotKey::Variable(variable) => {
+                    if builder.is_none() && input.index_of(variable).is_some() {
+                        return Ok(());
+                    }
+                    variable.clone()
+                }
+                SlotKey::Blank(label) => {
+                    let columns = builder
+                        .as_ref()
+                        .map_or_else(|| input.vars(), crate::solution::SchemaBuilder::vars);
+                    if columns.iter().any(|variable| {
+                        variable.as_str().strip_prefix(BLANK_VAR_PREFIX) == Some(label)
+                    }) {
+                        return Ok(());
+                    }
+                    blank_var_admitted(label, workspace)?
+                }
+            };
+            if builder.is_none() {
+                let mut value = crate::solution::SchemaBuilder::new(workspace);
+                value.try_extend(input.vars().iter().cloned())?;
+                builder = Some(value);
             }
-            SlotPosition::Term(TermPattern::Triple(t)) => pending.extend([
-                SlotPosition::Term(&t.object),
-                SlotPosition::Predicate(&t.predicate),
-                SlotPosition::Term(&t.subject),
-            ]),
-            SlotPosition::Predicate(NamedNodePattern::NamedNode(_))
-            | SlotPosition::Term(TermPattern::NamedNode(_) | TermPattern::Literal(_)) => {}
-        }
+            builder
+                .as_mut()
+                .expect("slot builder initialized")
+                .push(variable)
+                .map(|_| ())
+        })?;
     }
+    builder.map_or_else(|| Ok(input.clone()), crate::solution::SchemaBuilder::finish)
+}
+
+fn blank_slot_col(schema: &VarSchema, label: &str) -> Option<usize> {
+    schema
+        .vars()
+        .iter()
+        .position(|variable| variable.as_str().strip_prefix(BLANK_VAR_PREFIX) == Some(label))
 }
 
 /// The synthetic slot variable for a blank-node label (NUL-prefixed; cannot collide
@@ -1466,8 +1946,19 @@ fn visit_slot_keys<'a>(
 /// across its occurrences, and the column projected away before the node's rows leave.
 /// One spelling of the synthetic name, so the two cannot disagree about what a blank
 /// slot is called.
+#[cfg(test)]
 pub(crate) fn blank_var(label: &str) -> Variable {
-    Variable::new(format!("{BLANK_VAR_PREFIX}{label}"))
+    blank_var_admitted(label, &crate::WorkspaceCapability::resident())
+        .expect("resident blank variable allocation")
+}
+
+pub(crate) fn blank_var_admitted(
+    label: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Variable, EvalError> {
+    Ok(Variable::from_admitted(workspace.authored_text(
+        &format_args!("{BLANK_VAR_PREFIX}{label}"),
+    )?))
 }
 
 /// Whether a schema variable is a synthetic blank-node slot (vs. a real variable).
@@ -1485,24 +1976,63 @@ fn is_blank_var(var: &Variable) -> bool {
 /// dataset that vouches for no bound is matched the long way: its positions are
 /// compiled and bound over work lists, so a term of any depth costs no more machine
 /// stack.
+#[cfg(test)]
 fn compile_pattern<D: DatasetView>(
     pattern: &TriplePattern,
     schema: &VarSchema,
     dataset: &D,
 ) -> Result<Option<CompiledPattern<D::Id>>, EvalError> {
+    compile_pattern_admitted(
+        pattern,
+        schema,
+        dataset,
+        &crate::WorkspaceCapability::resident(),
+        &|value| {
+            dataset
+                .term_id_by_value(value)
+                .map_err(EvalError::source_read)
+        },
+    )
+}
+
+fn term_nesting_admitted(
+    term: &TermPattern,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<usize, EvalError> {
+    let mut storage = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    term.triple_term_nesting_with_memory(&mut memory)
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "triple nesting census")
+        })
+}
+
+fn compile_pattern_admitted<D: DatasetView>(
+    pattern: &TriplePattern,
+    schema: &VarSchema,
+    dataset: &D,
+    workspace: &crate::WorkspaceCapability,
+    lookup: &impl Fn(&purrdf_core::TermValue) -> Result<Option<D::Id>, EvalError>,
+) -> Result<Option<CompiledPattern<D::Id>>, EvalError> {
     if let Some(bound) = dataset.triple_term_nesting_bound()
-        && (pattern.subject.triple_term_nesting() > bound
-            || pattern.object.triple_term_nesting() > bound)
+        && (term_nesting_admitted(&pattern.subject, workspace)? > bound
+            || term_nesting_admitted(&pattern.object, workspace)? > bound)
     {
         return Ok(None);
     }
-    let Some(s) = compile_term(&pattern.subject, schema, dataset)? else {
+    let Some(s) = compile_term_admitted(&pattern.subject, schema, dataset, workspace, lookup)?
+    else {
         return Ok(None);
     };
-    let Some(p) = compile_predicate(&pattern.predicate, schema, dataset) else {
+    let Some(p) =
+        compile_predicate_admitted(&pattern.predicate, schema, dataset, workspace, lookup)?
+    else {
         return Ok(None);
     };
-    let Some(o) = compile_term(&pattern.object, schema, dataset)? else {
+    let Some(o) = compile_term_admitted(&pattern.object, schema, dataset, workspace, lookup)?
+    else {
         return Ok(None);
     };
     Ok(Some(CompiledPattern { s, p, o }))
@@ -1510,43 +2040,62 @@ fn compile_pattern<D: DatasetView>(
 
 /// Compile a subject/object term position. `Ok(None)` = an absent ground constant
 /// (the pattern — and hence the BGP — cannot match).
+#[cfg(test)]
 fn compile_term<D: DatasetView>(
     term: &TermPattern,
     schema: &VarSchema,
     dataset: &D,
 ) -> Result<Option<Pos<D::Id>>, EvalError> {
+    compile_term_admitted(
+        term,
+        schema,
+        dataset,
+        &crate::WorkspaceCapability::resident(),
+        &|value| {
+            dataset
+                .term_id_by_value(value)
+                .map_err(EvalError::source_read)
+        },
+    )
+}
+
+fn compile_term_admitted<D: DatasetView>(
+    term: &TermPattern,
+    schema: &VarSchema,
+    dataset: &D,
+    workspace: &crate::WorkspaceCapability,
+    lookup: &impl Fn(&purrdf_core::TermValue) -> Result<Option<D::Id>, EvalError>,
+) -> Result<Option<Pos<D::Id>>, EvalError> {
     match term {
-        TermPattern::Variable(v) => Ok(Some(Pos::Slot(slot_col(schema, v)))),
-        TermPattern::BlankNode(b) => Ok(Some(Pos::Slot(slot_col(schema, &blank_var(b.as_str()))))),
-        // A quoted-triple position: if it contains a variable it is a STRUCTURAL match
-        // that binds inner columns (`Pos::Triple`); a fully-ground quoted triple
-        // resolves to a single interned id (`Pos::Bound`) exactly like any constant.
-        TermPattern::Triple(t) => {
-            let nested = index_nested_triples(t);
+        TermPattern::Variable(variable) => Ok(Some(Pos::Slot(slot_col(schema, variable)))),
+        TermPattern::BlankNode(blank) => Ok(Some(Pos::Slot(
+            blank_slot_col(schema, blank.as_str()).expect("every blank slot is registered"),
+        ))),
+        TermPattern::Triple(triple) => {
+            let nested = index_nested_triples_admitted(triple, workspace)?;
             if nested[0].has_variable {
-                match compile_triple_pos(&nested, schema, dataset)? {
-                    Some(tp) => Ok(Some(Pos::Triple(Box::new(tp)))),
+                match compile_triple_pos_admitted(&nested, schema, dataset, workspace, lookup)? {
+                    Some(triple) => Ok(Some(Pos::Triple(OwnedTriplePos::new_admitted(
+                        triple, workspace,
+                    )?))),
                     None => Ok(None),
                 }
             } else {
-                let value = ground_term_pattern_to_value(term, "a BGP")?;
-                Ok(dataset
-                    .term_id_by_value(&value)
-                    .map_err(EvalError::source_read)?
-                    .map(Pos::Bound))
+                let value = crate::convert::ground_term_pattern_to_workspace_value(
+                    term, "a BGP", workspace,
+                )?;
+                Ok(lookup(&value)?.map(Pos::Bound))
             }
         }
         TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
-            let value = ground_term_pattern_to_value(term, "a BGP")?;
-            Ok(dataset
-                .term_id_by_value(&value)
-                .map_err(EvalError::source_read)?
-                .map(Pos::Bound))
+            let value =
+                crate::convert::ground_term_pattern_to_workspace_value(term, "a BGP", workspace)?;
+            Ok(lookup(&value)?.map(Pos::Bound))
         }
     }
 }
 
-/// One quoted-triple pattern of a nested position, indexed by [`index_nested_triples`]:
+/// One quoted-triple pattern of a nested position, indexed by [`index_nested_triples_admitted`]:
 /// where its subject and object quoted triples sit in the same index, and whether a
 /// variable (or blank node) occurs anywhere inside it.
 struct NestedTriple<'a> {
@@ -1559,7 +2108,10 @@ struct NestedTriple<'a> {
 /// Index every quoted-triple pattern reachable from `root` — `root` itself at index 0,
 /// each triple before the triples nested inside it — and mark which of them contain a
 /// variable, in two passes over the index rather than a descent per triple.
-fn index_nested_triples(root: &TriplePattern) -> Vec<NestedTriple<'_>> {
+fn index_nested_triples_admitted<'a>(
+    root: &'a TriplePattern,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<NestedTriple<'a>>, EvalError> {
     // The position a pending triple fills in its parent, so the parent's index entry
     // can name it once the pending triple's own index is known.
     enum Under {
@@ -1567,26 +2119,27 @@ fn index_nested_triples(root: &TriplePattern) -> Vec<NestedTriple<'_>> {
         Subject(usize),
         Object(usize),
     }
-    let mut nested: Vec<NestedTriple<'_>> = Vec::new();
-    let mut pending = vec![(root, Under::Root)];
+    let mut nested = AdmittedVec::<NestedTriple<'a>>::new(workspace);
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push((root, Under::Root))?;
     while let Some((triple, under)) = pending.pop() {
         let index = nested.len();
         match under {
             Under::Root => {}
-            Under::Subject(parent) => nested[parent].subject = Some(index),
-            Under::Object(parent) => nested[parent].object = Some(index),
+            Under::Subject(parent) => nested.as_mut_slice()[parent].subject = Some(index),
+            Under::Object(parent) => nested.as_mut_slice()[parent].object = Some(index),
         }
         nested.push(NestedTriple {
             triple,
             subject: None,
             object: None,
             has_variable: false,
-        });
+        })?;
         if let TermPattern::Triple(object) = &triple.object {
-            pending.push((object, Under::Object(index)));
+            pending.push((object, Under::Object(index)))?;
         }
         if let TermPattern::Triple(subject) = &triple.subject {
-            pending.push((subject, Under::Subject(index)));
+            pending.push((subject, Under::Subject(index)))?;
         }
     }
     // Every nested triple is indexed after the triple holding it, so reading the index
@@ -1603,9 +2156,9 @@ fn index_nested_triples(root: &TriplePattern) -> Vec<NestedTriple<'_>> {
         let has_variable = position_has_variable(&entry.triple.subject, entry.subject)
             || matches!(entry.triple.predicate, NamedNodePattern::Variable(_))
             || position_has_variable(&entry.triple.object, entry.object);
-        nested[index].has_variable = has_variable;
+        nested.as_mut_slice()[index].has_variable = has_variable;
     }
-    nested
+    Ok(nested)
 }
 
 /// Compile the variable-carrying quoted-triple pattern at index 0 of `nested` — the
@@ -1617,10 +2170,12 @@ fn index_nested_triples(root: &TriplePattern) -> Vec<NestedTriple<'_>> {
 /// One frame per quoted triple still being compiled lives on an explicit stack, so a
 /// position nested to any depth compiles on constant machine stack; the dataset is
 /// consulted in exactly the order a descent would consult it.
-fn compile_triple_pos<D: DatasetView>(
+fn compile_triple_pos_admitted<D: DatasetView>(
     nested: &[NestedTriple<'_>],
     schema: &VarSchema,
     dataset: &D,
+    workspace: &crate::WorkspaceCapability,
+    lookup: &impl Fn(&purrdf_core::TermValue) -> Result<Option<D::Id>, EvalError>,
 ) -> Result<Option<TriplePos<D::Id>>, EvalError> {
     /// A quoted triple being compiled: the positions compiled so far.
     struct Frame<I: ViewTermId> {
@@ -1628,20 +2183,22 @@ fn compile_triple_pos<D: DatasetView>(
         s: Option<Pos<I>>,
         p: Option<Pos<I>>,
     }
-    let mut frames: Vec<Frame<D::Id>> = vec![Frame {
+    let mut frames = AdmittedVec::new(workspace);
+    frames.push(Frame {
         at: 0,
         s: None,
         p: None,
-    }];
+    })?;
     // A quoted triple compiled in full, on its way to the position that holds it.
     let mut completed: Option<TriplePos<D::Id>> = None;
     loop {
         let frame = frames
+            .as_mut_slice()
             .last_mut()
             .expect("a frame is open until the root completes");
         let entry = &nested[frame.at];
         let position = if let Some(completed) = completed.take() {
-            Pos::Triple(Box::new(completed))
+            Pos::Triple(OwnedTriplePos::new_admitted(completed, workspace)?)
         } else if frame.s.is_none() || frame.p.is_some() {
             // The next term position: the subject first, the object once the predicate
             // is compiled.
@@ -1652,7 +2209,9 @@ fn compile_triple_pos<D: DatasetView>(
             };
             match term {
                 TermPattern::Variable(v) => Pos::Slot(slot_col(schema, v)),
-                TermPattern::BlankNode(b) => Pos::Slot(slot_col(schema, &blank_var(b.as_str()))),
+                TermPattern::BlankNode(b) => {
+                    Pos::Slot(blank_slot_col(schema, b.as_str()).expect("registered blank slot"))
+                }
                 TermPattern::Triple(_) => {
                     let at = nested_at.expect("a nested triple is indexed");
                     if nested[at].has_variable {
@@ -1660,31 +2219,36 @@ fn compile_triple_pos<D: DatasetView>(
                             at,
                             s: None,
                             p: None,
-                        });
+                        })?;
                         continue;
                     }
-                    let value = ground_term_pattern_to_value(term, "a BGP")?;
-                    match dataset
-                        .term_id_by_value(&value)
-                        .map_err(EvalError::source_read)?
-                    {
+                    let value = crate::convert::ground_term_pattern_to_workspace_value(
+                        term, "a BGP", workspace,
+                    )?;
+                    match lookup(&value)? {
                         Some(id) => Pos::Bound(id),
                         None => return Ok(None),
                     }
                 }
                 TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
-                    let value = ground_term_pattern_to_value(term, "a BGP")?;
-                    match dataset
-                        .term_id_by_value(&value)
-                        .map_err(EvalError::source_read)?
-                    {
+                    let value = crate::convert::ground_term_pattern_to_workspace_value(
+                        term, "a BGP", workspace,
+                    )?;
+                    match lookup(&value)? {
                         Some(id) => Pos::Bound(id),
                         None => return Ok(None),
                     }
                 }
             }
         } else {
-            let Some(p) = compile_predicate(&entry.triple.predicate, schema, dataset) else {
+            let Some(p) = compile_predicate_admitted(
+                &entry.triple.predicate,
+                schema,
+                dataset,
+                workspace,
+                lookup,
+            )?
+            else {
                 return Ok(None);
             };
             frame.p = Some(p);
@@ -1715,20 +2279,39 @@ fn slot_col(schema: &VarSchema, var: &Variable) -> usize {
 }
 
 /// Compile a predicate position (IRI or variable). `None` = an absent ground IRI.
+#[cfg(test)]
 fn compile_predicate<D: DatasetView>(
     predicate: &NamedNodePattern,
     schema: &VarSchema,
     dataset: &D,
 ) -> Option<Pos<D::Id>> {
+    compile_predicate_admitted(
+        predicate,
+        schema,
+        dataset,
+        &crate::WorkspaceCapability::resident(),
+        &|value| {
+            dataset
+                .term_id_by_value(value)
+                .map_err(EvalError::source_read)
+        },
+    )
+    .expect("resident predicate compilation")
+}
+
+fn compile_predicate_admitted<D: DatasetView>(
+    predicate: &NamedNodePattern,
+    schema: &VarSchema,
+    _dataset: &D,
+    workspace: &crate::WorkspaceCapability,
+    lookup: &impl Fn(&purrdf_core::TermValue) -> Result<Option<D::Id>, EvalError>,
+) -> Result<Option<Pos<D::Id>>, EvalError> {
     match predicate {
-        NamedNodePattern::Variable(v) => Some(Pos::Slot(
-            schema
-                .index_of(v)
-                .expect("every slot key was registered in pass 1"),
-        )),
-        NamedNodePattern::NamedNode(n) => dataset
-            .term_id_if_ready(&named_node_to_value(n))
-            .map(Pos::Bound),
+        NamedNodePattern::Variable(variable) => Ok(Some(Pos::Slot(slot_col(schema, variable)))),
+        NamedNodePattern::NamedNode(node) => {
+            let value = crate::convert::named_node_to_workspace_value(node, workspace)?;
+            Ok(lookup(&value)?.map(Pos::Bound))
+        }
     }
 }
 
@@ -1760,7 +2343,8 @@ fn bind_row<D: DatasetView>(
     cp: &CompiledPattern<D::Id>,
     quad: &QuadIds<D::Id>,
     dataset: &D,
-) -> Option<Solution<D::Id>> {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<RetainedRow<D::Id>>, EvalError> {
     // Reject what can be rejected WITHOUT the row copy first. A row wider than the
     // inline capacity spills to the heap, so a copy made before the test is an
     // allocation spent on a candidate that was never going to survive.
@@ -1779,22 +2363,27 @@ fn bind_row<D: DatasetView>(
     // `Pos::Bound` mismatch must be caught in this function.
     for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
         match pos {
-            Pos::Bound(want) if *want != id => return None,
+            Pos::Bound(want) if *want != id => return Ok(None),
             Pos::Slot(col) => match row[*col] {
-                Some(existing) if existing != SolutionTerm::Existing(id) => return None,
+                Some(existing) if existing != SolutionTerm::Existing(id) => return Ok(None),
                 _ => {}
             },
             _ => {}
         }
     }
 
-    let mut out = Solution::from_slice(row);
-    for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
-        if !bind_pos(&mut out, pos, id, dataset) {
-            return None;
+    let mut matched = true;
+    let out = RetainedRow::try_build(row.len(), workspace, |out| {
+        out.copy_from_slice(row);
+        for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
+            if !bind_pos_admitted(out, pos, id, dataset, workspace)? {
+                matched = false;
+                break;
+            }
         }
-    }
-    Some(out)
+        Ok(())
+    })?;
+    Ok(matched.then_some(out))
 }
 
 /// [`bind_pos`]'s work list: positions still to unify, each with its candidate id.
@@ -1811,20 +2400,39 @@ type PosWork<'p, I> = purrdf_core::SmallVec<[(&'p Pos<I>, I); 4]>;
 /// resolved against the dataset as it is reached, over a work list rather than the
 /// call stack: the first disagreement ends the unification with `out` as written so
 /// far, which the caller discards.
+#[cfg(test)]
 fn bind_pos<D: DatasetView>(
     out: &mut Solution<D::Id>,
     pos: &Pos<D::Id>,
     id: D::Id,
     dataset: &D,
 ) -> bool {
+    bind_pos_admitted(
+        out,
+        pos,
+        id,
+        dataset,
+        &crate::WorkspaceCapability::default(),
+    )
+    .expect("resident position matching")
+}
+
+fn bind_pos_admitted<D: DatasetView>(
+    out: &mut Solution<D::Id>,
+    pos: &Pos<D::Id>,
+    id: D::Id,
+    dataset: &D,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<bool, EvalError> {
     // Inline for a plain position and for a quoted triple of plain positions, so
     // binding a row allocates nothing beyond the row it writes.
+    let mut allocation = None;
     let mut pending: PosWork<'_, D::Id> = purrdf_core::smallvec![(pos, id)];
     while let Some((pos, id)) = pending.pop() {
         match pos {
             Pos::Bound(want) => {
                 if *want != id {
-                    return false;
+                    return Ok(false);
                 }
             }
             Pos::Slot(col) => {
@@ -1832,7 +2440,7 @@ fn bind_pos<D: DatasetView>(
                 match out[*col] {
                     Some(existing) => {
                         if existing != value {
-                            return false;
+                            return Ok(false);
                         }
                     }
                     None => out[*col] = Some(value),
@@ -1843,17 +2451,49 @@ fn bind_pos<D: DatasetView>(
                     TermRef::Triple { s, p, o } => Some((s, p, o)),
                     _ => None,
                 })
-                .ok()
-                .flatten()
-            {
-                Some((s, p, o)) => pending.extend([(&t.o, o), (&t.p, p), (&t.s, s)]),
+                .map_err(|error| {
+                    if workspace.is_bounded() {
+                        EvalError::WorkspaceStopped
+                    } else {
+                        EvalError::source_read(error)
+                    }
+                })? {
+                Some((s, p, o)) => {
+                    let needed = pending
+                        .len()
+                        .checked_add(3)
+                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                    if needed > pending.capacity() {
+                        let capacity = pending
+                            .capacity()
+                            .checked_mul(2)
+                            .ok_or(EvalError::WorkspaceBoundOverflow)?
+                            .max(needed);
+                        let bytes = std::alloc::Layout::array::<(&Pos<D::Id>, D::Id)>(capacity)
+                            .map_err(|_| EvalError::WorkspaceBoundOverflow)?
+                            .size();
+                        let next = workspace.charge(
+                            u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+                        )?;
+                        pending
+                            .try_reserve_exact(capacity - pending.len())
+                            .map_err(|_| EvalError::AllocationFailed {
+                                construct: "nested position work list",
+                            })?;
+                        allocation = Some(next);
+                    }
+                    pending.extend([(&t.o, o), (&t.p, p), (&t.s, s)]);
+                }
                 // The candidate term is not a quoted triple, so a structural triple
                 // pattern cannot match it.
-                _ => return false,
+                _ => return Ok(false),
             },
         }
     }
-    true
+    // Destroy the spilled work list before releasing its original admission.
+    drop(pending);
+    drop(allocation);
+    Ok(true)
 }
 
 /// Emit the virtual triple candidates from the RDF 1.2 reification layer that match
@@ -1939,66 +2579,189 @@ fn object_can_be_triple_term<D: DatasetView>(pos: &Pos<D::Id>, dataset: &D) -> b
 /// Format a triple pattern as a compact SPARQL-like string for plan-introspection
 /// output. The format is human-readable and stable; it is not a round-trippable
 /// serializer.
+#[cfg(test)]
 fn triple_pattern_to_string(tp: &TriplePattern) -> String {
-    format!(
-        "{} {} {} .",
-        term_pattern_to_string(&tp.subject),
-        named_node_pattern_to_string(&tp.predicate),
-        term_pattern_to_string(&tp.object)
-    )
+    let mut out = String::new();
+    write_triple_pattern(tp, &mut out, &crate::WorkspaceCapability::resident())
+        .expect("resident triple spelling");
+    out
+}
+
+fn write_triple_pattern(
+    triple: &TriplePattern,
+    out: &mut impl TextOut,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
+    write_term_pattern(&triple.subject, out, workspace)?;
+    out.push(' ');
+    write_named_node_pattern(&triple.predicate, out);
+    out.push(' ');
+    write_term_pattern(&triple.object, out, workspace)?;
+    out.push_str(" .");
+    if out.failed() {
+        return Err(EvalError::WorkspaceBoundOverflow);
+    }
+    Ok(())
+}
+
+/// The same RDF spelling is first measured and then written into its exact
+/// admitted destination. The sink cannot silently grow a bounded destination.
+fn triple_pattern_text_admitted(
+    triple: &TriplePattern,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(String, crate::WorkspaceAllocation), EvalError> {
+    struct Text<'a> {
+        output: Option<&'a mut String>,
+        bytes: usize,
+        failed: bool,
+    }
+    impl std::fmt::Write for Text<'_> {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            if self.failed {
+                return Err(std::fmt::Error);
+            }
+            let Some(bytes) = self.bytes.checked_add(text.len()) else {
+                self.failed = true;
+                return Err(std::fmt::Error);
+            };
+            if let Some(output) = self.output.as_mut() {
+                if bytes > output.capacity() {
+                    self.failed = true;
+                    return Err(std::fmt::Error);
+                }
+                output.push_str(text);
+            }
+            self.bytes = bytes;
+            Ok(())
+        }
+    }
+    impl TextOut for Text<'_> {
+        fn push_str(&mut self, text: &str) {
+            let _ = std::fmt::Write::write_str(self, text);
+        }
+        fn push(&mut self, character: char) {
+            let _ = std::fmt::Write::write_char(self, character);
+        }
+        fn failed(&self) -> bool {
+            self.failed
+        }
+    }
+    let mut measured = Text {
+        output: None,
+        bytes: 0,
+        failed: false,
+    };
+    write_triple_pattern(triple, &mut measured, workspace)?;
+    let bytes = measured.bytes;
+    let allocation =
+        workspace.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    let mut output = String::new();
+    output
+        .try_reserve_exact(bytes)
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "EXPLAIN triple text",
+        })?;
+    {
+        let mut destination = Text {
+            output: Some(&mut output),
+            bytes: 0,
+            failed: false,
+        };
+        write_triple_pattern(triple, &mut destination, workspace)?;
+        if destination.failed || destination.bytes != bytes {
+            return Err(EvalError::WorkspaceBoundOverflow);
+        }
+    }
+    Ok((output, allocation))
 }
 
 /// Format a term pattern as a compact SPARQL-like string: every constant in the
 /// RDF 1.2 term syntax ([`purrdf_lex::term_syntax`]), a quoted triple as
 /// `<<( s p o )>>`, written left to right over a work list of the pieces still to
 /// emit, so a term nested to any depth is formatted on constant machine stack.
+#[cfg(test)]
 fn term_pattern_to_string(term: &TermPattern) -> String {
-    /// One piece of the text still to emit.
+    let mut out = String::new();
+    write_term_pattern(term, &mut out, &crate::WorkspaceCapability::resident())
+        .expect("resident term spelling");
+    out
+}
+
+fn write_term_pattern(
+    term: &TermPattern,
+    out: &mut impl TextOut,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
     enum Piece<'a> {
         Term(&'a TermPattern),
         Predicate(&'a NamedNodePattern),
         Text(&'static str),
     }
-    let mut out = String::new();
-    let mut pending = vec![Piece::Term(term)];
+    let mut storage = crate::workspace::LexicalFrame::new(workspace);
+    let mut pending = purrdf_lex::walk::WorkList::<Piece<'_>, 16>::new();
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    pending
+        .try_push_admitted(Piece::Term(term), &mut memory)
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "EXPLAIN term walk")
+        })?;
     while let Some(piece) = pending.pop() {
         match piece {
             Piece::Text(text) => out.push_str(text),
-            Piece::Predicate(nn) => write_named_node_pattern(nn, &mut out),
-            Piece::Term(TermPattern::Variable(v)) => {
+            Piece::Predicate(named) => write_named_node_pattern(named, out),
+            Piece::Term(TermPattern::Variable(variable)) => {
                 out.push('?');
-                out.push_str(v.as_str());
+                out.push_str(variable.as_str());
             }
-            Piece::Term(TermPattern::BlankNode(b)) => write_blank(b.as_str(), &mut out),
-            Piece::Term(TermPattern::NamedNode(n)) => write_iri(n.as_str(), &mut out),
-            Piece::Term(TermPattern::Literal(l)) => write_literal(
-                l.value(),
-                l.datatype().as_str(),
-                l.language(),
-                l.direction()
+            Piece::Term(TermPattern::BlankNode(blank)) => write_blank(blank.as_str(), out),
+            Piece::Term(TermPattern::NamedNode(named)) => write_iri(named.as_str(), out),
+            Piece::Term(TermPattern::Literal(literal)) => write_literal(
+                literal.value(),
+                literal.datatype().as_str(),
+                literal.language(),
+                literal
+                    .direction()
                     .map(purrdf_sparql_algebra::BaseDirection::as_str),
-                &mut out,
+                out,
             ),
-            Piece::Term(TermPattern::Triple(t)) => {
+            Piece::Term(TermPattern::Triple(triple)) => {
                 out.push_str(TRIPLE_TERM_OPEN);
                 out.push(' ');
-                pending.extend([
+                for child in [
                     Piece::Text(TRIPLE_TERM_CLOSE),
                     Piece::Text(" "),
-                    Piece::Term(&t.object),
+                    Piece::Term(&triple.object),
                     Piece::Text(" "),
-                    Piece::Predicate(&t.predicate),
+                    Piece::Predicate(&triple.predicate),
                     Piece::Text(" "),
-                    Piece::Term(&t.subject),
-                ]);
+                    Piece::Term(&triple.subject),
+                ] {
+                    pending
+                        .try_push_admitted(child, &mut memory)
+                        .map_err(|error| {
+                            memory
+                                .admission_mut()
+                                .storage_error(error, "EXPLAIN term walk")
+                        })?;
+                }
             }
         }
+        if out.failed() {
+            return Err(EvalError::WorkspaceBoundOverflow);
+        }
     }
-    out
+    pending.release_admitted(&mut memory).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "EXPLAIN term walk")
+    })?;
+    Ok(())
 }
 
 /// Append a named-node pattern (IRI or variable).
-fn write_named_node_pattern(nn: &NamedNodePattern, out: &mut String) {
+fn write_named_node_pattern(nn: &NamedNodePattern, out: &mut impl TextOut) {
     match nn {
         NamedNodePattern::Variable(v) => {
             out.push('?');
@@ -2009,6 +2772,7 @@ fn write_named_node_pattern(nn: &NamedNodePattern, out: &mut String) {
 }
 
 /// Format a named-node pattern (IRI or variable) as a compact string.
+#[cfg(test)]
 fn named_node_pattern_to_string(nn: &NamedNodePattern) -> String {
     let mut out = String::new();
     write_named_node_pattern(nn, &mut out);
@@ -2025,28 +2789,42 @@ fn named_node_pattern_to_string(nn: &NamedNodePattern) -> String {
 pub(crate) struct PlanSurvey {
     /// Human-readable triple-pattern strings, in the order the planner chose, for every
     /// BGP with at least two patterns. The historical `explain_query` output.
-    pub(crate) orders: Vec<String>,
+    pub(crate) orders: AdmittedRecords<String>,
     /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
     /// walks; `None` where it predicts nothing.
-    pub(crate) estimates: Vec<Option<PlanEstimate>>,
+    pub(crate) estimates: AdmittedVec<Option<PlanEstimate>>,
     /// The shape of that tree, which is where a surveyed node finds its id.
-    shape: Arc<PlanShape>,
+    shape: SharedWorkspace<PlanShape>,
+    workspace: crate::WorkspaceCapability,
 }
 
 purrdf_hash::debug_non_exhaustive!(PlanSurvey { orders, estimates });
 
 impl PlanSurvey {
     /// An empty survey of the tree `shape` numbers.
-    pub(crate) fn for_shape(shape: &Arc<PlanShape>) -> Self {
-        Self {
-            orders: Vec::new(),
-            estimates: vec![None; shape.len()],
-            shape: Arc::clone(shape),
+    pub(crate) fn for_shape(shape: &SharedWorkspace<PlanShape>) -> Self {
+        Self::for_shape_admitted(shape, &crate::WorkspaceCapability::resident())
+            .expect("resident plan survey")
+    }
+
+    pub(crate) fn for_shape_admitted(
+        shape: &SharedWorkspace<PlanShape>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let mut estimates = AdmittedVec::with_capacity(shape.len(), workspace)?;
+        for _ in 0..shape.len() {
+            estimates.push_reserved(None);
         }
+        Ok(Self {
+            orders: AdmittedRecords::new(workspace),
+            estimates,
+            shape: shape.clone(),
+            workspace: workspace.clone(),
+        })
     }
 
     /// The shape of the surveyed tree.
-    pub(crate) const fn shape(&self) -> &Arc<PlanShape> {
+    pub(crate) const fn shape(&self) -> &SharedWorkspace<PlanShape> {
         &self.shape
     }
 
@@ -2056,7 +2834,7 @@ impl PlanSurvey {
             .shape
             .node_of(node)
             .expect("the survey walks only nodes of the tree it was sized for");
-        self.estimates[id.index()] = Some(estimate);
+        self.estimates.as_mut_slice()[id.index()] = Some(estimate);
     }
 
     /// The prediction for `node`, when it is a node of the surveyed tree and the survey
@@ -2134,6 +2912,7 @@ impl PlanSurvey {
 ///
 /// A call whose IRI resolves against no supplied registry contributes nothing, exactly as
 /// every other unpredictable leaf does; evaluation refuses that query on its own terms.
+#[cfg(test)]
 pub(crate) fn survey_pattern_plans<D: DatasetView>(
     dataset: &D,
     active_dataset: &ActiveDataset<D::Id>,
@@ -2142,6 +2921,27 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
     relations: &crate::property_fn::PropertyFunctionRegistry,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
+    survey_pattern_plans_admitted(
+        dataset,
+        active_dataset,
+        active_graph,
+        pattern,
+        relations,
+        survey,
+        &crate::workspace::QueryWorkspace::resident(),
+    )
+}
+
+pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
+    dataset: &D,
+    active_dataset: &ActiveDataset<D::Id>,
+    active_graph: GraphMatch<D::Id>,
+    pattern: &GraphPattern,
+    relations: &crate::property_fn::PropertyFunctionRegistry,
+    survey: &mut PlanSurvey,
+    account: &crate::workspace::QueryWorkspace<D::ReadError>,
+) -> Result<(), EvalError> {
+    let workspace = account.capability();
     /// One pending step of the walk.
     enum Step<'a, I> {
         /// Survey the subtree rooted at the node, evaluated against the graph.
@@ -2162,10 +2962,11 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
         },
     }
 
-    let mut steps: Vec<Step<'_, D::Id>> = vec![Step::Visit(pattern, active_graph)];
+    let mut steps = AdmittedVec::new(&workspace);
+    steps.push(Step::Visit(pattern, active_graph))?;
     // Retain only completed drivers needed by a parent join. This avoids
     // re-censusing every prefix of a deep ordinary join chain.
-    let mut seeds = DetHashMap::<usize, SeedEstimate>::default();
+    let mut seeds = crate::workspace::AdmittedMap::<usize, SeedEstimate>::default();
     while let Some(step) = steps.pop() {
         let (pattern, active_graph) = match step {
             Step::BoundRight {
@@ -2175,40 +2976,49 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
                 graph,
                 optional,
             } => {
-                if !PositivePlan::pure_eligible(right) {
+                if !PositivePlan::pure_eligible_admitted(right, &workspace)? {
                     drop(seeds.remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize)));
-                    steps.push(Step::Visit(right, graph));
+                    steps.push(Step::Visit(right, graph))?;
                     continue;
                 }
                 let driving_rows = predicted_rows(left, survey).unwrap_or(1);
-                let mut seed = seeds
-                    .remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize))
-                    .unwrap_or_else(|| {
-                        let mut bound = DetHashSet::default();
-                        crate::property_fn_plan::collect_certainly_bound(left, &mut bound);
-                        SeedEstimate {
-                            schema: Arc::unwrap_or_clone(crate::eval::syntactic_schema(left)),
-                            bound,
+                let mut seed =
+                    match seeds.remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize)) {
+                        Some(seed) => seed,
+                        None => SeedEstimate {
+                            schema: crate::eval::syntactic_schema_admitted(left, &workspace)?
+                                .as_ref()
+                                .clone(),
+                            bound: crate::property_fn_plan::collect_certainly_bound_admitted(
+                                left, &workspace,
+                            )?,
                             rows: driving_rows,
-                        }
-                    });
+                        },
+                    };
                 seed.rows = if optional { 1 } else { driving_rows };
-                if let Some(positive) =
-                    PositivePlan::build_seeded(dataset, active_dataset, graph, right, &seed)?
-                {
-                    positive.survey_seeded(
+                if let Some(positive) = PositivePlan::build_seeded_admitted(
+                    dataset,
+                    active_dataset,
+                    graph,
+                    right,
+                    &seed,
+                    account,
+                )? {
+                    positive.survey_seeded_admitted(
                         dataset,
                         active_dataset,
                         graph,
-                        right,
-                        Some(&seed),
+                        (right, Some(&seed)),
                         survey,
+                        account,
                     )?;
                     let mut estimate = survey
                         .estimate_of(right)
                         .expect("the seeded root was surveyed")
                         .clone();
-                    let schema = seed.schema.union(positive.root_schema());
+                    let schema = seed
+                        .schema
+                        .union_admitted(positive.root_schema(), &workspace)?;
                     estimate.columns = schema.len() as u64;
                     if optional {
                         estimate.rows = driving_rows.saturating_mul(estimate.rows.max(1));
@@ -2217,24 +3027,30 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
                     let rows = estimate.rows;
                     survey.record(node, estimate);
                     if !optional {
-                        crate::property_fn_plan::collect_certainly_bound(right, &mut seed.bound);
+                        seed.bound = seed.bound.union_admitted(
+                            &crate::property_fn_plan::collect_certainly_bound_admitted(
+                                right, &workspace,
+                            )?,
+                            &workspace,
+                        )?;
                     }
-                    seeds.insert(
+                    seeds.insert_admitted(
                         std::ptr::from_ref(node) as usize,
                         SeedEstimate {
                             schema,
                             bound: seed.bound,
                             rows,
                         },
-                    );
+                        &workspace,
+                    )?;
                 } else {
-                    steps.push(Step::Visit(right, graph));
+                    steps.push(Step::Visit(right, graph))?;
                 }
                 continue;
             }
             Step::Call { node, call, left } => {
-                let mut bound = DetHashSet::default();
-                crate::property_fn_plan::collect_certainly_bound(left, &mut bound);
+                let bound =
+                    crate::property_fn_plan::collect_certainly_bound_admitted(left, &workspace)?;
                 record_call_estimate(
                     node,
                     call,
@@ -2251,26 +3067,38 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
             .shape
             .node_of(pattern)
             .is_some_and(|node| survey.shape.positive_region(node))
-            && let Some(positive) =
-                PositivePlan::build(dataset, active_dataset, active_graph, pattern)?
+            && let Some(positive) = PositivePlan::build_admitted(
+                dataset,
+                active_dataset,
+                active_graph,
+                pattern,
+                account,
+            )?
         {
-            positive.survey(dataset, active_dataset, active_graph, pattern, survey)?;
+            positive.survey_admitted(
+                dataset,
+                active_dataset,
+                active_graph,
+                pattern,
+                survey,
+                account,
+            )?;
             continue;
         }
         match pattern {
             GraphPattern::Bgp { patterns } => {
-                survey_bgp(dataset, active_dataset, active_graph, pattern, patterns, survey)?;
+                survey_bgp(dataset, active_dataset, active_graph, pattern, patterns, survey, account)?;
             }
             // The two shapes a property-function call is attached through, and therefore the
             // only place a call's driving side is in scope. The right side is pushed first so
             // the left's whole subtree is surveyed before it.
             GraphPattern::Join { left, right } => {
                 if let GraphPattern::PropertyFunction(call) = &**right {
-                    steps.push(Step::Call { node: right, call, left });
+                    steps.push(Step::Call { node: right, call, left })?;
                 } else {
-                    steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: false });
+                    steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: false })?;
                 }
-                steps.push(Step::Visit(left, active_graph));
+                steps.push(Step::Visit(left, active_graph))?;
             }
             GraphPattern::Lateral { left, right } => {
                 if let GraphPattern::PropertyFunction(call) = &**right {
@@ -2278,26 +3106,26 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
                         node: right,
                         call,
                         left,
-                    });
+                    })?;
                 } else {
-                    steps.push(Step::Visit(right, active_graph));
+                    steps.push(Step::Visit(right, active_graph))?;
                 }
-                steps.push(Step::Visit(left, active_graph));
+                steps.push(Step::Visit(left, active_graph))?;
             }
             GraphPattern::Apply { left, right, .. } => {
-                steps.push(Step::Visit(right, active_graph));
-                steps.push(Step::Visit(left, active_graph));
+                steps.push(Step::Visit(right, active_graph))?;
+                steps.push(Step::Visit(left, active_graph))?;
             }
             GraphPattern::Union { arms } => {
-                steps.extend(arms.iter().rev().map(|arm| Step::Visit(arm, active_graph)));
+                for arm in arms.iter().rev() { steps.push(Step::Visit(arm, active_graph))?; }
             }
             GraphPattern::LeftJoin { left, right, .. } => {
-                steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: true });
-                steps.push(Step::Visit(left, active_graph));
+                steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: true })?;
+                steps.push(Step::Visit(left, active_graph))?;
             }
             GraphPattern::Minus { left, right } => {
-                steps.push(Step::Visit(right, active_graph));
-                steps.push(Step::Visit(left, active_graph));
+                steps.push(Step::Visit(right, active_graph))?;
+                steps.push(Step::Visit(left, active_graph))?;
             }
             GraphPattern::Filter { inner, .. }
             | GraphPattern::Extend { inner, .. }
@@ -2312,23 +3140,24 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
             | GraphPattern::Slice { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Group { inner, .. } => {
-                steps.push(Step::Visit(inner, active_graph));
+                steps.push(Step::Visit(inner, active_graph))?;
             }
             GraphPattern::Graph { name, inner } => match name {
                 NamedNodePattern::NamedNode(n) => {
-                    match addressed_graph(dataset, active_dataset, &named_node_to_value(n)) {
-                        Some(graph) => steps.push(Step::Visit(inner, GraphMatch::Named(graph))),
+                    let name = crate::convert::named_node_to_workspace_value(n, &workspace)?;
+                    match addressed_graph(dataset, active_dataset, &name, &|error| account.source_error(error))? {
+                        Some(graph) => steps.push(Step::Visit(inner, GraphMatch::Named(graph)))?,
                         // An empty scope: the block yields no row and its inner pattern
                         // is never evaluated, so the block's estimate is zero.
                         None => survey.record(pattern, EMPTY_SCOPE),
                     }
                 }
-                NamedNodePattern::Variable(_) => steps.push(Step::Visit(inner, GraphMatch::Any)),
+                NamedNodePattern::Variable(_) => steps.push(Step::Visit(inner, GraphMatch::Any))?,
             },
             // A call with nothing written before it: its driving bag is the identity table,
             // which is one row, so its whole prediction is the relation's declared bound.
             GraphPattern::PropertyFunction(call) => {
-                record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey)?;
+                record_call_estimate(pattern, call, &VarSchema::default(), 1, relations, survey)?;
             }
             // Leaves that hold no BGP: there is no triple-pattern join order to choose and
             // no base cardinality to probe.
@@ -2357,16 +3186,22 @@ const EMPTY_SCOPE: PlanEstimate = PlanEstimate {
 /// (`modifier::eval_graph`): the name's term, when it names a graph of `dataset` that
 /// `active_dataset`'s named set admits. `None` is an empty scope — never the default
 /// graph — whether the name is absent from the dictionary, a term that names no graph,
-/// or excluded by `FROM NAMED`. A lookup that is not ready prices as an empty scope too,
-/// the under-count this survey is documented to fail towards.
+/// or excluded by `FROM NAMED`. Operational lookup failures preserve their original
+/// source cause instead of certifying an empty scope.
+///
+/// # Errors
+///
+/// The source's typed reverse-lookup refusal.
 pub(crate) fn addressed_graph<D: DatasetView>(
     dataset: &D,
     active_dataset: &ActiveDataset<D::Id>,
     name: &purrdf_core::TermValue,
-) -> Option<D::Id> {
-    dataset
-        .term_id_if_ready(name)
-        .filter(|&id| dataset.has_named_graph(id) && active_dataset.named_allows(id))
+    source_error: &impl Fn(D::ReadError) -> EvalError,
+) -> Result<Option<D::Id>, EvalError> {
+    Ok(dataset
+        .term_id_by_value(name)
+        .map_err(source_error)?
+        .filter(|&id| dataset.has_named_graph(id) && active_dataset.named_allows(id)))
 }
 
 /// Survey one basic graph pattern — `node`, holding `patterns` — for
@@ -2382,6 +3217,7 @@ fn survey_bgp<D: DatasetView>(
     node: &GraphPattern,
     patterns: &[TriplePattern],
     survey: &mut PlanSurvey,
+    account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(), EvalError> {
     if patterns.is_empty() {
         return Ok(());
@@ -2391,9 +3227,9 @@ fn survey_bgp<D: DatasetView>(
         active_dataset,
         active_graph,
         node,
-        patterns,
         &SeedEstimate::default(),
         survey,
+        account,
     )
 }
 
@@ -2405,56 +3241,64 @@ fn forecast_bgp<D: DatasetView>(
     active_graph: GraphMatch<D::Id>,
     patterns: &[TriplePattern],
     seed: &SeedEstimate,
-) -> Result<(VarSchema, PlanEstimate, Vec<usize>), EvalError> {
+    account: &crate::workspace::QueryWorkspace<D::ReadError>,
+) -> Result<(VarSchema, PlanEstimate, AdmittedVec<usize>), EvalError> {
+    let workspace = account.capability();
     let scope = active_dataset.scope_for(active_graph);
-    let mut working = seed.schema.clone();
-    for pattern in patterns {
-        for key in slot_keys(pattern) {
-            working.push(key);
+    let working = collect_slots_admitted(patterns, Some(&seed.schema), &workspace)?;
+    let seeded = !seed.schema.is_empty() || !seed.bound.is_empty() || seed.rows != 1;
+    let mut initial =
+        AdmittedVec::with_capacity(if seeded { working.len() } else { 0 }, &workspace)?;
+    if seeded {
+        for variable in working.vars() {
+            initial.push_reserved(seed.bound.contains(variable));
         }
     }
-    let seeded = !seed.schema.is_empty() || !seed.bound.is_empty() || seed.rows != 1;
-    let initial: Vec<bool> = if seeded {
-        working
-            .vars()
-            .iter()
-            .map(|v| seed.bound.contains(v))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let mut compiled = Vec::with_capacity(patterns.len());
+    let mut compiled = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
     let mut any_absent = false;
     for pattern in patterns {
-        match compile_pattern(pattern, &working, dataset)? {
-            Some(cp) => compiled.push(cp),
+        match compile_pattern_admitted(pattern, &working, dataset, &workspace, &|value| {
+            dataset
+                .term_id_by_value(value)
+                .map_err(|error| account.source_error(error))
+        })? {
+            Some(pattern) => compiled.push_reserved(pattern),
             None => {
                 any_absent = true;
                 break;
             }
         }
     }
-    let order: Vec<usize> = if any_absent {
-        (0..patterns.len()).collect()
-    } else if seeded {
-        cost_based_order_from(&compiled, dataset, &scope, &initial)
+    let order = if any_absent {
+        let mut order = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
+        for index in 0..patterns.len() {
+            order.push_reserved(index);
+        }
+        order
     } else {
-        cost_based_order(&compiled, dataset, &scope)
+        cost_based_order_from_admitted(&compiled, dataset, &scope, &initial, &workspace)?
     };
-    let schema = real_var_schema(&working);
+    let schema = VarSchema::from_vars_admitted(
+        working
+            .vars()
+            .iter()
+            .filter(|variable| !is_blank_var(variable))
+            .cloned(),
+        &workspace,
+    )?;
     let (rows, peak_rows) = if any_absent {
         (0, 0)
     } else if patterns.is_empty() {
         (seed.rows, seed.rows)
-    } else if seeded {
-        replay_cost_estimate_from(&compiled, dataset, &scope, &order, &initial, seed.rows)
     } else {
-        replay_cost_estimate(&compiled, dataset, &scope, &order)
+        replay_cost_estimate_from_admitted(
+            &compiled, dataset, &scope, &order, &initial, seed.rows, &workspace,
+        )?
     };
     let estimate = PlanEstimate {
         rows,
         peak_rows,
-        columns: working.len() as u64,
+        columns: u64::try_from(working.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
     };
     Ok((schema, estimate, order))
 }
@@ -2465,12 +3309,22 @@ fn survey_bgp_seeded<D: DatasetView>(
     active_dataset: &ActiveDataset<D::Id>,
     active_graph: GraphMatch<D::Id>,
     node: &GraphPattern,
-    patterns: &[TriplePattern],
     seed: &SeedEstimate,
     survey: &mut PlanSurvey,
+    account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(), EvalError> {
-    let (_, estimate, order) = forecast_bgp(dataset, active_dataset, active_graph, patterns, seed)?;
-    record_bgp_forecast(node, patterns, estimate, &order, survey);
+    let GraphPattern::Bgp { patterns } = node else {
+        unreachable!("BGP survey receives a BGP node");
+    };
+    let (_, estimate, order) = forecast_bgp(
+        dataset,
+        active_dataset,
+        active_graph,
+        patterns,
+        seed,
+        account,
+    )?;
+    record_bgp_forecast(node, patterns, estimate, &order, survey)?;
     Ok(())
 }
 
@@ -2482,13 +3336,15 @@ fn record_bgp_forecast(
     estimate: PlanEstimate,
     order: &[usize],
     survey: &mut PlanSurvey,
-) {
+) -> Result<(), EvalError> {
     if patterns.len() >= 2 {
         for &i in order {
-            survey.orders.push(triple_pattern_to_string(&patterns[i]));
+            let (text, allocation) = triple_pattern_text_admitted(&patterns[i], &survey.workspace)?;
+            survey.orders.push(text, allocation)?;
         }
     }
     survey.record(node, estimate);
+    Ok(())
 }
 
 /// Record the survey's prediction for one property-function node, keyed by that node's
@@ -2506,7 +3362,7 @@ fn record_bgp_forecast(
 fn record_call_estimate(
     node: &GraphPattern,
     call: &PropertyFunctionCall,
-    bound: &DetHashSet<Variable>,
+    bound: &VarSchema,
     driving_rows: u64,
     relations: &crate::property_fn::PropertyFunctionRegistry,
     survey: &mut PlanSurvey,
@@ -2514,7 +3370,18 @@ fn record_call_estimate(
     let Some(relation) = relations.resolve(&call.iri) else {
         return Ok(());
     };
-    let mode = crate::property_fn_plan::invocation_mode(call, bound);
+    let mut storage = crate::workspace::LexicalFrame::new(&survey.workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut storage);
+    let mode = crate::property_fn_plan::invocation_mode_with_memory(
+        call,
+        &|variable| bound.contains(variable),
+        &mut memory,
+    )
+    .map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "property invocation forecast")
+    })?;
     let rows_per_invocation =
         crate::property_fn::declaration_contained(&call.iri, "row bound", || {
             relation.rows_per_invocation(mode)
@@ -2576,134 +3443,121 @@ fn predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
 /// Saturating `f64`-to-`u64` conversion: Rust's `as` cast saturates rather than wrapping,
 /// so an estimate beyond `u64::MAX` becomes `u64::MAX` and a negative one — which the
 /// model cannot produce, every factor being non-negative — would become zero.
-fn replay_cost_estimate<D: DatasetView>(
-    compiled: &[CompiledPattern<D::Id>],
-    dataset: &D,
-    scope: &GraphScope<D::Id>,
-    order: &[usize],
-) -> (u64, u64) {
-    replay_cost_estimate_from(compiled, dataset, scope, order, &[], 1)
-}
-
-fn replay_cost_estimate_from<D: DatasetView>(
+fn replay_cost_estimate_from_admitted<D: DatasetView>(
     compiled: &[CompiledPattern<D::Id>],
     dataset: &D,
     scope: &GraphScope<D::Id>,
     order: &[usize],
     initial: &[bool],
     driving_rows: u64,
-) -> (u64, u64) {
-    let base: Vec<f64> = compiled
-        .iter()
-        .map(|cp| base_cardinality(dataset, cp, scope) as f64)
-        .collect();
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(u64, u64), EvalError> {
+    let base = cardinality_base(compiled, dataset, scope, workspace)?;
     let t = dataset.term_count().max(1) as f64;
-    let mut n_cols = 0usize;
-    for cp in compiled {
-        for pos in [&cp.s, &cp.p, &cp.o] {
-            for_each_slot(pos, &mut |c| n_cols = n_cols.max(c + 1));
-        }
-    }
-
+    let columns = cost_columns(compiled, workspace)?;
     let precision = Binary64Scope::enter();
     let ops = precision.ops();
-    let mut bound = initial.to_vec();
-    bound.resize(n_cols, false);
-    // A join variable ranges over the relation that introduced it, rather than
-    // every term in unrelated dataset regions. The constants-only relation size
-    // is a cheap upper bound on that domain. Keeping a domain per slot also
-    // preserves disconnected factors through later connected stages.
-    let mut domains = vec![t; n_cols];
+    let mut bound = cost_bound_mask(initial, columns, workspace)?;
+    let mut domains = AdmittedVec::with_capacity(columns, workspace)?;
+    for _ in 0..columns {
+        domains.push_reserved(t);
+    }
     let mut running = driving_rows as f64;
-    let mut peak = if compiled.is_empty() { running } else { 0.0f64 };
-    for &i in order {
+    let mut peak = if compiled.is_empty() {
+        running
+    } else {
+        0.0_f64
+    };
+    for &index in order {
         let mut divisor = 1.0_f64;
-        let current_domain = base[i].min(t).max(1.0);
-        for position in [&compiled[i].s, &compiled[i].p, &compiled[i].o] {
+        let current_domain = base[index].min(t).max(1.0);
+        for position in [&compiled[index].s, &compiled[index].p, &compiled[index].o] {
             let mut previous_domain = 0.0_f64;
-            for_each_slot(position, &mut |column| {
+            for_each_slot_admitted(position, workspace, &mut |column| {
                 if bound[column] {
                     previous_domain = previous_domain.max(domains[column]);
                 }
-            });
+                Ok(())
+            })?;
             if previous_domain > 0.0 {
                 divisor = ops.mul(divisor, previous_domain.max(current_domain));
             }
         }
-        running = ops.div(ops.mul(running, base[i]), divisor);
+        running = ops.div(ops.mul(running, base[index]), divisor);
         peak = peak.max(running);
-        for position in [&compiled[i].s, &compiled[i].p, &compiled[i].o] {
-            for_each_slot(position, &mut |column| {
-                domains[column] = if bound[column] {
+        for position in [&compiled[index].s, &compiled[index].p, &compiled[index].o] {
+            for_each_slot_admitted(position, workspace, &mut |column| {
+                let domain = if bound[column] {
                     domains[column].min(current_domain)
                 } else {
                     current_domain
                 };
-            });
+                domains.as_mut_slice()[column] = domain;
+                Ok(())
+            })?;
         }
-        mark_bound(&compiled[i], &mut bound);
+        mark_bound_admitted(&compiled[index], bound.as_mut_slice(), workspace)?;
     }
-    (running as u64, peak as u64)
-}
-
-/// An empty solution sequence over only the real (non-blank) variables of `working`.
-fn empty_over_real_vars<I: ViewTermId>(working: &VarSchema) -> SolutionSeq<I> {
-    let real = real_var_schema(working);
-    SolutionSeq::empty(Arc::new(real))
-}
-
-/// The schema of `working` restricted to its real variables, in order.
-fn real_var_schema(working: &VarSchema) -> VarSchema {
-    VarSchema::from_vars(working.vars().iter().filter(|v| !is_blank_var(v)).cloned())
-}
-
-/// Project the working rows onto only the real variables, dropping the synthetic
-/// blank-node columns (which are scoped to this BGP and must not leak into joins).
-/// Multiset cardinality is preserved (no dedup).
-fn project_out_blanks<I: ViewTermId>(
-    working: &VarSchema,
-    rows: Vec<Solution<I>>,
-) -> SolutionSeq<I> {
-    BgpProjection::new(working).apply(rows)
+    Ok((running as u64, peak as u64))
 }
 
 /// One BGP's real columns, retained when many occurrences share its layout.
 struct BgpProjection {
-    schema: Arc<VarSchema>,
-    keep: purrdf_core::SmallVec<[usize; 8]>,
+    schema: crate::solution::SharedSchema,
+    keep: AdmittedVec<usize>,
     has_blanks: bool,
 }
 
 impl BgpProjection {
     /// Record real columns in working order for every occurrence of this layout.
-    fn new(working: &VarSchema) -> Self {
-        let keep: purrdf_core::SmallVec<[usize; 8]> = working
-            .vars()
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| (!is_blank_var(v)).then_some(i))
-            .collect();
-        Self {
-            schema: Arc::new(real_var_schema(working)),
-            has_blanks: keep.len() != working.len(),
-            keep,
+    fn new_admitted(
+        working: &VarSchema,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let mut keep = AdmittedVec::new(workspace);
+        for (column, variable) in working.vars().iter().enumerate() {
+            if !is_blank_var(variable) {
+                keep.push(column)?;
+            }
         }
+        let has_blanks = keep.len() != working.len();
+        let schema = if has_blanks {
+            VarSchema::from_vars_admitted(
+                keep.iter().map(|&column| working.vars()[column].clone()),
+                workspace,
+            )?
+            .shared_admitted(workspace)?
+        } else {
+            working.clone().shared_admitted(workspace)?
+        };
+        Ok(Self {
+            schema,
+            keep,
+            has_blanks,
+        })
     }
 
     /// Rows cover the full working layout. Reuse them when no blank slot is hidden,
     /// otherwise select exactly the retained columns without changing the bag.
-    fn apply<I: ViewTermId>(&self, rows: Vec<Solution<I>>) -> SolutionSeq<I> {
+    fn apply<I: ViewTermId>(
+        &self,
+        rows: AdmittedVec<RetainedRow<I>>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<SolutionSeq<I>, EvalError> {
         let rows = if self.has_blanks {
-            rows.into_iter()
-                .map(|row| self.keep.iter().map(|&i| row[i]).collect())
-                .collect()
+            let mut projected = RowsBuilder::new(workspace);
+            for row in rows {
+                projected
+                    .push_cells(self.keep.len(), self.keep.iter().map(|&column| row[column]))?;
+            }
+            projected.finish()?
         } else {
-            rows
+            RowsBuilder::from_storage(rows, workspace).finish()?
         };
-        SolutionSeq {
-            schema: Arc::clone(&self.schema),
+        Ok(SolutionSeq {
+            schema: self.schema.clone(),
             rows,
-        }
+        })
     }
 }
 
@@ -3755,7 +4609,9 @@ mod tests {
     fn cardinality_default_preserves_merge_graph_statistic_boundaries() {
         let graph = skewed_graph();
         let compiled = cost_spokes(&graph, 3);
-        let scope = GraphScope::Merge(vec![graph.hub, graph.hot]);
+        let scope = GraphScope::Merge(crate::dataset_spec::GraphIds::resident(vec![
+            graph.hub, graph.hot,
+        ]));
         for statistic in [
             0_u64,
             (1 << 52) - 1,
@@ -3773,11 +4629,17 @@ mod tests {
                     .collect::<Vec<_>>()
             }));
             let actual = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                cost_base(&compiled, &host, &scope)
+                cost_base(
+                    &compiled,
+                    &host,
+                    &scope,
+                    &crate::WorkspaceCapability::resident(),
+                )
+                .expect("resident pattern costs")
             }));
             match (original, actual) {
                 (Ok(original), Ok(actual)) => {
-                    for (original, actual) in original.iter().zip(actual) {
+                    for (original, actual) in original.iter().zip(actual.iter()) {
                         assert_eq!(actual.rows.to_bits(), original.to_bits());
                         assert_eq!(actual.work.to_bits(), original.to_bits());
                     }
@@ -3803,7 +4665,13 @@ mod tests {
                     .iter()
                     .map(|pattern| base_cardinality(&*graph.ds, pattern, &scope) as f64)
                     .collect();
-                let native = cost_base(&compiled, &*graph.ds, &scope);
+                let native = cost_base(
+                    &compiled,
+                    &*graph.ds,
+                    &scope,
+                    &crate::WorkspaceCapability::resident(),
+                )
+                .expect("resident pattern costs");
                 for (native, original) in native.iter().zip(&base) {
                     assert_eq!(native.rows.to_bits(), original.to_bits());
                     assert_eq!(native.work.to_bits(), original.to_bits());
@@ -3878,8 +4746,27 @@ mod tests {
         let compiled = cost_spokes(&graph, 3);
         let scope = GraphScope::One(GraphMatch::Default);
         let order = [0, 1, 2];
-        let expected = replay_cost_estimate_from(&compiled, &*graph.ds, &scope, &order, &[], 7);
-        let actual = replay_cost_estimate_from(&compiled, &host, &scope, &order, &[], 7);
+        let workspace = crate::WorkspaceCapability::resident();
+        let expected = replay_cost_estimate_from_admitted(
+            &compiled,
+            &*graph.ds,
+            &scope,
+            &order,
+            &[],
+            7,
+            &workspace,
+        )
+        .expect("resident cardinality replay");
+        let actual = replay_cost_estimate_from_admitted(
+            &compiled,
+            &host,
+            &scope,
+            &order,
+            &[],
+            7,
+            &workspace,
+        )
+        .expect("resident measured-work replay");
         assert_eq!(actual, expected);
     }
 
@@ -3908,7 +4795,9 @@ mod tests {
                     &scope,
                     &[],
                     Some(crate::plan_cache::OrderCacheRef::Legacy(&cache)),
-                );
+                    &crate::WorkspaceCapability::resident(),
+                )
+                .expect("resident cached order");
                 assert_eq!(&*order, &expected);
             }
         }
@@ -4086,7 +4975,7 @@ mod term_walk_tests {
             TermPattern::Triple(t) => {
                 if reference_triple_has_variable(t) {
                     match reference_compile_triple_pos(t, schema, dataset)? {
-                        Some(tp) => Ok(Some(Pos::Triple(Box::new(tp)))),
+                        Some(tp) => Ok(Some(Pos::Triple(Box::new(tp).into()))),
                         None => Ok(None),
                     }
                 } else {
@@ -4393,15 +5282,18 @@ mod term_walk_tests {
         match choices.choose(5) {
             0 | 1 => Pos::Slot(choices.choose(COLUMNS)),
             2 => Pos::Bound(ids[choices.choose(ids.len())]),
-            _ => Pos::Triple(Box::new(TriplePos {
-                s: position(choices, ids),
-                p: if choices.choose(2) == 0 {
-                    Pos::Slot(choices.choose(COLUMNS))
-                } else {
-                    Pos::Bound(ids[choices.choose(ids.len())])
-                },
-                o: position(choices, ids),
-            })),
+            _ => Pos::Triple(
+                Box::new(TriplePos {
+                    s: position(choices, ids),
+                    p: if choices.choose(2) == 0 {
+                        Pos::Slot(choices.choose(COLUMNS))
+                    } else {
+                        Pos::Bound(ids[choices.choose(ids.len())])
+                    },
+                    o: position(choices, ids),
+                })
+                .into(),
+            ),
         }
     }
 
@@ -4413,15 +5305,18 @@ mod term_walk_tests {
             0 => Pos::Slot(choices.choose(COLUMNS)),
             1 => Pos::Bound(ids(dataset)[choices.choose(dataset.term_count())]),
             _ => match dataset.resolve(id) {
-                TermRef::Triple { s, p, o } => Pos::Triple(Box::new(TriplePos {
-                    s: mirroring(choices, dataset, s),
-                    p: if choices.choose(3) == 0 {
-                        Pos::Slot(choices.choose(COLUMNS))
-                    } else {
-                        Pos::Bound(p)
-                    },
-                    o: mirroring(choices, dataset, o),
-                })),
+                TermRef::Triple { s, p, o } => Pos::Triple(
+                    Box::new(TriplePos {
+                        s: mirroring(choices, dataset, s),
+                        p: if choices.choose(3) == 0 {
+                            Pos::Slot(choices.choose(COLUMNS))
+                        } else {
+                            Pos::Bound(p)
+                        },
+                        o: mirroring(choices, dataset, o),
+                    })
+                    .into(),
+                ),
                 _ => Pos::Bound(id),
             },
         }
@@ -4496,11 +5391,14 @@ mod term_walk_tests {
     fn deep_position(depth: usize, leaf: TermId) -> Pos {
         let mut pos = Pos::Slot(1);
         for _ in 0..depth {
-            pos = Pos::Triple(Box::new(TriplePos {
-                s: Pos::Bound(leaf),
-                p: Pos::Slot(0),
-                o: pos,
-            }));
+            pos = Pos::Triple(
+                Box::new(TriplePos {
+                    s: Pos::Bound(leaf),
+                    p: Pos::Slot(0),
+                    o: pos,
+                })
+                .into(),
+            );
         }
         pos
     }
@@ -4779,7 +5677,7 @@ mod term_walk_tests {
         for seed in 0..600_u64 {
             let mut choices = Choices::new(seed);
             let pattern = triple_pattern(&mut choices);
-            let schema = Arc::new(VarSchema::from_vars(slot_keys(&pattern)));
+            let schema = VarSchema::shared_resident(VarSchema::from_vars(slot_keys(&pattern)));
             for term in [&pattern.subject, &pattern.object] {
                 let ours = compile_term(term, &schema, &recording);
                 let our_log = recording.take_log();
@@ -4926,7 +5824,7 @@ mod term_walk_tests {
             );
 
             let dataset = dataset();
-            let schema = Arc::new(VarSchema::from_vars([Variable::new("v")]));
+            let schema = VarSchema::shared_resident(VarSchema::from_vars([Variable::new("v")]));
             let compiled = compile_term(&term, &schema, dataset.as_ref())
                 .expect("compiles")
                 .expect("every constant is held");
@@ -4953,6 +5851,7 @@ mod survey_tests {
 
     use super::{EMPTY_SCOPE, PlanSurvey, record_call_estimate, survey_bgp, survey_pattern_plans};
     use crate::DetHashSet;
+    use crate::VarSchema;
     use crate::dataset_spec::ActiveDataset;
     use crate::error::EvalError;
     use crate::governor::ledger::PlanEstimate;
@@ -5003,6 +5902,7 @@ mod survey_tests {
                 pattern,
                 patterns,
                 survey,
+                &crate::workspace::QueryWorkspace::resident(),
             ),
             GraphPattern::Join { left, right }
             | GraphPattern::Lateral { left, right }
@@ -5021,7 +5921,7 @@ mod survey_tests {
                     record_call_estimate(
                         right,
                         call,
-                        &bound,
+                        &VarSchema::from_vars(bound.iter().cloned()),
                         reference_predicted_rows(left, survey).unwrap_or(1),
                         relations,
                         survey,
@@ -5140,7 +6040,7 @@ mod survey_tests {
                 )
             }
             GraphPattern::PropertyFunction(call) => {
-                record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey)
+                record_call_estimate(pattern, call, &VarSchema::default(), 1, relations, survey)
             }
             GraphPattern::Values {
                 variables,
@@ -5178,8 +6078,8 @@ mod survey_tests {
         let mut bound = DetHashSet::default();
         crate::property_fn_plan::collect_certainly_bound(left, &mut bound);
         let seed = super::SeedEstimate {
-            schema: Arc::unwrap_or_clone(crate::eval::syntactic_schema(left)),
-            bound,
+            schema: crate::eval::syntactic_schema(left).as_ref().clone(),
+            bound: VarSchema::from_vars(bound),
             rows: if optional { 1 } else { driving_rows },
         };
         let Some(plan) =
@@ -5187,7 +6087,14 @@ mod survey_tests {
         else {
             return Ok(false);
         };
-        plan.survey_seeded(dataset, active_dataset, graph, right, Some(&seed), survey)?;
+        plan.survey_seeded_admitted(
+            dataset,
+            active_dataset,
+            graph,
+            (right, Some(&seed)),
+            survey,
+            &crate::workspace::QueryWorkspace::resident(),
+        )?;
         let mut estimate = survey
             .estimate_of(right)
             .expect("the driven relation was surveyed")
@@ -5528,7 +6435,7 @@ mod survey_tests {
             .enumerate()
             .filter_map(|(id, estimate)| estimate.clone().map(|estimate| (id, estimate)))
             .collect();
-        (survey.orders.clone(), estimates)
+        (survey.orders.to_vec(), estimates)
     }
 
     // ── The tests ──────────────────────────────────────────────────────────────────

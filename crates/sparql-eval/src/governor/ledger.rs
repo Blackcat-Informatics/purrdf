@@ -121,12 +121,11 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use std::sync::Arc;
-
 use super::{CHARGE_SCHEDULE, ChargePoint};
 use crate::agg_fn::AggDescriptor;
 use crate::plan::{NodeId, PlanShape};
 use crate::property_fn::PfDescriptor;
+use crate::workspace::{AdmittedRecords, AdmittedVec, SharedWorkspace};
 
 /// The cost planner's prediction for one basic graph pattern, recorded before evaluation
 /// so the ledger can print it beside the row count that actually materialised.
@@ -176,16 +175,16 @@ struct LedgerNode {
 /// charges across copies and none of them would be the total.
 pub(crate) struct ChargeLedger {
     /// One entry per plan node, indexed by [`NodeId`].
-    nodes: Vec<LedgerNode>,
+    nodes: AdmittedVec<LedgerNode>,
     /// The shape of the tree the ledger lines are the nodes of, which is where a node's
     /// address resolves to its line.
-    shape: Arc<PlanShape>,
+    shape: SharedWorkspace<PlanShape>,
     /// Fuel charged per node, per [`ChargePoint`], in [`CHARGE_SCHEDULE`] order.
-    fuel: Vec<[AtomicU64; CHARGE_SCHEDULE.len()]>,
+    fuel: AdmittedVec<[AtomicU64; CHARGE_SCHEDULE.len()]>,
     /// Rows each node committed to its own output.
-    rows: Vec<AtomicU64>,
+    rows: AdmittedVec<AtomicU64>,
     /// The largest materialized bag each node held, in cells.
-    cells: Vec<AtomicU64>,
+    cells: AdmittedVec<AtomicU64>,
 }
 
 impl std::fmt::Debug for ChargeLedger {
@@ -199,27 +198,62 @@ impl std::fmt::Debug for ChargeLedger {
 impl ChargeLedger {
     /// A ledger over the tree `shape` numbers, with the planner's per-node predictions
     /// indexed by [`NodeId`] (a missing entry is no prediction).
-    pub(crate) fn for_plan(shape: &Arc<PlanShape>, estimates: &[Option<PlanEstimate>]) -> Self {
+    #[cfg(test)]
+    pub(crate) fn for_plan(
+        shape: &SharedWorkspace<PlanShape>,
+        estimates: &[Option<PlanEstimate>],
+    ) -> Self {
+        Self::allocate_tables(shape, estimates, &crate::WorkspaceCapability::resident())
+            .expect("resident ledger tables")
+    }
+
+    fn allocate_tables(
+        shape: &SharedWorkspace<PlanShape>,
+        estimates: &[Option<PlanEstimate>],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, crate::EvalError> {
         let count = shape.len();
-        let nodes = (0..count)
-            .map(|index| {
-                let node = NodeId::from_index(index);
-                LedgerNode {
-                    label: shape.kind(node).label(),
-                    depth: shape.depth(node) as usize,
-                    estimate: estimates.get(index).cloned().flatten(),
-                }
-            })
-            .collect();
-        Self {
-            nodes,
-            shape: Arc::clone(shape),
-            fuel: (0..count)
-                .map(|_| std::array::from_fn(|_| AtomicU64::new(0)))
-                .collect(),
-            rows: (0..count).map(|_| AtomicU64::new(0)).collect(),
-            cells: (0..count).map(|_| AtomicU64::new(0)).collect(),
+        let mut nodes = AdmittedVec::with_capacity(count, workspace)?;
+        let mut fuel = AdmittedVec::with_capacity(count, workspace)?;
+        let mut rows = AdmittedVec::with_capacity(count, workspace)?;
+        let mut cells = AdmittedVec::with_capacity(count, workspace)?;
+        for index in 0..count {
+            let node = NodeId::from_index(index);
+            nodes.push_reserved(LedgerNode {
+                label: shape.kind(node).label(),
+                depth: shape.depth(node) as usize,
+                estimate: estimates.get(index).cloned().flatten(),
+            });
+            fuel.push_reserved(std::array::from_fn(|_| AtomicU64::new(0)));
+            rows.push_reserved(AtomicU64::new(0));
+            cells.push_reserved(AtomicU64::new(0));
         }
+        Ok(Self {
+            nodes,
+            shape: shape.clone(),
+            fuel,
+            rows,
+            cells,
+        })
+    }
+
+    /// Tables, native shared control and terminal output are all admitted before
+    /// measurement. The unique publication permit cannot allocate after refusal.
+    pub(crate) fn for_plan_admitted(
+        shape: &SharedWorkspace<PlanShape>,
+        estimates: &[Option<PlanEstimate>],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(SharedWorkspace<Self>, LedgerPublication), crate::EvalError> {
+        let ledger = SharedWorkspace::new_admitted(
+            Self::allocate_tables(shape, estimates, workspace)?,
+            workspace,
+        )?;
+        let rows = AdmittedVec::with_capacity(shape.len(), workspace)?;
+        let publication = LedgerPublication {
+            rows,
+            ledger: ledger.clone(),
+        };
+        Ok((ledger, publication))
     }
 
     /// The node of the plan at `address`, or `None` when the address is not a plan node
@@ -259,20 +293,40 @@ impl ChargeLedger {
 
     /// The ledger as an ordered, owned snapshot — the form that crosses the public
     /// boundary.
+    #[cfg(test)]
     pub(crate) fn snapshot(&self) -> Vec<NodeCharges> {
-        self.nodes
-            .iter()
-            .enumerate()
-            .map(|(ordinal, node)| NodeCharges {
-                ordinal,
-                depth: node.depth,
-                label: node.label,
-                fuel: std::array::from_fn(|slot| self.fuel[ordinal][slot].load(Ordering::Relaxed)),
-                rows: self.rows[ordinal].load(Ordering::Relaxed),
-                cells: self.cells[ordinal].load(Ordering::Relaxed),
-                estimate: node.estimate.clone(),
-            })
+        (0..self.nodes.len())
+            .map(|ordinal| self.node_charges(ordinal))
             .collect()
+    }
+
+    fn node_charges(&self, ordinal: usize) -> NodeCharges {
+        let node = &self.nodes[ordinal];
+        NodeCharges {
+            ordinal,
+            depth: node.depth,
+            label: node.label,
+            fuel: std::array::from_fn(|slot| self.fuel[ordinal][slot].load(Ordering::Relaxed)),
+            rows: self.rows[ordinal].load(Ordering::Relaxed),
+            cells: self.cells[ordinal].load(Ordering::Relaxed),
+            estimate: node.estimate.clone(),
+        }
+    }
+}
+
+/// A unique, preallocated output permit owned by the EXPLAIN ingress.
+pub(crate) struct LedgerPublication {
+    rows: AdmittedVec<NodeCharges>,
+    ledger: SharedWorkspace<ChargeLedger>,
+}
+
+impl LedgerPublication {
+    /// Joined counters only fill existing slots; ownership moves unchanged.
+    pub(crate) fn finish(mut self) -> AdmittedVec<NodeCharges> {
+        for ordinal in 0..self.ledger.nodes.len() {
+            self.rows.push_reserved(self.ledger.node_charges(ordinal));
+        }
+        self.rows
     }
 }
 
@@ -325,16 +379,16 @@ impl NodeCharges {
 /// Returned by
 /// [`NativeSparqlEngine::explain_query`](crate::NativeSparqlEngine::explain_query). Every
 /// field is owned and deterministic; [`Self::render`] turns it into the stable text form.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct QueryExplanation {
     /// The charge-schedule profile this build implements — the identifier, its version,
     /// and the content address of the schedule itself.
     profile: ProfileIdentity,
     /// The cost-based BGP join orders, one string per triple pattern, in the order the
     /// planner selected — exactly what this API returned before the ledger existed.
-    join_orders: Vec<String>,
+    join_orders: AdmittedRecords<String>,
     /// One line per algebra node, in the plan's pre-order.
-    ledger: Vec<NodeCharges>,
+    ledger: AdmittedVec<NodeCharges>,
     /// The full self-description of every property-function relation that was in
     /// scope, sorted by IRI.
     ///
@@ -350,7 +404,7 @@ pub struct QueryExplanation {
     /// registered rather than of registration order — see
     /// [`PropertyFunctionRegistry::describe`](crate::property_fn::PropertyFunctionRegistry::describe),
     /// which this is taken from verbatim.
-    relations: Vec<PfDescriptor>,
+    relations: AdmittedRecords<PfDescriptor>,
     /// The full self-description of every custom-aggregate that was in scope, sorted by
     /// IRI. The exact twin of [`Self::relations`], for the exact same reason: a `Custom`
     /// aggregate is HOST code that folds a `GROUP BY` group into a value no built-in
@@ -360,10 +414,11 @@ pub struct QueryExplanation {
     /// [`AggregateRegistry::describe`](crate::agg_fn::AggregateRegistry::describe), which
     /// this is taken from verbatim, so the list is a function of what was registered
     /// rather than of registration order.
-    aggregates: Vec<AggDescriptor>,
+    aggregates: AdmittedRecords<AggDescriptor>,
     /// The whole execution's consumption and ceilings, so a reader can check the ledger's
     /// fuel column against the total it decomposes.
     evidence: purrdf_core::GovernorEvidence,
+    _profile_allocation: Option<crate::WorkspaceAllocation>,
 }
 
 /// The pinned identity of the charge schedule an explanation was priced under.
@@ -387,6 +442,33 @@ pub struct ProfileIdentity {
 }
 
 impl ProfileIdentity {
+    /// This build's exact profile text is admitted before its only allocation.
+    pub(crate) fn current_admitted(
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(Self, crate::WorkspaceAllocation), crate::EvalError> {
+        let digest = super::schedule_hash(
+            super::GOVERNOR_PROFILE_ID,
+            super::GOVERNOR_PROFILE_VERSION,
+            &CHARGE_SCHEDULE,
+        );
+        let mut bytes = [0_u8; 2 * size_of::<[u8; 32]>()];
+        let spelling = purrdf_hash::hex::encode_to_slice(&digest, &mut bytes)
+            .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
+        let allocation = workspace.charge(
+            u64::try_from(spelling.len()).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        let digest = crate::workspace::string(spelling, "EXPLAIN profile digest")?;
+        Ok((
+            Self {
+                id: super::GOVERNOR_PROFILE_ID,
+                version: super::GOVERNOR_PROFILE_VERSION,
+                digest,
+                stop_poll_fuel: super::STOP_POLL_FUEL,
+            },
+            allocation,
+        ))
+    }
+
     /// This build's profile identity.
     #[must_use]
     pub fn current() -> Self {
@@ -399,9 +481,22 @@ impl ProfileIdentity {
     }
 }
 
+impl Clone for QueryExplanation {
+    fn clone(&self) -> Self {
+        // An explicit copy of a borrowed resident object belongs to its caller.
+        // Operational carriers clone their immutable Shared owner instead.
+        Self::resident_parts(
+            self.join_orders.to_vec(),
+            self.ledger.to_vec(),
+            self.relations.to_vec(),
+            self.aggregates.to_vec(),
+            self.evidence.clone(),
+        )
+    }
+}
+
 impl QueryExplanation {
-    /// Assemble an explanation from the parts the engine computed.
-    pub(crate) fn new(
+    fn resident_parts(
         join_orders: Vec<String>,
         ledger: Vec<NodeCharges>,
         relations: Vec<PfDescriptor>,
@@ -410,11 +505,32 @@ impl QueryExplanation {
     ) -> Self {
         Self {
             profile: ProfileIdentity::current(),
+            join_orders: AdmittedRecords::resident(join_orders),
+            ledger: AdmittedVec::from_parts(ledger, None, &crate::WorkspaceCapability::resident()),
+            relations: AdmittedRecords::resident(relations),
+            aggregates: AdmittedRecords::resident(aggregates),
+            evidence,
+            _profile_allocation: None,
+        }
+    }
+
+    /// Assemble already admitted, immutable metadata without any allocation.
+    pub(crate) fn from_admitted(
+        profile: (ProfileIdentity, crate::WorkspaceAllocation),
+        join_orders: AdmittedRecords<String>,
+        ledger: AdmittedVec<NodeCharges>,
+        relations: AdmittedRecords<PfDescriptor>,
+        aggregates: AdmittedRecords<AggDescriptor>,
+        evidence: purrdf_core::GovernorEvidence,
+    ) -> Self {
+        Self {
+            profile: profile.0,
             join_orders,
             ledger,
             relations,
             aggregates,
             evidence,
+            _profile_allocation: Some(profile.1),
         }
     }
 
@@ -526,7 +642,7 @@ impl QueryExplanation {
         // registered would make "no relations were in scope" and "this build does not
         // report relations" the same bytes.
         let _ = writeln!(out, "relations");
-        for descriptor in &self.relations {
+        for descriptor in self.relations.iter() {
             let _ = write!(
                 out,
                 "  {} arity={},{} volatility={}",
@@ -543,7 +659,7 @@ impl QueryExplanation {
         // Always emitted, empty or not, for the exact reason the `relations` block is: see
         // above.
         let _ = writeln!(out, "aggregates");
-        for descriptor in &self.aggregates {
+        for descriptor in self.aggregates.iter() {
             let _ = write!(
                 out,
                 "  {} arity={} volatility={} algebraic-class={} state-bound={}",
@@ -559,7 +675,7 @@ impl QueryExplanation {
             out.push('\n');
         }
         let _ = writeln!(out, "join-orders");
-        for pattern in &self.join_orders {
+        for pattern in self.join_orders.iter() {
             let _ = writeln!(out, "  {pattern}");
         }
         let _ = writeln!(out, "consumed");

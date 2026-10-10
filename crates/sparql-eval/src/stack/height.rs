@@ -138,44 +138,79 @@ impl Depth {
     }
 }
 
-/// Admit the trees rooted at `roots`, iteratively.
-///
-/// # Errors
-///
-/// [`EvalError::StackExhausted`] when a walk as tall as a tree (patterns, expressions and
-/// paths counted; triple patterns and terms not) does not fit the stack left on the
-/// calling thread; on `wasm32`, [`EvalError::HostStackExhausted`] when it is also past
-/// the host-stack bounds.
-fn admit<'a>(roots: impl IntoIterator<Item = NodeRef<'a>>) -> Result<(), EvalError> {
-    // The pending nodes of a shallow plan stay inline: admitting it allocates nothing.
-    let mut stack: purrdf_core::SmallVec<[(NodeRef<'a>, Depth); 32]> =
-        roots.into_iter().map(|root| (root, Depth::ROOT)).collect();
-    let mut fits = 0;
-    while let Some((node, depth)) = stack.pop() {
-        depth.admit(&mut fits)?;
-        let below = depth.below(node);
-        node.for_each_child(|child| stack.push((child, below)));
+fn admit_with_memory<'a>(
+    roots: impl IntoIterator<Item = NodeRef<'a>>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvalError> {
+    let result = (|| {
+        let mut stack = purrdf_lex::walk::WorkList::<(NodeRef<'a>, Depth), 32>::new();
+        for root in roots {
+            stack.try_push_admitted((root, Depth::ROOT), memory)?;
+        }
+        let mut fits = 0;
+        while let Some((node, depth)) = stack.pop() {
+            depth.admit(&mut fits).map_err(HeightFailure::Evaluation)?;
+            let below = depth.below(node);
+            let mut failure = None;
+            node.for_each_child(|child| {
+                if failure.is_none()
+                    && let Err(error) = stack.try_push_admitted((child, below), memory)
+                {
+                    failure = Some(error);
+                }
+            });
+            if let Some(error) = failure {
+                return Err(HeightFailure::Storage(error));
+            }
+        }
+        stack.release_admitted(memory)?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(()),
+        Err(HeightFailure::Evaluation(error)) => Err(error),
+        Err(HeightFailure::Storage(error)) => Err(memory
+            .admission_mut()
+            .storage_error(error, "query algebra height")),
     }
-    Ok(())
 }
 
-/// Admit `pattern` for evaluation: see [`admit`].
-pub(crate) fn admit_pattern(pattern: &GraphPattern) -> Result<(), EvalError> {
-    admit([NodeRef::Pattern(pattern)])
+enum HeightFailure {
+    Evaluation(EvalError),
+    Storage(purrdf_lex::allocation::StorageError),
+}
+purrdf_lex::variant_from!(HeightFailure { Storage(purrdf_lex::allocation::StorageError) });
+
+/// Admit pattern height under the original physical traversal account.
+pub(crate) fn admit_pattern_with_memory(
+    pattern: &GraphPattern,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvalError> {
+    admit_with_memory([NodeRef::Pattern(pattern)], memory)
 }
 
-/// Admit `query` for the recursive passes preparation runs over it: its pattern and, for
-/// a `CONSTRUCT`, its template's triples; see [`admit`].
+/// Admit query pattern and template trees, preserving the original root order.
 pub(crate) fn admit_query(query: &Query) -> Result<(), EvalError> {
+    let capability = crate::WorkspaceCapability::default();
+    let mut frame = crate::workspace::LexicalFrame::new(&capability);
+    admit_query_with_memory(query, &mut purrdf_lex::allocation::Memory::new(&mut frame))
+}
+
+/// The same query depth law with native before-growth physical admission.
+pub(crate) fn admit_query_with_memory(
+    query: &Query,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvalError> {
     match query {
         Query::Construct {
             pattern, template, ..
-        } => admit(
+        } => admit_with_memory(
             std::iter::once(NodeRef::Pattern(pattern))
                 .chain(template.iter().map(|quad| NodeRef::Triple(&quad.triple))),
+            memory,
         ),
         Query::Select { pattern, .. }
         | Query::Ask { pattern, .. }
-        | Query::Describe { pattern, .. } => admit([NodeRef::Pattern(pattern)]),
+        | Query::Describe { pattern, .. } => admit_with_memory([NodeRef::Pattern(pattern)], memory),
     }
 }

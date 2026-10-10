@@ -1090,7 +1090,11 @@ mod tests {
                 );
                 match err {
                     EvalError::ExistsScopeCollision { variable, intro } => {
-                        assert_eq!(variable, expected_variable, "unexpected colliding variable");
+                        assert_eq!(
+                            variable.as_str(),
+                            expected_variable,
+                            "unexpected colliding variable"
+                        );
                         assert_eq!(intro, expected_intro, "unexpected collision-intro wording");
                     }
                     other => panic!("expected EvalError::ExistsScopeCollision, got {other:?}"),

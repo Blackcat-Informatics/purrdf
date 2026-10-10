@@ -64,6 +64,16 @@ pub fn frame_le(out: &mut Vec<u8>, bytes: &[u8]) {
     out.extend_from_slice(bytes);
 }
 
+/// The checked exact destination layout of one published labelled frame.
+/// Returns `None` if the combined frame cannot fit in addressable storage.
+#[must_use]
+pub fn frame_be_labelled_len(label: &str, value: &[u8]) -> Option<usize> {
+    size_of::<u64>()
+        .checked_add(label.len())?
+        .checked_add(size_of::<u64>())?
+        .checked_add(value.len())
+}
+
 /// Append `label` and then `value` to `out`, each as its length in eight
 /// big-endian bytes followed by its bytes:
 /// `u64_be(len(label)) ‖ label ‖ u64_be(len(value)) ‖ value`.
@@ -79,7 +89,7 @@ pub fn frame_le(out: &mut Vec<u8>, bytes: &[u8]) {
 /// ```
 #[inline]
 pub fn frame_be_labelled(out: &mut Vec<u8>, label: &str, value: &[u8]) {
-    out.reserve(16 + label.len() + value.len());
+    out.reserve(frame_be_labelled_len(label, value).expect("labelled frame size overflow"));
     out.extend_from_slice(&(label.len() as u64).to_be_bytes());
     out.extend_from_slice(label.as_bytes());
     out.extend_from_slice(&(value.len() as u64).to_be_bytes());

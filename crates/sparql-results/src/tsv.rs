@@ -231,7 +231,7 @@ mod tests {
                     Some(lit("Grace", XSD_STRING)),
                 ],
             ],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let expected = concat!(
             "?s\t?b\t?name\t?age\t?label\n",
@@ -254,7 +254,7 @@ mod tests {
                     direction: None,
                 }),
             ]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let text = tsv_text(&result, &ResultProvenance::default());
         assert!(
@@ -274,7 +274,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
             rows: vec![vec![Some(triple)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_tsv(&result, &ResultProvenance::default())
             .expect_err("literal predicate must be rejected");
@@ -297,7 +297,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
             rows: vec![vec![Some(triple)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_tsv(&result, &ResultProvenance::default())
             .expect_err("blank-node predicate must be rejected");
@@ -327,7 +327,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
             rows: vec![vec![Some(outer)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_tsv(&result, &ResultProvenance::default())
             .expect_err("nested malformed predicate must be rejected");
@@ -355,8 +355,11 @@ mod tests {
             location: None,
         });
         let dataset = builder.freeze().expect("dataset freezes");
-        let err = to_tsv(&SparqlResult::Graph(dataset), &ResultProvenance::default())
-            .expect_err("graph rejected");
+        let err = to_tsv(
+            &SparqlResult::Graph(dataset.into()),
+            &ResultProvenance::default(),
+        )
+        .expect_err("graph rejected");
         assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
     }
 
@@ -368,7 +371,7 @@ mod tests {
             rows: vec![vec![Some(TermValue::Iri(
                 "http://example.org/x".to_string(),
             ))]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let expected = concat!("?a\t?b\t?c\n", "<http://example.org/x>\t\t\n",);
         assert_eq!(tsv_text(&result, &ResultProvenance::default()), expected);
@@ -381,7 +384,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["a".to_string()],
             rows: vec![vec![Some(iri.clone()), Some(iri)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_tsv(&result, &ResultProvenance::default())
             .expect_err("over-wide row must be rejected");
@@ -401,7 +404,7 @@ mod tests {
             rows: vec![vec![Some(TermValue::Iri(
                 "http://example.org/x".to_string(),
             ))]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_tsv(&result, &ResultProvenance::default())
             .expect_err("tab in variable name must be rejected");
@@ -415,7 +418,7 @@ mod tests {
             rows: vec![vec![Some(TermValue::Iri(
                 "http://example.org/x".to_string(),
             ))]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_tsv(&result, &ResultProvenance::default())
             .expect_err("newline in variable name must be rejected");
@@ -429,7 +432,7 @@ mod tests {
             rows: vec![vec![Some(TermValue::Iri(
                 "http://example.org/x".to_string(),
             ))]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_tsv(&result, &ResultProvenance::default())
             .expect_err("CR in variable name must be rejected");
@@ -443,7 +446,7 @@ mod tests {
             rows: vec![vec![Some(TermValue::Iri(
                 "http://example.org/s".to_string(),
             ))]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let provenance = ResultProvenance {
             query_hash: Some("deadbeef".to_string()),

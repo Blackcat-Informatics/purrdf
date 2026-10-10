@@ -47,28 +47,45 @@ use purrdf_lex::walk::{Dismantle, Nested as NestedBox, Tok, WorkList, write_debu
 ///
 /// Reads like a `Box<TermValue>` — it dereferences to the term — and is built with
 /// [`TermBox::new`] or `TermValue::into()`, and taken apart with
-/// [`TermBox::into_inner`]. Its drop takes a nested triple term apart over a work list,
-/// so dropping a term of any depth needs no more machine stack.
+/// [`TermBox::into_inner`]. Its drop threads continuations through emptied child
+/// slots, so dropping a term of any depth needs neither traversal allocation nor
+/// additional machine stack.
 pub type TermBox = NestedBox<TermValue>;
 
 impl Dismantle for TermValue {
-    /// Take a triple term apart over a work list: every component that is itself a
-    /// triple term is moved onto the list before its owner goes.
     fn dismantle(node: Box<Self>) {
-        if !matches!(*node, Self::Triple { .. }) {
-            return;
-        }
-        let mut work: WorkList<Box<Self>, 8> = WorkList::with(node);
-        while let Some(mut node) = work.pop() {
-            if let Self::Triple { s, p, o } = &mut *node {
-                for component in [s, p, o] {
-                    if let Some(inner) = component.take()
-                        && matches!(*inner, Self::Triple { .. })
-                    {
-                        work.push(inner);
-                    }
-                }
+        purrdf_lex::walk::dismantle_tree(node);
+    }
+}
+
+impl purrdf_lex::walk::DismantleTree for TermValue {
+    fn next_child(&mut self) -> Option<&mut NestedBox<Self>> {
+        if let Self::Triple { s, p, o } = self {
+            if !s.is_taken() {
+                Some(s)
+            } else if !p.is_taken() {
+                Some(p)
+            } else if !o.is_taken() {
+                Some(o)
+            } else {
+                None
             }
+        } else {
+            None
+        }
+    }
+
+    fn last_child(&mut self) -> Option<&mut NestedBox<Self>> {
+        if let Self::Triple { s, p, o } = self {
+            if o.is_taken() {
+                Some(o)
+            } else if p.is_taken() {
+                Some(p)
+            } else {
+                Some(s)
+            }
+        } else {
+            None
         }
     }
 }
@@ -91,7 +108,56 @@ enum FoldStep<T> {
     Assemble(T),
 }
 
+enum CloneStep<'a> {
+    Enter(&'a TermValue),
+    Assemble,
+}
+
+fn bottom_up_workspace_bound<Step, Value>(nodes: usize) -> Option<usize> {
+    if nodes <= 1 {
+        return Some(0);
+    }
+    // At most two pending steps per input node. Geometric vector growth can
+    // overlap an old buffer of at most P cells and a new one of at most 2P.
+    // Answers retain at most N values, with the same old/new capacity overlap.
+    let steps = nodes.checked_mul(6)?.checked_mul(size_of::<Step>())?;
+    let answers = nodes.checked_mul(3)?.checked_mul(size_of::<Value>())?;
+    steps.checked_add(answers)
+}
+
+/// Physical temporary storage bound for the existing bottom-up fold over
+/// `nodes` input nodes. Payloads returned by callbacks are priced separately.
+#[must_use]
+pub fn fold_workspace_bound<N, T>(nodes: usize) -> Option<usize> {
+    bottom_up_workspace_bound::<FoldStep<N>, T>(nodes)
+}
+
+/// The original visitor failure or a before-allocation native working-storage refusal.
+#[derive(Debug)]
+pub enum OwnedTermFoldError<E> {
+    /// First leaf or triple callback failure.
+    Visitor(E),
+    /// Original checked layout, admission or allocator refusal.
+    Storage(purrdf_lex::allocation::StorageError),
+}
+purrdf_lex::variant_from!(impl<E> OwnedTermFoldError<E> { Storage(purrdf_lex::allocation::StorageError) });
+impl<E: fmt::Display> fmt::Display for OwnedTermFoldError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Visitor(error) => error.fmt(f),
+            Self::Storage(error) => error.fmt(f),
+        }
+    }
+}
+impl<E: std::error::Error + 'static> std::error::Error for OwnedTermFoldError<E> {}
+
 impl TermValue {
+    /// Temporary work-list and value-vector allocation bound of this type's
+    /// iterative clone. The cloned strings and boxes are additional payload.
+    #[must_use]
+    pub fn clone_workspace_bound(nodes: usize) -> Option<usize> {
+        bottom_up_workspace_bound::<CloneStep<'_>, Self>(nodes)
+    }
     /// Fold this term bottom-up over a work list: `leaf` answers for every term that is
     /// not a triple term, and `triple` combines a triple term's three answers — its
     /// subject, predicate and object, each folded fully in that order — into its own.
@@ -139,51 +205,119 @@ impl TermValue {
         mut leaf: impl FnMut(Self) -> Result<T, E>,
         mut triple: impl FnMut(T, T, T) -> Result<T, E>,
     ) -> Result<T, E> {
+        match self.try_fold_owned_with_memory(
+            |value, _| leaf(value),
+            |s, p, o, _| triple(s, p, o),
+            &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+        ) {
+            Ok(value) => Ok(value),
+            Err(OwnedTermFoldError::Visitor(error)) => Err(error),
+            Err(OwnedTermFoldError::Storage(error)) => {
+                panic!("resident owned term fold allocation: {error}")
+            }
+        }
+    }
+    /// Consume the same term bottom-up under the original native allocation
+    /// owner. String/box construction belongs to the supplied leaf/triple doors.
+    /// # Errors
+    /// Preserves the first visitor failure or before-growth storage refusal.
+    pub fn try_fold_owned_with_memory<T, E, S: purrdf_lex::allocation::Admission + ?Sized>(
+        self,
+        mut leaf: impl FnMut(Self, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
+        mut triple: impl FnMut(T, T, T, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<T, OwnedTermFoldError<E>> {
         enum Step {
             Enter(TermValue),
             Assemble,
         }
         let Self::Triple { .. } = self else {
-            return leaf(self);
+            return leaf(self, memory).map_err(OwnedTermFoldError::Visitor);
         };
-        let mut steps: Vec<Step> = vec![Step::Enter(self)];
-        let mut answers: Vec<T> = Vec::with_capacity(3);
+        let mut steps = Vec::new();
+        memory.push(&mut steps, Step::Enter(self))?;
+        let mut answers = Vec::new();
+        memory.reserve(&mut answers, 3)?;
         while let Some(step) = steps.pop() {
             match step {
                 Step::Enter(Self::Triple { s, p, o }) => {
-                    steps.extend([
-                        Step::Assemble,
-                        Step::Enter(o.into_inner()),
-                        Step::Enter(p.into_inner()),
-                        Step::Enter(s.into_inner()),
-                    ]);
+                    memory.extend(
+                        &mut steps,
+                        [
+                            Step::Assemble,
+                            Step::Enter(o.into_inner()),
+                            Step::Enter(p.into_inner()),
+                            Step::Enter(s.into_inner()),
+                        ],
+                    )?;
                 }
-                Step::Enter(term) => answers.push(leaf(term)?),
+                Step::Enter(term) => {
+                    let answer = leaf(term, memory).map_err(OwnedTermFoldError::Visitor)?;
+                    memory.push(&mut answers, answer)?;
+                }
                 Step::Assemble => {
                     let o = answers.pop().expect("a triple's object is folded");
                     let p = answers.pop().expect("a triple's predicate is folded");
                     let s = answers.pop().expect("a triple's subject is folded");
-                    answers.push(triple(s, p, o)?);
+                    let answer = triple(s, p, o, memory).map_err(OwnedTermFoldError::Visitor)?;
+                    memory.push(&mut answers, answer)?;
                 }
             }
         }
-        Ok(answers
+        let answer = answers
             .pop()
-            .expect("the root's answer is the last one assembled"))
+            .expect("the root's answer is the last one assembled");
+        memory.release_vec(steps)?;
+        memory.release_vec(answers)?;
+        Ok(answer)
     }
 
     /// Visit every term of this one in pre-order — a triple term first, then its
     /// subject, predicate and object, each with everything below it — over a work
     /// list. The first `Break` ends the visit and is returned.
     pub fn visit_terms<B>(&self, mut visit: impl FnMut(&Self) -> ControlFlow<B>) -> ControlFlow<B> {
-        let mut pending: WorkList<&Self, 16> = WorkList::with(self);
-        while let Some(term) = pending.pop() {
-            visit(term)?;
-            if let Self::Triple { s, p, o } = term {
-                pending.extend([&**o, &**p, &**s]);
+        self.visit_terms_with_memory(
+            |term, _| Ok(visit(term)),
+            &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+        )
+        .expect("resident term traversal storage")
+    }
+
+    /// Visit the same pre-order terms through the native storage home.
+    ///
+    /// # Errors
+    /// Returns the first visitor or storage refusal.
+    pub fn visit_terms_with_memory<S: purrdf_lex::allocation::Admission + ?Sized, B>(
+        &self,
+        mut visit: impl FnMut(
+            &Self,
+            &mut purrdf_lex::allocation::Memory<'_, S>,
+        ) -> Result<ControlFlow<B>, purrdf_lex::allocation::StorageError>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<ControlFlow<B>, purrdf_lex::allocation::StorageError> {
+        let mut pending: WorkList<&Self, 16> = WorkList::new();
+        let outcome = (|| {
+            pending.try_push_admitted(self, memory)?;
+            while let Some(term) = pending.pop() {
+                if let ControlFlow::Break(value) = visit(term, memory)? {
+                    return Ok(ControlFlow::Break(value));
+                }
+                if let Self::Triple { s, p, o } = term {
+                    pending.try_push_admitted(&**o, memory)?;
+                    pending.try_push_admitted(&**p, memory)?;
+                    pending.try_push_admitted(&**s, memory)?;
+                }
             }
+            Ok(ControlFlow::Continue(()))
+        })();
+        // Release only this walk's spill, even after a visitor or push refuses.
+        // Visitor-authored payloads may survive outside this call, so their
+        // original grants must remain. Cleanup cannot replace the first error.
+        let released = pending.release_admitted(memory);
+        match outcome {
+            Err(original) => Err(original),
+            Ok(flow) => released.map(|()| flow),
         }
-        ControlFlow::Continue(())
     }
 
     /// Visit every blank identity in this term, including triple components and
@@ -199,24 +333,60 @@ impl TermValue {
         &self,
         mut visit: impl FnMut(&str, crate::BlankScope) -> ControlFlow<B>,
     ) -> ControlFlow<B> {
-        self.visit_terms(|term| {
-            match term {
-                Self::Blank { label, scope } => visit(label, *scope)?,
+        self.visit_blank_identities_with_memory(
+            |label, scope, _| visit(label, scope),
+            &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
+        )
+        .expect("resident blank identity traversal storage")
+    }
+
+    /// Visit the same identities with admitted work-list and composite buffers.
+    ///
+    /// # Errors
+    /// Returns layout, admission or allocator refusal before growing storage.
+    pub fn visit_blank_identities_with_memory<S: purrdf_lex::allocation::Admission + ?Sized, B>(
+        &self,
+        mut visit: impl FnMut(
+            &str,
+            crate::BlankScope,
+            &mut purrdf_lex::allocation::Memory<'_, S>,
+        ) -> ControlFlow<B>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<ControlFlow<B>, purrdf_lex::allocation::StorageError> {
+        self.visit_terms_with_memory(
+            |term, memory| match term {
+                Self::Blank { label, scope } => Ok(visit(label, *scope, memory)),
                 Self::Literal {
                     lexical_form,
                     datatype,
                     ..
                 } => {
-                    for (label, scope) in
-                        crate::cdt_blank::cdt_embedded_blanks(lexical_form, datatype)
-                    {
-                        visit(&label, scope)?;
+                    let blanks = crate::cdt_blank::cdt_embedded_blanks_with_memory(
+                        lexical_form,
+                        datatype,
+                        memory,
+                    )?;
+                    let mut bytes = 0usize;
+                    for (label, _) in &blanks {
+                        bytes = bytes
+                            .checked_add(label.capacity())
+                            .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
                     }
+                    let mut stopped = None;
+                    for (label, scope) in &blanks {
+                        if let ControlFlow::Break(value) = visit(label, *scope, memory) {
+                            stopped = Some(value);
+                            break;
+                        }
+                    }
+                    memory.release_vec(blanks)?;
+                    memory.release_bytes(bytes)?;
+                    Ok(stopped.map_or(ControlFlow::Continue(()), ControlFlow::Break))
                 }
-                Self::Iri(_) | Self::Triple { .. } => {}
-            }
-            ControlFlow::Continue(())
-        })
+                Self::Iri(_) | Self::Triple { .. } => Ok(ControlFlow::Continue(())),
+            },
+            memory,
+        )
     }
 
     /// Visit every term of this one in pre-order, with each triple term reported once
@@ -332,7 +502,24 @@ pub fn try_fold_term<D: DatasetView + ?Sized, T, E>(
     mut triple: impl FnMut(D::Id, T, T, T) -> Result<T, E>,
     mut read_error: impl FnMut(D::ReadError) -> E,
 ) -> Result<T, E> {
-    try_fold_nested(
+    try_fold_term_with_storage(view, id, &mut leaf, &mut triple, &mut read_error, |error| {
+        panic!("resident term fold allocation: {error}")
+    })
+}
+
+/// Bottom-up term fold with a separately typed fallible working-buffer failure.
+///
+/// # Errors
+/// Returns the first backing read, callback or working-buffer allocation error.
+pub fn try_fold_term_with_storage<D: DatasetView + ?Sized, T, E>(
+    view: &D,
+    id: D::Id,
+    mut leaf: impl FnMut(D::Id, TermRef<'_, D::Id>) -> Result<T, E>,
+    mut triple: impl FnMut(D::Id, T, T, T) -> Result<T, E>,
+    mut read_error: impl FnMut(D::ReadError) -> E,
+    storage_error: impl FnMut(std::collections::TryReserveError) -> E,
+) -> Result<T, E> {
+    try_fold_nested_with_storage(
         id,
         &mut (),
         |(), id| {
@@ -343,6 +530,7 @@ pub fn try_fold_term<D: DatasetView + ?Sized, T, E>(
             }
         },
         |(), id, s, p, o| triple(id, s, p, o),
+        storage_error,
     )
 }
 
@@ -379,35 +567,260 @@ pub fn try_fold_nested<N: Copy, C: ?Sized, T, E>(
     mut enter: impl FnMut(&mut C, N) -> Result<Nested<N, T>, E>,
     mut triple: impl FnMut(&mut C, N, T, T, T) -> Result<T, E>,
 ) -> Result<T, E> {
-    let (s, p, o) = match enter(ctx, root)? {
+    try_fold_nested_with_storage(root, ctx, &mut enter, &mut triple, |error| {
+        panic!("resident nested fold allocation: {error}")
+    })
+}
+
+/// Fold the same nested structure with fallible working-buffer growth.
+///
+/// # Errors
+/// Returns the first visitor or working-buffer allocation failure.
+/// The original term-fold kernel's concrete scratch operations. Payload
+/// factories receive the same storage object, so native payload and work-list
+/// admission cannot borrow two independent accounts for one live allocation.
+trait FoldBuffers<N, T, E> {
+    fn push_step(
+        &mut self,
+        steps: &mut WorkList<FoldStep<N>, 32>,
+        step: FoldStep<N>,
+    ) -> Result<(), E>;
+    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E>;
+    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E>;
+    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E>;
+}
+
+struct ResidentFold<F>(F);
+
+impl<N, T, E, F: FnMut(std::collections::TryReserveError) -> E> FoldBuffers<N, T, E>
+    for ResidentFold<F>
+{
+    fn push_step(
+        &mut self,
+        steps: &mut WorkList<FoldStep<N>, 32>,
+        step: FoldStep<N>,
+    ) -> Result<(), E> {
+        steps.try_push(step).map_err(&mut self.0)
+    }
+    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E> {
+        answers.try_reserve_exact(required).map_err(&mut self.0)
+    }
+    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E> {
+        answers.try_reserve(1).map_err(&mut self.0)?;
+        answers.push(answer);
+        Ok(())
+    }
+    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E> {
+        drop(steps);
+        drop(answers);
+        Ok(())
+    }
+}
+
+struct NativeFold<'memory, 'storage, S: purrdf_lex::allocation::Admission + ?Sized, F> {
+    memory: &'memory mut purrdf_lex::allocation::Memory<'storage, S>,
+    storage_error: F,
+}
+
+impl<N, T, E, S, F> FoldBuffers<N, T, E> for NativeFold<'_, '_, S, F>
+where
+    S: purrdf_lex::allocation::Admission + ?Sized,
+    F: FnMut(purrdf_lex::allocation::StorageError, &mut purrdf_lex::allocation::Memory<'_, S>) -> E,
+{
+    fn push_step(
+        &mut self,
+        steps: &mut WorkList<FoldStep<N>, 32>,
+        step: FoldStep<N>,
+    ) -> Result<(), E> {
+        steps
+            .try_push_admitted(step, self.memory)
+            .map_err(|error| (self.storage_error)(error, self.memory))
+    }
+    fn reserve_answers(&mut self, answers: &mut Vec<T>, required: usize) -> Result<(), E> {
+        self.memory
+            .reserve(answers, required)
+            .map_err(|error| (self.storage_error)(error, self.memory))
+    }
+    fn push_answer(&mut self, answers: &mut Vec<T>, answer: T) -> Result<(), E> {
+        self.memory
+            .push(answers, answer)
+            .map_err(|error| (self.storage_error)(error, self.memory))
+    }
+    fn finish(&mut self, steps: WorkList<FoldStep<N>, 32>, answers: Vec<T>) -> Result<(), E> {
+        steps
+            .release_admitted(self.memory)
+            .map_err(|error| (self.storage_error)(error, self.memory))?;
+        self.memory
+            .release_vec(answers)
+            .map_err(|error| (self.storage_error)(error, self.memory))
+    }
+}
+
+/// The sole original bottom-up traversal, shared by resident fallible and native
+/// admitted folds. The callbacks own returned payloads; scratch is destroyed
+/// before its original native grant is refunded.
+fn try_fold_nested_buffered<N: Copy, C: ?Sized, T, E, B: FoldBuffers<N, T, E>>(
+    root: N,
+    ctx: &mut C,
+    mut enter: impl FnMut(&mut C, N, &mut B) -> Result<Nested<N, T>, E>,
+    mut triple: impl FnMut(&mut C, N, T, T, T, &mut B) -> Result<T, E>,
+    buffers: &mut B,
+) -> Result<T, E> {
+    let (s, p, o) = match enter(ctx, root, buffers)? {
         Nested::Leaf(answer) => return Ok(answer),
         Nested::Triple(s, p, o) => (s, p, o),
     };
-    let mut steps: WorkList<FoldStep<N>, 32> = WorkList::with(FoldStep::Assemble(root));
-    steps.extend([FoldStep::Enter(o), FoldStep::Enter(p), FoldStep::Enter(s)]);
-    let mut answers: Vec<T> = Vec::with_capacity(3);
+    let mut steps = WorkList::with(FoldStep::Assemble(root));
+    for step in [FoldStep::Enter(o), FoldStep::Enter(p), FoldStep::Enter(s)] {
+        buffers.push_step(&mut steps, step)?;
+    }
+    let mut answers = Vec::new();
+    buffers.reserve_answers(&mut answers, 3)?;
     while let Some(step) = steps.pop() {
         match step {
-            FoldStep::Enter(node) => match enter(ctx, node)? {
-                Nested::Leaf(answer) => answers.push(answer),
-                Nested::Triple(s, p, o) => steps.extend([
-                    FoldStep::Assemble(node),
-                    FoldStep::Enter(o),
-                    FoldStep::Enter(p),
-                    FoldStep::Enter(s),
-                ]),
+            FoldStep::Enter(node) => match enter(ctx, node, buffers)? {
+                Nested::Leaf(answer) => buffers.push_answer(&mut answers, answer)?,
+                Nested::Triple(s, p, o) => {
+                    for step in [
+                        FoldStep::Assemble(node),
+                        FoldStep::Enter(o),
+                        FoldStep::Enter(p),
+                        FoldStep::Enter(s),
+                    ] {
+                        buffers.push_step(&mut steps, step)?;
+                    }
+                }
             },
             FoldStep::Assemble(node) => {
                 let o = answers.pop().expect("a triple's object is folded");
                 let p = answers.pop().expect("a triple's predicate is folded");
                 let s = answers.pop().expect("a triple's subject is folded");
-                answers.push(triple(ctx, node, s, p, o)?);
+                let answer = triple(ctx, node, s, p, o, buffers)?;
+                buffers.push_answer(&mut answers, answer)?;
             }
         }
     }
-    Ok(answers
+    let answer = answers
         .pop()
-        .expect("the root's answer is the last one assembled"))
+        .expect("the root's answer is the last one assembled");
+    buffers.finish(steps, answers)?;
+    Ok(answer)
+}
+
+fn try_fold_nested_with_storage<N: Copy, C: ?Sized, T, E>(
+    root: N,
+    ctx: &mut C,
+    mut enter: impl FnMut(&mut C, N) -> Result<Nested<N, T>, E>,
+    mut triple: impl FnMut(&mut C, N, T, T, T) -> Result<T, E>,
+    storage_error: impl FnMut(std::collections::TryReserveError) -> E,
+) -> Result<T, E> {
+    try_fold_nested_buffered(
+        root,
+        ctx,
+        |ctx, node, _| enter(ctx, node),
+        |ctx, node, s, p, o, _| triple(ctx, node, s, p, o),
+        &mut ResidentFold(storage_error),
+    )
+}
+
+/// Fold the same original nested structure under actual native live-capacity admission.
+///
+/// Payload callbacks receive this memory to admit their actual strings and
+/// boxes before construction. The work list and answer array use it too. A
+/// failed fold destroys every partial answer before refunding its original delta;
+/// the first typed read, callback or physical error remains authoritative.
+///
+/// # Errors
+/// Returns the first original visitor or physical allocation failure.
+pub fn try_fold_nested_with_memory<
+    N: Copy,
+    C: ?Sized,
+    T,
+    E,
+    S: purrdf_lex::allocation::Admission + ?Sized,
+>(
+    root: N,
+    ctx: &mut C,
+    mut enter: impl FnMut(
+        &mut C,
+        N,
+        &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<Nested<N, T>, E>,
+    mut triple: impl FnMut(
+        &mut C,
+        N,
+        T,
+        T,
+        T,
+        &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<T, E>,
+    storage_error: impl FnMut(
+        purrdf_lex::allocation::StorageError,
+        &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> E,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<T, E> {
+    let baseline = memory.admitted_bytes();
+    let result = try_fold_nested_buffered(
+        root,
+        ctx,
+        |ctx, node, buffers: &mut NativeFold<'_, '_, S, _>| enter(ctx, node, buffers.memory),
+        |ctx, node, s, p, o, buffers| triple(ctx, node, s, p, o, buffers.memory),
+        &mut NativeFold {
+            memory,
+            storage_error,
+        },
+    );
+    if result.is_err()
+        && let Some(released) = memory.admitted_bytes().checked_sub(baseline)
+    {
+        // The kernel's owned locals have died. A refund refusal cannot replace
+        // the original error or release any still-live enclosing payload.
+        let _ = memory.release_bytes(released);
+    }
+    result
+}
+
+/// Fold a DatasetView's original typed term under native payload and work admission.
+///
+/// # Errors
+/// Returns the first backing read, callback or physical failure; no whole-view
+/// maximum or dictionary census is needed to copy a supported term.
+pub fn try_fold_term_with_memory<
+    D: DatasetView + ?Sized,
+    T,
+    E,
+    S: purrdf_lex::allocation::Admission + ?Sized,
+>(
+    view: &D,
+    id: D::Id,
+    mut leaf: impl FnMut(
+        D::Id,
+        TermRef<'_, D::Id>,
+        &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<T, E>,
+    mut triple: impl FnMut(D::Id, T, T, T, &mut purrdf_lex::allocation::Memory<'_, S>) -> Result<T, E>,
+    mut read_error: impl FnMut(D::ReadError) -> E,
+    storage_error: impl FnMut(
+        purrdf_lex::allocation::StorageError,
+        &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> E,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<T, E> {
+    try_fold_nested_with_memory(
+        id,
+        &mut (),
+        |(), id, memory| {
+            let guard = view.resolve(id).map_err(&mut read_error)?;
+            match guard.term() {
+                TermRef::Triple { s, p, o } => Ok(Nested::Triple(s, p, o)),
+                resolved => leaf(id, resolved, memory).map(Nested::Leaf),
+            }
+        },
+        |(), id, s, p, o, memory| triple(id, s, p, o, memory),
+        storage_error,
+        memory,
+    )
 }
 
 /// Visit the nested structure at `root` in pre-order over a work list: a triple term
@@ -437,50 +850,73 @@ pub fn visit_nested<N: Copy, B>(
 impl Clone for TermValue {
     /// A copy, built bottom-up over a work list.
     fn clone(&self) -> Self {
-        enum Step<'a> {
-            Enter(&'a TermValue),
-            Assemble,
-        }
+        self.try_clone().expect("resident term clone allocation")
+    }
+}
+
+impl TermValue {
+    /// Copy this term through the native iterative clone using fallible storage.
+    /// Callers admit its payload and `clone_workspace_bound` before invocation.
+    ///
+    /// # Errors
+    /// Returns the first actual string, box or traversal allocation refusal.
+    pub fn try_clone(&self) -> Result<Self, std::collections::TryReserveError> {
+        use CloneStep as Step;
         let Self::Triple { .. } = self else {
             return shallow_clone(self);
         };
         let mut stack: WorkList<Step<'_>, 32> = WorkList::with(Step::Enter(self));
-        let mut copies: Vec<Self> = Vec::with_capacity(3);
+        let mut copies: Vec<Self> = Vec::new();
+        copies.try_reserve_exact(3)?;
         while let Some(step) = stack.pop() {
             match step {
                 Step::Enter(Self::Triple { s, p, o }) => {
-                    stack.extend([
+                    for step in [
                         Step::Assemble,
                         Step::Enter(o),
                         Step::Enter(p),
                         Step::Enter(s),
-                    ]);
+                    ] {
+                        stack.try_push(step)?;
+                    }
                 }
-                Step::Enter(leaf) => copies.push(shallow_clone(leaf)),
+                Step::Enter(leaf) => {
+                    copies.try_reserve(1)?;
+                    copies.push(shallow_clone(leaf)?);
+                }
                 Step::Assemble => {
                     let o = copies.pop().expect("a triple's object is copied");
                     let p = copies.pop().expect("a triple's predicate is copied");
                     let s = copies.pop().expect("a triple's subject is copied");
+                    copies.try_reserve(1)?;
                     copies.push(Self::Triple {
-                        s: TermBox::new(s),
-                        p: TermBox::new(p),
-                        o: TermBox::new(o),
+                        s: crate::small::try_boxed(s)?.into(),
+                        p: crate::small::try_boxed(p)?.into(),
+                        o: crate::small::try_boxed(o)?.into(),
                     });
                 }
             }
         }
-        copies
+        Ok(copies
             .pop()
-            .expect("the root's copy is the last one assembled")
+            .expect("the root's copy is the last one assembled"))
     }
 }
 
 /// A copy of a term that is not a triple term.
-fn shallow_clone(term: &TermValue) -> TermValue {
-    match term {
-        TermValue::Iri(iri) => TermValue::Iri(iri.clone()),
+pub(crate) fn try_owned_text(source: &str) -> Result<String, std::collections::TryReserveError> {
+    let mut copy = String::new();
+    copy.try_reserve_exact(source.len())?;
+    copy.push_str(source);
+    Ok(copy)
+}
+
+fn shallow_clone(term: &TermValue) -> Result<TermValue, std::collections::TryReserveError> {
+    use try_owned_text as text;
+    Ok(match term {
+        TermValue::Iri(iri) => TermValue::Iri(text(iri)?),
         TermValue::Blank { label, scope } => TermValue::Blank {
-            label: label.clone(),
+            label: text(label)?,
             scope: *scope,
         },
         TermValue::Literal {
@@ -489,31 +925,31 @@ fn shallow_clone(term: &TermValue) -> TermValue {
             language,
             direction,
         } => TermValue::Literal {
-            lexical_form: lexical_form.clone(),
-            datatype: datatype.clone(),
-            language: language.clone(),
+            lexical_form: text(lexical_form)?,
+            datatype: text(datatype)?,
+            language: language.as_deref().map(text).transpose()?,
             direction: *direction,
         },
         TermValue::Triple { .. } => unreachable!("a triple term is copied over the work list"),
-    }
+    })
 }
 
 /// Compare `a` and `b` in pre-order, component by component: the first pair of nodes
 /// `shallow` does not call equal decides; a triple's components are compared after
 /// the triple itself, subject first.
-fn compare_pairs(
+fn try_compare_pairs(
     a: &TermValue,
     b: &TermValue,
     shallow: impl Fn(&TermValue, &TermValue) -> Ordering,
-) -> Ordering {
+) -> Result<Ordering, std::collections::TryReserveError> {
     if !matches!(a, TermValue::Triple { .. }) || !matches!(b, TermValue::Triple { .. }) {
-        return shallow(a, b);
+        return Ok(shallow(a, b));
     }
     let mut pending: WorkList<(&TermValue, &TermValue), 16> = WorkList::with((a, b));
     while let Some((a, b)) = pending.pop() {
         match shallow(a, b) {
             Ordering::Equal => {}
-            decided => return decided,
+            decided => return Ok(decided),
         }
         if let (
             TermValue::Triple {
@@ -528,10 +964,40 @@ fn compare_pairs(
             },
         ) = (a, b)
         {
-            pending.extend([(&**oa, &**ob), (&**pa, &**pb), (&**sa, &**sb)]);
+            for pair in [(&**oa, &**ob), (&**pa, &**pb), (&**sa, &**sb)] {
+                pending.try_push(pair)?;
+            }
         }
     }
-    Ordering::Equal
+    Ok(Ordering::Equal)
+}
+
+impl TermValue {
+    /// Checked native comparison work-list peak for at most `nodes` paired nodes.
+    #[must_use]
+    pub fn comparison_workspace_bound(nodes: usize) -> Option<usize> {
+        if nodes <= 1 {
+            return Some(0);
+        }
+        nodes
+            .checked_mul(6)?
+            .checked_mul(size_of::<(&Self, &Self)>())
+    }
+
+    /// RDF term identity through the fallible native comparison home.
+    ///
+    /// # Errors
+    /// Returns an actual traversal allocation refusal.
+    pub fn try_eq(&self, other: &Self) -> Result<bool, std::collections::TryReserveError> {
+        try_compare_pairs(self, other, |a, b| {
+            if shallow_eq(a, b) {
+                Ordering::Equal
+            } else {
+                Ordering::Less
+            }
+        })
+        .map(|order| order == Ordering::Equal)
+    }
 }
 
 /// The variant and the leaf fields of two terms, not their components: equal when
@@ -572,13 +1038,8 @@ impl PartialEq for TermValue {
     /// The same variant, then the same fields — components included — as
     /// `#[derive(PartialEq)]` compares, over a work list.
     fn eq(&self, other: &Self) -> bool {
-        compare_pairs(self, other, |a, b| {
-            if shallow_eq(a, b) {
-                Ordering::Equal
-            } else {
-                Ordering::Less
-            }
-        }) == Ordering::Equal
+        self.try_eq(other)
+            .expect("resident term equality allocation")
     }
 }
 
@@ -596,7 +1057,18 @@ impl Eq for TermValue {}
 // object, each by this same order — walked over a work list.
 impl Ord for TermValue {
     fn cmp(&self, other: &Self) -> Ordering {
-        compare_pairs(self, other, |a, b| {
+        self.try_cmp(other)
+            .expect("resident term comparison allocation")
+    }
+}
+
+impl TermValue {
+    /// Total RDF term order through the fallible native comparison home.
+    ///
+    /// # Errors
+    /// Returns an actual traversal allocation refusal.
+    pub fn try_cmp(&self, other: &Self) -> Result<Ordering, std::collections::TryReserveError> {
+        try_compare_pairs(self, other, |a, b| {
             a.canonical_tag()
                 .cmp(&b.canonical_tag())
                 .then_with(|| match (a, b) {
@@ -666,6 +1138,30 @@ impl PartialOrd for TermValue {
 // the pre-order sequence, fed from a work list.
 impl Hash for TermValue {
     fn hash<H: Hasher>(&self, state: &mut H) {
+        self.try_hash(state).expect("resident term hash allocation");
+    }
+}
+
+impl TermValue {
+    /// Checked work-list peak of hashing an owned term with `nodes` nodes.
+    #[must_use]
+    pub fn hash_workspace_bound(nodes: usize) -> Option<usize> {
+        if nodes <= 1 {
+            return Some(0);
+        }
+        std::alloc::Layout::array::<&Self>(nodes.checked_mul(6)?)
+            .ok()
+            .map(|layout| layout.size())
+    }
+
+    /// Hash through the native RDF identity encoding with fallible traversal storage.
+    ///
+    /// # Errors
+    /// Returns an actual work-list allocation refusal.
+    pub fn try_hash<H: Hasher>(
+        &self,
+        state: &mut H,
+    ) -> Result<(), std::collections::TryReserveError> {
         let mut pending: WorkList<&Self, 16> = WorkList::with(self);
         while let Some(term) = pending.pop() {
             match term {
@@ -692,10 +1188,13 @@ impl Hash for TermValue {
                 }
                 Self::Triple { s, p, o } => {
                     3u8.hash(state);
-                    pending.extend([&**o, &**p, &**s]);
+                    pending.try_push(&**o)?;
+                    pending.try_push(&**p)?;
+                    pending.try_push(&**s)?;
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -705,47 +1204,98 @@ type ValueTok<'a> = Tok<&'a TermValue, &'a dyn fmt::Debug>;
 /// Append the script `#[derive(Debug)]` prints for `value` to `out`, a triple
 /// term's components as [`Tok::Node`]s.
 fn debug_script<'a>(value: &'a TermValue, out: &mut WorkList<ValueTok<'a>, 32>) {
+    let result: Result<(), Infallible> = debug_script_tokens(value, &mut |token| {
+        out.push(token);
+        Ok(())
+    });
+    match result {
+        Ok(()) => {}
+        Err(error) => match error {},
+    }
+}
+fn debug_script_with_memory<'a, S: purrdf_lex::allocation::Admission + ?Sized>(
+    value: &'a TermValue,
+    out: &mut WorkList<ValueTok<'a>, 32>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    debug_script_tokens(value, &mut |token| out.try_push_admitted(token, memory))
+}
+fn debug_script_tokens<'a, E>(
+    value: &'a TermValue,
+    append: &mut impl FnMut(ValueTok<'a>) -> Result<(), E>,
+) -> Result<(), E> {
     match value {
-        TermValue::Iri(iri) => out.extend([
-            Tok::Tuple("Iri"),
-            Tok::Leaf(iri as &dyn fmt::Debug),
-            Tok::EndTuple,
-        ]),
-        TermValue::Blank { label, scope } => out.extend([
-            Tok::Struct("Blank"),
-            Tok::Field("label"),
-            Tok::Leaf(label as &dyn fmt::Debug),
-            Tok::Field("scope"),
-            Tok::Leaf(scope),
-            Tok::EndStruct,
-        ]),
+        TermValue::Iri(iri) => {
+            for token in [
+                Tok::Tuple("Iri"),
+                Tok::Leaf(iri as &dyn fmt::Debug),
+                Tok::EndTuple,
+            ] {
+                append(token)?;
+            }
+        }
+        TermValue::Blank { label, scope } => {
+            for token in [
+                Tok::Struct("Blank"),
+                Tok::Field("label"),
+                Tok::Leaf(label as &dyn fmt::Debug),
+                Tok::Field("scope"),
+                Tok::Leaf(scope),
+                Tok::EndStruct,
+            ] {
+                append(token)?;
+            }
+        }
         TermValue::Literal {
             lexical_form,
             datatype,
             language,
             direction,
-        } => out.extend([
-            Tok::Struct("Literal"),
-            Tok::Field("lexical_form"),
-            Tok::Leaf(lexical_form as &dyn fmt::Debug),
-            Tok::Field("datatype"),
-            Tok::Leaf(datatype),
-            Tok::Field("language"),
-            Tok::Leaf(language),
-            Tok::Field("direction"),
-            Tok::Leaf(direction),
-            Tok::EndStruct,
-        ]),
-        TermValue::Triple { s, p, o } => out.extend([
-            Tok::Struct("Triple"),
-            Tok::Field("s"),
-            Tok::Node(&**s),
-            Tok::Field("p"),
-            Tok::Node(&**p),
-            Tok::Field("o"),
-            Tok::Node(&**o),
-            Tok::EndStruct,
-        ]),
+        } => {
+            for token in [
+                Tok::Struct("Literal"),
+                Tok::Field("lexical_form"),
+                Tok::Leaf(lexical_form as &dyn fmt::Debug),
+                Tok::Field("datatype"),
+                Tok::Leaf(datatype),
+                Tok::Field("language"),
+                Tok::Leaf(language),
+                Tok::Field("direction"),
+                Tok::Leaf(direction),
+                Tok::EndStruct,
+            ] {
+                append(token)?;
+            }
+        }
+        TermValue::Triple { s, p, o } => {
+            for token in [
+                Tok::Struct("Triple"),
+                Tok::Field("s"),
+                Tok::Node(&**s),
+                Tok::Field("p"),
+                Tok::Node(&**p),
+                Tok::Field("o"),
+                Tok::Node(&**o),
+                Tok::EndStruct,
+            ] {
+                append(token)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+impl TermValue {
+    /// The same Debug script with original native work-list admission.
+    ///
+    /// # Errors
+    /// Returns output formatting or physical storage refusal.
+    pub fn write_debug_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::walk::DebugWriteError> {
+        purrdf_lex::walk::write_debug_with_memory(f, self, debug_script_with_memory, memory)
     }
 }
 
@@ -769,6 +1319,48 @@ mod tests {
     use super::{TermBox, TermValue, TermVisit};
     use crate::RdfTextDirection;
     use crate::ir::term::BlankScope;
+
+    #[test]
+    fn native_visit_failure_releases_only_its_pending_spill() {
+        use purrdf_lex::allocation::{Memory, Resident, StorageError};
+
+        let mut term = TermValue::iri("leaf");
+        for _ in 0..24 {
+            term = TermValue::Triple {
+                s: TermBox::new(term),
+                p: TermBox::new(TermValue::iri("predicate")),
+                o: TermBox::new(TermValue::iri("object")),
+            };
+        }
+        let mut admission = Resident;
+        let mut memory = Memory::new(&mut admission);
+        let parent = memory.string("parent-owned").expect("parent destination");
+        let baseline = memory.admitted_bytes();
+        let mut retained = None;
+        let mut visited = 0;
+        let result: Result<ControlFlow<Infallible>, StorageError> = term.visit_terms_with_memory(
+            |_, memory| {
+                visited += 1;
+                if visited == 20 {
+                    assert!(
+                        memory.admitted_bytes() > baseline,
+                        "the pending walk spilled"
+                    );
+                    retained = Some(memory.string("visitor-owned")?);
+                    return Err(StorageError::AllocationFailed);
+                }
+                Ok(ControlFlow::Continue(()))
+            },
+            &mut memory,
+        );
+        assert_eq!(result, Err(StorageError::AllocationFailed));
+        let retained = retained.expect("visitor payload survives its failure");
+        assert_eq!(memory.admitted_bytes(), baseline + retained.capacity());
+        memory.release_string(retained).expect("visitor release");
+        assert_eq!(memory.admitted_bytes(), baseline);
+        memory.release_string(parent).expect("parent release");
+        assert_eq!(memory.admitted_bytes(), 0);
+    }
 
     /// The recursive reference: the same variants with `Box` components and every
     /// trait derived, plus the hand-written order, hash and encoding as recursive

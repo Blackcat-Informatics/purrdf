@@ -39,6 +39,13 @@
 //! dataset are the same data, and that the configuration found that data rather
 //! than a misspelling of it — see [`verify_binding`].
 
+use crate::query_workspace::{QueryString, admitted, query_error};
+use crate::score::{distinct_terms_owned, score_located_owned, select_counted_owned};
+use purrdf_sparql_eval::{
+    AdmittedPfRow, AdmittedVec, NativeDiagnostic, NativeDiagnosticKind, WorkspaceAllocation,
+    WorkspaceCapability, WorkspaceTerm,
+};
+use std::mem::size_of;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -52,9 +59,7 @@ use purrdf_sparql_eval::{
 
 use crate::error::TextError;
 use crate::index::{PartitionKey, TextIndex, TextIndexConfig, source_digest};
-use crate::score::{
-    Constraint, PartitionFilter, Scored, ScoringWork, distinct_terms, score_located, select_counted,
-};
+use crate::score::{Constraint, Scored, ScoringWork};
 
 // `?score` is emitted as `xsd:decimal`; `?rank`, `?matched` and `?position` as
 // `xsd:integer`. A searchable literal is an `xsd:string`, an `rdf:langString` or
@@ -128,7 +133,11 @@ enum RankBound {
 }
 
 /// The lexical form of a needle bound at `position`.
-fn needle_text(value: &TermValue, position: usize) -> Result<&str, EvalError> {
+fn needle_text_owned<'a>(
+    value: &'a TermValue,
+    position: usize,
+    workspace: &WorkspaceCapability,
+) -> Result<&'a str, EvalError> {
     match value {
         TermValue::Literal {
             lexical_form,
@@ -141,15 +150,24 @@ fn needle_text(value: &TermValue, position: usize) -> Result<&str, EvalError> {
         {
             Ok(lexical_form)
         }
-        TermValue::Literal { datatype, .. } => Err(EvalError::function(format!(
-            "the needle at position {position} is a literal of datatype <{datatype}>; a text \
+        TermValue::Literal { datatype, .. } => Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "the needle at position {position} is a literal of datatype <{datatype}>; a text \
              search reads a string, so the needle must be an xsd:string, rdf:langString or \
              rdf:dirLangString"
-        ))),
-        other => Err(EvalError::function(format!(
-            "the needle at position {position} is {other:?}; only a literal carries text, so an \
-             IRI, a blank node or a triple term names nothing this relation can search for"
-        ))),
+            ),
+            workspace,
+        )),
+        other => Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "the needle at position {position} is {}; only a literal carries text, so an \
+             IRI, a blank node or a triple term names nothing this relation can search for",
+                other.kind_description()
+            ),
+            workspace,
+        )),
     }
 }
 
@@ -159,10 +177,11 @@ fn needle_text(value: &TermValue, position: usize) -> Result<&str, EvalError> {
 /// [`Constraint::Absent`] rather than [`Constraint::Exactly`] of an empty tag:
 /// the two are distinct partitions, and collapsing them would make a query for
 /// untagged text answer with text tagged by an empty string, or the reverse.
-fn language_constraint(
-    value: &TermValue,
+fn language_constraint_owned<'a>(
+    value: &'a TermValue,
     position: usize,
-) -> Result<Constraint<String>, EvalError> {
+    workspace: &WorkspaceCapability,
+) -> Result<Constraint<&'a str>, EvalError> {
     match value {
         TermValue::Literal {
             lexical_form,
@@ -171,13 +190,18 @@ fn language_constraint(
         } if datatype == XSD_STRING => Ok(if lexical_form.is_empty() {
             Constraint::Absent
         } else {
-            Constraint::Exactly(lexical_form.clone())
+            Constraint::Exactly(lexical_form.as_str())
         }),
-        other => Err(EvalError::function(format!(
-            "the language at position {position} is {other:?}; this relation emits an xsd:string \
+        other => Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "the language at position {position} is {}; this relation emits an xsd:string \
              there — the tag itself, or the empty string for an untagged document — so nothing \
-             else can name a language"
-        ))),
+             else can name a language",
+                other.kind_description()
+            ),
+            workspace,
+        )),
     }
 }
 
@@ -226,37 +250,57 @@ fn xsd_integer_parts(lexical_form: &str) -> Option<(bool, &str)> {
 /// A negative rank stays a refusal at every magnitude. It is not a row the index
 /// might have and does not: 1-based positions have no negative region, so the
 /// request is outside the domain rather than empty within it.
-fn rank_bound(value: &TermValue) -> Result<RankBound, EvalError> {
+fn rank_bound_owned(
+    value: &TermValue,
+    workspace: &WorkspaceCapability,
+) -> Result<RankBound, EvalError> {
     let TermValue::Literal {
         lexical_form,
         datatype,
         ..
     } = value
     else {
-        return Err(EvalError::function(format!(
-            "the rank at position {SEARCH_RANK} is {value:?}; a rank is a 1-based position, which \
-             only an xsd:integer literal can name"
-        )));
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "the rank at position {SEARCH_RANK} is {}; a rank is a 1-based position, which \
+             only an xsd:integer literal can name",
+                value.kind_description()
+            ),
+            workspace,
+        ));
     };
     if datatype != XSD_INTEGER {
-        return Err(EvalError::function(format!(
-            "the rank at position {SEARCH_RANK} is a literal of datatype <{datatype}>; this \
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "the rank at position {SEARCH_RANK} is a literal of datatype <{datatype}>; this \
              relation emits an xsd:integer there, so only an xsd:integer can name a rank"
-        )));
+            ),
+            workspace,
+        ));
     }
     let Some((negative, digits)) = xsd_integer_parts(lexical_form) else {
-        return Err(EvalError::function(format!(
-            "the rank at position {SEARCH_RANK} has lexical form {lexical_form:?}, which is not in \
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "the rank at position {SEARCH_RANK} has lexical form {lexical_form:?}, which is not in \
              the lexical space of xsd:integer (an optional sign followed by one or more digits)"
-        )));
+            ),
+            workspace,
+        ));
     };
     // `digits` has had its leading zeros stripped, so it is empty exactly when
     // the value is zero — whatever sign was written in front of it.
     if digits.is_empty() || negative {
-        return Err(EvalError::function(format!(
-            "the rank at position {SEARCH_RANK} is {lexical_form}; ranks are 1-based, so zero and \
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "the rank at position {SEARCH_RANK} is {lexical_form}; ranks are 1-based, so zero and \
              every negative value are outside the domain rather than an empty answer within it"
-        )));
+            ),
+            workspace,
+        ));
     }
     // Strictly positive from here, so the only question left is whether it names
     // a position an index can number. One that does not is a question the index
@@ -266,37 +310,59 @@ fn rank_bound(value: &TermValue) -> Result<RankBound, EvalError> {
         .map_or(RankBound::BeyondTheIndex, RankBound::At))
 }
 
-/// Whether `row` agrees with every bound position of the invocation.
-fn agrees(bound: &[Option<TermValue>], row: &[TermValue]) -> bool {
-    bound
-        .iter()
-        .zip(row)
-        .all(|(want, have)| want.as_ref().is_none_or(|want| want == have))
-}
-
-/// The invocation's bound values by flattened position, cloned out of the
-/// borrow `args` lends for the duration of `open`.
-fn bound_values(args: &PfArgs<'_>) -> Vec<Option<TermValue>> {
-    args.flattened().map(<Option<&TermValue>>::cloned).collect()
-}
-
-/// A `?lang` cell: the tag itself, or the empty string for an untagged document.
-fn language_term(language: Option<&str>) -> TermValue {
-    TermValue::simple_literal(language.unwrap_or(""))
-}
-
 /// Refuse an invocation whose argument vectors do not match `declared`.
 ///
 /// `open_contained` already checked this for every engine-driven call; a direct
 /// caller gets the same answer rather than an out-of-range read.
-fn check_arity(args: &PfArgs<'_>, declared: PfArity, what: &str) -> Result<(), EvalError> {
+fn check_arity_owned(
+    args: &PfArgs<'_>,
+    declared: PfArity,
+    what: &str,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
     let supplied = args.arity();
     if supplied == declared {
         return Ok(());
     }
-    Err(EvalError::function(format!(
-        "the {what} relation expects {declared} argument(s), got {supplied}"
-    )))
+    Err(NativeDiagnostic::error(
+        NativeDiagnosticKind::Function,
+        format_args!("the {what} relation expects {declared} argument(s), got {supplied}"),
+        workspace,
+    ))
+}
+
+fn bound_terms(
+    args: &PfArgs<'_>,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<Option<WorkspaceTerm>>, EvalError> {
+    let mut bound = AdmittedVec::with_capacity(args.arity().total(), workspace)?;
+    for value in args.flattened() {
+        bound.push(value.map(|value| workspace.clone_term(value)).transpose()?)?;
+    }
+    Ok(bound)
+}
+
+fn agrees_owned(
+    bound: &[Option<WorkspaceTerm>],
+    row: &[TermValue],
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    for (want, have) in bound.iter().zip(row) {
+        if let Some(want) = want
+            && !workspace.terms_equal(want, have)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn language_matches(language: &Constraint<&str>, key: &PartitionKey) -> bool {
+    match language {
+        Constraint::Any => true,
+        Constraint::Absent => key.language().is_none(),
+        Constraint::Exactly(language) => key.language() == Some(*language),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -329,11 +395,6 @@ fn distinct_graphs(keys: &[PartitionKey]) -> u64 {
     graphs.sort_unstable();
     graphs.dedup();
     graphs.len() as u64
-}
-
-/// Every partition key of `index`, ascending — the order both relations emit in.
-fn partition_keys(index: &TextIndex) -> Vec<PartitionKey> {
-    index.partitions().map(|(key, _)| key.clone()).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -699,11 +760,11 @@ impl SearchObservations {
 struct Holding<'i> {
     /// The document id.
     document: u32,
-    /// Its partition.
-    key: PartitionKey,
+    /// Stable ordinal of its partition in the immutable caller index.
+    partition: usize,
     /// `(term ordinal, predicate frequencies)` for each distinct needle term the
     /// document holds, in ascending ordinal order — what the point scorer reads.
-    located: Vec<(usize, &'i [(u32, u64)])>,
+    located: AdmittedVec<(usize, &'i [(u32, u64)])>,
 }
 
 /// One row a [`SearchCursor`] will emit, before it is rendered.
@@ -1054,117 +1115,220 @@ impl TextSearchRelation {
     /// caller that goes on to score the document reads the same facts the lookup
     /// already located instead of searching for them again.
     ///
-    /// `terms` is the needle's [`distinct_terms`], which the caller computes and
+    /// `terms` is the needle's [`distinct_terms_owned`], which the caller computes and
     /// which is where a needle wider than the ranking profile admits is refused —
     /// the ranker's own check, called rather than restated, so a needle too wide
     /// to rank is too wide to look up rather than quietly answering empty.
-    fn holdings(
+    fn holdings_owned(
         &self,
         subject: &TermValue,
         terms: &[&str],
-        filter: &PartitionFilter,
-    ) -> Vec<Holding<'_>> {
-        let mut held: Vec<Holding<'_>> = Vec::new();
-        for &document in self.index.documents_with_subject(subject) {
+        language: &Constraint<&str>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<AdmittedVec<Holding<'_>>, TextError> {
+        let documents = admitted(self.index.documents_with_subject_owned(subject, workspace))?;
+        let mut held = admitted(AdmittedVec::with_capacity(documents.len(), workspace))?;
+        for &document in documents {
             let Some(key) = self.index.partition_key_of(document) else {
                 continue;
             };
-            if !filter.matches(key) {
+            if !language_matches(language, key) {
                 continue;
             }
-            // Every term is asked, rather than stopping at the first hit, so the
-            // cost of a lookup is a function of the request and not of which
-            // term happened to match first — one lookup per `(document, term)`
-            // pair, always, which is the number `SearchObservations` reports and
-            // a test can assert as a literal.
-            let mut located = Vec::new();
+            let mut located = admitted(AdmittedVec::with_capacity(terms.len(), workspace))?;
             for (ordinal, term) in terms.iter().enumerate() {
                 self.observations
                     .membership_lookups
                     .fetch_add(1, Ordering::Relaxed);
                 if let Some(counts) = self.index.posted_frequencies(document, term) {
-                    located.push((ordinal, counts));
+                    admitted(located.push((ordinal, counts)))?;
                 }
             }
             if !located.is_empty() {
-                held.push(Holding {
+                let partition = self.index.partition_ordinal_of(document).ok_or_else(|| {
+                    query_error(
+                        workspace,
+                        NativeDiagnosticKind::Internal,
+                        format_args!("text index document {document} has no partition"),
+                    )
+                    .unwrap_or_else(|failure| failure)
+                })?;
+                admitted(held.push(Holding {
                     document,
-                    key: key.clone(),
+                    partition,
                     located,
-                });
+                }))?;
             }
         }
-        // Already in emission order, `(partition key ASC, rank ASC)`, with nothing
-        // to sort: a subject holds at most one document per partition, the ids
-        // come back ascending, and the index assigns ids in `(graph, subject,
-        // language)` order — so among one subject's documents ascending id is
-        // ascending `(graph, language)`, which is exactly `PartitionKey`'s order.
-        held
+        Ok(held)
     }
 
-    /// Score each holding document in place, without ranking anything.
-    ///
-    /// The path a bound `?doc` takes when `?rank` is **unobserved** — see
-    /// [`PropertyFunction::open`]. Each document's score is the one the ranker
-    /// would give it, exactly: [`score_located`] sums through the one summation
-    /// the ranker uses, over the same stored corpus statistics. What is not
-    /// computed is the rank, because nothing will read it.
-    fn scored_in_place(
+    /// Score only held documents when rank is unobserved, through the same
+    /// admitted summation the partition ranker uses.
+    fn scored_in_place_owned(
         &self,
         terms: &[&str],
         holdings: &[Holding<'_>],
-    ) -> Result<Vec<Hit>, TextError> {
+        workspace: &WorkspaceCapability,
+    ) -> Result<AdmittedVec<Hit>, TextError> {
         self.observations
             .point_scorings
             .fetch_add(1, Ordering::Relaxed);
         let mut work = ScoringWork::default();
-        let hits = holdings
-            .iter()
-            .map(|holding| {
-                score_located(
+        let result = (|| {
+            let mut hits = admitted(AdmittedVec::with_capacity(holdings.len(), workspace))?;
+            for holding in holdings {
+                let (score, matched) = score_located_owned(
                     &self.index,
                     holding.document,
                     terms,
                     &holding.located,
                     &mut work,
-                )
-                .map(|(score, matched)| Hit {
+                    workspace,
+                )?;
+                admitted(hits.push(Hit {
                     document: holding.document,
                     score,
-                    rank: None,
                     matched,
-                })
-            })
-            .collect::<Result<Vec<Hit>, TextError>>();
+                    rank: None,
+                }))?;
+            }
+            Ok(hits)
+        })();
         self.observations.record(work);
-        hits
+        result
     }
 
-    /// Enter the partition ranker, counting the entry and the work it did.
-    ///
-    /// The **only** call site of [`crate::select`] in this relation, which is
-    /// what makes [`SearchObservations::rankings`] a measurement rather than an
-    /// estimate: an invocation that did not come through here did not rank
-    /// anything, because there is no other way for it to have done so.
-    fn ranked(
+    /// The single partition-ranker entry; record actual work even on refusal.
+    fn ranked_owned(
         &self,
-        needle: &[String],
-        filter: &PartitionFilter,
+        needle: &[QueryString],
+        matches: impl Fn(&PartitionKey) -> bool,
         ceiling: Option<u64>,
         partition_rank: Option<u32>,
-    ) -> Result<Vec<Scored>, TextError> {
+        workspace: &WorkspaceCapability,
+    ) -> Result<AdmittedVec<Scored>, TextError> {
         self.observations.rankings.fetch_add(1, Ordering::Relaxed);
         let mut work = ScoringWork::default();
-        let rows = select_counted(
+        let result = select_counted_owned(
             &self.index,
-            needle,
-            filter,
+            needle.iter().map(QueryString::as_str),
+            matches,
             ceiling,
             partition_rank,
             &mut work,
+            workspace,
         );
         self.observations.record(work);
-        rows
+        result
+    }
+
+    fn open_owned(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        workspace: WorkspaceCapability,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        check_arity_owned(args, self.arity(), "text search", &workspace)?;
+        let needle = args.get(SEARCH_NEEDLE).ok_or_else(|| NativeDiagnostic::error(NativeDiagnosticKind::Function,
+            format_args!("the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
+                for a needle and cannot enumerate needles for a document, which is why both of \
+                its declared modes — `{SEARCH_MODE}` and `{SEARCH_CANDIDATE_MODE}` — demand it"), &workspace))?;
+        let text = needle_text_owned(needle, SEARCH_NEEDLE, &workspace)?;
+        let rank = args
+            .get(SEARCH_RANK)
+            .map(|value| rank_bound_owned(value, &workspace))
+            .transpose()?
+            .unwrap_or(RankBound::Unbound);
+        let language = args
+            .get(SEARCH_LANG)
+            .map(|value| language_constraint_owned(value, SEARCH_LANG, &workspace))
+            .transpose()?
+            .unwrap_or(Constraint::Any);
+        let post_rank_filtered = args.get(SEARCH_DOC).is_some()
+            || args.get(SEARCH_SCORE).is_some()
+            || args.get(SEARCH_MATCHED).is_some();
+        let select_ceiling = if post_rank_filtered { None } else { ceiling };
+        let analyzed = self.index.query_terms_owned(text, &workspace)?;
+        let rank_at = match rank {
+            RankBound::At(at) => Some(at),
+            _ => None,
+        };
+        let mut rows = AdmittedVec::new(&workspace);
+        match args.get(SEARCH_DOC) {
+            _ if rank == RankBound::BeyondTheIndex => {}
+            None => {
+                let scored = self.ranked_owned(
+                    &analyzed,
+                    |key| language_matches(&language, key),
+                    select_ceiling,
+                    rank_at,
+                    &workspace,
+                )?;
+                rows = AdmittedVec::with_capacity(scored.len(), &workspace)?;
+                for row in scored {
+                    rows.push(Hit::from(row))?;
+                }
+            }
+            Some(subject) => {
+                let terms =
+                    distinct_terms_owned(analyzed.iter().map(QueryString::as_str), &workspace)?;
+                let holdings = self.holdings_owned(subject, &terms, &language, &workspace)?;
+                if args.is_unobserved(SEARCH_RANK) {
+                    if !holdings.is_empty() {
+                        rows = self.scored_in_place_owned(&terms, &holdings, &workspace)?;
+                    }
+                } else if !holdings.is_empty() {
+                    let mut documents = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
+                    let mut keys = AdmittedVec::with_capacity(holdings.len(), &workspace)?;
+                    for holding in &holdings {
+                        documents.push(holding.document)?;
+                        keys.push(holding.partition)?;
+                    }
+                    drop(holdings);
+                    let scored = self.ranked_owned(
+                        &analyzed,
+                        |key| {
+                            language_matches(&language, key)
+                                && self
+                                    .index
+                                    .local_partition_ordinal(key)
+                                    .is_some_and(|ordinal| keys.contains(&ordinal))
+                        },
+                        select_ceiling,
+                        rank_at,
+                        &workspace,
+                    )?;
+                    rows =
+                        AdmittedVec::with_capacity(documents.len().min(scored.len()), &workspace)?;
+                    for row in scored {
+                        if documents.contains(&row.document) {
+                            rows.push(Hit::from(row))?;
+                        }
+                    }
+                }
+            }
+        }
+        let bound = bound_terms(args, &workspace)?;
+        let control = workspace.charge(
+            u64::try_from(size_of::<SearchCursor>())
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        let cursor = SearchCursor {
+            index: Arc::clone(&self.index),
+            generation: Arc::clone(&self.generation),
+            rows,
+            at: 0,
+            bound,
+            remaining: ceiling,
+            workspace,
+            _control: control,
+        };
+        let cursor =
+            purrdf_core::small::try_boxed(cursor).map_err(|_| EvalError::AllocationFailed {
+                construct: "text search cursor",
+            })?;
+        Ok(cursor)
     }
 }
 
@@ -1306,102 +1470,16 @@ impl PropertyFunction for TextSearchRelation {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        check_arity(args, self.arity(), "text search")?;
+        self.open_owned(args, ceiling, WorkspaceCapability::default())
+    }
 
-        let Some(needle) = args.get(SEARCH_NEEDLE) else {
-            return Err(EvalError::function(format!(
-                "the needle at position {SEARCH_NEEDLE} is free; this relation retrieves documents \
-                 for a needle and cannot enumerate needles for a document, which is why both of \
-                 its declared modes — `{SEARCH_MODE}` and `{SEARCH_CANDIDATE_MODE}` — demand it"
-            )));
-        };
-        let text = needle_text(needle, SEARCH_NEEDLE)?;
-
-        let rank = match args.get(SEARCH_RANK) {
-            Some(value) => rank_bound(value)?,
-            None => RankBound::Unbound,
-        };
-        let language = match args.get(SEARCH_LANG) {
-            Some(value) => language_constraint(value, SEARCH_LANG)?,
-            None => Constraint::Any,
-        };
-        let filter = PartitionFilter::unconstrained().with_language(language);
-
-        // The ceiling handling, and why it is not simply passed through.
-        //
-        // `args_are_admission_transparent` treats a CONSTANT at any position as
-        // transparent, so the engine offers a ceiling even for a call written
-        // `ex:a <search> ( "cat" ?s ?r ?l ?m )`. Positions 0, 2 and 5 are
-        // filtered *after* ranking, so handing that ceiling to `select` would
-        // truncate the ranking first and let the cursor filter a prefix — it
-        // could then emit fewer than `k` rows and report exhaustion while
-        // matching rows sat beyond the truncation, which the engine reads as a
-        // complete answer. So on any of those the ranking is computed in full
-        // and the cursor does the cutting.
-        //
-        // A bound `?lang` (4) is different: it is pushed into the partition
-        // filter *before* ranking, which is sound because ranks are
-        // per-partition — dropping whole partitions cannot change a surviving
-        // row's rank. A bound `?rank` (3) is likewise handed to `select`, which
-        // applies it before its own truncation. Neither can drop a row the
-        // cursor would have emitted, so the ceiling stays valid on those paths.
-        let post_rank_filtered = args.get(SEARCH_DOC).is_some()
-            || args.get(SEARCH_SCORE).is_some()
-            || args.get(SEARCH_MATCHED).is_some();
-        let select_ceiling = if post_rank_filtered { None } else { ceiling };
-
-        let analyzed = self.index.query_terms(text)?;
-        let at = match rank {
-            RankBound::At(at) => Some(at),
-            // `BeyondTheIndex` is answered empty below; `Unbound` bounds nothing.
-            RankBound::Unbound | RankBound::BeyondTheIndex => None,
-        };
-
-        let rows: Vec<Hit> = match args.get(SEARCH_DOC) {
-            // A `?rank` past the end of every partition names no row, whatever
-            // else is bound, and is answered without entering the ranker.
-            _ if rank == RankBound::BeyondTheIndex => Vec::new(),
-            None => self
-                .ranked(&analyzed, &filter, select_ceiling, at)?
-                .into_iter()
-                .map(Hit::from)
-                .collect(),
-            // A bound `?doc` is answered membership-first: see `holdings` for why
-            // that is the whole of the exclusion lookup this relation declares a
-            // basis for, and `open`'s documentation for the two ways a present
-            // document is then answered.
-            Some(subject) => {
-                let terms = distinct_terms(&analyzed);
-                let holdings = self.holdings(subject, &terms, &filter);
-                if holdings.is_empty() {
-                    Vec::new()
-                } else if args.is_unobserved(SEARCH_RANK) {
-                    self.scored_in_place(&terms, &holdings)?
-                } else {
-                    let documents: Vec<u32> =
-                        holdings.iter().map(|holding| holding.document).collect();
-                    let keys = holdings.into_iter().map(|holding| holding.key).collect();
-                    // The subject's own rows and nothing else reach the cursor:
-                    // every other candidate was needed to rank these, and is not
-                    // a row this invocation can emit.
-                    self.ranked(&analyzed, &filter.restricted_to(keys), select_ceiling, at)?
-                        .into_iter()
-                        .filter(|row| documents.contains(&row.document))
-                        .map(Hit::from)
-                        .collect()
-                }
-            }
-        };
-
-        Ok(Box::new(SearchCursor {
-            index: Arc::clone(&self.index),
-            generation: Arc::clone(&self.generation),
-            needle: needle.clone(),
-            rows,
-            at: 0,
-            bound: bound_values(args),
-            remaining: ceiling,
-        }))
+    fn open_admitted(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        workspace: WorkspaceCapability,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        self.open_owned(args, ceiling, workspace)
     }
 }
 
@@ -1427,73 +1505,83 @@ impl PropertyFunction for TextSearchRelation {
 /// admission-transparent and so still offers a ceiling for.
 #[derive(Debug)]
 struct SearchCursor {
-    /// The index the rows' subjects and languages are read from.
     index: Arc<TextIndex>,
-    /// The generation of that index, pinned here because `open` is where the
-    /// snapshot this cursor answers from is pinned.
     generation: Arc<str>,
-    /// The needle, echoed verbatim into position 1 of every row.
-    needle: TermValue,
-    /// The rows to emit, in `(partition ASC, rank ASC)` order.
-    rows: Vec<Hit>,
-    /// How far into `rows` the cursor has read.
+    rows: AdmittedVec<Hit>,
     at: usize,
-    /// The invocation's bound values by flattened position (`None` = free).
-    bound: Vec<Option<TermValue>>,
-    /// The rows this invocation may still emit under the engine's licence.
+    bound: AdmittedVec<Option<WorkspaceTerm>>,
     remaining: Option<u64>,
+    workspace: WorkspaceCapability,
+    _control: WorkspaceAllocation,
 }
 
 impl SearchCursor {
-    /// The full row for one ranked document.
-    fn build(&self, hit: &Hit) -> Result<PfRow, EvalError> {
+    fn build(&self, hit: &Hit) -> Result<AdmittedPfRow, EvalError> {
         let document = self.index.document(hit.document).ok_or_else(|| {
-            EvalError::data(format!(
-                "the ranker named document {}, which the index does not hold",
-                hit.document
-            ))
+            NativeDiagnostic::error(
+                NativeDiagnosticKind::Data,
+                format_args!(
+                    "a scored row named document {}, which the index does not hold",
+                    hit.document
+                ),
+                &self.workspace,
+            )
         })?;
-        Ok(vec![
-            document.subject().clone(),
-            self.needle.clone(),
-            TermValue::typed_literal(hit.score.value.to_decimal_lexical(), XSD_DECIMAL),
-            // An uncomputed rank sits only at an unobserved position, whose value
-            // the engine discards unread. Zero is outside the 1-based rank domain,
-            // so it could never be mistaken for a rank even by a reader that
-            // ignored that contract.
-            TermValue::integer(hit.rank.unwrap_or(0)),
-            language_term(document.language()),
-            TermValue::integer(hit.matched as i128),
-        ])
+        let needle = self.bound[SEARCH_NEEDLE]
+            .as_ref()
+            .expect("validated required needle");
+        let terms = [
+            self.workspace.clone_term(document.subject())?,
+            self.workspace.clone_term(needle)?,
+            self.workspace
+                .literal(hit.score.value.decimal_display(), XSD_DECIMAL)?,
+            self.workspace.literal(hit.rank.unwrap_or(0), XSD_INTEGER)?,
+            self.workspace
+                .literal(document.language().unwrap_or(""), XSD_STRING)?,
+            self.workspace.literal(hit.matched, XSD_INTEGER)?,
+        ];
+        AdmittedPfRow::from_terms(terms.into_iter(), &self.workspace)
     }
-}
 
-impl PfCursor for SearchCursor {
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+    fn next_owned(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
         if self.remaining == Some(0) {
             return Ok(None);
         }
-        while let Some(scored) = self.rows.get(self.at) {
+        while let Some(hit) = self.rows.get(self.at) {
             self.at += 1;
-            let row = self.build(scored)?;
-            if agrees(&self.bound, &row) {
+            let row = self.build(hit)?;
+            if agrees_owned(&self.bound, row.cells(), &self.workspace)? {
                 if let Some(remaining) = self.remaining.as_mut() {
-                    *remaining = remaining.saturating_sub(1);
+                    *remaining -= 1;
                 }
                 return Ok(Some(row));
             }
         }
         Ok(None)
     }
+}
 
-    /// The index generation these rows came out of — the digest
-    /// [`index_generation`] renders, verbatim.
-    ///
-    /// The `Arc<str>` was cloned in `open`, so the reading is of the snapshot
-    /// this cursor was built against and cannot drift if the host swaps its
-    /// relation for one over a rebuilt index mid-drain. Attesting clones the
-    /// pointer again rather than the 64 hex characters behind it: the engine
-    /// asks this once per invocation, and an invocation is once per driving row.
+fn resident_row(row: Option<AdmittedPfRow>) -> Result<Option<PfRow>, EvalError> {
+    row.map(|row| {
+        row.try_into_resident()
+            .map_err(|_| EvalError::WorkspaceStopped)
+    })
+    .transpose()
+}
+
+macro_rules! resident_cursor_next {
+    () => {
+        fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+            resident_row(self.next_owned()?)
+        }
+    };
+}
+
+impl PfCursor for SearchCursor {
+    resident_cursor_next!();
+    fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
+        self.next_owned()
+    }
     fn generation(&self) -> IndexGeneration {
         IndexGeneration::Declared(Arc::clone(&self.generation))
     }
@@ -1693,6 +1781,88 @@ impl TermOccurrenceRelation {
         }
     }
 
+    fn open_owned(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        workspace: WorkspaceCapability,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        check_arity_owned(args, self.arity(), "term occurrence", &workspace)?;
+        let needle = args.get(OCCURRENCE_TERM).ok_or_else(|| {
+            NativeDiagnostic::error(
+                NativeDiagnosticKind::Function,
+                format_args!(
+                    "the term at position {OCCURRENCE_TERM} is free; this relation enumerates the \
+                occurrences of a term and cannot enumerate terms, which is why its only declared \
+                mode is `{OCCURRENCE_MODE}`"
+                ),
+                &workspace,
+            )
+        })?;
+        let text = needle_text_owned(needle, OCCURRENCE_TERM, &workspace)?;
+        let language = args
+            .get(OCCURRENCE_LANG)
+            .map(|value| language_constraint_owned(value, OCCURRENCE_LANG, &workspace))
+            .transpose()?
+            .unwrap_or(Constraint::Any);
+        let documents = args
+            .get(OCCURRENCE_DOC)
+            .map(|subject| self.index.documents_with_subject_owned(subject, &workspace))
+            .transpose()?;
+        let analyzed = self.index.query_terms_owned(text, &workspace)?;
+        if analyzed.len() > 1 {
+            return Err(NativeDiagnostic::error(
+                NativeDiagnosticKind::Function,
+                format_args!(
+                    "the term at position {OCCURRENCE_TERM} is {text:?}, which analyzes to \
+                    {count} terms ({analyzed_terms:?}); this relation matches ONE term per invocation by \
+                    contract, so a multi-term needle is written as one call per term joined on the \
+                    document position",
+                    count = analyzed.len(),
+                    analyzed_terms = &*analyzed
+                ),
+                &workspace,
+            ));
+        }
+        let mut partitions = AdmittedVec::new(&workspace);
+        if analyzed.first().is_some_and(|term| !term.is_empty()) {
+            for (ordinal, (key, _)) in self.index.partitions().enumerate() {
+                if language_matches(&language, key)
+                    && documents.is_none_or(|documents| {
+                        documents.iter().any(|&document| {
+                            self.index.partition_ordinal_of(document) == Some(ordinal)
+                        })
+                    })
+                {
+                    partitions.push(ordinal)?;
+                }
+            }
+        }
+        let bound = bound_terms(args, &workspace)?;
+        let control = workspace.charge(
+            u64::try_from(size_of::<OccurrenceCursor>())
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        let cursor = OccurrenceCursor {
+            index: Arc::clone(&self.index),
+            generation: Arc::clone(&self.generation),
+            analyzed,
+            partitions,
+            partition_at: 0,
+            posting_at: 0,
+            position_at: 0,
+            bound,
+            remaining: ceiling,
+            workspace,
+            _control: control,
+        };
+        let cursor =
+            purrdf_core::small::try_boxed(cursor).map_err(|_| EvalError::AllocationFailed {
+                construct: "term occurrence cursor",
+            })?;
+        Ok(cursor)
+    }
+
     /// The index this relation answers from.
     #[must_use]
     pub fn index(&self) -> &TextIndex {
@@ -1768,74 +1938,16 @@ impl PropertyFunction for TermOccurrenceRelation {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        check_arity(args, self.arity(), "term occurrence")?;
+        self.open_owned(args, ceiling, WorkspaceCapability::default())
+    }
 
-        let Some(needle) = args.get(OCCURRENCE_TERM) else {
-            return Err(EvalError::function(format!(
-                "the term at position {OCCURRENCE_TERM} is free; this relation enumerates the \
-                 occurrences of a term and cannot enumerate terms, which is why its only declared \
-                 mode is `{OCCURRENCE_MODE}`"
-            )));
-        };
-        let text = needle_text(needle, OCCURRENCE_TERM)?;
-
-        let language = match args.get(OCCURRENCE_LANG) {
-            Some(value) => language_constraint(value, OCCURRENCE_LANG)?,
-            None => Constraint::Any,
-        };
-        let mut filter = PartitionFilter::unconstrained().with_language(language);
-
-        // A bound `?doc` is narrowed to the partitions that subject occupies.
-        // This cursor is already lazy per partition, so without it a bound
-        // `?doc` walks each partition's posting list for the term and discards
-        // every row but that subject's. Naming the subject's own partitions
-        // skips those lists rather than reading them.
-        //
-        // The search relation beside it goes one step further and decides
-        // membership per document before ranking anything, which this relation
-        // cannot: a membership answer says whether the term occurs, and this
-        // relation's rows are the occurrences themselves, so there is nothing it
-        // could answer without reading the posting it would have emitted.
-        if let Some(subject) = args.get(OCCURRENCE_DOC) {
-            filter = filter.restricted_to(self.index.partitions_holding_subject(subject));
-        }
-
-        let mut analyzed = self.index.query_terms(text)?;
-        if analyzed.len() > 1 {
-            return Err(EvalError::function(format!(
-                "the term at position {OCCURRENCE_TERM} is {text:?}, which analyzes to \
-                 {count} terms ({analyzed:?}); this relation matches ONE term per invocation by \
-                 contract, so a multi-term needle is written as one call per term joined on the \
-                 document position",
-                count = analyzed.len()
-            )));
-        }
-        // A needle of pure punctuation names no term, which matches nothing.
-        // That is the same answer the index side gives, and the two ends must
-        // agree about what "no text" means.
-        let term = analyzed.pop().unwrap_or_default();
-        let partitions = if term.is_empty() {
-            Vec::new()
-        } else {
-            partition_keys(&self.index)
-                .into_iter()
-                .filter(|key| filter.matches(key))
-                .collect()
-        };
-
-        Ok(Box::new(OccurrenceCursor {
-            index: Arc::clone(&self.index),
-            generation: Arc::clone(&self.generation),
-            term,
-            needle: needle.clone(),
-            partitions,
-            partition_at: 0,
-            postings: Vec::new(),
-            posting_at: 0,
-            position_at: 0,
-            bound: bound_values(args),
-            remaining: ceiling,
-        }))
+    fn open_admitted(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        workspace: WorkspaceCapability,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        self.open_owned(args, ceiling, workspace)
     }
 }
 
@@ -1851,99 +1963,82 @@ impl PropertyFunction for TermOccurrenceRelation {
 /// licence is decremented **only** on emitted rows.
 #[derive(Debug)]
 struct OccurrenceCursor {
-    /// The index the postings are read from.
     index: Arc<TextIndex>,
-    /// The generation of that index, pinned here because `open` is where the
-    /// snapshot this cursor answers from is pinned.
     generation: Arc<str>,
-    /// The analyzed term, empty when the needle named none.
-    term: String,
-    /// The needle, echoed verbatim into position 1 of every row.
-    needle: TermValue,
-    /// The admitted partitions, ascending.
-    partitions: Vec<PartitionKey>,
-    /// How far into `partitions` the cursor has read.
+    analyzed: AdmittedVec<QueryString>,
+    partitions: AdmittedVec<usize>,
     partition_at: usize,
-    /// The current partition's postings: `(document, positions)`.
-    postings: Vec<(u32, Vec<u32>)>,
-    /// How far into `postings` the cursor has read.
     posting_at: usize,
-    /// How far into the current posting's positions the cursor has read.
     position_at: usize,
-    /// The invocation's bound values by flattened position (`None` = free).
-    bound: Vec<Option<TermValue>>,
-    /// The rows this invocation may still emit under the engine's licence.
+    bound: AdmittedVec<Option<WorkspaceTerm>>,
     remaining: Option<u64>,
+    workspace: WorkspaceCapability,
+    _control: WorkspaceAllocation,
 }
 
 impl OccurrenceCursor {
-    /// The full row for one occurrence.
-    fn build(&self, document: u32, position: u32) -> Result<PfRow, EvalError> {
+    fn build(&self, document: u32, position: u32) -> Result<AdmittedPfRow, EvalError> {
         let held = self.index.document(document).ok_or_else(|| {
-            EvalError::data(format!(
-                "a posting named document {document}, which the index does not hold"
-            ))
+            NativeDiagnostic::error(
+                NativeDiagnosticKind::Data,
+                format_args!("a posting named document {document}, which the index does not hold"),
+                &self.workspace,
+            )
         })?;
-        Ok(vec![
-            held.subject().clone(),
-            self.needle.clone(),
-            language_term(held.language()),
-            TermValue::integer(position),
-        ])
+        let needle = self.bound[OCCURRENCE_TERM]
+            .as_ref()
+            .expect("validated required occurrence term");
+        let terms = [
+            self.workspace.clone_term(held.subject())?,
+            self.workspace.clone_term(needle)?,
+            self.workspace
+                .literal(held.language().unwrap_or(""), XSD_STRING)?,
+            self.workspace.literal(position, XSD_INTEGER)?,
+        ];
+        AdmittedPfRow::from_terms(terms.into_iter(), &self.workspace)
     }
 
-    /// Read the next partition's postings into `postings`, or report that there
-    /// is no next partition.
-    fn load_next_partition(&mut self) -> bool {
-        let Some(key) = self.partitions.get(self.partition_at).cloned() else {
-            return false;
+    fn next_owned(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
+        let Some(term) = self.analyzed.first() else {
+            return Ok(None);
         };
-        self.partition_at += 1;
-        let loaded: Vec<(u32, Vec<u32>)> = self
-            .index
-            .postings(&key, &self.term)
-            .map(|(document, positions)| (document, positions.to_vec()))
-            .collect();
-        self.postings = loaded;
-        self.posting_at = 0;
-        self.position_at = 0;
-        true
-    }
-}
-
-impl PfCursor for OccurrenceCursor {
-    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
         loop {
             if self.remaining == Some(0) {
                 return Ok(None);
             }
-            let Some((document, positions)) = self.postings.get(self.posting_at) else {
-                if self.load_next_partition() {
-                    continue;
-                }
+            let Some(&partition) = self.partitions.get(self.partition_at) else {
                 return Ok(None);
+            };
+            let Some((document, positions)) =
+                self.index.posting_at(partition, term, self.posting_at)
+            else {
+                self.partition_at += 1;
+                self.posting_at = 0;
+                self.position_at = 0;
+                continue;
             };
             let Some(&position) = positions.get(self.position_at) else {
                 self.posting_at += 1;
                 self.position_at = 0;
                 continue;
             };
-            let document = *document;
             self.position_at += 1;
-
             let row = self.build(document, position)?;
-            if agrees(&self.bound, &row) {
+            if agrees_owned(&self.bound, row.cells(), &self.workspace)? {
                 if let Some(remaining) = self.remaining.as_mut() {
-                    *remaining = remaining.saturating_sub(1);
+                    *remaining -= 1;
                 }
                 return Ok(Some(row));
             }
         }
     }
+}
 
-    /// The index generation these occurrences came out of — the same digest the
-    /// ranked relation beside it declares, because it is the same index and the
-    /// same question, and attested the same way: by cloning the shared pointer.
+impl PfCursor for OccurrenceCursor {
+    resident_cursor_next!();
+    fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
+        self.next_owned()
+    }
     fn generation(&self) -> IndexGeneration {
         IndexGeneration::Declared(Arc::clone(&self.generation))
     }
@@ -2052,6 +2147,7 @@ pub fn verify_binding<D: DatasetView>(
 
 #[cfg(test)]
 mod tests {
+    use purrdf_sparql_eval::NativeDiagnosticKind;
     use std::sync::Arc;
 
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
@@ -2515,7 +2611,10 @@ mod tests {
         let relation = TextSearchRelation::new(golden());
         let error = invoke(&relation, &[None, None, None, None, None, None], None)
             .expect_err("a free needle is not a mode this relation serves");
-        assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == NativeDiagnosticKind::Function),
+            "got {error:?}"
+        );
         assert!(
             error.to_string().contains("position 1"),
             "the message must name the position: {error}"
@@ -2541,13 +2640,19 @@ mod tests {
             bound[1] = Some(needle.clone());
             let error =
                 invoke(&search, &bound, None).expect_err("only a string literal carries text");
-            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+            assert!(
+                matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == NativeDiagnosticKind::Function),
+                "got {error:?}"
+            );
 
             let mut bound = occurrence_args("unused");
             bound[1] = Some(needle);
             let error =
                 invoke(&occurrence, &bound, None).expect_err("only a string literal carries text");
-            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+            assert!(
+                matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == NativeDiagnosticKind::Function),
+                "got {error:?}"
+            );
         }
 
         // A language-tagged string IS text, and is accepted.
@@ -2622,7 +2727,10 @@ mod tests {
             let mut bound = search_args("alpha");
             bound[3] = Some(TermValue::typed_literal(lexical, XSD_INTEGER));
             let error = invoke(&relation, &bound, None).expect_err("ranks start at one");
-            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+            assert!(
+                matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == NativeDiagnosticKind::Function),
+                "got {error:?}"
+            );
             assert!(error.to_string().contains("1-based"), "got {error}");
         }
 
@@ -2631,7 +2739,10 @@ mod tests {
             let mut bound = search_args("alpha");
             bound[3] = Some(value);
             let error = invoke(&relation, &bound, None).expect_err("only an xsd:integer is a rank");
-            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+            assert!(
+                matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == NativeDiagnosticKind::Function),
+                "got {error:?}"
+            );
         }
 
         // So is a lexical form outside `xsd:integer`'s lexical space even when
@@ -2642,7 +2753,10 @@ mod tests {
             let error = invoke(&relation, &bound, None).expect_err(&format!(
                 "{lexical:?} is not in xsd:integer's lexical space and must be refused"
             ));
-            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+            assert!(
+                matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == NativeDiagnosticKind::Function),
+                "got {error:?}"
+            );
             assert!(
                 error.to_string().contains("lexical space"),
                 "a malformed lexical form must be named as one: {error}"
@@ -2762,13 +2876,19 @@ mod tests {
             bound[4] = Some(value.clone());
             let error =
                 invoke(&search, &bound, None).expect_err("only an xsd:string names a language");
-            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+            assert!(
+                matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == NativeDiagnosticKind::Function),
+                "got {error:?}"
+            );
 
             let mut bound = occurrence_args("alpha");
             bound[2] = Some(value);
             let error =
                 invoke(&occurrence, &bound, None).expect_err("only an xsd:string names a language");
-            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+            assert!(
+                matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == NativeDiagnosticKind::Function),
+                "got {error:?}"
+            );
         }
     }
 
@@ -3360,7 +3480,10 @@ mod tests {
         let relation = TermOccurrenceRelation::new(occurrences());
         let error = invoke(&relation, &occurrence_args("alpha beta"), None)
             .expect_err("two terms are two calls");
-        assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+        assert!(
+            matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == NativeDiagnosticKind::Function),
+            "got {error:?}"
+        );
         assert!(
             error.to_string().contains("ONE term per invocation"),
             "the message must say what the contract is: {error}"
@@ -3380,7 +3503,10 @@ mod tests {
         for needle in ["中文", "中文全"] {
             let error = invoke(&relation, &occurrence_args(needle), None)
                 .expect_err("multiple unknown Han graphemes require separate invocations");
-            assert!(matches!(error, EvalError::Function(_)), "got {error:?}");
+            assert!(
+                matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == NativeDiagnosticKind::Function),
+                "got {error:?}"
+            );
         }
 
         // A hyphenated compound is the Latin-script form of the same boundary.

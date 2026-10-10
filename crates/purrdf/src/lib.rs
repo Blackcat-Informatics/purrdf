@@ -792,7 +792,7 @@ mod tests {
             query: "ASK { <https://example.org/value> <https://example.org/p> <https://example.org/value> }",
             base_iri: None, substitutions: &[],
         }, sparql::QueryOptions::EMPTY).expect("root fallible stack consumer");
-        assert!(matches!(complete.result, SparqlResult::Boolean(true)));
+        assert_eq!(complete.result.boolean(), Some(true));
         assert_eq!(
             complete.evidence.requested_origins,
             vec![StackPageOrigin::Head]

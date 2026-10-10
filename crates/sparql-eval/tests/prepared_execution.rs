@@ -147,8 +147,10 @@ fn assert_stays_on_the_calling_thread(ds: &RdfDataset) {
 /// reaches every thread this file's measurements ever run on, and no
 /// `rayon::broadcast` is needed to make the flag visible to a worker pool.
 fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
+    #[cfg(debug_assertions)]
     purrdf_sparql_eval::set_memo_verification_enabled(false);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation));
+    #[cfg(debug_assertions)]
     purrdf_sparql_eval::set_memo_verification_enabled(true);
     match result {
         Ok(value) => value,
@@ -164,27 +166,26 @@ fn without_memo_verification<T>(operation: impl FnOnce() -> T) -> T {
 /// setup (a fresh solution buffer, the interned egress) is not free. What this pin
 /// claims is narrower and achievable — that the cost is a FIXED constant, independent
 /// of how many times the execution has already run — which is what
-/// `re_running_a_prepared_execution_costs_23_allocations` asserts against it, at every
+/// `re_running_a_prepared_execution_costs_a_pinned_constant` asserts against it, at every
 /// one of [`MEASURED_RUNS`] consecutive steady-state runs. If this ever moves,
 /// re-measure with `without_memo_verification` bracketing the window exactly as the
 /// test does, and update this constant to match: it is not a ceiling, it is the
 /// currently-measured marginal cost.
 ///
-/// The 23, read off the calling thread's ledger one allocation at a time:
-///
-/// * **3** grounding the bound IRI into the probe list — the IRI's own string and
-///   its validation;
-/// * **1** the evaluation context;
-/// * **2** the one-row `VALUES` seed the parameter rides — its row and its term;
-/// * **8** the basic graph pattern — its compiled pattern and constant, its working
-///   and projected schemas, and the row buffer it fills;
-/// * **7** the seed's join onto it — the hash index, the joined schema, the column
-///   map and the joined rows;
-/// * **2** the projection's column map and rows.
+/// The native ownership path measures **21** allocations on each of five
+/// consecutive steady-state runs. The call includes the original probe write,
+/// evaluation context, admitted VALUES/BGP/join schemas and row buffers, and
+/// interned projection. The old component breakdown described the previous
+/// ownership representation; this pin measures the complete current call rather
+/// than assigning unmeasured counts to individual producers.
+/// Immutable schema clones retain their existing inner owner, and a BGP projection
+/// that removes no columns retains that same schema. Neither publishes another
+/// variable array or outer schema control. Native argument leases also remain
+/// sparse: resident values do not allocate an array of empty ownership slots.
 ///
 /// None of it is the plan: the numbered tree and its compiled expressions are the
 /// retained substituted tree's, built once and shared by every run.
-const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 23;
+const PREPARED_EXECUTION_RUN_ALLOCATIONS: u64 = 21;
 
 const QUERY: &str = "SELECT ?o WHERE { ?this <http://example.org/p> ?o }";
 
@@ -233,7 +234,7 @@ fn a_prepared_execution_answers_each_binding_from_one_plan() {
 }
 
 #[test]
-fn re_running_a_prepared_execution_costs_23_allocations() {
+fn re_running_a_prepared_execution_costs_a_pinned_constant() {
     let ds = dataset(8);
     assert_stays_on_the_calling_thread(&ds);
     let engine = NativeSparqlEngine::new();
@@ -262,9 +263,8 @@ fn re_running_a_prepared_execution_costs_23_allocations() {
     // the SECOND is the second consecutive sighting, which is when
     // `purrdf_sparql_eval::prebind_memo` BUILDS the retained tree and pays for the
     // several extra rewrites that costs. Only from the third run on is the handle
-    // in the steady state the pin is stated over. Measured on the calling thread's
-    // ledger these three phases are 54, 89 and 23 allocations, deterministically,
-    // which is how the boundary was read rather than assumed.
+    // in the steady state the pin is stated over. Both warm-up phases are outside
+    // the five measured calls, so their construction cost is not part of the pin.
     let _warm = (run(0), run(1));
 
     // The measured runs: the memo's differential oracle comes OFF here and only
@@ -496,25 +496,19 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 /// query carries three distinct IRIs rather than one: a per-occurrence cost would show
 /// here as a multiple of three.
 ///
-/// The **48**, read off the calling thread's ledger one allocation at a time:
-///
-/// * **1** the per-call `Query::validate` walk's root list; its shared borrowed
-///   traversal keeps this shallow fixture's pending nodes inline, so the former
-///   heap traversal-stack growth is absent;
-/// * **1** the evaluation context;
-/// * **11** the two basic graph patterns — their compiled patterns, working schemas
-///   and row buffers;
-/// * **10** the `FILTER` over the eight joined rows — its output rows, the value
-///   stack its program runs on, the constant it interns and the terms the comparison
-///   types (its worker's receipts are harvested inline);
-/// * **3** the XSD parse cache the comparison fills;
-/// * **2** the projection's column map and rows;
-/// * **20** the materialized egress — the eight answer rows and their IRI strings,
-///   the variable list and the empty constructed graph.
+/// The current native ownership representation measures **50** allocations on
+/// each of five consecutive calls. That complete call includes re-admission,
+/// both BGPs, FILTER and parsed-value owners, projection, and materialized rows
+/// with their auxiliary dataset handle. The former per-component counts belonged
+/// to the old raw-buffer representation and are not used to infer this total.
+/// Unchanged schemas and projections reuse their immutable inner owner, and VM
+/// argument leases are sparse. This complete native call also retains its own
+/// admitted controls and buffers; the pin measures their combined marginal cost,
+/// rather than treating the former raw-buffer cost as an allocation allowance.
 ///
 /// None of it is the plan: the numbered tree and the `FILTER`'s compiled program are
 /// the admitted plan's, built on its first evaluation and shared by every later one.
-const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 48;
+const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 50;
 
 /// The query [`PREPARED_PLAN_CALL_ALLOCATIONS`] is measured over.
 ///

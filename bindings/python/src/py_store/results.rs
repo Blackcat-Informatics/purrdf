@@ -110,7 +110,7 @@ pub(crate) fn serialize_sparql_solutions<'py>(
     let result = SparqlResult::Solutions {
         variables,
         rows: native_rows,
-        aux,
+        aux: aux.into(),
     };
     let (prov, namespace) = decode_provenance(provenance_namespace, query_hash)?;
     // The native serialization runs detached (GIL released).

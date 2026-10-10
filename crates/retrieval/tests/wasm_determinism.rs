@@ -516,9 +516,7 @@ fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
     let mut two = scripted(["beta", "gamma", "alpha"]);
     two.attestation = PfAttestation {
         generation: IndexGeneration::declared("gen-8"),
-        service: ServiceLevel::Incomplete {
-            reason: REASON.to_owned(),
-        },
+        service: ServiceLevel::incomplete_static(REASON),
     };
 
     let result = ready(fuse::<ScriptedStream, Term>(
@@ -541,9 +539,7 @@ fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
         result.trailer.attestations[&iri(STRATUM_TWO)],
         PfAttestation {
             generation: IndexGeneration::declared("gen-8"),
-            service: ServiceLevel::Incomplete {
-                reason: REASON.to_owned(),
-            },
+            service: ServiceLevel::incomplete_static(REASON),
         }
     );
 

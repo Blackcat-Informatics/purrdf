@@ -63,6 +63,8 @@ mod analysis;
 pub mod character;
 pub use character::{HanCharacterIndex, HanMatchEvidence};
 mod error;
+mod query_workspace;
+pub use query_workspace::CapacityFailure;
 mod fixed;
 mod index;
 pub mod phonetic;

@@ -46,12 +46,14 @@ use purrdf_sparql_algebra::{
 };
 
 use crate::DetHashSet;
+use crate::WorkspaceCapability;
 use crate::agg_fn::{AggregateRegistry, ScalarvalKind, ScalarvalSpec};
-use crate::convert::literal_to_value;
 use crate::error::EvalError;
-use crate::expr::xsd_of;
 use crate::property_fn::{NOT_RANKED_CANONICAL, PfArity, PropertyFunctionRegistry};
-use crate::registry_id::append_framed_part;
+use crate::registry_id::append_framed_part_with_memory;
+use crate::solution::{SchemaBuilder, VarSchema};
+use crate::workspace::{AdmittedMap, AdmittedVec, AdmittedVecIntoIter, LexicalFrame};
+use purrdf_lex::allocation::{Memory, StorageError};
 
 /// Which admission seam a [`plan_query`]/[`plan_where_pattern`] failure came from.
 ///
@@ -163,6 +165,68 @@ mod diagnostic_code_tests {
     }
 }
 
+/// Native preparation preserves the seam, operational cause and physical refusal.
+#[derive(Debug)]
+pub(crate) enum PreparationError {
+    Plan(PlanError),
+    Evaluation(EvalError),
+    Storage(StorageError),
+}
+purrdf_lex::variant_from!(PreparationError { Plan(PlanError) });
+purrdf_lex::variant_from!(PreparationError { Evaluation(EvalError) });
+purrdf_lex::variant_from!(PreparationError { Storage(StorageError) });
+pub(crate) type PrepResult<T> = Result<T, PreparationError>;
+
+impl PreparationError {
+    fn into_failure(
+        self,
+        memory: &mut Memory<'_, LexicalFrame>,
+    ) -> crate::engine::EvaluationFailure {
+        match self {
+            Self::Storage(error) => crate::engine::EvaluationFailure::Evaluation(
+                memory
+                    .admission_mut()
+                    .storage_error(error, "query preparation"),
+            ),
+            Self::Evaluation(error) => crate::engine::EvaluationFailure::Evaluation(error),
+            Self::Plan(error) => {
+                if let Some(cause) = memory.admission_mut().take_failure() {
+                    return crate::engine::EvaluationFailure::Evaluation(cause);
+                }
+                crate::engine::EvaluationFailure::native_diagnostic(
+                    error.diagnostic_code(),
+                    &error,
+                    memory.admission_mut().workspace(),
+                )
+            }
+        }
+    }
+    fn into_plan(self, memory: &mut Memory<'_, LexicalFrame>) -> PlanError {
+        match self {
+            Self::Plan(error) => error,
+            Self::Evaluation(error) => PlanError::property_function(error),
+            Self::Storage(error) => PlanError::property_function(
+                memory
+                    .admission_mut()
+                    .storage_error(error, "query preparation"),
+            ),
+        }
+    }
+}
+
+fn plan_message(
+    seam: PlanSeam,
+    message: impl core::fmt::Display,
+    workspace: &WorkspaceCapability,
+) -> PlanError {
+    let error = crate::error::NativeDiagnostic::error(
+        crate::error::NativeDiagnosticKind::Function,
+        message,
+        workspace,
+    );
+    PlanError { seam, error }
+}
+
 /// The promised-parameter set [`plan_query`] and [`plan_where_pattern`] take, built
 /// from the names a prepare declared.
 ///
@@ -204,44 +268,85 @@ pub(crate) fn plan_query(
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
 ) -> Result<Option<Query>, PlanError> {
-    plan_query_with(query, relations, agg_registry, parameters, true)
+    legacy_query_plan(query, relations, agg_registry, parameters, true)
 }
 
 /// Immutable prepared plans retain their positive topology. Registry and promised
 /// parameter feasibility still run, without normalizing an already admitted tree.
-pub(crate) fn recheck_query(
+fn legacy_query_plan(
     query: &Query,
     relations: &PropertyFunctionRegistry,
-    agg_registry: &AggregateRegistry,
+    aggregates: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
+    normalize: bool,
 ) -> Result<Option<Query>, PlanError> {
-    plan_query_with(query, relations, agg_registry, parameters, false)
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let names = memory
+        .collect(parameters.iter().map(Variable::as_str))
+        .map_err(|error| PreparationError::Storage(error).into_plan(&mut memory))?;
+    plan_query_native(query, relations, aggregates, &names, normalize, &mut memory)
+        .map_err(|error| error.into_plan(&mut memory))
 }
 
-fn plan_query_with(
+/// Prepare through the original allocation admission, retaining only new AST buffers.
+pub(crate) fn plan_query_with_memory(
     query: &Query,
     relations: &PropertyFunctionRegistry,
-    agg_registry: &AggregateRegistry,
-    parameters: &DetHashSet<Variable>,
-    normalize_positive: bool,
-) -> Result<Option<Query>, PlanError> {
+    aggregates: &AggregateRegistry,
+    parameters: &[&str],
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<Option<Query>, crate::engine::EvaluationFailure> {
+    plan_query_native(query, relations, aggregates, parameters, true, memory)
+        .map_err(|error| error.into_failure(memory))
+}
+
+/// Recheck feasibility without renormalizing an immutable prepared topology.
+pub(crate) fn recheck_query_with_memory(
+    query: &Query,
+    relations: &PropertyFunctionRegistry,
+    aggregates: &AggregateRegistry,
+    parameters: &[&str],
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<Option<Query>, crate::engine::EvaluationFailure> {
+    plan_query_native(query, relations, aggregates, parameters, false, memory)
+        .map_err(|error| error.into_failure(memory))
+}
+
+fn promised_parameters(
+    parameters: &[&str],
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    let mut builder = SchemaBuilder::new(workspace);
+    for name in parameters {
+        let _ = builder.push(Variable::from_admitted(workspace.authored_text(name)?))?;
+    }
+    builder.finish()
+}
+
+fn plan_query_native(
+    query: &Query,
+    relations: &PropertyFunctionRegistry,
+    aggregates: &AggregateRegistry,
+    parameters: &[&str],
+    normalize: bool,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Option<Query>> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let promised = promised_parameters(parameters, &workspace)?;
     let pattern = match query {
         Query::Select { pattern, .. }
         | Query::Ask { pattern, .. }
         | Query::Construct { pattern, .. }
         | Query::Describe { pattern, .. } => pattern,
     };
-    let Some(planned) = plan_where_pattern_with(
-        pattern,
-        relations,
-        agg_registry,
-        parameters,
-        normalize_positive,
-    )?
+    let Some(planned) =
+        plan_where_pattern_native(pattern, relations, aggregates, &promised, normalize, memory)?
     else {
         return Ok(None);
     };
-    Ok(Some(crate::blank_scope::query_with_pattern(query, planned)))
+    Ok(Some(query.clone_with_pattern_with_memory(planned, memory)?))
 }
 
 /// [`plan_query`] on a standalone [`GraphPattern`] rather than a full [`Query`] — the
@@ -275,47 +380,96 @@ pub(crate) fn plan_where_pattern(
     agg_registry: &AggregateRegistry,
     parameters: &DetHashSet<Variable>,
 ) -> Result<Option<GraphPattern>, PlanError> {
-    plan_where_pattern_with(pattern, relations, agg_registry, parameters, true)
-}
-
-fn plan_where_pattern_with(
-    pattern: &GraphPattern,
-    relations: &PropertyFunctionRegistry,
-    agg_registry: &AggregateRegistry,
-    parameters: &DetHashSet<Variable>,
-    normalize_positive: bool,
-) -> Result<Option<GraphPattern>, PlanError> {
-    // A blank node label written in two pieces of one basic graph pattern — a
-    // triple and a call, a triple and a path, two calls — is one variable across
-    // them. Settled first, and for every pattern whether or not it carries a call,
-    // because a call's arguments are admitted below by what is bound, and a
-    // shared blank a sibling binds IS bound. See `crate::blank_scope`.
-    let joined = crate::blank_scope::join_shared_blanks(pattern);
-    let pattern = joined.as_ref().unwrap_or(pattern);
-    let normalized = normalize_positive
-        .then(|| crate::join_plan::normalize(pattern))
-        .flatten();
-    let pattern = normalized.as_ref().unwrap_or(pattern);
-    // Either hazard alone must still run the walk: a query with a `Custom`
-    // aggregate and no property-function call would otherwise skip this pass
-    // entirely on the property-function-only check, and its admission (below,
-    // as the planner enters the aggregate) would never happen.
-    if !crate::property_fn_eval::pattern_needs_admission(pattern) {
-        return Ok(normalized.or(joined));
-    }
-    // The plan is measured against the evaluator's depth envelope before any of it is
-    // copied or an admitted call chain is traversed; one that does not fit is refused,
-    // typed.
-    crate::governor::soundness::validate_graph_pattern_depth(pattern)
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let promised = VarSchema::from_vars_admitted(parameters.iter().cloned(), &workspace)
         .map_err(PlanError::property_function)?;
-    plan_pattern(
+    plan_where_pattern_native(
         pattern,
         relations,
         agg_registry,
-        &DetHashSet::default(),
-        Promise::descent(parameters),
+        &promised,
+        true,
+        &mut memory,
     )
-    .map(Some)
+    .map_err(|error| error.into_plan(&mut memory))
+}
+
+fn plan_where_pattern_native(
+    pattern: &GraphPattern,
+    relations: &PropertyFunctionRegistry,
+    aggregates: &AggregateRegistry,
+    parameters: &VarSchema,
+    normalize_positive: bool,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Option<GraphPattern>> {
+    let start = memory.admitted_bytes();
+    let joined = crate::blank_scope::join_shared_blanks_with_memory(pattern, memory)?;
+    let joined_bytes = memory
+        .admitted_bytes()
+        .checked_sub(start)
+        .ok_or(StorageError::SizeOverflow)?;
+    let pattern = joined.as_ref().unwrap_or(pattern);
+    let normalized_start = memory.admitted_bytes();
+    let normalized = if normalize_positive {
+        crate::join_plan::normalize_with_memory(pattern, memory)?
+    } else {
+        None
+    };
+    let normalized_bytes = memory
+        .admitted_bytes()
+        .checked_sub(normalized_start)
+        .ok_or(StorageError::SizeOverflow)?;
+    let effective = normalized.as_ref().unwrap_or(pattern);
+    if !crate::property_fn_eval::pattern_needs_admission_with_memory(effective, memory)? {
+        if normalized.is_some() {
+            drop(joined);
+            memory.release_bytes(joined_bytes)?;
+            return Ok(normalized);
+        }
+        return Ok(joined);
+    }
+    crate::governor::soundness::validate_graph_pattern_depth_with_memory(effective, memory)?;
+    let planned = plan_pattern_native(
+        effective,
+        relations,
+        aggregates,
+        &VarSchema::default(),
+        NativePromise::descent(parameters),
+        memory,
+    )?;
+    drop(normalized);
+    memory.release_bytes(normalized_bytes)?;
+    drop(joined);
+    memory.release_bytes(joined_bytes)?;
+    Ok(Some(planned))
+}
+
+/// The same promise law borrowing an immutable, admitted membership owner.
+#[derive(Clone, Copy)]
+enum NativePromise<'a> {
+    None,
+    Everywhere(&'a VarSchema),
+}
+impl<'a> NativePromise<'a> {
+    fn descent(parameters: &'a VarSchema) -> Self {
+        if parameters.is_empty() {
+            Self::None
+        } else {
+            Self::Everywhere(parameters)
+        }
+    }
+    const fn for_calls(self) -> Option<&'a VarSchema> {
+        match self {
+            Self::None => None,
+            Self::Everywhere(values) => Some(values),
+        }
+    }
+    fn writes(self, variable: &Variable) -> bool {
+        self.for_calls()
+            .is_some_and(|values| values.contains(variable))
+    }
 }
 
 /// Where a prepared execution's declared parameters count as bound while a call is
@@ -333,6 +487,7 @@ fn plan_where_pattern_with(
 /// A promise never extends `outer`, which stays the set of variables the pattern
 /// ITSELF certainly binds: it is consulted only where a call is admitted, and where a
 /// `BIND` or an aggregate reads a parameter (see [`Written`]).
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 enum Promise<'a> {
     /// Nothing is promised: the execution declares no parameters.
@@ -341,17 +496,8 @@ enum Promise<'a> {
     Everywhere(&'a DetHashSet<Variable>),
 }
 
+#[cfg(test)]
 impl<'a> Promise<'a> {
-    /// The promise a plan starts from: every declared parameter, everywhere, or
-    /// nothing when none is declared.
-    fn descent(parameters: &'a DetHashSet<Variable>) -> Self {
-        if parameters.is_empty() {
-            Self::None
-        } else {
-            Self::Everywhere(parameters)
-        }
-    }
-
     /// What the run writes into the rows and expressions of a pattern evaluated at
     /// this node — see [`Written`].
     const fn written(self) -> Written<'a> {
@@ -373,6 +519,7 @@ impl<'a> Promise<'a> {
 ///
 /// Borrowed whenever there is nothing to add, so an ordinary prepare — which promises
 /// nothing — builds no set.
+#[cfg(test)]
 fn call_scope<'s>(
     bound: &'s DetHashSet<Variable>,
     promise: Promise<'_>,
@@ -417,35 +564,69 @@ struct Atom<'a> {
 /// order, a custom aggregate's) runs then — and assembled once every part under it
 /// is planned, the parts rebuilt in the order the node's fields are written. The
 /// first admission failure met in that order is the one returned.
+#[cfg(test)]
 fn plan_pattern(
     pattern: &GraphPattern,
     relations: &PropertyFunctionRegistry,
-    agg_registry: &AggregateRegistry,
+    aggregates: &AggregateRegistry,
     outer: &DetHashSet<Variable>,
     promise: Promise<'_>,
 ) -> Result<GraphPattern, PlanError> {
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let outer = VarSchema::from_vars_admitted(outer.iter().cloned(), &workspace)
+        .map_err(PlanError::property_function)?;
+    let promised = match promise.for_calls() {
+        None => VarSchema::default(),
+        Some(values) => VarSchema::from_vars_admitted(values.iter().cloned(), &workspace)
+            .map_err(PlanError::property_function)?,
+    };
+    plan_pattern_native(
+        pattern,
+        relations,
+        aggregates,
+        &outer,
+        NativePromise::descent(&promised),
+        &mut memory,
+    )
+    .map_err(|error| error.into_plan(&mut memory))
+}
+
+fn plan_pattern_native<'a>(
+    pattern: &'a GraphPattern,
+    relations: &PropertyFunctionRegistry,
+    aggregates: &AggregateRegistry,
+    outer: &'a VarSchema,
+    promise: NativePromise<'a>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<GraphPattern> {
+    let workspace = memory.admission_mut().workspace().clone();
     let mut planner = Planner {
         relations,
-        agg_registry,
-        steps: vec![Step::Pattern(
-            pattern,
-            SetRef::Given(outer),
-            Prom::of(promise),
-        )],
-        values: Vec::new(),
-        scopes: Vec::new(),
+        agg_registry: aggregates,
+        steps: AdmittedVec::new(&workspace),
+        values: AdmittedVec::new(&workspace),
+        scopes: AdmittedVec::new(&workspace),
+        workspace,
+        memory,
     };
+    planner.steps.push(Step::Pattern(
+        pattern,
+        SetRef::Given(outer),
+        Prom::of(promise),
+    ))?;
     while let Some(step) = planner.steps.pop() {
         match step {
             Step::Pattern(node, scope, promise) => planner.enter_pattern(node, scope, promise)?,
             Step::Expression(expr, scope, promise) => {
-                planner.enter_expression(expr, scope, promise);
+                planner.enter_expression(expr, scope, promise)?;
             }
             Step::Aggregate(aggregate, scope, promise) => {
                 planner.enter_aggregate(aggregate, scope, promise)?;
             }
-            Step::Order(order, scope, promise) => planner.enter_order(order, scope, promise),
-            Step::Assemble(assemble) => planner.assemble(assemble),
+            Step::Order(order, scope, promise) => planner.enter_order(order, scope, promise)?,
+            Step::Assemble(assemble) => planner.assemble(assemble)?,
         }
     }
     Ok(planner.finish())
@@ -502,7 +683,7 @@ fn chain_node(pattern: &GraphPattern) -> Option<ChainNode<'_>> {
 /// # What joins into one chain
 ///
 /// Every member of a chain is joined to every other, and a join is associative and
-/// commutative — which is what licenses [`order_chain`] to reorder them at all. So a
+/// commutative — which is what licenses [`order_chain_native`] to reorder them at all. So a
 /// `Join` whose operand is ITSELF a chain spine is one chain with it, not an opaque
 /// member: `{ VALUES ?q { … } ?q ex:rel ?out }` parses to `Join(VALUES, Lateral(Z,
 /// call))`, and the call is fed by the `VALUES` exactly as it would be by a triple
@@ -512,7 +693,25 @@ fn chain_node(pattern: &GraphPattern) -> Option<ChainNode<'_>> {
 ///
 /// A `LATERAL` whose right operand is NOT a call is the opposite case, and is not a
 /// chain node: see [`chain_node`].
+#[cfg(test)]
 fn collect_chain<'a>(pattern: &'a GraphPattern, atoms: &mut Vec<Atom<'a>>) -> bool {
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    let mut owner = AdmittedVec::from_resident(core::mem::take(atoms));
+    let found = collect_chain_native(pattern, &mut owner, &mut memory)
+        .expect("resident chain traversal allocation failed");
+    *atoms = owner
+        .try_into_resident()
+        .unwrap_or_else(|_| unreachable!("resident owner"));
+    found
+}
+
+fn collect_chain_native<'a>(
+    pattern: &'a GraphPattern,
+    atoms: &mut AdmittedVec<Atom<'a>>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<bool> {
     /// One pending step of the peel.
     enum Step<'a> {
         /// A chain node whose operands are still to be peeled.
@@ -523,27 +722,29 @@ fn collect_chain<'a>(pattern: &'a GraphPattern, atoms: &mut Vec<Atom<'a>>) -> bo
         Call(&'a GraphPattern, &'a PropertyFunctionCall),
     }
     let Some(root) = chain_node(pattern) else {
-        return false;
+        return Ok(false);
     };
-    let mut pending = vec![Step::Node(root)];
+    let mut pending: purrdf_lex::walk::WorkList<_, 16> =
+        purrdf_lex::walk::WorkList::with(Step::Node(root));
     while let Some(step) = pending.pop() {
         match step {
             Step::Node(ChainNode::Lateral { left, node, call }) => {
-                pending.push(Step::Call(node, call));
-                pending.push(Step::Operand(left));
+                pending.try_push_admitted(Step::Call(node, call), memory)?;
+                pending.try_push_admitted(Step::Operand(left), memory)?;
             }
             Step::Node(ChainNode::Join { left, right }) => {
-                pending.push(Step::Operand(right));
-                pending.push(Step::Operand(left));
+                pending.try_push_admitted(Step::Operand(right), memory)?;
+                pending.try_push_admitted(Step::Operand(left), memory)?;
             }
             Step::Operand(operand) => match chain_node(operand) {
-                Some(node) => pending.push(Step::Node(node)),
-                None => push_atom(operand, None, atoms),
+                Some(node) => pending.try_push_admitted(Step::Node(node), memory)?,
+                None => push_atom_native(operand, None, atoms)?,
             },
-            Step::Call(node, call) => push_atom(node, Some(call), atoms),
+            Step::Call(node, call) => push_atom_native(node, Some(call), atoms)?,
         }
     }
-    true
+    pending.release_admitted(memory)?;
+    Ok(true)
 }
 
 /// The call a `Lateral`'s right operand becomes once planned, when it becomes one — and
@@ -554,7 +755,7 @@ fn collect_chain<'a>(pattern: &'a GraphPattern, atoms: &mut Vec<Atom<'a>>) -> bo
 /// right operand — and it runs on the PLANNED query, not the text. The two differ in
 /// exactly one way this pass controls: a group whose only member is a call parses to
 /// `Lateral(Z, call)`
-/// (the empty `Bgp` the parser opens every block with), and [`order_chain`] rebuilds
+/// (the empty `Bgp` the parser opens every block with), and [`order_chain_native`] rebuilds
 /// that chain as the bare call, because [`push_atom`] drops `Z`. So
 /// `?s ?p ?o LATERAL { ?q <rel> ?out }` is PLANNED as `Lateral(?s ?p ?o, call)` — the
 /// position the pushdown writes into — though its text puts a `Lateral` between the
@@ -581,35 +782,33 @@ fn planned_lateral_call(right: &GraphPattern) -> Option<(&GraphPattern, &Propert
 /// Push one chain member, dropping the EMPTY `Bgp` the parser leaves where a call opens
 /// its block. It is the identity table `Z`, so joining it back in would only widen the
 /// rebuilt tree with a node that binds nothing and matches everything.
+#[cfg(test)]
 fn push_atom<'a>(
     pattern: &'a GraphPattern,
     call: Option<&'a PropertyFunctionCall>,
     atoms: &mut Vec<Atom<'a>>,
 ) {
-    if pattern.is_empty_bgp() {
-        return;
-    }
-    let position = atoms.len();
-    atoms.push(Atom {
-        pattern,
-        call,
-        position,
-    });
+    let mut owner = AdmittedVec::from_resident(core::mem::take(atoms));
+    push_atom_native(pattern, call, &mut owner).expect("resident atom storage failed");
+    *atoms = owner
+        .try_into_resident()
+        .unwrap_or_else(|_| unreachable!("resident owner"));
 }
 
-/// One chain's feasible order: its atoms as they re-attach, each with whether it is a
-/// call and — for the calls — the variables bound when it was chosen.
-struct ChainOrder<'a> {
-    /// The atoms, in the chosen order.
-    ordered: Vec<&'a GraphPattern>,
-    /// Whether each atom of `ordered` is a call.
-    is_call: Vec<bool>,
-    /// The set `bound` held at the moment each atom was CHOSEN — i.e. exactly the
-    /// variables a CALL atom is driven with when it is planned. Captured here (rather
-    /// than read from the fully-accumulated `bound` after the loop) is what keeps a call
-    /// from being admitted as though sibling atoms chosen AFTER it — and everything they
-    /// bind — were already in scope.
-    bound_before: Vec<DetHashSet<Variable>>,
+fn push_atom_native<'a>(
+    pattern: &'a GraphPattern,
+    call: Option<&'a PropertyFunctionCall>,
+    atoms: &mut AdmittedVec<Atom<'a>>,
+) -> Result<(), EvalError> {
+    if !pattern.is_empty_bgp() {
+        let position = atoms.len();
+        atoms.push(Atom {
+            pattern,
+            call,
+            position,
+        })?;
+    }
+    Ok(())
 }
 
 /// The greedy feasibility order over one chain's atoms.
@@ -639,51 +838,63 @@ struct ChainOrder<'a> {
 ///
 /// The atoms are then planned each in turn and the spine rebuilt in this order by the
 /// [`Planner`] ([`Assemble::Chain`]).
-fn order_chain<'a>(
-    atoms: Vec<Atom<'a>>,
-    relations: &PropertyFunctionRegistry,
-    outer: &DetHashSet<Variable>,
-    promise: Promise<'_>,
-) -> Result<ChainOrder<'a>, PlanError> {
-    let mut bound = outer.clone();
-    let mut remaining: Vec<Atom<'a>> = atoms;
-    let mut ordered: Vec<&'a GraphPattern> = Vec::with_capacity(remaining.len());
-    let mut is_call: Vec<bool> = Vec::with_capacity(remaining.len());
-    let mut bound_before: Vec<DetHashSet<Variable>> = Vec::with_capacity(remaining.len());
+struct NativeChainOrder<'a> {
+    ordered: AdmittedVec<&'a GraphPattern>,
+    is_call: AdmittedVec<bool>,
+    bound_before: AdmittedVec<VarSchema>,
+}
 
+fn order_chain_native<'a>(
+    mut remaining: AdmittedVec<Atom<'a>>,
+    relations: &PropertyFunctionRegistry,
+    outer: &VarSchema,
+    promise: NativePromise<'_>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<NativeChainOrder<'a>> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let mut bound = outer.clone();
+    let mut ordered = AdmittedVec::with_capacity(remaining.len(), &workspace)?;
+    let mut is_call = AdmittedVec::with_capacity(remaining.len(), &workspace)?;
+    let mut bound_before = AdmittedVec::with_capacity(remaining.len(), &workspace)?;
     while !remaining.is_empty() {
         let mut best: Option<(usize, (u64, &str, usize))> = None;
         for (index, atom) in remaining.iter().enumerate() {
-            let Some(call) = atom.call else {
-                let key = (0_u64, "", atom.position);
-                if best.is_none_or(|(_, current)| key < current) {
-                    best = Some((index, key));
+            let key = match atom.call {
+                None => (0_u64, "", atom.position),
+                Some(call) => {
+                    let Some(rows_bound) = admitted_row_bound_native(
+                        call,
+                        relations,
+                        &|variable| bound.contains(variable) || promise.writes(variable),
+                        memory,
+                    )?
+                    else {
+                        continue;
+                    };
+                    (rows_bound, call.iri.as_str(), atom.position)
                 }
-                continue;
             };
-            let Some(rows_bound) =
-                admitted_row_bound(call, relations, &call_scope(&bound, promise))?
-            else {
-                continue;
-            };
-            let key = (rows_bound, call.iri.as_str(), atom.position);
             if best.is_none_or(|(_, current)| key < current) {
                 best = Some((index, key));
             }
         }
         let Some((index, _)) = best else {
-            return Err(stuck(&remaining, relations, &call_scope(&bound, promise)));
+            return Err(stuck_native(
+                &remaining,
+                relations,
+                &|variable| bound.contains(variable) || promise.writes(variable),
+                memory,
+            )?
+            .into());
         };
         let atom = remaining.remove(index);
-        bound_before.push(bound.clone());
-        // Every atom is evaluated with the enclosing context in hand (the chain as a
-        // whole is), so a `BIND` inside one reading only `outer` binds its target —
-        // but never with an earlier sibling's rows: siblings are joined, not correlated.
-        collect_bound(atom.pattern, outer, promise.written(), &mut bound);
-        ordered.push(atom.pattern);
-        is_call.push(atom.call.is_some());
+        bound_before.push(bound.clone())?;
+        let added = collect_bound_admitted(atom.pattern, outer, promise.for_calls(), &workspace)?;
+        bound = bound.union_admitted(&added, &workspace)?;
+        ordered.push(atom.pattern)?;
+        is_call.push(atom.call.is_some())?;
     }
-    Ok(ChainOrder {
+    Ok(NativeChainOrder {
         ordered,
         is_call,
         bound_before,
@@ -697,99 +908,179 @@ fn order_chain<'a>(
 /// answer to read the relation's declared row bound for the mode a call is actually
 /// invoked in: a relation that is cheap bound and expensive free would otherwise be
 /// admitted, or refused, against a mode the query never uses.
-pub(crate) fn invocation_mode(
+/// The same invocation law under the original physical walk admission.
+/// Membership borrows the caller's certainty owner rather than copying its set.
+pub(crate) fn invocation_mode_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
     call: &PropertyFunctionCall,
-    bound: &DetHashSet<Variable>,
-) -> BindingPattern {
-    BindingPattern::from_bools(
-        call.subject_args
-            .iter()
-            .chain(&call.object_args)
-            .map(|term| term_is_bound(term, bound)),
-    )
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut Memory<'_, S>,
+) -> Result<BindingPattern, StorageError> {
+    // The existing BindingPattern contract is a 64-bit pure value. Its positions
+    // need no heap storage while each argument's traversal admits actual spill.
+    let mut bits = [false; BindingPattern::MAX_ARITY];
+    let mut arity = 0usize;
+    for (position, term) in call
+        .subject_args
+        .iter()
+        .chain(&call.object_args)
+        .enumerate()
+    {
+        assert!(
+            position < BindingPattern::MAX_ARITY,
+            "BindingPattern arity exceeds its bitset"
+        );
+        bits[position] = term_is_bound_with_memory(term, bound, memory)?;
+        arity = position + 1;
+    }
+    Ok(BindingPattern::from_bools(bits[..arity].iter().copied()))
 }
 
-/// Whether an argument term denotes a known value under `bound`.
-///
-/// A blank node is a non-distinguished variable and is never bound; a quoted triple is
-/// bound only when every component is, its nested triples walked over a work list.
+/// Resident test entry for the same native term-boundness body.
+#[cfg(test)]
 fn term_is_bound(term: &TermPattern, bound: &DetHashSet<Variable>) -> bool {
-    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
+    term_is_bound_with_memory(
+        term,
+        &|variable| bound.contains(variable),
+        &mut Memory::new(&mut purrdf_lex::allocation::Resident),
+    )
+    .expect("resident term-boundness traversal allocation failed")
+}
+
+/// Whether a term denotes a known value under the borrowed membership law.
+///
+/// Blank nodes remain non-distinguished variables. Every quoted-triple component
+/// must be bound; the original walk order uses the shared inline/spill work list.
+fn term_is_bound_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    term: &TermPattern,
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, StorageError> {
+    let mut pending: purrdf_lex::walk::WorkList<_, 8> = purrdf_lex::walk::WorkList::with(term);
+    let mut answer = true;
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
-            TermPattern::BlankNode(_) => return false,
+            TermPattern::BlankNode(_) => {
+                answer = false;
+                break;
+            }
             TermPattern::Variable(variable) => {
-                if !bound.contains(variable) {
-                    return false;
+                if !bound(variable) {
+                    answer = false;
+                    break;
                 }
             }
             TermPattern::Triple(triple) => {
                 if let NamedNodePattern::Variable(variable) = &triple.predicate
-                    && !bound.contains(variable)
+                    && !bound(variable)
                 {
-                    return false;
+                    answer = false;
+                    break;
                 }
-                pending.push(&triple.object);
-                pending.push(&triple.subject);
+                pending.try_push_admitted(&triple.object, memory)?;
+                pending.try_push_admitted(&triple.subject, memory)?;
             }
         }
     }
-    true
+    pending.release_admitted(memory)?;
+    Ok(answer)
 }
 
 /// The admission failure for a chain with no feasible total order, naming the stuck
 /// atoms, the positions they cannot fill, and the modes they declare.
+#[cfg(test)]
 fn stuck(
     remaining: &[Atom<'_>],
     relations: &PropertyFunctionRegistry,
     bound: &DetHashSet<Variable>,
 ) -> PlanError {
-    let mut described: Vec<String> = Vec::new();
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    stuck_native(
+        remaining,
+        relations,
+        &|variable| bound.contains(variable),
+        &mut memory,
+    )
+    .unwrap_or_else(|error| error.into_plan(&mut memory))
+}
+
+fn stuck_native(
+    remaining: &[Atom<'_>],
+    relations: &PropertyFunctionRegistry,
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<PlanError> {
+    struct Description<'a> {
+        call: &'a PropertyFunctionCall,
+        mode: BindingPattern,
+        declared: &'a [BindingPattern],
+    }
+    struct Message<'a>(&'a [Description<'a>]);
+    impl core::fmt::Display for Message<'_> {
+        fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            out.write_str(
+                "no feasible evaluation order exists for this group's property-function call(s): ",
+            )?;
+            for (index, description) in self.0.iter().enumerate() {
+                if index != 0 {
+                    out.write_str("; ")?;
+                }
+                write!(
+                    out,
+                    "<{}> reachable only as `{}` (free position(s) ",
+                    description.call.iri, description.mode
+                )?;
+                let mut first = true;
+                for position in 0..description.mode.arity() {
+                    if !description.mode.is_bound(position) {
+                        if !first {
+                            out.write_str(", ")?;
+                        }
+                        write!(out, "{position}")?;
+                        first = false;
+                    }
+                }
+                if first {
+                    out.write_str("none")?;
+                }
+                out.write_str("), declaring [")?;
+                for (index, mode) in description.declared.iter().enumerate() {
+                    if index != 0 {
+                        out.write_str(", ")?;
+                    }
+                    write!(out, "{mode}")?;
+                }
+                out.write_str("]")?;
+            }
+            Ok(())
+        }
+    }
+    let workspace = memory.admission_mut().workspace().clone();
+    let mut described = AdmittedVec::new(&workspace);
     for atom in remaining {
         let Some(call) = atom.call else {
             continue;
         };
-        let mode = invocation_mode(call, bound);
-        let free: Vec<String> = mode
-            .code()
-            .char_indices()
-            .filter(|&(_, code)| code == 'f')
-            .map(|(position, _)| position.to_string())
-            .collect();
-        // Best-effort: this is already an admission failure being reported, so a
-        // relation whose `modes` ALSO panics degrades the diagnostic to an empty
-        // declared-modes list rather than losing the admission failure itself.
-        let declared: Vec<String> = relations
+        let mode = invocation_mode_with_memory(call, bound, memory)?;
+        // Preserve the original best-effort declared-modes suffix on an
+        // already-infeasible chain. No diagnostic is allocated and discarded.
+        let declared = relations
             .resolve(&call.iri)
-            .and_then(|relation| {
-                crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
-                    relation
-                        .modes()
-                        .iter()
-                        .copied()
-                        .map(BindingPattern::code)
-                        .collect::<Vec<_>>()
-                })
-                .ok()
-            })
-            .unwrap_or_default();
-        described.push(format!(
-            "<{}> reachable only as `{}` (free position(s) {}), declaring [{}]",
-            call.iri,
-            mode.code(),
-            if free.is_empty() {
-                "none".to_owned()
-            } else {
-                free.join(", ")
-            },
-            declared.join(", ")
-        ));
+            .and_then(|relation| crate::contain::declaration_best_effort(|| relation.modes()))
+            .unwrap_or(&[]);
+        described.push(Description {
+            call,
+            mode,
+            declared,
+        })?;
     }
-    PlanError::property_function(EvalError::function(format!(
-        "no feasible evaluation order exists for this group's property-function call(s): {}",
-        described.join("; ")
-    )))
+    Ok(plan_message(
+        PlanSeam::PropertyFunction,
+        Message(&described),
+        &workspace,
+    ))
 }
 
 /// Resolve a call's IRI, or report the admission failure that an unregistered IRI is.
@@ -797,58 +1088,103 @@ fn stuck(
 /// An EMPTY registry is the same failure: the parser mints a call node only under a
 /// caller-configured namespace, so a call with nothing to resolve against is a host
 /// configuration that names a relation it never supplied — never a silently empty one.
-fn resolve<'r>(
+fn resolve_native<'r>(
     call: &PropertyFunctionCall,
     relations: &'r PropertyFunctionRegistry,
+    workspace: &WorkspaceCapability,
 ) -> Result<&'r std::sync::Arc<dyn crate::property_fn::PropertyFunction>, PlanError> {
     relations.resolve(&call.iri).ok_or_else(|| {
-        PlanError::property_function(EvalError::function(format!(
-            "no property function is registered for <{}>",
-            call.iri
-        )))
+        plan_message(
+            PlanSeam::PropertyFunction,
+            format_args!("no property function is registered for <{}>", call.iri),
+            workspace,
+        )
     })
 }
 
 /// Resolve and admit a call under its actual lexical binding scope. `None` means
 /// its access mode is infeasible; a chain may first bind more variables.
+#[cfg(test)]
 fn admitted_row_bound(
     call: &PropertyFunctionCall,
     relations: &PropertyFunctionRegistry,
     bound: &DetHashSet<Variable>,
 ) -> Result<Option<u64>, PlanError> {
-    let relation = resolve(call, relations)?;
-    let arity = crate::property_fn::declaration_contained(&call.iri, "arity", || relation.arity())
-        .map_err(PlanError::property_function)?;
-    check_arity(call, arity)?;
-    let mode = invocation_mode(call, bound);
-    let admitted = crate::property_fn::declaration_contained(&call.iri, "declared modes", || {
-        relation
-            .modes()
-            .iter()
-            .any(|declared| declared.subsumes(mode))
-    })
+    let workspace = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&workspace);
+    let mut memory = Memory::new(&mut frame);
+    admitted_row_bound_native(
+        call,
+        relations,
+        &|variable| bound.contains(variable),
+        &mut memory,
+    )
+    .map_err(|error| error.into_plan(&mut memory))
+}
+
+fn admitted_row_bound_native(
+    call: &PropertyFunctionCall,
+    relations: &PropertyFunctionRegistry,
+    bound: &dyn Fn(&Variable) -> bool,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<Option<u64>> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let relation = resolve_native(call, relations, &workspace)?;
+    let arity = crate::contain::declaration_contained_admitted(
+        "property function",
+        call.iri.as_str(),
+        "arity",
+        || relation.arity(),
+        &workspace,
+    )
+    .map_err(PlanError::property_function)?;
+    check_arity_native(call, arity, &workspace)?;
+    let mode = invocation_mode_with_memory(call, bound, memory)?;
+    let admitted = crate::contain::declaration_contained_admitted(
+        "property function",
+        call.iri.as_str(),
+        "declared modes",
+        || {
+            relation
+                .modes()
+                .iter()
+                .any(|declared| declared.subsumes(mode))
+        },
+        &workspace,
+    )
     .map_err(PlanError::property_function)?;
     if !admitted {
         return Ok(None);
     }
-    crate::property_fn::declaration_contained(&call.iri, "row bound", || {
-        relation.rows_per_invocation(mode)
-    })
-    .map(Some)
-    .map_err(PlanError::property_function)
+    let rows = crate::contain::declaration_contained_admitted(
+        "property function",
+        call.iri.as_str(),
+        "row bound",
+        || relation.rows_per_invocation(mode),
+        &workspace,
+    )
+    .map_err(PlanError::property_function)?;
+    Ok(Some(rows))
 }
 
 /// Check a call site's argument counts against the relation's declaration.
-fn check_arity(call: &PropertyFunctionCall, declared: PfArity) -> Result<(), PlanError> {
+fn check_arity_native(
+    call: &PropertyFunctionCall,
+    declared: PfArity,
+    workspace: &WorkspaceCapability,
+) -> Result<(), PlanError> {
     let supplied = PfArity::new(call.subject_args.len(), call.object_args.len());
     if declared == supplied {
         return Ok(());
     }
-    Err(PlanError::property_function(EvalError::function(format!(
-        "property function <{}> is declared with {declared} argument(s); the call site supplies \
-         {supplied}",
-        call.iri
-    ))))
+    Err(plan_message(
+        PlanSeam::PropertyFunction,
+        format_args!(
+            "property function <{}> is declared with {declared} argument(s); the call site supplies {supplied}",
+            call.iri,
+        ),
+        workspace,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -860,14 +1196,14 @@ fn check_arity(call: &PropertyFunctionCall, declared: PfArity) -> Result<(), Pla
 #[derive(Clone, Copy)]
 enum SetRef<'a> {
     /// A set the caller holds.
-    Given(&'a DetHashSet<Variable>),
+    Given(&'a VarSchema),
     /// The set at this index of the planner's arena.
     Owned(usize),
 }
 
 impl<'a> SetRef<'a> {
     /// The set itself, read from `scopes` when the planner owns it.
-    fn get<'s>(self, scopes: &'s [DetHashSet<Variable>]) -> &'s DetHashSet<Variable>
+    fn get<'s>(self, scopes: &'s [VarSchema]) -> &'s VarSchema
     where
         'a: 's,
     {
@@ -883,30 +1219,30 @@ impl<'a> SetRef<'a> {
 /// frame cannot borrow from an arena that grows while the frame waits.
 #[derive(Clone, Copy)]
 enum Prom<'a> {
-    /// [`Promise::None`].
+    /// [`NativePromise::None`].
     None,
-    /// [`Promise::Everywhere`].
+    /// [`NativePromise::Everywhere`].
     Everywhere(SetRef<'a>),
 }
 
 impl<'a> Prom<'a> {
     /// `promise`, its set held as given.
-    const fn of(promise: Promise<'a>) -> Self {
+    const fn of(promise: NativePromise<'a>) -> Self {
         match promise {
-            Promise::None => Self::None,
-            Promise::Everywhere(parameters) => Self::Everywhere(SetRef::Given(parameters)),
+            NativePromise::None => Self::None,
+            NativePromise::Everywhere(parameters) => Self::Everywhere(SetRef::Given(parameters)),
         }
     }
 
     /// The [`Promise`] this stands for, its set read from `scopes` when the planner owns
     /// it.
-    fn view<'s>(self, scopes: &'s [DetHashSet<Variable>]) -> Promise<'s>
+    fn view<'s>(self, scopes: &'s [VarSchema]) -> NativePromise<'s>
     where
         'a: 's,
     {
         match self {
-            Self::None => Promise::None,
-            Self::Everywhere(parameters) => Promise::Everywhere(parameters.get(scopes)),
+            Self::None => NativePromise::None,
+            Self::Everywhere(parameters) => NativePromise::Everywhere(parameters.get(scopes)),
         }
     }
 }
@@ -999,7 +1335,10 @@ enum Assemble<'a> {
     /// A chain: its atoms re-attach in the chosen order, a call through a `Lateral` (it
     /// depends on what is to its left), everything else through a `Join`. `is_call`
     /// says which each atom is; the arena is cut back to `mark`.
-    Chain { is_call: Vec<bool>, mark: usize },
+    Chain {
+        is_call: AdmittedVec<bool>,
+        mark: usize,
+    },
     /// An expression, over its planned operands.
     Expression(&'a Expression),
     /// An aggregate, over its planned arguments and sort keys.
@@ -1015,42 +1354,50 @@ enum Assemble<'a> {
 /// entered and cuts the arena back when it is assembled, and every part is assembled
 /// before the node it is under, so a set is released exactly when the last frame
 /// reading it is gone.
-struct Planner<'a, 'r> {
+struct Planner<'a, 'r, 'm, 's> {
     relations: &'r PropertyFunctionRegistry,
     agg_registry: &'r AggregateRegistry,
-    steps: Vec<Step<'a>>,
-    values: Vec<Planned>,
-    scopes: Vec<DetHashSet<Variable>>,
+    steps: AdmittedVec<Step<'a>>,
+    values: AdmittedVec<Planned>,
+    scopes: AdmittedVec<VarSchema>,
+    workspace: WorkspaceCapability,
+    memory: &'m mut Memory<'s, LexicalFrame>,
 }
 
-impl<'a> Planner<'a, '_> {
+impl<'a> Planner<'a, '_, '_, '_> {
     /// Own `set` in the arena, and the reference to read it by.
-    fn own(&mut self, set: DetHashSet<Variable>) -> SetRef<'a> {
-        self.scopes.push(set);
-        SetRef::Owned(self.scopes.len() - 1)
+    fn own(&mut self, set: VarSchema) -> PrepResult<SetRef<'a>> {
+        self.scopes.push(set)?;
+        Ok(SetRef::Owned(self.scopes.len() - 1))
     }
 
     /// Widen `scope` by what `pattern` certainly binds under `promise`: the scope an
     /// expression evaluated over `pattern`'s rows sees.
     fn widen(
         &self,
-        scope: &mut DetHashSet<Variable>,
+        scope: &mut VarSchema,
         outer: SetRef<'a>,
         pattern: &GraphPattern,
         promise: Prom<'a>,
-    ) {
-        collect_bound(
+    ) -> PrepResult<()> {
+        let added = collect_bound_admitted(
             pattern,
             outer.get(&self.scopes),
-            promise.view(&self.scopes).written(),
-            scope,
-        );
+            promise.view(&self.scopes).for_calls(),
+            &self.workspace,
+        )?;
+        *scope = scope.union_admitted(&added, &self.workspace)?;
+        Ok(())
     }
 
     /// The top `count` planned parts, in the order they were planned.
-    fn take(&mut self, count: usize) -> std::vec::IntoIter<Planned> {
+    fn take(&mut self, count: usize) -> PrepResult<AdmittedVecIntoIter<Planned>> {
         let at = self.values.len() - count;
-        self.values.split_off(at).into_iter()
+        let mut parts = AdmittedVec::with_capacity(count, &self.workspace)?;
+        for part in self.values.drain_from(at) {
+            parts.push_reserved(part);
+        }
+        Ok(parts.into_iter())
     }
 
     /// The root's plan: the one value left once every step has run.
@@ -1074,81 +1421,93 @@ impl<'a> Planner<'a, '_> {
         node: &'a GraphPattern,
         scope: SetRef<'a>,
         promise: Prom<'a>,
-    ) -> Result<(), PlanError> {
-        // Compiler-produced algebra may be a bare call, without the parser's Lateral
-        // wrapper. Apply the same admission as a chain member before cloning it.
+    ) -> PrepResult<()> {
         if let GraphPattern::PropertyFunction(call) = node {
-            let bound = call_scope(scope.get(&self.scopes), promise.view(&self.scopes));
-            if admitted_row_bound(call, self.relations, &bound)?.is_none() {
-                return Err(stuck(
+            let bound = scope.get(&self.scopes);
+            let promised = promise.view(&self.scopes);
+            let membership =
+                |variable: &Variable| bound.contains(variable) || promised.writes(variable);
+            if admitted_row_bound_native(call, self.relations, &membership, self.memory)?.is_none()
+            {
+                return Err(stuck_native(
                     &[Atom {
                         pattern: node,
                         call: Some(call),
                         position: 0,
                     }],
                     self.relations,
-                    &bound,
-                ));
+                    &membership,
+                    self.memory,
+                )?
+                .into());
             }
-            self.values.push(Planned::Pattern(node.clone()));
+            self.values
+                .push(Planned::Pattern(node.clone_with_memory(self.memory)?))?;
             return Ok(());
         }
-        // A chain is a left-deep spine of `Lateral`s (a call's join) and `Join`s (the
-        // residual data written between two calls), which is exactly the shape the parser
-        // assembles a triples block containing calls into. Anything else is rebuilt
-        // structurally.
-        let mut atoms = Vec::new();
-        if collect_chain(node, &mut atoms) && atoms.iter().any(|atom| atom.call.is_some()) {
+        let mut atoms = AdmittedVec::new(&self.workspace);
+        if collect_chain_native(node, &mut atoms, self.memory)?
+            && atoms.iter().any(|atom| atom.call.is_some())
+        {
             return self.enter_chain(atoms, scope, promise);
         }
-        self.enter_parts(node, scope, promise);
-        Ok(())
+        self.enter_parts(node, scope, promise)
     }
 
     /// Order a chain's atoms and push each to be planned: a call against the variables
     /// bound when it was chosen, anything else against the chain's enclosing context.
     fn enter_chain(
         &mut self,
-        atoms: Vec<Atom<'a>>,
+        atoms: AdmittedVec<Atom<'a>>,
         scope: SetRef<'a>,
         promise: Prom<'a>,
-    ) -> Result<(), PlanError> {
-        let ChainOrder {
+    ) -> PrepResult<()> {
+        let NativeChainOrder {
             ordered,
             is_call,
             bound_before,
-        } = order_chain(
+        } = order_chain_native(
             atoms,
             self.relations,
             scope.get(&self.scopes),
             promise.view(&self.scopes),
+            self.memory,
         )?;
         let mark = self.scopes.len();
-        self.scopes.extend(bound_before);
-        self.steps.push(Step::Assemble(Assemble::Chain {
-            is_call: is_call.clone(),
-            mark,
-        }));
-        // Pushed last to first, so the atoms are planned in the chosen order.
-        for (index, (pattern, call)) in ordered.into_iter().zip(is_call).enumerate().rev() {
-            // A call is re-attached through a `Lateral`, which drives it with the rows of
-            // every atom before it, so it is admitted against the set bound when it was
-            // chosen. Any other atom is re-attached through a `Join`, which evaluates it
-            // on its own — so a call NESTED inside it (a `UNION` arm's own chain, say)
-            // sees only what the chain's enclosing context binds.
-            let atom_scope = if call {
+        for bound in bound_before {
+            self.scopes.push(bound)?;
+        }
+        let operand_start = self.steps.len();
+        self.steps.reserve_additional(
+            ordered
+                .len()
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        // The original reverse source order, without cloning the call flags.
+        for index in (0..ordered.len()).rev() {
+            let atom_scope = if is_call[index] {
                 SetRef::Owned(mark + index)
             } else {
                 scope
             };
-            self.steps.push(Step::Pattern(pattern, atom_scope, promise));
+            self.steps
+                .push_reserved(Step::Pattern(ordered[index], atom_scope, promise));
         }
+        self.steps
+            .push_reserved(Step::Assemble(Assemble::Chain { is_call, mark }));
+        self.steps.as_mut_slice()[operand_start..].rotate_right(1);
         Ok(())
     }
 
     /// Push the parts of a non-chain node, threading to each the variables its left
     /// siblings certainly bind and the promise that reaches it.
-    fn enter_parts(&mut self, node: &'a GraphPattern, scope: SetRef<'a>, promise: Prom<'a>) {
+    fn enter_parts(
+        &mut self,
+        node: &'a GraphPattern,
+        scope: SetRef<'a>,
+        promise: Prom<'a>,
+    ) -> PrepResult<()> {
         // The one rewrite writes the parameters everywhere, so every part of the node
         // inherits the same promise. See [`Promise`].
         let mark = self.scopes.len();
@@ -1160,50 +1519,58 @@ impl<'a> Planner<'a, '_> {
                 policy,
             } => {
                 let mut certain = scope.get(&self.scopes).clone();
-                self.widen(&mut certain, scope, left, promise);
-                let mut right_scope = scope.get(&self.scopes).clone();
-                let mut supplied = promise
-                    .view(&self.scopes)
-                    .for_calls()
-                    .cloned()
-                    .unwrap_or_default();
-                for (input, _) in &policy.inputs {
-                    right_scope.remove(input);
-                    supplied.remove(input);
+                self.widen(&mut certain, scope, left, promise)?;
+                let promised = promise.view(&self.scopes);
+                let inputs = VarSchema::from_vars_admitted(
+                    policy.inputs.iter().map(|(input, _)| input.clone()),
+                    &self.workspace,
+                )?;
+                let mut right_scope_builder = SchemaBuilder::new(&self.workspace);
+                let mut supplied = SchemaBuilder::new(&self.workspace);
+                for variable in scope.get(&self.scopes).vars() {
+                    if !inputs.contains(variable) {
+                        let _ = right_scope_builder.push(variable.clone())?;
+                    }
+                }
+                if let Some(parameters) = promised.for_calls() {
+                    for variable in parameters.vars() {
+                        if !inputs.contains(variable) {
+                            let _ = supplied.push(variable.clone())?;
+                        }
+                    }
                 }
                 for (input, driver) in &policy.inputs {
-                    if (certain.contains(driver)
-                        || promise.view(&self.scopes).written().writes(driver))
+                    if (certain.contains(driver) || promised.writes(driver))
                         && policy.optional.as_ref().is_none_or(|optional| {
                             optional
                                 .retry_inputs
                                 .iter()
                                 .any(|(retry_input, retry_driver)| {
-                                    retry_input == input
-                                        && (certain.contains(retry_driver)
-                                            || promise
-                                                .view(&self.scopes)
-                                                .written()
-                                                .writes(retry_driver))
+                                    if retry_input != input {
+                                        return false;
+                                    }
+                                    certain.contains(retry_driver) || promised.writes(retry_driver)
                                 })
                         })
                     {
-                        right_scope.insert(input.clone());
-                        supplied.insert(input.clone());
+                        let _ = right_scope_builder.push(input.clone())?;
+                        let _ = supplied.push(input.clone())?;
                     }
                 }
                 if let Some(optional) = &policy.optional {
-                    right_scope.insert(optional.forget_marker.clone());
-                    supplied.insert(optional.forget_marker.clone());
+                    let _ = right_scope_builder.push(optional.forget_marker.clone())?;
+                    let _ = supplied.push(optional.forget_marker.clone())?;
                 }
-                let right_scope = self.own(right_scope);
+                let right_scope = right_scope_builder.finish()?;
+                let supplied = supplied.finish()?;
+                let right_scope = self.own(right_scope)?;
                 // Apply substitutes these values into the whole RHS, through
                 // projections too; they are writes, not narrowable outer context.
-                let right_promise = Prom::Everywhere(self.own(supplied));
-                self.steps.push(assemble);
+                let right_promise = Prom::Everywhere(self.own(supplied)?);
+                self.steps.push(assemble)?;
                 self.steps
-                    .push(Step::Pattern(right, right_scope, right_promise));
-                self.steps.push(Step::Pattern(left, scope, promise));
+                    .push(Step::Pattern(right, right_scope, right_promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
             }
             // A leaf is planned as written. So is a `SERVICE`: its body is forwarded to a
             // remote endpoint rather than evaluated promise, and `crate::remote` refuses to
@@ -1213,18 +1580,19 @@ impl<'a> Planner<'a, '_> {
             | GraphPattern::Values { .. }
             | GraphPattern::PropertyFunction(_)
             | GraphPattern::Service { .. } => {
-                self.values.push(Planned::Pattern(node.clone()));
+                self.values
+                    .push(Planned::Pattern(node.clone_with_memory(self.memory)?))?;
             }
             // An ordinary `Join` evaluates its operands independently and joins the
             // results, so a call inside the right operand is invoked with nothing the
             // left operand binds: it sees what the enclosing context binds and no more.
             // Only a `Lateral` hands its right operand the left rows — which is why a
             // call that depends on an earlier atom is rebuilt through one (see
-            // [`order_chain`]).
+            // [`order_chain_native`]).
             GraphPattern::Join { left, right } => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(right, scope, promise));
-                self.steps.push(Step::Pattern(left, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(right, scope, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
             }
             // The right side of a `Lateral` is evaluated once per left row with that row
             // in hand, so it sees what the left side certainly binds. A `Lateral` whose
@@ -1235,11 +1603,11 @@ impl<'a> Planner<'a, '_> {
             // `crate::substitute`'s `push_probes`).
             GraphPattern::Lateral { left, right } => {
                 let mut inner = scope.get(&self.scopes).clone();
-                self.widen(&mut inner, scope, left, promise);
-                let inner = self.own(inner);
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(right, inner, promise));
-                self.steps.push(Step::Pattern(left, scope, promise));
+                self.widen(&mut inner, scope, left, promise)?;
+                let inner = self.own(inner)?;
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(right, inner, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
             }
             // `OPTIONAL`'s right side and `MINUS`'s right side are evaluated
             // independently of the left and then matched against it, exactly as a
@@ -1254,27 +1622,27 @@ impl<'a> Planner<'a, '_> {
                 // The inline condition is evaluated only on candidate JOINED rows, so
                 // both sides' bindings are available to it.
                 let mut condition_scope = scope.get(&self.scopes).clone();
-                self.widen(&mut condition_scope, scope, left, promise);
-                self.widen(&mut condition_scope, scope, right, promise);
-                let condition_scope = self.own(condition_scope);
-                self.steps.push(assemble);
+                self.widen(&mut condition_scope, scope, left, promise)?;
+                self.widen(&mut condition_scope, scope, right, promise)?;
+                let condition_scope = self.own(condition_scope)?;
+                self.steps.push(assemble)?;
                 if let Some(expression) = expression {
                     self.steps
-                        .push(Step::Expression(expression, condition_scope, promise));
+                        .push(Step::Expression(expression, condition_scope, promise))?;
                 }
-                self.steps.push(Step::Pattern(right, scope, promise));
-                self.steps.push(Step::Pattern(left, scope, promise));
+                self.steps.push(Step::Pattern(right, scope, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
             }
             GraphPattern::Minus { left, right } => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(right, scope, promise));
-                self.steps.push(Step::Pattern(left, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(right, scope, promise))?;
+                self.steps.push(Step::Pattern(left, scope, promise))?;
             }
             // A `UNION` branch cannot rely on its sibling.
             GraphPattern::Union { arms } => {
-                self.steps.push(assemble);
+                self.steps.push(assemble)?;
                 for arm in arms.iter().rev() {
-                    self.steps.push(Step::Pattern(arm, scope, promise));
+                    self.steps.push(Step::Pattern(arm, scope, promise))?;
                 }
             }
             // A `FILTER`'s expression is evaluated over the rows its inner pattern
@@ -1284,45 +1652,47 @@ impl<'a> Planner<'a, '_> {
             // then the inner pattern.
             GraphPattern::Filter { expr, inner } => {
                 let mut rows = scope.get(&self.scopes).clone();
-                self.widen(&mut rows, scope, inner, promise);
-                let rows = self.own(rows);
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, scope, promise));
-                self.steps.push(Step::Expression(expr, rows, promise));
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
+                self.steps.push(Step::Expression(expr, rows, promise))?;
             }
             GraphPattern::Extend {
                 inner, expression, ..
             } => {
                 let mut rows = scope.get(&self.scopes).clone();
-                self.widen(&mut rows, scope, inner, promise);
-                let rows = self.own(rows);
-                self.steps.push(assemble);
-                self.steps.push(Step::Expression(expression, rows, promise));
-                self.steps.push(Step::Pattern(inner, scope, promise));
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
+                self.steps
+                    .push(Step::Expression(expression, rows, promise))?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
             GraphPattern::Unfold {
                 inner, expression, ..
             } => {
                 let mut rows = scope.get(&self.scopes).clone();
-                self.widen(&mut rows, scope, inner, promise);
-                let rows = self.own(rows);
-                self.steps.push(assemble);
-                self.steps.push(Step::Expression(expression, rows, promise));
-                self.steps.push(Step::Pattern(inner, scope, promise));
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
+                self.steps
+                    .push(Step::Expression(expression, rows, promise))?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
             GraphPattern::Graph { inner, .. } => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
             GraphPattern::OrderBy { inner, expression } => {
                 let mut rows = scope.get(&self.scopes).clone();
-                self.widen(&mut rows, scope, inner, promise);
-                let rows = self.own(rows);
-                self.steps.push(assemble);
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
                 for key in expression.iter().rev() {
-                    self.steps.push(Step::Order(key, rows, promise));
+                    self.steps.push(Step::Order(key, rows, promise))?;
                 }
-                self.steps.push(Step::Pattern(inner, scope, promise));
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
             // A sub-`SELECT` is its own scope: a variable bound outside it is visible
             // inside only when it projects it — the correlated substitution (a
@@ -1331,70 +1701,82 @@ impl<'a> Planner<'a, '_> {
             // to them on the way in. A prepared execution's parameters are written past
             // the projection, so the promise passes unchanged.
             GraphPattern::Project { inner, variables } => {
-                let narrowed = narrowed_to(scope.get(&self.scopes), variables);
-                let narrowed = self.own(narrowed);
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, narrowed, promise));
+                let narrowed =
+                    narrowed_to_admitted(scope.get(&self.scopes), variables, &self.workspace)?;
+                let narrowed = self.own(narrowed)?;
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, narrowed, promise))?;
             }
             GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
             GraphPattern::Slice { inner, .. } => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(inner, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
             GraphPattern::Group {
                 inner, aggregates, ..
             } => {
                 let mut rows = scope.get(&self.scopes).clone();
-                self.widen(&mut rows, scope, inner, promise);
-                let rows = self.own(rows);
-                self.steps.push(assemble);
+                self.widen(&mut rows, scope, inner, promise)?;
+                let rows = self.own(rows)?;
+                self.steps.push(assemble)?;
                 for (_, aggregate) in aggregates.iter().rev() {
-                    self.steps.push(Step::Aggregate(aggregate, rows, promise));
+                    self.steps.push(Step::Aggregate(aggregate, rows, promise))?;
                 }
-                self.steps.push(Step::Pattern(inner, scope, promise));
+                self.steps.push(Step::Pattern(inner, scope, promise))?;
             }
         }
+        Ok(())
     }
 
     /// Enter `expr`: an expression that reaches neither a property-function call nor a
     /// custom aggregate is planned as written; any other has its operands pushed, and an
     /// `EXISTS` its pattern.
-    fn enter_expression(&mut self, expr: &'a Expression, scope: SetRef<'a>, promise: Prom<'a>) {
+    fn enter_expression(
+        &mut self,
+        expr: &'a Expression,
+        scope: SetRef<'a>,
+        promise: Prom<'a>,
+    ) -> PrepResult<()> {
         // Either hazard alone must still walk `expr` — see `plan_where_pattern`'s
         // identical widening for the same reason: an `EXISTS` whose inner `GROUP BY`
         // has a `Custom` aggregate but no property-function call must still reach
         // that aggregate's admission (through the `Expression::Exists` arm).
-        if !crate::property_fn_eval::expression_reaches_property_function(expr)
-            && !crate::property_fn_eval::expression_reaches_custom_aggregate(expr)
-        {
-            self.values.push(Planned::Expression(expr.clone()));
-            return;
+        if !crate::property_fn_eval::expression_reaches_property_function_with_memory(
+            expr,
+            self.memory,
+        )? && !crate::property_fn_eval::expression_reaches_custom_aggregate_with_memory(
+            expr,
+            self.memory,
+        )? {
+            self.values
+                .push(Planned::Expression(expr.clone_with_memory(self.memory)?))?;
+            return Ok(());
         }
         let assemble = Step::Assemble(Assemble::Expression(expr));
         match expr {
             // A correlated `EXISTS` sees its enclosing group's bindings, so the scope
             // carries straight in: that is what lets a relation inside one be invoked
             // bound. A prepared execution's parameters reach it too: the pre-binding
-            // rewrite binds them in every call everywhere (see [`Promise::Everywhere`]).
+            // rewrite binds them in every call everywhere (see [`NativePromise::Everywhere`]).
             Expression::Exists(pattern) => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Pattern(pattern, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Pattern(pattern, scope, promise))?;
             }
             Expression::Or(operands) | Expression::And(operands) => {
-                self.steps.push(assemble);
+                self.steps.push(assemble)?;
                 for operand in operands.iter().rev() {
-                    self.steps.push(Step::Expression(operand, scope, promise));
+                    self.steps.push(Step::Expression(operand, scope, promise))?;
                 }
             }
             Expression::Arithmetic(first, steps) => {
-                self.steps.push(assemble);
+                self.steps.push(assemble)?;
                 for (_, operand) in steps.iter().rev() {
-                    self.steps.push(Step::Expression(operand, scope, promise));
+                    self.steps.push(Step::Expression(operand, scope, promise))?;
                 }
-                self.steps.push(Step::Expression(first, scope, promise));
+                self.steps.push(Step::Expression(first, scope, promise))?;
             }
             Expression::Equal(a, b)
             | Expression::SameTerm(a, b)
@@ -1402,40 +1784,44 @@ impl<'a> Planner<'a, '_> {
             | Expression::GreaterOrEqual(a, b)
             | Expression::Less(a, b)
             | Expression::LessOrEqual(a, b) => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Expression(b, scope, promise));
-                self.steps.push(Step::Expression(a, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Expression(b, scope, promise))?;
+                self.steps.push(Step::Expression(a, scope, promise))?;
             }
             Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Expression(a, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps.push(Step::Expression(a, scope, promise))?;
             }
             Expression::If(condition, then, otherwise) => {
-                self.steps.push(assemble);
-                self.steps.push(Step::Expression(otherwise, scope, promise));
-                self.steps.push(Step::Expression(then, scope, promise));
-                self.steps.push(Step::Expression(condition, scope, promise));
+                self.steps.push(assemble)?;
+                self.steps
+                    .push(Step::Expression(otherwise, scope, promise))?;
+                self.steps.push(Step::Expression(then, scope, promise))?;
+                self.steps
+                    .push(Step::Expression(condition, scope, promise))?;
             }
             Expression::In(needle, haystack) => {
-                self.steps.push(assemble);
+                self.steps.push(assemble)?;
                 for item in haystack.iter().rev() {
-                    self.steps.push(Step::Expression(item, scope, promise));
+                    self.steps.push(Step::Expression(item, scope, promise))?;
                 }
-                self.steps.push(Step::Expression(needle, scope, promise));
+                self.steps.push(Step::Expression(needle, scope, promise))?;
             }
             Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
-                self.steps.push(assemble);
+                self.steps.push(assemble)?;
                 for item in items.iter().rev() {
-                    self.steps.push(Step::Expression(item, scope, promise));
+                    self.steps.push(Step::Expression(item, scope, promise))?;
                 }
             }
             Expression::NamedNode(_)
             | Expression::Literal(_)
             | Expression::Variable(_)
             | Expression::Bound(_) => {
-                self.values.push(Planned::Expression(expr.clone()));
+                self.values
+                    .push(Planned::Expression(expr.clone_with_memory(self.memory)?))?;
             }
         }
+        Ok(())
     }
 
     /// Enter `aggregate`: for [`AggregateFunction::Custom`], ADMIT the call at prepare
@@ -1459,80 +1845,105 @@ impl<'a> Planner<'a, '_> {
         aggregate: &'a AggregateExpression,
         scope: SetRef<'a>,
         promise: Prom<'a>,
-    ) -> Result<(), PlanError> {
+    ) -> PrepResult<()> {
         if let AggregateFunction::Custom(iri) = aggregate.function() {
             let iri_str = iri.as_str();
             let Some(custom) = self.agg_registry.resolve(iri_str) else {
-                return Err(PlanError::aggregate(EvalError::function(format!(
-                    "no custom aggregate is registered for <{iri_str}>"
-                ))));
+                return Err(plan_message(
+                    PlanSeam::Aggregate,
+                    format_args!("no custom aggregate is registered for <{iri_str}>"),
+                    &self.workspace,
+                )
+                .into());
             };
-            let declared = crate::agg_fn::arity_contained(custom.as_ref(), iri_str)
-                .map_err(PlanError::aggregate)?;
+            let declared = crate::contain::declaration_contained_admitted(
+                "custom aggregate",
+                iri_str,
+                "arity",
+                || custom.arity(),
+                &self.workspace,
+            )
+            .map_err(PlanError::aggregate)?;
             let supplied = aggregate.args().len();
             if !declared.accepts(supplied) {
-                return Err(PlanError::aggregate(EvalError::function(format!(
-                    "custom aggregate <{iri_str}> is declared with {declared} argument(s); the \
-                     call site supplies {supplied}"
-                ))));
+                return Err(plan_message(PlanSeam::Aggregate, format_args!(
+                    "custom aggregate <{iri_str}> is declared with {declared} argument(s); the call site supplies {supplied}",
+                ), &self.workspace).into());
             }
-            let declared_scalarvals = crate::agg_fn::scalarvals_contained(custom.as_ref(), iri_str)
-                .map_err(PlanError::aggregate)?;
-            validate_scalarvals(iri_str, aggregate.scalarvals(), &declared_scalarvals)
-                .map_err(PlanError::aggregate)?;
+            let declared_scalarvals = crate::contain::declaration_contained_admitted(
+                "custom aggregate",
+                iri_str,
+                "scalarval declaration",
+                || custom.scalarvals(),
+                &self.workspace,
+            )
+            .map_err(PlanError::aggregate)?;
+            validate_scalarvals_native(
+                iri_str,
+                aggregate.scalarvals(),
+                declared_scalarvals,
+                &self.workspace,
+            )
+            .map_err(PlanError::aggregate)?;
         }
         self.steps
-            .push(Step::Assemble(Assemble::Aggregate(aggregate)));
+            .push(Step::Assemble(Assemble::Aggregate(aggregate)))?;
         // A `FOLD`'s own sort keys are per-row expressions read from the same
         // solutions its arguments are, so they are planned too: a property function or
         // custom aggregate reachable from `FOLD(?v ORDER BY f(?w))` would otherwise
         // skip this walk's prepare-time admission entirely. Pushed after the arguments'
         // reverse, so the arguments are planned first.
         for order in aggregate.order_by().iter().rev() {
-            self.steps.push(Step::Order(order, scope, promise));
+            self.steps.push(Step::Order(order, scope, promise))?;
         }
         for arg in aggregate.args().iter().rev() {
-            self.steps.push(Step::Expression(arg, scope, promise));
+            self.steps.push(Step::Expression(arg, scope, promise))?;
         }
         Ok(())
     }
 
     /// Enter a sort key: its expression is planned, and the key rebuilt with its
     /// `ASC`/`DESC` direction.
-    fn enter_order(&mut self, order: &'a OrderExpression, scope: SetRef<'a>, promise: Prom<'a>) {
-        self.steps.push(Step::Assemble(Assemble::Order(order)));
+    fn enter_order(
+        &mut self,
+        order: &'a OrderExpression,
+        scope: SetRef<'a>,
+        promise: Prom<'a>,
+    ) -> PrepResult<()> {
+        self.steps.push(Step::Assemble(Assemble::Order(order)))?;
         let (OrderExpression::Asc(expr) | OrderExpression::Desc(expr)) = order;
-        self.steps.push(Step::Expression(expr, scope, promise));
+        self.steps.push(Step::Expression(expr, scope, promise))?;
+        Ok(())
     }
 
     /// Rebuild one node from the planned parts under it, in the order its fields are
     /// written.
-    fn assemble(&mut self, assemble: Assemble<'a>) {
+    fn assemble(&mut self, assemble: Assemble<'a>) -> PrepResult<()> {
         match assemble {
             Assemble::Pattern { node, mark } => {
-                let planned = self.assemble_pattern(node);
+                let planned = self.assemble_pattern(node)?;
                 self.scopes.truncate(mark);
-                self.values.push(Planned::Pattern(planned));
+                self.values.push(Planned::Pattern(planned))?;
             }
             // Rebuild the left-deep spine in the chosen order: a call re-attaches
             // through a `Lateral` (it depends on what is to its left), everything else
             // through a `Join`.
             Assemble::Chain { is_call, mark } => {
                 let mut chain: Option<GraphPattern> = None;
-                for (part, call) in self.take(is_call.len()).zip(is_call) {
+                for (part, call) in self.take(is_call.len())?.zip(is_call) {
                     let planned = part.pattern();
                     chain = Some(match chain {
                         None => planned,
                         Some(left) => {
                             if call {
                                 GraphPattern::Lateral {
-                                    left: Child::new(left),
-                                    right: Child::new(planned),
+                                    left: Child::try_new(left, self.memory)?,
+                                    right: Child::try_new(planned, self.memory)?,
                                 }
                             } else {
                                 GraphPattern::Join {
-                                    left: Child::new(left),
-                                    right: Child::new(planned),
+                                    left: Child::try_new(left, self.memory)?,
+                                    right: Child::try_new(planned, self.memory)?,
                                 }
                             }
                         }
@@ -1541,20 +1952,26 @@ impl<'a> Planner<'a, '_> {
                 self.scopes.truncate(mark);
                 self.values.push(Planned::Pattern(
                     chain.unwrap_or(GraphPattern::Bgp { patterns: vec![] }),
-                ));
+                ))?;
             }
             Assemble::Expression(expr) => {
-                let planned = self.assemble_expression(expr);
-                self.values.push(Planned::Expression(planned));
+                let planned = self.assemble_expression(expr)?;
+                self.values.push(Planned::Expression(planned))?;
             }
             Assemble::Aggregate(aggregate) => {
-                let mut parts = self.take(aggregate.args().len() + aggregate.order_by().len());
-                let args: Vec<Expression> = parts
-                    .by_ref()
-                    .take(aggregate.args().len())
-                    .map(Planned::expression)
-                    .collect();
-                let order_by: Vec<OrderExpression> = parts.map(Planned::order).collect();
+                let count = aggregate
+                    .args()
+                    .len()
+                    .checked_add(aggregate.order_by().len())
+                    .ok_or(StorageError::SizeOverflow)?;
+                let mut parts = self.take(count)?;
+                let args = self.memory.collect(
+                    parts
+                        .by_ref()
+                        .take(aggregate.args().len())
+                        .map(Planned::expression),
+                )?;
+                let order_by = self.memory.collect(parts.map(Planned::order))?;
                 // Planning an argument rewrites it in place and never changes the
                 // argument COUNT, and planning a sort key never removes one, so this can
                 // never turn a valid `aggregate` into an invalid one — the
@@ -1562,108 +1979,100 @@ impl<'a> Planner<'a, '_> {
                 let planned = AggregateExpression::new(
                     aggregate.function().clone(),
                     args,
-                    aggregate.scalarvals().to_vec(),
+                    aggregate.clone_scalarvals_with_memory(self.memory)?,
                     order_by,
                     aggregate.distinct,
                 )
                 .expect("planning preserves argument count, so arity stays valid");
-                self.values.push(Planned::Aggregate(planned));
+                self.values.push(Planned::Aggregate(planned))?;
             }
             Assemble::Order(order) => {
-                let expr = next_expression(&mut self.take(1));
+                let expr = next_expression(&mut self.take(1)?);
                 self.values.push(Planned::Order(match order {
                     OrderExpression::Asc(_) => OrderExpression::Asc(expr),
                     OrderExpression::Desc(_) => OrderExpression::Desc(expr),
-                }));
+                }))?;
             }
         }
+        Ok(())
     }
 
     /// `node` rebuilt over its planned parts, taken in the order they were planned.
-    fn assemble_pattern(&mut self, node: &'a GraphPattern) -> GraphPattern {
-        match node {
+    fn assemble_pattern(&mut self, node: &'a GraphPattern) -> PrepResult<GraphPattern> {
+        Ok(match node {
             GraphPattern::Apply { policy, .. } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let left = next_pattern(&mut parts);
                 let right = next_pattern(&mut parts);
-                let optional = policy.optional.as_ref().map(|optional| {
-                    purrdf_sparql_algebra::algebra::OptionalApplication {
-                        retry_inputs: optional.retry_inputs.clone(),
-                        forget_marker: optional.forget_marker.clone(),
-                    }
-                });
                 GraphPattern::Apply {
-                    left: Child::new(left),
-                    right: Child::new(right),
-                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
-                        dataset_required: policy.dataset_required,
-                        row_pipeline: policy.row_pipeline,
-                        reduced_adjacent: policy.reduced_adjacent,
-                        group_domain: policy.group_domain.clone(),
-                        inputs: policy.inputs.clone(),
-                        optional,
-                    }),
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
+                    policy: policy.clone_box_with_memory(self.memory)?,
                 }
             }
             GraphPattern::Join { .. } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let left = next_pattern(&mut parts);
                 let right = next_pattern(&mut parts);
                 GraphPattern::Join {
-                    left: Child::new(left),
-                    right: Child::new(right),
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
                 }
             }
             GraphPattern::Lateral { .. } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let left = next_pattern(&mut parts);
                 let right = next_pattern(&mut parts);
                 GraphPattern::Lateral {
-                    left: Child::new(left),
-                    right: Child::new(right),
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
                 }
             }
             GraphPattern::LeftJoin { expression, .. } => {
-                let mut parts = self.take(2 + usize::from(expression.is_some()));
+                let mut parts = self.take(2 + usize::from(expression.is_some()))?;
                 let left = next_pattern(&mut parts);
                 let right = next_pattern(&mut parts);
                 let expression = expression.as_ref().map(|_| next_expression(&mut parts));
                 GraphPattern::LeftJoin {
-                    left: Child::new(left),
-                    right: Child::new(right),
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
                     expression,
                 }
             }
             GraphPattern::Minus { .. } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let left = next_pattern(&mut parts);
                 let right = next_pattern(&mut parts);
                 GraphPattern::Minus {
-                    left: Child::new(left),
-                    right: Child::new(right),
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right, self.memory)?,
                 }
             }
             GraphPattern::Union { arms } => {
-                let mut parts = self.take(arms.len());
+                let mut parts = self.take(arms.len())?;
                 GraphPattern::Union {
-                    arms: arms.map_ref(|_| next_pattern(&mut parts)),
+                    arms: purrdf_sparql_algebra::Chain::try_from(
+                        self.memory
+                            .collect((0..arms.len()).map(|_| next_pattern(&mut parts)))?,
+                    )
+                    .unwrap_or_else(|_| unreachable!("planning preserves UNION arity")),
                 }
             }
             GraphPattern::Filter { .. } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let expr = next_expression(&mut parts);
                 let inner = next_pattern(&mut parts);
                 GraphPattern::Filter {
                     expr,
-                    inner: Child::new(inner),
+                    inner: Child::try_new(inner, self.memory)?,
                 }
             }
             GraphPattern::Extend { variable, .. } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let inner = next_pattern(&mut parts);
                 let expression = next_expression(&mut parts);
                 GraphPattern::Extend {
-                    inner: Child::new(inner),
+                    inner: Child::try_new(inner, self.memory)?,
                     variable: variable.clone(),
                     expression,
                 }
@@ -1671,11 +2080,11 @@ impl<'a> Planner<'a, '_> {
             GraphPattern::Unfold {
                 element, companion, ..
             } => {
-                let mut parts = self.take(2);
+                let mut parts = self.take(2)?;
                 let inner = next_pattern(&mut parts);
                 let expression = next_expression(&mut parts);
                 GraphPattern::Unfold {
-                    inner: Child::new(inner),
+                    inner: Child::try_new(inner, self.memory)?,
                     expression,
                     element: element.clone(),
                     companion: companion.clone(),
@@ -1683,28 +2092,33 @@ impl<'a> Planner<'a, '_> {
             }
             GraphPattern::Graph { name, .. } => GraphPattern::Graph {
                 name: name.clone(),
-                inner: Child::new(next_pattern(&mut self.take(1))),
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
             },
             GraphPattern::OrderBy { expression, .. } => {
-                let mut parts = self.take(1 + expression.len());
+                let mut parts = self.take(
+                    expression
+                        .len()
+                        .checked_add(1)
+                        .ok_or(StorageError::SizeOverflow)?,
+                )?;
                 let inner = next_pattern(&mut parts);
                 GraphPattern::OrderBy {
-                    inner: Child::new(inner),
-                    expression: parts.map(Planned::order).collect(),
+                    inner: Child::try_new(inner, self.memory)?,
+                    expression: self.memory.collect(parts.map(Planned::order))?,
                 }
             }
             GraphPattern::Project { variables, .. } => GraphPattern::Project {
-                inner: Child::new(next_pattern(&mut self.take(1))),
-                variables: variables.clone(),
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
+                variables: self.memory.collect(variables.iter().cloned())?,
             },
             GraphPattern::Distinct { .. } => GraphPattern::Distinct {
-                inner: Child::new(next_pattern(&mut self.take(1))),
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
             },
             GraphPattern::Reduced { .. } => GraphPattern::Reduced {
-                inner: Child::new(next_pattern(&mut self.take(1))),
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
             },
             GraphPattern::Slice { start, length, .. } => GraphPattern::Slice {
-                inner: Child::new(next_pattern(&mut self.take(1))),
+                inner: Child::try_new(next_pattern(&mut self.take(1)?), self.memory)?,
                 start: *start,
                 length: *length,
             },
@@ -1713,16 +2127,22 @@ impl<'a> Planner<'a, '_> {
                 aggregates,
                 ..
             } => {
-                let mut parts = self.take(1 + aggregates.len());
+                let mut parts = self.take(
+                    aggregates
+                        .len()
+                        .checked_add(1)
+                        .ok_or(StorageError::SizeOverflow)?,
+                )?;
                 let inner = next_pattern(&mut parts);
                 GraphPattern::Group {
-                    inner: Child::new(inner),
-                    variables: variables.clone(),
-                    aggregates: aggregates
-                        .iter()
-                        .zip(parts)
-                        .map(|((variable, _), part)| (variable.clone(), part.aggregate()))
-                        .collect(),
+                    inner: Child::try_new(inner, self.memory)?,
+                    variables: self.memory.collect(variables.iter().cloned())?,
+                    aggregates: self.memory.collect(
+                        aggregates
+                            .iter()
+                            .zip(parts)
+                            .map(|((variable, _), part)| (variable.clone(), part.aggregate())),
+                    )?,
                 }
             }
             GraphPattern::Bgp { .. }
@@ -1732,100 +2152,145 @@ impl<'a> Planner<'a, '_> {
             | GraphPattern::Service { .. } => {
                 unreachable!("a leaf is planned as it is entered and never assembled")
             }
-        }
+        })
     }
 
     /// `expr` rebuilt over its planned operands, taken in the order they were planned.
-    fn assemble_expression(&mut self, expr: &'a Expression) -> Expression {
-        match expr {
-            Expression::Exists(_) => {
-                Expression::Exists(Child::new(next_pattern(&mut self.take(1))))
-            }
+    fn assemble_expression(&mut self, expr: &'a Expression) -> PrepResult<Expression> {
+        Ok(match expr {
+            Expression::Exists(_) => Expression::Exists(Child::try_new(
+                next_pattern(&mut self.take(1)?),
+                self.memory,
+            )?),
             Expression::Or(operands) => {
-                let mut parts = self.take(operands.len());
-                Expression::Or(operands.map_ref(|_| next_expression(&mut parts)))
+                let mut parts = self.take(operands.len())?;
+                Expression::Or(
+                    purrdf_sparql_algebra::Chain::try_from(
+                        self.memory
+                            .collect((0..operands.len()).map(|_| next_expression(&mut parts)))?,
+                    )
+                    .unwrap_or_else(|_| unreachable!("planning preserves OR arity")),
+                )
             }
             Expression::And(operands) => {
-                let mut parts = self.take(operands.len());
-                Expression::And(operands.map_ref(|_| next_expression(&mut parts)))
+                let mut parts = self.take(operands.len())?;
+                Expression::And(
+                    purrdf_sparql_algebra::Chain::try_from(
+                        self.memory
+                            .collect((0..operands.len()).map(|_| next_expression(&mut parts)))?,
+                    )
+                    .unwrap_or_else(|_| unreachable!("planning preserves AND arity")),
+                )
             }
             Expression::Arithmetic(_, steps) => {
-                let mut parts = self.take(1 + steps.len());
+                let mut parts = self.take(
+                    steps
+                        .len()
+                        .checked_add(1)
+                        .ok_or(StorageError::SizeOverflow)?,
+                )?;
                 let first = next_expression(&mut parts);
                 Expression::Arithmetic(
-                    Child::new(first),
-                    steps.map_ref(|(operator, _)| (*operator, next_expression(&mut parts))),
+                    Child::try_new(first, self.memory)?,
+                    purrdf_sparql_algebra::NonEmpty::try_from(
+                        self.memory.collect(
+                            steps
+                                .iter()
+                                .map(|(operator, _)| (*operator, next_expression(&mut parts))),
+                        )?,
+                    )
+                    .unwrap_or_else(|_| unreachable!("planning preserves arithmetic step arity")),
                 )
             }
             Expression::Equal(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::Equal(a, b)
             }
             Expression::SameTerm(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::SameTerm(a, b)
             }
             Expression::Greater(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::Greater(a, b)
             }
             Expression::GreaterOrEqual(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::GreaterOrEqual(a, b)
             }
             Expression::Less(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::Less(a, b)
             }
             Expression::LessOrEqual(..) => {
-                let (a, b) = self.take_pair();
+                let (a, b) = self.take_pair()?;
                 Expression::LessOrEqual(a, b)
             }
-            Expression::UnaryPlus(_) => {
-                Expression::UnaryPlus(Child::new(next_expression(&mut self.take(1))))
-            }
-            Expression::UnaryMinus(_) => {
-                Expression::UnaryMinus(Child::new(next_expression(&mut self.take(1))))
-            }
-            Expression::Not(_) => Expression::Not(Child::new(next_expression(&mut self.take(1)))),
+            Expression::UnaryPlus(_) => Expression::UnaryPlus(Child::try_new(
+                next_expression(&mut self.take(1)?),
+                self.memory,
+            )?),
+            Expression::UnaryMinus(_) => Expression::UnaryMinus(Child::try_new(
+                next_expression(&mut self.take(1)?),
+                self.memory,
+            )?),
+            Expression::Not(_) => Expression::Not(Child::try_new(
+                next_expression(&mut self.take(1)?),
+                self.memory,
+            )?),
             Expression::If(..) => {
-                let mut parts = self.take(3);
+                let mut parts = self.take(3)?;
                 let condition = next_expression(&mut parts);
                 let then = next_expression(&mut parts);
                 let otherwise = next_expression(&mut parts);
                 Expression::If(
-                    Child::new(condition),
-                    Child::new(then),
-                    Child::new(otherwise),
+                    Child::try_new(condition, self.memory)?,
+                    Child::try_new(then, self.memory)?,
+                    Child::try_new(otherwise, self.memory)?,
                 )
             }
             Expression::In(_, haystack) => {
-                let mut parts = self.take(1 + haystack.len());
+                let mut parts = self.take(
+                    haystack
+                        .len()
+                        .checked_add(1)
+                        .ok_or(StorageError::SizeOverflow)?,
+                )?;
                 let needle = next_expression(&mut parts);
-                Expression::In(Child::new(needle), parts.map(Planned::expression).collect())
+                Expression::In(
+                    Child::try_new(needle, self.memory)?,
+                    self.memory.collect(parts.map(Planned::expression))?.into(),
+                )
             }
             Expression::Coalesce(items) => {
-                Expression::Coalesce(self.take(items.len()).map(Planned::expression).collect())
+                let parts = self.take(items.len())?;
+                Expression::Coalesce(self.memory.collect(parts.map(Planned::expression))?.into())
             }
-            Expression::FunctionCall(function, args) => Expression::FunctionCall(
-                function.clone(),
-                self.take(args.len()).map(Planned::expression).collect(),
-            ),
+            Expression::FunctionCall(function, args) => {
+                let parts = self.take(args.len())?;
+                Expression::FunctionCall(
+                    function.clone_with_memory(self.memory)?,
+                    self.memory.collect(parts.map(Planned::expression))?.into(),
+                )
+            }
             Expression::NamedNode(_)
             | Expression::Literal(_)
             | Expression::Variable(_)
             | Expression::Bound(_) => {
                 unreachable!("a constant or a variable is planned as it is entered")
             }
-        }
+        })
     }
 
     /// The two planned operands of a binary operator, in order.
-    fn take_pair(&mut self) -> (Child<Expression>, Child<Expression>) {
-        let mut parts = self.take(2);
+    fn take_pair(&mut self) -> PrepResult<(Child<Expression>, Child<Expression>)> {
+        let mut parts = self.take(2)?;
         let a = next_expression(&mut parts);
         let b = next_expression(&mut parts);
-        (Child::new(a), Child::new(b))
+        Ok((
+            Child::try_new(a, self.memory)?,
+            Child::try_new(b, self.memory)?,
+        ))
     }
 }
 
@@ -1848,39 +2313,62 @@ impl<'a> Planner<'a, '_> {
 ///
 /// [`EvalError::Function`] naming `iri` and the offending scalarval, for any of
 /// the four cases above.
+#[cfg(test)]
 fn validate_scalarvals(
     iri: &str,
     supplied: &[(String, Literal)],
     declared: &[ScalarvalSpec],
 ) -> Result<(), EvalError> {
-    let mut seen: DetHashSet<&str> = DetHashSet::default();
+    validate_scalarvals_native(iri, supplied, declared, &WorkspaceCapability::resident())
+}
+
+fn validate_scalarvals_native(
+    iri: &str,
+    supplied: &[(String, Literal)],
+    declared: &[ScalarvalSpec],
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut seen = AdmittedMap::default();
     for (name, value) in supplied {
-        if !seen.insert(name.as_str()) {
-            return Err(EvalError::function(format!(
-                "custom aggregate <{iri}> was supplied the scalarval `{name}` more than once"
-            )));
+        if seen.get(&name.as_str()).is_some() {
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!(
+                    "custom aggregate <{iri}> was supplied the scalarval `{name}` more than once"
+                ),
+                workspace,
+            ));
         }
+        let _ = seen.insert_admitted(name.as_str(), (), workspace)?;
         let Some(spec) = declared.iter().find(|spec| spec.name == name) else {
-            return Err(EvalError::function(format!(
-                "custom aggregate <{iri}> does not accept a scalarval named `{name}`"
-            )));
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!("custom aggregate <{iri}> does not accept a scalarval named `{name}`"),
+                workspace,
+            ));
         };
-        if !scalarval_value_matches_kind(value, spec.kind) {
-            return Err(EvalError::function(format!(
-                "custom aggregate <{iri}>'s scalarval `{name}` must be {}, found datatype \
-                 <{}>",
-                spec.kind.label(),
-                value.datatype().as_str()
-            )));
+        if !scalarval_value_matches_kind_native(value, spec.kind, workspace)? {
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!(
+                    "custom aggregate <{iri}>'s scalarval `{name}` must be {}, found datatype <{}>",
+                    spec.kind.label(),
+                    value.datatype().as_str()
+                ),
+                workspace,
+            ));
         }
     }
     for spec in declared {
         if !supplied.iter().any(|(name, _)| name == spec.name) {
-            return Err(EvalError::function(format!(
-                "custom aggregate <{iri}> requires a scalarval named `{}`, which the call site \
-                 did not supply",
-                spec.name
-            )));
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Function,
+                format_args!(
+                    "custom aggregate <{iri}> requires a scalarval named `{}`, which the call site did not supply",
+                    spec.name
+                ),
+                workspace,
+            ));
         }
     }
     Ok(())
@@ -1893,16 +2381,29 @@ fn validate_scalarvals(
 /// hand-rolled datatype-IRI string comparison, so a numeric scalarval's
 /// admission rule can never drift from what the numeric tower actually accepts
 /// elsewhere in this crate.
-fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
-    match kind {
-        ScalarvalKind::Numeric => xsd_of(&literal_to_value(value))
-            .as_ref()
-            .is_some_and(purrdf_xsd::XsdValue::is_numeric),
+fn scalarval_value_matches_kind_native(
+    value: &Literal,
+    kind: ScalarvalKind,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    Ok(match kind {
+        ScalarvalKind::Numeric => {
+            if value.language().is_some() {
+                return Ok(false);
+            }
+            let Some(datatype) = purrdf_xsd::XsdDatatype::from_iri(value.datatype().as_str())
+            else {
+                return Ok(false);
+            };
+            crate::parsed_value::ParsedValue::parse(value.value(), datatype, false, workspace)?
+                .as_deref()
+                .is_some_and(purrdf_xsd::XsdValue::is_numeric)
+        }
         ScalarvalKind::String => {
             value.language().is_none()
                 && value.datatype().as_str() == purrdf_sparql_algebra::ast::XSD_STRING
         }
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1929,7 +2430,7 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 /// * a `VALUES` column with a term — no `UNDEF` — in every row;
 /// * the target of a `BIND` whose expression reads only variables its inner pattern
 ///   binds by this same rule, or variables the context it is evaluated in holds bound
-///   — the left operand of an enclosing `LATERAL` (see [`expression_reads_only_bound`]
+///   — the left operand of an enclosing `LATERAL` (see [`expression_reads_only_bound_admitted`]
 ///   and [`collect_certainly_bound_in`]);
 /// * a variable a `FILTER`'s condition requires bound for it to be true
 ///   ([`Outcome::Truth`]): `FILTER(BOUND(?v))`, `FILTER(sameTerm(?v, ?o))`,
@@ -1938,7 +2439,7 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 ///   binds only what both of its sides do, and `FILTER(!BOUND(?v))` binds nothing;
 /// * the variable naming a `GRAPH`;
 /// * a grouping key every row of the grouped pattern binds;
-/// * an aggregate's output when [`aggregate_certainly_binds`] says every group row
+/// * an aggregate's output when [`aggregate_certainly_binds_admitted`] says every group row
 ///   holds one save a row whose aggregate failed on present values — `COUNT`, `SUM`,
 ///   `AVG`, `GROUP_CONCAT` and `FOLD` always, `SAMPLE`/`MIN`/`MAX` and a custom
 ///   aggregate under an explicit `GROUP BY` of arguments reading only what every row
@@ -1968,7 +2469,7 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 /// computed from is certainly present, and a group whose aggregate failed on those
 /// values — a `MAX(STR(?x))` whose every `?x` is a blank node, a `SUM` over a string —
 /// is a row refused (or, for a relation that also serves the free mode, invoked free)
-/// exactly as a row whose `BIND` erred. [`aggregate_certainly_binds`] states which
+/// exactly as a row whose `BIND` erred. [`aggregate_certainly_binds_admitted`] states which
 /// absences of input the text itself fixes.
 ///
 /// A `BIND` that reads a variable its inner pattern does NOT certainly bind —
@@ -1984,8 +2485,27 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
 /// Erring on the narrow side is otherwise harmless: at worst a feasible order is
 /// missed and the query is refused at prepare time with a message that names exactly
 /// what could not be bound.
+#[cfg(test)]
 pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashSet<Variable>) {
     collect_certainly_bound_in(pattern, &DetHashSet::default(), out);
+}
+
+/// The same certainty law with every engine-created owner admitted before growth.
+/// The returned immutable schema keeps its original payload admission alive.
+pub(crate) fn collect_certainly_bound_admitted(
+    pattern: &GraphPattern,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    collect_certainly_bound_in_admitted(pattern, &VarSchema::default(), workspace)
+}
+
+/// Contextual certainty, without adding the caller's context to the result.
+pub(crate) fn collect_certainly_bound_in_admitted(
+    pattern: &GraphPattern,
+    context: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    collect_bound_admitted(pattern, context, None, workspace)
 }
 
 /// [`collect_certainly_bound`] for a pattern evaluated with `context` already bound:
@@ -2004,6 +2524,7 @@ pub(crate) fn collect_certainly_bound(pattern: &GraphPattern, out: &mut DetHashS
 /// pattern of a sub-`SELECT` for the variables it projects — a variable it does not
 /// project is a different variable inside it. A nested `LATERAL`'s right operand sees
 /// `context` and its own left operand's certain bindings.
+#[cfg(test)]
 pub(crate) fn collect_certainly_bound_in(
     pattern: &GraphPattern,
     context: &DetHashSet<Variable>,
@@ -2014,6 +2535,7 @@ pub(crate) fn collect_certainly_bound_in(
 
 /// What a prepared execution's run writes into a pattern the planner is judging, beyond
 /// the pattern's own bindings. See [`Promise`].
+#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 struct Written<'a> {
     /// The parameters the one pre-binding rewrite writes into EVERY expression of the
@@ -2023,8 +2545,10 @@ struct Written<'a> {
     everywhere: Option<&'a DetHashSet<Variable>>,
 }
 
+#[cfg(test)]
 impl Written<'_> {
     /// Nothing is written: the pattern is judged by its own bindings and its context.
+    #[cfg(test)]
     const NOTHING: Self = Self { everywhere: None };
 
     /// Whether an expression reads `variable` as a value the run wrote in.
@@ -2041,12 +2565,34 @@ impl Written<'_> {
 /// context and the writes that reach it, and the root's is added to `out`. A `LATERAL`
 /// binds its left operand first, then its right operand under the context the left one
 /// widens.
+#[cfg(test)]
 fn collect_bound(
     pattern: &GraphPattern,
     context: &DetHashSet<Variable>,
     given_written: Written<'_>,
     out: &mut DetHashSet<Variable>,
 ) {
+    // These sets are caller-owned resident planner inputs and output. Bounded
+    // callers keep the VarSchema returned by collect_bound_admitted instead.
+    let workspace = WorkspaceCapability::default();
+    let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
+        .expect("resident certainty context");
+    let written = given_written.everywhere.map(|set| {
+        VarSchema::from_vars_admitted(set.iter().cloned(), &workspace)
+            .expect("resident certainty writes")
+    });
+    let bound = collect_bound_admitted(pattern, &context, written.as_ref(), &workspace)
+        .expect("resident certainly-bound allocation");
+    out.extend(bound.vars().iter().cloned());
+}
+
+/// Contextual certainty with optional promised bindings and retained schema owners.
+pub(crate) fn collect_bound_admitted(
+    pattern: &GraphPattern,
+    context: &VarSchema,
+    given_written: Option<&VarSchema>,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
     /// The context a node is evaluated under: the caller's, or one a `LATERAL` or a
     /// sub-`SELECT` built for its operand, held in the arena.
     #[derive(Clone, Copy)]
@@ -2061,23 +2607,23 @@ fn collect_bound(
     }
     // The original caller writes remain outside the worklist. A one-based arena
     // index uses its zero niche, preserving the former per-frame pointer width.
-    const _: () = assert!(size_of::<Writes>() == size_of::<Written<'_>>());
+    const _: () = assert!(size_of::<Writes>() == size_of::<Option<&VarSchema>>());
     impl Writes {
         fn set<'s>(
             self,
-            given: Written<'s>,
-            arena: &'s [DetHashSet<Variable>],
-        ) -> Option<&'s DetHashSet<Variable>> {
+            given: Option<&'s VarSchema>,
+            arena: &'s [VarSchema],
+        ) -> Option<&'s VarSchema> {
             match self {
-                Self::Given => given.everywhere,
+                Self::Given => given,
                 Self::Owned(index) => Some(&arena[index.get() - 1]),
             }
         }
         fn writes(
             self,
             variable: &Variable,
-            given: Written<'_>,
-            arena: &[DetHashSet<Variable>],
+            given: Option<&VarSchema>,
+            arena: &[VarSchema],
         ) -> bool {
             self.set(given, arena)
                 .is_some_and(|set| set.contains(variable))
@@ -2101,52 +2647,53 @@ fn collect_bound(
         ),
         /// A `LATERAL` whose right operand is bound too: its set is the union of both,
         /// the left operand's carried here; the arena is cut back to `mark`.
-        LateralRight(DetHashSet<Variable>, usize),
+        LateralRight(VarSchema, usize),
     }
     /// The set `context` names, read from `arena` when a node built it.
     fn resolve<'c>(
         context: Context,
-        given: &'c DetHashSet<Variable>,
-        arena: &'c [DetHashSet<Variable>],
-    ) -> &'c DetHashSet<Variable> {
+        given: &'c VarSchema,
+        arena: &'c [VarSchema],
+    ) -> &'c VarSchema {
         match context {
             Context::Given => given,
             Context::Owned(index) => &arena[index],
         }
     }
-    let mut arena: Vec<DetHashSet<Variable>> = Vec::new();
-    let mut values: Vec<DetHashSet<Variable>> = Vec::new();
-    let mut steps = vec![Step::Enter(pattern, Context::Given, Writes::Given)];
+    let mut arena = AdmittedVec::<VarSchema>::new(workspace);
+    let mut values = AdmittedVec::<VarSchema>::new(workspace);
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(Step::Enter(pattern, Context::Given, Writes::Given))?;
     while let Some(step) = steps.pop() {
         match step {
             Step::Enter(node, ctx, written) => {
                 let mark = arena.len();
                 match node {
                     GraphPattern::Bgp { patterns } => {
-                        let mut bound = DetHashSet::default();
+                        let mut bound = SchemaBuilder::new(workspace);
                         for triple in patterns {
-                            collect_triple_vars(triple, &mut bound);
+                            collect_triple_vars_admitted(triple, &mut bound, workspace)?;
                         }
-                        values.push(bound);
+                        values.push(bound.finish()?)?;
                     }
                     GraphPattern::Path {
                         subject,
                         path: _,
                         object,
                     } => {
-                        let mut bound = DetHashSet::default();
-                        collect_term_vars(subject, &mut bound);
-                        collect_term_vars(object, &mut bound);
-                        values.push(bound);
+                        let mut bound = SchemaBuilder::new(workspace);
+                        collect_term_vars_admitted(subject, &mut bound, workspace)?;
+                        collect_term_vars_admitted(object, &mut bound, workspace)?;
+                        values.push(bound.finish()?)?;
                     }
                     // Every flattened argument position of a call receives a value on
                     // every row it emits, so its variables are certainly bound by it.
                     GraphPattern::PropertyFunction(call) => {
-                        let mut bound = DetHashSet::default();
+                        let mut bound = SchemaBuilder::new(workspace);
                         for term in call.subject_args.iter().chain(&call.object_args) {
-                            collect_term_vars(term, &mut bound);
+                            collect_term_vars_admitted(term, &mut bound, workspace)?;
                         }
-                        values.push(bound);
+                        values.push(bound.finish()?)?;
                     }
                     // A `VALUES` column binds its variable in every row exactly when no
                     // row holds `UNDEF` there. An empty table produces no row at all, so
@@ -2156,26 +2703,28 @@ fn collect_bound(
                         variables,
                         bindings,
                     } => {
-                        let bound = variables
-                            .iter()
-                            .enumerate()
-                            .filter(|(column, _)| {
-                                bindings
-                                    .iter()
-                                    .all(|row| row.get(*column).is_some_and(Option::is_some))
-                            })
-                            .map(|(_, variable)| variable.clone())
-                            .collect();
-                        values.push(bound);
+                        let bound = VarSchema::from_vars_admitted(
+                            variables
+                                .iter()
+                                .enumerate()
+                                .filter(|(column, _)| {
+                                    bindings
+                                        .iter()
+                                        .all(|row| row.get(*column).is_some_and(Option::is_some))
+                                })
+                                .map(|(_, variable)| variable.clone()),
+                            workspace,
+                        )?;
+                        values.push(bound)?;
                     }
                     // A remote endpoint may omit a column, so it promises nothing.
                     GraphPattern::Service { .. } => {
-                        values.push(DetHashSet::default());
+                        values.push(VarSchema::default())?;
                     }
                     GraphPattern::Join { left, right } => {
-                        steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(right, ctx, written));
-                        steps.push(Step::Enter(left, ctx, written));
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(right, ctx, written))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
                     }
                     GraphPattern::Apply {
                         left,
@@ -2183,28 +2732,28 @@ fn collect_bound(
                         policy,
                     } => {
                         if policy.optional.is_some() {
-                            steps.push(Step::Exit(node, ctx, written, mark));
+                            steps.push(Step::Exit(node, ctx, written, mark))?;
                         } else {
-                            steps.push(Step::ApplyLeft(right, policy, ctx, written));
+                            steps.push(Step::ApplyLeft(right, policy, ctx, written))?;
                         }
-                        steps.push(Step::Enter(left, ctx, written));
+                        steps.push(Step::Enter(left, ctx, written))?;
                     }
                     // The right operand is evaluated once per left row with that row in
                     // hand, so it sees the left operand's certain bindings as well as the
                     // enclosing context's: the left operand is bound first.
                     GraphPattern::Lateral { left, right } => {
-                        steps.push(Step::LateralLeft(right, ctx, written));
-                        steps.push(Step::Enter(left, ctx, written));
+                        steps.push(Step::LateralLeft(right, ctx, written))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
                     }
                     // The right side may contribute nothing to a row.
                     GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. } => {
-                        steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(left, ctx, written));
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(left, ctx, written))?;
                     }
                     GraphPattern::Union { arms } => {
-                        steps.push(Step::Exit(node, ctx, written, mark));
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
                         for arm in arms.iter().rev() {
-                            steps.push(Step::Enter(arm, ctx, written));
+                            steps.push(Step::Enter(arm, ctx, written))?;
                         }
                     }
                     // The solution-modifier wrappers the seed descends through keep
@@ -2217,75 +2766,91 @@ fn collect_bound(
                     | GraphPattern::Unfold { inner, .. }
                     | GraphPattern::Extend { inner, .. }
                     | GraphPattern::Group { inner, .. } => {
-                        steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(inner, ctx, written));
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, ctx, written))?;
                     }
                     GraphPattern::Graph { inner, .. } => {
-                        steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(inner, ctx, written));
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, ctx, written))?;
                     }
                     // The context reaches a sub-`SELECT`'s inner pattern only through the
                     // variables the projection names; what the SHACL pre-binding rewrite
                     // writes is written past the projection too.
                     GraphPattern::Project { inner, variables } => {
-                        let narrowed = narrowed_to(resolve(ctx, context, &arena), variables);
-                        arena.push(narrowed);
-                        steps.push(Step::Exit(node, ctx, written, mark));
-                        steps.push(Step::Enter(inner, Context::Owned(mark), written));
+                        let narrowed = narrowed_to_admitted(
+                            resolve(ctx, context, &arena),
+                            variables,
+                            workspace,
+                        )?;
+                        arena.push(narrowed)?;
+                        steps.push(Step::Exit(node, ctx, written, mark))?;
+                        steps.push(Step::Enter(inner, Context::Owned(mark), written))?;
                     }
                 }
             }
             Step::ApplyLeft(right, policy, ctx, written) => {
                 let left_bound = values.pop().expect("the driver is bound first");
                 let outer = resolve(ctx, context, &arena);
-                let mut right_context = outer.clone();
-                let mut supplied = written
-                    .set(given_written, &arena)
-                    .cloned()
-                    .unwrap_or_default();
-                for (input, _) in &policy.inputs {
-                    right_context.remove(input);
-                    supplied.remove(input);
+                let shadowed = VarSchema::from_vars_admitted(
+                    policy.inputs.iter().map(|(input, _)| input.clone()),
+                    workspace,
+                )?;
+                let mut right_context = SchemaBuilder::new(workspace);
+                for variable in outer
+                    .vars()
+                    .iter()
+                    .filter(|variable| !shadowed.contains(variable))
+                {
+                    right_context.push(variable.clone())?;
+                }
+                let written_set = written.set(given_written, &arena);
+                let mut supplied = SchemaBuilder::new(workspace);
+                for variable in written_set
+                    .into_iter()
+                    .flat_map(|set| set.vars().iter())
+                    .filter(|variable| !shadowed.contains(variable))
+                {
+                    supplied.push(variable.clone())?;
                 }
                 for (input, driver) in &policy.inputs {
                     if left_bound.contains(driver)
                         || outer.contains(driver)
                         || written.writes(driver, given_written, &arena)
                     {
-                        right_context.insert(input.clone());
-                        supplied.insert(input.clone());
+                        right_context.push(input.clone())?;
+                        supplied.push(input.clone())?;
                     }
                 }
                 let mark = arena.len();
-                arena.push(right_context);
-                arena.push(supplied);
-                steps.push(Step::LateralRight(left_bound, mark));
+                arena.push(right_context.finish()?)?;
+                arena.push(supplied.finish()?)?;
+                steps.push(Step::LateralRight(left_bound, mark))?;
                 steps.push(Step::Enter(
                     right,
                     Context::Owned(mark),
                     Writes::Owned(
                         std::num::NonZeroUsize::new(
                             mark.checked_add(2)
-                                .expect("an allocated arena index is representable"),
+                                .ok_or(EvalError::WorkspaceBoundOverflow)?,
                         )
                         .expect("one-based arena index"),
                     ),
-                ));
+                ))?;
             }
             Step::LateralLeft(right, ctx, written) => {
                 let left_bound = values.pop().expect("the left operand is bound first");
-                let mut right_context = resolve(ctx, context, &arena).clone();
-                right_context.extend(left_bound.iter().cloned());
+                let right_context =
+                    resolve(ctx, context, &arena).union_admitted(&left_bound, workspace)?;
                 let mark = arena.len();
-                arena.push(right_context);
-                steps.push(Step::LateralRight(left_bound, mark));
-                steps.push(Step::Enter(right, Context::Owned(mark), written));
+                arena.push(right_context)?;
+                steps.push(Step::LateralRight(left_bound, mark))?;
+                steps.push(Step::Enter(right, Context::Owned(mark), written))?;
             }
             Step::LateralRight(left_bound, mark) => {
                 let mut bound = values.pop().expect("the right operand is bound second");
-                bound.extend(left_bound);
+                bound = bound.union_admitted(&left_bound, workspace)?;
                 arena.truncate(mark);
-                values.push(bound);
+                values.push(bound)?;
             }
             Step::Exit(node, ctx, written, mark) => {
                 let bound = match node {
@@ -2295,14 +2860,14 @@ fn collect_bound(
                         } else {
                             let right = values.pop().expect("the operand is bound");
                             let mut left = values.pop().expect("the driver is bound");
-                            left.extend(right);
+                            left = left.union_admitted(&right, workspace)?;
                             left
                         }
                     }
                     GraphPattern::Join { .. } => {
                         let right = values.pop().expect("the right operand is bound");
                         let mut bound = values.pop().expect("the left operand is bound");
-                        bound.extend(right);
+                        bound = bound.union_admitted(&right, workspace)?;
                         bound
                     }
                     GraphPattern::LeftJoin { .. } | GraphPattern::Minus { .. } => {
@@ -2310,12 +2875,16 @@ fn collect_bound(
                     }
                     // Only what EVERY arm binds is bound in every row.
                     GraphPattern::Union { arms } => {
-                        let at = values.len() - arms.len();
-                        let mut arms_bound = values.drain(at..);
-                        let first = arms_bound.next().unwrap_or_default();
-                        arms_bound.fold(first, |common, bound| {
-                            common.intersection(&bound).cloned().collect()
-                        })
+                        let at = values
+                            .len()
+                            .checked_sub(arms.len())
+                            .expect("each UNION arm produced its certainty value");
+                        let mut arms_bound = values.drain_from(at);
+                        let mut common = arms_bound.next().unwrap_or_default();
+                        for bound in arms_bound {
+                            common = intersection_admitted(&common, &bound, workspace)?;
+                        }
+                        common
                     }
                     // A `FILTER` passes only rows its condition is true on, and every
                     // variable the condition requires bound for that is therefore bound
@@ -2327,14 +2896,17 @@ fn collect_bound(
                     // nothing, the narrow answer.
                     GraphPattern::Filter { expr, .. } => {
                         let mut bound = values.pop().expect("the inner pattern is bound");
-                        bound.extend(
-                            requires(expr, Outcome::Truth)
-                                .unwrap_or_default()
-                                .into_iter()
-                                .filter(|variable| {
-                                    !written.writes(variable, given_written, &arena)
-                                }),
-                        );
+                        let required =
+                            requires_admitted(expr, Outcome::Truth, workspace)?.unwrap_or_default();
+                        let constrained = VarSchema::from_vars_admitted(
+                            required
+                                .vars()
+                                .iter()
+                                .filter(|variable| !written.writes(variable, given_written, &arena))
+                                .cloned(),
+                            workspace,
+                        )?;
+                        bound = bound.union_admitted(&constrained, workspace)?;
                         bound
                     }
                     // `UNFOLD`s own targets are NOT certainly bound: a SEP-0009 `null`
@@ -2360,19 +2932,23 @@ fn collect_bound(
                     } => {
                         let mut bound = values.pop().expect("the inner pattern is bound");
                         let context = resolve(ctx, context, &arena);
-                        if expression_reads_only_bound(expression, &|read| {
-                            bound.contains(read)
-                                || context.contains(read)
-                                || written.writes(read, given_written, &arena)
-                        }) {
-                            bound.insert(variable.clone());
+                        if expression_reads_only_bound_admitted(
+                            expression,
+                            &|read| {
+                                bound.contains(read)
+                                    || context.contains(read)
+                                    || written.writes(read, given_written, &arena)
+                            },
+                            workspace,
+                        )? {
+                            bound.push_admitted(variable.clone(), workspace)?;
                         }
                         bound
                     }
                     GraphPattern::Graph { name, .. } => {
                         let mut bound = values.pop().expect("the inner pattern is bound");
                         if let NamedNodePattern::Variable(variable) = name {
-                            bound.insert(variable.clone());
+                            bound.push_admitted(variable.clone(), workspace)?;
                         }
                         bound
                     }
@@ -2380,15 +2956,17 @@ fn collect_bound(
                     // pattern bound it certainly.
                     GraphPattern::Project { variables, .. } => {
                         let inner_bound = values.pop().expect("the inner pattern is bound");
-                        variables
-                            .iter()
-                            .filter(|variable| inner_bound.contains(*variable))
-                            .cloned()
-                            .collect()
+                        VarSchema::from_vars_admitted(
+                            variables
+                                .iter()
+                                .filter(|variable| inner_bound.contains(variable))
+                                .cloned(),
+                            workspace,
+                        )?
                     }
                     // A grouping key is bound in a group's row when every row of the
                     // group binds it; an aggregate's output by
-                    // [`aggregate_certainly_binds`].
+                    // [`aggregate_certainly_binds_admitted`].
                     GraphPattern::Group {
                         variables,
                         aggregates,
@@ -2398,20 +2976,24 @@ fn collect_bound(
                         let context = resolve(ctx, context, &arena);
                         let row_binds =
                             |read: &Variable| inner_bound.contains(read) || context.contains(read);
-                        let mut bound: DetHashSet<Variable> = variables
-                            .iter()
-                            .filter(|key| row_binds(key))
-                            .cloned()
-                            .collect();
+                        let mut bound = SchemaBuilder::new(workspace);
+                        for variable in variables.iter().filter(|key| row_binds(key)) {
+                            bound.push(variable.clone())?;
+                        }
                         let grouped = !variables.is_empty();
                         for (variable, aggregate) in aggregates {
-                            if aggregate_certainly_binds(aggregate, grouped, &|read| {
-                                row_binds(read) || written.writes(read, given_written, &arena)
-                            }) {
-                                bound.insert(variable.clone());
+                            if aggregate_certainly_binds_admitted(
+                                aggregate,
+                                grouped,
+                                &|read| {
+                                    row_binds(read) || written.writes(read, given_written, &arena)
+                                },
+                                workspace,
+                            )? {
+                                bound.push(variable.clone())?;
                             }
                         }
-                        bound
+                        bound.finish()?
                     }
                     GraphPattern::Bgp { .. }
                     | GraphPattern::Path { .. }
@@ -2426,11 +3008,11 @@ fn collect_bound(
                     }
                 };
                 arena.truncate(mark);
-                values.push(bound);
+                values.push(bound)?;
             }
         }
     }
-    out.extend(values.pop().expect("the root's set is computed last"));
+    Ok(values.pop().expect("the root's set is computed last"))
 }
 
 /// Whether an aggregate's output is bound in every row its `GROUP BY` produces, save
@@ -2472,7 +3054,7 @@ fn collect_bound(
 ///   the first three always do, and a host's aggregate may. They count only under an
 ///   explicit `GROUP BY`, whose every group holds at least one row, and only over
 ///   arguments that read nothing but what every row binds (or constants —
-///   [`expression_reads_only_bound`], the test a `BIND` expression passes). Every row
+///   [`expression_reads_only_bound_admitted`], the test a `BIND` expression passes). Every row
 ///   of a group then hands the aggregate a value unless its argument errored on
 ///   present values — `STR(?x)` on a blank node, `IRI(STR(?x))` on a string that is
 ///   not an IRI — and the aggregate is unbound only if every row's argument errored,
@@ -2482,26 +3064,31 @@ fn collect_bound(
 ///   an `OPTIONAL`'s `?w` does not, as `BIND(?w AS ?y)` does not. WITHOUT a
 ///   `GROUP BY` the implicit group may hold no row, where these answer unbound for
 ///   want of any input: the same structural absence, so none of them counts there.
-fn aggregate_certainly_binds(
+fn aggregate_certainly_binds_admitted(
     aggregate: &AggregateExpression,
     grouped: bool,
     row_binds: &dyn Fn(&Variable) -> bool,
-) -> bool {
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
     match aggregate.function() {
         AggregateFunction::Count
         | AggregateFunction::Sum
         | AggregateFunction::Avg
         | AggregateFunction::GroupConcat
-        | AggregateFunction::Fold => true,
+        | AggregateFunction::Fold => Ok(true),
         AggregateFunction::Sample
         | AggregateFunction::Min
         | AggregateFunction::Max
         | AggregateFunction::Custom(_) => {
-            grouped
-                && aggregate
-                    .args()
-                    .iter()
-                    .all(|arg| expression_reads_only_bound(arg, row_binds))
+            if !grouped {
+                return Ok(false);
+            }
+            for arg in aggregate.args() {
+                if !expression_reads_only_bound_admitted(arg, row_binds, workspace)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
         }
     }
 }
@@ -2509,12 +3096,40 @@ fn aggregate_certainly_binds(
 /// The part of `context` a sub-`SELECT` projecting `variables` lets into its inner
 /// pattern: an enclosing binding is substituted into it only for a variable it
 /// projects.
+#[cfg(test)]
 fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHashSet<Variable> {
-    context
+    let workspace = WorkspaceCapability::default();
+    let context = VarSchema::from_vars_admitted(context.iter().cloned(), &workspace)
+        .expect("resident projected certainty context");
+    narrowed_to_admitted(&context, variables, &workspace)
+        .expect("resident projected certainty allocation")
+        .vars()
         .iter()
-        .filter(|variable| variables.contains(*variable))
         .cloned()
         .collect()
+}
+
+fn narrowed_to_admitted(
+    context: &VarSchema,
+    variables: &[Variable],
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    VarSchema::from_vars_admitted(
+        context
+            .vars()
+            .iter()
+            .filter(|variable| variables.contains(variable))
+            .cloned(),
+        workspace,
+    )
+}
+
+fn intersection_admitted(
+    left: &VarSchema,
+    right: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    narrowed_to_admitted(left, right.vars(), workspace)
 }
 
 /// Whether `expr` can be left without a value only by the data it reads — never
@@ -2536,7 +3151,17 @@ fn narrowed_to(context: &DetHashSet<Variable>, variables: &[Variable]) -> DetHas
 ///
 /// A post-order walk over a work list, so an expression of any depth needs no more
 /// machine stack: every operand answers before the operator over it does.
+#[cfg(test)]
 fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -> bool) -> bool {
+    expression_reads_only_bound_admitted(expr, is_bound, &WorkspaceCapability::default())
+        .expect("resident expression certainty allocation")
+}
+
+fn expression_reads_only_bound_admitted(
+    expr: &Expression,
+    is_bound: &dyn Fn(&Variable) -> bool,
+    workspace: &WorkspaceCapability,
+) -> Result<bool, EvalError> {
     /// One step of the walk.
     enum Step<'e> {
         /// Enter an expression: a leaf answers at once, an operator pushes its operands.
@@ -2544,28 +3169,34 @@ fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -
         /// Combine an operator's answer from its operands', `count` of them.
         Exit(&'e Expression, usize),
     }
-    let mut steps = vec![Step::Enter(expr)];
-    let mut values: Vec<bool> = Vec::new();
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(Step::Enter(expr))?;
+    let mut values = AdmittedVec::<bool>::new(workspace);
     while let Some(step) = steps.pop() {
         match step {
             Step::Enter(expr) => match expr {
                 Expression::NamedNode(_)
                 | Expression::Literal(_)
                 | Expression::Bound(_)
-                | Expression::Exists(_) => values.push(true),
-                Expression::Variable(variable) => values.push(is_bound(variable)),
+                | Expression::Exists(_) => values.push(true)?,
+                Expression::Variable(variable) => values.push(is_bound(variable))?,
                 Expression::Or(operands) | Expression::And(operands) => {
-                    steps.push(Step::Exit(expr, operands.len()));
+                    steps.push(Step::Exit(expr, operands.len()))?;
                     for operand in operands.iter().rev() {
-                        steps.push(Step::Enter(operand));
+                        steps.push(Step::Enter(operand))?;
                     }
                 }
                 Expression::Arithmetic(first, rest) => {
-                    steps.push(Step::Exit(expr, 1 + rest.len()));
+                    steps.push(Step::Exit(
+                        expr,
+                        rest.len()
+                            .checked_add(1)
+                            .ok_or(EvalError::WorkspaceBoundOverflow)?,
+                    ))?;
                     for (_, operand) in rest.iter().rev() {
-                        steps.push(Step::Enter(operand));
+                        steps.push(Step::Enter(operand))?;
                     }
-                    steps.push(Step::Enter(first));
+                    steps.push(Step::Enter(first))?;
                 }
                 Expression::Equal(a, b)
                 | Expression::SameTerm(a, b)
@@ -2573,38 +3204,47 @@ fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -
                 | Expression::GreaterOrEqual(a, b)
                 | Expression::Less(a, b)
                 | Expression::LessOrEqual(a, b) => {
-                    steps.push(Step::Exit(expr, 2));
-                    steps.push(Step::Enter(b));
-                    steps.push(Step::Enter(a));
+                    steps.push(Step::Exit(expr, 2))?;
+                    steps.push(Step::Enter(b))?;
+                    steps.push(Step::Enter(a))?;
                 }
                 Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-                    steps.push(Step::Exit(expr, 1));
-                    steps.push(Step::Enter(a));
+                    steps.push(Step::Exit(expr, 1))?;
+                    steps.push(Step::Enter(a))?;
                 }
                 Expression::If(condition, then, otherwise) => {
-                    steps.push(Step::Exit(expr, 3));
-                    steps.push(Step::Enter(otherwise));
-                    steps.push(Step::Enter(then));
-                    steps.push(Step::Enter(condition));
+                    steps.push(Step::Exit(expr, 3))?;
+                    steps.push(Step::Enter(otherwise))?;
+                    steps.push(Step::Enter(then))?;
+                    steps.push(Step::Enter(condition))?;
                 }
                 Expression::In(needle, haystack) => {
-                    steps.push(Step::Exit(expr, 1 + haystack.len()));
+                    steps.push(Step::Exit(
+                        expr,
+                        haystack
+                            .len()
+                            .checked_add(1)
+                            .ok_or(EvalError::WorkspaceBoundOverflow)?,
+                    ))?;
                     for item in haystack.iter().rev() {
-                        steps.push(Step::Enter(item));
+                        steps.push(Step::Enter(item))?;
                     }
-                    steps.push(Step::Enter(needle));
+                    steps.push(Step::Enter(needle))?;
                 }
                 Expression::Coalesce(items) | Expression::FunctionCall(_, items) => {
-                    steps.push(Step::Exit(expr, items.len()));
+                    steps.push(Step::Exit(expr, items.len()))?;
                     for item in items.iter().rev() {
-                        steps.push(Step::Enter(item));
+                        steps.push(Step::Enter(item))?;
                     }
                 }
             },
             Step::Exit(expr, count) => {
-                let at = values.len() - count;
+                let at = values
+                    .len()
+                    .checked_sub(count)
+                    .expect("every operand answered");
                 let answer = {
-                    let mut operands = values.drain(at..);
+                    let mut operands = values.drain_from(at);
                     // `COALESCE` qualifies when any argument does; every other operator
                     // when every operand does.
                     if matches!(expr, Expression::Coalesce(_)) {
@@ -2613,13 +3253,13 @@ fn expression_reads_only_bound(expr: &Expression, is_bound: &dyn Fn(&Variable) -
                         operands.all(|reads| reads)
                     }
                 };
-                values.push(answer);
+                values.push(answer)?;
             }
         }
     }
-    values
+    Ok(values
         .pop()
-        .expect("the root's answer is the last one computed")
+        .expect("the root's answer is the last one computed"))
 }
 
 /// Whether `function` is a type test: total over terms, answering a boolean.
@@ -2759,22 +3399,26 @@ pub(crate) const fn strict_in_argument(function: &Function, position: usize) -> 
 /// `None` is what a constant that is never true (`false`, `0`, an IRI, which has no
 /// effective boolean value) answers for truth, and anything that reaches the outcome
 /// only through it inherits it: it absorbs a conjunction of requirements
-/// ([`all_of`]) and is the identity of an alternative between them ([`one_of`]). So
+/// ([`all_of_admitted`]) and is the identity of an alternative between them ([`one_of_admitted`]). So
 /// `IF(BOUND(?v), ?v = ?v, false)` is true only through its first branch, and needs
 /// `?v`.
+#[cfg(test)]
 type Requires = Option<DetHashSet<Variable>>;
 
 /// Needs nothing.
+#[cfg(test)]
 fn needs_nothing() -> Requires {
     Some(DetHashSet::default())
 }
 
 /// Needs `variable`.
+#[cfg(test)]
 fn needs(variable: &Variable) -> Requires {
     Some(std::iter::once(variable.clone()).collect())
 }
 
 /// Both requirements hold: the union, and never if either is never.
+#[cfg(test)]
 fn all_of(left: Requires, right: Requires) -> Requires {
     let (mut left, right) = (left?, right?);
     left.extend(right);
@@ -2783,6 +3427,7 @@ fn all_of(left: Requires, right: Requires) -> Requires {
 
 /// One of the requirements holds, and which is not known: the intersection, over the
 /// ones that can hold at all.
+#[cfg(test)]
 fn one_of(left: Requires, right: Requires) -> Requires {
     match (left, right) {
         (None, other) | (other, None) => other,
@@ -2793,7 +3438,42 @@ fn one_of(left: Requires, right: Requires) -> Requires {
     }
 }
 
-/// The outcome an expression is asked what it must have bound for — see [`Requires`].
+/// A reachable requirement owns its original schema; None means impossible.
+type AdmittedRequires = Option<VarSchema>;
+
+fn needs_admitted(
+    variable: &Variable,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    Ok(Some(VarSchema::from_vars_admitted(
+        std::iter::once(variable.clone()),
+        workspace,
+    )?))
+}
+
+fn all_of_admitted(
+    left: AdmittedRequires,
+    right: AdmittedRequires,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    let (Some(left), Some(right)) = (left, right) else {
+        return Ok(None);
+    };
+    Ok(Some(left.union_admitted(&right, workspace)?))
+}
+
+fn one_of_admitted(
+    left: AdmittedRequires,
+    right: AdmittedRequires,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    match (left, right) {
+        (None, other) | (other, None) => Ok(other),
+        (Some(left), Some(right)) => Ok(Some(intersection_admitted(&left, &right, workspace)?)),
+    }
+}
+
+/// The outcome an expression is asked what it must have bound for — see [`AdmittedRequires`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Outcome {
     /// TRUE — which a `FILTER` over the expression therefore binds in every row it
@@ -2855,9 +3535,9 @@ enum Outcome {
 /// How an operator's requirement is combined from its operands'.
 #[derive(Clone, Copy)]
 enum Combine {
-    /// Every operand's requirement holds: [`all_of`], folded from nothing needed.
+    /// Every operand's requirement holds: [`all_of_admitted`], folded from nothing needed.
     All,
-    /// One operand's requirement holds, and which is not known: [`one_of`], folded from
+    /// One operand's requirement holds, and which is not known: [`one_of_admitted`], folded from
     /// never.
     One,
     /// [`Self::One`] over the operands there are, or nothing needed when there are none —
@@ -2869,7 +3549,7 @@ enum Combine {
     Conditional,
 }
 
-/// One step of [`requires`]'s walk.
+/// One step of [`requires_admitted`]'s walk.
 enum RequirementStep<'e> {
     /// Ask `expr` what it needs to reach the outcome.
     Enter(&'e Expression, Outcome),
@@ -2878,28 +3558,74 @@ enum RequirementStep<'e> {
 }
 
 /// The variables `expr` must have bound to reach `outcome`, or `None` when it never does
-/// — see [`Requires`], and the rules on each [`Outcome`].
+/// — see [`AdmittedRequires`], and the rules on each [`Outcome`].
 ///
 /// A post-order walk over a work list, so an expression of any depth needs no more
 /// machine stack: an operator asks each operand what it needs in the mode that operand
 /// is read in, and combines the answers as its rule says.
+#[cfg(test)]
 fn requires(expr: &Expression, outcome: Outcome) -> Requires {
-    let mut steps = vec![RequirementStep::Enter(expr, outcome)];
-    let mut values: Vec<Requires> = Vec::new();
+    requires_admitted(expr, outcome, &WorkspaceCapability::default())
+        .expect("resident expression requirement allocation")
+        .map(|bound| bound.vars().iter().cloned().collect())
+}
+
+fn requires_admitted(
+    expr: &Expression,
+    outcome: Outcome,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedRequires, EvalError> {
+    let mut steps = AdmittedVec::new(workspace);
+    steps.push(RequirementStep::Enter(expr, outcome))?;
+    let mut values = AdmittedVec::<AdmittedRequires>::new(workspace);
     while let Some(step) = steps.pop() {
         match step {
             RequirementStep::Enter(expr, outcome) => {
-                enter_requirement(expr, outcome, &mut steps, &mut values);
+                enter_requirement(expr, outcome, &mut steps, &mut values, workspace)?;
             }
             RequirementStep::Exit(combine, count) => {
-                let at = values.len() - count;
+                let at = values
+                    .len()
+                    .checked_sub(count)
+                    .expect("each requested outcome produced one requirement");
                 let combined = {
-                    let mut operands = values.drain(at..);
+                    let mut operands = values.drain_from(at);
                     match combine {
-                        Combine::All => operands.fold(needs_nothing(), all_of),
-                        Combine::One => operands.fold(None, one_of),
+                        Combine::All => {
+                            let mut required = SchemaBuilder::new(workspace);
+                            let mut possible = true;
+                            for operand in operands {
+                                match operand {
+                                    Some(bound) if possible => {
+                                        for variable in bound.vars() {
+                                            required.push(variable.clone())?;
+                                        }
+                                    }
+                                    None => possible = false,
+                                    Some(_) => {}
+                                }
+                            }
+                            if possible {
+                                Some(required.finish()?)
+                            } else {
+                                None
+                            }
+                        }
+                        Combine::One => {
+                            let mut combined = None;
+                            for operand in operands {
+                                combined = one_of_admitted(combined, operand, workspace)?;
+                            }
+                            combined
+                        }
                         Combine::OneOrNothing => {
-                            operands.reduce(one_of).unwrap_or_else(needs_nothing)
+                            let mut combined = operands
+                                .next()
+                                .unwrap_or_else(|| Some(VarSchema::default()));
+                            for operand in operands {
+                                combined = one_of_admitted(combined, operand, workspace)?;
+                            }
+                            combined
                         }
                         Combine::Conditional => {
                             let mut next = || {
@@ -2912,23 +3638,20 @@ fn requires(expr: &Expression, outcome: Outcome) -> Requires {
                             let then = next();
                             let condition_false = next();
                             let otherwise = next();
-                            all_of(
-                                condition_value,
-                                one_of(
-                                    all_of(condition_true, then),
-                                    all_of(condition_false, otherwise),
-                                ),
-                            )
+                            let then = all_of_admitted(condition_true, then, workspace)?;
+                            let otherwise = all_of_admitted(condition_false, otherwise, workspace)?;
+                            let branch = one_of_admitted(then, otherwise, workspace)?;
+                            all_of_admitted(condition_value, branch, workspace)?
                         }
                     }
                 };
-                values.push(combined);
+                values.push(combined)?;
             }
         }
     }
-    values
+    Ok(values
         .pop()
-        .expect("the root's requirement is the last one combined")
+        .expect("the root's requirement is the last one combined"))
 }
 
 /// Ask `expr` what it needs to reach `outcome`: a leaf's requirement is pushed onto
@@ -2937,19 +3660,22 @@ fn requires(expr: &Expression, outcome: Outcome) -> Requires {
 fn enter_requirement<'e>(
     expr: &'e Expression,
     outcome: Outcome,
-    steps: &mut Vec<RequirementStep<'e>>,
-    values: &mut Vec<Requires>,
-) {
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
+    values: &mut AdmittedVec<AdmittedRequires>,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
     let mut outcome = outcome;
     loop {
         match (outcome, expr) {
             (Outcome::Truth, Expression::Variable(variable) | Expression::Bound(variable)) => {
-                values.push(needs(variable));
+                values.push(needs_admitted(variable, workspace)?)?;
             }
-            (Outcome::Truth, Expression::Exists(_)) => values.push(needs_nothing()),
-            (Outcome::Truth, Expression::NamedNode(_)) => values.push(None),
-            (Outcome::Truth, Expression::Literal(literal)) => values
-                .push((crate::expr::constant_ebv(literal) == Some(true)).then(DetHashSet::default)),
+            (Outcome::Truth, Expression::Exists(_)) => values.push(Some(VarSchema::default()))?,
+            (Outcome::Truth, Expression::NamedNode(_)) => values.push(None)?,
+            (Outcome::Truth, Expression::Literal(literal)) => values.push(
+                (crate::expr::constant_ebv_admitted(literal, workspace)? == Some(true))
+                    .then(VarSchema::default),
+            )?,
             // A chain is its binary operator folded from the operator's identity, whose
             // requirement is the fold's: `true` (`&&`) needs nothing, `false` (`||`) is
             // never true.
@@ -2957,14 +3683,14 @@ fn enter_requirement<'e>(
                 steps,
                 Combine::All,
                 operands.iter().map(|operand| (operand, Outcome::Truth)),
-            ),
+            )?,
             (Outcome::Truth, Expression::Or(operands)) => push_operands(
                 steps,
                 Combine::One,
                 operands.iter().map(|operand| (operand, Outcome::Truth)),
-            ),
+            )?,
             (Outcome::Truth, Expression::Not(operand)) => {
-                steps.push(RequirementStep::Enter(operand, Outcome::Falsity));
+                steps.push(RequirementStep::Enter(operand, Outcome::Falsity))?;
             }
             (Outcome::Truth, Expression::FunctionCall(function, args))
                 if is_type_test(function) =>
@@ -2973,47 +3699,50 @@ fn enter_requirement<'e>(
                     steps,
                     Combine::All,
                     args.iter().map(|arg| (arg, Outcome::Value)),
-                );
+                )?;
             }
             (Outcome::Truth, Expression::Coalesce(items)) => push_operands(
                 steps,
                 Combine::One,
                 items.iter().map(|item| (item, Outcome::Truth)),
-            ),
-            (Outcome::Falsity, Expression::Variable(variable)) => values.push(needs(variable)),
-            (Outcome::Falsity, Expression::Bound(_) | Expression::Exists(_)) => {
-                values.push(needs_nothing());
+            )?,
+            (Outcome::Falsity, Expression::Variable(variable)) => {
+                values.push(needs_admitted(variable, workspace)?)?;
             }
-            (Outcome::Falsity, Expression::NamedNode(_)) => values.push(None),
+            (Outcome::Falsity, Expression::Bound(_) | Expression::Exists(_)) => {
+                values.push(Some(VarSchema::default()))?;
+            }
+            (Outcome::Falsity, Expression::NamedNode(_)) => values.push(None)?,
             (Outcome::Falsity, Expression::Literal(literal)) => values.push(
-                (crate::expr::constant_ebv(literal) == Some(false)).then(DetHashSet::default),
-            ),
+                (crate::expr::constant_ebv_admitted(literal, workspace)? == Some(false))
+                    .then(VarSchema::default),
+            )?,
             (Outcome::Falsity, Expression::FunctionCall(function, _)) if is_type_test(function) => {
-                values.push(needs_nothing());
+                values.push(Some(VarSchema::default()))?;
             }
             (Outcome::Falsity, Expression::Not(operand)) => {
-                steps.push(RequirementStep::Enter(operand, Outcome::Truth));
+                steps.push(RequirementStep::Enter(operand, Outcome::Truth))?;
             }
             (Outcome::Falsity, Expression::And(operands)) => push_operands(
                 steps,
                 Combine::One,
                 operands.iter().map(|operand| (operand, Outcome::Falsity)),
-            ),
+            )?,
             (Outcome::Falsity, Expression::Or(operands)) => push_operands(
                 steps,
                 Combine::All,
                 operands.iter().map(|operand| (operand, Outcome::Falsity)),
-            ),
+            )?,
             (Outcome::Falsity, Expression::Coalesce(items)) => push_operands(
                 steps,
                 Combine::One,
                 items.iter().map(|item| (item, Outcome::Falsity)),
-            ),
+            )?,
             (Outcome::Truth | Outcome::Falsity, Expression::If(condition, then, otherwise)) => {
-                push_conditional(steps, condition, then, otherwise, outcome);
+                push_conditional(steps, condition, then, otherwise, outcome)?;
             }
             (Outcome::Truth | Outcome::Falsity, Expression::In(needle, _)) => {
-                steps.push(RequirementStep::Enter(needle, Outcome::Value));
+                steps.push(RequirementStep::Enter(needle, Outcome::Value))?;
             }
             // Every other operator, comparison and function call reaches the outcome
             // only through a value, so it needs what it needs for one.
@@ -3033,14 +3762,16 @@ fn enter_requirement<'e>(
                 outcome = Outcome::Value;
                 continue;
             }
-            (Outcome::Value, Expression::Variable(variable)) => values.push(needs(variable)),
+            (Outcome::Value, Expression::Variable(variable)) => {
+                values.push(needs_admitted(variable, workspace)?)?;
+            }
             (
                 Outcome::Value,
                 Expression::NamedNode(_)
                 | Expression::Literal(_)
                 | Expression::Bound(_)
                 | Expression::Exists(_),
-            ) => values.push(needs_nothing()),
+            ) => values.push(Some(VarSchema::default()))?,
             (Outcome::Value, Expression::FunctionCall(function, args)) => push_operands(
                 steps,
                 Combine::All,
@@ -3048,7 +3779,7 @@ fn enter_requirement<'e>(
                     .enumerate()
                     .filter(|(position, _)| strict_in_argument(function, *position))
                     .map(|(_, arg)| (arg, Outcome::Value)),
-            ),
+            )?,
             // The pairwise `one_of`, folded; an empty chain is its identity constant,
             // which has a value for any row.
             (Outcome::Value, Expression::And(operands) | Expression::Or(operands)) => {
@@ -3056,7 +3787,7 @@ fn enter_requirement<'e>(
                     steps,
                     Combine::OneOrNothing,
                     operands.iter().map(|operand| (operand, Outcome::Value)),
-                );
+                )?;
             }
             (Outcome::Value, Expression::Arithmetic(first, rest)) => push_operands(
                 steps,
@@ -3064,7 +3795,7 @@ fn enter_requirement<'e>(
                 std::iter::once(&**first)
                     .chain(rest.iter().map(|(_, operand)| operand))
                     .map(|operand| (operand, Outcome::Value)),
-            ),
+            )?,
             (
                 Outcome::Value,
                 Expression::Equal(a, b)
@@ -3077,57 +3808,58 @@ fn enter_requirement<'e>(
                 steps,
                 Combine::All,
                 [(&**a, Outcome::Value), (&**b, Outcome::Value)].into_iter(),
-            ),
+            )?,
             (
                 Outcome::Value,
                 Expression::UnaryPlus(operand)
                 | Expression::UnaryMinus(operand)
                 | Expression::Not(operand),
-            ) => steps.push(RequirementStep::Enter(operand, Outcome::Value)),
+            ) => steps.push(RequirementStep::Enter(operand, Outcome::Value))?,
             (Outcome::Value, Expression::If(condition, then, otherwise)) => {
-                push_conditional(steps, condition, then, otherwise, Outcome::Value);
+                push_conditional(steps, condition, then, otherwise, Outcome::Value)?;
             }
             (Outcome::Value, Expression::Coalesce(items)) => push_operands(
                 steps,
                 Combine::One,
                 items.iter().map(|item| (item, Outcome::Value)),
-            ),
+            )?,
             (Outcome::Value, Expression::In(needle, _)) => {
-                steps.push(RequirementStep::Enter(needle, Outcome::Value));
+                steps.push(RequirementStep::Enter(needle, Outcome::Value))?;
             }
         }
-        return;
+        return Ok(());
     }
 }
 
 /// Push `operands` to be asked, in reading order, behind the step combining their
 /// requirements as `combine` says.
 fn push_operands<'e>(
-    steps: &mut Vec<RequirementStep<'e>>,
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
     combine: Combine,
     operands: impl Iterator<Item = (&'e Expression, Outcome)>,
-) {
+) -> Result<(), EvalError> {
     let exit = steps.len();
-    steps.push(RequirementStep::Exit(combine, 0));
+    steps.push(RequirementStep::Exit(combine, 0))?;
     for (operand, outcome) in operands {
-        steps.push(RequirementStep::Enter(operand, outcome));
+        steps.push(RequirementStep::Enter(operand, outcome))?;
     }
     let count = steps.len() - exit - 1;
-    steps[exit] = RequirementStep::Exit(combine, count);
+    steps.as_mut_slice()[exit] = RequirementStep::Exit(combine, count);
     // Pushed in reading order, so reversed to pop in it.
-    steps[exit + 1..].reverse();
+    steps.as_mut_slice()[exit + 1..].reverse();
+    Ok(())
 }
 
 /// Push an `IF`'s five operand requirements ([`Combine::Conditional`]): the condition's
 /// value, its truth, the first branch's `outcome`, the condition's falsity, and the
 /// second branch's `outcome`.
 fn push_conditional<'e>(
-    steps: &mut Vec<RequirementStep<'e>>,
+    steps: &mut AdmittedVec<RequirementStep<'e>>,
     condition: &'e Expression,
     then: &'e Expression,
     otherwise: &'e Expression,
     outcome: Outcome,
-) {
+) -> Result<(), EvalError> {
     push_operands(
         steps,
         Combine::Conditional,
@@ -3139,38 +3871,64 @@ fn push_conditional<'e>(
             (otherwise, outcome),
         ]
         .into_iter(),
-    );
+    )
 }
 
 /// Add a triple pattern's variables, its nested quoted triples walked over a work list.
-fn collect_triple_vars(triple: &TriplePattern, out: &mut DetHashSet<Variable>) {
-    let mut pending = vec![triple];
+fn collect_triple_vars_admitted(
+    triple: &TriplePattern,
+    out: &mut SchemaBuilder,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push(triple)?;
     while let Some(triple) = pending.pop() {
         for term in [&triple.subject, &triple.object] {
             match term {
                 TermPattern::Variable(variable) => {
-                    out.insert(variable.clone());
+                    out.push(variable.clone())?;
                 }
-                TermPattern::Triple(nested) => pending.push(nested),
+                TermPattern::Triple(nested) => pending.push(nested)?,
                 TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
                 }
             }
         }
         if let NamedNodePattern::Variable(variable) = &triple.predicate {
-            out.insert(variable.clone());
+            out.push(variable.clone())?;
         }
     }
+    Ok(())
 }
 
-/// Add a term position's variables, a quoted triple's through [`collect_triple_vars`].
-fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
+/// Add a term position's variables through the same admitted nested-triple walk.
+fn collect_term_vars_admitted(
+    term: &TermPattern,
+    out: &mut SchemaBuilder,
+    workspace: &WorkspaceCapability,
+) -> Result<(), EvalError> {
     match term {
         TermPattern::Variable(variable) => {
-            out.insert(variable.clone());
+            out.push(variable.clone())?;
         }
-        TermPattern::Triple(triple) => collect_triple_vars(triple, out),
+        TermPattern::Triple(triple) => collect_triple_vars_admitted(triple, out, workspace)?,
         TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
     }
+    Ok(())
+}
+
+#[cfg(test)]
+fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
+    let workspace = WorkspaceCapability::default();
+    let mut bound = SchemaBuilder::new(&workspace);
+    collect_term_vars_admitted(term, &mut bound, &workspace).expect("resident term variable walk");
+    out.extend(
+        bound
+            .finish()
+            .expect("resident term variable schema")
+            .vars()
+            .iter()
+            .cloned(),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -3236,14 +3994,30 @@ fn collect_term_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
 pub(crate) fn registry_fingerprint(
     relations: &PropertyFunctionRegistry,
 ) -> Result<String, EvalError> {
+    let capability = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&capability);
+    registry_fingerprint_with_memory(relations, &mut Memory::new(&mut frame))
+}
+
+/// Recompute the live declaration identity through its original physical account.
+pub(crate) fn registry_fingerprint_with_memory(
+    relations: &PropertyFunctionRegistry,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<String, EvalError> {
     if relations.is_empty() {
         return Ok(String::new());
     }
-    let mut out = String::new();
-    out.push_str(&relations.instance_id().stable_encoding().to_string());
-    out.push('\u{5}');
-    out.push_str(&content_fingerprint(relations)?.to_hex());
-    Ok(out)
+    let digest = content_fingerprint_with_memory(relations, memory)?;
+    memory
+        .format(&format_args!(
+            "{}\u{5}{digest}",
+            relations.instance_id().stable_encoding()
+        ))
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "relation fingerprint")
+        })
 }
 
 /// The domain separator every property-function content fingerprint opens with, so
@@ -3339,58 +4113,94 @@ const CONTENT_VERSION: u16 = 2;
 pub fn content_fingerprint(
     relations: &PropertyFunctionRegistry,
 ) -> Result<ContentDigest, EvalError> {
-    let mut bytes = Vec::new();
-    append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
-    append_framed_part(&mut bytes, "version", &CONTENT_VERSION.to_be_bytes());
-    for descriptor in relations.describe()? {
-        append_framed_part(&mut bytes, "iri", descriptor.iri.as_bytes());
-        append_framed_part(
+    let capability = WorkspaceCapability::resident();
+    let mut frame = LexicalFrame::new(&capability);
+    content_fingerprint_with_memory(relations, &mut Memory::new(&mut frame))
+}
+
+fn content_fingerprint_with_memory(
+    relations: &PropertyFunctionRegistry,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> Result<ContentDigest, EvalError> {
+    let capability = memory.admission_mut().workspace().clone();
+    let descriptors = relations.describe_admitted(&capability)?;
+    let result = (|| -> Result<ContentDigest, StorageError> {
+        let mut bytes = Vec::new();
+        append_framed_part_with_memory(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes(), memory)?;
+        append_framed_part_with_memory(
             &mut bytes,
-            "subject-arity",
-            &(descriptor.subject_arity as u64).to_be_bytes(),
-        );
-        append_framed_part(
-            &mut bytes,
-            "object-arity",
-            &(descriptor.object_arity as u64).to_be_bytes(),
-        );
-        append_framed_part(
-            &mut bytes,
-            "volatility",
-            descriptor.volatility.label().as_bytes(),
-        );
-        append_framed_part(
-            &mut bytes,
-            "mode-count",
-            &(descriptor.modes.len() as u64).to_be_bytes(),
-        );
-        for mode in &descriptor.modes {
-            append_framed_part(&mut bytes, "mode-code", mode.code.as_bytes());
-            append_framed_part(
+            "version",
+            &CONTENT_VERSION.to_be_bytes(),
+            memory,
+        )?;
+        for descriptor in descriptors.iter() {
+            append_framed_part_with_memory(&mut bytes, "iri", descriptor.iri.as_bytes(), memory)?;
+            append_framed_part_with_memory(
                 &mut bytes,
-                "mode-rows",
-                &mode.rows_per_invocation.to_be_bytes(),
-            );
-        }
-        // The ranked-retrieval declaration the host supplied at registration. A
-        // producer's participation in fusion is a declaration exactly as arity,
-        // volatility and modes are: it decides whether a request can draw ranked
-        // candidates from this IRI at all, and under which stratum, ordering and
-        // duplicate guarantee they arrive. A relation registered without one
-        // contributes the fixed `NOT_RANKED_CANONICAL` description rather than
-        // nothing, so a producer that does not fuse still occupies the field and
-        // cannot be confused with one whose declaration was simply not read.
-        append_framed_part(
-            &mut bytes,
-            "ranked",
-            match descriptor.ranked.as_ref() {
-                None => NOT_RANKED_CANONICAL.to_owned(),
-                Some(declaration) => declaration.canonical_description(),
+                "subject-arity",
+                &(descriptor.subject_arity as u64).to_be_bytes(),
+                memory,
+            )?;
+            append_framed_part_with_memory(
+                &mut bytes,
+                "object-arity",
+                &(descriptor.object_arity as u64).to_be_bytes(),
+                memory,
+            )?;
+            append_framed_part_with_memory(
+                &mut bytes,
+                "volatility",
+                descriptor.volatility.label().as_bytes(),
+                memory,
+            )?;
+            append_framed_part_with_memory(
+                &mut bytes,
+                "mode-count",
+                &(descriptor.modes.len() as u64).to_be_bytes(),
+                memory,
+            )?;
+            for mode in &descriptor.modes {
+                append_framed_part_with_memory(
+                    &mut bytes,
+                    "mode-code",
+                    mode.code.as_bytes(),
+                    memory,
+                )?;
+                append_framed_part_with_memory(
+                    &mut bytes,
+                    "mode-rows",
+                    &mode.rows_per_invocation.to_be_bytes(),
+                    memory,
+                )?;
             }
-            .as_bytes(),
-        );
-    }
-    Ok(ContentDigest::of(&bytes))
+            match descriptor.ranked.as_ref() {
+                None => append_framed_part_with_memory(
+                    &mut bytes,
+                    "ranked",
+                    NOT_RANKED_CANONICAL.as_bytes(),
+                    memory,
+                )?,
+                Some(declaration) => {
+                    let spelling = memory.format(&declaration.canonical_display())?;
+                    append_framed_part_with_memory(
+                        &mut bytes,
+                        "ranked",
+                        spelling.as_bytes(),
+                        memory,
+                    )?;
+                    memory.release_string(spelling)?;
+                }
+            }
+        }
+        let digest = ContentDigest::of(&bytes);
+        memory.release_vec(bytes)?;
+        Ok(digest)
+    })();
+    result.map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "relation fingerprint")
+    })
 }
 
 #[cfg(test)]
@@ -4467,7 +5277,7 @@ mod iterative_walk_tests {
         }
     }
 
-    /// Test-only recursive reference for `super::order_chain`.
+    /// Test-only recursive reference for `super::order_chain_native`.
     fn reference_order_chain(
         atoms: Vec<Atom<'_>>,
         relations: &PropertyFunctionRegistry,

@@ -378,7 +378,7 @@ fn retained_unit_order_preserves_the_structural_override_and_ordinary_cache_path
         ]
         .into_iter()
         .collect();
-        assert_eq!(rows.rows, vec![expected; 2]);
+        assert_eq!(rows.rows, vec![expected; 2].into());
         consumption.push(state.evidence().consumed_in(ResourceDimension::Fuel));
     }
     assert!(

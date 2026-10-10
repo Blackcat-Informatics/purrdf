@@ -18,7 +18,9 @@
 //! positive basic-graph-pattern spine over work lists as well; deeper input
 //! consumes no additional machine stack.
 
+use crate::walk::walk_pre_post_with_memory;
 use core::fmt;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 
 use crate::walk::{Flow, NodeRef, Visit, walk_pre_post};
 use crate::{
@@ -189,6 +191,26 @@ impl fmt::Display for ScopeError {
 
 impl std::error::Error for ScopeError {}
 
+/// Typed observer or physical working-storage refusal.
+#[derive(Debug)]
+pub enum ScopeValidationError {
+    /// Original observer violation.
+    Scope(ScopeError),
+    /// Original native storage refusal.
+    Storage(StorageError),
+}
+purrdf_lex::variant_from!(ScopeValidationError { Scope(ScopeError) });
+purrdf_lex::variant_from!(ScopeValidationError { Storage(StorageError) });
+impl fmt::Display for ScopeValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Scope(error) => error.fmt(f),
+            Self::Storage(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for ScopeValidationError {}
+
 impl From<ScopeError> for crate::ParseError {
     fn from(error: ScopeError) -> Self {
         Self::syntax(error.to_string(), 0)
@@ -204,9 +226,33 @@ impl From<ScopeError> for crate::ParseError {
 /// # Errors
 /// Returns the first hidden observation in deterministic preorder.
 pub fn validate_pattern(pattern: &GraphPattern) -> Result<(), ScopeError> {
-    walk_nodes(NodeRef::Pattern(pattern), |node, index| {
-        check_node(node, ScopeSite::pattern(index))
-    })
+    resident_scope(|memory| validate_pattern_with_memory(pattern, memory))
+}
+
+/// Check observer roles with before-growth native walk admission.
+/// # Errors
+/// Returns original observer violations or native storage refusal.
+pub fn validate_pattern_with_memory<S: Admission + ?Sized>(
+    pattern: &GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), ScopeValidationError> {
+    walk_nodes_with_memory(
+        NodeRef::Pattern(pattern),
+        |node, index, _| {
+            check_node(node, ScopeSite::pattern(index)).map_err(ScopeValidationError::from)
+        },
+        memory,
+    )
+}
+
+fn resident_scope(
+    check: impl FnOnce(&mut Memory<'_, Resident>) -> Result<(), ScopeValidationError>,
+) -> Result<(), ScopeError> {
+    match check(&mut Memory::new(&mut Resident)) {
+        Ok(()) => Ok(()),
+        Err(ScopeValidationError::Scope(error)) => Err(error),
+        Err(ScopeValidationError::Storage(error)) => panic!("resident observer storage: {error}"),
+    }
 }
 
 /// Check a query's template or description targets, then its graph pattern.
@@ -214,8 +260,7 @@ pub fn validate_pattern(pattern: &GraphPattern) -> Result<(), ScopeError> {
 /// # Errors
 /// Returns a typed hidden observation with its query region and owning node.
 pub fn validate_query(query: &Query) -> Result<(), ScopeError> {
-    validate_query_head(query)?;
-    validate_pattern(query.pattern())
+    resident_scope(|memory| validate_query_with_memory(query, memory))
 }
 
 /// Check every output slot of one template quad, including quoted triple terms.
@@ -226,15 +271,29 @@ pub fn validate_query(query: &Query) -> Result<(), ScopeError> {
 /// # Errors
 /// Refuses a hidden identity in a template subject, predicate, object or graph.
 pub fn validate_quad(quad: &QuadPattern) -> Result<(), ScopeError> {
-    validate_quad_at(quad, 0)
+    resident_scope(|memory| validate_quad_at_with_memory(quad, 0, memory))
 }
 
 /// The head checks shared by full structural admission and identity-only queries.
-pub(crate) fn validate_query_head(query: &Query) -> Result<(), ScopeError> {
+/// Check a query's observer contract through native working storage.
+/// # Errors
+/// Returns the original observer violation or physical refusal.
+pub fn validate_query_with_memory<S: Admission + ?Sized>(
+    query: &Query,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), ScopeValidationError> {
+    validate_query_head_with_memory(query, memory)?;
+    validate_pattern_with_memory(query.pattern(), memory)
+}
+
+pub(crate) fn validate_query_head_with_memory<S: Admission + ?Sized>(
+    query: &Query,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), ScopeValidationError> {
     match query {
         Query::Construct { template, .. } => {
             for (index, quad) in template.iter().enumerate() {
-                validate_quad_at(quad, index)?;
+                validate_quad_at_with_memory(quad, index, memory)?;
             }
         }
         Query::Describe { targets, .. } => {
@@ -258,29 +317,37 @@ pub(crate) fn validate_query_head(query: &Query) -> Result<(), ScopeError> {
     Ok(())
 }
 
-fn validate_quad_at(quad: &QuadPattern, item: usize) -> Result<(), ScopeError> {
+fn validate_quad_at_with_memory<S: Admission + ?Sized>(
+    quad: &QuadPattern,
+    item: usize,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), ScopeValidationError> {
     let mut next_node = 0;
-    walk_nodes(NodeRef::Triple(&quad.triple), |node, index| {
-        next_node = index + 1;
-        let site = ScopeSite {
-            region: ScopeRegion::Template,
-            item,
-            node: index,
-            slot: 0,
-        };
-        if let NodeRef::Triple(triple) = node {
-            if let TermPattern::Variable(variable) = &triple.subject {
-                check_identity(variable, ObserverRole::TemplateSubject, site)?;
+    walk_nodes_with_memory(
+        NodeRef::Triple(&quad.triple),
+        |node, index, _| {
+            next_node = index + 1;
+            let site = ScopeSite {
+                region: ScopeRegion::Template,
+                item,
+                node: index,
+                slot: 0,
+            };
+            if let NodeRef::Triple(triple) = node {
+                if let TermPattern::Variable(variable) = &triple.subject {
+                    check_identity(variable, ObserverRole::TemplateSubject, site)?;
+                }
+                if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                    check_identity(variable, ObserverRole::TemplatePredicate, site.at_slot(1))?;
+                }
+                if let TermPattern::Variable(variable) = &triple.object {
+                    check_identity(variable, ObserverRole::TemplateObject, site.at_slot(2))?;
+                }
             }
-            if let NamedNodePattern::Variable(variable) = &triple.predicate {
-                check_identity(variable, ObserverRole::TemplatePredicate, site.at_slot(1))?;
-            }
-            if let TermPattern::Variable(variable) = &triple.object {
-                check_identity(variable, ObserverRole::TemplateObject, site.at_slot(2))?;
-            }
-        }
-        Ok(())
-    })?;
+            Ok::<_, ScopeValidationError>(())
+        },
+        memory,
+    )?;
     if let Some(NamedNodePattern::Variable(variable)) = &quad.graph {
         check_identity(
             variable,
@@ -374,24 +441,36 @@ fn check_identity(
     Ok(())
 }
 
-/// The shared numbered borrowed walk for observer and full structural admission.
-pub(crate) fn walk_nodes<'a, E>(
+/// Numbered preorder over the same native traversal law.
+pub(crate) fn walk_nodes_with_memory<'a, S, E>(
     root: NodeRef<'a>,
-    mut check: impl FnMut(NodeRef<'a>, usize) -> Result<(), E>,
-) -> Result<(), E> {
-    let mut result = Ok(());
-    let mut index = 0;
-    walk_pre_post(root, |phase, node| {
-        if phase == Visit::Enter {
-            result = check(node, index);
-            if result.is_err() {
-                return Flow::Stop;
+    mut check: impl FnMut(NodeRef<'a>, usize, &mut Memory<'_, S>) -> Result<(), E>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), E>
+where
+    S: Admission + ?Sized,
+    E: From<StorageError>,
+{
+    let mut index = 0usize;
+    let mut failure = None;
+    walk_pre_post_with_memory(
+        root,
+        |phase, node, memory| {
+            if phase == Visit::Enter {
+                if let Err(error) = check(node, index, memory) {
+                    failure = Some(error);
+                    return Ok(Flow::Stop);
+                }
+                index = index.checked_add(1).ok_or(StorageError::SizeOverflow)?;
             }
-            index += 1;
-        }
-        Flow::Descend
-    });
-    result
+            Ok(Flow::Descend)
+        },
+        memory,
+    )?;
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 // Source basic-graph-pattern ownership and exposure are shared with evaluation.
@@ -414,39 +493,75 @@ pub fn joins_blank_scope(pattern: &GraphPattern) -> bool {
 /// first, so the left pops first and the leaves come out left to right, however tall
 /// the spine.
 pub fn spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
-    visit_spine_leaves(pattern, &mut |leaf| {
-        out.push(leaf);
-        false
-    });
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    spine_leaves_with_memory(pattern, out, &mut memory).expect("resident spine storage");
 }
 
-/// Whether any leaf under the spine rooted at `pattern` satisfies `test`.
-///
-/// Leaves are visited left to right, stopping at the first match. The work list
-/// holds up to eight pending nodes inline; a deeper spine can spill to heap scratch
-/// even when no labels need renaming. This walk runs on every admission, including
-/// prepared re-runs.
+/// Collect written-order spine leaves with native storage admission.
+/// # Errors
+/// Returns checked native working/output buffer refusal.
+pub fn spine_leaves_with_memory<'a, S: Admission + ?Sized>(
+    pattern: &'a GraphPattern,
+    out: &mut Vec<&'a GraphPattern>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    visit_spine_leaves_with_memory(
+        pattern,
+        &mut |leaf, memory| {
+            memory.push(out, leaf)?;
+            Ok(false)
+        },
+        memory,
+    )?;
+    Ok(())
+}
+
+/// Visit leaves in their original written order.
 pub fn visit_spine_leaves<'a>(
     pattern: &'a GraphPattern,
     test: &mut impl FnMut(&'a GraphPattern) -> bool,
 ) -> bool {
+    visit_spine_leaves_with_memory(
+        pattern,
+        &mut |leaf, _| Ok::<_, StorageError>(test(leaf)),
+        &mut Memory::new(&mut Resident),
+    )
+    .expect("resident spine traversal")
+}
+
+/// The same written-order spine walk under original storage admission.
+/// # Errors
+/// Returns original visitor or physical working-storage refusal.
+pub fn visit_spine_leaves_with_memory<'a, S, E>(
+    pattern: &'a GraphPattern,
+    test: &mut impl FnMut(&'a GraphPattern, &mut Memory<'_, S>) -> Result<bool, E>,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, E>
+where
+    S: Admission + ?Sized,
+    E: From<StorageError>,
+{
     let mut pending = crate::worklist::WorkList::<_, 8>::with(pattern);
+    let mut found = false;
     while let Some(node) = pending.pop() {
         match node {
             GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
                 if joins_blank_scope(node) =>
             {
-                pending.push(right);
-                pending.push(left);
+                pending.try_push_admitted(&**right, memory)?;
+                pending.try_push_admitted(&**left, memory)?;
             }
             _ => {
-                if test(node) {
-                    return true;
+                if test(node, memory)? {
+                    found = true;
+                    break;
                 }
             }
         }
     }
-    false
+    pending.release_admitted(memory)?;
+    Ok(found)
 }
 
 /// Which identities a source-blank exposure walk includes.
@@ -460,72 +575,131 @@ pub enum LabelSource {
     All,
 }
 
-/// Visit a leaf's labels, stopping when the visitor returns true. A UNION exposes
-/// only carried parser-block identities, never its arms' local algebra blanks.
+/// Visit exposed leaf labels under the original identity rule.
 pub fn visit_leaf_labels<'a>(
     leaf: &'a GraphPattern,
     source: LabelSource,
     visit: &mut impl FnMut(&'a str) -> bool,
 ) -> bool {
+    visit_leaf_labels_with_memory(
+        leaf,
+        source,
+        &mut |label, _| Ok::<_, StorageError>(visit(label)),
+        &mut Memory::new(&mut Resident),
+    )
+    .expect("resident leaf-label traversal")
+}
+
+/// The same raw/carried exposure rule with admitted spill storage.
+/// # Errors
+/// Returns original visitor or physical storage refusal.
+pub fn visit_leaf_labels_with_memory<'a, S, E>(
+    leaf: &'a GraphPattern,
+    source: LabelSource,
+    visit: &mut impl FnMut(&'a str, &mut Memory<'_, S>) -> Result<bool, E>,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, E>
+where
+    S: Admission + ?Sized,
+    E: From<StorageError>,
+{
     let mut pending = crate::worklist::WorkList::<_, 8>::with((leaf, source));
-    while let Some((node, source)) = pending.pop() {
-        let found = match node {
-            GraphPattern::Bgp { patterns } => patterns.iter().any(|triple| {
-                visit_term_labels(&triple.subject, source, visit)
-                    || visit_term_labels(&triple.object, source, visit)
-            }),
+    let mut found = false;
+    'nodes: while let Some((node, source)) = pending.pop() {
+        match node {
+            GraphPattern::Bgp { patterns } => {
+                for triple in patterns {
+                    if visit_term_labels_with_memory(&triple.subject, source, visit, memory)?
+                        || visit_term_labels_with_memory(&triple.object, source, visit, memory)?
+                    {
+                        found = true;
+                        break 'nodes;
+                    }
+                }
+            }
             GraphPattern::Path {
                 subject, object, ..
             } => {
-                visit_term_labels(subject, source, visit)
-                    || visit_term_labels(object, source, visit)
+                if visit_term_labels_with_memory(subject, source, visit, memory)?
+                    || visit_term_labels_with_memory(object, source, visit, memory)?
+                {
+                    found = true;
+                    break;
+                }
             }
-            GraphPattern::PropertyFunction(call) => call
-                .subject_args
-                .iter()
-                .chain(&call.object_args)
-                .any(|term| visit_term_labels(term, source, visit)),
+            GraphPattern::PropertyFunction(call) => {
+                for term in call.subject_args.iter().chain(&call.object_args) {
+                    if visit_term_labels_with_memory(term, source, visit, memory)? {
+                        found = true;
+                        break 'nodes;
+                    }
+                }
+            }
             GraphPattern::Join { left, right } => {
-                pending.push((right, source));
-                pending.push((left, source));
-                false
+                pending.try_push_admitted((&**right, source), memory)?;
+                pending.try_push_admitted((&**left, source), memory)?;
             }
             GraphPattern::Union { arms } if source != LabelSource::Raw => {
-                pending.extend(arms.iter().rev().map(|arm| (arm, LabelSource::Carried)));
-                false
+                for arm in arms.iter().rev() {
+                    pending.try_push_admitted((arm, LabelSource::Carried), memory)?;
+                }
             }
-            _ => false,
-        };
-        if found {
-            return true;
+            _ => {}
         }
     }
-    false
+    pending.release_admitted(memory)?;
+    Ok(found)
 }
 
-/// The blank labels in a term, subject before object at every quoted level, over
-/// an inline work list and with the same early-exit visitor as the leaf walk.
+/// Visit term labels, subject before object at each quoted level.
 pub fn visit_term_labels<'a>(
     term: &'a TermPattern,
     source: LabelSource,
     visit: &mut impl FnMut(&'a str) -> bool,
 ) -> bool {
+    visit_term_labels_with_memory(
+        term,
+        source,
+        &mut |label, _| Ok::<_, StorageError>(visit(label)),
+        &mut Memory::new(&mut Resident),
+    )
+    .expect("resident term-label traversal")
+}
+
+/// The same native term exposure walk with before-growth storage admission.
+/// # Errors
+/// Returns original visitor or physical storage refusal.
+pub fn visit_term_labels_with_memory<'a, S, E>(
+    term: &'a TermPattern,
+    source: LabelSource,
+    visit: &mut impl FnMut(&'a str, &mut Memory<'_, S>) -> Result<bool, E>,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, E>
+where
+    S: Admission + ?Sized,
+    E: From<StorageError>,
+{
     let mut pending = crate::worklist::WorkList::<_, 8>::with(term);
+    let mut found = false;
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::BlankNode(blank) if source != LabelSource::Carried => {
-                if visit(blank.as_str()) {
-                    return true;
+                if visit(blank.as_str(), memory)? {
+                    found = true;
+                    break;
                 }
             }
             TermPattern::Variable(variable) if source != LabelSource::Raw => {
-                if variable.source_blank_label().is_some_and(&mut *visit) {
-                    return true;
+                if let Some(label) = variable.source_blank_label()
+                    && visit(label, memory)?
+                {
+                    found = true;
+                    break;
                 }
             }
             TermPattern::Triple(triple) => {
-                pending.push(&triple.object);
-                pending.push(&triple.subject);
+                pending.try_push_admitted(&triple.object, memory)?;
+                pending.try_push_admitted(&triple.subject, memory)?;
             }
             TermPattern::NamedNode(_)
             | TermPattern::BlankNode(_)
@@ -533,5 +707,6 @@ pub fn visit_term_labels<'a>(
             | TermPattern::Variable(_) => {}
         }
     }
-    false
+    pending.release_admitted(memory)?;
+    Ok(found)
 }

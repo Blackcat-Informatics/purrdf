@@ -868,6 +868,8 @@ impl PyQuerySolutionIterator {
 #[pyclass(name = "QueryTriples")]
 #[derive(Debug)]
 pub struct PyQueryTriples {
+    // Keep native admissions alive through the host result lifetime.
+    _dataset: purrdf_core::DatasetHandle,
     pub(crate) triples: Vec<RdfTriple>,
     pos: usize,
 }
@@ -947,6 +949,8 @@ impl PyQueryTriples {
 #[pyclass(name = "QueryQuads")]
 #[derive(Debug)]
 pub struct PyQueryQuads {
+    // Host term materialization does not release the original native owner.
+    _dataset: purrdf_core::DatasetHandle,
     pub(crate) quads: Vec<RdfQuad>,
     pos: usize,
 }
@@ -1181,7 +1185,7 @@ pub(crate) fn materialize_results(py: Python<'_>, result: SparqlResult) -> PyRes
             )?
             .into_any())
         }
-        SparqlResult::Graph(graph) => materialize_graph(py, &graph),
+        SparqlResult::Graph(graph) => materialize_graph(py, graph),
         SparqlResult::Boolean(value) => Ok(Py::new(py, PyQueryBoolean { value })?.into_any()),
     }
 }
@@ -1207,16 +1211,32 @@ pub(crate) fn materialize_results(py: Python<'_>, result: SparqlResult) -> PyRes
 /// The graph name is never dropped. A triple has no slot for one, so flattening a
 /// graph-carrying result into `QueryTriples` would delete the most explicit part of the
 /// caller's query with no exception and no loss signal.
-fn materialize_graph(py: Python<'_>, graph: &RdfDataset) -> PyResult<Py<PyAny>> {
-    let quads = crate::flat_rdf_quads_from_dataset(graph);
+fn materialize_graph(py: Python<'_>, graph: purrdf_core::DatasetHandle) -> PyResult<Py<PyAny>> {
+    let quads = crate::flat_rdf_quads_from_dataset(graph.as_ref());
     if quads.iter().any(|quad| quad.graph_name.is_some()) {
-        return Ok(Py::new(py, PyQueryQuads { quads, pos: 0 })?.into_any());
+        return Ok(Py::new(
+            py,
+            PyQueryQuads {
+                _dataset: graph,
+                quads,
+                pos: 0,
+            },
+        )?
+        .into_any());
     }
     let triples: Vec<RdfTriple> = quads
         .into_iter()
         .map(|q| RdfTriple::new(q.subject, q.predicate, q.object))
         .collect();
-    Ok(Py::new(py, PyQueryTriples { triples, pos: 0 })?.into_any())
+    Ok(Py::new(
+        py,
+        PyQueryTriples {
+            _dataset: graph,
+            triples,
+            pos: 0,
+        },
+    )?
+    .into_any())
 }
 
 /// Lower a dataset-independent [`TermValue`] (the SPARQL egress cell type) into the
@@ -2028,8 +2048,11 @@ fn witness_to_dict<'py>(
             })
             .collect();
         entry.set_item("generations", generations)?;
-        let incompleteness: Vec<&str> =
-            attested.incompleteness.iter().map(String::as_str).collect();
+        let incompleteness: Vec<&str> = attested
+            .incompleteness
+            .iter()
+            .map(purrdf_core::small::shared::SharedText::as_str)
+            .collect();
         entry.set_item("incompleteness", incompleteness)?;
         out.set_item(iri, entry)?;
     }

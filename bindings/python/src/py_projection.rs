@@ -245,7 +245,7 @@ impl PyProjectionLift {
     /// Frozen RDF 1.2 dataset handle.
     #[getter]
     fn dataset(&self, py: Python<'_>) -> PyResult<Py<PyRdfDataset>> {
-        Py::new(py, PyRdfDataset::from_arc(Arc::clone(&self.dataset)))
+        Py::new(py, PyRdfDataset::from_frozen(Arc::clone(&self.dataset)))
     }
 
     /// Fresh Python list of immutable structured loss records.

@@ -92,23 +92,14 @@ pub(super) fn strip_x_flag_whitespace(pattern: &str) -> String {
 /// The same textual x rule, with admitted allocation and original byte offsets.
 pub(super) fn strip_bounded(
     pattern: &str,
-    budget: &mut super::xpath::Budget,
+    budget: &mut super::xpath::Budget<'_>,
 ) -> Result<(String, Vec<usize>), super::xpath::Error> {
-    use super::xpath::{Error, Resource};
+    use super::xpath::Resource;
     budget.charge_wide(Resource::CompileSlots, (pattern.len() as u128) * 2 + 1)?;
     let mut out = String::new();
     let mut offsets = Vec::new();
-    out.try_reserve_exact(pattern.len())
-        .map_err(|_| Error::Allocation {
-            resource: Resource::CompileSlots,
-            units: pattern.len() as u64,
-        })?;
-    offsets
-        .try_reserve_exact(pattern.len() + 1)
-        .map_err(|_| Error::Allocation {
-            resource: Resource::CompileSlots,
-            units: pattern.len() as u64 + 1,
-        })?;
+    budget.reserve_string(&mut out, pattern.len())?;
+    budget.reserve(&mut offsets, pattern.len() + 1)?;
     let before = budget.used(Resource::CompileSlots);
     let mut scanner = Scanner::bounded(pattern, budget, true)?;
     let scanner_slots = budget.used(Resource::CompileSlots) - before;
@@ -126,7 +117,7 @@ pub(super) fn strip_bounded(
         }
     }
     offsets.push(pattern.len());
-    drop(scanner);
+    scanner.release(budget)?;
     budget.release_compile_slots(scanner_slots);
     Ok((out, offsets))
 }

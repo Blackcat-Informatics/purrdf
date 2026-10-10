@@ -30,6 +30,7 @@ use std::sync::{Arc, OnceLock};
 
 use hashbrown::HashTable;
 
+use crate::backend::DatasetHandle;
 use crate::content_id::{Blake3ContentId, ContentIdScheme};
 use crate::dataset_view::GraphMatch;
 // Re-exported `pub(crate)` so the sibling `super::dataset::FastHasher` path used by
@@ -46,6 +47,27 @@ use super::term::{BlankScope, InternedTerm, TermId, TermValue, arena_str};
 /// layer (`reifier rdf:reifies <<( s p o )>>`). Used to expose the reifier side-table
 /// as virtual triples in [`RdfDataset::reifier_quads`].
 use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+
+/// Actual host allocation failure while preparing an immutable query graph's
+/// lazy indexes. The original fallible allocation error remains available.
+#[derive(Debug)]
+pub enum QueryIndexAllocationError {
+    /// Ordinal array allocation failed.
+    Permutation(std::collections::TryReserveError),
+    /// The statement graph histogram table allocation failed.
+    StatementHistogram(hashbrown::TryReserveError),
+}
+
+impl std::fmt::Display for QueryIndexAllocationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Permutation(error) => error.fmt(formatter),
+            Self::StatementHistogram(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for QueryIndexAllocationError {}
 
 /// Lazy successor→predecessors reverse index for
 /// [`RdfDataset::predecessors`]: each successor `TermId` maps to its
@@ -365,7 +387,7 @@ pub struct RdfDataset {
     /// graph, backing [`RdfDataset::named_graph_row_count`]. DERIVED,
     /// NON-SERIALIZED: a pure function of the frozen statement tables, built by
     /// one pass on first use and read only by dataset-local `TermId`s.
-    statement_graph_rows: OnceLock<HashMap<TermId, usize, FastHasher>>,
+    statement_graph_rows: OnceLock<HashTable<(TermId, usize)>>,
 }
 
 /// The lazy non-identity permutation indexes over the freeze-sorted `quads` table
@@ -741,7 +763,7 @@ impl<'a> Iterator for QuadMatches<'a> {
 /// dropped without materializing matching [`QuadIds`] into a result vector.
 #[derive(Debug)]
 pub struct QuadPatternCursor {
-    dataset: Arc<RdfDataset>,
+    dataset: DatasetHandle,
     access: QuadCandidateAccess,
     next: usize,
     end: usize,
@@ -750,6 +772,26 @@ pub struct QuadPatternCursor {
 }
 
 impl QuadPatternCursor {
+    /// Open the original indexed cursor while retaining the frozen storage owner.
+    #[must_use]
+    pub fn new(
+        dataset: DatasetHandle,
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> Self {
+        let plan = RdfDataset::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
+        let (access, next, end) = dataset.candidate_access(&plan, s, p, o, g);
+        Self {
+            dataset,
+            access,
+            next,
+            end,
+            key: QuadKey::new(s, p, o, g),
+        }
+    }
+
     /// The pinned dataset whose term IDs the yielded rows address.
     #[must_use]
     pub fn dataset(&self) -> &RdfDataset {
@@ -865,24 +907,49 @@ impl RdfDataset {
         let statements = if self.reifiers.is_empty() && self.annotations.is_empty() {
             0
         } else {
-            self.statement_graph_rows
-                .get_or_init(|| {
-                    let mut rows: HashMap<TermId, usize, FastHasher> = HashMap::default();
-                    let graphs = self
-                        .reifiers
-                        .iter()
-                        .map(|&(_, _, g)| g)
-                        .chain(self.annotations.iter().map(|&(_, _, _, g)| g));
-                    for graph in graphs.flatten() {
-                        *rows.entry(graph).or_default() += 1;
-                    }
-                    rows
-                })
-                .get(&graph)
-                .copied()
-                .unwrap_or(0)
+            self.try_statement_graph_rows()
+                .expect("a resident statement histogram can be allocated")
+                .find(crate::hash::hash_of(&graph), |&(key, _)| key == graph)
+                .map_or(0, |&(_, count)| count)
         };
         hi - lo + statements
+    }
+
+    /// Build the statement histogram in its one allocation home. The frozen
+    /// graph declarations include every statement graph, so reserving their
+    /// cardinality once prevents any allocating insertion in the fill pass.
+    fn try_statement_graph_rows(
+        &self,
+    ) -> Result<&HashTable<(TermId, usize)>, hashbrown::TryReserveError> {
+        if let Some(rows) = self.statement_graph_rows.get() {
+            return Ok(rows);
+        }
+        let mut rows = HashTable::new();
+        rows.try_reserve(self.named_graphs.len(), |&(graph, _)| {
+            crate::hash::hash_of(&graph)
+        })?;
+        self.fill_statement_graph_rows(&mut rows);
+        let _ = self.statement_graph_rows.set(rows);
+        Ok(self
+            .statement_graph_rows
+            .get()
+            .expect("the histogram was installed by this reader or a concurrent reader"))
+    }
+
+    fn fill_statement_graph_rows(&self, rows: &mut HashTable<(TermId, usize)>) {
+        let graphs = self
+            .reifiers
+            .iter()
+            .map(|&(_, _, graph)| graph)
+            .chain(self.annotations.iter().map(|&(_, _, _, graph)| graph));
+        for graph in graphs.flatten() {
+            let hash = crate::hash::hash_of(&graph);
+            if let Some((_, count)) = rows.find_mut(hash, |&(key, _)| key == graph) {
+                *count += 1;
+            } else {
+                rows.insert_unique(hash, (graph, 1), |&(key, _)| crate::hash::hash_of(&key));
+            }
+        }
     }
 
     /// Resolve a term id to the owned [`RdfTerm`] model, triple terms included.
@@ -1082,25 +1149,56 @@ impl RdfDataset {
     /// the first-access build race-safe and keeps the dataset `Send + Sync`. Never
     /// called for [`QuadPermutation::Spog`] (the table is already that order).
     fn permutation(&self, perm: QuadPermutation) -> &[u32] {
-        let cell = match perm {
+        self.try_permutation(perm)
+            .expect("host cannot allocate a resident quad index")
+    }
+
+    fn try_permutation(
+        &self,
+        perm: QuadPermutation,
+    ) -> Result<&[u32], std::collections::TryReserveError> {
+        let cell = self.permutation_cell(perm);
+        if cell.get().is_none() {
+            let ordinals = self.build_permutation(
+                perm,
+                &mut (),
+                |(), values, required| values.try_reserve_exact(required),
+                |(), values| Ok(values.into_boxed_slice()),
+            )?;
+            let _ = cell.set(ordinals);
+        }
+        Ok(cell
+            .get()
+            .expect("this call or a concurrent reader installed the index"))
+    }
+
+    fn permutation_cell(&self, perm: QuadPermutation) -> &OnceLock<Box<[u32]>> {
+        match perm {
             QuadPermutation::Spog => unreachable!("SPOG is the identity table, never materialized"),
             QuadPermutation::Pos => &self.indexes.pos,
             QuadPermutation::Osp => &self.indexes.osp,
             QuadPermutation::Gspo => &self.indexes.gspo,
             QuadPermutation::Gpos => &self.indexes.gpos,
             QuadPermutation::Gosp => &self.indexes.gosp,
-        };
-        cell.get_or_init(|| {
-            let axes = perm.axes();
-            // The ordinal arrays are `u32`, so a dataset with more than u32::MAX quads
-            // could not be addressed; fail fast rather than silently truncate the cast.
-            let len = u32::try_from(self.quads.len()).expect("dataset quad count exceeds u32::MAX");
-            let mut ordinals: Vec<u32> = (0..len).collect();
-            ordinals.sort_by(|&a, &b| {
-                compare_quads(axes, &self.quads[a as usize], &self.quads[b as usize])
-            });
-            ordinals.into_boxed_slice()
-        })
+        }
+    }
+
+    fn build_permutation<S, E>(
+        &self,
+        permutation: QuadPermutation,
+        storage: &mut S,
+        reserve: impl FnOnce(&mut S, &mut Vec<u32>, usize) -> Result<(), E>,
+        freeze: impl FnOnce(&mut S, Vec<u32>) -> Result<Box<[u32]>, E>,
+    ) -> Result<Box<[u32]>, E> {
+        let axes = permutation.axes();
+        let len = u32::try_from(self.quads.len()).expect("dataset quad count exceeds u32::MAX");
+        let mut ordinals = Vec::new();
+        reserve(storage, &mut ordinals, self.quads.len())?;
+        ordinals.extend(0..len);
+        ordinals.sort_unstable_by(|&a, &b| {
+            compare_quads(axes, &self.quads[a as usize], &self.quads[b as usize])
+        });
+        freeze(storage, ordinals)
     }
 
     /// The contiguous candidate run for an `(s, p, o, g)` pattern: the chosen
@@ -1293,15 +1391,7 @@ impl RdfDataset {
         o: Option<TermId>,
         g: GraphMatch,
     ) -> QuadPatternCursor {
-        let plan = Self::probe_plan(s.is_some(), p.is_some(), o.is_some(), g);
-        let (access, next, end) = self.candidate_access(&plan, s, p, o, g);
-        QuadPatternCursor {
-            dataset: Arc::clone(self),
-            access,
-            next,
-            end,
-            key: QuadKey::new(s, p, o, g),
-        }
+        QuadPatternCursor::new(Arc::clone(self).into(), s, p, o, g)
     }
 
     /// Like `Self::quads_for_pattern_indexed`, but with a caller-precomputed
@@ -1992,6 +2082,109 @@ impl RdfDataset {
             + size_of_val(self.reifiers.as_ref())
             + size_of_val(self.annotations.as_ref())
             + size_of_val(self.named_graphs.as_ref())
+    }
+
+    /// Retained capacity of a freshly materialized query graph, including every
+    /// lazy quad permutation its immutable readers can populate.
+    ///
+    /// Query builders carry RDF data only. A graph with configured content or
+    /// derivation metadata is not a query-output certificate and returns `None`.
+    /// Permutations use five boxed `u32` ordinal arrays sorted in place.
+    /// [`Self::warm_query_indexes`] finishes those allocations before publication.
+    #[must_use]
+    pub fn query_retained_bytes(&self) -> Option<usize> {
+        if !self.locations.is_empty()
+            || !self.content_ids.is_empty()
+            || self.content_scheme.is_some()
+            || self.derivation_predicate_iri.is_some()
+        {
+            return None;
+        }
+        let permutations = self.quads.len().checked_mul(5 * size_of::<u32>())?;
+        // A statement histogram can hold at most one entry per named graph.
+        // The fill home reserves this exact entry bound in hashbrown's table;
+        // share its checked physical bucket/control layout certificate.
+        let histogram = if self.reifiers.is_empty() && self.annotations.is_empty() {
+            0
+        } else {
+            crate::hash::hash_table_allocation_bound::<(TermId, usize)>(self.named_graphs.len())?
+        };
+        self.rdf_payload_bytes()
+            .checked_add(size_of::<Self>() + 2 * size_of::<usize>())?
+            .checked_add(self.term_index.allocation_size())?
+            .checked_add(permutations)?
+            .checked_add(histogram)
+    }
+
+    /// Materialize all lazy query-output indexes while its execution admission
+    /// is still held. Consumers then borrow a frozen allocation under its lease.
+    ///
+    /// # Errors
+    /// Returns the host's actual capacity allocation refusal.
+    pub fn warm_query_indexes(&self) -> Result<(), QueryIndexAllocationError> {
+        for permutation in [
+            QuadPermutation::Pos,
+            QuadPermutation::Osp,
+            QuadPermutation::Gspo,
+            QuadPermutation::Gpos,
+            QuadPermutation::Gosp,
+        ] {
+            self.try_permutation(permutation)
+                .map_err(QueryIndexAllocationError::Permutation)?;
+        }
+        if !self.reifiers.is_empty() || !self.annotations.is_empty() {
+            self.try_statement_graph_rows()
+                .map_err(QueryIndexAllocationError::StatementHistogram)?;
+        }
+        Ok(())
+    }
+
+    /// Allocate query indexes before native graph publication, under the same
+    /// original Memory as its frozen buffers. Exclusive access prevents another
+    /// reader from installing an unadmitted index during construction.
+    ///
+    /// # Errors
+    /// Returns physical layout, original admission or allocator refusal.
+    pub fn warm_query_indexes_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &mut self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        for permutation in [
+            QuadPermutation::Pos,
+            QuadPermutation::Osp,
+            QuadPermutation::Gspo,
+            QuadPermutation::Gpos,
+            QuadPermutation::Gosp,
+        ] {
+            if self.permutation_cell(permutation).get().is_some() {
+                continue;
+            }
+            let ordinals = self.build_permutation(
+                permutation,
+                memory,
+                purrdf_lex::allocation::Memory::reserve,
+                purrdf_lex::allocation::Memory::boxed_slice,
+            )?;
+            self.permutation_cell(permutation)
+                .set(ordinals)
+                .expect("exclusive native construction owns the empty index cell");
+        }
+        if (!self.reifiers.is_empty() || !self.annotations.is_empty())
+            && self.statement_graph_rows.get().is_none()
+        {
+            let mut rows = HashTable::new();
+            crate::hash::reserve_table_with_memory(
+                &mut rows,
+                self.named_graphs.len(),
+                |&(graph, _)| crate::hash::hash_of(&graph),
+                memory,
+            )?;
+            self.fill_statement_graph_rows(&mut rows);
+            self.statement_graph_rows
+                .set(rows)
+                .expect("exclusive native construction owns the empty histogram cell");
+        }
+        Ok(())
     }
 
     /// A cheap, deterministic fingerprint of this frozen dataset's size, for a

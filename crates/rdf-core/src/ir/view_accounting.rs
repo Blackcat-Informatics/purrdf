@@ -472,7 +472,32 @@ impl RetentionLedger {
         charge: RetainedCharge,
         mutability: OwnerMutability,
     ) -> RetentionGuard {
-        let key = OwnerKey(Arc::as_ptr(owner).cast::<()>().addr());
+        self.register(
+            OwnerKey(Arc::as_ptr(owner).cast::<()>().addr()),
+            RetentionOwner::Shared(Arc::clone(owner) as Arc<dyn Any + Send + Sync>),
+            charge,
+            mutability,
+        )
+    }
+
+    /// Retain the original caller or native dataset owner under its frozen charge.
+    #[must_use = "retention is released as soon as the guard drops"]
+    pub fn retain_dataset_handle(self: &Arc<Self>, owner: &crate::DatasetHandle) -> RetentionGuard {
+        self.register(
+            OwnerKey(std::ptr::from_ref(owner.as_ref()).addr()),
+            RetentionOwner::Dataset(owner.clone()),
+            RetainedCharge::of_dataset(owner),
+            OwnerMutability::Frozen,
+        )
+    }
+
+    fn register(
+        self: &Arc<Self>,
+        key: OwnerKey,
+        owner: RetentionOwner,
+        charge: RetainedCharge,
+        mutability: OwnerMutability,
+    ) -> RetentionGuard {
         let mut state = self.state();
         let entry = state.owners.entry(key).or_insert(OwnerEntry {
             charge,
@@ -496,7 +521,7 @@ impl RetentionLedger {
             key,
             charge,
             mutability,
-            owner: Arc::clone(owner) as Arc<dyn Any + Send + Sync>,
+            owner,
         }
     }
 
@@ -543,6 +568,20 @@ impl RetentionLedger {
     }
 }
 
+enum RetentionOwner {
+    Shared(Arc<dyn Any + Send + Sync>),
+    Dataset(crate::DatasetHandle),
+}
+
+impl Clone for RetentionOwner {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Shared(owner) => Self::Shared(Arc::clone(owner)),
+            Self::Dataset(owner) => Self::Dataset(owner.clone()),
+        }
+    }
+}
+
 /// A registered owner's RAII receipt: its charge is on the ledger for exactly as
 /// long as at least one guard for that owner lives.
 ///
@@ -558,7 +597,7 @@ pub struct RetentionGuard {
     /// The strong, type-erased handle that keeps [`Self::key`] meaningful. Held
     /// for its side effect only; it is dropped AFTER [`Drop::drop`] has erased
     /// the ledger entry, which is what makes address reuse harmless.
-    owner: Arc<dyn Any + Send + Sync>,
+    owner: RetentionOwner,
 }
 
 impl RetentionGuard {
@@ -684,7 +723,7 @@ impl Clone for RetentionGuard {
             key: self.key,
             charge: self.charge,
             mutability: self.mutability,
-            owner: Arc::clone(&self.owner),
+            owner: self.owner.clone(),
         }
     }
 }

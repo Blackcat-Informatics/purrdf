@@ -78,120 +78,12 @@ const BASE64_ALPHABET: &[u8; 64] =
 ///   `AQJ=` are not.
 /// - The empty string (after stripping whitespace) is valid and decodes to empty `Vec<u8>`.
 pub fn parse_base64(lexical: &str) -> Result<Vec<u8>, XsdError> {
-    let err = |reason| XsdError::invalid(XsdDatatype::Base64Binary, lexical, reason);
-
-    // Strip ASCII whitespace first (XSD base64Binary lexical space permits it).
-    let stripped: Vec<u8> = lexical
-        .bytes()
-        .filter(|&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
-        .collect();
-
-    if stripped.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // After stripping, length must be a multiple of 4.
-    if !stripped.len().is_multiple_of(4) {
-        return Err(err(
-            "base64Binary lexical length (after stripping whitespace) must be a multiple of 4",
-        ));
-    }
-
-    // Count and validate trailing `=` padding — at most 2.
-    let pad_count = stripped.iter().rev().take_while(|&&b| b == b'=').count();
-    if pad_count > 2 {
-        return Err(err(
-            "base64Binary lexical has more than 2 padding characters",
-        ));
-    }
-
-    // Ensure `=` only appears at the end (no internal `=`).
-    let data_len = stripped.len() - pad_count;
-    for &b in &stripped[..data_len] {
-        if b == b'=' {
-            return Err(err(
-                "internal padding character '=' in base64Binary lexical",
-            ));
-        }
-    }
-
-    // Decode groups of 4 characters.
-    let mut out = Vec::with_capacity((stripped.len() / 4) * 3);
-    let groups = stripped.len() / 4;
-
-    for g in 0..groups {
-        let base = g * 4;
-        let is_last = g == groups - 1;
-
-        let (a_raw, b_raw, c_raw, d_raw) = (
-            stripped[base],
-            stripped[base + 1],
-            stripped[base + 2],
-            stripped[base + 3],
-        );
-
-        if is_last && pad_count > 0 {
-            // Final group with padding. pad_count is 1 or 2 (0 takes the else branch;
-            // >2 was rejected above). Both arms are explicit; no wildcard needed.
-            if pad_count == 1 {
-                // Three base64 chars + one `=` → 2 output bytes.
-                let a = decode_b64_char(a_raw)
-                    .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
-                let b = decode_b64_char(b_raw)
-                    .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
-                let c = decode_b64_char(c_raw)
-                    .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
-                if d_raw != b'=' {
-                    return Err(err(
-                        "expected padding character '=' in base64Binary lexical",
-                    ));
-                }
-                // XSD 1.1 Part 2 §3.3.17 `B16`: the character before a single `=`
-                // carries no bits past the two encoded bytes.
-                if c & 0b11 != 0 {
-                    return Err(err(
-                        "base64Binary character before '=' must be one of AEIMQUYcgkosw048",
-                    ));
-                }
-                out.push((a << 2) | (b >> 4));
-                out.push((b << 4) | (c >> 2));
-            } else {
-                // pad_count == 2: Two base64 chars + two `=` → 1 output byte.
-                let a = decode_b64_char(a_raw)
-                    .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
-                let b = decode_b64_char(b_raw)
-                    .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
-                if c_raw != b'=' || d_raw != b'=' {
-                    return Err(err(
-                        "expected padding characters '==' in base64Binary lexical",
-                    ));
-                }
-                // XSD 1.1 Part 2 §3.3.17 `B04`: the character before `==` carries no
-                // bits past the one encoded byte.
-                if b & 0b1111 != 0 {
-                    return Err(err(
-                        "base64Binary character before '==' must be one of AQgw",
-                    ));
-                }
-                out.push((a << 2) | (b >> 4));
-            }
-        } else {
-            // Full group (no padding needed).
-            let a = decode_b64_char(a_raw)
-                .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
-            let b = decode_b64_char(b_raw)
-                .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
-            let c = decode_b64_char(c_raw)
-                .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
-            let d = decode_b64_char(d_raw)
-                .ok_or_else(|| err("invalid character in base64Binary lexical"))?;
-            out.push((a << 2) | (b >> 4));
-            out.push((b << 4) | (c >> 2));
-            out.push((c << 6) | d);
-        }
-    }
-
-    Ok(out)
+    let plan = BinaryPlan::new(XsdDatatype::Base64Binary, lexical)
+        .map_err(|error| error.into_xsd(lexical))?;
+    let mut output = vec![0; plan.len()];
+    plan.decode_into(&mut output)
+        .map_err(|error| error.into_xsd(lexical))?;
+    Ok(output)
 }
 
 /// Map a base64 alphabet character to its 6-bit value, or `None` for invalid chars.
@@ -209,28 +101,42 @@ fn decode_b64_char(b: u8) -> Option<u8> {
 
 /// Encode a byte slice to XSD canonical base64Binary form (standard base64, `=` padding, no whitespace).
 pub fn canonical_base64(bytes: &[u8]) -> String {
+    let full_groups = bytes.len() / 3;
+    let remainder = bytes.len() % 3;
+    let length = (full_groups + usize::from(remainder > 0)) * 4;
+    let mut output = String::with_capacity(length);
+    write_base64(bytes, &mut output).expect("resident String formatting");
+    output
+}
+
+/// Borrowed canonical RFC 4648 text through the existing native encoder.
+#[derive(Debug, Clone, Copy)]
+pub struct Base64<'a>(pub &'a [u8]);
+impl core::fmt::Display for Base64<'_> {
+    fn fmt(&self, output: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write_base64(self.0, output)
+    }
+}
+
+fn write_base64(bytes: &[u8], out: &mut impl core::fmt::Write) -> core::fmt::Result {
     if bytes.is_empty() {
-        return String::new();
+        return Ok(());
     }
 
     let full_groups = bytes.len() / 3;
     let remainder = bytes.len() % 3;
-    let out_len = (full_groups + usize::from(remainder > 0)) * 4;
-    // Build directly as a String — all output bytes are valid ASCII (BASE64_ALPHABET
-    // + '='), so char::from is safe and no from_utf8 conversion is needed.
-    let mut out = String::with_capacity(out_len);
 
     for g in 0..full_groups {
         let base = g * 3;
         let (a, b, c) = (bytes[base], bytes[base + 1], bytes[base + 2]);
-        out.push(char::from(BASE64_ALPHABET[(a >> 2) as usize]));
-        out.push(char::from(
+        out.write_char(char::from(BASE64_ALPHABET[(a >> 2) as usize]))?;
+        out.write_char(char::from(
             BASE64_ALPHABET[((a & 0x03) << 4 | b >> 4) as usize],
-        ));
-        out.push(char::from(
+        ))?;
+        out.write_char(char::from(
             BASE64_ALPHABET[((b & 0x0F) << 2 | c >> 6) as usize],
-        ));
-        out.push(char::from(BASE64_ALPHABET[(c & 0x3F) as usize]));
+        ))?;
+        out.write_char(char::from(BASE64_ALPHABET[(c & 0x3F) as usize]))?;
     }
 
     if remainder > 0 {
@@ -239,24 +145,288 @@ pub fn canonical_base64(bytes: &[u8]) -> String {
         // the entire `if` block). Both arms are explicit; no wildcard is needed.
         if remainder == 1 {
             let a = bytes[base];
-            out.push(char::from(BASE64_ALPHABET[(a >> 2) as usize]));
-            out.push(char::from(BASE64_ALPHABET[((a & 0x03) << 4) as usize]));
-            out.push('=');
+            out.write_char(char::from(BASE64_ALPHABET[(a >> 2) as usize]))?;
+            out.write_char(char::from(BASE64_ALPHABET[((a & 0x03) << 4) as usize]))?;
+            out.write_char('=')?;
         } else {
             // remainder == 2
             let (a, b) = (bytes[base], bytes[base + 1]);
-            out.push(char::from(BASE64_ALPHABET[(a >> 2) as usize]));
-            out.push(char::from(
+            out.write_char(char::from(BASE64_ALPHABET[(a >> 2) as usize]))?;
+            out.write_char(char::from(
                 BASE64_ALPHABET[((a & 0x03) << 4 | b >> 4) as usize],
-            ));
-            out.push(char::from(BASE64_ALPHABET[((b & 0x0F) << 2) as usize]));
+            ))?;
+            out.write_char(char::from(BASE64_ALPHABET[((b & 0x0F) << 2) as usize]))?;
         }
         // Both remainder arms end with one shared padding '='; remainder == 1 adds
         // its second '=' above, keeping the emitted bytes identical.
-        out.push('=');
+        out.write_char('=')?;
     }
 
-    out
+    Ok(())
+}
+
+/// Borrowed native parse failures. No lexical String is constructed here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinaryReadError {
+    /// The lexical is outside the datatype's binary value space.
+    InvalidLexical {
+        /// Datatype whose lexical rules were applied.
+        datatype: XsdDatatype,
+        /// Stable native diagnostic reason.
+        reason: &'static str,
+    },
+    /// The destination layout exceeds addressable storage.
+    LayoutOverflow,
+    /// A preallocated destination cannot hold the decoded bytes.
+    OutputTooShort {
+        /// Required decoded byte length.
+        needed: usize,
+        /// Provided destination length.
+        available: usize,
+    },
+}
+
+impl BinaryReadError {
+    fn base64(reason: &'static str) -> Self {
+        Self::InvalidLexical {
+            datatype: XsdDatatype::Base64Binary,
+            reason,
+        }
+    }
+
+    fn into_xsd(self, lexical: &str) -> XsdError {
+        match self {
+            Self::InvalidLexical { datatype, reason } => {
+                XsdError::invalid(datatype, lexical, reason)
+            }
+            // These are unreachable in the resident exact-size adapter for a
+            // real &str, but remain hard failures rather than decoded success.
+            Self::LayoutOverflow => XsdError::invalid(
+                XsdDatatype::Base64Binary,
+                lexical,
+                "binary output layout overflow",
+            ),
+            Self::OutputTooShort { .. } => XsdError::invalid(
+                XsdDatatype::Base64Binary,
+                lexical,
+                "binary destination is too short",
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Base64Shape {
+    groups: usize,
+    padding: usize,
+}
+
+/// A checked native plan over immutable caller-owned lexical bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct BinaryPlan<'a> {
+    lexical: &'a str,
+    datatype: XsdDatatype,
+    output: std::alloc::Layout,
+    base64: Option<Base64Shape>,
+}
+
+impl<'a> BinaryPlan<'a> {
+    /// Validate the lexical without heap allocation and price its destination.
+    pub fn new(datatype: XsdDatatype, lexical: &'a str) -> Result<Self, BinaryReadError> {
+        let (length, base64) = match datatype {
+            XsdDatatype::HexBinary => {
+                let length = purrdf_hash::hex::decoded_len(lexical).map_err(|error| {
+                    BinaryReadError::InvalidLexical {
+                        datatype,
+                        reason: match error {
+                            purrdf_hash::hex::HexError::OddLength { .. } => {
+                                "hexBinary lexical must have an even number of digits"
+                            }
+                            _ => "non-hexadecimal character in hexBinary lexical",
+                        },
+                    }
+                })?;
+                (length, None)
+            }
+            XsdDatatype::Base64Binary => {
+                let shape = base64_shape(lexical)?;
+                decode_base64_groups(lexical, shape, |_| {})?;
+                let length = shape
+                    .groups
+                    .checked_mul(3)
+                    .and_then(|n| n.checked_sub(shape.padding))
+                    .ok_or(BinaryReadError::LayoutOverflow)?;
+                (length, Some(shape))
+            }
+            _ => {
+                return Err(BinaryReadError::InvalidLexical {
+                    datatype,
+                    reason: "parse_binary called with non-binary datatype",
+                });
+            }
+        };
+        let output =
+            std::alloc::Layout::array::<u8>(length).map_err(|_| BinaryReadError::LayoutOverflow)?;
+        Ok(Self {
+            lexical,
+            datatype,
+            output,
+            base64,
+        })
+    }
+
+    #[must_use]
+    /// The exact decoded byte destination layout.
+    pub const fn output_layout(self) -> std::alloc::Layout {
+        self.output
+    }
+    #[must_use]
+    /// The decoded byte length.
+    pub const fn len(self) -> usize {
+        self.output.size()
+    }
+    #[must_use]
+    /// Whether the decoded value contains no bytes.
+    pub const fn is_empty(self) -> bool {
+        self.output.size() == 0
+    }
+
+    /// Fill supplied bytes. No allocation/growth and no stripped lexical buffer.
+    pub fn decode_into(self, output: &mut [u8]) -> Result<(), BinaryReadError> {
+        if output.len() < self.len() {
+            return Err(BinaryReadError::OutputTooShort {
+                needed: self.len(),
+                available: output.len(),
+            });
+        }
+        if let Some(shape) = self.base64 {
+            let mut cursor = 0;
+            decode_base64_groups(self.lexical, shape, |bytes| {
+                let end = cursor + bytes.len();
+                output[cursor..end].copy_from_slice(bytes);
+                cursor = end;
+            })?;
+            debug_assert_eq!(cursor, self.len());
+        } else {
+            purrdf_hash::hex::decode_to_slice(self.lexical, output).map_err(
+                |error| match error {
+                    purrdf_hash::hex::HexError::OutputTooShort { needed, available } => {
+                        BinaryReadError::OutputTooShort { needed, available }
+                    }
+                    purrdf_hash::hex::HexError::OddLength { .. } => {
+                        BinaryReadError::InvalidLexical {
+                            datatype: self.datatype,
+                            reason: "hexBinary lexical must have an even number of digits",
+                        }
+                    }
+                    _ => BinaryReadError::InvalidLexical {
+                        datatype: self.datatype,
+                        reason: "non-hexadecimal character in hexBinary lexical",
+                    },
+                },
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn base64_bytes(lexical: &str) -> impl Iterator<Item = u8> + '_ {
+    lexical
+        .bytes()
+        .filter(|&b| !matches!(b, b' ' | b'\t' | b'\n' | b'\r'))
+}
+
+fn base64_shape(lexical: &str) -> Result<Base64Shape, BinaryReadError> {
+    let (mut length, mut padding, mut internal) = (0_usize, 0_usize, false);
+    for byte in base64_bytes(lexical) {
+        length = length
+            .checked_add(1)
+            .ok_or(BinaryReadError::LayoutOverflow)?;
+        if byte == b'=' {
+            padding = padding
+                .checked_add(1)
+                .ok_or(BinaryReadError::LayoutOverflow)?;
+        } else {
+            internal |= padding != 0;
+            padding = 0;
+        }
+    }
+    if !length.is_multiple_of(4) {
+        return Err(BinaryReadError::base64(
+            "base64Binary lexical length (after stripping whitespace) must be a multiple of 4",
+        ));
+    }
+    if padding > 2 {
+        return Err(BinaryReadError::base64(
+            "base64Binary lexical has more than 2 padding characters",
+        ));
+    }
+    if internal {
+        return Err(BinaryReadError::base64(
+            "internal padding character '=' in base64Binary lexical",
+        ));
+    }
+    Ok(Base64Shape {
+        groups: length / 4,
+        padding,
+    })
+}
+
+/// The one native base64 group decoder; validation uses a zero-allocation sink.
+fn decode_base64_groups(
+    lexical: &str,
+    shape: Base64Shape,
+    mut emit: impl FnMut(&[u8]),
+) -> Result<(), BinaryReadError> {
+    let mut input = base64_bytes(lexical);
+    for group in 0..shape.groups {
+        let mut raw = [0_u8; 4];
+        for byte in &mut raw {
+            *byte = input
+                .next()
+                .expect("the checked shape counts all group bytes");
+        }
+        let [a_raw, b_raw, c_raw, d_raw] = raw;
+        let invalid = || BinaryReadError::base64("invalid character in base64Binary lexical");
+        let a = decode_b64_char(a_raw).ok_or_else(invalid)?;
+        let b = decode_b64_char(b_raw).ok_or_else(invalid)?;
+        let last = group == shape.groups - 1;
+        let (c, d, length) = if last && shape.padding == 2 {
+            if c_raw != b'=' || d_raw != b'=' {
+                return Err(BinaryReadError::base64(
+                    "expected padding characters '==' in base64Binary lexical",
+                ));
+            }
+            if b & 0b1111 != 0 {
+                return Err(BinaryReadError::base64(
+                    "base64Binary character before '==' must be one of AQgw",
+                ));
+            }
+            (0, 0, 1)
+        } else if last && shape.padding == 1 {
+            let c = decode_b64_char(c_raw).ok_or_else(invalid)?;
+            if d_raw != b'=' {
+                return Err(BinaryReadError::base64(
+                    "expected padding character '=' in base64Binary lexical",
+                ));
+            }
+            if c & 0b11 != 0 {
+                return Err(BinaryReadError::base64(
+                    "base64Binary character before '=' must be one of AEIMQUYcgkosw048",
+                ));
+            }
+            (c, 0, 2)
+        } else {
+            (
+                decode_b64_char(c_raw).ok_or_else(invalid)?,
+                decode_b64_char(d_raw).ok_or_else(invalid)?,
+                3,
+            )
+        };
+        let output = [(a << 2) | (b >> 4), (b << 4) | (c >> 2), (c << 6) | d];
+        emit(&output[..length]);
+    }
+    Ok(())
 }
 
 // ── dispatch ──────────────────────────────────────────────────────────────────────

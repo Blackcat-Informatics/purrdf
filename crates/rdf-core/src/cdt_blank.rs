@@ -38,7 +38,7 @@
 //! those bytes. [`bind_cdt_blank_labels`] does exactly that and nothing else: it
 //! rewrites the `BLANK_NODE_LABEL` token spans, in place, to the canonical
 //! `(label, scope)` spelling that
-//! [`encode_blank_label`] produces, and
+//! [`encode_blank_label`](crate::blank_label::encode_blank_label) produces, and
 //! leaves **every other byte of the lexical form untouched** — whitespace,
 //! numeric spellings, map-entry order, quote style, escape spellings and
 //! datatype IRIs all survive byte for byte.
@@ -90,11 +90,16 @@
 
 use std::borrow::Cow;
 
-use purrdf_iri::terminals::{self, expand_uchars};
+use purrdf_iri::terminals;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+use purrdf_lex::terminals::expand_uchars_with_memory;
 
 use purrdf_cdt::{CDT_LIST, CDT_MAP, CdtContents, CdtError, CdtTerm, CdtValue, parse_cdt_by_iri};
 
-use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
+use crate::blank_label::{
+    LabelAlphabet, decode_blank_label, decode_blank_label_with_memory,
+    encode_blank_label_with_memory,
+};
 use crate::ir::term::BlankScope;
 
 /// Whether `datatype` is one of the two SEP-0009 composite datatype IRIs.
@@ -151,15 +156,34 @@ impl BlankBinding {
     /// at [`BlankScope::DEFAULT`].
     #[must_use]
     pub fn rebind(self, token: &str) -> Cow<'_, str> {
-        let (label, scope) = self.resolve(token);
-        match encode_blank_label(&label, scope, LabelAlphabet::BlankNodeLabel) {
-            // Re-borrow from `token` rather than from the temporary `label` when
-            // the whole round trip was the identity, so the caller keeps its
-            // no-allocation fast path.
+        self.rebind_with_memory(token, &mut Memory::new(&mut Resident))
+            .expect("resident blank-label binding allocation failed")
+    }
+
+    /// Bind the same label under the caller's original physical admission.
+    ///
+    /// # Errors
+    /// Returns physical refusal without changing label identity or spelling.
+    pub fn rebind_with_memory<'a, S: Admission + ?Sized>(
+        self,
+        token: &'a str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Cow<'a, str>, StorageError> {
+        let (label, scope) = match self {
+            Self::Decoded(alphabet) => decode_blank_label_with_memory(token, alphabet, memory)?,
+            Self::Ambient(scope) => (Cow::Borrowed(token), scope),
+        };
+        let encoded =
+            encode_blank_label_with_memory(&label, scope, LabelAlphabet::BlankNodeLabel, memory)?;
+        let bound = match encoded {
             Cow::Borrowed(encoded) if encoded == token => Cow::Borrowed(token),
-            Cow::Borrowed(encoded) => Cow::Owned(encoded.to_owned()),
+            Cow::Borrowed(encoded) => Cow::Owned(memory.string(encoded)?),
             Cow::Owned(encoded) => Cow::Owned(encoded),
+        };
+        if let Cow::Owned(label) = label {
+            memory.release_string(label)?;
         }
+        Ok(bound)
     }
 }
 
@@ -301,6 +325,53 @@ pub fn bind_cdt_blank_labels_unchecked<'a>(
     )
 }
 
+/// Bind the existing unchecked scanner's labels under original physical admission.
+///
+/// Recognition, root spans, nesting and byte-preserving splicing are identical to
+/// the resident path. An owned result remains admitted in `memory`; the caller
+/// must retain that original grant until the result is destroyed or transferred.
+///
+/// # Errors
+/// Returns physical refusal; it is never converted to a malformed-text no-op.
+pub fn bind_cdt_blank_labels_unchecked_with_memory<'a, S: Admission + ?Sized>(
+    lexical: &'a str,
+    datatype: &str,
+    binding: BlankBinding,
+    memory: &mut Memory<'_, S>,
+) -> Result<Cow<'a, str>, StorageError> {
+    if !is_cdt_datatype(datatype) {
+        return Ok(Cow::Borrowed(lexical));
+    }
+    let spans = scan_tokens_with_memory(lexical, memory)?;
+    let output = splice_with_memory(
+        lexical,
+        &spans,
+        &mut |token, memory| match token {
+            TokenKind::Blank(label) => match binding.rebind_with_memory(label, memory)? {
+                Cow::Borrowed(_) => Ok(None),
+                Cow::Owned(bound) => {
+                    let replacement = memory.format(&format_args!("_:{bound}"))?;
+                    memory.release_string(bound)?;
+                    Ok(Some(replacement))
+                }
+            },
+            TokenKind::Iri { .. } => Ok(None),
+        },
+        memory,
+    )?;
+    release_spans(spans, memory)?;
+    Ok(output)
+}
+
+fn release_spans<S: Admission + ?Sized>(
+    spans: Vec<TokenSpan>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    let bytes = span_payload_bytes(&spans)?;
+    memory.release_vec(spans)?;
+    memory.release_bytes(bytes)
+}
+
 /// Rewrite the blank-node AND IRI tokens of an ALREADY-BOUND composite lexical
 /// form, so a whole-dataset term rewrite reaches inside composite literals.
 ///
@@ -324,14 +395,54 @@ pub fn rewrite_cdt_terms<'a>(
     on_blank: &mut dyn FnMut(&str) -> Option<String>,
     on_iri: &mut dyn FnMut(&str, bool) -> Option<String>,
 ) -> Cow<'a, str> {
+    rewrite_cdt_terms_with_memory(
+        lexical,
+        datatype,
+        &mut |token, memory| {
+            let value = on_blank(token);
+            if let Some(value) = &value {
+                memory.add_bytes(value.capacity())?;
+            }
+            Ok(value)
+        },
+        &mut |iri, only, memory| {
+            let value = on_iri(iri, only);
+            if let Some(value) = &value {
+                memory.add_bytes(value.capacity())?;
+            }
+            Ok(value)
+        },
+        &mut Memory::new(&mut Resident),
+    )
+    .expect("resident composite term rewrite allocation failed")
+}
+
+/// Rewrite the same embedded blank and IRI token spans under their original
+/// native storage owner. Callback output must be allocated through `memory`.
+/// # Errors
+/// Returns physical layout, admission or allocator refusal before growth.
+pub fn rewrite_cdt_terms_with_memory<'a, S: Admission + ?Sized>(
+    lexical: &'a str,
+    datatype: &str,
+    on_blank: &mut impl FnMut(&str, &mut Memory<'_, S>) -> Result<Option<String>, StorageError>,
+    on_iri: &mut impl FnMut(&str, bool, &mut Memory<'_, S>) -> Result<Option<String>, StorageError>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Cow<'a, str>, StorageError> {
     if !is_cdt_datatype(datatype) {
-        return Cow::Borrowed(lexical);
+        return Ok(Cow::Borrowed(lexical));
     }
-    let spans = scan_tokens(lexical);
-    splice(lexical, &spans, &mut |token| match token {
-        TokenKind::Blank(label) => on_blank(label),
-        TokenKind::Iri { iri, iri_only } => on_iri(iri, *iri_only),
-    })
+    let spans = scan_tokens_with_memory(lexical, memory)?;
+    let result = splice_with_memory(
+        lexical,
+        &spans,
+        &mut |token, memory| match token {
+            TokenKind::Blank(label) => on_blank(label, memory),
+            TokenKind::Iri { iri, iri_only } => on_iri(iri, *iri_only, memory),
+        },
+        memory,
+    )?;
+    release_spans(spans, memory)?;
+    Ok(result)
 }
 
 /// Rewrite each `BLANK_NODE_LABEL` of an ALREADY-BOUND composite lexical form
@@ -356,6 +467,18 @@ pub fn rewrite_cdt_blank_terms<'a>(
     rewrite_cdt_terms(lexical, datatype, rewrite, &mut |_, _| None)
 }
 
+/// Rename the same embedded composite blanks through the original native scanner.
+/// # Errors
+/// Returns physical refusal; every returned owned byte retains caller `memory`.
+pub fn rewrite_cdt_blank_terms_with_memory<'a, S: Admission + ?Sized>(
+    lexical: &'a str,
+    datatype: &str,
+    rewrite: &mut impl FnMut(&str, &mut Memory<'_, S>) -> Result<Option<String>, StorageError>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Cow<'a, str>, StorageError> {
+    rewrite_cdt_terms_with_memory(lexical, datatype, rewrite, &mut |_, _, _| Ok(None), memory)
+}
+
 /// Every `(label, scope)` pair an ALREADY-BOUND composite lexical form
 /// references, in occurrence order and with duplicates kept.
 ///
@@ -371,19 +494,38 @@ pub fn rewrite_cdt_blank_terms<'a>(
 /// Empty for a non-composite datatype.
 #[must_use]
 pub fn cdt_embedded_blanks(lexical: &str, datatype: &str) -> Vec<(String, BlankScope)> {
+    cdt_embedded_blanks_with_memory(lexical, datatype, &mut Memory::new(&mut Resident))
+        .expect("resident composite blank discovery allocation failed")
+}
+
+/// Discover the same embedded blank identities through the original scanner,
+/// preserving their original buffer grant until the returned labels die.
+///
+/// # Errors
+/// Returns physical layout, admission or allocator refusal.
+pub fn cdt_embedded_blanks_with_memory<S: Admission + ?Sized>(
+    lexical: &str,
+    datatype: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<Vec<(String, BlankScope)>, StorageError> {
     if !is_cdt_datatype(datatype) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    scan_tokens(lexical)
-        .into_iter()
-        .filter_map(|span| match span.kind {
-            TokenKind::Blank(token) => {
-                let (label, scope) = decode_blank_label(&token, LabelAlphabet::BlankNodeLabel);
-                Some((label.into_owned(), scope))
-            }
-            TokenKind::Iri { .. } => None,
-        })
-        .collect()
+    let spans = scan_tokens_with_memory(lexical, memory)?;
+    let mut blanks = Vec::new();
+    for span in &spans {
+        if let TokenKind::Blank(token) = &span.kind {
+            let (label, scope) =
+                decode_blank_label_with_memory(token, LabelAlphabet::BlankNodeLabel, memory)?;
+            let label = match label {
+                Cow::Owned(label) => label,
+                Cow::Borrowed(label) => memory.string(label)?,
+            };
+            memory.push(&mut blanks, (label, scope))?;
+        }
+    }
+    release_spans(spans, memory)?;
+    Ok(blanks)
 }
 
 /// Parse `lexical` as a value of the composite `datatype`, mapping every
@@ -440,29 +582,52 @@ fn splice<'a>(
     spans: &[TokenSpan],
     rewrite: &mut dyn FnMut(&TokenKind) -> Option<String>,
 ) -> Cow<'a, str> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    splice_with_memory(
+        lexical,
+        spans,
+        &mut |token, memory| {
+            let replacement = rewrite(token);
+            // Resident callbacks own their storage before entering this scanner.
+            // Bounded callbacks below allocate through the original memory instead.
+            if let Some(text) = &replacement {
+                memory.add_bytes(text.capacity())?;
+            }
+            Ok(replacement)
+        },
+        &mut memory,
+    )
+    .expect("resident composite splice allocation failed")
+}
+
+fn splice_with_memory<'a, S: Admission + ?Sized>(
+    lexical: &'a str,
+    spans: &[TokenSpan],
+    rewrite: &mut impl FnMut(&TokenKind, &mut Memory<'_, S>) -> Result<Option<String>, StorageError>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Cow<'a, str>, StorageError> {
     let mut out: Option<String> = None;
     let mut cursor = 0usize;
     for span in spans {
-        // A token the previous splice already consumed (only reachable if the
-        // scan produced overlapping spans, which it does not) is skipped rather
-        // than allowed to slice mid-character.
         if span.start < cursor {
             continue;
         }
-        let Some(replacement) = rewrite(&span.kind) else {
+        let Some(replacement) = rewrite(&span.kind, memory)? else {
             continue;
         };
-        let buf = out.get_or_insert_with(|| String::with_capacity(lexical.len() + 16));
-        buf.push_str(&lexical[cursor..span.start]);
-        buf.push_str(&replacement);
+        let buf = out.get_or_insert_with(String::new);
+        memory.push_str(buf, &lexical[cursor..span.start])?;
+        memory.push_str(buf, &replacement)?;
+        memory.release_string(replacement)?;
         cursor = span.end;
     }
     match out {
         Some(mut buf) => {
-            buf.push_str(&lexical[cursor..]);
-            Cow::Owned(buf)
+            memory.push_str(&mut buf, &lexical[cursor..])?;
+            Ok(Cow::Owned(buf))
         }
-        None => Cow::Borrowed(lexical),
+        None => Ok(Cow::Borrowed(lexical)),
     }
 }
 
@@ -592,33 +757,83 @@ impl Region {
 /// unescaped-then-re-escaped, so a nested literal's escape spellings survive a
 /// rewrite of its labels byte for byte.
 fn scan_tokens(lexical: &str) -> Vec<TokenSpan> {
+    scan_tokens_with_memory(lexical, &mut Memory::new(&mut Resident))
+        .expect("resident composite scanner allocation failed")
+}
+
+fn scan_tokens_with_memory<S: Admission + ?Sized>(
+    lexical: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<Vec<TokenSpan>, StorageError> {
     let mut spans = Vec::new();
-    let mut queue = vec![Region {
-        text: lexical.to_owned(),
-        map: Vec::new(),
-    }];
+    let mut queue = Vec::new();
+    let text = memory.string(lexical)?;
+    memory.push(
+        &mut queue,
+        Region {
+            text,
+            map: Vec::new(),
+        },
+    )?;
     // One region per embedded composite literal; the outer parse's element
     // budget bounds how many there can be.
     let mut budget = purrdf_cdt::MAX_ELEMENTS;
     while let Some(region) = queue.pop() {
         if budget == 0 {
+            release_region(region, memory)?;
             break;
         }
         budget -= 1;
-        scan_region(&region, &mut spans, &mut queue);
+        scan_region(&region, &mut spans, &mut queue, memory)?;
+        release_region(region, memory)?;
     }
     spans.sort_unstable_by_key(|span| span.start);
     // A token located inside an embedded literal is nested INSIDE that
     // literal's own IRIREF-bearing span only in the datatype case, which is
     // scanned in the parent region; the label regions never overlap. Drop any
     // span that would still overlap its predecessor rather than trust that.
+    let before = span_payload_bytes(&spans)?;
     spans.dedup_by(|later, earlier| later.start < earlier.end);
-    spans
+    let after = span_payload_bytes(&spans)?;
+    memory.release_bytes(
+        before
+            .checked_sub(after)
+            .ok_or(StorageError::SizeOverflow)?,
+    )?;
+    while let Some(region) = queue.pop() {
+        release_region(region, memory)?;
+    }
+    memory.release_vec(queue)?;
+    Ok(spans)
+}
+
+fn span_payload_bytes(spans: &[TokenSpan]) -> Result<usize, StorageError> {
+    spans.iter().try_fold(0usize, |total, span| {
+        total
+            .checked_add(match &span.kind {
+                TokenKind::Blank(text) => text.capacity(),
+                TokenKind::Iri { iri, .. } => iri.capacity(),
+            })
+            .ok_or(StorageError::SizeOverflow)
+    })
+}
+
+fn release_region<S: Admission + ?Sized>(
+    region: Region,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    memory.release_string(region.text)?;
+    memory.release_vec(region.map)
 }
 
 /// Scan one region, appending token spans and queueing the unescaped content of
 /// every composite-typed literal it embeds.
-fn scan_region(region: &Region, spans: &mut Vec<TokenSpan>, queue: &mut Vec<Region>) {
+fn scan_region<S: Admission + ?Sized>(
+    region: &Region,
+    spans: &mut Vec<TokenSpan>,
+    queue: &mut Vec<Region>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
     let bytes = region.text.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {
@@ -630,20 +845,24 @@ fn scan_region(region: &Region, spans: &mut Vec<TokenSpan>, queue: &mut Vec<Regi
                 if let Some(close) = close {
                     // An element-position IRI: `iri_only` is false, because the
                     // grammar admits a blank node in this very position.
-                    push_iri_span(region, i, close, end, false, spans);
+                    push_iri_span(region, i, close, end, false, spans, memory)?;
                 }
                 i = end;
             }
-            b'"' | b'\'' => i = scan_string(region, i, spans, queue),
+            b'"' | b'\'' => i = scan_string(region, i, spans, queue, memory)?,
             b'_' if bytes.get(i + 1) == Some(&b':') => {
                 let label_start = i + 2;
                 let end = scan_label_body(&region.text, label_start);
                 if end > label_start {
-                    spans.push(TokenSpan {
-                        start: region.root_of(i),
-                        end: region.root_of(end),
-                        kind: TokenKind::Blank(region.text[label_start..end].to_owned()),
-                    });
+                    let label = memory.string(&region.text[label_start..end])?;
+                    memory.push(
+                        spans,
+                        TokenSpan {
+                            start: region.root_of(i),
+                            end: region.root_of(end),
+                            kind: TokenKind::Blank(label),
+                        },
+                    )?;
                 }
                 i = end.max(label_start);
             }
@@ -653,6 +872,7 @@ fn scan_region(region: &Region, spans: &mut Vec<TokenSpan>, queue: &mut Vec<Regi
             }
         }
     }
+    Ok(())
 }
 
 /// Scan an `IRIREF` opening at `start`, returning `(end, close)` — the offset
@@ -702,33 +922,39 @@ fn scan_label_body(text: &str, start: usize) -> usize {
 
 /// Record one `IRIREF` token: `open` is the `<`, `close` the `>`, `end` one past
 /// the `>`.
-fn push_iri_span(
+fn push_iri_span<S: Admission + ?Sized>(
     region: &Region,
     open: usize,
     close: usize,
     end: usize,
     iri_only: bool,
     spans: &mut Vec<TokenSpan>,
-) {
-    spans.push(TokenSpan {
-        start: region.root_of(open),
-        end: region.root_of(end),
-        kind: TokenKind::Iri {
-            iri: expand_uchars(&region.text[open + 1..close]).into_owned(),
-            iri_only,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    let iri = match expand_uchars_with_memory(&region.text[open + 1..close], memory)? {
+        Cow::Borrowed(text) => memory.string(text)?,
+        Cow::Owned(text) => text,
+    };
+    memory.push(
+        spans,
+        TokenSpan {
+            start: region.root_of(open),
+            end: region.root_of(end),
+            kind: TokenKind::Iri { iri, iri_only },
         },
-    });
+    )
 }
 
 /// Scan a quoted string opening at `start`, queueing its unescaped content when
 /// a `^^` datatype marks it as an embedded composite literal. Returns the offset
 /// just past the literal (including any datatype or language tag).
-fn scan_string(
+fn scan_string<S: Admission + ?Sized>(
     region: &Region,
     start: usize,
     spans: &mut Vec<TokenSpan>,
     queue: &mut Vec<Region>,
-) -> usize {
+    memory: &mut Memory<'_, S>,
+) -> Result<usize, StorageError> {
     let bytes = region.text.as_bytes();
     let quote = bytes[start];
     let long = region.text[start..].starts_with(if quote == b'"' { "\"\"\"" } else { "'''" });
@@ -760,39 +986,53 @@ fn scan_string(
         i += 1;
     }
     if after >= bytes.len() {
-        return bytes.len();
+        return Ok(bytes.len());
     }
 
     // `String (LANGTAG | '^^' IRIREF)?` — only the typed form can be composite.
     if !region.text[after..].starts_with("^^") {
-        return after;
+        return Ok(after);
     }
     let iri_start = after + 2;
     if bytes.get(iri_start) != Some(&b'<') {
-        return iri_start;
+        return Ok(iri_start);
     }
     let (iri_end, close) = scan_iriref(bytes, iri_start);
     let Some(close) = close else {
-        return iri_end;
+        return Ok(iri_end);
     };
     // An IRIREF body's `UCHAR` escapes decoded, so a datatype written with them
     // still compares equal to the composite IRIs.
-    let datatype = expand_uchars(&region.text[iri_start + 1..close]);
+    let datatype = expand_uchars_with_memory(&region.text[iri_start + 1..close], memory)?;
     if is_cdt_datatype(&datatype) {
-        queue.push(unescaped_region(region, content_start, content_end));
+        let nested = unescaped_region(region, content_start, content_end, memory)?;
+        memory.push(queue, nested)?;
+    }
+    if let Cow::Owned(datatype) = datatype {
+        memory.release_string(datatype)?;
     }
     // A literal's datatype can never be a blank node, so a rewriter that mints
     // blanks from IRIs must refuse here rather than write an invalid literal.
-    push_iri_span(region, iri_start, close, iri_end, true, spans);
-    iri_end
+    push_iri_span(region, iri_start, close, iri_end, true, spans, memory)?;
+    Ok(iri_end)
 }
 
 /// Build the scan region for an embedded composite literal: its content
 /// unescaped, plus the root offset of every resulting byte.
-fn unescaped_region(region: &Region, content_start: usize, content_end: usize) -> Region {
+fn unescaped_region<S: Admission + ?Sized>(
+    region: &Region,
+    content_start: usize,
+    content_end: usize,
+    memory: &mut Memory<'_, S>,
+) -> Result<Region, StorageError> {
     let raw = &region.text[content_start..content_end];
-    let mut text = String::with_capacity(raw.len());
-    let mut map = Vec::with_capacity(raw.len() + 1);
+    let mut text = String::new();
+    let mut map = Vec::new();
+    memory.reserve_string(&mut text, raw.len())?;
+    memory.reserve(
+        &mut map,
+        raw.len().checked_add(1).ok_or(StorageError::SizeOverflow)?,
+    )?;
     let bytes = raw.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {
@@ -804,21 +1044,21 @@ fn unescaped_region(region: &Region, content_start: usize, content_end: usize) -
                 // Every byte an escape produces points at the escape's opening
                 // backslash: a label never rides in an escape, so this offset is
                 // only ever consulted for bytes that are not part of a label.
-                map.push(root);
+                memory.push(&mut map, root)?;
             }
-            text.push(ch);
+            memory.push_char(&mut text, ch)?;
             i += width;
         } else {
             let ch = raw[i..].chars().next().unwrap_or('\u{fffd}');
             for k in 0..ch.len_utf8() {
-                map.push(root + k);
+                memory.push(&mut map, root + k)?;
             }
             text.push(ch);
             i += ch.len_utf8();
         }
     }
-    map.push(region.root_of(content_end));
-    Region { text, map }
+    memory.push(&mut map, region.root_of(content_end))?;
+    Ok(Region { text, map })
 }
 
 /// Decode one escape sequence at `at`, returning the scalar and the raw width

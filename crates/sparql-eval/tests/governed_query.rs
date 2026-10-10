@@ -227,7 +227,8 @@ fn subjects(result: &SparqlResult) -> Vec<String> {
             out.sort();
             out
         }
-        other => panic!("expected SELECT solutions, got: {other:?}"),
+        SparqlResult::Boolean(_) => panic!("expected SELECT solutions, got a boolean result"),
+        SparqlResult::Graph(_) => panic!("expected SELECT solutions, got a graph result"),
     }
 }
 
@@ -296,7 +297,7 @@ fn plain_bind_reuse_preserves_bound_unbound_rows_and_projected_multiplicity() {
 }
 
 /// The frozen graph a graph-producing query returned.
-fn graph_of(result: &SparqlResult) -> &Arc<RdfDataset> {
+fn graph_of(result: &SparqlResult) -> &RdfDataset {
     match result {
         SparqlResult::Graph(graph) => graph,
         other => panic!("expected a CONSTRUCT/DESCRIBE graph, got: {other:?}"),

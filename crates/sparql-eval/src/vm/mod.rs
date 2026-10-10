@@ -67,14 +67,24 @@ pub(crate) fn program_at<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     node: &GraphPattern,
     expr: &Expression,
-) -> Arc<ExprProgram> {
+) -> Result<crate::workspace::SharedWorkspace<ExprProgram>, EvalError> {
     if let Some(plan) = ctx.plan.as_ref()
         && let Some(id) = plan.node_of(node)
         && let Some(position) = attached_position(node, expr)
     {
-        return plan.shape().program(id, position, expr);
+        if !ctx.growth.is_bounded() {
+            return Ok(plan.shape().program(id, position, expr).into());
+        }
+        if let Some(program) = plan.shape().cached_program(id, position) {
+            return Ok(program.into());
+        }
     }
-    Arc::new(ExprProgram::compile(expr))
+    if ctx.growth.is_bounded() {
+        let program = ExprProgram::compile_admitted(expr, &ctx.growth)?;
+        crate::workspace::SharedWorkspace::new_admitted(program, &ctx.growth)
+    } else {
+        Ok(Arc::new(ExprProgram::compile(expr)).into())
+    }
 }
 
 /// `expr`'s position among `node`'s attached expressions, in the order the plan
@@ -103,18 +113,96 @@ enum Val<I: Copy> {
     /// An effective boolean value, or an error.
     Ebv(Option<bool>),
     /// A string argument (lexical form, lower-cased tag and base direction), or absent.
-    Str(Option<helpers::StringArg>),
+    Str(Option<helpers::OwnedStringArg>),
     /// The program's string constant at this index, read in place rather than copied.
     StrConst(u32),
     /// A triple term a constructor built for the constructor it is the object of, not
     /// interned, or unbound.
-    Value(Option<TermValue>),
+    Value(Option<crate::WorkspaceTerm>),
     /// An `IN` in progress: the needle, its value, and whether a candidate raised.
     In {
         target: SolutionTerm<I>,
-        value: TermValue,
+        value: crate::WorkspaceTerm,
         saw_error: bool,
     },
+}
+
+/// Actual dispatch still reads its original native `[Option<TermValue>]` slice.
+/// This owner keeps every payload's original grant through that entire call,
+/// including a SPARQL-bodied suspension, without copying any argument values.
+pub(crate) struct Arguments {
+    values: crate::AdmittedVec<Option<TermValue>>,
+    // Declaration order drops all payloads before their original grants.
+    allocations: crate::AdmittedVec<crate::WorkspaceAllocation>,
+}
+
+impl std::fmt::Debug for Arguments {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Arguments")
+            .field("len", &self.values.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::ops::Deref for Arguments {
+    type Target = [Option<TermValue>];
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
+
+impl Arguments {
+    fn new(workspace: &crate::WorkspaceCapability) -> Self {
+        Self {
+            values: crate::AdmittedVec::new(workspace),
+            allocations: crate::AdmittedVec::new(workspace),
+        }
+    }
+
+    fn with_capacity(
+        capacity: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Ok(Self {
+            values: crate::AdmittedVec::with_capacity(capacity, workspace)?,
+            allocations: if workspace.is_bounded() {
+                crate::AdmittedVec::with_capacity(capacity, workspace)?
+            } else {
+                crate::AdmittedVec::new(workspace)
+            },
+        })
+    }
+
+    fn clear(&mut self) {
+        self.values.clear();
+        self.allocations.clear();
+    }
+
+    fn push(&mut self, value: Option<crate::WorkspaceTerm>) -> Result<(), EvalError> {
+        // Admit both metadata slots BEFORE separating the original payload owner.
+        // A refused push still drops WorkspaceTerm's payload before its grant.
+        let retain = value
+            .as_ref()
+            .is_some_and(crate::WorkspaceTerm::has_admission);
+        self.values.reserve_next()?;
+        if retain {
+            self.allocations.reserve_next()?;
+        }
+        if let Some(value) = value {
+            let (value, allocation) = value.into_parts();
+            self.values.push_reserved(Some(value));
+            if retain {
+                self.allocations.push_reserved(allocation);
+            }
+        } else {
+            self.values.push_reserved(None);
+        }
+        Ok(())
+    }
+
+    fn take(&mut self, workspace: &crate::WorkspaceCapability) -> Self {
+        std::mem::replace(self, Self::new(workspace))
+    }
 }
 
 /// The value stack. On the heap rather than inline: a link lives in the frame of the
@@ -171,7 +259,7 @@ pub(crate) enum Suspend<'e, 'd> {
         func: &'d crate::user_fn::UserFunction,
         body: &'d Arc<crate::engine::PreparedQuery>,
         call: u32,
-        vals: Vec<Option<TermValue>>,
+        vals: Arguments,
     },
 }
 
@@ -179,7 +267,7 @@ pub(crate) enum Suspend<'e, 'd> {
 /// schema, its constant regexes compiled, its `EXISTS` bound to their patterns, and its
 /// constant pool and value stack.
 pub(crate) struct Linked<'e, I: Copy> {
-    program: Arc<ExprProgram>,
+    program: crate::workspace::SharedWorkspace<ExprProgram>,
     /// Each variable slot's schema column.
     ///
     /// Held inline for a program reading few variables, so linking one allocates
@@ -196,83 +284,195 @@ pub(crate) struct Linked<'e, I: Copy> {
     stack: ValStack<I>,
     /// A function call's argument values, refilled by every call instruction, so a row
     /// that calls a function reuses one buffer instead of allocating its own.
-    args: Vec<Option<TermValue>>,
+    args: Arguments,
+    // The linked buffers are destroyed before their physical admission.
+    _allocation: Option<crate::WorkspaceAllocation>,
+    _exists_allocation: Option<crate::WorkspaceAllocation>,
 }
 
 impl<'e, I: Copy + PartialEq> Linked<'e, I> {
     /// Link `program`, compiled from `expr`, to a call over `schema`.
+    #[cfg(test)]
     pub(crate) fn link<D: DatasetView<Id = I> + Sync>(
-        program: Arc<ExprProgram>,
+        program: impl Into<crate::workspace::SharedWorkspace<ExprProgram>>,
         expr: &'e Expression,
         schema: &VarSchema,
         ctx: &mut EvalCtx<'_, D>,
     ) -> Self {
+        Self::link_admitted(program, expr, schema, ctx).expect("resident VM link allocation")
+    }
+
+    pub(crate) fn link_admitted<D: DatasetView<Id = I> + Sync>(
+        program: impl Into<crate::workspace::SharedWorkspace<ExprProgram>>,
+        expr: &'e Expression,
+        schema: &VarSchema,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<Self, EvalError> {
+        let program = program.into();
         let mut exists = Vec::new();
+        let mut exists_allocation = None;
         if program.has_exists() {
-            let mut pending = vec![expr];
+            let mut pending = Vec::new();
+            let mut pending_allocation = None;
+            ctx.growth
+                .reserve_vec(&mut pending, &mut pending_allocation, 1)?;
+            pending.push(expr);
             while let Some(expr) = pending.pop() {
                 if let Expression::Exists(pattern) = expr {
+                    let required = exists
+                        .len()
+                        .checked_add(1)
+                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                    ctx.growth
+                        .reserve_vec(&mut exists, &mut exists_allocation, required)?;
                     exists.push(&**pattern);
                 }
-                compile::push_operands(expr, &mut pending);
+                let start = pending.len();
+                let mut failure = None;
+                compile::visit_operands(expr, |operand| {
+                    if failure.is_some() {
+                        return;
+                    }
+                    let Some(required) = pending.len().checked_add(1) else {
+                        failure = Some(EvalError::WorkspaceBoundOverflow);
+                        return;
+                    };
+                    match ctx
+                        .growth
+                        .reserve_vec(&mut pending, &mut pending_allocation, required)
+                    {
+                        Ok(()) => pending.push(operand),
+                        Err(error) => failure = Some(error),
+                    }
+                });
+                if let Some(error) = failure {
+                    return Err(error);
+                }
+                pending[start..].reverse();
             }
         }
-        Self::link_parts(program, exists, schema, ctx)
+        Self::link_parts(program, exists, exists_allocation, schema, ctx)
     }
 
     /// Link a program whose expression is not at hand. An `EXISTS` in it has no
     /// pattern to test and fails the run as an internal error.
-    pub(crate) fn link_without_exists<D: DatasetView<Id = I> + Sync>(
-        program: Arc<ExprProgram>,
+    pub(crate) fn link_without_exists_admitted<D: DatasetView<Id = I> + Sync>(
+        program: impl Into<crate::workspace::SharedWorkspace<ExprProgram>>,
         schema: &VarSchema,
         ctx: &mut EvalCtx<'_, D>,
-    ) -> Self {
-        Self::link_parts(program, Vec::new(), schema, ctx)
+    ) -> Result<Self, EvalError> {
+        Self::link_parts(program.into(), Vec::new(), None, schema, ctx)
     }
 
     fn link_parts<D: DatasetView<Id = I> + Sync>(
-        program: Arc<ExprProgram>,
+        program: crate::workspace::SharedWorkspace<ExprProgram>,
         exists: Vec<&'e GraphPattern>,
+        exists_allocation: Option<crate::WorkspaceAllocation>,
         schema: &VarSchema,
         ctx: &mut EvalCtx<'_, D>,
-    ) -> Self {
-        let slots = program
-            .vars
+    ) -> Result<Self, EvalError> {
+        let stack_capacity = program.ops.len();
+        let args_capacity = program
+            .ops
             .iter()
-            .map(|var| schema.index_of(var))
-            .collect();
-        let regexes = program
-            .regexes
-            .iter()
-            .map(|constant| match constant {
+            .filter_map(|op| match op {
+                Op::Call { argc, .. } | Op::CallCustom { argc, .. } => Some(*argc as usize),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        let arrays = [
+            std::alloc::Layout::array::<Option<usize>>(if program.vars.len() > 4 {
+                program.vars.len()
+            } else {
+                0
+            }),
+            std::alloc::Layout::array::<ConstCell<I>>(if program.consts.len() > 4 {
+                program.consts.len()
+            } else {
+                0
+            }),
+            std::alloc::Layout::array::<RegexSlot>(program.regexes.len()),
+            std::alloc::Layout::array::<Val<I>>(stack_capacity),
+        ];
+        let mut bytes = 0usize;
+        for layout in arrays {
+            bytes = bytes
+                .checked_add(
+                    layout
+                        .map_err(|_| EvalError::WorkspaceBoundOverflow)?
+                        .size(),
+                )
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        }
+        let allocation = ctx
+            .growth
+            .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let mut slots = purrdf_core::SmallVec::new();
+        slots
+            .try_reserve_exact(program.vars.len())
+            .map_err(|_| EvalError::AllocationFailed {
+                construct: "VM variable slots",
+            })?;
+        for var in &program.vars {
+            slots.push(schema.index_of(var));
+        }
+        let mut consts = purrdf_core::SmallVec::new();
+        consts
+            .try_reserve_exact(program.consts.len())
+            .map_err(|_| EvalError::AllocationFailed {
+                construct: "VM constant cells",
+            })?;
+        for _ in 0..program.consts.len() {
+            consts.push(ConstCell::Unread);
+        }
+        let mut regexes = Vec::new();
+        regexes
+            .try_reserve_exact(program.regexes.len())
+            .map_err(|_| EvalError::AllocationFailed {
+                construct: "VM regex slots",
+            })?;
+        for constant in &program.regexes {
+            regexes.push(match constant {
                 Some((pattern, flags)) => {
                     RegexSlot::Linked(crate::xpath_regex::LinkedPattern::link(ctx, pattern, flags))
                 }
                 None => RegexSlot::PerRow,
-            })
-            .collect();
-        Self {
-            consts: purrdf_core::smallvec![ConstCell::Unread; program.consts.len()],
+            });
+        }
+        let mut stack = Vec::new();
+        stack
+            .try_reserve_exact(stack_capacity)
+            .map_err(|_| EvalError::AllocationFailed {
+                construct: "VM value stack",
+            })?;
+        let args = Arguments::with_capacity(args_capacity, &ctx.growth)?;
+        Ok(Self {
+            consts,
             slots,
             regexes,
             exists,
-            stack: Vec::new(),
-            args: Vec::new(),
+            stack,
+            args,
             program,
-        }
+            _allocation: Some(allocation),
+            _exists_allocation: exists_allocation,
+        })
     }
 
     /// A copy for a forked worker: the same slots, regexes and patterns, with a constant
     /// pool of its own, since the worker interns into its own scratch.
     pub(crate) fn fresh(&self) -> Self {
         Self {
-            program: Arc::clone(&self.program),
+            program: self.program.clone(),
             slots: self.slots.clone(),
             consts: purrdf_core::smallvec![ConstCell::Unread; self.consts.len()],
             regexes: self.regexes.clone(),
             exists: self.exists.clone(),
             stack: Vec::new(),
-            args: Vec::new(),
+            args: Arguments::new(&crate::WorkspaceCapability::resident()),
+            _allocation: None,
+            _exists_allocation: None,
         }
     }
 
@@ -298,6 +498,30 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
         schema: &VarSchema,
         ctx: &mut EvalCtx<'_, D>,
     ) -> Result<Option<SolutionTerm<I>>, EvalError> {
+        self.stack.clear();
+        let mut pc = 0;
+        loop {
+            match self.advance(&mut pc, row, ctx)? {
+                VmStep::Value(value) => return Ok(value),
+                VmStep::Suspend(suspend) => {
+                    let value = resolve(suspend, &self.program, row, schema, ctx)?;
+                    self.stack.push(Val::Term(value));
+                }
+            }
+        }
+    }
+
+    /// Run instructions up to a recursive suspension or the completed value.
+    /// The instruction temporaries must die before `term` resolves the suspension:
+    /// keeping this frame live would charge every opcode's native owners to each
+    /// nested EXISTS or SPARQL function, even when that opcode never runs there.
+    #[inline(never)]
+    fn advance<'d, D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        pc: &mut usize,
+        row: &[Option<SolutionTerm<I>>],
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<VmStep<'e, 'd, I>, EvalError> {
         let Self {
             program,
             slots,
@@ -306,19 +530,19 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
             exists,
             stack,
             args,
+            ..
         } = self;
-        stack.clear();
         let ops = &program.ops;
-        let mut pc = 0_usize;
-        while let Some(op) = ops.get(pc) {
-            pc += 1;
+        while let Some(op) = ops.get(*pc) {
+            *pc += 1;
             match *op {
                 Op::Const(k) => {
                     let k = k as usize;
                     let term = match consts[k] {
                         ConstCell::Read(term) => term,
                         ConstCell::Unread => {
-                            let term = helpers::intern_leaf(ctx, program.consts[k].value())?;
+                            let value = program.consts[k].value_admitted(&ctx.growth)?;
+                            let term = ctx.intern_workspace_term(value)?;
                             consts[k] = ConstCell::Read(term);
                             term
                         }
@@ -385,16 +609,16 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 }
                 Op::Branch { on_false, end } => match pop_ebv(stack)? {
                     Some(true) => {}
-                    Some(false) => pc = on_false as usize,
+                    Some(false) => *pc = on_false as usize,
                     None => {
                         stack.push(Val::Term(None));
-                        pc = end as usize;
+                        *pc = end as usize;
                     }
                 },
-                Op::Jmp(target) => pc = target as usize,
+                Op::Jmp(target) => *pc = target as usize,
                 Op::CoalesceNext(end) => {
                     if matches!(stack.last(), Some(Val::Term(Some(_)))) {
-                        pc = end as usize;
+                        *pc = end as usize;
                     } else {
                         pop_term(stack)?;
                     }
@@ -403,10 +627,10 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 Op::InNeedle(end) => match pop_term(stack)? {
                     None => {
                         stack.push(Val::Term(None));
-                        pc = end as usize;
+                        *pc = end as usize;
                     }
                     Some(target) => {
-                        let value = helpers::value_of(ctx, target)?;
+                        let value = helpers::owned_value_of(ctx, target)?;
                         stack.push(Val::In {
                             target,
                             value,
@@ -443,7 +667,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     if matched {
                         stack.pop();
                         stack.push(Val::Term(Some(helpers::intern_boolean(ctx, true)?)));
-                        pc = end as usize;
+                        *pc = end as usize;
                     }
                 }
                 Op::InEnd => {
@@ -469,7 +693,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     stack.push(Val::Term(helpers::unary_numeric_term(
                         ctx,
                         operand,
-                        purrdf_xsd::numeric_unary_plus,
+                        purrdf_xsd::numeric::NumericUnaryOperator::Plus,
                     )?));
                 }
                 Op::UnaryMinus => {
@@ -477,7 +701,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     stack.push(Val::Term(helpers::unary_numeric_term(
                         ctx,
                         operand,
-                        purrdf_xsd::value_unary_minus,
+                        purrdf_xsd::numeric::NumericUnaryOperator::Minus,
                     )?));
                 }
                 Op::Exists(site) => {
@@ -487,48 +711,46 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                              for it",
                         )
                     })?;
-                    let value = resolve(Suspend::Exists(pattern), program, row, schema, ctx)?;
-                    stack.push(Val::Term(value));
+                    return Ok(VmStep::Suspend(Suspend::Exists(pattern)));
                 }
                 Op::Call { call, argc, regex } => {
                     pop_values(stack, argc, ctx, args)?;
                     let compiled = regex.and_then(|slot| regexes[slot as usize].linked());
-                    let value = helpers::apply_function(
-                        &program.calls[call as usize],
-                        args,
-                        ctx,
-                        compiled,
-                    )?;
-                    stack.push(Val::Term(value));
+                    let result =
+                        helpers::apply_function(&program.calls[call as usize], args, ctx, compiled);
+                    args.clear();
+                    stack.push(Val::Term(result?));
                 }
                 Op::CallCustom { call, argc } => {
                     pop_values(stack, argc, ctx, args)?;
-                    let value = match call_custom(program, call, args, ctx)? {
-                        VmStep::Value(value) => value,
-                        VmStep::Suspend(suspend) => resolve(suspend, program, row, schema, ctx)?,
-                    };
-                    stack.push(Val::Term(value));
+                    let result = call_custom(program, call, args, ctx);
+                    args.clear();
+                    match result? {
+                        VmStep::Value(value) => stack.push(Val::Term(value)),
+                        suspension @ VmStep::Suspend(_) => return Ok(suspension),
+                    }
                 }
                 Op::Triple { intern } => {
                     let object = match stack.pop() {
                         Some(Val::Term(term)) => {
-                            term.map(|t| helpers::value_of(ctx, t)).transpose()?
+                            term.map(|t| helpers::owned_value_of(ctx, t)).transpose()?
                         }
                         Some(Val::Value(value)) => value,
                         Some(_) => return Err(mistyped("a term or a triple term value")),
                         None => return Err(underflow()),
                     };
                     let predicate = pop_term(stack)?
-                        .map(|t| helpers::value_of(ctx, t))
+                        .map(|t| helpers::owned_value_of(ctx, t))
                         .transpose()?;
                     let subject = pop_term(stack)?
-                        .map(|t| helpers::value_of(ctx, t))
+                        .map(|t| helpers::owned_value_of(ctx, t))
                         .transpose()?;
-                    let value = helpers::triple_value(subject, predicate, object);
+                    let value =
+                        helpers::triple_value_admitted(subject, predicate, object, &ctx.growth)?;
                     stack.push(if intern {
                         Val::Term(
                             value
-                                .map(|value| helpers::intern(ctx, value))
+                                .map(|value| ctx.intern_workspace_term(value))
                                 .transpose()?
                                 .flatten(),
                         )
@@ -553,8 +775,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     stack.push(Val::Str(
                         term.map(|t| helpers::str_lexical_term(ctx, t))
                             .transpose()?
-                            .flatten()
-                            .map(|s| (s, None, None)),
+                            .flatten(),
                     ));
                 }
                 Op::ToLangLexical => {
@@ -562,8 +783,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     stack.push(Val::Str(
                         term.map(|t| helpers::lang_lexical_term(ctx, t))
                             .transpose()?
-                            .flatten()
-                            .map(|s| (s, None, None)),
+                            .flatten(),
                     ));
                 }
                 Op::StrPred(pred) => {
@@ -573,13 +793,13 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                         // §17.4.1.1: an incompatible pair is an error, not `false`.
                         (Some(h), Some(n))
                             if helpers::args_compatible(
-                                h.1.as_deref(),
-                                h.2,
-                                n.1.as_deref(),
-                                n.2,
+                                h.parts().1,
+                                h.parts().2,
+                                n.parts().1,
+                                n.parts().2,
                             ) =>
                         {
-                            let (h, n) = (h.0.as_str(), n.0.as_str());
+                            let (h, n) = (h.parts().0, n.parts().0);
                             let holds = match pred {
                                 StrPred::Contains => h.contains(n),
                                 StrPred::StrStarts => h.starts_with(n),
@@ -597,25 +817,25 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     // string is an error, never "no flags". The stack holds the
                     // operands text, pattern, flags, so they pop in reverse.
                     let flags = if flags {
-                        pop_str(stack, &program.strs)?.filter(|f| f.1.is_none())
+                        pop_str(stack, &program.strs)?.filter(|f| f.parts().1.is_none())
                     } else {
-                        Some(std::borrow::Cow::Borrowed(&NO_FLAGS))
+                        Some(StrArg::Borrowed(&NO_FLAGS))
                     };
                     // The pattern is a simple literal too; the text may be any string.
-                    let pattern = pop_str(stack, &program.strs)?.filter(|p| p.1.is_none());
+                    let pattern = pop_str(stack, &program.strs)?.filter(|p| p.parts().1.is_none());
                     let text = pop_str(stack, &program.strs)?;
                     let value = match (text, pattern, flags) {
                         (Some(text), Some(pattern), Some(flags)) => {
-                            let flags = flags.0.as_str();
+                            let flags = flags.parts().0;
                             let compiled = crate::xpath_regex::resolve(
                                 ctx,
-                                &pattern.0,
+                                pattern.parts().0,
                                 flags,
                                 regexes[slot as usize].linked(),
                             )?;
                             match compiled {
                                 Some(re) => re
-                                    .is_match(&text.0)?
+                                    .is_match(text.parts().0, &ctx.growth)?
                                     .map(|holds| helpers::intern_boolean(ctx, holds))
                                     .transpose()?,
                                 None => None,
@@ -630,9 +850,14 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     let tag = pop_str(stack, &program.strs)?;
                     // Both are simple literals (§17.4.3.13); a tagged one is an error.
                     let value = match (tag, range) {
-                        (Some(tag), Some(range)) if tag.1.is_none() && range.1.is_none() => Some(
-                            helpers::intern_boolean(ctx, helpers::lang_matches(&tag.0, &range.0))?,
-                        ),
+                        (Some(tag), Some(range))
+                            if tag.parts().1.is_none() && range.parts().1.is_none() =>
+                        {
+                            Some(helpers::intern_boolean(
+                                ctx,
+                                helpers::lang_matches(tag.parts().0, range.parts().0),
+                            )?)
+                        }
                         _ => None,
                     };
                     stack.push(Val::Term(value));
@@ -645,7 +870,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 "an expression program left more than its value on the stack",
             ));
         }
-        Ok(value)
+        Ok(VmStep::Value(value))
     }
 }
 
@@ -680,7 +905,7 @@ fn compare<D: DatasetView + Sync>(
 fn call_custom<'e, 'd, D: DatasetView + Sync>(
     program: &ExprProgram,
     call: u32,
-    vals: &[Option<TermValue>],
+    vals: &mut Arguments,
     ctx: &mut EvalCtx<'d, D>,
 ) -> Result<VmStep<'e, 'd, D::Id>, EvalError> {
     let Function::Custom(iri) = &program.calls[call as usize] else {
@@ -694,7 +919,7 @@ fn call_custom<'e, 'd, D: DatasetView + Sync>(
             func,
             body,
             call,
-            vals: vals.to_vec(),
+            vals: vals.take(&ctx.growth),
         }));
     }
     helpers::apply_custom_host(iri.as_str(), vals, ctx).map(VmStep::Value)
@@ -739,7 +964,7 @@ fn pop_values<D: DatasetView + Sync>(
     stack: &mut ValStack<D::Id>,
     argc: u32,
     ctx: &EvalCtx<'_, D>,
-    vals: &mut Vec<Option<TermValue>>,
+    vals: &mut Arguments,
 ) -> Result<(), EvalError> {
     let start = stack
         .len()
@@ -750,7 +975,7 @@ fn pop_values<D: DatasetView + Sync>(
         let Val::Term(term) = entry else {
             return Err(mistyped("a term"));
         };
-        vals.push(term.map(|t| helpers::value_of(ctx, t)).transpose()?);
+        vals.push(term.map(|t| helpers::owned_value_of(ctx, t)).transpose()?)?;
     }
     Ok(())
 }
@@ -771,23 +996,32 @@ fn pop_ebv<I: Copy>(stack: &mut ValStack<I>) -> Result<Option<bool>, EvalError> 
     }
 }
 
-/// A string argument as an instruction reads it: its lexical form, lower-cased tag and
-/// base direction, owned when the program computed it and borrowed when it is one of the program's
-/// constants.
-type StrArg<'p> = std::borrow::Cow<'p, helpers::StringArg>;
+/// Constants are borrowed from the authored program; runtime operands preserve
+/// their own original term lease. Neither representation deep-clones on a pop.
+enum StrArg<'p> {
+    Borrowed(&'p helpers::StringArg),
+    Owned(helpers::OwnedStringArg),
+}
 
-/// The flags an omitted `REGEX` flags argument reads as.
+impl StrArg<'_> {
+    fn parts(&self) -> (&str, Option<&str>, Option<purrdf_core::RdfTextDirection>) {
+        match self {
+            Self::Borrowed(value) => (&value.0, value.1.as_deref(), value.2),
+            Self::Owned(value) => value.parts(),
+        }
+    }
+}
+
+/// The flags an omitted REGEX argument reads as, without an allocation.
 static NO_FLAGS: helpers::StringArg = (String::new(), None, None);
 
-/// Pop a string argument: one the program computed, or one of its constants `strs`,
-/// borrowed where it stands.
 fn pop_str<'p, I: Copy>(
     stack: &mut ValStack<I>,
     strs: &'p [helpers::StringArg],
 ) -> Result<Option<StrArg<'p>>, EvalError> {
     match stack.pop() {
-        Some(Val::Str(value)) => Ok(value.map(std::borrow::Cow::Owned)),
-        Some(Val::StrConst(k)) => Ok(Some(std::borrow::Cow::Borrowed(&strs[k as usize]))),
+        Some(Val::Str(value)) => Ok(value.map(StrArg::Owned)),
+        Some(Val::StrConst(k)) => Ok(Some(StrArg::Borrowed(&strs[k as usize]))),
         Some(_) => Err(mistyped("a string argument")),
         None => Err(underflow()),
     }

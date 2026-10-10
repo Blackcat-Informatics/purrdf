@@ -11,7 +11,8 @@ use crate::ast::{
     BlankNode, GroundTerm, Literal, NamedNode, NamedNodePattern, QuadPattern, TermPattern,
     TriplePattern, Variable,
 };
-use crate::walk::{Flow, NodeRef, walk_pre_post};
+use crate::walk::{Flow, NodeRef, walk_pre_post_with_memory};
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 
 impl Query {
     /// Conservative bytes retained by this algebra, including vector capacities.
@@ -23,6 +24,40 @@ impl Query {
     /// height is charged in full.
     #[must_use]
     pub fn retained_size_bytes(&self) -> usize {
+        self.retained_size_bytes_with_memory(&mut Memory::new(&mut Resident))
+            .expect("resident retained-size traversal")
+    }
+
+    /// Observe the same conservative per-occurrence statistic with admitted spill.
+    /// This statistic never certifies native payload ownership.
+    ///
+    /// # Errors
+    /// Returns checked native working-storage refusal.
+    pub fn retained_size_bytes_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<usize, StorageError> {
+        self.retained_bytes_with_memory(memory, false)
+    }
+
+    /// Observe only original raw AST buffers and boxes after scratch dies.
+    /// Intrinsic text owners are excluded. This may release an original grant,
+    /// and must never admit a previously constructed payload.
+    ///
+    /// # Errors
+    /// Returns checked layout sum or native traversal-storage refusal.
+    pub fn raw_owned_bytes_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<usize, StorageError> {
+        self.retained_bytes_with_memory(memory, true)
+    }
+
+    fn retained_bytes_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+        raw: bool,
+    ) -> Result<usize, StorageError> {
         let (pattern, head) = match self {
             Self::Select {
                 pattern,
@@ -38,9 +73,9 @@ impl Query {
             } => (
                 pattern,
                 sum([
-                    dataset.heap_bytes(),
-                    base_iri.heap_bytes(),
-                    version.heap_bytes(),
+                    dataset.heap_bytes(raw),
+                    base_iri.heap_bytes(raw),
+                    version.heap_bytes(raw),
                 ]),
             ),
             Self::Construct {
@@ -52,14 +87,11 @@ impl Query {
             } => (
                 pattern,
                 sum([
-                    vec_bytes(template),
-                    template
-                        .iter()
-                        .map(templated)
-                        .fold(0, usize::saturating_add),
-                    dataset.heap_bytes(),
-                    base_iri.heap_bytes(),
-                    version.heap_bytes(),
+                    edge_bytes::<QuadPattern>(template.capacity()),
+                    templated_all(template, memory, raw)?,
+                    dataset.heap_bytes(raw),
+                    base_iri.heap_bytes(raw),
+                    version.heap_bytes(raw),
                 ]),
             ),
             Self::Describe {
@@ -71,49 +103,64 @@ impl Query {
             } => (
                 pattern,
                 sum([
-                    targets.heap_bytes(),
-                    dataset.heap_bytes(),
-                    base_iri.heap_bytes(),
-                    version.heap_bytes(),
+                    targets.heap_bytes(raw),
+                    dataset.heap_bytes(raw),
+                    base_iri.heap_bytes(raw),
+                    version.heap_bytes(raw),
                 ]),
             ),
         };
-        sum([
-            size_of::<Self>(),
+        let bytes = sum([
+            if raw { 0 } else { size_of::<Self>() },
             head,
-            tree_bytes(NodeRef::Pattern(pattern)),
-        ])
+            tree_bytes_with_memory(NodeRef::Pattern(pattern), memory, raw)?,
+        ]);
+        if raw && bytes == usize::MAX {
+            Err(StorageError::SizeOverflow)
+        } else {
+            Ok(bytes)
+        }
     }
 }
 
-/// The heap a `CONSTRUCT` template quad retains, its triple's terms included.
-fn templated(quad: &QuadPattern) -> usize {
-    sum([
-        quad.graph.heap_bytes(),
-        tree_bytes(NodeRef::Triple(&quad.triple)),
-    ])
+/// The original template statistic, including quoted terms.
+fn templated_all<S: Admission + ?Sized>(
+    template: &[QuadPattern],
+    memory: &mut Memory<'_, S>,
+    raw: bool,
+) -> Result<usize, StorageError> {
+    let mut total = 0usize;
+    for quad in template {
+        total = total.saturating_add(sum([
+            quad.graph.heap_bytes(raw),
+            tree_bytes_with_memory(NodeRef::Triple(&quad.triple), memory, raw)?,
+        ]));
+    }
+    Ok(total)
 }
 
-/// The heap the tree under `root` retains: every node's own share, summed over a
-/// work list.
-fn tree_bytes(root: NodeRef<'_>) -> usize {
+/// Every node's original conservative share; native walk storage is not counted.
+fn tree_bytes_with_memory<S: Admission + ?Sized>(
+    root: NodeRef<'_>,
+    memory: &mut Memory<'_, S>,
+    raw: bool,
+) -> Result<usize, StorageError> {
     let mut total = 0usize;
-    walk_pre_post(root, |visit, node| {
-        if visit == crate::walk::Visit::Enter {
-            total = total.saturating_add(own_bytes(node));
-        }
-        Flow::Descend
-    });
-    total
+    walk_pre_post_with_memory(
+        root,
+        |visit, node, _| {
+            if visit == crate::walk::Visit::Enter {
+                total = total.saturating_add(own_bytes(node, raw));
+            }
+            Ok::<_, StorageError>(Flow::Descend)
+        },
+        memory,
+    )?;
+    Ok(total)
 }
 
 fn sum(parts: impl IntoIterator<Item = usize>) -> usize {
     parts.into_iter().fold(0, usize::saturating_add)
-}
-
-/// The allocation a vector holds, by capacity, not counting what its elements own.
-fn vec_bytes<T>(values: &[T]) -> usize {
-    values.len().saturating_mul(size_of::<T>())
 }
 
 /// A list edge's allocation, by capacity.
@@ -124,44 +171,44 @@ fn edge_bytes<T>(capacity: usize) -> usize {
 /// The heap a node owns directly: its leaves, the boxes and vectors its children
 /// live in — but not what those children own, which is charged when they are
 /// visited.
-fn own_bytes(node: NodeRef<'_>) -> usize {
+fn own_bytes(node: NodeRef<'_>, raw: bool) -> usize {
     match node {
-        NodeRef::Pattern(pattern) => pattern_bytes(pattern),
-        NodeRef::Expr(expr) => expr_bytes(expr),
-        NodeRef::Path(path) => path_bytes(path),
-        NodeRef::Triple(triple) => triple.predicate.heap_bytes(),
+        NodeRef::Pattern(pattern) => pattern_bytes(pattern, raw),
+        NodeRef::Expr(expr) => expr_bytes(expr, raw),
+        NodeRef::Path(path) => path_bytes(path, raw),
+        NodeRef::Triple(triple) => triple.predicate.heap_bytes(raw),
         NodeRef::Term(term) => match term {
-            TermPattern::NamedNode(x) => x.heap_bytes(),
-            TermPattern::BlankNode(x) => x.heap_bytes(),
-            TermPattern::Literal(x) => x.heap_bytes(),
-            TermPattern::Variable(x) => x.heap_bytes(),
+            TermPattern::NamedNode(x) => x.heap_bytes(raw),
+            TermPattern::BlankNode(x) => x.heap_bytes(raw),
+            TermPattern::Literal(x) => x.heap_bytes(raw),
+            TermPattern::Variable(x) => x.heap_bytes(raw),
             TermPattern::Triple(_) => size_of::<TriplePattern>(),
         },
         NodeRef::Ground(term) => match term {
-            GroundTerm::NamedNode(x) => x.heap_bytes(),
-            GroundTerm::BlankNode(x) => x.heap_bytes(),
-            GroundTerm::Literal(x) => x.heap_bytes(),
+            GroundTerm::NamedNode(x) => x.heap_bytes(raw),
+            GroundTerm::BlankNode(x) => x.heap_bytes(raw),
+            GroundTerm::Literal(x) => x.heap_bytes(raw),
             GroundTerm::Triple(triple) => sum([
                 size_of::<crate::ast::GroundTriple>(),
-                triple.predicate.heap_bytes(),
+                triple.predicate.heap_bytes(raw),
             ]),
         },
         NodeRef::Order(_) => 0,
         NodeRef::Aggregate(aggregate) => sum([
-            aggregate.function.heap_bytes(),
+            aggregate.function.heap_bytes(raw),
             edge_bytes::<Expression>(aggregate.args.capacity()),
             edge_bytes::<(String, Literal)>(aggregate.scalarvals.capacity()),
             aggregate
                 .scalarvals
                 .iter()
-                .map(|(key, value)| sum([key.capacity(), value.heap_bytes()]))
+                .map(|(key, value)| sum([key.capacity(), value.heap_bytes(raw)]))
                 .fold(0, usize::saturating_add),
             edge_bytes::<OrderExpression>(aggregate.order_by.capacity()),
         ]),
     }
 }
 
-fn pattern_bytes(pattern: &GraphPattern) -> usize {
+fn pattern_bytes(pattern: &GraphPattern, raw: bool) -> usize {
     use GraphPattern as G;
     const INNER: usize = size_of::<GraphPattern>();
     match pattern {
@@ -173,7 +220,7 @@ fn pattern_bytes(pattern: &GraphPattern) -> usize {
                     edge_bytes::<(Variable, Variable)>(values.capacity()),
                     values
                         .iter()
-                        .map(|(a, b)| sum([a.heap_bytes(), b.heap_bytes()]))
+                        .map(|(a, b)| sum([a.heap_bytes(raw), b.heap_bytes(raw)]))
                         .fold(0, usize::saturating_add),
                 ])
             };
@@ -186,14 +233,14 @@ fn pattern_bytes(pattern: &GraphPattern) -> usize {
                         domain.len().saturating_mul(size_of::<Variable>()),
                         domain
                             .iter()
-                            .map(Variable::heap_bytes)
+                            .map(|variable| variable.heap_bytes(raw))
                             .fold(0, usize::saturating_add),
                     ])
                 }),
                 policy.optional.as_ref().map_or(0, |optional| {
                     sum([
                         pairs(&optional.retry_inputs),
-                        optional.forget_marker.heap_bytes(),
+                        optional.forget_marker.heap_bytes(raw),
                     ])
                 }),
             ])
@@ -213,31 +260,31 @@ fn pattern_bytes(pattern: &GraphPattern) -> usize {
             sum([INNER, keys])
         }
         G::Union { arms } => edge_bytes::<GraphPattern>(arms.capacity()),
-        G::Graph { name, .. } | G::Service { name, .. } => sum([INNER, name.heap_bytes()]),
-        G::Extend { variable, .. } => sum([INNER, variable.heap_bytes()]),
+        G::Graph { name, .. } | G::Service { name, .. } => sum([INNER, name.heap_bytes(raw)]),
+        G::Extend { variable, .. } => sum([INNER, variable.heap_bytes(raw)]),
         G::Values {
             variables,
             bindings,
         } => sum([
-            variables.heap_bytes(),
+            variables.heap_bytes(raw),
             edge_bytes::<Vec<Option<GroundTerm>>>(bindings.capacity()),
             bindings
                 .iter()
                 .map(|row| edge_bytes::<Option<GroundTerm>>(row.capacity()))
                 .fold(0, usize::saturating_add),
         ]),
-        G::Project { variables, .. } => sum([INNER, variables.heap_bytes()]),
+        G::Project { variables, .. } => sum([INNER, variables.heap_bytes(raw)]),
         G::Group {
             variables,
             aggregates,
             ..
         } => sum([
             INNER,
-            variables.heap_bytes(),
+            variables.heap_bytes(raw),
             edge_bytes::<(Variable, crate::AggregateExpression)>(aggregates.capacity()),
             aggregates
                 .iter()
-                .map(|(output, _)| output.heap_bytes())
+                .map(|(output, _)| output.heap_bytes(raw))
                 .fold(0, usize::saturating_add),
         ]),
         G::PropertyFunction(call) => sum([
@@ -247,17 +294,17 @@ fn pattern_bytes(pattern: &GraphPattern) -> usize {
         ]),
         G::Unfold {
             element, companion, ..
-        } => sum([INNER, element.heap_bytes(), companion.heap_bytes()]),
+        } => sum([INNER, element.heap_bytes(raw), companion.heap_bytes(raw)]),
     }
 }
 
-fn expr_bytes(expr: &Expression) -> usize {
+fn expr_bytes(expr: &Expression, raw: bool) -> usize {
     use Expression as E;
     const OPERAND: usize = size_of::<Expression>();
     match expr {
-        E::NamedNode(x) => x.heap_bytes(),
-        E::Literal(x) => x.heap_bytes(),
-        E::Variable(x) | E::Bound(x) => x.heap_bytes(),
+        E::NamedNode(x) => x.heap_bytes(raw),
+        E::Literal(x) => x.heap_bytes(raw),
+        E::Variable(x) | E::Bound(x) => x.heap_bytes(raw),
         E::Or(operands) | E::And(operands) => edge_bytes::<Expression>(operands.capacity()),
         E::Arithmetic(_, steps) => sum([
             OPERAND,
@@ -274,105 +321,110 @@ fn expr_bytes(expr: &Expression) -> usize {
         E::If(..) => 3 * OPERAND,
         E::Coalesce(list) => edge_bytes::<Expression>(list.capacity()),
         E::FunctionCall(function, args) => sum([
-            function.heap_bytes(),
+            function.heap_bytes(raw),
             edge_bytes::<Expression>(args.capacity()),
         ]),
         E::Exists(_) => size_of::<GraphPattern>(),
     }
 }
 
-fn path_bytes(path: &PropertyPathExpression) -> usize {
+fn path_bytes(path: &PropertyPathExpression, raw: bool) -> usize {
     use PropertyPathExpression as P;
     match path {
-        P::NamedNode(x) => x.heap_bytes(),
+        P::NamedNode(x) => x.heap_bytes(raw),
         P::Reverse(_) | P::ZeroOrMore(_) | P::OneOrMore(_) | P::ZeroOrOne(_) | P::Range { .. } => {
             size_of::<PropertyPathExpression>()
         }
         P::Sequence(elements) | P::Alternative(elements) => {
             edge_bytes::<PropertyPathExpression>(elements.capacity())
         }
-        P::NegatedPropertySet(elements) => elements.heap_bytes(),
-        P::Wildcard { namespace } => namespace.heap_bytes(),
+        P::NegatedPropertySet(elements) => elements.heap_bytes(raw),
+        P::Wildcard { namespace } => namespace.heap_bytes(raw),
     }
 }
 
 /// The heap a leaf value owns; leaves own no node, so this never recurses.
 trait HeapBytes {
-    fn heap_bytes(&self) -> usize;
+    fn heap_bytes(&self, raw: bool) -> usize;
 }
 impl<T: HeapBytes> HeapBytes for Vec<T> {
-    fn heap_bytes(&self) -> usize {
-        edge_bytes::<T>(self.capacity()).saturating_add(sum(self.iter().map(HeapBytes::heap_bytes)))
+    fn heap_bytes(&self, raw: bool) -> usize {
+        edge_bytes::<T>(self.capacity())
+            .saturating_add(sum(self.iter().map(|value| value.heap_bytes(raw))))
     }
 }
 impl<T: HeapBytes> HeapBytes for Option<T> {
-    fn heap_bytes(&self) -> usize {
-        self.as_ref().map_or(0, HeapBytes::heap_bytes)
+    fn heap_bytes(&self, raw: bool) -> usize {
+        self.as_ref().map_or(0, |value| value.heap_bytes(raw))
     }
 }
 impl HeapBytes for String {
-    fn heap_bytes(&self) -> usize {
+    fn heap_bytes(&self, _raw: bool) -> usize {
         self.capacity()
     }
 }
-fn shared_string(value: &str) -> usize {
-    value.len().saturating_add(2 * size_of::<usize>())
+fn shared_string(value: &str, raw: bool) -> usize {
+    if raw {
+        0
+    } else {
+        value.len().saturating_add(2 * size_of::<usize>())
+    }
 }
 macro_rules! lexical {
     ($($ty:ty),+ $(,)?) => { $(impl HeapBytes for $ty {
-        fn heap_bytes(&self) -> usize { shared_string(self.as_str()) }
+        fn heap_bytes(&self, raw: bool) -> usize { shared_string(self.as_str(), raw) }
     })+ };
 }
 lexical!(NamedNode, BlankNode, Variable);
 impl HeapBytes for Literal {
-    fn heap_bytes(&self) -> usize {
+    fn heap_bytes(&self, raw: bool) -> usize {
         sum([
-            shared_string(self.value()),
-            self.datatype().heap_bytes(),
-            self.language().map_or(0, shared_string),
+            shared_string(self.value(), raw),
+            self.datatype().heap_bytes(raw),
+            self.language().map_or(0, |value| shared_string(value, raw)),
         ])
     }
 }
 impl HeapBytes for NamedNodePattern {
-    fn heap_bytes(&self) -> usize {
+    fn heap_bytes(&self, raw: bool) -> usize {
         match self {
-            Self::NamedNode(x) => x.heap_bytes(),
-            Self::Variable(x) => x.heap_bytes(),
+            Self::NamedNode(x) => x.heap_bytes(raw),
+            Self::Variable(x) => x.heap_bytes(raw),
         }
     }
 }
 impl HeapBytes for NegatedPathElement {
-    fn heap_bytes(&self) -> usize {
-        self.predicate.heap_bytes()
+    fn heap_bytes(&self, raw: bool) -> usize {
+        self.predicate.heap_bytes(raw)
     }
 }
 impl HeapBytes for QueryDataset {
-    fn heap_bytes(&self) -> usize {
-        sum([self.default.heap_bytes(), self.named.heap_bytes()])
+    fn heap_bytes(&self, raw: bool) -> usize {
+        sum([self.default.heap_bytes(raw), self.named.heap_bytes(raw)])
     }
 }
 impl HeapBytes for SparqlVersion {
-    fn heap_bytes(&self) -> usize {
+    fn heap_bytes(&self, raw: bool) -> usize {
         match self {
-            Self::Other(x) => x.heap_bytes(),
+            Self::Other(x) => x.heap_bytes(raw),
             Self::V12 | Self::V12Basic => 0,
         }
     }
 }
 impl HeapBytes for PurrdfCall {
-    fn heap_bytes(&self) -> usize {
-        self.iri.heap_bytes()
+    fn heap_bytes(&self, raw: bool) -> usize {
+        self.iri.heap_bytes(raw)
     }
 }
 impl HeapBytes for CdtCall {
-    fn heap_bytes(&self) -> usize {
-        self.iri.heap_bytes()
+    fn heap_bytes(&self, raw: bool) -> usize {
+        self.iri.heap_bytes(raw)
     }
 }
 impl HeapBytes for AggregateFunction {
-    fn heap_bytes(&self) -> usize {
+    fn heap_bytes(&self, raw: bool) -> usize {
         match self {
-            Self::Custom(x) => x.heap_bytes(),
+            Self::Custom(x) => x.heap_bytes(raw),
             Self::Count
             | Self::Sum
             | Self::Avg
@@ -385,11 +437,11 @@ impl HeapBytes for AggregateFunction {
     }
 }
 impl HeapBytes for Function {
-    fn heap_bytes(&self) -> usize {
+    fn heap_bytes(&self, raw: bool) -> usize {
         match self {
-            Self::Purrdf(x) => x.heap_bytes(),
-            Self::Cdt(x) => x.heap_bytes(),
-            Self::Custom(x) => x.heap_bytes(),
+            Self::Purrdf(x) => x.heap_bytes(raw),
+            Self::Cdt(x) => x.heap_bytes(raw),
+            Self::Custom(x) => x.heap_bytes(raw),
             Self::Str
             | Self::Lang
             | Self::LangMatches

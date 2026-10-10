@@ -3044,9 +3044,7 @@ mod tests {
     }
 
     fn incomplete(reason: &str) -> ServiceLevel {
-        ServiceLevel::Incomplete {
-            reason: reason.to_owned(),
-        }
+        ServiceLevel::incomplete(reason)
     }
 
     /// A witness built the way the evaluator builds one: by recording

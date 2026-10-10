@@ -2004,7 +2004,7 @@ fn ranked_declaration<'a>(
         .get(&binding.producer)
         .ok_or_else(|| malformed(binding, "has no registry declaration to compile against"))?
         .ranked
-        .as_ref()
+        .as_deref()
         .ok_or_else(|| malformed(binding, "declares no ranked capability to compile against"))
 }
 

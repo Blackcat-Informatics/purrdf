@@ -12,13 +12,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 type IoResult<T> = std::io::Result<T>;
-const AFTER: [&str; 8] = [
+const AFTER: [&str; 9] = [
     "lib",
     "doc",
     "integration-1",
     "integration-2",
     "integration-3",
     "integration-4",
+    "integration-5",
     "capi",
     "downstream",
 ];
@@ -246,10 +247,10 @@ fn workflow_contract(text: &str) -> IoResult<()> {
     if provision.len() != 1
         || provision[0].0 >= execution
         || provision[0].1.get("if").and_then(Value::as_str)
-            != Some("matrix.shard == 'integration-2'")
+            != Some("matrix.shard == 'integration-5'")
     {
         return Err(invalid(
-            "one owned fixture parent setup must precede only the native integration-2 shard",
+            "one owned fixture parent setup must precede only the native integration-5 shard",
         ));
     }
     for job in [

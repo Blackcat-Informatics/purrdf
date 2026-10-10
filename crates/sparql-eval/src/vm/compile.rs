@@ -37,12 +37,12 @@
 //! same order. The walk over the expression is a work list: an expression of any depth
 //! compiles on heap, never on the machine stack.
 
-use purrdf_core::TermValue;
 use purrdf_sparql_algebra::{
     ArithmeticOperator, Expression, Function, Literal, NamedNode, Variable,
 };
 
-use crate::DetHashMap;
+use purrdf_core::FastMap;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 
 use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 use purrdf_xsd::datatype::XSD_STRING;
@@ -199,11 +199,16 @@ pub(crate) enum Constant {
 }
 
 impl Constant {
-    /// The constant as the term value the evaluator interns.
-    pub(crate) fn value(&self) -> TermValue {
+    /// Copy the authored constant only after its actual facets are admitted.
+    pub(crate) fn value_admitted(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<crate::WorkspaceTerm, crate::EvalError> {
         match self {
-            Self::Iri(node) => TermValue::Iri(node.as_str().to_owned()),
-            Self::Literal(literal) => crate::convert::literal_to_value(literal),
+            Self::Iri(node) => crate::convert::named_node_to_workspace_value(node, workspace),
+            Self::Literal(literal) => {
+                crate::convert::literal_to_workspace_value(literal, workspace)
+            }
         }
     }
 }
@@ -228,6 +233,7 @@ pub(crate) struct ExprProgram {
     pub(super) regexes: Vec<Option<(String, String)>>,
     /// How many `EXISTS` the expression holds.
     pub(super) exists: u32,
+    owner: Option<crate::workspace::LexicalFrame>,
 }
 
 /// How an operand is read. See the module docs.
@@ -264,88 +270,109 @@ type Tasks<'x> = purrdf_core::SmallVec<[Task<'x>; 16]>;
 const SCANNED_VARIABLES: usize = 8;
 
 /// The compiler's state.
-struct Compiler {
+struct Compiler<'m, 's, S: Admission + ?Sized> {
+    memory: &'m mut Memory<'s, S>,
     program: ExprProgram,
     /// Each variable's slot, once the program reads more than [`SCANNED_VARIABLES`];
     /// until then a slot is found by scanning [`ExprProgram::vars`].
-    slots: DetHashMap<Variable, u32>,
+    slots: FastMap<Variable, u32>,
     labels: purrdf_core::SmallVec<[u32; 8]>,
 }
 
 impl ExprProgram {
-    /// Compile `expr`, evaluated as a term.
+    /// Compile through the original native instruction body.
     pub(crate) fn compile(expr: &Expression) -> Self {
-        let mut program = Self::default();
-        program.recompile(expr);
-        program
+        let mut resident = Resident;
+        Self::default()
+            .compile_with_memory(expr, &mut Memory::new(&mut resident))
+            .expect("resident expression compilation")
     }
-
-    /// Compile `expr` into this program, replacing everything it held. The program's
-    /// tables keep their capacity, so compiling an expression of the shape this one was
-    /// compiled from allocates nothing for them.
+    pub(crate) fn compile_admitted(
+        expr: &Expression,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, crate::EvalError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let result = Memory::new(&mut frame)
+            .scope(|memory| Self::default().compile_with_memory(expr, memory));
+        let mut program =
+            result.map_err(|error| frame.storage_error(error, "expression compilation"))?;
+        program.owner = Some(frame);
+        Ok(program)
+    }
     pub(crate) fn recompile(&mut self, expr: &Expression) {
-        let mut program = std::mem::take(self);
-        let Self {
-            ops,
-            vars,
-            consts,
-            strs,
-            calls,
-            regexes,
-            exists,
-        } = &mut program;
-        ops.clear();
-        vars.clear();
-        consts.clear();
-        strs.clear();
-        calls.clear();
-        regexes.clear();
-        *exists = 0;
+        let mut resident = Resident;
+        *self = std::mem::take(self)
+            .compile_with_memory(expr, &mut Memory::new(&mut resident))
+            .expect("resident expression recompilation");
+    }
+    fn compile_with_memory<S: Admission + ?Sized>(
+        mut self,
+        expr: &Expression,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        self.ops.clear();
+        self.vars.clear();
+        self.consts.clear();
+        self.strs.clear();
+        self.calls.clear();
+        self.regexes.clear();
+        self.exists = 0;
         let mut compiler = Compiler {
-            program,
-            slots: DetHashMap::default(),
+            program: self,
+            slots: FastMap::default(),
             labels: purrdf_core::SmallVec::new(),
+            memory,
         };
-        let mut work: Tasks<'_> = purrdf_core::smallvec![Task::Compile(expr, Mode::Term)];
+        let mut work: Tasks<'_> = purrdf_core::SmallVec::new();
+        work.push_with_memory(Task::Compile(expr, Mode::Term), compiler.memory)?;
         let mut next: Tasks<'_> = purrdf_core::SmallVec::new();
         while let Some(task) = work.pop() {
             match task {
                 Task::Compile(expr, mode) => {
-                    compiler.expand(expr, mode, &mut next);
-                    // `next` is in evaluation order and the work list pops from its end,
-                    // so moving `next` over last-first leaves its first task on top.
+                    compiler.expand(expr, mode, &mut next)?;
                     while let Some(task) = next.pop() {
-                        work.push(task);
+                        work.push_with_memory(task, compiler.memory)?;
                     }
                 }
-                Task::AbsentStringArg => compiler.program.ops.push(Op::StrNone),
-                Task::Emit(op) => compiler.program.ops.push(op),
+                Task::AbsentStringArg => compiler
+                    .program
+                    .ops
+                    .push_with_memory(Op::StrNone, compiler.memory)?,
+                Task::Emit(op) => compiler.program.ops.push_with_memory(op, compiler.memory)?,
                 Task::Label(label) => {
                     compiler.labels[label as usize] = compiler.program.ops.len() as u32;
                 }
-                Task::Skip(args) => compiler.program.exists += count_exists(args),
+                Task::Skip(args) => compiler.program.exists += count_exists(args, compiler.memory)?,
             }
         }
         compiler.resolve_labels();
-        *self = compiler.program;
+        work.release_with_memory(compiler.memory)?;
+        next.release_with_memory(compiler.memory)?;
+        compiler.labels.release_with_memory(compiler.memory)?;
+        let bytes = purrdf_core::hash::hash_table_allocation_bound::<(Variable, u32)>(
+            compiler.slots.capacity(),
+        )
+        .ok_or(StorageError::SizeOverflow)?;
+        drop(compiler.slots);
+        compiler.memory.release_bytes(bytes)?;
+        Ok(compiler.program)
     }
-
     /// Whether the program reaches an `EXISTS`.
     pub(crate) const fn has_exists(&self) -> bool {
         self.exists > 0
     }
 }
 
-impl Compiler {
+impl<S: Admission + ?Sized> Compiler<'_, '_, S> {
     /// A fresh label.
-    fn label(&mut self) -> u32 {
-        self.labels.push(u32::MAX);
-        (self.labels.len() - 1) as u32
+    fn label(&mut self) -> Result<u32, StorageError> {
+        self.labels.push_with_memory(u32::MAX, self.memory)?;
+        Ok((self.labels.len() - 1) as u32)
     }
 
     /// The slot of `var`: the position of its first occurrence among the variables the
     /// program reads.
-    fn slot(&mut self, var: &Variable) -> u32 {
+    fn slot(&mut self, var: &Variable) -> Result<u32, StorageError> {
         let found = if self.slots.is_empty() {
             self.program
                 .vars
@@ -356,145 +383,170 @@ impl Compiler {
             self.slots.get(var).copied()
         };
         if let Some(slot) = found {
-            return slot;
+            return Ok(slot);
         }
         let slot = self.program.vars.len() as u32;
-        self.program.vars.push(var.clone());
+        self.program
+            .vars
+            .push_with_memory(var.clone(), self.memory)?;
         if !self.slots.is_empty() {
+            let required = self.slots.len() + 1;
+            purrdf_core::hash::reserve_map_with_memory(&mut self.slots, required, self.memory)?;
             self.slots.insert(var.clone(), slot);
         } else if self.program.vars.len() > SCANNED_VARIABLES {
             for (index, known) in self.program.vars.iter().enumerate() {
+                let required = self.slots.len() + 1;
+                purrdf_core::hash::reserve_map_with_memory(&mut self.slots, required, self.memory)?;
                 self.slots.insert(known.clone(), index as u32);
             }
         }
-        slot
+        Ok(slot)
     }
 
     /// A new term constant.
-    fn constant(&mut self, value: Constant) -> Op {
-        self.program.consts.push(value);
-        Op::Const((self.program.consts.len() - 1) as u32)
+    fn constant(&mut self, value: Constant) -> Result<Op, StorageError> {
+        self.program.consts.push_with_memory(value, self.memory)?;
+        Ok(Op::Const((self.program.consts.len() - 1) as u32))
     }
 
     /// A new string constant.
-    fn string(&mut self, lexical: String, language: Option<String>) -> Op {
+    fn string(&mut self, lexical: String, language: Option<String>) -> Result<Op, StorageError> {
         // The constants read in place are the untagged and `rdf:langString` ones; a
         // directional literal is read through its interned term.
-        self.program.strs.push((lexical, language, None));
-        Op::StrConst((self.program.strs.len() - 1) as u32)
+        self.memory
+            .push(&mut self.program.strs, (lexical, language, None))?;
+        Ok(Op::StrConst((self.program.strs.len() - 1) as u32))
     }
 
     /// A new call-table entry.
-    fn call(&mut self, function: &Function) -> u32 {
-        self.program.calls.push(function.clone());
-        (self.program.calls.len() - 1) as u32
+    fn call(&mut self, function: &Function) -> Result<u32, StorageError> {
+        let function = function.clone_with_memory(self.memory)?;
+        self.program.calls.push_with_memory(function, self.memory)?;
+        Ok((self.program.calls.len() - 1) as u32)
     }
 
     /// A new regex slot.
-    fn regex(&mut self, constant: Option<(String, String)>) -> u32 {
-        self.program.regexes.push(constant);
-        (self.program.regexes.len() - 1) as u32
+    fn regex(&mut self, constant: Option<(String, String)>) -> Result<u32, StorageError> {
+        self.memory.push(&mut self.program.regexes, constant)?;
+        Ok((self.program.regexes.len() - 1) as u32)
     }
 
     /// Lay out `expr` read in `mode` as tasks, in evaluation order. Leaves are emitted
     /// here, which is where the pre-order visits them; composite nodes become their
     /// operands' tasks followed by their own instruction.
-    fn expand<'x>(&mut self, expr: &'x Expression, mode: Mode, out: &mut Tasks<'x>) {
+    fn expand<'x>(
+        &mut self,
+        expr: &'x Expression,
+        mode: Mode,
+        out: &mut Tasks<'x>,
+    ) -> Result<(), StorageError> {
         match mode {
-            Mode::Term => self.expand_term(expr, out),
+            Mode::Term => self.expand_term(expr, out)?,
             Mode::TripleObject => match expr {
                 Expression::FunctionCall(Function::Triple, args) if args.len() == 3 => {
-                    triple_operands(args, out);
-                    out.push(Task::Emit(Op::Triple { intern: false }));
+                    triple_operands(args, out, self.memory)?;
+                    out.push_with_memory(Task::Emit(Op::Triple { intern: false }), self.memory)?;
                 }
-                _ => out.push(Task::Compile(expr, Mode::Term)),
+                _ => out.push_with_memory(Task::Compile(expr, Mode::Term), self.memory)?,
             },
             Mode::StringArg => match expr {
                 Expression::Literal(lit)
                     if lit.datatype().as_str() == XSD_STRING
                         || lit.datatype().as_str() == RDF_LANG_STRING =>
                 {
-                    let op = self.string(
-                        lit.value().to_owned(),
-                        lit.language().map(purrdf_iri::langtag::identity_fold),
-                    );
-                    out.push(Task::Emit(op));
+                    let lexical = self.memory.string(lit.value())?;
+                    let language = lit
+                        .language()
+                        .map(|tag| purrdf_iri::langtag::identity_fold_with_memory(tag, self.memory))
+                        .transpose()?;
+                    let op = self.string(lexical, language)?;
+                    out.push_with_memory(Task::Emit(op), self.memory)?;
                 }
                 Expression::FunctionCall(Function::Str, inner) if inner.len() == 1 => {
-                    out.push(Task::Compile(&inner[0], Mode::StrLexical));
+                    out.push_with_memory(Task::Compile(&inner[0], Mode::StrLexical), self.memory)?;
                 }
                 Expression::FunctionCall(Function::Lang, inner) if inner.len() == 1 => {
-                    out.push(Task::Compile(&inner[0], Mode::LangLexical));
+                    out.push_with_memory(Task::Compile(&inner[0], Mode::LangLexical), self.memory)?;
                 }
                 _ => {
-                    out.push(Task::Compile(expr, Mode::Term));
-                    out.push(Task::Emit(Op::ToStrArg));
+                    out.push_with_memory(Task::Compile(expr, Mode::Term), self.memory)?;
+                    out.push_with_memory(Task::Emit(Op::ToStrArg), self.memory)?;
                 }
             },
             Mode::StrLexical => match expr {
                 Expression::NamedNode(node) => {
-                    let op = self.string(node.as_str().to_owned(), None);
-                    out.push(Task::Emit(op));
+                    let lexical = self.memory.string(node.as_str())?;
+                    let op = self.string(lexical, None)?;
+                    out.push_with_memory(Task::Emit(op), self.memory)?;
                 }
                 Expression::Literal(lit) => {
-                    let op = self.string(lit.value().to_owned(), None);
-                    out.push(Task::Emit(op));
+                    let lexical = self.memory.string(lit.value())?;
+                    let op = self.string(lexical, None)?;
+                    out.push_with_memory(Task::Emit(op), self.memory)?;
                 }
                 _ => {
-                    out.push(Task::Compile(expr, Mode::Term));
-                    out.push(Task::Emit(Op::ToStrLexical));
+                    out.push_with_memory(Task::Compile(expr, Mode::Term), self.memory)?;
+                    out.push_with_memory(Task::Emit(Op::ToStrLexical), self.memory)?;
                 }
             },
             Mode::LangLexical => match expr {
                 Expression::Literal(lit) => {
-                    let op = self.string(
-                        lit.language()
-                            .map_or_default(purrdf_iri::langtag::identity_fold),
-                        None,
-                    );
-                    out.push(Task::Emit(op));
+                    let language = purrdf_iri::langtag::identity_fold_with_memory(
+                        lit.language().unwrap_or_default(),
+                        self.memory,
+                    )?;
+                    let op = self.string(language, None)?;
+                    out.push_with_memory(Task::Emit(op), self.memory)?;
                 }
                 _ => {
-                    out.push(Task::Compile(expr, Mode::Term));
-                    out.push(Task::Emit(Op::ToLangLexical));
+                    out.push_with_memory(Task::Compile(expr, Mode::Term), self.memory)?;
+                    out.push_with_memory(Task::Emit(Op::ToLangLexical), self.memory)?;
                 }
             },
         }
+        Ok(())
     }
 
     /// [`Self::expand`] for [`Mode::Term`].
-    fn expand_term<'x>(&mut self, expr: &'x Expression, out: &mut Tasks<'x>) {
+    fn expand_term<'x>(
+        &mut self,
+        expr: &'x Expression,
+        out: &mut Tasks<'x>,
+    ) -> Result<(), StorageError> {
         match expr {
             Expression::NamedNode(node) => {
-                let op = self.constant(Constant::Iri(node.clone()));
-                out.push(Task::Emit(op));
+                let op = self.constant(Constant::Iri(node.clone()))?;
+                out.push_with_memory(Task::Emit(op), self.memory)?;
             }
             Expression::Literal(lit) => {
-                let op = self.constant(Constant::Literal(lit.clone()));
-                out.push(Task::Emit(op));
+                let op = self.constant(Constant::Literal(lit.clone()))?;
+                out.push_with_memory(Task::Emit(op), self.memory)?;
             }
             Expression::Variable(var) => {
-                let slot = self.slot(var);
-                out.push(Task::Emit(Op::Var(slot)));
+                let slot = self.slot(var)?;
+                out.push_with_memory(Task::Emit(Op::Var(slot)), self.memory)?;
             }
             Expression::Bound(var) => {
-                let slot = self.slot(var);
-                out.push(Task::Emit(Op::Bound(slot)));
+                let slot = self.slot(var)?;
+                out.push_with_memory(Task::Emit(Op::Bound(slot)), self.memory)?;
             }
             Expression::Or(operands) | Expression::And(operands) => {
                 for operand in operands {
-                    out.push(Task::Compile(operand, Mode::Term));
-                    out.push(Task::Emit(Op::EbvOf));
+                    out.push_with_memory(Task::Compile(operand, Mode::Term), self.memory)?;
+                    out.push_with_memory(Task::Emit(Op::EbvOf), self.memory)?;
                 }
-                out.push(Task::Emit(Op::Kleene {
-                    or: matches!(expr, Expression::Or(_)),
-                    n: operands.len() as u32,
-                }));
+                out.push_with_memory(
+                    Task::Emit(Op::Kleene {
+                        or: matches!(expr, Expression::Or(_)),
+                        n: operands.len() as u32,
+                    }),
+                    self.memory,
+                )?;
             }
             Expression::Not(operand) => {
-                out.push(Task::Compile(operand, Mode::Term));
-                out.push(Task::Emit(Op::EbvOf));
-                out.push(Task::Emit(Op::Not));
+                out.push_with_memory(Task::Compile(operand, Mode::Term), self.memory)?;
+                out.push_with_memory(Task::Emit(Op::EbvOf), self.memory)?;
+                out.push_with_memory(Task::Emit(Op::Not), self.memory)?;
             }
             Expression::Equal(a, b)
             | Expression::SameTerm(a, b)
@@ -510,68 +562,69 @@ impl Compiler {
                     Expression::Less(..) => Op::Cmp(Cmp::Less),
                     _ => Op::Cmp(Cmp::LessOrEqual),
                 };
-                out.push(Task::Compile(a, Mode::Term));
-                out.push(Task::Compile(b, Mode::Term));
-                out.push(Task::Emit(op));
+                out.push_with_memory(Task::Compile(a, Mode::Term), self.memory)?;
+                out.push_with_memory(Task::Compile(b, Mode::Term), self.memory)?;
+                out.push_with_memory(Task::Emit(op), self.memory)?;
             }
             Expression::If(condition, then, otherwise) => {
-                let on_false = self.label();
-                let end = self.label();
-                out.push(Task::Compile(condition, Mode::Term));
-                out.push(Task::Emit(Op::EbvOf));
-                out.push(Task::Emit(Op::Branch { on_false, end }));
-                out.push(Task::Compile(then, Mode::Term));
-                out.push(Task::Emit(Op::Jmp(end)));
-                out.push(Task::Label(on_false));
-                out.push(Task::Compile(otherwise, Mode::Term));
-                out.push(Task::Label(end));
+                let on_false = self.label()?;
+                let end = self.label()?;
+                out.push_with_memory(Task::Compile(condition, Mode::Term), self.memory)?;
+                out.push_with_memory(Task::Emit(Op::EbvOf), self.memory)?;
+                out.push_with_memory(Task::Emit(Op::Branch { on_false, end }), self.memory)?;
+                out.push_with_memory(Task::Compile(then, Mode::Term), self.memory)?;
+                out.push_with_memory(Task::Emit(Op::Jmp(end)), self.memory)?;
+                out.push_with_memory(Task::Label(on_false), self.memory)?;
+                out.push_with_memory(Task::Compile(otherwise, Mode::Term), self.memory)?;
+                out.push_with_memory(Task::Label(end), self.memory)?;
             }
             Expression::Coalesce(items) => {
                 let Some((last, init)) = items.split_last() else {
-                    out.push(Task::Emit(Op::PushUnbound));
-                    return;
+                    out.push_with_memory(Task::Emit(Op::PushUnbound), self.memory)?;
+                    return Ok(());
                 };
-                let end = self.label();
+                let end = self.label()?;
                 for item in init {
-                    out.push(Task::Compile(item, Mode::Term));
-                    out.push(Task::Emit(Op::CoalesceNext(end)));
+                    out.push_with_memory(Task::Compile(item, Mode::Term), self.memory)?;
+                    out.push_with_memory(Task::Emit(Op::CoalesceNext(end)), self.memory)?;
                 }
-                out.push(Task::Compile(last, Mode::Term));
-                out.push(Task::Label(end));
+                out.push_with_memory(Task::Compile(last, Mode::Term), self.memory)?;
+                out.push_with_memory(Task::Label(end), self.memory)?;
             }
             Expression::In(needle, haystack) => {
-                let end = self.label();
-                out.push(Task::Compile(needle, Mode::Term));
-                out.push(Task::Emit(Op::InNeedle(end)));
+                let end = self.label()?;
+                out.push_with_memory(Task::Compile(needle, Mode::Term), self.memory)?;
+                out.push_with_memory(Task::Emit(Op::InNeedle(end)), self.memory)?;
                 for item in haystack {
-                    out.push(Task::Compile(item, Mode::Term));
-                    out.push(Task::Emit(Op::InItem(end)));
+                    out.push_with_memory(Task::Compile(item, Mode::Term), self.memory)?;
+                    out.push_with_memory(Task::Emit(Op::InItem(end)), self.memory)?;
                 }
-                out.push(Task::Emit(Op::InEnd));
-                out.push(Task::Label(end));
+                out.push_with_memory(Task::Emit(Op::InEnd), self.memory)?;
+                out.push_with_memory(Task::Label(end), self.memory)?;
             }
             Expression::Exists(_) => {
                 let site = self.program.exists;
                 self.program.exists += 1;
-                out.push(Task::Emit(Op::Exists(site)));
+                out.push_with_memory(Task::Emit(Op::Exists(site)), self.memory)?;
             }
             Expression::Arithmetic(first, steps) => {
-                out.push(Task::Compile(first, Mode::Term));
+                out.push_with_memory(Task::Compile(first, Mode::Term), self.memory)?;
                 for (op, operand) in steps {
-                    out.push(Task::Compile(operand, Mode::Term));
-                    out.push(Task::Emit(Op::Arith(*op)));
+                    out.push_with_memory(Task::Compile(operand, Mode::Term), self.memory)?;
+                    out.push_with_memory(Task::Emit(Op::Arith(*op)), self.memory)?;
                 }
             }
             Expression::UnaryPlus(operand) => {
-                out.push(Task::Compile(operand, Mode::Term));
-                out.push(Task::Emit(Op::UnaryPlus));
+                out.push_with_memory(Task::Compile(operand, Mode::Term), self.memory)?;
+                out.push_with_memory(Task::Emit(Op::UnaryPlus), self.memory)?;
             }
             Expression::UnaryMinus(operand) => {
-                out.push(Task::Compile(operand, Mode::Term));
-                out.push(Task::Emit(Op::UnaryMinus));
+                out.push_with_memory(Task::Compile(operand, Mode::Term), self.memory)?;
+                out.push_with_memory(Task::Emit(Op::UnaryMinus), self.memory)?;
             }
-            Expression::FunctionCall(function, args) => self.expand_call(function, args, out),
+            Expression::FunctionCall(function, args) => self.expand_call(function, args, out)?,
         }
+        Ok(())
     }
 
     /// A function call in [`Mode::Term`]. The string predicates read their arguments
@@ -582,76 +635,102 @@ impl Compiler {
         function: &'x Function,
         args: &'x [Expression],
         out: &mut Tasks<'x>,
-    ) {
-        let string_args = |count: usize, out: &mut Tasks<'x>| {
+    ) -> Result<(), StorageError> {
+        let string_args = |count: usize,
+                           out: &mut Tasks<'x>,
+                           memory: &mut Memory<'_, S>|
+         -> Result<(), StorageError> {
             for index in 0..count {
-                out.push(args.get(index).map_or(Task::AbsentStringArg, |arg| {
-                    Task::Compile(arg, Mode::StringArg)
-                }));
+                out.push_with_memory(
+                    args.get(index).map_or(Task::AbsentStringArg, |arg| {
+                        Task::Compile(arg, Mode::StringArg)
+                    }),
+                    memory,
+                )?;
             }
             if args.len() > count {
-                out.push(Task::Skip(&args[count..]));
+                out.push_with_memory(Task::Skip(&args[count..]), memory)?;
             }
+            Ok(())
         };
         match function {
             Function::Contains | Function::StrStarts | Function::StrEnds => {
-                string_args(2, out);
-                out.push(Task::Emit(Op::StrPred(match function {
-                    Function::Contains => StrPred::Contains,
-                    Function::StrStarts => StrPred::StrStarts,
-                    _ => StrPred::StrEnds,
-                })));
+                string_args(2, out, self.memory)?;
+                out.push_with_memory(
+                    Task::Emit(Op::StrPred(match function {
+                        Function::Contains => StrPred::Contains,
+                        Function::StrStarts => StrPred::StrStarts,
+                        _ => StrPred::StrEnds,
+                    })),
+                    self.memory,
+                )?;
             }
             Function::Regex => {
-                let constant = constant_string_arg(args.get(1)).and_then(|pattern| {
-                    let flags = match args.get(2) {
-                        None => String::new(),
-                        Some(flags) => constant_string_arg(Some(flags))?,
-                    };
-                    Some((pattern, flags))
-                });
-                let slot = self.regex(constant);
+                let constant = match constant_string_arg(args.get(1), self.memory)? {
+                    Some(pattern) => match args.get(2) {
+                        None => Some((pattern, String::new())),
+                        Some(flags) => match constant_string_arg(Some(flags), self.memory)? {
+                            Some(flags) => Some((pattern, flags)),
+                            None => {
+                                self.memory.release_string(pattern)?;
+                                None
+                            }
+                        },
+                    },
+                    None => None,
+                };
+                let slot = self.regex(constant)?;
                 let flags = args.len() > 2;
-                string_args(if flags { 3 } else { 2 }, out);
-                out.push(Task::Emit(Op::Regex { slot, flags }));
+                string_args(if flags { 3 } else { 2 }, out, self.memory)?;
+                out.push_with_memory(Task::Emit(Op::Regex { slot, flags }), self.memory)?;
             }
             Function::LangMatches => {
-                string_args(2, out);
-                out.push(Task::Emit(Op::LangMatches));
+                string_args(2, out, self.memory)?;
+                out.push_with_memory(Task::Emit(Op::LangMatches), self.memory)?;
             }
             // A constructor whose object is another constructor: the chain below it is
             // built as one value and interned here, once.
             Function::Triple if args.len() == 3 && is_triple_constructor(&args[2]) => {
-                triple_operands(args, out);
-                out.push(Task::Emit(Op::Triple { intern: true }));
+                triple_operands(args, out, self.memory)?;
+                out.push_with_memory(Task::Emit(Op::Triple { intern: true }), self.memory)?;
             }
             Function::Custom(_) => {
                 for arg in args {
-                    out.push(Task::Compile(arg, Mode::Term));
+                    out.push_with_memory(Task::Compile(arg, Mode::Term), self.memory)?;
                 }
-                let call = self.call(function);
-                out.push(Task::Emit(Op::CallCustom {
-                    call,
-                    argc: args.len() as u32,
-                }));
+                let call = self.call(function)?;
+                out.push_with_memory(
+                    Task::Emit(Op::CallCustom {
+                        call,
+                        argc: args.len() as u32,
+                    }),
+                    self.memory,
+                )?;
             }
             _ => {
                 let regex = if matches!(function, Function::Replace) {
-                    replace_constant(args).map(|constant| self.regex(Some(constant)))
+                    match replace_constant(args, self.memory)? {
+                        Some(constant) => Some(self.regex(Some(constant))?),
+                        None => None,
+                    }
                 } else {
                     None
                 };
                 for arg in args {
-                    out.push(Task::Compile(arg, Mode::Term));
+                    out.push_with_memory(Task::Compile(arg, Mode::Term), self.memory)?;
                 }
-                let call = self.call(function);
-                out.push(Task::Emit(Op::Call {
-                    call,
-                    argc: args.len() as u32,
-                    regex,
-                }));
+                let call = self.call(function)?;
+                out.push_with_memory(
+                    Task::Emit(Op::Call {
+                        call,
+                        argc: args.len() as u32,
+                        regex,
+                    }),
+                    self.memory,
+                )?;
             }
         }
+        Ok(())
     }
 
     /// Rewrite every jump's label id to the instruction index the label was bound to.
@@ -681,107 +760,168 @@ pub(super) fn is_triple_constructor(expr: &Expression) -> bool {
 
 /// A triple term constructor's three operands, in order: the subject and predicate as
 /// terms, and the object as a value when it is itself a constructor.
-fn triple_operands<'x>(args: &'x [Expression], out: &mut Tasks<'x>) {
-    out.push(Task::Compile(&args[0], Mode::Term));
-    out.push(Task::Compile(&args[1], Mode::Term));
-    out.push(Task::Compile(
-        &args[2],
-        if is_triple_constructor(&args[2]) {
-            Mode::TripleObject
-        } else {
-            Mode::Term
-        },
-    ));
+fn triple_operands<'x, S: Admission + ?Sized>(
+    args: &'x [Expression],
+    out: &mut Tasks<'x>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    out.push_with_memory(Task::Compile(&args[0], Mode::Term), memory)?;
+    out.push_with_memory(Task::Compile(&args[1], Mode::Term), memory)?;
+    out.push_with_memory(
+        Task::Compile(
+            &args[2],
+            if is_triple_constructor(&args[2]) {
+                Mode::TripleObject
+            } else {
+                Mode::Term
+            },
+        ),
+        memory,
+    )?;
+    Ok(())
 }
 
 /// The string a [`Mode::StringArg`] operand reads without evaluating anything, when it
 /// is one: a string literal, or `STR`/`LANG` of a constant.
-fn constant_string_arg(expr: Option<&Expression>) -> Option<String> {
-    match expr? {
+fn constant_string_arg<S: Admission + ?Sized>(
+    expr: Option<&Expression>,
+    memory: &mut Memory<'_, S>,
+) -> Result<Option<String>, StorageError> {
+    let Some(expr) = expr else {
+        return Ok(None);
+    };
+    let text = match expr {
         Expression::Literal(lit)
             if lit.datatype().as_str() == XSD_STRING
                 || lit.datatype().as_str() == RDF_LANG_STRING =>
         {
-            Some(lit.value().to_owned())
+            lit.value()
         }
         Expression::FunctionCall(Function::Str, inner) if inner.len() == 1 => match &inner[0] {
-            Expression::NamedNode(node) => Some(node.as_str().to_owned()),
-            Expression::Literal(lit) => Some(lit.value().to_owned()),
-            _ => None,
+            Expression::NamedNode(node) => node.as_str(),
+            Expression::Literal(lit) => lit.value(),
+            _ => return Ok(None),
         },
         Expression::FunctionCall(Function::Lang, inner) if inner.len() == 1 => match &inner[0] {
-            Expression::Literal(lit) => Some(
-                lit.language()
-                    .map_or_default(purrdf_iri::langtag::identity_fold),
-            ),
-            _ => None,
+            Expression::Literal(lit) => {
+                return purrdf_iri::langtag::identity_fold_with_memory(
+                    lit.language().unwrap_or_default(),
+                    memory,
+                )
+                .map(Some);
+            }
+            _ => return Ok(None),
         },
-        _ => None,
-    }
+        _ => return Ok(None),
+    };
+    memory.string(text).map(Some)
 }
 
 /// `REPLACE`'s pattern and flags, when both are simple literals (or the flags are
 /// absent): the lexical forms its string-argument reading takes from them. A tagged
 /// pattern or flags argument is an error the call reports per row, so it links none.
-fn replace_constant(args: &[Expression]) -> Option<(String, String)> {
-    let string_literal = |expr: &Expression| match expr {
-        Expression::Literal(lit) if lit.datatype().as_str() == XSD_STRING => {
-            Some(lit.value().to_owned())
+fn replace_constant<S: Admission + ?Sized>(
+    args: &[Expression],
+    memory: &mut Memory<'_, S>,
+) -> Result<Option<(String, String)>, StorageError> {
+    fn string_literal(expr: &Expression) -> Option<&str> {
+        match expr {
+            Expression::Literal(lit) if lit.datatype().as_str() == XSD_STRING => Some(lit.value()),
+            _ => None,
         }
-        _ => None,
+    }
+    let Some(pattern) = args.get(1).and_then(string_literal) else {
+        return Ok(None);
     };
-    let pattern = string_literal(args.get(1)?)?;
     let flags = match args.get(3) {
-        None => String::new(),
-        Some(flags) => string_literal(flags)?,
+        None => "",
+        Some(flags) => {
+            let Some(flags) = string_literal(flags) else {
+                return Ok(None);
+            };
+            flags
+        }
     };
-    Some((pattern, flags))
+    Ok(Some((memory.string(pattern)?, memory.string(flags)?)))
 }
 
 /// The `EXISTS` nodes in `exprs`, counted over a work list.
-fn count_exists(exprs: &[Expression]) -> u32 {
-    let mut count = 0;
-    let mut pending: Vec<&Expression> = exprs.iter().collect();
+fn count_exists<S: Admission + ?Sized>(
+    exprs: &[Expression],
+    memory: &mut Memory<'_, S>,
+) -> Result<u32, StorageError> {
+    let mut count = 0u32;
+    let mut pending = Vec::new();
+    for expr in exprs {
+        memory.push(&mut pending, expr)?;
+    }
     while let Some(expr) = pending.pop() {
         if matches!(expr, Expression::Exists(_)) {
-            count += 1;
+            count = count.checked_add(1).ok_or(StorageError::SizeOverflow)?;
         }
-        push_operands(expr, &mut pending);
+        let mut result = Ok(());
+        visit_operands(expr, |operand| {
+            if result.is_ok() {
+                result = memory.push(&mut pending, operand);
+            }
+        });
+        result?;
     }
-    count
+    memory.release_vec(pending)?;
+    Ok(count)
 }
 
-/// Push `expr`'s operands onto `pending` — every sub-expression, in reverse so a stack
-/// pops them left to right.
-pub(super) fn push_operands<'x>(expr: &'x Expression, pending: &mut Vec<&'x Expression>) {
-    let start = pending.len();
+/// The one operand-order traversal used by resident and admitted walks.
+pub(super) fn visit_operands<'x>(expr: &'x Expression, mut visit: impl FnMut(&'x Expression)) {
     match expr {
         Expression::NamedNode(_)
         | Expression::Literal(_)
         | Expression::Variable(_)
         | Expression::Bound(_)
         | Expression::Exists(_) => {}
-        Expression::Or(operands) | Expression::And(operands) => pending.extend(operands.iter()),
+        Expression::Or(operands) | Expression::And(operands) => {
+            for operand in operands {
+                visit(operand);
+            }
+        }
         Expression::Equal(a, b)
         | Expression::SameTerm(a, b)
         | Expression::Greater(a, b)
         | Expression::GreaterOrEqual(a, b)
         | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b) => pending.extend([&**a, &**b]),
-        Expression::Not(a) | Expression::UnaryPlus(a) | Expression::UnaryMinus(a) => {
-            pending.push(a);
+        | Expression::LessOrEqual(a, b) => {
+            visit(a);
+            visit(b);
         }
-        Expression::If(a, b, c) => pending.extend([&**a, &**b, &**c]),
-        Expression::Coalesce(items) => pending.extend(items.iter()),
+        Expression::Not(a) | Expression::UnaryPlus(a) | Expression::UnaryMinus(a) => {
+            visit(a);
+        }
+        Expression::If(a, b, c) => {
+            visit(a);
+            visit(b);
+            visit(c);
+        }
+        Expression::Coalesce(items) => {
+            for operand in items {
+                visit(operand);
+            }
+        }
         Expression::In(needle, haystack) => {
-            pending.push(needle);
-            pending.extend(haystack.iter());
+            visit(needle);
+            for operand in haystack {
+                visit(operand);
+            }
         }
         Expression::Arithmetic(first, steps) => {
-            pending.push(first);
-            pending.extend(steps.iter().map(|(_, operand)| operand));
+            visit(first);
+            for (_, operand) in steps {
+                visit(operand);
+            }
         }
-        Expression::FunctionCall(_, args) => pending.extend(args.iter()),
+        Expression::FunctionCall(_, args) => {
+            for operand in args {
+                visit(operand);
+            }
+        }
     }
-    pending[start..].reverse();
 }

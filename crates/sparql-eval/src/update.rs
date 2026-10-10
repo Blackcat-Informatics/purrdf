@@ -164,7 +164,7 @@ fn iri_abort(err: &purrdf_core::IriError) -> UpdateAbort {
 /// `DELETE/INSERT … WHERE` evaluates identically to a `SELECT`.
 pub(crate) struct UpdateEvalConfig<'e> {
     pub(crate) xpath_regex: Option<crate::xpath_regex::Selection>,
-    pub(crate) standpoint_predicates: Option<&'e StandpointPredicates>,
+    pub(crate) standpoint_predicates: Option<&'e Arc<StandpointPredicates>>,
     pub(crate) order_cache: &'e BoundedOrderCache,
     /// This request's live governor accounting, or `None` for an ungoverned request.
     ///
@@ -548,7 +548,7 @@ fn insert_data(
     let prefix = template_has_blank_node(data)
         .then(|| mutable_mint_prefix(m, None))
         .flatten();
-    let mut blanks: DetHashMap<String, String> = DetHashMap::default();
+    let mut blanks: crate::template::TemplateBlanks = crate::template::TemplateBlanks::default();
     for qp in data {
         if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter, prefix.as_deref()) {
             // Charged per quad rather than per operation because an ill-formed template
@@ -569,7 +569,7 @@ fn delete_data(
     counter: &mut u64,
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
-    let mut blanks: DetHashMap<String, String> = DetHashMap::default();
+    let mut blanks: crate::template::TemplateBlanks = crate::template::TemplateBlanks::default();
     for qp in data {
         if let Some(q) = instantiate_ground_quad(qp, &mut blanks, counter, None) {
             charge_mutations(governors, 1)?;
@@ -648,7 +648,8 @@ fn delete_insert(
     // registered", regardless of whether one was configured for the request. The same
     // holds for a `SERVICE` in this `WHERE`: it federates through the request's source
     // or, with none, fails exactly as a source-less query's does.
-    let mut ctx = apply_query_options(ctx, cfg.options)?;
+    let mut ctx = apply_query_options(ctx, cfg.options)
+        .map_err(crate::engine::EvaluationFailure::into_diagnostic)?;
     // The request's governors, so the `WHERE` charges and stops exactly as the same
     // pattern would inside a governed `SELECT`. Without this the ceilings a caller set
     // would bound their queries and silently not bound their mutations.
@@ -656,7 +657,7 @@ fn delete_insert(
         ctx = ctx.with_governors(Arc::clone(state));
     }
     if let Some(preds) = cfg.standpoint_predicates {
-        ctx = ctx.with_standpoint_predicates(preds.clone());
+        ctx = ctx.with_shared_standpoint_predicates(Arc::clone(preds));
     }
     // Seed the WHERE/template context from the request-wide counter (never reset
     // between operations — see `eval_update`) and hand it back below, so blanks
@@ -678,7 +679,13 @@ fn delete_insert(
         })?;
     }
 
-    ctx.reserve_concrete_blank_inputs(pattern);
+    ctx.reserve_concrete_blank_inputs(pattern)
+        .map_err(|error| {
+            RdfDiagnostic::error(
+                crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+                error.to_string(),
+            )
+        })?;
 
     // Scope the WHERE active dataset (§3.1.3): USING (if present) builds a custom
     // dataset and replaces WITH's effect on the WHERE; otherwise WITH scopes the WHERE
@@ -739,8 +746,10 @@ fn delete_insert(
     // Blank-label maps are reset PER ROW (template blanks co-refer within a row, are
     // distinct across rows) but the allocation is hoisted: `.clear()` reuses the
     // capacity instead of allocating a fresh map for every solution.
-    let mut del_blanks: DetHashMap<String, String> = DetHashMap::default();
-    let mut ins_blanks: DetHashMap<String, String> = DetHashMap::default();
+    let mut del_blanks: crate::template::TemplateBlanks =
+        crate::template::TemplateBlanks::default();
+    let mut ins_blanks: crate::template::TemplateBlanks =
+        crate::template::TemplateBlanks::default();
     for row in &seq.rows {
         del_blanks.clear();
         for (qp, ordinal) in delete.iter().zip(&delete_ordinals) {
@@ -873,7 +882,7 @@ fn admit_where<D: purrdf_core::DatasetView + Sync>(
     }
     let tree = crate::plan::Tree::build(pattern);
     let mut survey = crate::bgp::PlanSurvey::for_shape(tree.shape());
-    crate::bgp::survey_pattern_plans(
+    crate::bgp::survey_pattern_plans_admitted(
         snap,
         active_dataset,
         purrdf_core::GraphMatch::Default,
@@ -887,6 +896,7 @@ fn admit_where<D: purrdf_core::DatasetView + Sync>(
         // that configured no registry.
         relations,
         &mut survey,
+        &crate::workspace::QueryWorkspace::resident(),
     )
     .map_err(|e| {
         RdfDiagnostic::error(
@@ -1020,13 +1030,23 @@ fn silence_or_fail(
         return Err(UpdateAbort::Failed(diagnostic));
     }
     if let Some(state) = governors {
-        state.record_silenced(purrdf_core::SilencedInvocation::new(
-            purrdf_core::SilencedTarget::Load {
-                iri: source.to_owned(),
-            },
-            kind,
-            diagnostic.message,
-        ));
+        state
+            .record_silenced_admitted(
+                purrdf_core::SilencedInvocation::new(
+                    purrdf_core::SilencedTarget::Load {
+                        iri: source.to_owned(),
+                    },
+                    kind,
+                    diagnostic.message,
+                ),
+                &crate::WorkspaceCapability::resident(),
+            )
+            .map_err(|error| {
+                UpdateAbort::Failed(RdfDiagnostic::error(
+                    crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
+                    error.to_string(),
+                ))
+            })?;
     }
     Ok(())
 }
@@ -1248,7 +1268,7 @@ fn mutable_mint_prefix(destination: &MutableDataset, requested: Option<&str>) ->
 /// default graph (DATA has no `WITH`). Blanks mint from the shared `counter`.
 fn instantiate_ground_quad(
     qp: &QuadPattern,
-    blanks: &mut DetHashMap<String, String>,
+    blanks: &mut crate::template::TemplateBlanks,
     counter: &mut u64,
     prefix: Option<&str>,
 ) -> Option<QuadValues> {
@@ -1306,7 +1326,7 @@ fn instantiate_quad_with_default<D: purrdf_core::DatasetView + Sync>(
     qp: &QuadPattern,
     ordinal: &QuadOrdinal,
     row: &Solution<D::Id>,
-    blanks: &mut DetHashMap<String, String>,
+    blanks: &mut crate::template::TemplateBlanks,
     ctx: &mut EvalCtx<'_, D>,
     default_graph: Option<&TermValue>,
 ) -> Result<Option<QuadValues>, crate::error::EvalError> {

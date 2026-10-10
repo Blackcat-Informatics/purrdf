@@ -114,14 +114,14 @@
 //! contract. The charges that bound *work* (a `FILTER` predicate not yet run, a `BIND`
 //! expression not yet evaluated) still cut, because there the refusal is the bound.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use purrdf_core::{TrippedGovernor, ViewTermId};
 use purrdf_sparql_algebra::GraphPattern;
 
 use crate::governor::soundness::{
-    ChildEdge, ChildEdges, OrderCertainty, PrefixFidelity, SpineClass, SpineContext, child_edges,
-    pattern_label,
+    ChildEdge, ChildEdges, OrderCertainty, PrefixFidelity, SpineClass, SpineContext,
+    child_edges_admitted, pattern_label,
 };
 use crate::solution::{SolutionSeq, VarSchema};
 
@@ -303,7 +303,7 @@ impl<I: ViewTermId> Truncation<I> {
     pub(crate) fn barred_at(
         node: &GraphPattern,
         tripped: TrippedGovernor,
-        schema: Arc<VarSchema>,
+        schema: crate::solution::SharedSchema,
     ) -> Self {
         let mut certificate = Certificate::origin(tripped);
         certificate.ascend(ChildEdge::OPAQUE, node);
@@ -468,19 +468,28 @@ pub(crate) struct Lift<'p> {
     /// The composed certificate of the child truncation absorbed so far, if any.
     certificate: Option<Certificate>,
     /// The best schema known for this node's output, used when no rows can be computed.
-    schema: Option<Arc<VarSchema>>,
+    schema: Option<crate::solution::SharedSchema>,
 }
 
 impl<'p> Lift<'p> {
     /// A lift for `node`, reading its child classification from
-    /// [`crate::governor::soundness::child_edges`].
+    /// [`crate::governor::soundness::child_edges_admitted`].
+    #[cfg(test)]
     pub(crate) fn at(node: &'p GraphPattern) -> Self {
-        Self {
+        Self::at_admitted(node, &crate::WorkspaceCapability::resident())
+            .expect("resident node lift")
+    }
+
+    pub(crate) fn at_admitted(
+        node: &'p GraphPattern,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, crate::EvalError> {
+        Ok(Self {
             node,
-            edges: child_edges(node),
+            edges: child_edges_admitted(node, workspace)?,
             certificate: None,
             schema: None,
-        }
+        })
     }
 
     /// Absorb the result of this node's `ordinal`-th classified child — the ordinal at
@@ -503,7 +512,7 @@ impl<'p> Lift<'p> {
                 let (rows, mut certificate) = truncation.split();
                 certificate.ascend(self.edges.at(ordinal), self.node);
                 let barred = certificate.spine().class() == SpineClass::Unknown;
-                self.schema = Some(Arc::clone(&rows.schema));
+                self.schema = Some(rows.schema.clone());
                 self.certificate = Some(certificate);
                 if barred { None } else { Some(rows) }
             }
@@ -558,7 +567,7 @@ impl<'p> Lift<'p> {
 
     /// The schema of the last absorbed child, for an operator that needs to build an
     /// empty result of its own shape.
-    pub(crate) fn absorbed_schema(&self) -> Option<Arc<VarSchema>> {
+    pub(crate) fn absorbed_schema(&self) -> Option<crate::solution::SharedSchema> {
         self.schema.clone()
     }
 }
@@ -574,15 +583,32 @@ impl<'p> Lift<'p> {
 /// its row loop is done and withholds its whole output — which is exactly what
 /// [`ChildRole::Opaque`] licenses and all it licenses.
 ///
-/// Shared through an [`Arc`], so an observation made on a forked parallel worker's
+/// Shared through its immutable owner, so an observation made on a forked parallel worker's
 /// context reaches the parent that forked it. A worker's own context is dropped the
 /// instant its closure returns, so a non-shared cell would silently lose the barrier and
 /// the operator would emit rows whose `EXISTS` booleans were computed over a truncated
 /// bag.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ExpressionBarrier(Arc<OnceLock<TrippedGovernor>>);
+#[derive(Debug, Clone)]
+pub(crate) struct ExpressionBarrier(crate::workspace::SharedWorkspace<OnceLock<TrippedGovernor>>);
+
+impl Default for ExpressionBarrier {
+    fn default() -> Self {
+        Self::admitted(&crate::WorkspaceCapability::resident())
+            .expect("resident expression barrier allocation")
+    }
+}
 
 impl ExpressionBarrier {
+    /// The actual one-shot control is admitted before its native allocation.
+    pub(crate) fn admitted(
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, crate::EvalError> {
+        Ok(Self(crate::workspace::SharedWorkspace::new_admitted(
+            OnceLock::new(),
+            workspace,
+        )?))
+    }
+
     /// Record that an expression-embedded pattern truncated. Write-once: the first trip
     /// is the reported trip, matching the governor state's own latching.
     pub(crate) fn record(&self, tripped: TrippedGovernor) {
@@ -603,6 +629,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::governor::soundness::child_edges;
     use crate::governor::soundness::{ChildRole, walk_spine};
 
     /// A fuel trip, the governor these tests use whenever the identity of the governor is
@@ -633,10 +660,11 @@ mod tests {
     /// were withheld" without building a dataset.
     fn one_row() -> SolutionSeq<TermId> {
         SolutionSeq {
-            schema: Arc::new(VarSchema::from_vars([Variable::new("s")])),
+            schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("s")])),
             rows: vec![purrdf_core::smallvec![Some(
                 crate::scratch::SolutionTerm::Existing(TermId::from_index(0))
-            )]],
+            )]]
+            .into(),
         }
     }
 
