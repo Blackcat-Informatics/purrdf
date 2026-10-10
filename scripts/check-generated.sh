@@ -113,7 +113,7 @@ check_file() {
 sync_file() {
   local generated="$1"
   local committed="$2"
-  if [ "$mode" = "--write" ]; then
+  if [ "$mode" = "--write" ] && ! cmp -s "$generated" "$committed"; then
     cp -- "$generated" "$committed"
   fi
   check_file "$generated" "$committed"

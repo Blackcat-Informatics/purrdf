@@ -9,10 +9,10 @@ conformance. `make check` executes their complete registered targets through
 crates for `wasm32-unknown-unknown`. `make wasm-pkg-test` exercises the optimized
 package, JavaScript bindings and identity ABI; CI also runs the Worker recipe.
 
-`make wasm-test` selects 29 named cases in 13 integration targets,
-with 34 executions across 17 scalar/SIMD target invocations. Every selection
+`make wasm-test` selects 30 named cases in 14 integration targets,
+with 35 executions across 18 scalar/SIMD target invocations. Every selection
 exercises an actual WASM dispatch path, SIMD kernel, shadow-stack floor or host
-interface, except the numeric and sentence byte-identity targets. WebAssembly has 32- and
+interface, except the numeric, sentence and MIME byte-identity targets. WebAssembly has 32- and
 64-bit integers only, so every `i128` step of the arbitrary-precision numeric
 tower and every `u64`/`u128` carry lane under it is lowered differently there; a
 lowering bug would bind a different digit rather than crash. Those targets hold
@@ -21,9 +21,12 @@ refusals among them — to the native ones by a pinned digest both targets
 reproduce. The sentence probe reproduces pinned UTF-8 segments and byte offsets
 through the public borrowed iterators, including paragraph separators, ignored
 characters, abbreviations and multilingual/emoji segments. The full official
-sentence corpus remains a native Rust conformance check. Runner preflight additionally exercises panic handling, refused flags
+sentence corpus remains a native Rust conformance check. The MIME probe reproduces
+one native SHA256 transcript of original message octets and emitted Turtle,
+N-Triples and JSON-LD bytes, and reconstructs every original through the actual
+RDF parser and shared cover decoder. Runner preflight additionally exercises panic handling, refused flags
 and sealed host reads. Every other numeric expectation, general digest vectors,
-geometry, index determinism and codec corpora run in native Rust.
+geometry, index determinism and the remaining codec corpora run in native Rust.
 
 After preflight, the lane sets `PURRDF_TEST_REQUIRE_EXACT=1` in the shared Rust
 harness. Each invocation must execute one case for every exact filter; missing,
@@ -77,6 +80,7 @@ admission refusal, and does not repeat semantic vectors or benchmark fixtures.
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `match_length_kernels_match_portable` | Calls the simd128 match-length kernel against the portable kernel over vector widths and mismatch positions. |
 | `purrdf-deflate` / `deflate_conformance` | SIMD | `hash_kernels_match_portable` | Calls the simd128 window-hash kernel against the scalar reference over lengths and offsets. |
 | `purrdf-text` / `wasm_determinism` | scalar | `the_sentence_boundaries_are_reproduced_on_this_target` | Reproduces pinned borrowed UTF-8 sentence bytes and offsets from the same versioned Sentence_Break tables, including the alphanumeric filter and empty input. |
+| `purrdf-mime` / `lossless` | scalar | `production_rdf_round_trip_is_deterministic_for_original_and_broken_messages` | Reproduces the frozen native transcript of message and RDF bytes across all three serializers; reconstructs repeated, nested, multipart and malformed originals through the production RDF parser and byte-cover decoder. |
 
 The hash benchmark targets remain native benchmarks. No benchmark smoke target
 runs in the WASM lane; the selected testkit host-clock case exercises its WASM

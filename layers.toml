@@ -184,6 +184,10 @@ name = "purrdf-markdown"
 deps = ["purrdf-core", "purrdf-hash"]
 
 [[crate]]
+name = "purrdf-mime"
+deps = ["purrdf-core", "purrdf-hash", "purrdf-lex", "purrdf-xsd"]
+
+[[crate]]
 name = "purrdf-shex"
 deps = [
     "purrdf-core",
@@ -346,6 +350,7 @@ deps = [
     "purrdf-json",
     "purrdf-lex",
     "purrdf-markdown",
+    "purrdf-mime",
     "purrdf-rdf",
     "purrdf-retrieval",
     "purrdf-shapes",

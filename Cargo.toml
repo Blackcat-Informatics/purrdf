@@ -27,6 +27,7 @@ members = [
     "crates/jsonschema",
     "crates/lex",
     "crates/markdown",
+    "crates/mime",
     "crates/purrdf",
     "crates/rdf",
     "crates/rdf-capi",
@@ -97,6 +98,7 @@ purrdf-json = { path = "crates/json", version = "3.0.1" }
 purrdf-jsonschema = { path = "crates/jsonschema", version = "3.0.1" }
 purrdf-lex = { path = "crates/lex", version = "3.0.1" }
 purrdf-markdown = { path = "crates/markdown", version = "3.0.1" }
+purrdf-mime = { path = "crates/mime", version = "3.0.1" }
 purrdf-rdf = { path = "crates/rdf", version = "3.0.1" }
 purrdf-retrieval = { path = "crates/retrieval", version = "3.0.1" }
 purrdf-shapes = { path = "crates/shapes", version = "3.0.1" }

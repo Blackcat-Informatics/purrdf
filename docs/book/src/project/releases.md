@@ -67,7 +67,7 @@ cargo lane:
   publishing;
 - every workspace crate version must match the tag version.
 
-Every functional version of every crate in the 31-crate release set is
+Every functional version of every crate in the 32-crate release set is
 published by that lane. Each existing crate record is locked on crates.io with
 *Require trusted publishing* (`trustpub_only`), so an API token cannot publish
 a new version of any of them: crates.io answers with
@@ -77,7 +77,7 @@ Set up new crate records **before tagging**. A token creates each missing
 record by publishing an isolated, empty, dependency-free **0.0.0** package;
 the real workspace crate keeps its functional release version. Configure its
 Trusted Publisher entry and enable *Require trusted publishing*, then reconcile
-`PURRDF_UNBOOTSTRAPPED_CRATES` in `scripts/release-crates.sh`. All 31 records
+`PURRDF_UNBOOTSTRAPPED_CRATES` in `scripts/release-crates.sh`. All 32 records
 must exist, all publisher entries must be configured, every record must be
 locked, and the ledger must be empty before the functional release begins.
 `scripts/check-crates-io-records.sh --require-all` verifies the public records
