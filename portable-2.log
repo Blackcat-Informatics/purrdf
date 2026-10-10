@@ -1,0 +1,24 @@
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf-core)
+   Compiling purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/datalog)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/entail)
+    Finished `test` profile [optimized] target(s) in 57.12s
+     Running tests/regular_role_chains.rs (/opt/.cargo/slots/1e00e87a12d7031b/0/build/wasm32-unknown-unknown/debug/build/purrdf-entail/b853416d725f1aa8/out/regular_role_chains-b853416d725f1aa8.wasm)
+
+running 14 tests
+test all_nine_consumer_shapes_are_exact_and_contradictions_are_detected ... ok
+test inverse_heads_nested_dependencies_and_simple_equivalence_cycles ... ok
+test universal_obligations_clash_after_recursive_paths_and_blocking ... ok
+test cyclic_existentials_with_role_obligations_have_a_finite_blocking_closure ... ok
+test printed_order_counterexample_and_inverse_endpoint_typo_do_not_pass ... ok
+test literal_recursive_endpoint_is_not_replaced_by_an_equivalent_name ... ok
+test recorded_chain_consequence_replays_against_the_original_rbox ... ok
+test chain_derived_types_reach_all_query_services_and_materialization ... ok
+test fixed_top_is_universal_and_bottom_chain_clashes ... ok
+test fixed_top_aliases_without_a_chain_reach_query_only_individuals ... ok
+test non_simple_characteristics_and_malformed_chain_lists_hard_refuse ... ok
+test role_language_work_exhaustion_is_unknown_never_a_consistency_proof ... ok
+test cancelling_an_existing_regular_role_owner_cannot_publish_a_decision ... ok
+test nominal_merges_and_simple_functionality_preserve_role_obligations ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+

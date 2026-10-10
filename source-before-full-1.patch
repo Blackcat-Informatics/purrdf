@@ -1,0 +1,3746 @@
+diff --git Makefile Makefile
+index 1311da6b2..e6e927c4b 100644
+--- Makefile
++++ Makefile
+@@ -711,6 +711,22 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface
+ 	else \
+ 		bash scripts/check-wasm-test-runner.sh \
+ 		&& export PURRDF_TEST_REQUIRE_EXACT=1 \
++		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
++			cargo test --locked --target wasm32-unknown-unknown -p purrdf-entail --test regular_role_chains -- --exact \
++				all_nine_consumer_shapes_are_exact_and_contradictions_are_detected \
++				inverse_heads_nested_dependencies_and_simple_equivalence_cycles \
++				universal_obligations_clash_after_recursive_paths_and_blocking \
++				cyclic_existentials_with_role_obligations_have_a_finite_blocking_closure \
++				printed_order_counterexample_and_inverse_endpoint_typo_do_not_pass \
++				literal_recursive_endpoint_is_not_replaced_by_an_equivalent_name \
++				recorded_chain_consequence_replays_against_the_original_rbox \
++				chain_derived_types_reach_all_query_services_and_materialization \
++				fixed_top_is_universal_and_bottom_chain_clashes \
++				fixed_top_aliases_without_a_chain_reach_query_only_individuals \
++				non_simple_characteristics_and_malformed_chain_lists_hard_refuse \
++				role_language_work_exhaustion_is_unknown_never_a_consistency_proof \
++				cancelling_an_existing_regular_role_owner_cannot_publish_a_decision \
++				nominal_merges_and_simple_functionality_preserve_role_obligations \
+ 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+ 			cargo test --locked --target wasm32-unknown-unknown -p purrdf-sparql-eval --test knn_wasm_reassociated -- --exact \
+ 				the_reassociated_path_is_the_one_this_build_was_made_for \
+diff --git crates/entail/Cargo.toml crates/entail/Cargo.toml
+index 8010bee37..8fe432466 100644
+--- crates/entail/Cargo.toml
++++ crates/entail/Cargo.toml
+@@ -71,11 +71,17 @@ purrdf-stack = { workspace = true }
+ # run and a failure reproduces; test-only and path-only, so it reaches no shipped artifact
+ # and is stripped from the packaged manifest.
+ purrdf-testkit = { workspace = true }
++
+ # The workspace's counting allocator, registered by the graph tests to assert that a
+ # neighbourhood read allocates nothing once its scratch has grown to the graph. Test-only and
+ # path-only, like testkit.
+ purrdf-alloc-probe = { workspace = true }
+ 
++[[test]]
++# The same complete role-chain production fixtures execute natively and on wasm32.
++name = "regular_role_chains"
++harness = false
++
+ [[bench]]
+ # Forward-materialization chase latency over a synthetic subclass hierarchy at two
+ # depths — a regression watch on the semi-naive fixpoint. Report-only.
+diff --git crates/entail/README.md crates/entail/README.md
+index f417792c6..906aad37a 100644
+--- crates/entail/README.md
++++ crates/entail/README.md
+@@ -27,7 +27,7 @@ external reasoner, no `tokio`, and no string round-trip.
+ | Entry point | Regime(s) | Engine |
+ | --- | --- | --- |
+ | `materialize(ds, plan)` | **all seven** | Forward materialization ("chase") of `calculus_program(regime)` through `purrdf-datalog`'s native semi-naive fixpoint — the declared rule set *is* the executable, so the contract hash a report carries names the clauses that ran. Returns `(closure, ReasoningReport)` — the report is not optional. `plan` is a `Materialization`, which carries each regime's own input, so the function is TOTAL: `OwlDirect(&[QTriple])` and `Rif(&RuleSet)` delegate to the two entry points below rather than being refused. |
+-| `materialize_dl_reported(ds, bgp)` | `OWL-Direct` | Open-world OWL DL over a SHOIQ(D) hypertableau, directed by the query's class expressions — what `materialize(ds, Materialization::OwlDirect(bgp))` delegates to. Answers a BGP whose variables are all distinguished; a query blank node is a non-distinguished variable and raises the `NonDistinguishedVariable` boundary rather than being answered incompletely in silence. |
++| `materialize_dl_reported(ds, bgp)` | `OWL-Direct` | Open-world OWL DL over the hypertableau with regular SROIQ role languages, directed by the query's class expressions — what `materialize(ds, Materialization::OwlDirect(bgp))` delegates to. Answers a BGP whose variables are all distinguished; a query blank node is a non-distinguished variable and raises the `NonDistinguishedVariable` boundary rather than being answered incompletely in silence. |
+ | `Reasoner::new(ds)` | `OWL-Direct` | The Description-Logic services — consistency, class satisfiability, classification, realization, instance retrieval and axiom entailment. Each answer arrives as a `Certified<T>` carrying a `DlCertificate`: the DL lane's own completeness notion, which reports both the constructs the reverse mapping could not read and a search that ran out of deterministic steps. Records no proof term: `Certified::proof()` is `None`. |
+ | `Reasoner::with_proofs(ds)` | `OWL-Direct` | The same services, each answer additionally carrying a `ServiceProof` a consumer replays against their own copy of the data. Opt-in because it costs an RDFC-1.0 canonicalization of the dataset, a clausification contract per call, and one instrumented tableau trace per run; the verdict and every `DlCertificate` counter are identical either way. |
+ | `extract_module(ds, signature, method)` | — | Syntactic locality module extraction (`BOT` / `TOP` / `STAR`). Sound, not minimal: a construct whose locality is not decided exactly is kept conservatively and the keep is reported. |
+@@ -95,6 +95,20 @@ what `ReasoningReport::regime()` names, what `rules()`/`implemented()` are index
+ by, and what `Regime::from_iri` parses a `sparql:entailmentRegime` IRI into.
+ `Materialization::regime()` is the map from the input to the identity.
+ 
++Regular role chains use the original SROIQ automaton obligations in the
++hypertableau, including its blocking labels, rather than treating finite ABox
++closure as a decision procedure. Admission first checks the authored OWL 2
++Structural Specification §11.2 order (literal recursive endpoints are checked
++before equivalent-property normalization), then checks the mixed simple/complex
++dependency condition after genuine simple equivalences are quotiented. Passing
++the printed order alone does not establish a regular language: Stefanoni's
++[Example 12.2 and Theorem 12.4](https://www.cs.ox.ac.uk/files/7941/paper.pdf)
++give the counterexample and regular-calculus condition. A cycle through a complex
++dependency refuses with `RoleHierarchyError`; ordinary simple equivalence cycles
++remain legal. Inverse heads reverse the whole inclusion, and top/bottom properties
++retain their fixed semantics. Native storage refusal and cancellation remain
++operational causes, never a decided consistency verdict.
++
+ ## Rule coverage
+ 
+ The rule tables are data, not prose. `rules(regime)` is what the specification
+@@ -109,7 +123,7 @@ difference is the gap, and it is also what a `ReasoningReport` reports as
+ | `RDFS` | RDF 1.2 Semantics §8.1.1 + §9.2.1 | 18 | 18 |
+ | `OWL-RL` | OWL 2 Profiles §4.3 Tables 4–9 | 78 | 78 |
+ | `D` | OWL 2 Profiles §4.3 Table 8 | 5 | 5 |
+-| `OWL-Direct` | — (SHOIQ(D) hypertableau, not a fixed table) | 0 | 0 |
++| `OWL-Direct` | — (hypertableau with regular role languages, not a fixed table) | 0 | 0 |
+ | `RIF` | — (caller-supplied rule set) | 0 | 0 |
+ 
+ The per-rule table is generated from this crate's own API and drift-guarded:
+diff --git crates/entail/src/entails/mod.rs crates/entail/src/entails/mod.rs
+index 4057b8264..c86807625 100644
+--- crates/entail/src/entails/mod.rs
++++ crates/entail/src/entails/mod.rs
+@@ -552,6 +552,7 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
+         | EntailError::Evaluate(_)
+         | EntailError::Chase(_)
+         | EntailError::MalformedList(_)
++        | EntailError::RoleHierarchy(_)
+         | EntailError::ForeignTerm(_)
+         | EntailError::SourceRead(_)
+         | EntailError::UnsupportedRegime(_)
+diff --git crates/entail/src/interner.rs crates/entail/src/interner.rs
+index 6a8951be4..9a2142f2f 100644
+--- crates/entail/src/interner.rs
++++ crates/entail/src/interner.rs
+@@ -53,9 +53,12 @@ impl Interner {
+     }
+ 
+     /// The id already assigned to `iri`, if it has been interned (lookup only).
+-    #[cfg(test)]
+     pub(crate) fn id_of_iri(&self, iri: &str) -> Option<u32> {
+-        self.id_of(&TermValue::Iri(iri.to_owned()))
++        // Vocabulary lookup borrows spelling without a temporary owned term.
++        self.values.iter().enumerate().find_map(|(index, value)| {
++            matches!(value, TermValue::Iri(value) if value == iri)
++                .then(|| u32::try_from(index).expect("interned term count fits u32"))
++        })
+     }
+ 
+     /// Borrowed term lookup at the sole interner home.
+diff --git crates/entail/src/lib.rs crates/entail/src/lib.rs
+index 6596363a1..12eab12d0 100644
+--- crates/entail/src/lib.rs
++++ crates/entail/src/lib.rs
+@@ -338,6 +338,9 @@ impl Materialization<'_> {
+     }
+ }
+ 
++/// The typed refusal of an object-property hierarchy before reasoning starts.
++pub use owl_dl::roles::RoleHierarchyError;
++
+ /// Why a closure could not be produced.
+ #[derive(Debug, Clone)]
+ #[non_exhaustive]
+@@ -347,6 +350,9 @@ pub enum EntailError {
+     /// A knowledge-base or rule document was malformed (e.g. an ill-formed OWL
+     /// class-expression graph or an unrecognized RIF construct).
+     Parse(String),
++    /// An object-property hierarchy is malformed, nonregular, or physically
++    /// refused before the regular-language program could be constructed.
++    RoleHierarchy(RoleHierarchyError),
+     /// A PROOF-CARRYING operation was asked of a reasoner that records no proofs.
+     ///
+     /// Recording is opt-in: [`Reasoner::new`] answers questions and keeps no evidence, while
+@@ -557,11 +563,21 @@ impl EntailError {
+     }
+ }
+ 
++impl From<RoleHierarchyError> for EntailError {
++    fn from(error: RoleHierarchyError) -> Self {
++        match error {
++            RoleHierarchyError::Stopped => Self::Stopped,
++            error => Self::RoleHierarchy(error),
++        }
++    }
++}
++
+ impl std::fmt::Display for EntailError {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         match self {
+             Self::Build(msg) => write!(f, "entailment build error: {msg}"),
+             Self::Parse(msg) => write!(f, "entailment parse error: {msg}"),
++            Self::RoleHierarchy(error) => write!(f, "entailment role-hierarchy error: {error}"),
+             Self::ProofsNotRecorded => write!(
+                 f,
+                 "this reasoner records no proofs, so it has no ontology identity to check one \
+@@ -697,6 +713,7 @@ impl std::error::Error for EntailError {
+             Self::Chase(inner) => Some(inner),
+             Self::Canonicalization(inner) => Some(inner),
+             Self::ForeignTerm(inner) => Some(inner),
++            Self::RoleHierarchy(inner) => Some(inner),
+             Self::Build(_)
+             | Self::SourceRead(_)
+             | Self::Parse(_)
+diff --git crates/entail/src/owl_dl/bounds.rs crates/entail/src/owl_dl/bounds.rs
+index 85a280e64..1f9258d40 100644
+--- crates/entail/src/owl_dl/bounds.rs
++++ crates/entail/src/owl_dl/bounds.rs
+@@ -1084,7 +1084,7 @@ mod owner_tests {
+             // Input concepts, exact range tables and source strings precede this
+             // measurement. Only the actual preparation owner is being measured.
+             let mut kb = Kb::from_dataset(&dataset).unwrap();
+-            kb.finalize();
++            kb.finalize().expect("fixture preparation");
+             let window = CurrentThreadWindow::open();
+             let mut table = Preparation::default();
+             table
+@@ -1113,7 +1113,7 @@ mod owner_tests {
+     fn compiled_schema_guards_borrow_original_admitted_products_without_allocation() {
+         let dataset = shared_schema(8, 16, true);
+         let mut kb = Kb::from_dataset(&dataset).unwrap();
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         assert_ne!(
+             kb.schema.guards.len(),
+             0,
+diff --git crates/entail/src/owl_dl/clause.rs crates/entail/src/owl_dl/clause.rs
+index 755d05612..133d4defe 100644
+--- crates/entail/src/owl_dl/clause.rs
++++ crates/entail/src/owl_dl/clause.rs
+@@ -706,6 +706,51 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
+             );
+         }
+     }
++    // Universal restrictions over regular role languages use a finite closure
++    // of internal state labels. These labels travel with blocking signatures;
++    // no completion edge or RDF name stands in for an automaton continuation.
++    if let Some(program) = &kb.role_program {
++        for obligation in &program.obligations {
++            let machine = &program.machines[obligation.machine];
++            out.push_triggered(
++                obligation.source,
++                Vec::new(),
++                vec![vec![HeadAtom::Concept {
++                    var: 0,
++                    concept: obligation.states[machine.initial],
++                }]],
++            );
++            out.push_triggered(
++                obligation.states[machine.accepting],
++                Vec::new(),
++                vec![vec![HeadAtom::Concept {
++                    var: 0,
++                    concept: obligation.filler,
++                }]],
++            );
++            for edge in &machine.transitions {
++                let (body, target) = match edge.letter {
++                    Some(role) => (
++                        vec![BodyAtom::Role {
++                            from: 0,
++                            to: 1,
++                            role,
++                        }],
++                        1,
++                    ),
++                    None => (Vec::new(), 0),
++                };
++                out.push_triggered(
++                    obligation.states[edge.from],
++                    body,
++                    vec![vec![HeadAtom::Concept {
++                        var: target,
++                        concept: obligation.states[edge.to],
++                    }]],
++                );
++            }
++        }
++    }
+     // The absorbed TBox, verbatim: [`crate::owl_dl::absorb`] has already decided each
+     // inclusion's guard, so emission is a translation and not a second place the encoding is
+     // chosen. Marked as TBox-derived, which is what scopes it to the OBJECT domain — a
+@@ -1116,7 +1161,7 @@ mod tests {
+         let id = kb.table.intern(concept);
+         kb.abox_types.push((1, id));
+         kb.individuals.insert(1);
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         kb
+     }
+ 
+@@ -1366,7 +1411,7 @@ mod tests {
+     fn the_absorbed_tbox_becomes_triggered_atomic_clauses() {
+         let mut kb = Kb::empty();
+         kb.push_gci(Concept::Named(10), Concept::Named(11));
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         let named = kb.table.intern(Concept::Named(10));
+         let clauses = derive(&kb);
+         let triggered: Vec<usize> = clauses.triggered_by(named, &kb.schema).collect();
+@@ -1390,7 +1435,7 @@ mod tests {
+             Concept::Some(Role::Named(20), Box::new(Concept::Named(10))),
+             Concept::Named(11),
+         );
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         let filler = kb.table.intern(Concept::Named(10));
+         let clauses = derive(&kb);
+         assert!(
+@@ -1450,7 +1495,7 @@ mod tests {
+         kb.asymmetric.insert(21);
+         kb.disjoint_roles.insert((20, 21));
+         kb.disjoint_roles.insert((21, 20));
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         let clauses = derive(&kb);
+         // Only what nothing can trigger is tried everywhere: `⊤ ⊑ A` and the nominal guard.
+         assert_eq!(
+diff --git crates/entail/src/owl_dl/concept.rs crates/entail/src/owl_dl/concept.rs
+index 7dadff189..8700caa1b 100644
+--- crates/entail/src/owl_dl/concept.rs
++++ crates/entail/src/owl_dl/concept.rs
+@@ -25,6 +25,7 @@
+ use std::hash::{BuildHasher, Hash};
+ 
+ use hashbrown::HashTable;
++use purrdf_lex::allocation::{Memory, Resident, StorageError};
+ 
+ /// A DL role: a named object property, or its inverse.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+@@ -97,6 +98,19 @@ pub(crate) enum Concept {
+     /// `owl:ReflexiveProperty` (`⊤ ⊑ ∃r.Self`) and `owl:IrreflexiveProperty`
+     /// (`⊤ ⊑ ¬∃r.Self`) are ordinary GCIs here rather than a second mechanism.
+     SelfRestriction(Role),
++    /// An internal positive role-automaton obligation. This is not a user-visible
++    /// class or RDF term: the role calculus supplies its transition/acceptance
++    /// implications, and its identity participates in ordinary node blocking.
++    RoleState {
++        /// The compiled role-language machine.
++        machine: usize,
++        /// The local automaton state.
++        state: usize,
++        /// The original universal restriction's filler concept.
++        filler: u32,
++        /// The classical complement of this internal state atom.
++        negated: bool,
++    },
+ }
+ 
+ impl Concept {
+@@ -197,6 +211,7 @@ impl Concept {
+             Self::Top
+             | Self::Bottom
+             | Self::Named(_)
++            | Self::RoleState { .. }
+             | Self::SelfRestriction(_)
+             | Self::Data(_) => self,
+             Self::Nominal(ids) => Self::nominal(ids),
+@@ -221,6 +236,17 @@ impl Concept {
+         match c {
+             Self::Top => Self::Bottom,
+             Self::Bottom => Self::Top,
++            Self::RoleState {
++                machine,
++                state,
++                filler,
++                negated,
++            } => Self::RoleState {
++                machine,
++                state,
++                filler,
++                negated: !negated,
++            },
+             Self::Named(_) | Self::SelfRestriction(_) | Self::Data(_) => Self::Not(Box::new(c)),
+             Self::Nominal(ids) => Self::Not(Box::new(Self::nominal(ids))),
+             Self::Not(inner) => inner.nnf(),
+@@ -331,12 +357,13 @@ impl ConceptTable {
+         let decomp = match c {
+             Concept::Top => Decomp::Top,
+             Concept::Bottom => Decomp::Bottom,
+-            Concept::Named(_) => Decomp::Named,
++            Concept::Named(_) | Concept::RoleState { negated: false, .. } => Decomp::Named,
++            Concept::RoleState { negated: true, .. } => Decomp::NegNamed,
+             Concept::Nominal(ids) => Decomp::Nominal(ids.clone()),
+             Concept::SelfRestriction(role) => Decomp::SelfRestriction(*role),
+             Concept::Data(range) => Decomp::Data(*range),
+             Concept::Not(inner) => match inner.as_ref() {
+-                Concept::Named(_) => Decomp::NegNamed,
++                Concept::Named(_) | Concept::RoleState { .. } => Decomp::NegNamed,
+                 Concept::Nominal(ids) => Decomp::NegNominal(ids.clone()),
+                 Concept::SelfRestriction(role) => Decomp::NegSelfRestriction(*role),
+                 Concept::Data(range) => Decomp::NegData(*range),
+@@ -350,14 +377,117 @@ impl ConceptTable {
+             Concept::Min(n, r, c) => Decomp::Min(*n, *r, self.intern_nnf(c)),
+             Concept::Max(n, r, c) => Decomp::Max(*n, *r, self.intern_nnf(c)),
+         };
+-        let id = u32::try_from(self.concepts.len()).expect("concept count fits u32");
+-        self.concepts.push(c.clone());
++        self.append(c.clone(), decomp, hash, |_| Ok(()))
++            .expect("resident concept count fits u32")
++    }
++
++    /// Intern a stack-only automaton-state identity. The reasoner is a resident
++    /// owner, so its existing containers already belong to the unlimited resident
++    /// admission; every replacement is nevertheless fallible before allocation.
++    /// This is not a certificate for a bounded caller's pre-existing raw table.
++    pub(crate) fn try_role_state(
++        &mut self,
++        machine: usize,
++        state: usize,
++        filler: u32,
++    ) -> Result<u32, StorageError> {
++        let concept = Concept::RoleState {
++            machine,
++            state,
++            filler,
++            negated: false,
++        };
++        let hash = purrdf_core::FastHasher::default().hash_one(&concept);
++        let existing = self
++            .index
++            .find(hash, |&id| self.concepts[id as usize] == concept)
++            .copied();
++        if let Some(id) = existing
++            && self.neg[id as usize].is_some()
++        {
++            return Ok(id);
++        }
++        let positive = match existing {
++            Some(id) => id,
++            None => self.append(concept, Decomp::Named, hash, Self::reserve_state)?,
++        };
++        let complement = Concept::RoleState {
++            machine,
++            state,
++            filler,
++            negated: true,
++        };
++        let complement_hash = purrdf_core::FastHasher::default().hash_one(&complement);
++        let negative = self.append(
++            complement,
++            Decomp::NegNamed,
++            complement_hash,
++            Self::reserve_state,
++        )?;
++        self.neg[positive as usize] = Some(negative);
++        self.neg[negative as usize] = Some(positive);
++        Ok(positive)
++    }
++
++    fn reserve_state(table: &mut Self) -> Result<(), StorageError> {
++        let old = table
++            .concepts
++            .capacity()
++            .checked_mul(size_of::<Concept>())
++            .and_then(|n| {
++                table
++                    .decomp
++                    .capacity()
++                    .checked_mul(size_of::<Decomp>())
++                    .and_then(|m| n.checked_add(m))
++            })
++            .and_then(|n| {
++                table
++                    .neg
++                    .capacity()
++                    .checked_mul(size_of::<Option<u32>>())
++                    .and_then(|m| n.checked_add(m))
++            })
++            .and_then(|n| {
++                purrdf_core::hash::hash_table_allocation_bound::<u32>(table.index.capacity())
++                    .and_then(|m| n.checked_add(m))
++            })
++            .ok_or(StorageError::SizeOverflow)?;
++        let required = table
++            .concepts
++            .len()
++            .checked_add(1)
++            .ok_or(StorageError::SizeOverflow)?;
++        let mut resident = Resident;
++        let mut memory = Memory::resume(&mut resident, old);
++        memory.reserve_for_push(&mut table.concepts)?;
++        memory.reserve_for_push(&mut table.decomp)?;
++        memory.reserve_for_push(&mut table.neg)?;
++        purrdf_core::hash::reserve_table_with_memory(
++            &mut table.index,
++            required,
++            |&id| purrdf_core::FastHasher::default().hash_one(&table.concepts[id as usize]),
++            &mut memory,
++        )
++    }
++
++    /// One dense publication body, after its caller's original growth policy.
++    fn append(
++        &mut self,
++        concept: Concept,
++        decomp: Decomp,
++        hash: u64,
++        reserve: impl FnOnce(&mut Self) -> Result<(), StorageError>,
++    ) -> Result<u32, StorageError> {
++        let id = u32::try_from(self.concepts.len()).map_err(|_| StorageError::SizeOverflow)?;
++        reserve(self)?;
++        self.concepts.push(concept);
+         self.decomp.push(decomp);
+         self.neg.push(None);
+         self.index.insert_unique(hash, id, |&id| {
+             purrdf_core::FastHasher::default().hash_one(&self.concepts[id as usize])
+         });
+-        id
++        Ok(id)
+     }
+ 
+     /// The decomposed structure behind a concept id.
+@@ -432,6 +562,7 @@ impl ConceptTable {
+ 
+     /// Populate the negation id of every interned concept (a fixpoint, since
+     /// negating one concept may intern a new one whose own negation is then filled).
++    #[cfg(test)]
+     pub(crate) fn finalize(&mut self) {
+         match self.finalize_until(|| Ok::<(), std::convert::Infallible>(())) {
+             Ok(()) => {}
+diff --git crates/entail/src/owl_dl/constructs.rs crates/entail/src/owl_dl/constructs.rs
+index 6002c3cce..bd89f0f38 100644
+--- crates/entail/src/owl_dl/constructs.rs
++++ crates/entail/src/owl_dl/constructs.rs
+@@ -435,10 +435,10 @@ pub(crate) const OWL2_CONSTRUCTS: &[OwlConstruct] = &[
+         Shape::AxiomNode,
+         "the pairwise role disjointness of the axiom's owl:members list",
+     ),
+-    bounded(
++    handled(
+         OWL_PROPERTYCHAINAXIOM,
+         Shape::ListPredicate,
+-        Construct::PropertyChain,
++        "regular signed object-property languages, admitted by the source-order and mixed-dependency decision before completion reasoning",
+     ),
+     // --- OWL 2: individual axioms ------------------------------------------------------
+     handled(
+@@ -899,6 +899,9 @@ mod tests {
+             + kb.asymmetric.len()
+             + kb.disjoint_roles.len()
+             + kb.keys.len()
++            + kb.role_program
++                .as_ref()
++                .map_or(0, |program| program.source.chains.len())
+     }
+ 
+     /// THE INVENTORY GATE: every OWL 2 construct either reaches the knowledge base or
+@@ -1082,7 +1085,6 @@ mod tests {
+         // OWL-Direct boundary must have at least one term that raises it, or it is a
+         // boundary nothing can reach.
+         for boundary in [
+-            Construct::PropertyChain,
+             Construct::DataRange,
+             Construct::BuiltinRole,
+             Construct::UnresolvedOntologyImport,
+diff --git crates/entail/src/owl_dl/graph.rs crates/entail/src/owl_dl/graph.rs
+index c3a086563..64b5601f2 100644
+--- crates/entail/src/owl_dl/graph.rs
++++ crates/entail/src/owl_dl/graph.rs
+@@ -1215,6 +1215,7 @@ impl Budget {
+ /// satisfaction test — hold the graph through `&self` and the state through `&State`, and
+ /// threading `&mut` through them would turn a measurement into a refactor of every rule.
+ pub(crate) struct Work {
++    storage_refusal: std::cell::Cell<Option<purrdf_lex::allocation::StorageError>>,
+     /// Units charged so far, clamped at [`Self::cap`].
+     spent: std::cell::Cell<u64>,
+     /// The ceiling this meter stops at.
+@@ -1225,6 +1226,7 @@ impl Work {
+     /// A meter that stops at `cap`.
+     const fn new(cap: u64) -> Self {
+         Self {
++            storage_refusal: std::cell::Cell::new(None),
+             spent: std::cell::Cell::new(0),
+             cap,
+         }
+@@ -1253,7 +1255,7 @@ impl Work {
+     /// the cap being reached and the search reporting it is bounded by one charge rather than
+     /// by whatever the enumeration would have cost.
+     pub(crate) fn exhausted(&self) -> bool {
+-        self.spent.get() >= self.cap
++        self.spent.get() >= self.cap || self.storage_refusal.get().is_some()
+     }
+ }
+ 
+@@ -1285,6 +1287,9 @@ impl Work {
+ /// and on `wasm32` for exactly the reason `steps` is — nothing here reads a clock.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub(crate) struct Decision {
++    /// Original physical refusal of a role-language read. Distinct from both
++    /// caller cancellation and a semantic work limit.
++    pub(crate) storage_refusal: Option<purrdf_lex::allocation::StorageError>,
+     /// Whether a clash-free completion was found. Only meaningful when `!exhausted`.
+     pub(crate) consistent: bool,
+     /// Derivation rounds consumed, summed over every branch the search explored.
+@@ -1337,6 +1342,12 @@ pub(crate) struct Decision {
+     pub(crate) peak_depth: u64,
+ }
+ 
++impl Decision {
++    pub(crate) fn undecided(&self) -> bool {
++        self.exhausted || self.stopped || self.storage_refusal.is_some()
++    }
++}
++
+ /// The search reached one of its two caps. A private marker rather than an
+ /// [`EntailError`](crate::EntailError): it is not a failure at this layer, it is one of the
+ /// three things a decision reports.
+@@ -1693,6 +1704,7 @@ impl Clique<'_> {
+ /// through `&self` is what lets a scan charge itself without every rule in both calculi
+ /// growing a `&mut`.
+ pub(crate) struct Graph<'a> {
++    top_role: Option<u32>,
+     /// The knowledge base (concept table, role hierarchy, inverses).
+     kb: &'a Kb,
+     /// The run's work meter — charged by every scan and enumeration below, and by the two
+@@ -1774,6 +1786,9 @@ impl<'a> Graph<'a> {
+             }
+         }
+         Self {
++            top_role: kb
++                .interner
++                .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY),
+             kb,
+             work: Work::new(work_cap),
+             meta,
+@@ -1792,12 +1807,21 @@ impl<'a> Graph<'a> {
+         self.kb
+     }
+ 
++    /// The fixed universal role is present even without an authored incident edge.
++    pub(crate) const fn has_universal_role(&self) -> bool {
++        self.top_role.is_some()
++    }
++
+     /// The run's work meter — what both drivers charge their own scans and clones to, and
+     /// read the run's work figure off.
+     pub(crate) const fn work(&self) -> &Work {
+         &self.work
+     }
+ 
++    pub(crate) fn storage_refusal(&self) -> Option<purrdf_lex::allocation::StorageError> {
++        self.work.storage_refusal.get()
++    }
++
+     /// A fresh label seeded with the internalized TBox.
+     pub(crate) fn seed_label(&self) -> BTreeSet<u32> {
+         self.meta.clone()
+@@ -1855,6 +1879,22 @@ impl<'a> Graph<'a> {
+                 set_distinct(&mut st, ra, rb);
+             }
+         }
++        if self.top_role.is_some() {
++            // Every named nominal denotes an element, including a query's
++            // previously unmentioned object. The universal role reaches it
++            // even when no asserted edge or positive nominal needs that root.
++            for concept in 0..self.kb.table.len() {
++                if let Decomp::Nominal(members) | Decomp::NegNominal(members) = self
++                    .kb
++                    .table
++                    .decomp(u32::try_from(concept).expect("dense concept id"))
++                {
++                    for &individual in members {
++                        self.root(&mut st, individual);
++                    }
++                }
++            }
++        }
+         for &(a, c) in extra {
+             let ra = self.root(&mut st, a);
+             st.nodes[ra].label.insert(c);
+@@ -2350,6 +2390,107 @@ impl<'a> Graph<'a> {
+         }
+     }
+ 
++    /// Evaluate the compiled language over the original completion edges and
++    /// equality representatives. Product identities are discovered before they
++    /// are queued; epsilon cycles and graph cycles therefore terminate without
++    /// imposing a path-length bound. All scratch dies before its original grant.
++    fn read_role_language(
++        &self,
++        st: &State,
++        x: usize,
++        machine: &super::roles::Automaton,
++        visit: &mut dyn FnMut(usize) -> bool,
++    ) -> Result<bool, purrdf_lex::allocation::StorageError> {
++        use purrdf_lex::allocation::{Memory, Resident};
++        let mut resident = Resident;
++        let mut memory = Memory::new(&mut resident);
++        memory.scope(|memory| {
++            let mut pending = Vec::new();
++            let mut reached = Vec::new();
++            let mut emitted = Vec::new();
++            let initial = (find(st, x), machine.initial);
++            memory.push(&mut reached, initial)?;
++            memory.push(&mut pending, initial)?;
++            let mut answer = false;
++            while let Some((node, state)) = pending.pop() {
++                if self.work.exhausted() || self.kb.stopped() {
++                    break;
++                }
++                self.work.charge(1);
++                if state == machine.accepting
++                    && let Err(position) = emitted.binary_search(&node)
++                {
++                    memory.reserve_for_push(&mut emitted)?;
++                    emitted.insert(position, node);
++                    if visit(node) {
++                        answer = true;
++                        break;
++                    }
++                }
++                for transition in &machine.transitions {
++                    self.work.charge(1);
++                    if self.work.exhausted() || self.kb.stopped() {
++                        break;
++                    }
++                    if transition.from != state {
++                        continue;
++                    }
++                    let mut enqueue =
++                        |target: usize| -> Result<(), purrdf_lex::allocation::StorageError> {
++                            let next = (target, transition.to);
++                            if let Err(position) = reached.binary_search(&next) {
++                                memory.reserve_for_push(&mut reached)?;
++                                reached.insert(position, next);
++                                memory.push(&mut pending, next)?;
++                            }
++                            Ok(())
++                        };
++                    if let Some(letter) = transition.letter {
++                        let (Role::Named(property) | Role::Inv(property)) = letter;
++                        if self.top_role == Some(property) {
++                            if st.nodes[node].concrete {
++                                continue;
++                            }
++                            for target in 0..st.nodes.len() {
++                                if self.work.exhausted() || self.kb.stopped() {
++                                    break;
++                                }
++                                self.work.charge(1);
++                                if find(st, target) == target && !st.nodes[target].concrete {
++                                    enqueue(target)?;
++                                }
++                            }
++                            continue;
++                        }
++                        if !self.charge_step(st, node) {
++                            break;
++                        }
++                        for &edge in st.class_edges(node) {
++                            let (from, to, property) = st.edges[edge];
++                            let from = find(st, from);
++                            let to = find(st, to);
++                            match letter {
++                                Role::Named(wanted) if wanted == property && from == node => {
++                                    enqueue(to)?;
++                                }
++                                Role::Inv(wanted) if wanted == property && to == node => {
++                                    enqueue(from)?;
++                                }
++                                _ => {}
++                            }
++                        }
++                    } else {
++                        enqueue(node)?;
++                    }
++                }
++            }
++            memory.release_vec(emitted)?;
++            memory.release_vec(reached)?;
++            memory.release_vec(pending)?;
++            Ok(answer)
++        })
++    }
++
+     /// The one neighbourhood read: call `visit` on every `role`-neighbour of `x` in
+     /// first-seen order, each once, and stop the moment it answers `true`. Returns whether it
+     /// did.
+@@ -2382,6 +2523,59 @@ impl<'a> Graph<'a> {
+         if self.work.exhausted() {
+             return false;
+         }
++        // The fixed universal role ranges over every current object-domain
++        // representative, including isolated roots and newly minted witnesses.
++        // It is not approximated by paths through authored top-role assertions.
++        let (Role::Named(property) | Role::Inv(property)) = role;
++        if self.top_role == Some(property)
++            || self.top_role.is_some_and(|top| {
++                let achievers = self.achievers(role);
++                realizes(&achievers, (top, true)) || realizes(&achievers, (top, false))
++            })
++            || self.kb.role_program.as_ref().is_some_and(|program| {
++                program.top.is_some_and(|top| {
++                    match (
++                        program.roles.binary_search(&top),
++                        program.roles.binary_search(&role),
++                    ) {
++                        (Ok(top), Ok(role)) => {
++                            program.machine_for[top] == program.machine_for[role]
++                        }
++                        _ => false,
++                    }
++                })
++            })
++        {
++            if st.nodes[find(st, x)].concrete {
++                return false;
++            }
++            for node in 0..st.nodes.len() {
++                if self.work.exhausted() || self.kb.stopped() {
++                    return false;
++                }
++                self.work.charge(1);
++                if find(st, node) == node && !st.nodes[node].concrete && visit(node) {
++                    return true;
++                }
++            }
++            return false;
++        }
++        if let Some(program) = &self.kb.role_program
++            && let Some(machine) = program.machine(role)
++        {
++            return match self.read_role_language(st, x, machine, visit) {
++                Ok(found) => found,
++                Err(original) => {
++                    if self.work.storage_refusal.get().is_none() {
++                        self.work.storage_refusal.set(Some(original));
++                    }
++                    // Stop at the original work poll without inventing work to
++                    // reach its cap. Decision retains the physical cause and
++                    // the exact work consumed before that failure.
++                    false
++                }
++            };
++        }
+         let ach = self.achievers(role);
+         let x = find(st, x);
+         self.integrate(st);
+diff --git crates/entail/src/owl_dl/hyper.rs crates/entail/src/owl_dl/hyper.rs
+index 7dad61510..081bb70f0 100644
+--- crates/entail/src/owl_dl/hyper.rs
++++ crates/entail/src/owl_dl/hyper.rs
+@@ -563,6 +563,7 @@ impl Hyper<'_> {
+     fn run(&mut self, st: State) -> Decision {
+         if self.g.kb().schema.stats.obstruction.is_some() {
+             return Decision {
++                storage_refusal: self.g.storage_refusal(),
+                 consistent: false,
+                 steps: 0,
+                 work: 0,
+@@ -575,6 +576,7 @@ impl Hyper<'_> {
+         }
+         match self.solve(st) {
+             Ok(consistent) => Decision {
++                storage_refusal: self.g.storage_refusal(),
+                 consistent,
+                 steps: self.steps,
+                 work: self.g.work().spent(),
+@@ -592,10 +594,11 @@ impl Hyper<'_> {
+             // measurements a reader of a `budget-exhausted` certificate most needs: they say
+             // whether the rounds went into a graph, into a branch factor or into a depth.
+             Err(Exhausted) => Decision {
++                storage_refusal: self.g.storage_refusal(),
+                 consistent: false,
+                 steps: self.steps,
+                 work: self.g.work().spent(),
+-                exhausted: !self.stopped,
++                exhausted: !self.stopped && self.g.storage_refusal().is_none(),
+                 stopped: self.stopped,
+                 peak_nodes: self.peak_nodes,
+                 disjunctions: self.disjunctions,
+@@ -613,6 +616,9 @@ impl Hyper<'_> {
+ /// round cap, and the honest ceiling on per-round work for the other).
+ pub(crate) fn consistent(kb: &Kb, assumptions: &Assumptions<'_>) -> Result<bool, EntailError> {
+     let decision = decide(kb, assumptions, Budget::for_kb(kb));
++    if let Some(original) = decision.storage_refusal {
++        return Err(super::roles::RoleHierarchyError::Storage(original).into());
++    }
+     if decision.stopped {
+         return Err(EntailError::Stopped);
+     }
+@@ -1114,7 +1120,14 @@ impl<'a> Hyper<'a> {
+                 st.clash = true;
+                 return Ok(false);
+             }
+-            let affected = if self.g.kb().rematches_everything() {
++            // A chain can expose a new match at an arbitrarily distant prefix
++            // root. The bounded-radius/transitive-bit region is valid only for
++            // its original role grammar. Regular languages use the complete
++            // root set, without a role-count or path-length bitmask cutoff.
++            let affected = if self.g.kb().rematches_everything()
++                || self.g.kb().role_program.is_some()
++                || self.g.has_universal_role()
++            {
+                 (0..st.nodes.len())
+                     .filter(|&x| find(st, x) == x)
+                     .map(|node| Affected {
+@@ -1264,6 +1277,16 @@ impl<'a> Hyper<'a> {
+     /// triggers ([`ClauseSet::untriggered`]).
+     fn untriggered_at(&self, st: &State, x: usize) -> Vec<usize> {
+         let mut open: Vec<usize> = self.clauses.untriggered().to_vec();
++        if self.g.kb().role_program.is_some() || self.g.has_universal_role() {
++            // A chain may realize a role without an incident edge carrying that
++            // role's name. The primitive edge index is not a complete filter for
++            // language-valued guards. The fixed universal role also has no
++            // authored edge requirement; the actual matcher checks every guard.
++            open.extend(self.clauses.all_edge_triggered());
++            open.sort_unstable();
++            open.dedup();
++            return open;
++        }
+         for &edge in st.class_edges(x) {
+             let (from, to, property) = st.edges[edge];
+             if find(st, from) == x {
+@@ -3147,7 +3170,7 @@ mod tests {
+         kb.abox_types.push((IND, wide));
+         kb.abox_types.push((IND, narrow));
+         kb.individuals.insert(IND);
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         kb
+     }
+ 
+@@ -3174,7 +3197,7 @@ mod tests {
+         kb.abox_types.push((U, min3));
+         kb.individuals.insert(SPY);
+         kb.individuals.insert(U);
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         kb
+     }
+ 
+@@ -3239,7 +3262,7 @@ mod tests {
+             kb.individuals.insert(y);
+         }
+         kb.abox_types.push((X + len, some_e));
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         kb
+     }
+ 
+@@ -3328,7 +3351,7 @@ mod tests {
+                 kb.individuals.insert(X + i);
+             }
+             kb.abox_types.push((X + len, c));
+-            kb.finalize();
++            kb.finalize().expect("fixture preparation");
+             kb
+         };
+         for len in [1, 2, 3, 4, 8, 16] {
+@@ -3359,7 +3382,7 @@ mod tests {
+         const R: u32 = 60;
+         let mut kb = Kb::empty();
+         kb.transitive.insert(R);
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         let g = crate::owl_dl::graph::Graph::new(&kb, u64::MAX);
+         let mut st = g.init_state(&Assumptions::of_kb());
+         for index in 0..6 {
+@@ -3445,7 +3468,7 @@ mod tests {
+             kb.abox_roles.push((X + i - 1, R, X + i));
+             kb.individuals.insert(X + i);
+         }
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         for full in [false, true] {
+             kb.full_rematch = full;
+             let mut h = Hyper::new(&kb, Budget::for_kb(&kb));
+@@ -3502,7 +3525,7 @@ mod tests {
+                 kb.abox_roles.push((a, R, a + k));
+             }
+         }
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         kb
+     }
+ 
+@@ -3660,7 +3683,7 @@ mod tests {
+                 let pick = usize::try_from(next(fillers.len() as u64)).expect("in range");
+                 place(at, fillers[pick].clone(), &mut kb);
+             }
+-            kb.finalize();
++            kb.finalize().expect("fixture preparation");
+             let cap = Budget::for_kb(&kb);
+             let delta = decide(&kb, &Assumptions::of_kb(), cap);
+             kb.full_rematch = true;
+@@ -3875,7 +3898,7 @@ mod tests {
+             Concept::Some(Role::Named(R), Box::new(Concept::Top)),
+         );
+         kb.individuals.insert(IND);
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         kb
+     }
+ 
+@@ -3891,7 +3914,7 @@ mod tests {
+             .intern(Concept::Or(vec![Concept::Named(A), Concept::Named(B)]));
+         kb.abox_types.push((IND, disjunction));
+         kb.individuals.insert(IND);
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         kb
+     }
+ 
+@@ -3964,7 +3987,7 @@ mod tests {
+             .intern(Concept::Or(vec![Concept::Named(A), Concept::Named(B)]));
+         kb.abox_types.push((IND, disjunction));
+         kb.individuals.insert(IND);
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         let generating = kb.table.intern(Concept::Named(A));
+         let inert = kb.table.intern(Concept::Named(B));
+         assert!(
+@@ -4011,7 +4034,7 @@ mod tests {
+             Concept::Named(B),
+             Concept::Some(Role::Named(R), Box::new(Concept::Named(C))),
+         );
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         let a = kb.table.intern(Concept::Named(A));
+         let b = kb.table.intern(Concept::Named(B));
+         let c = kb.table.intern(Concept::Named(C));
+@@ -4042,7 +4065,7 @@ mod tests {
+         let conjunction = kb
+             .table
+             .intern(Concept::And(vec![Concept::Named(A), Concept::Named(C)]));
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         assert!(!kb.generates(mixed), "C is a way out of the disjunction");
+         assert!(kb.generates(both), "both alternatives mint");
+         assert!(
+@@ -4072,7 +4095,7 @@ mod tests {
+             kb.abox_types.push((individual, A));
+             kb.individuals.insert(individual);
+         }
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         let b = kb.table.intern(Concept::Named(B));
+ 
+         let budget = Budget {
+diff --git crates/entail/src/owl_dl/mod.rs crates/entail/src/owl_dl/mod.rs
+index 580878408..0b61290ec 100644
+--- crates/entail/src/owl_dl/mod.rs
++++ crates/entail/src/owl_dl/mod.rs
+@@ -3,14 +3,16 @@
+ 
+ //! The native OWL-Direct (Description-Logic) reasoner core.
+ //!
+-//! Eight layers compose here: [`concept`] is the DL syntax and its structural
++//! The layers compose here: [`concept`] is the DL syntax and its structural
+ //! interner; [`data`] is the CONCRETE domain — the data ranges and literal values a
+ //! datatype map fixes rather than the ontology; [`parser`] reverse-maps a [`DatasetView`]
+ //! into a [`Kb`] (TBox, RBox, ABox, plus anonymous class expressions); [`absorb`] decides,
+ //! per general concept inclusion, whether it becomes a GUARDED CLAUSE or is internalized into
+ //! every node's label; [`clause`] compiles the concept table and that decision into
+ //! DL-clauses; [`graph`] is the completion graph and the two-domain
+-//! semantics of a node; [`hyper`] is the `SHOIQ(D)` HYPERTABLEAU that decides consistency
++//! semantics of a node; [`roles`] admits theorem-backed regular SROIQ role
++//! inclusions and compiles their languages and finite universal-state obligations;
++//! [`hyper`] is the HYPERTABLEAU that decides consistency
+ //! over those clauses; and [`saturate`] is the consequence-based
+ //! calculus that derives the WHOLE named-class subsumption relation in one fixpoint,
+ //! so classification is not a loop over the decision procedure. [`Kb`] ties them together and
+@@ -64,6 +66,7 @@ pub(crate) mod parser;
+ /// Independently replayable tableau PROOF TERMS, and the checker that re-derives them.
+ pub(crate) mod proof;
+ pub(crate) mod query;
++pub(crate) mod roles;
+ pub(crate) mod saturate;
+ pub(crate) mod support;
+ /// The concept-tree tableau [`hyper`] replaced, kept as its differential reference.
+@@ -156,6 +159,9 @@ pub(crate) struct Kb {
+     pub(crate) inverses: BTreeMap<u32, BTreeSet<u32>>,
+     /// Role hierarchy: super-property term id → its sub-property term ids.
+     pub(crate) role_sub: BTreeMap<u32, BTreeSet<u32>>,
++    /// Regular role languages and their finite universal-state blocking closure.
++    /// Absent on the legacy chain-free path.
++    pub(crate) role_program: Option<roles::RoleProgram>,
+     /// Concept assertions `a : C` — `(individual term id, concept id)`.
+     pub(crate) abox_types: Vec<(u32, u32)>,
+     /// Role assertions `a r b` — `(subject, property, object)` term ids.
+@@ -303,6 +309,7 @@ impl Kb {
+             generating: Vec::new(),
+             inverses: BTreeMap::new(),
+             role_sub: BTreeMap::new(),
++            role_program: None,
+             abox_types: Vec::new(),
+             abox_roles: Vec::new(),
+             same_as: Vec::new(),
+@@ -403,7 +410,7 @@ impl Kb {
+             self.keys_applied = true;
+             return Ok(());
+         }
+-        self.finalize();
++        self.finalize()?;
+         let named: Vec<u32> = self.individuals.iter().copied().collect();
+         let mut forced: Vec<(u32, u32)> = Vec::new();
+         for (class, properties) in &self.keys {
+@@ -486,7 +493,7 @@ impl Kb {
+     /// Finalize the knowledge base for DECIDING: clausify the TBox, and disclose the
+     /// completeness limit the finished terminology forces. Call once after all axioms and
+     /// assertions are in place.
+-    pub(crate) fn finalize(&mut self) {
++    pub(crate) fn finalize(&mut self) -> Result<(), EntailError> {
+         // The concept-tree `NN`-rule (the `cfg(test)` differential reference) adds a GUESSED
+         // `≤m S.C` to a nominal node's label, and the concept table is immutable during a search,
+         // so those sub-cardinalities must be interned now, before encoding. The production
+@@ -494,10 +501,7 @@ impl Kb {
+         // and its concept table is left byte-for-byte as it was.
+         #[cfg(test)]
+         self.intern_sub_cardinalities();
+-        match self.encode_until(|| Ok::<(), std::convert::Infallible>(())) {
+-            Ok(()) => {}
+-            Err(never) => match never {},
+-        }
++        self.encode_until(|| Ok::<(), EntailError>(()))
+     }
+ 
+     /// Clausify the TBox, polling a caller-supplied fallible work boundary.
+@@ -531,7 +535,7 @@ impl Kb {
+     /// interns MORE concepts — a named class, a query concept, a refutation witness — that
+     /// need negation-cache entries of their own, and [`ConceptTable::finalize_until`] is
+     /// already cheap for a concept it has already covered (a single `is_none` check per id).
+-    pub(crate) fn encode_until<E>(
++    pub(crate) fn encode_until<E: From<roles::RoleHierarchyError>>(
+         &mut self,
+         mut poll: impl FnMut() -> Result<(), E>,
+     ) -> Result<(), E> {
+@@ -555,6 +559,17 @@ impl Kb {
+             }
+         }
+         self.table.finalize_until(&mut poll)?;
++        if let Some(program) = &mut self.role_program {
++            let mut resident = purrdf_lex::allocation::Resident;
++            let mut memory =
++                purrdf_lex::allocation::Memory::resume(&mut resident, program.admitted_bytes);
++            let result =
++                program.extend_obligations(&mut self.table, self.stop.as_deref(), &mut memory);
++            // Original producer metadata, including a retained replacement
++            // capacity on refusal. No recount of the constructed payload.
++            program.admitted_bytes = memory.admitted_bytes();
++            result.map_err(E::from)?;
++        }
+         // LAST, over the finished table: the closure reads the absorbed clauses just derived,
+         // and the negation pass above interned the residual concepts a partial absorption or a
+         // `≤n` restriction's decided filler puts into a case split. Cheap even when the middle
+@@ -1101,7 +1116,7 @@ mod tests {
+         ));
+         kb.abox_types.push((dudley, dudley_all));
+ 
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         (kb, ids)
+     }
+ 
+@@ -1179,7 +1194,7 @@ mod tests {
+         // finalize again.
+         let acls = kb.iri_id(&format!("{NS}A")).unwrap();
+         kb.table.intern(Concept::Named(acls));
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         assert_eq!(
+             kb.absorb_calls, 1,
+             "Kb::tbox did not change, so the second finalize() must not re-absorb it"
+@@ -1188,7 +1203,7 @@ mod tests {
+         // Growing the TBox is the one thing that must force a re-absorption, proving the
+         // skip is conditional on `Kb::tbox` rather than a blanket no-op after the first call.
+         kb.push_gci(Concept::Named(acls), Concept::Top);
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         assert_eq!(
+             kb.absorb_calls, 2,
+             "a grown Kb::tbox must be re-absorbed on the next finalize()"
+@@ -1406,10 +1421,10 @@ mod boundary_tests {
+     /// axiom's RDF list head, so the knowledge base held `chained(chained, _:cell0)` — a
+     /// statement the ontology does not make, about an individual that does not exist.
+     ///
+-    /// This asserts all three halves of the repair: the boundary is RAISED, the list head
+-    /// is NOT an individual, and no role assertion was invented.
++    /// The regular inclusion is compiled, its list head is not an individual,
++    /// and no role assertion is invented from the structural predicate.
+     #[test]
+-    fn a_property_chain_is_bounded_rather_than_ingested_as_a_role_assertion() {
++    fn a_regular_property_chain_is_compiled_without_inventing_a_role_assertion() {
+         let mut b = RdfDatasetBuilder::new();
+         let chained = b.intern_iri(EX_CHAINED);
+         let chain = b.intern_iri(OWL_PROPERTYCHAINAXIOM);
+@@ -1428,11 +1443,8 @@ mod boundary_tests {
+         let ds = b.freeze().expect("freeze");
+ 
+         let kb = Kb::from_dataset(&ds).expect("the chain axiom parses");
+-        assert!(
+-            kb.boundaries().contains(&Construct::PropertyChain),
+-            "a chain axiom must raise its boundary: {:?}",
+-            kb.boundaries()
+-        );
++        assert!(!kb.boundaries().contains(&Construct::PropertyChain));
++        assert!(kb.role_program.is_some());
+         assert!(
+             kb.abox_roles.is_empty(),
+             "a chain axiom must not become a role assertion: {:?}",
+@@ -1444,23 +1456,14 @@ mod boundary_tests {
+             kb.individuals
+         );
+ 
+-        // …and the boundary reaches the caller, with the completeness narrowed to match.
++        // A regular role inclusion no longer narrows the completeness contract.
+         let (_, report) = materialize_dl_reported(&ds, &[] as &[QTriple]).expect("consistent");
+         assert_eq!(
+             report.completeness(),
+-            Completeness::ExactWithinBoundaries,
+-            "a run that met a boundary is not exact"
+-        );
+-        let constructs: Vec<Construct> = report
+-            .boundaries()
+-            .iter()
+-            .map(|boundary| boundary.construct())
+-            .collect();
+-        assert_eq!(constructs, vec![Construct::PropertyChain]);
+-        assert!(
+-            report.boundaries()[0].reason().contains("REGULARITY"),
+-            "the reason must name the check that is missing"
++            Completeness::Exact,
++            "a regular role inclusion is part of the exact calculus"
+         );
++        assert_eq!(report.boundaries(), []);
+     }
+ 
+     /// OWL 2 DL forbids a number restriction over a NON-SIMPLE role, and the condition is
+diff --git crates/entail/src/owl_dl/oracle.rs crates/entail/src/owl_dl/oracle.rs
+index b21730828..88270bc80 100644
+--- crates/entail/src/owl_dl/oracle.rs
++++ crates/entail/src/owl_dl/oracle.rs
+@@ -743,7 +743,7 @@ impl Case {
+             )
+             .expect("registering literals polls no stop signal");
+         }
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         let mut named = vec![NOT_A_CLASS; kb.table.len()];
+         let mut neg_named = vec![NOT_A_CLASS; kb.table.len()];
+         for (id, index) in pinned {
+@@ -1136,7 +1136,7 @@ fn mentions_the_data_domain(c: &Concept) -> bool {
+         Concept::And(members) | Concept::Or(members) => {
+             members.iter().any(mentions_the_data_domain)
+         }
+-        Concept::Top | Concept::Bottom | Concept::Named(_) => false,
++        Concept::Top | Concept::Bottom | Concept::Named(_) | Concept::RoleState { .. } => false,
+     }
+ }
+ 
+@@ -1417,6 +1417,7 @@ fn forces_unnamed_element(c: &Concept, asserted: bool) -> bool {
+         Concept::Top
+         | Concept::Bottom
+         | Concept::Named(_)
++        | Concept::RoleState { .. }
+         | Concept::Nominal(_)
+         | Concept::SelfRestriction(_)
+         | Concept::Data(_) => false,
+diff --git crates/entail/src/owl_dl/parser.rs crates/entail/src/owl_dl/parser.rs
+index 17bb07416..08c091c75 100644
+--- crates/entail/src/owl_dl/parser.rs
++++ crates/entail/src/owl_dl/parser.rs
+@@ -93,15 +93,15 @@ use crate::vocab::{
+     OWL_MAXCARDINALITY, OWL_MAXQUALIFIEDCARDINALITY, OWL_MEMBERS, OWL_MINCARDINALITY,
+     OWL_MINQUALIFIEDCARDINALITY, OWL_NAMEDINDIVIDUAL, OWL_NEGATIVEPROPERTYASSERTION, OWL_NOTHING,
+     OWL_OBJECTPROPERTY, OWL_ONCLASS, OWL_ONDATARANGE, OWL_ONDATATYPE, OWL_ONEOF, OWL_ONPROPERTIES,
+-    OWL_ONPROPERTY, OWL_ONTOLOGY, OWL_ONTOLOGYPROPERTY, OWL_PROPERTYDISJOINTWITH,
+-    OWL_QUALIFIEDCARDINALITY, OWL_RATIONAL, OWL_REAL, OWL_REFLEXIVEPROPERTY, OWL_RESTRICTION,
+-    OWL_SAMEAS, OWL_SOMEVALUESFROM, OWL_SOURCEINDIVIDUAL, OWL_SYMMETRICPROPERTY,
+-    OWL_TARGETINDIVIDUAL, OWL_TARGETVALUE, OWL_THING, OWL_TRANSITIVEPROPERTY, OWL_UNIONOF,
+-    OWL_WITHRESTRICTIONS, RDF_DIRLANGSTRING, RDF_FIRST, RDF_LANGRANGE, RDF_LANGSTRING, RDF_NIL,
+-    RDF_PROPERTY, RDF_REST, RDF_TYPE, RDFS_CLASS, RDFS_DATATYPE, RDFS_DOMAIN, RDFS_LITERAL,
+-    RDFS_RANGE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF, XSD_LENGTH, XSD_MAXEXCLUSIVE,
+-    XSD_MAXINCLUSIVE, XSD_MAXLENGTH, XSD_MINEXCLUSIVE, XSD_MININCLUSIVE, XSD_MINLENGTH, XSD_NS,
+-    XSD_PATTERN,
++    OWL_ONPROPERTY, OWL_ONTOLOGY, OWL_ONTOLOGYPROPERTY, OWL_PROPERTYCHAINAXIOM,
++    OWL_PROPERTYDISJOINTWITH, OWL_QUALIFIEDCARDINALITY, OWL_RATIONAL, OWL_REAL,
++    OWL_REFLEXIVEPROPERTY, OWL_RESTRICTION, OWL_SAMEAS, OWL_SOMEVALUESFROM, OWL_SOURCEINDIVIDUAL,
++    OWL_SYMMETRICPROPERTY, OWL_TARGETINDIVIDUAL, OWL_TARGETVALUE, OWL_THING,
++    OWL_TRANSITIVEPROPERTY, OWL_UNIONOF, OWL_WITHRESTRICTIONS, RDF_DIRLANGSTRING, RDF_FIRST,
++    RDF_LANGRANGE, RDF_LANGSTRING, RDF_NIL, RDF_PROPERTY, RDF_REST, RDF_TYPE, RDFS_CLASS,
++    RDFS_DATATYPE, RDFS_DOMAIN, RDFS_LITERAL, RDFS_RANGE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF,
++    XSD_LENGTH, XSD_MAXEXCLUSIVE, XSD_MAXINCLUSIVE, XSD_MAXLENGTH, XSD_MINEXCLUSIVE,
++    XSD_MININCLUSIVE, XSD_MINLENGTH, XSD_NS, XSD_PATTERN,
+ };
+ 
+ /// How deeply a class expression or a data range may nest before the parser refuses.
+@@ -187,6 +187,9 @@ pub(crate) struct Vocab {
+     pub(crate) inverse_of: u32,
+     pub(crate) equiv_prop: u32,
+     pub(crate) sub_prop: u32,
++    pub(crate) property_chain: Option<u32>,
++    pub(crate) datatype_property: u32,
++    pub(crate) annotation_property: u32,
+     pub(crate) property_disjoint_with: u32,
+     pub(crate) functional: u32,
+     pub(crate) inverse_functional: u32,
+@@ -314,6 +317,9 @@ impl Vocab {
+             inverse_of: i.intern_iri(OWL_INVERSEOF),
+             equiv_prop: i.intern_iri(OWL_EQUIVALENTPROPERTY),
+             sub_prop: i.intern_iri(RDFS_SUBPROPERTYOF),
++            property_chain: i.id_of_iri(OWL_PROPERTYCHAINAXIOM),
++            datatype_property: i.intern_iri(OWL_DATATYPEPROPERTY),
++            annotation_property: i.intern_iri(OWL_ANNOTATIONPROPERTY),
+             property_disjoint_with: i.intern_iri(OWL_PROPERTYDISJOINTWITH),
+             functional: i.intern_iri(OWL_FUNCTIONALPROPERTY),
+             inverse_functional: i.intern_iri(OWL_INVERSEFUNCTIONALPROPERTY),
+@@ -891,7 +897,7 @@ impl<'a> CeExtractor<'a> {
+         {
+             self.boundaries.insert(construct);
+         }
+-        let role = self.role_of(r);
++        let role = self.role_of(r)?;
+         if let Some(c) = self.get(node, self.v.some_values) {
+             return Ok(Concept::Some(role, Box::new(self.expr(c)?)));
+         }
+@@ -902,6 +908,7 @@ impl<'a> CeExtractor<'a> {
+             return Ok(Concept::Some(role, Box::new(Concept::Nominal(vec![a]))));
+         }
+         if let Some(lit) = self.get(node, self.v.has_self) {
++            self.counted_roles.insert(role);
+             return Ok(self.self_restriction(role, lit));
+         }
+         if let Some(lit) = self.get(node, self.v.min_qcard) {
+@@ -997,13 +1004,27 @@ impl<'a> CeExtractor<'a> {
+     }
+ 
+     /// The role denoted by property node `r` (`Inv` for an anonymous inverse).
+-    fn role_of(&self, r: u32) -> Role {
+-        if matches!(self.interner.value(r), TermValue::Blank { .. })
+-            && let Some(inv) = self.get(r, self.v.inverse_of)
++    fn role_of(&self, r: u32) -> Result<Role, EntailError> {
++        // A named data property remains a data-restriction operand. Anonymous
++        // object inverses share the RBox's exact two-form decoder; a missing or
++        // repeated inverse target cannot silently become a fresh named role.
++        if matches!(self.interner.value(r), TermValue::Iri(_))
++            && self
++                .index
++                .get(&r)
++                .and_then(|p| p.get(&self.v.ty))
++                .is_some_and(|types| types.contains(&self.v.datatype_property))
+         {
+-            return Role::Inv(inv);
++            return Ok(Role::Named(r));
+         }
+-        Role::Named(r)
++        super::roles::RoleReader {
++            index: self.index,
++            interner: self.interner,
++            vocab: self.v,
++            stop: self.stop,
++        }
++        .role(r)
++        .map_err(Into::into)
+     }
+ 
+     /// Parse a cardinality literal (an `xsd:nonNegativeInteger`/`integer`) as `u32`.
+@@ -1105,7 +1126,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
+     ds.checked_read(|ds| {
+         poll(stop)?;
+         let mut interner = Interner::default();
+-        let v = Vocab::intern(&mut interner);
++        let mut v = Vocab::intern(&mut interner);
+         let mut table = ConceptTable::default();
+         let top = table.top();
+         let bottom = table.bottom();
+@@ -1124,6 +1145,39 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
+             triples.push((s, p, o));
+             index_insert(&mut index, s, p, o);
+         }
++        // This predicate is source-driven. Looking it up after the source pass
++        // avoids minting a new vocabulary term on the legacy chain-free path.
++        v.property_chain = interner.id_of_iri(OWL_PROPERTYCHAINAXIOM);
++
++        // Role languages are compiled only for an actual complex inclusion.
++        // Merely mentioning the vocabulary IRI does not change the chain-free
++        // encoding or allocate a second copy of its ordinary role hierarchy.
++        let role_program = if v.property_chain.is_some_and(|predicate| {
++            index
++                .values()
++                .any(|predicates| predicates.contains_key(&predicate))
++        }) {
++            let reader = super::roles::RoleReader {
++                index: &index,
++                interner: &interner,
++                vocab: &v,
++                stop,
++            };
++            let mut resident = purrdf_lex::allocation::Resident;
++            let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
++            Some(memory.try_scope(|memory| {
++                let hierarchy = reader.hierarchy(memory)?;
++                let top = interner
++                    .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
++                    .map(Role::Named);
++                let mut program = hierarchy.compile(top, stop, memory)?;
++                program.source = hierarchy;
++                program.admitted_bytes = memory.admitted_bytes();
++                Ok::<_, super::roles::RoleHierarchyError>(program)
++            })?)
++        } else {
++            None
++        };
+ 
+         let mut acc = Accums::default();
+         let mut ranges = DataRangeTable::default();
+@@ -1163,15 +1217,66 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
+             // OWL 2 DL forbids a number restriction over a NON-SIMPLE role. The transitivity
+             // axioms are only all known now, so the condition is checked here rather than
+             // while the restriction was being decoded.
++            let top = interner.id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY);
+             for &role in ce.counted_roles() {
+                 ce.poll()?;
+-                if is_non_simple(role, &acc, stop)? {
++                let (Role::Named(property) | Role::Inv(property)) = role;
++                if top.is_some() && subrole_satisfies(role, &acc, stop, |id| top == Some(id))?
++                    || role_program
++                        .as_ref()
++                        .is_some_and(|program| program.non_simple.contains(&role))
++                {
++                    return Err(
++                        super::roles::RoleHierarchyError::NonSimpleProperty { property }.into(),
++                    );
++                }
++                if subrole_satisfies(role, &acc, stop, |id| acc.transitive.contains(&id))? {
+                     acc.boundaries.insert(Construct::NonSimpleRole);
+                     break;
+                 }
+             }
+         }
+ 
++        {
++            let top = interner.id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY);
++            let non_simple = |property| -> Result<bool, EntailError> {
++                Ok((top.is_some()
++                    && subrole_satisfies(Role::Named(property), &acc, stop, |id| top == Some(id))?)
++                    || role_program
++                        .as_ref()
++                        .is_some_and(|program| program.non_simple.contains(&Role::Named(property))))
++            };
++            for (&property, predicates) in &index {
++                poll(stop)?;
++                let restricted = predicates.get(&v.ty).is_some_and(|types| {
++                    types.iter().any(|&kind| {
++                        [
++                            v.functional,
++                            v.inverse_functional,
++                            v.irreflexive,
++                            v.asymmetric,
++                        ]
++                        .contains(&kind)
++                    })
++                });
++                if restricted && non_simple(property)? {
++                    return Err(
++                        super::roles::RoleHierarchyError::NonSimpleProperty { property }.into(),
++                    );
++                }
++            }
++            for &pair in &acc.disjoint_roles {
++                for property in <[u32; 2]>::from(pair) {
++                    if non_simple(property)? {
++                        return Err(super::roles::RoleHierarchyError::NonSimpleProperty {
++                            property,
++                        }
++                        .into());
++                    }
++                }
++            }
++        }
++
+         // Every literal that reaches the knowledge base carries its VALUE into the completion
+         // graph, and the literals' value classes decide which of them are one element of the data
+         // domain and which are provably different ones.
+@@ -1218,6 +1323,7 @@ pub(crate) fn build_with_preparation<D: DatasetView>(
+             generating: Vec::new(),
+             inverses: acc.inverses,
+             role_sub: acc.role_sub,
++            role_program,
+             abox_types: acc.abox_types,
+             abox_roles: acc.abox_roles,
+             same_as: acc.same_as,
+@@ -1381,15 +1487,16 @@ pub(crate) fn register_literals(
+     Ok(classes.class_of)
+ }
+ 
+-/// Whether `role` is NON-SIMPLE — transitive, or the super-role of a transitive role.
++/// Whether any sub-role or inverse partner has the requested characteristic.
+ ///
+ /// A role's inverse is simple exactly when the role is, so `Role::Inv(p)` is decided on
+ /// `p`. The sub-role closure walks [`Accums::role_sub`], which is the same hierarchy the
+ /// tableau's `achievers` walks, so the two agree on what a role's extension contains.
+-fn is_non_simple(
++fn subrole_satisfies(
+     role: Role,
+     acc: &Accums,
+     stop: Option<&dyn StopSignal>,
++    predicate: impl Fn(u32) -> bool,
+ ) -> Result<bool, EntailError> {
+     let (Role::Named(head) | Role::Inv(head)) = role;
+     let mut seen: BTreeSet<u32> = BTreeSet::new();
+@@ -1399,9 +1506,15 @@ fn is_non_simple(
+         if !seen.insert(current) {
+             continue;
+         }
+-        if acc.transitive.contains(&current) {
++        if predicate(current) {
+             return Ok(true);
+         }
++        if let Some(partners) = acc.inverses.get(&current) {
++            for &partner in partners {
++                poll(stop)?;
++                stack.push(partner);
++            }
++        }
+         if let Some(subs) = acc.role_sub.get(&current) {
+             for &sub in subs {
+                 poll(stop)?;
+diff --git crates/entail/src/owl_dl/proof.rs crates/entail/src/owl_dl/proof.rs
+index 54b2a7e04..830dcaa00 100644
+--- crates/entail/src/owl_dl/proof.rs
++++ crates/entail/src/owl_dl/proof.rs
+@@ -175,7 +175,10 @@ const CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-owl-dl-contract-v1");
+ /// the same one [`purrdf_datalog::cache::contract_hash`] states: anything that can change an
+ /// answer must change the digest, while two calculi that happen to agree may still differ.
+ /// Over-invalidation is never the bug.
+-pub const CALCULUS_VERSION: &str = "purrdf-owl-dl-hypertableau-v1";
++/// Version 2 binds regular-role automata and their universal-state blocking
++/// obligations. Every tableau proof changes contract, including chain-free
++/// inputs; a runless syntactic module proof has no tableau contract to change.
++pub const CALCULUS_VERSION: &str = "purrdf-owl-dl-hypertableau-regular-roles-v2";
+ 
+ /// The declared ceiling on recorded steps of each kind.
+ ///
+@@ -1685,8 +1688,9 @@ impl ProofAnswer {
+ 
+ /// Why a [`DlProof`] is not a proof of what it states.
+ ///
+-/// Every variant is a NORMAL rejection of an invalid proof, never an engine fault: a checker
+-/// that could not tell a forged proof from a genuine one would defeat the point of having one.
++/// Structural and semantic variants reject an invalid proof. Operational variants
++/// retain cancellation, preparation and physical refusal separately: interrupted
++/// independent checking neither validates nor disproves the claimed proof.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ #[non_exhaustive]
+ pub enum DlProofError {
+@@ -1702,6 +1706,8 @@ pub enum DlProofError {
+         /// Typed operational cause; it is not a malformed or unknown datatype.
+         obstruction: super::bounds::SchemaObstruction,
+     },
++    /// Original native storage refusal while independently checking role facts.
++    Storage(purrdf_lex::allocation::StorageError),
+     /// The proof is not a well-formed term: truncated, mis-tagged, or carrying an unknown
+     /// node kind or an out-of-range step index.
+     Malformed {
+@@ -2008,6 +2014,7 @@ impl std::fmt::Display for DlProofError {
+                 "OWL-DL current-support recording refused: {obstruction:?}"
+             ),
+             Self::Stopped => f.write_str("OWL-DL proof checking stopped"),
++            Self::Storage(error) => error.fmt(f),
+             Self::Malformed { detail } => write!(f, "malformed OWL-DL proof term: {detail}"),
+             Self::InputMismatch { expected, stated } => write!(
+                 f,
+@@ -2216,6 +2223,7 @@ impl std::error::Error for DlProofError {
+     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+         match self {
+             Self::Canonicalization(error) => Some(error),
++            Self::Storage(error) => Some(error),
+             _ => None,
+         }
+     }
+@@ -2667,22 +2675,33 @@ impl std::fmt::Debug for DlProofContext {
+     }
+ }
+ 
++fn proof_source_error(error: EntailError) -> DlProofError {
++    match error {
++        EntailError::RoleHierarchy(crate::RoleHierarchyError::Storage(error)) => {
++            DlProofError::Storage(error)
++        }
++        EntailError::Stopped => DlProofError::Stopped,
++        error => DlProofError::Ontology {
++            detail: error.to_string(),
++        },
++    }
++}
++
+ impl DlProofContext {
+     /// Read `ontology` into a checking context.
+     ///
+     /// # Errors
+     ///
+     /// [`DlProofError::Ontology`] if the dataset is not a well-formed OWL graph;
++    /// [`DlProofError::Storage`] or [`DlProofError::Stopped`] if native source
++    /// preparation is physically refused or cancelled;
+     /// [`DlProofError::Canonicalization`] if computing its producer-independent identity
+     /// is refused (a reserved-vocabulary term, or an exhausted n-degree search budget) —
+     /// `ontology` is wholly caller-supplied here, so this is a value rather than the panic
+     /// [`purrdf_core::canonicalize`] would raise for the same input.
+     pub fn of_ontology(ontology: &RdfDataset) -> Result<Self, DlProofError> {
+-        let mut kb =
+-            Kb::from_dataset(ontology).map_err(|error: EntailError| DlProofError::Ontology {
+-                detail: error.to_string(),
+-            })?;
+-        kb.finalize();
++        let mut kb = Kb::from_dataset(ontology).map_err(proof_source_error)?;
++        kb.finalize().map_err(proof_source_error)?;
+         let clauses = derive(&kb);
+         let contract = contract_digest(&clauses, &kb.schema);
+         let input = try_input_digest(ontology).map_err(DlProofError::Canonicalization)?;
+@@ -4120,11 +4139,11 @@ impl DlProof {
+ pub fn prove_consistency(ontology: &RdfDataset) -> Result<(ProofAnswer, DlProof), EntailError> {
+     let input = try_input_digest(ontology).map_err(EntailError::Canonicalization)?;
+     let mut kb = Kb::from_dataset(ontology)?;
+-    kb.finalize();
++    kb.finalize()?;
+     let contract = contract_of(&kb);
+     let (decision, recorder) =
+         crate::owl_dl::hyper::decide_recording(&kb, &Assumptions::of_kb(), Budget::for_kb(&kb));
+-    let answer = if decision.exhausted || decision.stopped {
++    let answer = if decision.undecided() {
+         ProofAnswer::Undecided
+     } else if decision.consistent {
+         ProofAnswer::Consistent
+@@ -4148,7 +4167,7 @@ pub(crate) fn prove_consistency_of_kb(kb: &Kb) -> (ProofAnswer, DlProof) {
+     let contract = contract_of(kb);
+     let (decision, recorder) =
+         crate::owl_dl::hyper::decide_recording(kb, &Assumptions::of_kb(), Budget::for_kb(kb));
+-    let answer = if decision.exhausted || decision.stopped {
++    let answer = if decision.undecided() {
+         ProofAnswer::Undecided
+     } else if decision.consistent {
+         ProofAnswer::Consistent
+@@ -4402,7 +4421,17 @@ fn check_introduced(
+ /// recomputed from the caller's role axioms rather than taken from the producer, precisely so
+ /// that a completion recorded with a wrong edge set cannot pass by supplying its own reading
+ /// of it.
++enum FiniteRoleRefusal {
++    Budget,
++    Storage(purrdf_lex::allocation::StorageError),
++}
++
++purrdf_lex::variant_from!(FiniteRoleRefusal { Storage(purrdf_lex::allocation::StorageError) });
++
+ struct CompletionView<'a> {
++    /// Least closure of original RBox inclusions on this finite proof graph.
++    /// Computed independently of the producer's automaton states and traversal.
++    role_relation: Option<Vec<(Role, usize, usize)>>,
+     /// The caller's own knowledge base — the concept table, the ABox and the role axioms.
+     kb: &'a Kb,
+     /// The recorded nodes, in the graph's ascending index order.
+@@ -4482,14 +4511,49 @@ impl<'a> CompletionView<'a> {
+                 blocked[x] = true;
+             }
+         }
++        let work = Cell::new(0u64);
++        let role_relation = if let Some(program) = &kb.role_program {
++            let mut resident = purrdf_lex::allocation::Resident;
++            let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
++            match program.source.close_edges(
++                &edges,
++                (
++                    completion.nodes.len(),
++                    kb.interner
++                        .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
++                        .map(Role::Named),
++                ),
++                |node| !completion.nodes[node].concrete,
++                || {
++                    work.set(work.get().saturating_add(1).min(cap));
++                    if work.get() >= cap {
++                        Err(FiniteRoleRefusal::Budget)
++                    } else {
++                        Ok(())
++                    }
++                },
++                &mut memory,
++            ) {
++                Ok(relation) => Some(relation),
++                Err(FiniteRoleRefusal::Storage(original)) => {
++                    return Err(DlProofError::Storage(original));
++                }
++                // The original cap is now exhausted; the checker will leave all
++                // unvisited clauses explicitly unattested, never satisfied.
++                Err(FiniteRoleRefusal::Budget) => Some(Vec::new()),
++            }
++        } else {
++            None
++        };
+         Ok(Self {
++            role_relation,
+             kb,
+             nodes: &completion.nodes,
+             edges,
+             blocked,
+             achievers: RefCell::new(BTreeMap::new()),
+             neighbours: RefCell::new(BTreeMap::new()),
+-            work: Cell::new(0),
++            work,
+             cap,
+         })
+     }
+@@ -4552,6 +4616,46 @@ impl<'a> CompletionView<'a> {
+     /// The `role`-neighbours of `x`, closed over the role hierarchy, the inverse declarations
+     /// and the transitive-role closure — the calculus's own `r`-neighbourhood, recomputed.
+     fn neighbors(&self, x: usize, role: Role) -> Vec<usize> {
++        if self
++            .kb
++            .interner
++            .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
++            .is_some_and(|top| {
++                matches!(role, Role::Named(p) | Role::Inv(p) if p == top)
++                    || self
++                        .achievers(role)
++                        .iter()
++                        .any(|&(property, _)| property == top)
++            })
++        {
++            if self.nodes[x].concrete {
++                return Vec::new();
++            }
++            let mut out = Vec::new();
++            for (node, value) in self.nodes.iter().enumerate() {
++                self.charge(1);
++                if self.spent() {
++                    break;
++                }
++                if !value.concrete {
++                    out.push(node);
++                }
++            }
++            return out;
++        }
++        if let Some(relation) = &self.role_relation {
++            let first =
++                relation.partition_point(|&(member, subject, _)| (member, subject) < (role, x));
++            let mut out = Vec::new();
++            for &(member, subject, target) in &relation[first..] {
++                self.charge(1);
++                if self.spent() || (member, subject) != (role, x) {
++                    break;
++                }
++                out.push(target);
++            }
++            return out;
++        }
+         if let Some(cached) = self.neighbours.borrow().get(&(x, role)) {
+             return cached.clone();
+         }
+@@ -6032,12 +6136,12 @@ mod tests {
+         let (_, proof, _) = refutation();
+         assert_eq!(
+             proof.digest_hex(),
+-            "ea40ad68088874796ccb64b6521d89d677a826858cc39cdef0dda82fb58b22a8",
++            "a0d268999d7768251ed3b0244cb8f7aee0af0a2d24d8470a2a6a19b5fede85dc",
+             "the proof digest moved"
+         );
+         assert_eq!(
+             purrdf_hash::hex::Lower(&proof.contract()).to_string(),
+-            "521a1c7e7b2f6e27b2df2e16744077fa5df333aa5554d64b68e388d09bddb361",
++            "642edf53bbd91f2d1b601b475dfe50a806bbea727c6e9224524b947a075e17a2",
+             "the calculus contract moved"
+         );
+     }
+@@ -7747,7 +7851,7 @@ mod tests {
+     fn a_branching_and_a_completing_proof_are_byte_identical_run_to_run() {
+         let mut kb = Kb::empty();
+         let ontologies = [closing_disjunction(), subclass_consistent()];
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         for ontology in ontologies {
+             let (_, first) = prove_consistency(&ontology).expect("reverse-maps");
+             let (_, again) = prove_consistency(&ontology).expect("reverse-maps");
+@@ -7863,7 +7967,7 @@ mod tests {
+             Concept::Some(Role::Named(20), Box::new(Concept::Top)),
+         );
+         kb.individuals.insert(30);
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         kb
+     }
+ 
+@@ -7944,7 +8048,7 @@ mod tests {
+         kb.abox_types.push((30, first));
+         kb.abox_types.push((30, second));
+         kb.individuals.insert(30);
+-        kb.finalize();
++        kb.finalize().expect("fixture preparation");
+         kb
+     }
+ 
+diff --git crates/entail/src/owl_dl/query.rs crates/entail/src/owl_dl/query.rs
+index ecf5b1cf0..1bbfc3dc6 100644
+--- crates/entail/src/owl_dl/query.rs
++++ crates/entail/src/owl_dl/query.rs
+@@ -318,7 +318,7 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
+         .collect();
+     let roles = intern_queried_roles(&mut kb, &v, &resolved);
+     let tasks = intern_tasks(&mut kb.table, &v, &named_classes, raw_tasks);
+-    kb.finalize();
++    kb.finalize()?;
+     if (has_definitions || has_bottom_constraints) && !kb.is_consistent()? {
+         return Err(EntailError::Unsatisfiable);
+     }
+@@ -336,7 +336,7 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
+     // above because an inconsistent knowledge base entails everything and this calculus
+     // reads the TBox only.
+     let seeds: Vec<u32> = named_cid.values().copied().collect();
+-    let taxonomy = saturate(&kb, &seeds);
++    let taxonomy = saturate(&kb, &seeds)?;
+     // A saturation the caller stopped is not a smaller taxonomy — it is no answer at all
+     // here, because the injections below read it as the WHOLE subsumption relation.
+     if taxonomy.was_stopped() {
+diff --git crates/entail/src/owl_dl/saturate.rs crates/entail/src/owl_dl/saturate.rs
+index 485f08333..2f5e23624 100644
+--- crates/entail/src/owl_dl/saturate.rs
++++ crates/entail/src/owl_dl/saturate.rs
+@@ -175,21 +175,21 @@ impl Taxonomy {
+ /// `seeds` fixes the contexts the answer is READ from; the saturation creates whatever
+ /// further contexts the existential rule needs, so a filler concept is reasoned about even
+ /// when the caller never named it.
+-pub(crate) fn saturate(kb: &Kb, seeds: &[u32]) -> Taxonomy {
++pub(crate) fn saturate(kb: &Kb, seeds: &[u32]) -> Result<Taxonomy, crate::EntailError> {
+     let normalized = Normalized::of_kb(kb);
+     let mut engine = Engine::new(&normalized, kb.top, kb.bottom);
+     for &seed in seeds {
+         engine.context(seed);
+     }
+-    let stopped = !engine.run(kb);
+-    Taxonomy {
++    let stopped = !engine.run(kb)?;
++    Ok(Taxonomy {
+         slot_of: engine.slot_of,
+         supers: engine.supers,
+         top: kb.top,
+         bottom: kb.bottom,
+         complete: normalized.complete,
+         stopped,
+-    }
++    })
+ }
+ 
+ /// The knowledge base as the four normalized axiom forms the rule table joins over.
+@@ -341,6 +341,17 @@ impl Normalized {
+     ///
+     /// See the [module docs](self) for the three conditions and the argument for each.
+     fn fragment_holds(&self, kb: &Kb) -> bool {
++        if kb.role_program.as_ref().is_some_and(|program| {
++            program.source.chains.iter().any(|chain| {
++                !matches!(chain.head, Role::Named(_))
++                    || chain
++                        .body
++                        .iter()
++                        .any(|role| !matches!(role, Role::Named(_)))
++            })
++        }) {
++            return false;
++        }
+         if !kb.inverses.is_empty() || !kb.disjoint_roles.is_empty() || !kb.asymmetric.is_empty() {
+             return false;
+         }
+@@ -533,27 +544,76 @@ impl<'a> Engine<'a> {
+     /// this calculus has no rounds — the queue is the loop — and one item is a handful of
+     /// map lookups, so it is the finest boundary that exists here and the cheapest one to
+     /// take.
+-    fn run(&mut self, kb: &Kb) -> bool {
++    fn run(&mut self, kb: &Kb) -> Result<bool, crate::EntailError> {
+         // An empty initial queue is still a classification boundary. Observe a signal
+         // that fired before entry instead of reporting an unexamined empty queue as a
+         // completed fixpoint.
+         if kb.stopped() {
+-            return false;
++            return Ok(false);
+         }
+-        while let Some(work) = self.queue.pop_front() {
+-            if kb.stopped() {
+-                return false;
++        loop {
++            while let Some(work) = self.queue.pop_front() {
++                if kb.stopped() {
++                    return Ok(false);
++                }
++                match work {
++                    Work::Concept { context, concept } => self.on_concept(context, concept),
++                    Work::Edge {
++                        subject,
++                        role,
++                        object,
++                    } => self.on_edge(subject, role, object),
++                }
+             }
+-            match work {
+-                Work::Concept { context, concept } => self.on_concept(context, concept),
+-                Work::Edge {
+-                    subject,
+-                    role,
+-                    object,
+-                } => self.on_edge(subject, role, object),
++            if let Some(program) = &kb.role_program
++                && kb.inverses.is_empty()
++                && program.source.chains.iter().all(|chain| {
++                    matches!(chain.head, Role::Named(_))
++                        && chain.body.iter().all(|role| matches!(role, Role::Named(_)))
++                })
++            {
++                let mut resident = purrdf_lex::allocation::Resident;
++                let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
++                memory.try_scope(|memory| {
++                    let edges = memory.collect(self.outgoing.iter().enumerate().flat_map(
++                        |(source, targets)| {
++                            targets
++                                .iter()
++                                .map(move |&(role, target)| (source, target, role))
++                        },
++                    ))?;
++                    let relation = program.source.close_edges(
++                        &edges,
++                        (
++                            self.supers.len(),
++                            kb.interner
++                                .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
++                                .map(Role::Named),
++                        ),
++                        |_| true,
++                        || {
++                            if kb.stopped() {
++                                Err(super::roles::RoleHierarchyError::Stopped)
++                            } else {
++                                Ok(())
++                            }
++                        },
++                        memory,
++                    )?;
++                    for &(role, subject, object) in &relation {
++                        if let Role::Named(role) = role {
++                            self.add_edge(subject, role, object);
++                        }
++                    }
++                    memory.release_vec(relation)?;
++                    memory.release_vec(edges)?;
++                    Ok::<_, super::roles::RoleHierarchyError>(())
++                })?;
++            }
++            if self.queue.is_empty() {
++                return Ok(true);
+             }
+         }
+-        true
+     }
+ 
+     /// Apply every rule triggered by `concept ∈ S(context)`.
+diff --git crates/entail/src/owl_dl/tableau.rs crates/entail/src/owl_dl/tableau.rs
+index b6b60fb22..808a9c28b 100644
+--- crates/entail/src/owl_dl/tableau.rs
++++ crates/entail/src/owl_dl/tableau.rs
+@@ -136,6 +136,7 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) ->
+     let st = t.g.init_state(assumptions);
+     match t.solve(st) {
+         Ok(consistent) => Decision {
++            storage_refusal: t.g.storage_refusal(),
+             consistent,
+             steps: t.steps,
+             work: t.g.work().spent(),
+@@ -146,10 +147,11 @@ pub(crate) fn decide(kb: &Kb, assumptions: &Assumptions<'_>, budget: Budget) ->
+             peak_depth: t.peak_depth,
+         },
+         Err(Exhausted) => Decision {
++            storage_refusal: t.g.storage_refusal(),
+             consistent: false,
+             steps: t.steps,
+             work: t.g.work().spent(),
+-            exhausted: !t.stopped,
++            exhausted: !t.stopped && t.g.storage_refusal().is_none(),
+             stopped: t.stopped,
+             peak_nodes: t.peak_nodes,
+             disjunctions: t.disjunctions,
+@@ -1104,7 +1106,7 @@ mod tests {
+         }
+ 
+         fn finish(mut self) -> Kb {
+-            self.kb.finalize();
++            self.kb.finalize().expect("fixture preparation");
+             self.kb
+         }
+     }
+diff --git crates/entail/src/reasoner/certificate.rs crates/entail/src/reasoner/certificate.rs
+index 9b47c3683..7cc14a23f 100644
+--- crates/entail/src/reasoner/certificate.rs
++++ crates/entail/src/reasoner/certificate.rs
+@@ -40,7 +40,7 @@
+ //!   [`Verdict::Unknown`] and drives the certificate to
+ //!   [`DlCompleteness::BudgetExhausted`] whichever cap it was.
+ //!
+-//! A search the caller's stop signal ended, rather than a cap, is not a fourth state: it
++//! A search the caller's stop signal ended, rather than a cap, adds no separate state: it
+ //! reaches the same [`DlCompleteness::BudgetExhausted`] a capped search does, because
+ //! `consistent` is exactly as meaningless under either — see
+ //! the crate-private search decision record. [`DlCertificate::stopped`] is where the two stay
+@@ -56,9 +56,10 @@
+ //! reader of such a certificate cannot tell which half to believe.
+ //!
+ //! That state is not detected here. It is UNREPRESENTABLE: [`DlCertificate`] stores no
+-//! completeness field at all, only the exhausted flag, the stopped flag and the boundary
+-//! list the reasoning session actually measured. [`DlCertificate::completeness`] COMPUTES
+-//! the verdict from those three on every call, so `Decided` beside a non-empty boundary
++//! completeness field at all, only the original storage/preparation refusals, the
++//! exhausted/stopped flags and the boundary list the session actually measured.
++//! [`DlCertificate::completeness`] computes the verdict from those fields on every
++//! call, so `Decided` beside a non-empty boundary
+ //! list is a value no caller — inside this crate or outside it — has a constructor for.
+ //! This crate's tests exercise the derivation over every reachable combination rather than
+ //! gating a predicate that could only ever answer `false`.
+@@ -167,6 +168,9 @@ pub enum DlCompleteness {
+     /// are the same fact about the ANSWER: neither leaves a decided result, so both drive
+     /// this one variant. [`DlCertificate::stopped`] is where the two are told apart.
+     BudgetExhausted,
++    /// A native destination refused before allocation. The original cause is
++    /// retained by [`DlCertificate::storage_refusal`], separately from work caps.
++    StorageRefused,
+ }
+ 
+ impl DlCompleteness {
+@@ -189,6 +193,7 @@ impl std::fmt::Display for DlCompleteness {
+             Self::Decided => "decided",
+             Self::DecidedWithinBoundaries => "decided-within-boundaries",
+             Self::BudgetExhausted => "budget-exhausted",
++            Self::StorageRefused => "storage-refused",
+         })
+     }
+ }
+@@ -203,11 +208,12 @@ impl std::fmt::Display for DlCompleteness {
+ pub struct DlCertificate {
+     /// Source preparation refusal, kept distinct from tableau work exhaustion.
+     schema_obstruction: Option<super::SchemaObstruction>,
++    storage_refusal: Option<purrdf_lex::allocation::StorageError>,
+     /// Whether any decision this run made reached its round cap or its work cap.
+     ///
+-    /// Together with [`Self::boundaries`] and [`Self::stopped`], this is the minimal state
+-    /// [`Self::completeness`] derives its verdict from — there is deliberately no
+-    /// separately stored completeness for the three to disagree with.
++    /// Together with the original refusals, [`Self::boundaries`] and [`Self::stopped`],
++    /// this is the state [`Self::completeness`] derives its verdict from; there is
++    /// deliberately no separately stored completeness to disagree with those fields.
+     exhausted: bool,
+     /// Whether any decision this run made ended because the caller's stop signal fired,
+     /// rather than because it reached a cap.
+@@ -288,6 +294,7 @@ impl DlCertificate {
+         Self {
+             schema_obstruction: None,
+             exhausted,
++            storage_refusal: None,
+             stopped,
+             boundaries,
+             steps,
+@@ -313,9 +320,10 @@ impl DlCertificate {
+ 
+     /// How complete the answer is.
+     ///
+-    /// DERIVED on every call from [`Self::boundaries`] and the run's own exhausted flag,
+-    /// never stored: an exhausted run is [`DlCompleteness::BudgetExhausted`] whatever else
+-    /// happened; failing that, a non-empty boundary list is
++    /// Derived on every call from the original refusal, stop, preparation and boundary
++    /// fields, never stored: a physical refusal is [`DlCompleteness::StorageRefused`];
++    /// otherwise an exhausted, stopped or preparation-obstructed run is
++    /// [`DlCompleteness::BudgetExhausted`]. Failing those, a non-empty boundary list is
+     /// [`DlCompleteness::DecidedWithinBoundaries`]; and only a run with neither is
+     /// [`DlCompleteness::Decided`]. That is what makes a `Decided` verdict beside a
+     /// non-empty boundary list a value nothing can construct — not the producer inside
+@@ -324,7 +332,9 @@ impl DlCertificate {
+     /// the two to disagree over.
+     #[must_use]
+     pub fn completeness(&self) -> DlCompleteness {
+-        if self.exhausted || self.stopped || self.schema_obstruction.is_some() {
++        if self.storage_refusal.is_some() {
++            DlCompleteness::StorageRefused
++        } else if self.exhausted || self.stopped || self.schema_obstruction.is_some() {
+             DlCompleteness::BudgetExhausted
+         } else if self.boundaries.is_empty() {
+             DlCompleteness::Decided
+@@ -333,13 +343,29 @@ impl DlCertificate {
+         }
+     }
+ 
++    /// The first original native refusal, without a rendered replacement.
++    #[must_use]
++    pub const fn storage_refusal(&self) -> Option<purrdf_lex::allocation::StorageError> {
++        self.storage_refusal
++    }
++
++    /// Preserve a physical refusal read from a rendered certificate. This does
++    /// not make the stated counters measurements or permit proof publication.
++    #[must_use]
++    pub const fn with_stated_storage_refusal(
++        mut self,
++        error: purrdf_lex::allocation::StorageError,
++    ) -> Self {
++        self.storage_refusal = Some(error);
++        self
++    }
++
+     /// Whether any decision this run made ended because the caller's stop signal fired
+     /// rather than because it reached a cap.
+     ///
+-    /// `false` under every OTHER completeness, [`DlCompleteness::BudgetExhausted`]
+-    /// included: that variant covers both a cap reached and a cancellation, and this is
+-    /// the one bit that tells a reader which. See the field doc for why the two are folded
+-    /// into one [`DlCompleteness`] variant rather than a fourth.
++    /// Budget exhaustion and cancellation share [`DlCompleteness::BudgetExhausted`],
++    /// and this bit distinguishes them. A physical refusal has its own completeness
++    /// and remains first priority even if another decision also observed cancellation.
+     #[must_use]
+     pub const fn stopped(&self) -> bool {
+         self.stopped
+@@ -610,7 +636,7 @@ impl Recording {
+             self.truncated = true;
+             (decide(kb, assumptions, budget), None)
+         };
+-        let answer = if decision.exhausted || decision.stopped {
++        let answer = if decision.undecided() {
+             ProofAnswer::Undecided
+         } else if decision.consistent {
+             ProofAnswer::Consistent
+@@ -646,6 +672,7 @@ impl Recording {
+ /// [`DlCertificate`] — which is what makes a certificate that omits an exhausted run
+ /// unconstructible rather than merely discouraged.
+ pub(crate) struct Session<'a> {
++    storage_refusal: Option<purrdf_lex::allocation::StorageError>,
+     /// The knowledge base every decision is made against.
+     kb: &'a Kb,
+     /// The per-decision budget: a round cap and a work cap.
+@@ -677,6 +704,14 @@ pub(crate) struct Session<'a> {
+ }
+ 
+ impl<'a> Session<'a> {
++    /// Preserve the first original physical cause at Result-returning service
++    /// boundaries, before publishing any answer or proof payload.
++    pub(crate) fn check_storage(&self) -> Result<(), crate::EntailError> {
++        match self.storage_refusal {
++            Some(original) => Err(crate::RoleHierarchyError::Storage(original).into()),
++            None => Ok(()),
++        }
++    }
+     /// Open a session over `kb` in which each decision may spend `budget`.
+     ///
+     /// `input` is the producer-independent identity of the ontology `kb` was reverse-mapped
+@@ -695,6 +730,7 @@ impl<'a> Session<'a> {
+         });
+         Self {
+             kb,
++            storage_refusal: None,
+             budget,
+             steps: 0,
+             work: 0,
+@@ -760,6 +796,9 @@ impl<'a> Session<'a> {
+         self.decisions += 1;
+         self.exhausted |= decision.exhausted;
+         self.stopped |= decision.stopped;
++        if self.storage_refusal.is_none() {
++            self.storage_refusal = decision.storage_refusal;
++        }
+         self.peak_nodes = self.peak_nodes.max(decision.peak_nodes);
+         self.disjunctions = self.disjunctions.saturating_add(decision.disjunctions);
+         self.peak_depth = self.peak_depth.max(decision.peak_depth);
+@@ -774,11 +813,14 @@ impl<'a> Session<'a> {
+     /// search is [`Verdict::Unknown`] — never `False`, which is the mistake this method
+     /// exists to make impossible to write at a call site.
+     pub(crate) fn refutes(&mut self, assumptions: &Assumptions<'_>) -> Verdict {
++        if self.storage_refusal.is_some() {
++            return Verdict::Unknown;
++        }
+         let decision = self.decide(assumptions);
+         // `stopped` is checked beside `exhausted` for the reason [`Decision`] documents: a
+         // cancelled run is exactly as undecided as a capped one, and `decision.consistent`
+         // is not a fact about the refutation under either.
+-        if decision.exhausted || decision.stopped {
++        if decision.undecided() {
+             Verdict::Unknown
+         } else if decision.consistent {
+             Verdict::False
+@@ -802,6 +844,7 @@ impl<'a> Session<'a> {
+             .collect();
+         DlCertificate {
+             schema_obstruction: self.kb.schema.stats.obstruction,
++            storage_refusal: self.storage_refusal,
+             exhausted: self.exhausted,
+             stopped: self.stopped,
+             boundaries,
+@@ -836,6 +879,11 @@ impl<'a> Session<'a> {
+         certificate: &DlCertificate,
+         bind: impl FnOnce() -> (Question, Vec<Claim>),
+     ) -> Option<ServiceProof> {
++        // Physical refusal is not a fabricated work-limit proof or a completed
++        // model certificate. The certified Unknown retains its original cause.
++        if self.storage_refusal.is_some() {
++            return None;
++        }
+         let recording = self.recording?;
+         let (question, claims) = bind();
+         // A receipt is attached exactly when a decision did not finish, which is the same
+diff --git crates/entail/src/reasoner/classify.rs crates/entail/src/reasoner/classify.rs
+index 17be2e7c2..6ea42ec47 100644
+--- crates/entail/src/reasoner/classify.rs
++++ crates/entail/src/reasoner/classify.rs
+@@ -93,10 +93,13 @@ impl Subsumptions {
+     /// it did not derive, and only when the saturation was not complete for this ontology.
+     /// Reflexive pairs are never sent to the tableau: `C ⊑ C` holds in every interpretation,
+     /// so asking would spend a decision to learn an axiom of the logic.
+-    pub(crate) fn decide(session: &mut Session<'_>, classes: &[(u32, u32)]) -> Self {
++    pub(crate) fn decide(
++        session: &mut Session<'_>,
++        classes: &[(u32, u32)],
++    ) -> Result<Self, crate::EntailError> {
+         let kb = session.kb();
+         let seeds: Vec<u32> = classes.iter().map(|&(_, concept)| concept).collect();
+-        let taxonomy = saturate(kb, &seeds);
++        let taxonomy = saturate(kb, &seeds)?;
+         let complete = taxonomy.is_complete();
+         let n = classes.len();
+         let mut verdicts = vec![Verdict::False; n * n];
+@@ -144,7 +147,7 @@ impl Subsumptions {
+                 }
+             }
+         }
+-        Self { n, verdicts, bases }
++        Ok(Self { n, verdicts, bases })
+     }
+ 
+     /// The CLAIMS a classification reports, each naming what decided it.
+@@ -756,7 +759,8 @@ mod tests {
+             let reasoner = Reasoner::new(&dataset).expect("reverse-map");
+             let (mut derived_session, usable) = reasoner.open().expect("consistent");
+             assert!(usable, "{name}: the fixture must be decidable in budget");
+-            let derived = Subsumptions::decide(&mut derived_session, &reasoner.classes);
++            let derived = Subsumptions::decide(&mut derived_session, &reasoner.classes)
++                .expect("fixture classification");
+             let (mut refuted_session, _) = reasoner.open().expect("consistent");
+             let refuted = Subsumptions::decide_by_tableau(&mut refuted_session, &reasoner.classes);
+             assert_eq!(
+@@ -822,7 +826,7 @@ mod tests {
+         for (name, dataset, _) in corpus() {
+             let reasoner = Reasoner::new(&dataset).expect("reverse-map");
+             let seeds: Vec<u32> = reasoner.classes.iter().map(|&(_, c)| c).collect();
+-            let taxonomy = saturate(&reasoner.kb, &seeds);
++            let taxonomy = saturate(&reasoner.kb, &seeds).expect("fixture saturation");
+             let complete = taxonomy.is_complete();
+             for &(_, sub) in &reasoner.classes {
+                 for &(_, sup) in &reasoner.classes {
+@@ -853,7 +857,9 @@ mod tests {
+             let reasoner = Reasoner::new(&dataset).expect("reverse-map");
+             let seeds: Vec<u32> = reasoner.classes.iter().map(|&(_, c)| c).collect();
+             assert_eq!(
+-                saturate(&reasoner.kb, &seeds).is_complete(),
++                saturate(&reasoner.kb, &seeds)
++                    .expect("fixture saturation")
++                    .is_complete(),
+                 expected,
+                 "{name}: fragment membership"
+             );
+diff --git crates/entail/src/reasoner/mod.rs crates/entail/src/reasoner/mod.rs
+index 38adf9516..77307e0e6 100644
+--- crates/entail/src/reasoner/mod.rs
++++ crates/entail/src/reasoner/mod.rs
+@@ -385,7 +385,7 @@ impl Reasoner {
+             .map(|&c| (c, kb.table.intern(class_concept(&vocab, c))))
+             .collect();
+         let individuals: Vec<u32> = kb.individuals.iter().copied().collect();
+-        kb.finalize();
++        kb.finalize()?;
+         let budget = Budget::for_kb(&kb);
+         let boundaries = kb.boundaries().clone();
+         let fresh = FreshSymbols::for_interner(&kb.interner);
+@@ -413,15 +413,15 @@ impl Reasoner {
+     /// `RefutationEncoding` entry: the consumer re-derives the question's encoding from the
+     /// question they hold, rather than from anything the producer shipped. It runs no search
+     /// and opens no session.
+-    pub fn prepare(&mut self, question: &Question) {
++    pub fn prepare(&mut self, question: &Question) -> Result<(), EntailError> {
+         match question {
+             Question::ClassSatisfiability { class } | Question::InstanceRetrieval { class } => {
+-                self.concept_of(class);
++                self.concept_of(class)?;
+             }
+             Question::AxiomEntailment { axiom } => {
+                 // The plan itself is discarded: what is wanted is the INTERNING it performed,
+                 // which is exactly what `Reasoner::entails` does before it reasons.
+-                let _plan = self.plan(axiom);
++                let _plan = self.plan(axiom)?;
+             }
+             // Consistency, classification and realization range over the ontology's own
+             // vocabulary, which `Reasoner::new` already interned; module extraction opens no
+@@ -431,6 +431,7 @@ impl Reasoner {
+             | Question::Realization { .. }
+             | Question::ModuleExtraction { .. } => {}
+         }
++        Ok(())
+     }
+ 
+     /// A CHECKING CONTEXT for the proof terms this reasoner's services issue.
+@@ -474,7 +475,7 @@ impl Reasoner {
+     ///
+     /// // The consumer checks with a reasoner of their OWN, over their own copy of the data.
+     /// let mut checker = Reasoner::with_proofs(&ds).expect("reverse-map");
+-    /// checker.prepare(&question);
++    /// checker.prepare(&question)?;
+     /// let ctx = checker.proof_context().expect("a recording reasoner checks proofs");
+     /// let certificate = answer.certificate();
+     /// let replay = answer
+@@ -609,7 +610,7 @@ impl Reasoner {
+         // `stopped` is checked beside `exhausted`: a run the caller cancelled has closed
+         // some branches and not others, exactly like a capped one, and `decision.consistent`
+         // is meaningless under either — see [`Decision`].
+-        let answer = if decision.exhausted || decision.stopped {
++        let answer = if decision.undecided() {
+             Verdict::Unknown
+         } else if decision.consistent {
+             Verdict::True
+@@ -674,7 +675,7 @@ impl Reasoner {
+         &mut self,
+         class: &TermValue,
+     ) -> Result<Certified<Verdict>, EntailError> {
+-        let concept = self.concept_of(class);
++        let concept = self.concept_of(class)?;
+         let (mut session, usable) = self.open()?;
+         let mut basis = Basis::NotDecided;
+         let answer = if usable {
+@@ -686,7 +687,7 @@ impl Reasoner {
+             // See [`Reasoner::consistency`]: `stopped` is read beside `exhausted` for the
+             // same reason. Satisfiability is witnessed by a MODEL, so a `True` here rests on
+             // the run's clash-free completion rather than on a closed refutation.
+-            if decision.exhausted || decision.stopped {
++            if decision.undecided() {
+                 basis = Basis::Undecided { run };
+                 Verdict::Unknown
+             } else if decision.consistent {
+@@ -699,6 +700,7 @@ impl Reasoner {
+         } else {
+             Verdict::Unknown
+         };
++        session.check_storage()?;
+         Ok(self.seal(session, answer, || {
+             (
+                 Question::ClassSatisfiability {
+@@ -733,12 +735,13 @@ impl Reasoner {
+     pub fn classify(&self) -> Result<Certified<ClassHierarchy>, EntailError> {
+         let (mut session, usable) = self.open()?;
+         let (answer, matrix) = if usable {
+-            let matrix = Subsumptions::decide(&mut session, &self.classes);
++            let matrix = Subsumptions::decide(&mut session, &self.classes)?;
+             let answer = ClassHierarchy::derive(&self.kb, &self.classes, &matrix);
+             (answer, Some(matrix))
+         } else {
+             (ClassHierarchy::default(), None)
+         };
++        session.check_storage()?;
+         Ok(self.seal(session, answer, || {
+             let claims =
+                 matrix.map_or_else(Vec::new, |matrix| matrix.claims(&self.kb, &self.classes));
+@@ -758,11 +761,12 @@ impl Reasoner {
+     pub fn realize(&self) -> Result<Certified<Realization>, EntailError> {
+         let (mut session, usable) = self.open()?;
+         let (answer, claims) = if usable {
+-            let matrix = Subsumptions::decide(&mut session, &self.classes);
++            let matrix = Subsumptions::decide(&mut session, &self.classes)?;
+             Realization::decide(&mut session, &self.individuals, &self.classes, &matrix)
+         } else {
+             (Realization::default(), Vec::new())
+         };
++        session.check_storage()?;
+         Ok(self.seal(session, answer, || (self.realization_question(), claims)))
+     }
+ 
+@@ -776,7 +780,7 @@ impl Reasoner {
+         &mut self,
+         class: &TermValue,
+     ) -> Result<Certified<Vec<TermValue>>, EntailError> {
+-        let concept = self.concept_of(class);
++        let concept = self.concept_of(class)?;
+         let (mut session, usable) = self.open()?;
+         let records = session.records();
+         let mut answer: Vec<TermValue> = Vec::new();
+@@ -806,6 +810,7 @@ impl Reasoner {
+             }
+         }
+         answer.sort();
++        session.check_storage()?;
+         Ok(self.seal(session, answer, || {
+             (
+                 Question::InstanceRetrieval {
+@@ -827,7 +832,7 @@ impl Reasoner {
+     /// [`EntailError::Unsatisfiable`] if the ontology has no model, in which case every
+     /// axiom is entailed and the answer would be worthless.
+     pub fn entails(&mut self, axiom: &DlAxiom) -> Result<Certified<Verdict>, EntailError> {
+-        let plan = self.plan(axiom);
++        let plan = self.plan(axiom)?;
+         let (mut session, usable) = self.open()?;
+         let mut runs = Vec::new();
+         let answer = if usable {
+@@ -835,6 +840,7 @@ impl Reasoner {
+         } else {
+             Verdict::Unknown
+         };
++        session.check_storage()?;
+         Ok(self.seal(session, answer, || {
+             (
+                 Question::AxiomEntailment {
+@@ -856,26 +862,26 @@ impl Reasoner {
+     /// Separated from [`Reasoner::entails`] because interning needs `&mut self` while the
+     /// session borrows `&self`, and because it puts every axiom's encoding in one readable
+     /// place instead of spreading eight of them through a borrow-juggling function.
+-    fn plan(&mut self, axiom: &DlAxiom) -> Refutation {
+-        match axiom {
++    fn plan(&mut self, axiom: &DlAxiom) -> Result<Refutation, EntailError> {
++        Ok(match axiom {
+             DlAxiom::SubClassOf { sub, sup } => {
+-                let sub = self.concept_of(sub);
+-                let sup = self.concept_of(sup);
++                let sub = self.concept_of(sub)?;
++                let sup = self.concept_of(sup)?;
+                 Refutation::Subsumption { sub, sup }
+             }
+             DlAxiom::EquivalentClasses { left, right } => {
+-                let left = self.concept_of(left);
+-                let right = self.concept_of(right);
++                let left = self.concept_of(left)?;
++                let right = self.concept_of(right)?;
+                 Refutation::Equivalence { left, right }
+             }
+             DlAxiom::DisjointClasses { left, right } => {
+-                let left = self.concept_of(left);
+-                let right = self.concept_of(right);
++                let left = self.concept_of(left)?;
++                let right = self.concept_of(right)?;
+                 Refutation::Disjointness { left, right }
+             }
+             DlAxiom::ClassAssertion { individual, class } => {
+                 let individual = self.term_of(individual);
+-                let concept = self.concept_of(class);
++                let concept = self.concept_of(class)?;
+                 Refutation::Membership {
+                     individual,
+                     concept,
+@@ -889,7 +895,7 @@ impl Reasoner {
+                 let subject = self.term_of(subject);
+                 let property = self.term_of(property);
+                 let object = self.term_of(object);
+-                let negated_reach = self.negated(reaches(property, object));
++                let negated_reach = self.negated(reaches(property, object))?;
+                 Refutation::RoleAssertion {
+                     subject,
+                     negated_reach,
+@@ -901,7 +907,7 @@ impl Reasoner {
+             DlAxiom::SameIndividual { left, right } => {
+                 let left = self.term_of(left);
+                 let right = self.term_of(right);
+-                let concept = self.interned(Concept::nominal(vec![right]));
++                let concept = self.interned(Concept::nominal(vec![right]))?;
+                 Refutation::Membership {
+                     individual: left,
+                     concept,
+@@ -912,7 +918,7 @@ impl Reasoner {
+             DlAxiom::DifferentIndividuals { left, right } => {
+                 let left = self.term_of(left);
+                 let right = self.term_of(right);
+-                let concept = self.negated(Concept::nominal(vec![right]));
++                let concept = self.negated(Concept::nominal(vec![right]))?;
+                 Refutation::Membership {
+                     individual: left,
+                     concept,
+@@ -923,7 +929,7 @@ impl Reasoner {
+                 let sup = self.term_of(sup);
+                 let x = self.fresh.mint(&mut self.kb.interner);
+                 let y = self.fresh.mint(&mut self.kb.interner);
+-                let negated_reach = self.negated(reaches(sup, y));
++                let negated_reach = self.negated(reaches(sup, y))?;
+                 Refutation::RoleInclusion {
+                     x,
+                     sub,
+@@ -931,20 +937,20 @@ impl Reasoner {
+                     negated_reach,
+                 }
+             }
+-        }
++        })
+     }
+ 
+-    /// Intern `concept` and finalize the negation cache, returning its id.
+-    fn interned(&mut self, concept: Concept) -> u32 {
++    /// Intern `concept` and finalize the complete blocking closure, returning its id.
++    fn interned(&mut self, concept: Concept) -> Result<u32, EntailError> {
+         let id = self.kb.table.intern(concept);
+-        self.kb.table.finalize();
+-        id
++        self.kb.finalize()?;
++        Ok(id)
+     }
+ 
+     /// Intern `concept`, finalize the negation cache, and return the id of its NEGATION.
+-    fn negated(&mut self, concept: Concept) -> u32 {
+-        let id = self.interned(concept);
+-        self.kb.table.negate(id)
++    fn negated(&mut self, concept: Concept) -> Result<u32, EntailError> {
++        let id = self.interned(concept)?;
++        Ok(self.kb.table.negate(id))
+     }
+ 
+     /// The concept id a class term denotes, interning it if the ontology never used it.
+@@ -952,11 +958,11 @@ impl Reasoner {
+     /// `owl:Thing` and `owl:Nothing` become `⊤` and `⊥` rather than opaque atomic classes,
+     /// which is what makes the boundary answers of every service correct without a special
+     /// case at each one.
+-    fn concept_of(&mut self, class: &TermValue) -> u32 {
++    fn concept_of(&mut self, class: &TermValue) -> Result<u32, EntailError> {
+         let term = self.kb.interner.intern(class.clone());
+         let id = self.kb.table.intern(class_concept(&self.vocab, term));
+-        self.kb.finalize();
+-        id
++        self.kb.finalize()?;
++        Ok(id)
+     }
+ 
+     /// The term id an individual or property term denotes, interning it if new.
+@@ -977,10 +983,13 @@ impl Reasoner {
+     fn open(&self) -> Result<(Session<'_>, bool), EntailError> {
+         let mut session = self.open_session();
+         let decision = session.decide(&Assumptions::of_kb());
++        if let Some(original) = decision.storage_refusal {
++            return Err(crate::RoleHierarchyError::Storage(original).into());
++        }
+         // A stopped consistency check is exactly as unusable as an exhausted one: neither
+         // tells the caller whether the ontology has a model, so both leave the session
+         // unusable rather than falling through to `!decision.consistent`.
+-        if decision.exhausted || decision.stopped {
++        if decision.undecided() {
+             return Ok((session, false));
+         }
+         if !decision.consistent {
+diff --git crates/entail/src/reasoner/profile.rs crates/entail/src/reasoner/profile.rs
+index d5fb6ce55..d0d8870c0 100644
+--- crates/entail/src/reasoner/profile.rs
++++ crates/entail/src/reasoner/profile.rs
+@@ -163,6 +163,7 @@ impl std::fmt::Display for ProfileViolation {
+ /// on: a certification proves membership, a violation does not prove non-membership.
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct ProfileCertificate {
++    role_hierarchy_refusal: Option<crate::RoleHierarchyError>,
+     /// Every violation found, sorted.
+     violations: Vec<ProfileViolation>,
+ }
+@@ -173,10 +174,18 @@ impl ProfileCertificate {
+     /// [`OwlProfile::Full`] is always certified; see the [module docs](self).
+     #[must_use]
+     pub fn certifies(&self, profile: OwlProfile) -> bool {
+-        !self
+-            .violations
+-            .iter()
+-            .any(|violation| violation.profile == profile)
++        (profile == OwlProfile::Full || self.role_hierarchy_refusal.is_none())
++            && !self
++                .violations
++                .iter()
++                .any(|violation| violation.profile == profile)
++    }
++
++    /// The original regular-role decision refusal, including malformed syntax
++    /// and physical storage failures. A refused scan certifies no DL profile.
++    #[must_use]
++    pub const fn role_hierarchy_refusal(&self) -> Option<crate::RoleHierarchyError> {
++        self.role_hierarchy_refusal
+     }
+ 
+     /// Every certified profile, most restrictive first.
+@@ -229,23 +238,63 @@ impl ProfileCertificate {
+ #[must_use]
+ pub fn profile(ds: &RdfDataset) -> ProfileCertificate {
+     let mut interner = Interner::default();
+-    let v = Vocab::intern(&mut interner);
++    let mut v = Vocab::intern(&mut interner);
+     let extra = Extra {
+         chain: interner.intern_iri(OWL_PROPERTYCHAINAXIOM),
+         object_property: interner.intern_iri(OWL_OBJECTPROPERTY),
+         data_property: interner.intern_iri(OWL_DATATYPEPROPERTY),
+     };
+     let index = build_data_index(ds, &mut interner);
++    v.property_chain = Some(extra.chain);
++    let role_hierarchy_refusal = if index
++        .values()
++        .any(|predicates| predicates.contains_key(&extra.chain))
++    {
++        let reader = crate::owl_dl::roles::RoleReader {
++            index: &index,
++            interner: &interner,
++            vocab: &v,
++            stop: None,
++        };
++        let mut resident = purrdf_lex::allocation::Resident;
++        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
++        memory
++            .try_scope(|memory| {
++                let hierarchy = reader.hierarchy(memory)?;
++                hierarchy.validate(
++                    interner
++                        .id_of_iri(purrdf_iri::vocab::owl::TOP_OBJECT_PROPERTY)
++                        .map(crate::owl_dl::concept::Role::Named),
++                    None,
++                    memory,
++                )?;
++                hierarchy.release(memory)?;
++                Ok::<_, crate::RoleHierarchyError>(())
++            })
++            .err()
++    } else {
++        None
++    };
+     let scan = Scan::of(&index, &v);
+     let mut violations = Vec::new();
+     scan.class_expressions(&interner, &v, &index, &mut violations);
+     scan.axioms(&interner, &v, extra.chain, &index, &mut violations);
+-    scan.description_logic(&interner, &v, &extra, &index, &mut violations);
++    scan.description_logic(
++        &interner,
++        &v,
++        &extra,
++        &index,
++        role_hierarchy_refusal.as_ref(),
++        &mut violations,
++    );
+     violations.sort_by(|a, b| {
+         (a.profile, &a.term, &a.subject, a.reason).cmp(&(b.profile, &b.term, &b.subject, b.reason))
+     });
+     violations.dedup();
+-    ProfileCertificate { violations }
++    ProfileCertificate {
++        role_hierarchy_refusal,
++        violations,
++    }
+ }
+ 
+ /// A class expression occurs on the SUBCLASS side of an inclusion.
+@@ -380,6 +429,7 @@ impl Scan {
+         v: &Vocab,
+         extra: &Extra,
+         index: &TripleIndex,
++        role_refusal: Option<&crate::RoleHierarchyError>,
+         out: &mut Vec<ProfileViolation>,
+     ) {
+         let Extra {
+@@ -416,9 +466,9 @@ impl Scan {
+             {
+                 deny(count, NON_SIMPLE_COUNT);
+             }
+-            // A chain axiom needs SROIQ's regularity condition decided before the ontology
+-            // is OWL 2 DL, and nothing here decides it.
+-            if preds.contains_key(&chain) {
++            // The actual same-home regular-role decision, not a blanket chain
++            // boundary or a finite graph-closure approximation.
++            if preds.contains_key(&chain) && role_refusal.is_some() {
+                 deny(chain, CHAIN_REGULARITY);
+             }
+             // Object and data properties are disjoint in OWL 2 DL.
+@@ -791,10 +841,8 @@ const NO_DATA_RANGE: &str = "no OWL 2 profile admits a constructed data range (o
+ const NON_SIMPLE_COUNT: &str = "OWL 2 DL requires the role of a number restriction to be SIMPLE — not transitive, not \
+      above a transitive role, and not the head of a property chain — because counting the \
+      successors of a composite role is undecidable";
+-/// A property chain whose regularity is undecided.
+-const CHAIN_REGULARITY: &str = "OWL 2 DL requires the complex role inclusions to be REGULAR (SROIQ's acyclicity \
+-     condition on the chain order), and this certifier does not decide regularity; the \
+-     ontology may well be DL, and the check declines to say so rather than guessing";
++/// A refused regular-role hierarchy; the certificate retains its typed witness.
++const CHAIN_REGULARITY: &str = "the object-property hierarchy was refused by the regular SROIQ source-order and mixed-dependency decision; role_hierarchy_refusal carries the original syntax, order, recursion or physical-storage witness";
+ /// Object and data properties overlap.
+ const PROPERTY_TYPE_SEPARATION: &str = "OWL 2 DL requires the object, data and annotation properties to be pairwise disjoint, \
+      and this IRI is declared both an owl:ObjectProperty and an owl:DatatypeProperty";
+diff --git crates/entail/src/reasoner/proof.rs crates/entail/src/reasoner/proof.rs
+index 166f5f5fc..5df382955 100644
+--- crates/entail/src/reasoner/proof.rs
++++ crates/entail/src/reasoner/proof.rs
+@@ -2385,7 +2385,9 @@ mod tests {
+     /// and their own copy of the question, with nothing the producer shipped.
+     fn context(ontology: &RdfDataset, question: &Question) -> DlProofContext {
+         let mut checker = Reasoner::with_proofs(ontology).expect("the fixture reverse-maps");
+-        checker.prepare(question);
++        checker
++            .prepare(question)
++            .expect("the fixture question prepares");
+         checker
+             .proof_context()
+             .expect("a recording reasoner checks proofs")
+@@ -3956,27 +3958,27 @@ mod tests {
+         let expected: Vec<(&str, String)> = [
+             (
+                 "consistency",
+-                "991a19126369287fb9e09e26216e8db6763ecbb199fdbf1f4d0426816ec94d76",
++                "829f99dde741e68af378c1e216190ccf0153999d6994a8975b6db2c39dd6093b",
+             ),
+             (
+                 "class-satisfiability",
+-                "52e70203fc4cb012e147a0b85e888f81fdc7c7ab963354575d86b0199a633242",
++                "ab043898d5ecbf9f7208a8ff1309e4d959f7496c660e14eabcb878489d1b2bc8",
+             ),
+             (
+                 "instance-retrieval",
+-                "e7c47de1c95e29d144ce16497a4088df7f6ad0a18b525bafc02f8ac7976eef06",
++                "06f904105e4067b818e7dda54feadc97710f7a29804c297f0eae1ef360706940",
+             ),
+             (
+                 "axiom-entailment",
+-                "dca7ae3a2e4e56cb6d58d1b0af58639ee2db4a4a05ecd3166fa268264e69d1c9",
++                "679ab5f2568d3b61e46abdf3593c6627383513934cf5834794a34feb896b1879",
+             ),
+             (
+                 "classification",
+-                "808261f360bf323b98f1af49979d0ebcf12181284b2fe831e3bb8b8366baecc6",
++                "dc44d5f862b98a2a33dd20bf19eb15885f26107b8f7ef01dfda193bf0753a812",
+             ),
+             (
+                 "realization",
+-                "f8a004d9e81e361d0c4f69ad883b2d0a51c4a6e701443ec9d911b885a8c3e2cd",
++                "163875e57d2e51f3585332b299a134ec43b3e9daa6bb18b67d1ecb7236eb5e76",
+             ),
+             (
+                 "module-extraction",
+@@ -3984,7 +3986,7 @@ mod tests {
+             ),
+             (
+                 "undecided",
+-                "056c64076cc2db1b59f545d4fa5a333a9c707a3d40a1e52504d9aae0b5549a56",
++                "d76dcdbdef9640671777de1c592a3f2f542b2c7460f517abc00fbe19d68d6251",
+             ),
+         ]
+         .into_iter()
+diff --git crates/entail/src/reasoner/proof/current.rs crates/entail/src/reasoner/proof/current.rs
+index 68b74830f..a3d407e69 100644
+--- crates/entail/src/reasoner/proof/current.rs
++++ crates/entail/src/reasoner/proof/current.rs
+@@ -327,7 +327,7 @@ mod tests {
+             },
+         )];
+         let mut checker = Reasoner::with_proofs(&dataset).unwrap();
+-        checker.prepare(&question);
++        checker.prepare(&question).expect("query preparation");
+         assert!(
+             forged
+                 .verify(&dataset, &question, None, &checker.proof_context().unwrap())
+diff --git crates/entail/src/reasoner/schema_tests.rs crates/entail/src/reasoner/schema_tests.rs
+index 2e33c3b52..f4da81be6 100644
+--- crates/entail/src/reasoner/schema_tests.rs
++++ crates/entail/src/reasoner/schema_tests.rs
+@@ -141,7 +141,9 @@ pub(crate) fn checked(dataset: &RdfDataset, answer: &Certified<Verdict>) -> Serv
+     let decoded = ServiceProof::decode(&encoded).expect("native canonical proof");
+     assert_eq!(decoded.encode(), encoded);
+     let mut checker = Reasoner::with_proofs(dataset).expect("consumer-owned source");
+-    checker.prepare(decoded.question());
++    checker
++        .prepare(decoded.question())
++        .expect("query preparation");
+     let context = checker.proof_context().expect("independent context");
+     let replay = decoded
+         .verify(
+@@ -597,7 +599,7 @@ fn retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof() {
+     let dataset = shared_schema(1, 0, false);
+     let mut reasoner = Reasoner::new(&dataset).unwrap();
+     assert!(reasoner.schema_bounds(&term("A")).is_none());
+-    let class = reasoner.concept_of(&term("A"));
++    let class = reasoner.concept_of(&term("A")).expect("query preparation");
+     let class = reasoner.kb.table.concept(class).clone();
+     let lower = (0..reasoner.kb.table.len())
+         .find_map(|id| match *reasoner.kb.table.decomp(id as u32) {
+@@ -609,7 +611,7 @@ fn retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof() {
+     let filler = reasoner.kb.table.concept(lower.1).clone();
+     let maximum = crate::owl_dl::concept::Concept::Max(0, lower.0, Box::new(filler));
+     reasoner.kb.push_gci(class, maximum);
+-    reasoner.kb.finalize();
++    reasoner.kb.finalize().expect("fixture preparation");
+     assert!(reasoner.schema_bounds(&term("A")).is_some());
+ }
+ 
+diff --git crates/entail/tests/reasoner.rs crates/entail/tests/reasoner.rs
+index 3eb2e9fb5..46b29cb86 100644
+--- crates/entail/tests/reasoner.rs
++++ crates/entail/tests/reasoner.rs
+@@ -184,6 +184,10 @@ fn honest<T>(answer: &purrdf_entail::Certified<T>) -> &purrdf_entail::DlCertific
+             "`DecidedWithinBoundaries` beside no boundaries should have derived `Decided`"
+         ),
+         DlCompleteness::BudgetExhausted => {}
++        DlCompleteness::StorageRefused => {
++            assert!(certificate.storage_refusal().is_some());
++            assert!(!certificate.completeness().is_decided());
++        }
+     }
+     assert!(
+         certificate.steps()
+@@ -948,8 +952,7 @@ fn the_work_cap_can_be_narrowed_and_never_widened() {
+ }
+ 
+ #[test]
+-fn an_ontology_carrying_a_bounded_construct_is_never_reported_decided() {
+-    // A property chain is read as a boundary rather than as a role assertion.
++fn a_short_property_chain_is_refused_before_any_certificate() {
+     let dataset = ds(&[
+         typed(N::E("q"), N::V(OBJECT_PROPERTY)),
+         (N::E("chained"), N::V(PROPERTY_CHAIN), N::B("cell0")),
+@@ -957,21 +960,12 @@ fn an_ontology_carrying_a_bounded_construct_is_never_reported_decided() {
+         (N::B("cell0"), N::V(REST), N::V(NIL)),
+         typed(N::E("A"), N::V(OWL_CLASS)),
+     ]);
+-    let reasoner = Reasoner::new(&dataset).expect("reverse-map");
+-    let answer = reasoner.classify().expect("consistent");
+-    let certificate = honest(&answer);
+-    assert_eq!(
+-        certificate.completeness(),
+-        DlCompleteness::DecidedWithinBoundaries,
+-        "a run that met a boundary has not decided the whole ontology"
+-    );
+-    assert!(certificate.completeness().is_decided());
+-    let names: Vec<&str> = certificate
+-        .boundaries()
+-        .iter()
+-        .map(|boundary| boundary.construct().as_str())
+-        .collect();
+-    assert_eq!(names, vec!["property-chain"]);
++    assert!(matches!(
++        Reasoner::new(&dataset),
++        Err(purrdf_entail::EntailError::RoleHierarchy(
++            purrdf_entail::RoleHierarchyError::ShortChain { .. }
++        ))
++    ));
+ }
+ 
+ #[test]
+@@ -1683,18 +1677,19 @@ fn cell(index: usize) -> &'static str {
+ }
+ 
+ #[test]
+-fn a_property_chain_blocks_dl_because_regularity_is_not_decided() {
++fn a_regular_property_chain_is_decided_for_dl_but_excluded_from_ql() {
+     let dataset = ds(&[
+         (N::E("chained"), N::V(PROPERTY_CHAIN), N::B("cell0")),
+         (N::B("cell0"), N::V(FIRST), N::E("q")),
+-        (N::B("cell0"), N::V(REST), N::V(NIL)),
++        (N::B("cell0"), N::V(REST), N::B("cell1")),
++        (N::B("cell1"), N::V(FIRST), N::E("r")),
++        (N::B("cell1"), N::V(REST), N::V(NIL)),
+     ]);
+     let certificate = profile(&dataset);
+-    assert!(!certificate.certifies(OwlProfile::Dl));
+-    let reason = certificate.violations_of(OwlProfile::Dl)[0].reason();
+     assert!(
+-        reason.contains("REGULAR"),
+-        "the reason names the check that is missing: {reason}"
++        certificate.certifies(OwlProfile::Dl),
++        "{:?}",
++        certificate.violations()
+     );
+     // …and QL excludes chains outright, while EL and RL admit them.
+     assert!(!certificate.certifies(OwlProfile::Ql));
+diff --git crates/entail/tests/schema_cardinality_boundary.rs crates/entail/tests/schema_cardinality_boundary.rs
+index aecda1011..029f0b3c5 100644
+--- crates/entail/tests/schema_cardinality_boundary.rs
++++ crates/entail/tests/schema_cardinality_boundary.rs
+@@ -111,7 +111,9 @@ fn largest_supported_bound_uses_prepared_clash_and_next_count_is_a_typed_refusal
+                 );
+             }
+             let mut consumer = Reasoner::with_proofs(&dataset).unwrap();
+-            consumer.prepare(proof.question());
++            consumer
++                .prepare(proof.question())
++                .expect("query preparation");
+             let context = consumer.proof_context().unwrap();
+             let replay = proof
+                 .verify(
+diff --git crates/lex/src/allocation.rs crates/lex/src/allocation.rs
+index 31d07d70e..5176d1a52 100644
+--- crates/lex/src/allocation.rs
++++ crates/lex/src/allocation.rs
+@@ -160,6 +160,18 @@ impl<'a, S: Admission + ?Sized> Memory<'a, S> {
+         &mut self,
+         body: impl FnOnce(&mut Self) -> Result<T, StorageError>,
+     ) -> Result<T, StorageError> {
++        self.try_scope(body)
++    }
++
++    /// Scope native construction while preserving its original typed domain error.
++    /// Failed local payloads die before their original grant delta is released.
++    ///
++    /// # Errors
++    /// Returns the first domain failure; a refund refusal never replaces it.
++    pub fn try_scope<T, E>(
++        &mut self,
++        body: impl FnOnce(&mut Self) -> Result<T, E>,
++    ) -> Result<T, E> {
+         let baseline = self.live;
+         match body(self) {
+             Ok(value) => Ok(value),
+diff --git crates/rdf-core/src/graph.rs crates/rdf-core/src/graph.rs
+index 24030032d..345211d9e 100644
+--- crates/rdf-core/src/graph.rs
++++ crates/rdf-core/src/graph.rs
+@@ -16,6 +16,37 @@
+ //! Mapping domain identities (slice IRIs, shape labels) onto that space, and
+ //! back, is the caller's job — this module knows nothing about RDF.
+ 
++use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
++
++/// A malformed dense graph or refusal of its original native workspace.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum GraphError {
++    /// An adjacency row points outside the declared dense node space.
++    InvalidEdge {
++        /// Source node.
++        from: usize,
++        /// Invalid destination node.
++        to: usize,
++    },
++    /// Native admission, layout or allocation refusal.
++    Storage(StorageError),
++}
++
++purrdf_lex::variant_from!(GraphError { Storage(StorageError) });
++
++impl core::fmt::Display for GraphError {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self {
++            Self::InvalidEdge { from, to } => {
++                write!(out, "graph edge {from} -> {to} leaves its dense node space")
++            }
++            Self::Storage(error) => error.fmt(out),
++        }
++    }
++}
++
++impl std::error::Error for GraphError {}
++
+ /// Tarjan's strongly-connected components over an adjacency list, iteratively.
+ ///
+ /// `adjacency[n]` lists the nodes `n` has an edge to; the node space is
+@@ -75,12 +106,33 @@
+ /// assert_eq!(components, vec![vec![0, 1], vec![2]]);
+ /// ```
+ pub fn tarjan_scc(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
+-    let mut components: Vec<Vec<usize>> = Vec::new();
+-    // Members in the order they unwind off the Tarjan stack.
+-    tarjan(adjacency, |component| {
+-        components.push(component.iter().rev().copied().collect());
+-    });
+-    components
++    tarjan_scc_with_memory(adjacency, &mut Memory::new(&mut Resident))
++        .expect("resident strongly connected components over a valid dense graph")
++}
++
++/// The original Tarjan implementation under the caller's native admission.
++///
++/// The result owner retains its original grant through destruction of every
++/// returned component. Invalid edges are refused before any allocation.
++///
++/// # Errors
++/// Returns malformed dense references or native storage refusal.
++pub fn tarjan_scc_with_memory<S: Admission + ?Sized>(
++    adjacency: &[Vec<usize>],
++    memory: &mut Memory<'_, S>,
++) -> Result<Vec<Vec<usize>>, GraphError> {
++    validate_adjacency(adjacency)?;
++    // Own the result inside the scope: on failure it dies before its grant.
++    memory
++        .scope(|memory| {
++            let mut components = Vec::new();
++            tarjan(adjacency, memory, |component, memory| {
++                let members = memory.collect(component.iter().rev().copied())?;
++                memory.push(&mut components, members)
++            })?;
++            Ok(components)
++        })
++        .map_err(GraphError::from)
+ }
+ 
+ /// The strongly connected component of every node, as a dense component id:
+@@ -117,29 +169,71 @@ pub fn scc_component_index<E>(adjacency: &[E]) -> Vec<usize>
+ where
+     for<'e> &'e E: IntoIterator<Item = &'e usize>,
+ {
+-    let mut index = vec![usize::MAX; adjacency.len()];
+-    let mut next = 0;
+-    tarjan(adjacency, |component| {
+-        for &member in component {
+-            index[member] = next;
++    scc_component_index_with_memory(adjacency, &mut Memory::new(&mut Resident))
++        .expect("resident component index over a valid dense graph")
++}
++
++/// The original component-index walk with fallible native storage.
++///
++/// # Errors
++/// Returns malformed dense references or native storage refusal. The caller
++/// retains the original result grant through destruction of the index array.
++pub fn scc_component_index_with_memory<E, S>(
++    adjacency: &[E],
++    memory: &mut Memory<'_, S>,
++) -> Result<Vec<usize>, GraphError>
++where
++    for<'e> &'e E: IntoIterator<Item = &'e usize>,
++    S: Admission + ?Sized,
++{
++    validate_adjacency(adjacency)?;
++    memory
++        .scope(|memory| {
++            let mut index = memory.collect(core::iter::repeat_n(usize::MAX, adjacency.len()))?;
++            let mut next = 0;
++            tarjan(adjacency, memory, |component, _memory| {
++                for &member in component {
++                    index[member] = next;
++                }
++                next += 1;
++                Ok(())
++            })?;
++            Ok(index)
++        })
++        .map_err(GraphError::from)
++}
++
++fn validate_adjacency<E>(adjacency: &[E]) -> Result<(), GraphError>
++where
++    for<'e> &'e E: IntoIterator<Item = &'e usize>,
++{
++    for (from, edges) in adjacency.iter().enumerate() {
++        for &to in edges {
++            if to >= adjacency.len() {
++                return Err(GraphError::InvalidEdge { from, to });
++            }
+         }
+-        next += 1;
+-    });
+-    index
++    }
++    Ok(())
+ }
+ 
+ /// Iterative Tarjan over any adjacency, handing each component to `emit` as
+ /// the slice of the Tarjan stack it occupies (its root first), in the order
+ /// the components finish.
+-fn tarjan<'g, E>(adjacency: &'g [E], mut emit: impl FnMut(&[usize]))
++fn tarjan<'g, E, S>(
++    adjacency: &'g [E],
++    memory: &mut Memory<'_, S>,
++    mut emit: impl FnMut(&[usize], &mut Memory<'_, S>) -> Result<(), StorageError>,
++) -> Result<(), StorageError>
+ where
+     &'g E: IntoIterator<Item = &'g usize>,
++    S: Admission + ?Sized,
+ {
+     const UNSET: usize = usize::MAX;
+     let n = adjacency.len();
+-    let mut index = vec![UNSET; n];
+-    let mut low = vec![0usize; n];
+-    let mut on_stack = vec![false; n];
++    let mut index = memory.collect(core::iter::repeat_n(UNSET, n))?;
++    let mut low = memory.collect(core::iter::repeat_n(0usize, n))?;
++    let mut on_stack = memory.collect(core::iter::repeat_n(false, n))?;
+     let mut stack: Vec<usize> = Vec::new();
+     let mut next_index = 0usize;
+     // Work frames: a node and the rest of its out-edges.
+@@ -155,9 +249,9 @@ where
+                 index[node] = next_index;
+                 low[node] = next_index;
+                 next_index += 1;
+-                stack.push(node);
++                memory.push(&mut stack, node)?;
+                 on_stack[node] = true;
+-                work.push((node, adjacency[node].into_iter()));
++                memory.push(&mut work, (node, adjacency[node].into_iter()))?;
+             }
+             let Some((node, edges)) = work.last_mut() else {
+                 break;
+@@ -188,11 +282,17 @@ where
+                 for &member in &stack[start..] {
+                     on_stack[member] = false;
+                 }
+-                emit(&stack[start..]);
++                emit(&stack[start..], memory)?;
+                 stack.truncate(start);
+             }
+         }
+     }
++    memory.release_vec(work)?;
++    memory.release_vec(stack)?;
++    memory.release_vec(on_stack)?;
++    memory.release_vec(low)?;
++    memory.release_vec(index)?;
++    Ok(())
+ }
+ 
+ #[cfg(test)]
+diff --git crates/validate/src/regime.rs crates/validate/src/regime.rs
+index 42d72a7a7..c8bca282b 100644
+--- crates/validate/src/regime.rs
++++ crates/validate/src/regime.rs
+@@ -1822,6 +1822,7 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
+         DlCompleteness::Decided => "decided",
+         DlCompleteness::DecidedWithinBoundaries => "decided-within-boundaries",
+         DlCompleteness::BudgetExhausted => "budget-exhausted",
++        DlCompleteness::StorageRefused => "storage-refused",
+     };
+     let _ = writeln!(out, "completeness {completeness}");
+     if let Some(obstruction) = certificate.schema_obstruction() {
+@@ -1835,6 +1836,15 @@ pub fn render_dl_certificate(service: &str, certificate: &DlCertificate) -> Stri
+             SchemaObstruction::Allocation => out.push_str("schema-preparation allocation\n"),
+         }
+     }
++    if let Some(error) = certificate.storage_refusal() {
++        let kind = match error {
++            purrdf_lex::allocation::StorageError::SizeOverflow => "size-overflow",
++            purrdf_lex::allocation::StorageError::AllocationFailed => "allocation-failed",
++            purrdf_lex::allocation::StorageError::AdmissionFailed => "admission-failed",
++            purrdf_lex::allocation::StorageError::FormattingFailed => "formatting-failed",
++        };
++        let _ = writeln!(out, "storage-refusal {kind}");
++    }
+     for boundary in certificate.boundaries() {
+         let _ = writeln!(
+             out,
+@@ -4317,6 +4327,8 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
+     }
+     let mut exhausted = None;
+     let mut schema_obstruction = None;
++    let mut storage_refusal = None;
++    let mut storage_refused = false;
+     let mut boundaries = Vec::new();
+     let mut counters: [Option<u64>; 8] = [None; 8];
+     const COUNTERS: [&str; 8] = [
+@@ -4334,6 +4346,10 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
+             exhausted = Some(match value {
+                 "decided" | "decided-within-boundaries" => false,
+                 "budget-exhausted" => true,
++                "storage-refused" => {
++                    storage_refused = true;
++                    false
++                }
+                 other => return Err(format!("unknown DL completeness \"{other}\"")),
+             });
+         } else if let Some(rest) = line.strip_prefix("schema-preparation ") {
+@@ -4357,6 +4373,18 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
+                 return Err("extra schema preparation obstruction arguments".to_owned());
+             }
+             schema_obstruction = Some(obstruction);
++        } else if let Some(value) = line.strip_prefix("storage-refusal ") {
++            use purrdf_lex::allocation::StorageError;
++            let error = match value {
++                "size-overflow" => StorageError::SizeOverflow,
++                "allocation-failed" => StorageError::AllocationFailed,
++                "admission-failed" => StorageError::AdmissionFailed,
++                "formatting-failed" => StorageError::FormattingFailed,
++                other => return Err(format!("unknown DL storage refusal \"{other}\"")),
++            };
++            if storage_refusal.replace(error).is_some() {
++                return Err("the certificate states storage-refusal twice".to_owned());
++            }
+         } else if let Some(rest) = line.strip_prefix("boundary ") {
+             let name = rest.split_once(' ').map_or(rest, |(name, _)| name);
+             let construct = purrdf_entail::Construct::of_name(name)
+@@ -4383,18 +4411,25 @@ fn parse_dl_certificate(text: &str) -> Result<DlCertificate, String> {
+     for (at, value) in counters.iter().enumerate() {
+         read[at] = value.ok_or_else(|| format!("the certificate states no `{}`", COUNTERS[at]))?;
+     }
+-    if schema_obstruction.is_some() && !exhausted {
++    if schema_obstruction.is_some() && !exhausted && !storage_refused {
+         return Err(
+             "a schema preparation obstruction requires incomplete certification".to_owned(),
+         );
+     }
++    if storage_refused != storage_refusal.is_some() {
++        return Err("storage-refused completeness requires exactly one physical cause".to_owned());
++    }
+     let certificate = DlCertificate::stated(
+         exhausted, false, boundaries, read[0], read[1], read[2], read[3], read[4], read[5],
+         read[6], read[7],
+     );
+-    Ok(match schema_obstruction {
++    let certificate = match schema_obstruction {
+         Some(obstruction) => certificate.with_schema_obstruction(obstruction),
+         None => certificate,
++    };
++    Ok(match storage_refusal {
++        Some(error) => certificate.with_stated_storage_refusal(error),
++        None => certificate,
+     })
+ }
+ 
+@@ -4646,7 +4681,9 @@ pub fn check_dl_proof(
+     // the `refutation-encoding` and `reverse-mapping` entries the report names.
+     let mut reasoner = Reasoner::with_proofs(&dataset).map_err(|e| format!("reasoner: {e}"))?;
+     let question = proof_question(&reasoner, asked, argument)?;
+-    reasoner.prepare(&question);
++    reasoner
++        .prepare(&question)
++        .map_err(|error| format!("question preparation: {error}"))?;
+     let context = reasoner
+         .proof_context()
+         .map_err(|error| format!("checking context: {error}"))?;
+@@ -5047,6 +5084,36 @@ mod tests {
+     use super::*;
+     use purrdf_core::TermBox;
+ 
++    #[test]
++    fn physical_dl_refusals_round_trip_without_a_decided_certificate() {
++        use purrdf_lex::allocation::StorageError;
++        let healthy = DlCertificate::stated(false, false, Vec::new(), 0, 0, 0, 0, 0, 0, 0, 0);
++        for error in [
++            StorageError::SizeOverflow,
++            StorageError::AllocationFailed,
++            StorageError::AdmissionFailed,
++            StorageError::FormattingFailed,
++        ] {
++            let refused = healthy.clone().with_stated_storage_refusal(error);
++            let text = render_dl_certificate("consistency", &refused);
++            let parsed = parse_dl_certificate(&text).expect("typed physical refusal");
++            assert_eq!(parsed.completeness(), DlCompleteness::StorageRefused);
++            assert_eq!(parsed.storage_refusal(), Some(error));
++            let cause = text
++                .lines()
++                .find(|line| line.starts_with("storage-refusal "))
++                .expect("original physical cause");
++            assert!(parse_dl_certificate(&text.replace(cause, "")).is_err());
++            assert!(
++                parse_dl_certificate(
++                    &text.replace("completeness storage-refused", "completeness decided")
++                )
++                .is_err()
++            );
++            assert!(parse_dl_certificate(&format!("{text}{cause}\n")).is_err());
++        }
++    }
++
+     /// The backward re-derivation runs on the PRODUCTION surface and says so.
+     ///
+     /// `rdf` and `d` carry small, largely schema-specific rule tables, so SLG resolution
+diff --git crates/validate/tests/fixtures/dl-proof.vectors crates/validate/tests/fixtures/dl-proof.vectors
+index 477bc1e82..cd2718671 100644
+--- crates/validate/tests/fixtures/dl-proof.vectors
++++ crates/validate/tests/fixtures/dl-proof.vectors
+@@ -15,7 +15,7 @@ purrdf-dl-proof 1
+ service consistency
+ availability recorded
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+-digest 991a19126369287fb9e09e26216e8db6763ecbb199fdbf1f4d0426816ec94d76
++digest 829f99dde741e68af378c1e216190ccf0153999d6994a8975b6db2c39dd6093b
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 1
+ traced 1
+@@ -30,8 +30,8 @@ body 0000000003000000000000000400000000000000050000000000000000010000
+ body 0000000000010000000000000000000000000000000000000000000000000001
+ body 100100000000000016000000000000007075727264662d6f776c2d646c2d7072
+ body 6f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca
+-body 352f9cc3c0f52a16e929c0ae1ae74cf7c23edb79b15c07ceadde0b7ca2613201
+-body a869e2f98faf0000060000000000000000000000000000000100000000000000
++body 352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666d8d8
++body a24ef8a73d990000060000000000000000000000000000000100000000000000
+ body 0200000000000000030000000000000004000000000000000500000000000000
+ body 0000000000000000000000000000000000000000000000000000000000000000
+ body 0500000000000000000000000000000000010100000000000000005500000000
+@@ -42,7 +42,7 @@ body 0001000000000000000000
+ purrdf-dl-proof-check 1
+ service consistency
+ availability recorded
+-digest 991a19126369287fb9e09e26216e8db6763ecbb199fdbf1f4d0426816ec94d76
++digest 829f99dde741e68af378c1e216190ccf0153999d6994a8975b6db2c39dd6093b
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+ runs 1
+ replayed 1
+@@ -70,7 +70,7 @@ purrdf-dl-proof 1
+ service class-satisfiability
+ availability recorded
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+-digest 52e70203fc4cb012e147a0b85e888f81fdc7c7ab963354575d86b0199a633242
++digest ab043898d5ecbf9f7208a8ff1309e4d959f7496c660e14eabcb878489d1b2bc8
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 2
+ traced 2
+@@ -86,8 +86,8 @@ body 000000000000687474703a2f2f6578616d706c652e6f72672f43617402000000
+ body 0000000001000000000000000000000000000000000000000000000000000110
+ body 0100000000000016000000000000007075727264662d6f776c2d646c2d70726f
+ body 6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca35
+-body 2f9cc3c0f52a16e929c0ae1ae74cf7c23edb79b15c07ceadde0b7ca2613201a8
+-body 69e2f98faf000006000000000000000000000000000000010000000000000002
++body 2f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666d8d8a2
++body 4ef8a73d99000006000000000000000000000000000000010000000000000002
+ body 0000000000000003000000000000000400000000000000050000000000000000
+ body 0000000000000000000000000000000000000000000000000000000000000005
+ body 0000000000000000000000000000000001010000000000000000550000000001
+@@ -95,8 +95,8 @@ body 0000000200000000000000020000000300000001000000000000005500000000
+ body 0000000000000000000000000000000000000000000000010000000000000000
+ body 000000000000000000010000000000000002000000013a010000000000001600
+ body 0000000000007075727264662d6f776c2d646c2d70726f6f662d76332796fe31
+-body f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f52a16e929
+-body c0ae1ae74cf7c23edb79b15c07ceadde0b7ca2613201a869e2f98faf00000600
++body f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f507fd6aba
++body 1113da287b4fea8db234ec6c7c21d41559b46666d8d8a24ef8a73d9900000600
+ body 0000000000000000000000000000010000000000000002000000000000000300
+ body 0000000000000400000000000000050000000000000000000000000000000000
+ body 0000000000000000000000000000000000000000000005000000000000000000
+@@ -110,7 +110,7 @@ body 01010000000000000000
+ purrdf-dl-proof-check 1
+ service class-satisfiability
+ availability recorded
+-digest 52e70203fc4cb012e147a0b85e888f81fdc7c7ab963354575d86b0199a633242
++digest ab043898d5ecbf9f7208a8ff1309e4d959f7496c660e14eabcb878489d1b2bc8
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+ runs 2
+ replayed 2
+@@ -150,7 +150,7 @@ purrdf-dl-proof 1
+ service classify
+ availability recorded
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+-digest 808261f360bf323b98f1af49979d0ebcf12181284b2fe831e3bb8b8366baecc6
++digest dc44d5f862b98a2a33dd20bf19eb15885f26107b8f7ef01dfda193bf0753a812
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 1
+ traced 1
+@@ -171,8 +171,8 @@ body 001700000000000000687474703a2f2f6578616d706c652e6f72672f46697368
+ body 0100000000000000010000000000000000000000000000000000000000000000
+ body 000001100100000000000016000000000000007075727264662d6f776c2d646c
+ body 2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a
+-body 1d7dca352f9cc3c0f52a16e929c0ae1ae74cf7c23edb79b15c07ceadde0b7ca2
+-body 613201a869e2f98faf0000060000000000000000000000000000000100000000
++body 1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b466
++body 66d8d8a24ef8a73d990000060000000000000000000000000000000100000000
+ body 0000000200000000000000030000000000000004000000000000000500000000
+ body 0000000000000000000000000000000000000000000000000000000000000000
+ body 0000000500000000000000000000000000000000010100000000000000005500
+@@ -205,7 +205,7 @@ body 6c0400
+ purrdf-dl-proof-check 1
+ service classify
+ availability recorded
+-digest 808261f360bf323b98f1af49979d0ebcf12181284b2fe831e3bb8b8366baecc6
++digest dc44d5f862b98a2a33dd20bf19eb15885f26107b8f7ef01dfda193bf0753a812
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+ runs 1
+ replayed 1
+@@ -234,7 +234,7 @@ purrdf-dl-proof 1
+ service realize
+ availability recorded
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+-digest f8a004d9e81e361d0c4f69ad883b2d0a51c4a6e701443ec9d911b885a8c3e2cd
++digest 163875e57d2e51f3585332b299a134ec43b3e9daa6bb18b67d1ecb7236eb5e76
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 6
+ traced 6
+@@ -256,8 +256,8 @@ body 2f416e696d616c001700000000000000687474703a2f2f6578616d706c652e6f
+ body 72672f4669736806000000000000000100000000000000000000000000000000
+ body 0000000000000000000110010000000000001600000000000000707572726466
+ body 2d6f776c2d646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbe
+-body acd16c3529137a1d7dca352f9cc3c0f52a16e929c0ae1ae74cf7c23edb79b15c
+-body 07ceadde0b7ca2613201a869e2f98faf00000600000000000000000000000000
++body acd16c3529137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c
++body 7c21d41559b46666d8d8a24ef8a73d9900000600000000000000000000000000
+ body 0000010000000000000002000000000000000300000000000000040000000000
+ body 0000050000000000000000000000000000000000000000000000000000000000
+ body 0000000000000000000005000000000000000000000000000000000101000000
+@@ -266,8 +266,8 @@ body 0000000000005500000000000000000000000000000000000000000000000000
+ body 0000010101000000000000005500000001000000000000000000000000000000
+ body 0000000001f60000000000000016000000000000007075727264662d6f776c2d
+ body 646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529
+-body 137a1d7dca352f9cc3c0f52a16e929c0ae1ae74cf7c23edb79b15c07ceadde0b
+-body 7ca2613201a869e2f98faf010006000000000000000000000000000000010000
++body 137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559
++body b46666d8d8a24ef8a73d99010006000000000000000000000000000000010000
+ body 0000000000020000000000000003000000000000000400000000000000050000
+ body 0000000000000000000000000001000000000000000100000000000000005500
+ body 0000010000000000000000550000000100000000000000000055000000010000
+@@ -275,8 +275,8 @@ body 0000000000000000000000000000000000000000000000000000000000000000
+ body 0000000100010000000000000055000000000000000000000000000000000000
+ body 000000000001140100000000000016000000000000007075727264662d6f776c
+ body 2d646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c35
+-body 29137a1d7dca352f9cc3c0f52a16e929c0ae1ae74cf7c23edb79b15c07ceadde
+-body 0b7ca2613201a869e2f98faf0000060000000000000000000000000000000100
++body 29137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d415
++body 59b46666d8d8a24ef8a73d990000060000000000000000000000000000000100
+ body 0000000000000200000000000000030000000000000004000000000000000500
+ body 0000000000000000000000000000000000000000000000000000000000000000
+ body 0000000000000500000000000000000000000000000000010100000000000000
+@@ -285,8 +285,8 @@ body 0000000000005500000000000000000000000000000000000000000000000000
+ body 0000010101000000000000005500000005000000000000000000000000000000
+ body 0000000001000100000000000016000000000000007075727264662d6f776c2d
+ body 646c2d70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529
+-body 137a1d7dca352f9cc3c0f52a16e929c0ae1ae74cf7c23edb79b15c07ceadde0b
+-body 7ca2613201a869e2f98faf010006000000000000000000000000000000010000
++body 137a1d7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559
++body b46666d8d8a24ef8a73d99010006000000000000000000000000000000010000
+ body 0000000000020000000000000003000000000000000400000000000000050000
+ body 0000000000000000000000000001000000000000000200000000000000005500
+ body 0000010000000000000000550000000200000000000000000055000000020000
+@@ -294,8 +294,8 @@ body 0000005500000005000000000000000000000000000000000000000000000000
+ body 0000000000000000000000000001010100000000000000550000000600000000
+ body 0000000000000000000000000000000100010000000000001600000000000000
+ body 7075727264662d6f776c2d646c2d70726f6f662d76332796fe31f2b96aabd458
+-body 2dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f52a16e929c0ae1ae74cf7
+-body c23edb79b15c07ceadde0b7ca2613201a869e2f98faf01000600000000000000
++body 2dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f507fd6aba1113da287b4f
++body ea8db234ec6c7c21d41559b46666d8d8a24ef8a73d9901000600000000000000
+ body 0000000000000000010000000000000002000000000000000300000000000000
+ body 0400000000000000050000000000000000000000000000000100000000000000
+ body 0300000000000000005500000001000000000000000055000000020000000000
+@@ -304,8 +304,8 @@ body 0000000000000000000000000000000000000000000000000100010000000000
+ body 0000550000000700000000000000000000000000000000000000011401000000
+ body 00000016000000000000007075727264662d6f776c2d646c2d70726f6f662d76
+ body 332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0
+-body f52a16e929c0ae1ae74cf7c23edb79b15c07ceadde0b7ca2613201a869e2f98f
+-body af00000600000000000000000000000000000001000000000000000200000000
++body f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666d8d8a24ef8a73d
++body 9900000600000000000000000000000000000001000000000000000200000000
+ body 0000000300000000000000040000000000000005000000000000000000000000
+ body 0000000000000000000000000000000000000000000000000000000500000000
+ body 0000000000000000000000000101000000000000000055000000000100000003
+@@ -328,7 +328,7 @@ body 7474703a2f2f6578616d706c652e6f72672f4669736802050000000000000000
+ purrdf-dl-proof-check 1
+ service realize
+ availability recorded
+-digest f8a004d9e81e361d0c4f69ad883b2d0a51c4a6e701443ec9d911b885a8c3e2cd
++digest 163875e57d2e51f3585332b299a134ec43b3e9daa6bb18b67d1ecb7236eb5e76
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+ runs 6
+ replayed 6
+@@ -355,7 +355,7 @@ purrdf-dl-proof 1
+ service instances
+ availability recorded
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+-digest 02e69f42b05ade1706bda76f2d25fa55a3d6c47a6bebffcbd03a3ab0116e45d0
++digest 7fc9781f3787700aa01560e2a6a50cd792924a5df1f0b828855378b013672ff2
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 2
+ traced 2
+@@ -371,8 +371,8 @@ body 000000000000687474703a2f2f6578616d706c652e6f72672f416e696d616c02
+ body 0000000000000001000000000000000000000000000000000000000000000000
+ body 0001100100000000000016000000000000007075727264662d6f776c2d646c2d
+ body 70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d
+-body 7dca352f9cc3c0f52a16e929c0ae1ae74cf7c23edb79b15c07ceadde0b7ca261
+-body 3201a869e2f98faf000006000000000000000000000000000000010000000000
++body 7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666
++body d8d8a24ef8a73d99000006000000000000000000000000000000010000000000
+ body 0000020000000000000003000000000000000400000000000000050000000000
+ body 0000000000000000000000000000000000000000000000000000000000000000
+ body 0000050000000000000000000000000000000001010000000000000000550000
+@@ -381,8 +381,8 @@ body 0000000000000000000000000000000000000000000000000000010101000000
+ body 0000000055000000060000000000000000000000000000000000000001000100
+ body 000000000016000000000000007075727264662d6f776c2d646c2d70726f6f66
+ body 2d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9c
+-body c3c0f52a16e929c0ae1ae74cf7c23edb79b15c07ceadde0b7ca2613201a869e2
+-body f98faf0100060000000000000000000000000000000100000000000000020000
++body c3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666d8d8a24ef8
++body a73d990100060000000000000000000000000000000100000000000000020000
+ body 0000000000030000000000000004000000000000000500000000000000000000
+ body 0000000000010000000000000003000000000000000055000000010000000000
+ body 0000005500000002000000000000000000550000000300000000005500000006
+@@ -395,7 +395,7 @@ body 00
+ purrdf-dl-proof-check 1
+ service instances
+ availability recorded
+-digest 02e69f42b05ade1706bda76f2d25fa55a3d6c47a6bebffcbd03a3ab0116e45d0
++digest 7fc9781f3787700aa01560e2a6a50cd792924a5df1f0b828855378b013672ff2
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+ runs 2
+ replayed 2
+@@ -425,7 +425,7 @@ purrdf-dl-proof 1
+ service entails
+ availability recorded
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+-digest dca7ae3a2e4e56cb6d58d1b0af58639ee2db4a4a05ecd3166fa268264e69d1c9
++digest 679ab5f2568d3b61e46abdf3593c6627383513934cf5834794a34feb896b1879
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 2
+ traced 2
+@@ -442,8 +442,8 @@ body 000000000000687474703a2f2f6578616d706c652e6f72672f416e696d616c02
+ body 0000000000000001000000000000000000000000000000000000000000000000
+ body 0001100100000000000016000000000000007075727264662d6f776c2d646c2d
+ body 70726f6f662d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d
+-body 7dca352f9cc3c0f52a16e929c0ae1ae74cf7c23edb79b15c07ceadde0b7ca261
+-body 3201a869e2f98faf000006000000000000000000000000000000010000000000
++body 7dca352f9cc3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666
++body d8d8a24ef8a73d99000006000000000000000000000000000000010000000000
+ body 0000020000000000000003000000000000000400000000000000050000000000
+ body 0000000000000000000000000000000000000000000000000000000000000000
+ body 0000050000000000000000000000000000000001010000000000000000550000
+@@ -452,8 +452,8 @@ body 0000000000000000000000000000000000000000000000000000010100000000
+ body 0000000000000000000000000200000000000000020000000600000001000100
+ body 000000000016000000000000007075727264662d6f776c2d646c2d70726f6f66
+ body 2d76332796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9c
+-body c3c0f52a16e929c0ae1ae74cf7c23edb79b15c07ceadde0b7ca2613201a869e2
+-body f98faf0100060000000000000000000000000000000100000000000000020000
++body c3c0f507fd6aba1113da287b4fea8db234ec6c7c21d41559b46666d8d8a24ef8
++body a73d990100060000000000000000000000000000000100000000000000020000
+ body 0000000000030000000000000004000000000000000500000000000000000000
+ body 0000000000010000000000000003000000000000000201000000010000000000
+ body 0000020100000002000000000000000002010000000300000000020100000006
+@@ -466,7 +466,7 @@ body 0000
+ purrdf-dl-proof-check 1
+ service entails
+ availability recorded
+-digest dca7ae3a2e4e56cb6d58d1b0af58639ee2db4a4a05ecd3166fa268264e69d1c9
++digest 679ab5f2568d3b61e46abdf3593c6627383513934cf5834794a34feb896b1879
+ input 2796fe31f2b96aabd4582dfd4703cfbeacd16c3529137a1d7dca352f9cc3c0f5
+ runs 2
+ replayed 2
+@@ -546,7 +546,7 @@ purrdf-dl-proof 1
+ service consistency
+ availability recorded
+ input 071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a219134fd23
+-digest bd4af5a427cef14f04a85f32dbed8c6ca5e15df2b2c13db0ce291c65ae8b362d
++digest e89c986f35fca612e769e754f15c2d7aabc4b1fb5cf0e2e058c4ae206f0c843d
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 1
+ traced 1
+@@ -561,8 +561,8 @@ body 0000000003000000000000000400000000000000050000000000000000010000
+ body 0000000000010000000000000000000000000000000000000000000000000001
+ body 040100000000000016000000000000007075727264662d6f776c2d646c2d7072
+ body 6f6f662d7633071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c099
+-body 8a219134fd237f58e406ed149f3c7b22c5b3b9d063f4a8499565f9152e47d243
+-body 8c6985585f690000060000000000000000000000000000000100000000000000
++body 8a219134fd23639d97703ef56af4a752c754c8d56a019d1c1287e5d84b928fb6
++body 19f5867376b50000060000000000000000000000000000000100000000000000
+ body 0200000000000000030000000000000004000000000000000500000000000000
+ body 0000000000000000000000000000000000000000000000000000000000000000
+ body 0500000000000000000000000000000000010100000000000000020000000000
+@@ -572,7 +572,7 @@ body 00000000000000000000000001000000000000000001000000000000000000
+ purrdf-dl-proof-check 1
+ service consistency
+ availability recorded
+-digest bd4af5a427cef14f04a85f32dbed8c6ca5e15df2b2c13db0ce291c65ae8b362d
++digest e89c986f35fca612e769e754f15c2d7aabc4b1fb5cf0e2e058c4ae206f0c843d
+ input 071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a219134fd23
+ runs 1
+ replayed 1
+@@ -605,7 +605,7 @@ purrdf-dl-proof 1
+ service class-satisfiability
+ availability recorded
+ input 071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a219134fd23
+-digest 2e2357415a282fffe1f9a383a32af7bb591bf41c5158df3ffa5d136d6fe04e63
++digest fb4791b19580ce2470621feecde2ac1f7624b1dfafe40a75b9de53f996c208ed
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 2
+ traced 2
+@@ -621,8 +621,8 @@ body 00000000000068747470733a2f2f6578616d706c652e6f72672f410200000000
+ body 0000000100000000000000000000000000000000000000000000000000010401
+ body 00000000000016000000000000007075727264662d6f776c2d646c2d70726f6f
+ body 662d7633071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a21
+-body 9134fd237f58e406ed149f3c7b22c5b3b9d063f4a8499565f9152e47d2438c69
+-body 85585f6900000600000000000000000000000000000001000000000000000200
++body 9134fd23639d97703ef56af4a752c754c8d56a019d1c1287e5d84b928fb619f5
++body 867376b500000600000000000000000000000000000001000000000000000200
+ body 0000000000000300000000000000040000000000000005000000000000000000
+ body 0000000000000000000000000000000000000000000000000000000000000500
+ body 0000000000000000000000000000000101000000000000000200000000000100
+@@ -630,8 +630,8 @@ body 0000000000000000000000000000000000000000000000000000000000000000
+ body 0000000000000000000001010000000000000000000000000000000001000000
+ body 0000000002000000014d0100000000000016000000000000007075727264662d
+ body 6f776c2d646c2d70726f6f662d7634071544bada45d94446f53ce8d8d931ec7c
+-body f73e1a9af8b882c0998a219134fd237f58e406ed149f3c7b22c5b3b9d063f4a8
+-body 499565f9152e47d2438c6985585f690100000600000000000000000000000000
++body f73e1a9af8b882c0998a219134fd23639d97703ef56af4a752c754c8d56a019d
++body 1c1287e5d84b928fb619f5867376b50100000600000000000000000000000000
+ body 0000010000000000000002000000000000000300000000000000040000000000
+ body 00000500000000000000000000000000000001000000000000000a0000000000
+ body 0000020000000001000000000000000200000000010000000000000000020000
+@@ -645,7 +645,7 @@ body 6f72672f41000100000000000000010000000000000000
+ purrdf-dl-proof-check 1
+ service class-satisfiability
+ availability recorded
+-digest 2e2357415a282fffe1f9a383a32af7bb591bf41c5158df3ffa5d136d6fe04e63
++digest fb4791b19580ce2470621feecde2ac1f7624b1dfafe40a75b9de53f996c208ed
+ input 071544bada45d94446f53ce8d8d931ec7cf73e1a9af8b882c0998a219134fd23
+ runs 2
+ replayed 2
+@@ -678,7 +678,7 @@ purrdf-dl-proof 1
+ service consistency
+ availability recorded
+ input 6918cbdb0b80c9887073c72a13bb5161cf3b1dbb716885b9b7b3296d1236421c
+-digest fcad831623e963062077b2ed5c29c1e534186d629098fa53735858a2f5e50e02
++digest c84d1a99758139d8e7a8181e1d4881f710a27dbfee5e0b32003cd1e4561302ab
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 1
+ traced 1
+@@ -693,8 +693,8 @@ body 0000000003000000000000000400000000000000050000000000000000010000
+ body 0000000000010100000000000000000000000000000000000000000000000001
+ body 4d0100000000000016000000000000007075727264662d6f776c2d646c2d7072
+ body 6f6f662d76346918cbdb0b80c9887073c72a13bb5161cf3b1dbb716885b9b7b3
+-body 296d1236421c7f58e406ed149f3c7b22c5b3b9d063f4a8499565f9152e47d243
+-body 8c6985585f690100000600000000000000000000000000000001000000000000
++body 296d1236421c639d97703ef56af4a752c754c8d56a019d1c1287e5d84b928fb6
++body 19f5867376b50100000600000000000000000000000000000001000000000000
+ body 0002000000000000000300000000000000040000000000000005000000000000
+ body 00000000000000000001000000000000000a0000000000000000590000000100
+ body 0000000000000059000000010000000000000000005900000002000000010200
+@@ -707,7 +707,7 @@ body 00000000000000000000000000000000
+ purrdf-dl-proof-check 1
+ service consistency
+ availability recorded
+-digest fcad831623e963062077b2ed5c29c1e534186d629098fa53735858a2f5e50e02
++digest c84d1a99758139d8e7a8181e1d4881f710a27dbfee5e0b32003cd1e4561302ab
+ input 6918cbdb0b80c9887073c72a13bb5161cf3b1dbb716885b9b7b3296d1236421c
+ runs 1
+ replayed 1
+@@ -740,7 +740,7 @@ purrdf-dl-proof 1
+ service consistency
+ availability recorded
+ input 7f53c332a1f9bfb91dc5e75fb83f10aefa9b451290b8d61eca1b493033ce9e3a
+-digest c9d22309470476a709da0ac394f46ddc1d84dee068a4f5107e3684640bd6fdae
++digest fd5e22b8cbf558901108c29110e3d5daeab8b8918a7b5cb7eb5e283ba850e0f2
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 1
+ traced 1
+@@ -755,8 +755,8 @@ body 0000000003000000000000000400000000000000050000000000000000010000
+ body 0000000000010100000000000000000000000000000000000000000000000001
+ body 4d0100000000000016000000000000007075727264662d6f776c2d646c2d7072
+ body 6f6f662d76347f53c332a1f9bfb91dc5e75fb83f10aefa9b451290b8d61eca1b
+-body 493033ce9e3a030e5c0011c66122f43a52c9bfae6f57efd10671713700f4cff7
+-body 56472bec29090100000600000000000000000000000000000001000000000000
++body 493033ce9e3a3be85f9e20c44aa315b1d831062181931d0cf9bb00d694b09e94
++body 542908386ed90100000600000000000000000000000000000001000000000000
+ body 0002000000000000000300000000000000040000000000000005000000000000
+ body 00000000000000000001000000000000000e0000000000000000590000000100
+ body 0000000000000059000000010000000000000000005900000002000000010200
+@@ -769,7 +769,7 @@ body 00000000000000000000000000000000
+ purrdf-dl-proof-check 1
+ service consistency
+ availability recorded
+-digest c9d22309470476a709da0ac394f46ddc1d84dee068a4f5107e3684640bd6fdae
++digest fd5e22b8cbf558901108c29110e3d5daeab8b8918a7b5cb7eb5e283ba850e0f2
+ input 7f53c332a1f9bfb91dc5e75fb83f10aefa9b451290b8d61eca1b493033ce9e3a
+ runs 1
+ replayed 1
+@@ -803,7 +803,7 @@ purrdf-dl-proof 1
+ service consistency
+ availability recorded
+ input 07f6a2e74b2771352ba29edf3170cba391c2d85a51933ddb76f2d1704c2e500b
+-digest 5a4cd4fba2105a71fa8485fb0ac34a1e134256d19c0100335f1fcccc84e82392
++digest 3182fe5c0444c7a33f88c0f3079f97902a498352344c8b26c7f21be820229213
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 1
+ traced 1
+@@ -818,8 +818,8 @@ body 0000000003000000000000000400000000000000050000000000000000010000
+ body 0000000000010100000000000000000000000000000000000000000000000001
+ body 800100000000000016000000000000007075727264662d6f776c2d646c2d7072
+ body 6f6f662d763407f6a2e74b2771352ba29edf3170cba391c2d85a51933ddb76f2
+-body d1704c2e500b5d5b6c7f4067b56e992b28733a96926fa11e5ba94d82031d6375
+-body 1f3dd94477ee0100000600000000000000000000000000000001000000000000
++body d1704c2e500b13549fcf470c0fe2f6b6580a55bbda43049f2742d9282d8aa7a1
++body a2a670c205090100000600000000000000000000000000000001000000000000
+ body 0002000000000000000300000000000000040000000000000005000000000000
+ body 00000000000000000001000000000000000e00000000000000005b0000000100
+ body 000000000000005b000000010000000000000000005b00000002000000010200
+@@ -834,7 +834,7 @@ body 000000
+ purrdf-dl-proof-check 1
+ service consistency
+ availability recorded
+-digest 5a4cd4fba2105a71fa8485fb0ac34a1e134256d19c0100335f1fcccc84e82392
++digest 3182fe5c0444c7a33f88c0f3079f97902a498352344c8b26c7f21be820229213
+ input 07f6a2e74b2771352ba29edf3170cba391c2d85a51933ddb76f2d1704c2e500b
+ runs 1
+ replayed 1
+@@ -870,7 +870,7 @@ purrdf-dl-proof 1
+ service consistency
+ availability recorded
+ input d9e058c5a509502dbff7a7d8d8606735400f3f9870d45af70b3ecc108913e33b
+-digest 8ebbe52b8e6697a0c5a63ce11ffe2091b495bd46073eb95b8bec8641fbd6bdfc
++digest b500368bc1eff864951bb4b1fa5fccc03afcf7529bb6454301d5a1ebd47743a1
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 1
+ traced 1
+@@ -885,8 +885,8 @@ body 0000000003000000000000000400000000000000050000000000000000010000
+ body 0000000000010100000000000000000000000000000000000000000000000001
+ body ac0100000000000016000000000000007075727264662d6f776c2d646c2d7072
+ body 6f6f662d7634d9e058c5a509502dbff7a7d8d8606735400f3f9870d45af70b3e
+-body cc108913e33b65cb11d91a18014d54ced85bb66116fcbd64feb65c85f46a646a
+-body 034c68019b4e0100000600000000000000000000000000000001000000000000
++body cc108913e33ba508baa82bca70aa63996baa31fea836ed275f1103eb7dcd5341
++body d76a0fc28fd00100000600000000000000000000000000000001000000000000
+ body 0002000000000000000300000000000000040000000000000005000000000000
+ body 00000000000000000001000000000000000f0000000000000002010000000100
+ body 0000000000000201000000010000000000000000020100000002000000010200
+@@ -902,7 +902,7 @@ body 000000000000000000000000000000
+ purrdf-dl-proof-check 1
+ service consistency
+ availability recorded
+-digest 8ebbe52b8e6697a0c5a63ce11ffe2091b495bd46073eb95b8bec8641fbd6bdfc
++digest b500368bc1eff864951bb4b1fa5fccc03afcf7529bb6454301d5a1ebd47743a1
+ input d9e058c5a509502dbff7a7d8d8606735400f3f9870d45af70b3ecc108913e33b
+ runs 1
+ replayed 1
+@@ -932,7 +932,7 @@ purrdf-dl-proof 1
+ service consistency
+ availability recorded
+ input d3404cd9feb0edbefa1a0e571ea14f9a1fa1874e68d91b583cd2ab55e784c573
+-digest 475519448bc809c7a25d2f4ed118d1358b7172e0f4aa9f017afb7000f6df4668
++digest a2c321af746244490414169620f81545513c0ca6bed38bf983572ce06587b098
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 1
+ traced 1
+@@ -947,8 +947,8 @@ body 0000000003000000000000000400000000000000050000000000000000010000
+ body 0000000000010100000000000000000000000000000000000000000000000001
+ body 440100000000000016000000000000007075727264662d6f776c2d646c2d7072
+ body 6f6f662d7634d3404cd9feb0edbefa1a0e571ea14f9a1fa1874e68d91b583cd2
+-body ab55e784c573706838234ad172001c3516ce4327b0fcf84758d6e9b584781a3f
+-body e874f807f6000100000600000000000000000000000000000001000000000000
++body ab55e784c5733bb2f0efaabff871095ee4c50ddeb2d909ac4983444b1d80e106
++body cb51e8fec7a70100000600000000000000000000000000000001000000000000
+ body 0002000000000000000300000000000000040000000000000005000000000000
+ body 0000000000000000000100000000000000090000000000000000570000000100
+ body 0000000000000057000000010000000000000000005700000002000000010200
+@@ -961,7 +961,7 @@ body 00000000000000
+ purrdf-dl-proof-check 1
+ service consistency
+ availability recorded
+-digest 475519448bc809c7a25d2f4ed118d1358b7172e0f4aa9f017afb7000f6df4668
++digest a2c321af746244490414169620f81545513c0ca6bed38bf983572ce06587b098
+ input d3404cd9feb0edbefa1a0e571ea14f9a1fa1874e68d91b583cd2ab55e784c573
+ runs 1
+ replayed 1
+@@ -995,7 +995,7 @@ purrdf-dl-proof 1
+ service consistency
+ availability recorded
+ input bb37b0707d71b8c9d3b58e27010f43efb42b60c6e1eb6b8bd2abe0e410025d03
+-digest d6a786bf729a2f184e3fa2955a2279a348cdc9f8a69ab4e1bedc29da07d83e26
++digest 470cda0863d18b5d363e892a6c44532066ebe60fc814d320010a396da49b5391
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 1
+ traced 1
+@@ -1010,8 +1010,8 @@ body 0000000003000000000000000400000000000000050000000000000000010000
+ body 0000000000010100000000000000000000000000000000000000000000000001
+ body 4d0100000000000016000000000000007075727264662d6f776c2d646c2d7072
+ body 6f6f662d7634bb37b0707d71b8c9d3b58e27010f43efb42b60c6e1eb6b8bd2ab
+-body e0e410025d03d43a4b38aff00a3d3b4c1b7530f439a26eee72258bc6231657d9
+-body 6048fd1bde870100000600000000000000000000000000000001000000000000
++body e0e410025d0389f756d6ef51bc28019686f175816841fb026d29fee7acef7b2b
++body b384175faec50100000600000000000000000000000000000001000000000000
+ body 0002000000000000000300000000000000040000000000000005000000000000
+ body 00000000000000000001000000000000000f00000000000000005a0000000100
+ body 000000000000005a000000010000000000000000005a00000002000000010200
+@@ -1024,7 +1024,7 @@ body 00000000000000000000000000000000
+ purrdf-dl-proof-check 1
+ service consistency
+ availability recorded
+-digest d6a786bf729a2f184e3fa2955a2279a348cdc9f8a69ab4e1bedc29da07d83e26
++digest 470cda0863d18b5d363e892a6c44532066ebe60fc814d320010a396da49b5391
+ input bb37b0707d71b8c9d3b58e27010f43efb42b60c6e1eb6b8bd2abe0e410025d03
+ runs 1
+ replayed 1
+@@ -1062,7 +1062,7 @@ purrdf-dl-proof 1
+ service consistency
+ availability recorded
+ input a79a6bce276132c449ad392b894e5d2bcfac01867e928480efb99e222656343b
+-digest 96e37ac28b4f0fd98d68aa914fafe43fd31dc1f3201902693f2624d3028b9609
++digest cd523833ab8a89a811b26169ec2d8d73e6bdec553bc67974a164a373f881fe1f
+ trust-base reverse-mapping,clausification,grounding,unravelling,refutation-encoding,classifying-saturation
+ runs 1
+ traced 1
+@@ -1077,8 +1077,8 @@ body 0000000003000000000000000400000000000000050000000000000000010000
+ body 0000000000010000000000000000000000000000000000000000000000000001
+ body 780100000000000016000000000000007075727264662d6f776c2d646c2d7072
+ body 6f6f662d7633a79a6bce276132c449ad392b894e5d2bcfac01867e928480efb9
+-body 9e222656343bc5aab0da0ca53c7564b53fb62b2ecc4c4ffa9a9402c0fd315c5e
+-body e122237d16960000060000000000000000000000000000000100000000000000
++body 9e222656343bed6ed6cebd129ee781b183ee39838e14abb5209e8af2c88c5c12
++body ab87080573090000060000000000000000000000000000000100000000000000
+ body 0200000000000000030000000000000004000000000000000500000000000000
+ body 0000000000000000000000000000000000000000000000000000000000000000
+ body 03000000000000000001000000000000000900000000000000005d0000000100
+@@ -1092,7 +1092,7 @@ body 01000000000000000001000000000000000000
+ purrdf-dl-proof-check 1
+ service consistency
+ availability recorded
+-digest 96e37ac28b4f0fd98d68aa914fafe43fd31dc1f3201902693f2624d3028b9609
++digest cd523833ab8a89a811b26169ec2d8d73e6bdec553bc67974a164a373f881fe1f
+ input a79a6bce276132c449ad392b894e5d2bcfac01867e928480efb99e222656343b
+ runs 1
+ replayed 1

@@ -1,0 +1,4 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/entail)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/alloc-probe)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/validate)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 12.12s

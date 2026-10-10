@@ -1,0 +1,2 @@
+checks     /home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/.stage/owl-propertychainaxiom-is-a-property/pr-checks.txt   state=pending
+comments   /home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/.stage/owl-propertychainaxiom-is-a-property/pr-comments.md  (2)

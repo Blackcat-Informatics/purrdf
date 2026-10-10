@@ -1,0 +1,10 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against a4bb1232d3b4 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+Recorded resolution for 'crates/entail/src/interner.rs'.
+Recorded resolution for 'crates/entail/src/owl_dl/proof.rs'.
+Recorded resolution for 'crates/entail/src/reasoner/certificate.rs'.
+Recorded resolution for 'crates/entail/src/reasoner/mod.rs'.
+Recorded resolution for 'crates/validate/src/regime.rs'.
+[paudley/452-owl-propertychainaxiom-is-a-property 2ce33c668] feat(entail): reason over regular OWL role chains
+ 34 files changed, 3685 insertions(+), 340 deletions(-)
+ create mode 100644 crates/entail/src/owl_dl/roles.rs
+ create mode 100644 crates/entail/tests/regular_role_chains.rs

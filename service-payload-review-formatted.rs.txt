@@ -1,0 +1,686 @@
+/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/.stage/owl-propertychainaxiom-is-a-property/service-payload-review-postimage.rs.txt:
+
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Actual public reasoning over regular role inclusions, not an RDF-list boundary.
+
+use std::sync::Arc;
+
+use purrdf_core::term_fixture::iri;
+use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
+use purrdf_entail::reasoner::{DlAxiom, DlCompleteness, Question, Reasoner, Verdict};
+use purrdf_entail::{EntailError, RoleHierarchyError};
+use purrdf_iri::vocab::{owl, rdf, rdfs};
+
+#[derive(Default)]
+struct Ontology {
+    builder: RdfDatasetBuilder,
+    next: usize,
+}
+
+impl Ontology {
+    fn named(&mut self, name: &str) -> TermId {
+        self.builder
+            .intern_iri(&format!("http://example.org/{name}"))
+    }
+
+    fn blank(&mut self) -> TermId {
+        let label = format!("syntax{}", self.next);
+        self.next += 1;
+        self.builder.intern_blank(&label, BlankScope::DEFAULT)
+    }
+
+    fn standard(&mut self, iri: &str) -> TermId {
+        self.builder.intern_iri(iri)
+    }
+
+    fn triple(&mut self, s: TermId, p: TermId, o: TermId) {
+        self.builder.push_quad(s, p, o, None);
+    }
+
+    fn inverse(&mut self, role: TermId) -> TermId {
+        let inverse = self.blank();
+        let predicate = self.standard(owl::INVERSE_OF);
+        self.triple(inverse, predicate, role);
+        inverse
+    }
+
+    fn chain(&mut self, head: TermId, body: &[TermId]) {
+        let first = self.standard(rdf::FIRST);
+        let rest = self.standard(rdf::REST);
+        let mut tail = self.standard(rdf::NIL);
+        for &member in body.iter().rev() {
+            let cell = self.blank();
+            self.triple(cell, first, member);
+            self.triple(cell, rest, tail);
+            tail = cell;
+        }
+        let predicate = self.standard(owl::PROPERTY_CHAIN_AXIOM);
+        self.triple(head, predicate, tail);
+    }
+
+    fn edge(&mut self, s: &str, role: TermId, o: &str) {
+        let subject = self.named(s);
+        let object = self.named(o);
+        self.triple(subject, role, object);
+    }
+
+    fn relation(&mut self, sub: TermId, predicate: &str, sup: TermId) {
+        let predicate = self.standard(predicate);
+        self.triple(sub, predicate, sup);
+    }
+
+    fn restriction(&mut self, role: TermId, predicate: &str, filler: TermId) -> TermId {
+        let restriction = self.blank();
+        let on = self.standard(owl::ON_PROPERTY);
+        self.triple(restriction, on, role);
+        let predicate = self.standard(predicate);
+        self.triple(restriction, predicate, filler);
+        restriction
+    }
+
+    fn finish(self) -> Arc<RdfDataset> {
+        self.builder.freeze().expect("valid RDF fixture")
+    }
+}
+
+fn assertion(subject: &str, property: &str, object: &str) -> DlAxiom {
+    DlAxiom::ObjectPropertyAssertion {
+        subject: iri(subject),
+        property: iri(property),
+        object: iri(object),
+    }
+}
+
+fn entailed(reasoner: &mut Reasoner, axiom: &DlAxiom, expected: Verdict) {
+    let answer = reasoner.entails(axiom).expect("complete service");
+    assert_eq!(*answer.answer(), expected);
+    assert_eq!(answer.certificate().completeness(), DlCompleteness::Decided);
+    assert_eq!(answer.certificate().boundaries(), []);
+    assert!(answer.certificate().storage_refusal().is_none());
+}
+
+/// These nine generic shapes are the verbatim ordered chain shapes of the nine
+/// external donor axioms, with consumer IRIs deliberately replaced by caller data.
+fn all_nine_consumer_shapes_are_exact_and_contradictions_are_detected() {
+    let chains = [
+        (
+            "hasSensoryQuantity",
+            "hasSensoryObservation",
+            "sensoryResult",
+        ),
+        ("eventLocation", "eventLocation", "containedInLocation"),
+        ("wasAssociatedWith", "generatedObservation", "vantage"),
+        ("hasReferenceFrame", "isResultOf", "hasReferenceFrame"),
+        ("memberOf", "memberOf", "subOrganizationOf"),
+        (
+            "hasCoordinates",
+            "hasCoordinateObservation",
+            "coordinateResult",
+        ),
+        ("hasGeometry", "hasCoordinateObservation", "geometryResult"),
+        ("locatedAt", "locatedAt", "containedInLocation"),
+        ("periodStart", "hasTemporalMeasurement", "measuredDate"),
+    ];
+    let mut ontology = Ontology::default();
+    for (head, left, right) in chains {
+        let head = ontology.named(head);
+        let left = ontology.named(left);
+        let right = ontology.named(right);
+        ontology.chain(head, &[left, right]);
+        ontology.edge("a", left, "b");
+        ontology.edge("b", right, "c");
+        // A second recursive hop, where the authored endpoint permits it.
+        ontology.edge("c", right, "d");
+    }
+    let dataset = ontology.finish();
+    let mut reasoner = Reasoner::new(&dataset).expect("the combined regular RBox");
+    let consistency = reasoner.consistency();
+    assert_eq!(*consistency.answer(), Verdict::True);
+    assert_eq!(
+        consistency.certificate().completeness(),
+        DlCompleteness::Decided
+    );
+    for (head, _, _) in chains {
+        entailed(&mut reasoner, &assertion("a", head, "c"), Verdict::True);
+        entailed(&mut reasoner, &assertion("c", head, "a"), Verdict::False);
+    }
+    for head in ["eventLocation", "memberOf", "locatedAt"] {
+        entailed(&mut reasoner, &assertion("a", head, "d"), Verdict::True);
+    }
+    for (head, left, right) in chains {
+        let mut contradicted = Ontology::default();
+        let head = contradicted.named(head);
+        let left = contradicted.named(left);
+        let right = contradicted.named(right);
+        contradicted.chain(head, &[left, right]);
+        contradicted.edge("a", left, "b");
+        contradicted.edge("b", right, "c");
+        let negative = contradicted.blank();
+        let kind = contradicted.standard(owl::NEGATIVE_PROPERTY_ASSERTION);
+        contradicted.relation(negative, rdf::TYPE, kind);
+        let a = contradicted.named("a");
+        let c = contradicted.named("c");
+        contradicted.relation(negative, owl::SOURCE_INDIVIDUAL, a);
+        contradicted.relation(negative, owl::ASSERTION_PROPERTY, head);
+        contradicted.relation(negative, owl::TARGET_INDIVIDUAL, c);
+        let dataset = contradicted.finish();
+        let answer = Reasoner::new(&dataset)
+            .expect("regular contradicted source")
+            .consistency();
+        assert_eq!(*answer.answer(), Verdict::False);
+        assert_eq!(answer.certificate().completeness(), DlCompleteness::Decided);
+    }
+}
+
+fn inverse_heads_nested_dependencies_and_simple_equivalence_cycles() {
+    let mut o = Ontology::default();
+    let p = o.named("p");
+    let q = o.named("q");
+    let r = o.named("r");
+    let alias = o.named("alias");
+    let s = o.named("s");
+    let inv_r = o.inverse(r);
+    o.chain(inv_r, &[p, q]);
+    o.relation(r, owl::EQUIVALENT_PROPERTY, alias);
+    o.chain(s, &[alias, p]);
+    o.edge("a", p, "b");
+    o.edge("b", q, "c");
+    o.edge("a", p, "d");
+    let dataset = o.finish();
+    let mut reasoner = Reasoner::new(&dataset).expect("regular inverse hierarchy");
+    entailed(&mut reasoner, &assertion("c", "r", "a"), Verdict::True);
+    entailed(&mut reasoner, &assertion("c", "alias", "a"), Verdict::True);
+    entailed(&mut reasoner, &assertion("c", "s", "d"), Verdict::True);
+    entailed(&mut reasoner, &assertion("a", "s", "c"), Verdict::False);
+}
+
+fn universal_obligations_clash_after_recursive_paths_and_blocking() {
+    for cyclic in [false, true] {
+        let mut o = Ontology::default();
+        let r = o.named("r");
+        let p = o.named("p");
+        let c = o.named("C");
+        let a = o.named("a");
+        let class_a = o.named("A");
+        let bottom = o.standard(owl::NOTHING);
+        let top = o.standard(owl::THING);
+        o.chain(r, &[r, p]);
+        if cyclic {
+            let some = o.restriction(p, owl::SOME_VALUES_FROM, class_a);
+            o.relation(class_a, rdfs::SUB_CLASS_OF, some);
+            o.relation(a, rdf::TYPE, class_a);
+            // Every r-reachable node must have no p successor. The recursive
+            // existential's successor carries A and therefore requires one.
+            let no_p = o.restriction(p, owl::ALL_VALUES_FROM, bottom);
+            let all = o.restriction(r, owl::ALL_VALUES_FROM, no_p);
+            o.relation(a, rdf::TYPE, all);
+            let some_r = o.restriction(r, owl::SOME_VALUES_FROM, class_a);
+            o.relation(a, rdf::TYPE, some_r);
+        } else {
+            o.edge("a", r, "b");
+            o.edge("b", p, "c");
+            o.edge("c", p, "d");
+            let all = o.restriction(r, owl::ALL_VALUES_FROM, c);
+            o.relation(a, rdf::TYPE, all);
+            let not_c = o.blank();
+            o.relation(not_c, owl::COMPLEMENT_OF, c);
+            let d = o.named("d");
+            o.relation(d, rdf::TYPE, not_c);
+        }
+        // Keep a genuinely populated object domain in both cases.
+        o.relation(a, rdf::TYPE, top);
+        let dataset = o.finish();
+        let answer = Reasoner::new(&dataset)
+            .expect("regular input")
+            .consistency();
+        assert_eq!(*answer.answer(), Verdict::False);
+        assert_eq!(answer.certificate().completeness(), DlCompleteness::Decided);
+    }
+}
+
+fn cyclic_existentials_with_role_obligations_have_a_finite_blocking_closure() {
+    let mut o = Ontology::default();
+    let r = o.named("r");
+    let p = o.named("p");
+    let a = o.named("a");
+    let class = o.named("A");
+    o.chain(r, &[r, p]);
+    let some = o.restriction(p, owl::SOME_VALUES_FROM, class);
+    o.relation(class, rdfs::SUB_CLASS_OF, some);
+    let all = o.restriction(r, owl::ALL_VALUES_FROM, class);
+    o.relation(class, rdfs::SUB_CLASS_OF, all);
+    o.relation(a, rdf::TYPE, class);
+    o.edge("a", r, "b");
+    let dataset = o.finish();
+    let reasoner = Reasoner::new(&dataset).expect("regular input");
+    let answer = reasoner.consistency();
+    assert_eq!(*answer.answer(), Verdict::True);
+    assert_eq!(answer.certificate().completeness(), DlCompleteness::Decided);
+}
+
+fn printed_order_counterexample_and_inverse_endpoint_typo_do_not_pass() {
+    for inverse_endpoint in [false, true] {
+        let mut o = Ontology::default();
+        let a = o.named("aRole");
+        let x = o.named("x");
+        if inverse_endpoint {
+            let inverse = o.inverse(a);
+            o.chain(a, &[inverse, x]);
+        } else {
+            let b = o.named("bRole");
+            let c = o.named("cRole");
+            let d = o.named("dRole");
+            let y = o.named("y");
+            o.relation(b, rdfs::SUB_PROPERTY_OF, c);
+            o.relation(d, rdfs::SUB_PROPERTY_OF, a);
+            o.chain(b, &[a, x]);
+            o.chain(d, &[y, c]);
+        }
+        let dataset = o.finish();
+        assert!(matches!(
+            Reasoner::new(&dataset),
+            Err(EntailError::RoleHierarchy(
+                RoleHierarchyError::OrderConflict { .. }
+                    | RoleHierarchyError::RecursiveDependency { .. }
+            ))
+        ));
+    }
+}
+
+fn literal_recursive_endpoint_is_not_replaced_by_an_equivalent_name() {
+    let mut o = Ontology::default();
+    let r = o.named("r");
+    let alias = o.named("alias");
+    let p = o.named("p");
+    o.relation(r, owl::EQUIVALENT_PROPERTY, alias);
+    o.chain(r, &[alias, p]);
+    let dataset = o.finish();
+    assert!(matches!(
+        Reasoner::new(&dataset),
+        Err(EntailError::RoleHierarchy(_))
+    ));
+}
+
+fn recorded_chain_consequence_replays_against_the_original_rbox() {
+    let mut o = Ontology::default();
+    let p = o.named("p");
+    let q = o.named("q");
+    let r = o.named("r");
+    o.chain(r, &[p, q]);
+    o.edge("a", p, "b");
+    o.edge("b", q, "c");
+    let dataset = o.finish();
+    let axiom = assertion("a", "r", "c");
+    let question = Question::AxiomEntailment {
+        axiom: Box::new(axiom.clone()),
+    };
+    let mut reasoner = Reasoner::with_proofs(&dataset).expect("regular source");
+    let answer = reasoner.entails(&axiom).expect("recorded answer");
+    assert_eq!(*answer.answer(), Verdict::True);
+    let mut consumer = Reasoner::with_proofs(&dataset).expect("independent reverse mapping");
+    consumer.prepare(&question).expect("query preparation");
+    let context = consumer.proof_context().expect("proof context");
+    let proof = answer.proof().expect("actual recorded chain refutation");
+    proof
+        .verify(&dataset, &question, Some(answer.certificate()), &context)
+        .expect("independent original-inclusion replay");
+
+    let mut altered = Ontology::default();
+    let p = altered.named("p");
+    let q = altered.named("q");
+    let r = altered.named("r");
+    altered.chain(r, &[q, p]);
+    altered.edge("a", p, "b");
+    altered.edge("b", q, "c");
+    let altered = altered.finish();
+    let mut checker = Reasoner::with_proofs(&altered).expect("regular changed RBox");
+    checker.prepare(&question).expect("same question");
+    let changed_context = checker.proof_context().expect("changed source context");
+    assert!(
+        proof
+            .verify(
+                &altered,
+                &question,
+                Some(answer.certificate()),
+                &changed_context
+            )
+            .is_err(),
+        "a proof of p·q must not authenticate a q·p source"
+    );
+}
+
+fn chain_derived_types_reach_all_query_services_and_materialization() {
+    let mut o = Ontology::default();
+    let p = o.named("p");
+    let q = o.named("q");
+    let r = o.named("r");
+    let class = o.named("C");
+    o.chain(r, &[p, q]);
+    o.relation(r, rdfs::RANGE, class);
+    o.edge("a", p, "b");
+    o.edge("b", q, "c");
+    // E forces a p·q path while forbidding every r successor. Only the chain
+    // inclusion makes E empty; the source ontology itself remains consistent.
+    let empty = o.named("E");
+    let thing = o.standard(owl::THING);
+    let nothing = o.standard(owl::NOTHING);
+    let q_path = o.restriction(q, owl::SOME_VALUES_FROM, thing);
+    let p_path = o.restriction(p, owl::SOME_VALUES_FROM, q_path);
+    let no_r = o.restriction(r, owl::ALL_VALUES_FROM, nothing);
+    o.relation(empty, rdfs::SUB_CLASS_OF, p_path);
+    o.relation(empty, rdfs::SUB_CLASS_OF, no_r);
+    let dataset = o.finish();
+    let mut reasoner = Reasoner::new(&dataset).expect("regular source");
+    entailed(
+        &mut reasoner,
+        &DlAxiom::ClassAssertion {
+            individual: iri("c"),
+            class: iri("C"),
+        },
+        Verdict::True,
+    );
+    let instances = reasoner.instances(&iri("C")).expect("instances");
+    assert_eq!(
+        instances.certificate().completeness(),
+        DlCompleteness::Decided
+    );
+    assert_eq!(instances.answer(), &[iri("c")]);
+    let realized = reasoner.realize().expect("realization");
+    assert_eq!(
+        realized.certificate().completeness(),
+        DlCompleteness::Decided
+    );
+    assert_eq!(
+        realized
+            .answer()
+            .types()
+            .iter()
+            .filter(|(_, class)| *class == iri("C"))
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![(iri("c"), iri("C"))]
+    );
+    assert!(
+        realized
+            .answer()
+            .direct_types()
+            .contains(&(iri("c"), iri("C")))
+    );
+    let classified = reasoner.classify().expect("classification");
+    assert_eq!(
+        classified.certificate().completeness(),
+        DlCompleteness::Decided
+    );
+    assert!(classified.answer().unsatisfiable().contains(&iri("E")));
+    assert!(
+        classified
+            .answer()
+            .subsumptions()
+            .contains(&(iri("E"), iri("C")))
+    );
+    let empty_answer = reasoner
+        .class_satisfiability(&iri("E"))
+        .expect("empty class");
+    assert_eq!(*empty_answer.answer(), Verdict::False);
+    let satisfiable = reasoner
+        .class_satisfiability(&iri("C"))
+        .expect("satisfiability");
+    assert_eq!(*satisfiable.answer(), Verdict::True);
+    let pattern = purrdf_entail::QTriple {
+        s: purrdf_entail::QNode::Term(iri("a")),
+        p: purrdf_entail::QNode::Term(iri("r")),
+        o: purrdf_entail::QNode::Term(iri("c")),
+    };
+    let (augmented, report) = purrdf_entail::materialize_dl_reported(&dataset, &[pattern])
+        .expect("actual production query augmentation");
+    assert_eq!(report.completeness(), purrdf_entail::Completeness::Exact);
+    assert!(augmented.quads().any(|quad| {
+        augmented.term_value(quad.s) == iri("a")
+            && augmented.term_value(quad.p) == iri("r")
+            && augmented.term_value(quad.o) == iri("c")
+    }));
+}
+
+fn fixed_top_is_universal_and_bottom_chain_clashes() {
+    for bottom_head in [false, true] {
+        let mut o = Ontology::default();
+        let p = o.named("p");
+        let q = o.named("q");
+        let fixed = o.standard(if bottom_head {
+            owl::BOTTOM_OBJECT_PROPERTY
+        } else {
+            owl::TOP_OBJECT_PROPERTY
+        });
+        o.chain(fixed, &[p, q]);
+        o.edge("a", p, "b");
+        o.edge("b", q, "c");
+        let dataset = o.finish();
+        let mut reasoner = Reasoner::new(&dataset).expect("fixed role syntax");
+        let answer = reasoner.consistency();
+        assert_eq!(
+            *answer.answer(),
+            if bottom_head {
+                Verdict::False
+            } else {
+                Verdict::True
+            }
+        );
+        assert_eq!(answer.certificate().completeness(), DlCompleteness::Decided);
+        if !bottom_head {
+            let axiom = DlAxiom::ObjectPropertyAssertion {
+                subject: iri("isolated"),
+                property: TermValue::iri(owl::TOP_OBJECT_PROPERTY),
+                object: iri("other"),
+            };
+            entailed(&mut reasoner, &axiom, Verdict::True);
+        }
+    }
+}
+
+fn fixed_top_aliases_without_a_chain_reach_query_only_individuals() {
+    for inverse in [false, true] {
+        let mut o = Ontology::default();
+        let top = o.standard(owl::TOP_OBJECT_PROPERTY);
+        let alias = o.named("universalAlias");
+        o.relation(
+            top,
+            if inverse {
+                owl::INVERSE_OF
+            } else {
+                rdfs::SUB_PROPERTY_OF
+            },
+            alias,
+        );
+        let dataset = o.finish();
+        let mut reasoner = Reasoner::with_proofs(&dataset).expect("fixed top alias");
+        let axiom = assertion("newSubject", "universalAlias", "newObject");
+        let answer = reasoner.entails(&axiom).expect("universal relation");
+        assert_eq!(*answer.answer(), Verdict::True);
+        let question = Question::AxiomEntailment {
+            axiom: Box::new(axiom),
+        };
+        let mut consumer = Reasoner::with_proofs(&dataset).expect("source context");
+        consumer.prepare(&question).expect("query roots");
+        answer
+            .proof()
+            .expect("recorded universal alias proof")
+            .verify(
+                &dataset,
+                &question,
+                Some(answer.certificate()),
+                &consumer.proof_context().expect("checking context"),
+            )
+            .expect("independent fixed-role alias replay");
+
+        let mut invalid = Ontology::default();
+        let top = invalid.standard(owl::TOP_OBJECT_PROPERTY);
+        let alias = invalid.named("universalAlias");
+        invalid.relation(
+            top,
+            if inverse {
+                owl::INVERSE_OF
+            } else {
+                rdfs::SUB_PROPERTY_OF
+            },
+            alias,
+        );
+        let functional = invalid.standard(owl::FUNCTIONAL_PROPERTY);
+        invalid.relation(alias, rdf::TYPE, functional);
+        assert!(matches!(
+            Reasoner::new(&invalid.finish()),
+            Err(EntailError::RoleHierarchy(
+                RoleHierarchyError::NonSimpleProperty { .. }
+            ))
+        ));
+    }
+}
+
+fn non_simple_characteristics_and_malformed_chain_lists_hard_refuse() {
+    for characteristic in [
+        owl::FUNCTIONAL_PROPERTY,
+        owl::INVERSE_FUNCTIONAL_PROPERTY,
+        owl::IRREFLEXIVE_PROPERTY,
+        owl::ASYMMETRIC_PROPERTY,
+    ] {
+        let mut o = Ontology::default();
+        let p = o.named("p");
+        let q = o.named("q");
+        let r = o.named("r");
+        o.chain(r, &[p, q]);
+        let kind = o.standard(characteristic);
+        o.relation(r, rdf::TYPE, kind);
+        let dataset = o.finish();
+        assert!(matches!(
+            Reasoner::new(&dataset),
+            Err(EntailError::RoleHierarchy(
+                RoleHierarchyError::NonSimpleProperty { .. }
+            ))
+        ));
+    }
+    let mut o = Ontology::default();
+    let p = o.named("p");
+    let r = o.named("r");
+    let cell = o.blank();
+    o.relation(r, owl::PROPERTY_CHAIN_AXIOM, cell);
+    o.relation(cell, rdf::FIRST, p);
+    o.relation(cell, rdf::REST, cell);
+    let dataset = o.finish();
+    assert!(matches!(
+        Reasoner::new(&dataset),
+        Err(EntailError::RoleHierarchy(
+            RoleHierarchyError::MalformedList { .. }
+        ))
+    ));
+}
+
+fn role_language_work_exhaustion_is_unknown_never_a_consistency_proof() {
+    let mut o = Ontology::default();
+    let p = o.named("p");
+    let r = o.named("r");
+    o.chain(r, &[r, p]);
+    o.edge("a", r, "b");
+    o.edge("b", p, "c");
+    let dataset = o.finish();
+    let reasoner = Reasoner::with_proofs(&dataset)
+        .expect("regular source")
+        .with_work_cap(1);
+    let answer = reasoner.consistency();
+    assert_eq!(*answer.answer(), Verdict::Unknown);
+    assert_eq!(
+        answer.certificate().completeness(),
+        DlCompleteness::BudgetExhausted
+    );
+}
+
+fn nominal_merges_and_simple_functionality_preserve_role_obligations() {
+    for contradict in [false, true] {
+        let mut o = Ontology::default();
+        let p = o.named("p");
+        let q = o.named("q");
+        let r = o.named("r");
+        let a = o.named("a");
+        let b = o.named("b");
+        let c = o.named("c");
+        let class = o.named("C");
+        o.chain(r, &[p, q]);
+        let function = o.standard(owl::FUNCTIONAL_PROPERTY);
+        o.relation(p, rdf::TYPE, function);
+        let nominal = o.blank();
+        let cell = o.blank();
+        let nil = o.standard(rdf::NIL);
+        o.relation(nominal, owl::ONE_OF, cell);
+        o.relation(cell, rdf::FIRST, b);
+        o.relation(cell, rdf::REST, nil);
+        let some = o.restriction(p, owl::SOME_VALUES_FROM, nominal);
+        o.relation(a, rdf::TYPE, some);
+        o.edge("a", p, "other");
+        o.edge("b", q, "c");
+        let all = o.restriction(r, owl::ALL_VALUES_FROM, class);
+        o.relation(a, rdf::TYPE, all);
+        let asserted = if contradict {
+            let complement = o.blank();
+            o.relation(complement, owl::COMPLEMENT_OF, class);
+            complement
+        } else {
+            class
+        };
+        o.relation(c, rdf::TYPE, asserted);
+        let dataset = o.finish();
+        let answer = Reasoner::new(&dataset)
+            .expect("regular source with a simple counted role")
+            .consistency();
+        assert_eq!(
+            *answer.answer(),
+            if contradict {
+                Verdict::False
+            } else {
+                Verdict::True
+            }
+        );
+        assert_eq!(answer.certificate().completeness(), DlCompleteness::Decided);
+    }
+}
+
+fn cancelling_an_existing_regular_role_owner_cannot_publish_a_decision() {
+    #[derive(Debug)]
+    struct Stop(std::sync::atomic::AtomicBool);
+    impl purrdf_datalog::StopSignal for Stop {
+        fn stopped(&self) -> bool {
+            self.0.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+    let mut o = Ontology::default();
+    let p = o.named("p");
+    let r = o.named("r");
+    o.chain(r, &[r, p]);
+    o.edge("a", r, "b");
+    o.edge("b", p, "c");
+    let dataset = o.finish();
+    let stop = Arc::new(Stop(std::sync::atomic::AtomicBool::new(false)));
+    let reasoner = Reasoner::with_stop(&dataset, stop.clone()).expect("regular source");
+    stop.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    let answer = reasoner.consistency();
+    assert_eq!(*answer.answer(), Verdict::Unknown);
+    assert!(answer.certificate().stopped());
+    assert!(answer.certificate().storage_refusal().is_none());
+    assert!(answer.proof().is_none());
+}
+
+purrdf_testkit::harness_main!(
+    all_nine_consumer_shapes_are_exact_and_contradictions_are_detected,
+    inverse_heads_nested_dependencies_and_simple_equivalence_cycles,
+    universal_obligations_clash_after_recursive_paths_and_blocking,
+    cyclic_existentials_with_role_obligations_have_a_finite_blocking_closure,
+    printed_order_counterexample_and_inverse_endpoint_typo_do_not_pass,
+    literal_recursive_endpoint_is_not_replaced_by_an_equivalent_name,
+    recorded_chain_consequence_replays_against_the_original_rbox,
+    chain_derived_types_reach_all_query_services_and_materialization,
+    fixed_top_is_universal_and_bottom_chain_clashes,
+    fixed_top_aliases_without_a_chain_reach_query_only_individuals,
+    non_simple_characteristics_and_malformed_chain_lists_hard_refuse,
+    role_language_work_exhaustion_is_unknown_never_a_consistency_proof,
+    cancelling_an_existing_regular_role_owner_cannot_publish_a_decision,
+    nominal_merges_and_simple_functionality_preserve_role_obligations,
+);

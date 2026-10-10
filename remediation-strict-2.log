@@ -1,0 +1,30 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/entail)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/validate)
+error: unnecessary qualification
+    --> crates/entail/src/owl_dl/mod.rs:1033:18
+     |
+1033 |                 &graph::Assumptions::of_kb(),
+     |                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `-D unused-qualifications` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(unused_qualifications)]`
+help: remove the unnecessary path segments
+     |
+1033 -                 &graph::Assumptions::of_kb(),
+1033 +                 &Assumptions::of_kb(),
+     |
+
+error: unnecessary qualification
+    --> crates/entail/src/owl_dl/mod.rs:1042:22
+     |
+1042 |                     &graph::Assumptions::of_kb(),
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: remove the unnecessary path segments
+     |
+1042 -                     &graph::Assumptions::of_kb(),
+1042 +                     &Assumptions::of_kb(),
+     |
+
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

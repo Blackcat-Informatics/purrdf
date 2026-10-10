@@ -1,0 +1,11 @@
+feat(entail): reason over regular OWL role chains
+
+Compile admitted signed-role languages from authored order and normalized mixed
+dependencies, and execute their universal state obligations through the original
+hypertableau, blocking, query services and independent proof checker. Reject
+malformed, nonregular and forbidden non-simple hierarchies with typed causes.
+
+Advance the tableau proof contract to regular-roles-v2 and replay the original
+questions and answers. Cover recursive and inverse roles, all nine caller chain
+shapes, actual service payloads, cancellation, physical refusal and native/WASM
+production paths.

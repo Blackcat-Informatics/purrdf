@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "issue": 452,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property",
+  "branch": "paudley/452-owl-propertychainaxiom-is-a-property",
+  "slug": "owl-propertychainaxiom-is-a-property",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/.stage/owl-propertychainaxiom-is-a-property",
+  "stage_tracked": true,
+  "base": "origin/main",
+  "base_oid": "a77b743bcc6fad89d88581ef9cb5a626a326834f",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property",
+    "branch:paudley/452-owl-propertychainaxiom-is-a-property",
+    "stage:/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/.stage/owl-propertychainaxiom-is-a-property",
+    "issue:/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/.stage/owl-propertychainaxiom-is-a-property/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-10-10T07:30:18-0600"
+}

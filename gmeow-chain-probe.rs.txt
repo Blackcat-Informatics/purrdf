@@ -1,0 +1,84 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+//! Public caller proof over the nine verbatim, explicitly supplied GMEOW chains.
+use purrdf_core::{BlankScope, RdfDatasetBuilder, TermValue};
+use purrdf_entail::reasoner::{DlAxiom, DlCompleteness, Reasoner, Verdict};
+use purrdf_iri::vocab::{owl, rdf};
+
+fn build(chains: &[Vec<&str>], negative: Option<usize>) -> std::sync::Arc<purrdf_core::RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let first = b.intern_iri(rdf::FIRST);
+    let rest = b.intern_iri(rdf::REST);
+    let nil = b.intern_iri(rdf::NIL);
+    let chain = b.intern_iri(owl::PROPERTY_CHAIN_AXIOM);
+    let a = b.intern_iri("https://example.org/a");
+    let middle = b.intern_iri("https://example.org/b");
+    let c = b.intern_iri("https://example.org/c");
+    for (index, terms) in chains.iter().enumerate() {
+        assert_eq!(terms.len(), 3);
+        let head = b.intern_iri(terms[0]);
+        let left = b.intern_iri(terms[1]);
+        let right = b.intern_iri(terms[2]);
+        let cell0 = b.intern_blank(&format!("c{index}_0"), BlankScope::DEFAULT);
+        let cell1 = b.intern_blank(&format!("c{index}_1"), BlankScope::DEFAULT);
+        for (s, p, o) in [
+            (head, chain, cell0),
+            (cell0, first, left),
+            (cell0, rest, cell1),
+            (cell1, first, right),
+            (cell1, rest, nil),
+            (a, left, middle),
+            (middle, right, c),
+        ] {
+            b.push_quad(s, p, o, None);
+        }
+        if negative == Some(index) {
+            let assertion = b.intern_blank("negative", BlankScope::DEFAULT);
+            let ty = b.intern_iri(rdf::TYPE);
+            let negative = b.intern_iri(owl::NEGATIVE_PROPERTY_ASSERTION);
+            let source = b.intern_iri(owl::SOURCE_INDIVIDUAL);
+            let property = b.intern_iri(owl::ASSERTION_PROPERTY);
+            let target = b.intern_iri(owl::TARGET_INDIVIDUAL);
+            for (p, o) in [(ty, negative), (source, a), (property, head), (target, c)] {
+                b.push_quad(assertion, p, o, None);
+            }
+        }
+    }
+    b.freeze().expect("caller graph")
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let path = std::env::args()
+        .nth(1)
+        .ok_or("caller input path is required")?;
+    let input = std::fs::read_to_string(path)?;
+    let chains: Vec<Vec<&str>> = input
+        .lines()
+        .map(|line| line.split('\t').collect())
+        .collect();
+    assert_eq!(chains.len(), 9, "exact actual consumer chain count");
+    let source = build(&chains, None);
+    let mut reasoner = Reasoner::new(&source)?;
+    let answer = reasoner.consistency();
+    assert_eq!(*answer.answer(), Verdict::True);
+    assert_eq!(answer.certificate().completeness(), DlCompleteness::Decided);
+    for (index, terms) in chains.iter().enumerate() {
+        let answer = reasoner.entails(&DlAxiom::ObjectPropertyAssertion {
+            subject: TermValue::iri("https://example.org/a"),
+            property: TermValue::iri(terms[0]),
+            object: TermValue::iri("https://example.org/c"),
+        })?;
+        assert_eq!(*answer.answer(), Verdict::True);
+        assert_eq!(answer.certificate().completeness(), DlCompleteness::Decided);
+        let contradicted = build(&chains, Some(index));
+        let answer = Reasoner::new(&contradicted)?.consistency();
+        assert_eq!(*answer.answer(), Verdict::False);
+        assert_eq!(answer.certificate().completeness(), DlCompleteness::Decided);
+        println!(
+            "chain {} exact positive and contradicted consequence PASS: {}",
+            index + 1,
+            terms[0]
+        );
+    }
+    Ok(())
+}

@@ -1,0 +1,45 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/entail)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf)
+error: unused `Result` that must be used
+   --> crates/entail/tests/schema_cardinality_boundary.rs:114:13
+    |
+114 |             consumer.prepare(proof.question());
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `-D unused-must-use` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+    |
+114 |             let _ = consumer.prepare(proof.question());
+    |             +++++++
+
+error: could not compile `purrdf-entail` (test "schema_cardinality_boundary") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: unused `Result` that must be used
+   --> crates/entail/src/reasoner/proof/current.rs:330:9
+    |
+330 |         checker.prepare(&question);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `-D unused-must-use` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_must_use)]`
+help: use `let _ = ...` to ignore the resulting value
+    |
+330 |         let _ = checker.prepare(&question);
+    |         +++++++
+
+error: unused `Result` that must be used
+   --> crates/entail/src/reasoner/schema_tests.rs:144:5
+    |
+144 |     checker.prepare(decoded.question());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+144 |     let _ = checker.prepare(decoded.question());
+    |     +++++++
+
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors

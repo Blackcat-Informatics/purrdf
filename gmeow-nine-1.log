@@ -1,0 +1,13 @@
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/alloc-probe)
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 24.61s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/external_chain_probe .stage/owl-propertychainaxiom-is-a-property/gmeow-chain-input.tsv`
+chain 1 exact positive and contradicted consequence PASS: https://blackcatinformatics.ca/gmeow/hasSensoryQuantity
+chain 2 exact positive and contradicted consequence PASS: https://blackcatinformatics.ca/gmeow/eventLocation
+chain 3 exact positive and contradicted consequence PASS: https://blackcatinformatics.ca/gmeow/wasAssociatedWith
+chain 4 exact positive and contradicted consequence PASS: https://blackcatinformatics.ca/gmeow/hasReferenceFrame
+chain 5 exact positive and contradicted consequence PASS: https://blackcatinformatics.ca/gmeow/memberOf
+chain 6 exact positive and contradicted consequence PASS: https://blackcatinformatics.ca/gmeow/hasCoordinates
+chain 7 exact positive and contradicted consequence PASS: https://blackcatinformatics.ca/gmeow/hasGeometry
+chain 8 exact positive and contradicted consequence PASS: https://blackcatinformatics.ca/gmeow/locatedAt
+chain 9 exact positive and contradicted consequence PASS: https://blackcatinformatics.ca/gmeow/periodStart

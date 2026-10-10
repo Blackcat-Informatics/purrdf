@@ -1,0 +1,9 @@
+https://blackcatinformatics.ca/gmeow/hasSensoryQuantity	https://blackcatinformatics.ca/gmeow/hasSensoryObservation	https://blackcatinformatics.ca/gmeow/sensoryResult
+https://blackcatinformatics.ca/gmeow/eventLocation	https://blackcatinformatics.ca/gmeow/eventLocation	https://blackcatinformatics.ca/gmeow/containedInLocation
+https://blackcatinformatics.ca/gmeow/wasAssociatedWith	https://blackcatinformatics.ca/gmeow/generatedObservation	https://blackcatinformatics.ca/gmeow/vantage
+https://blackcatinformatics.ca/gmeow/hasReferenceFrame	https://blackcatinformatics.ca/gmeow/isResultOf	https://blackcatinformatics.ca/gmeow/hasReferenceFrame
+https://blackcatinformatics.ca/gmeow/memberOf	https://blackcatinformatics.ca/gmeow/memberOf	https://blackcatinformatics.ca/gmeow/subOrganizationOf
+https://blackcatinformatics.ca/gmeow/hasCoordinates	https://blackcatinformatics.ca/gmeow/hasCoordinateObservation	https://blackcatinformatics.ca/gmeow/coordinateResult
+https://blackcatinformatics.ca/gmeow/hasGeometry	https://blackcatinformatics.ca/gmeow/hasCoordinateObservation	https://blackcatinformatics.ca/gmeow/geometryResult
+https://blackcatinformatics.ca/gmeow/locatedAt	https://blackcatinformatics.ca/gmeow/locatedAt	https://blackcatinformatics.ca/gmeow/containedInLocation
+https://blackcatinformatics.ca/gmeow/periodStart	https://blackcatinformatics.ca/gmeow/hasTemporalMeasurement	https://blackcatinformatics.ca/gmeow/measuredDate

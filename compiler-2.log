@@ -1,0 +1,68 @@
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/entail)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf)
+error: method `finalize` is never used
+   --> crates/entail/src/owl_dl/concept.rs:558:19
+    |
+331 | impl ConceptTable {
+    | ----------------- method in this implementation
+...
+558 |     pub(crate) fn finalize(&mut self) {
+    |                   ^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: method `precedes` is never used
+   --> crates/entail/src/owl_dl/roles.rs:192:19
+    |
+160 | impl RoleOrder {
+    | -------------- method in this implementation
+...
+192 |     pub(crate) fn precedes(&self, lower: Role, upper: Role) -> bool {
+    |                   ^^^^^^^^
+
+error: methods `inverse` and `release` are never used
+   --> crates/entail/src/owl_dl/roles.rs:719:8
+    |
+622 | impl Automaton {
+    | -------------- methods in this implementation
+...
+719 |     fn inverse<S: Admission + ?Sized>(
+    |        ^^^^^^^
+...
+742 |     fn release<S: Admission + ?Sized>(
+    |        ^^^^^^^
+
+error: method `release` is never used
+   --> crates/entail/src/owl_dl/roles.rs:837:19
+    |
+781 | impl RoleProgram {
+    | ---------------- method in this implementation
+...
+837 |     pub(crate) fn release<S: Admission + ?Sized>(
+    |                   ^^^^^^^
+
+error: could not compile `purrdf-entail` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: method `precedes` is never used
+   --> crates/entail/src/owl_dl/roles.rs:192:19
+    |
+160 | impl RoleOrder {
+    | -------------- method in this implementation
+...
+192 |     pub(crate) fn precedes(&self, lower: Role, upper: Role) -> bool {
+    |                   ^^^^^^^^
+    |
+    = note: `-D dead-code` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+
+error: method `inverse` is never used
+   --> crates/entail/src/owl_dl/roles.rs:719:8
+    |
+622 | impl Automaton {
+    | -------------- method in this implementation
+...
+719 |     fn inverse<S: Admission + ?Sized>(
+    |        ^^^^^^^
+
+error: could not compile `purrdf-entail` (lib test) due to 2 previous errors

@@ -1,0 +1,14 @@
+Preserve role-read refusals and actionable source witnesses
+
+Latch caller cancellation after role scans and before both decision drivers
+publish a verdict. Preserve the tableau's original storage refusal, guard
+top-role order membership, and cache the proof checker's universal role once.
+Handle universal object-role assertions outside the RBox without a false
+builtin boundary. Retain semantic refusal source spellings through native
+admitted diagnostics, with the original typed classification available.
+
+Validate both drivers' mid-round stop behavior and storage interpretation,
+the full affected entail/validate targets, all sixteen native and optimized
+portable role controls, strict all-target Clippy, metadata and helper hygiene.
+Replay all seven original hosted assembly measurements into maintained docs;
+final-head hosted measurement remains required for publication acceptance.

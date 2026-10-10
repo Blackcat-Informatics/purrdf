@@ -1,0 +1,32 @@
+{
+  "issue": 452,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "owl:propertyChainAxiom is a property-chain boundary; regular chains are not decided",
+  "state": "OPEN",
+  "adrs": [],
+  "linked_issues": {},
+  "related": [
+    {
+      "number": 173,
+      "title": "feat(entail): close the 16 ledgered W3C OWL 2 RL entailment-corpus gaps",
+      "state": "CLOSED"
+    },
+    {
+      "number": 167,
+      "title": "Expose OWL-RL materialize in the python library",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "none": 21,
+    "performance": 2,
+    "semantic-identity-loss": 1
+  },
+  "coverage": [
+    "issue #452 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "forge search on ['owl:propertyChainAxiom', 'property-chain', 'boundary;']: 2 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}

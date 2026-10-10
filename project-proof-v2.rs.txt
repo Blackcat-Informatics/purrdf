@@ -1,0 +1,47 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+//! One-time projection for the documented regular-role calculus version.
+//! Existing inputs, questions and exact answers are preserved; every new proof
+//! must independently replay before any projected bytes are emitted.
+use purrdf_validate::regime::{check_dl_proof, dl_proof_golden_vectors, prove_to_string};
+
+fn main() -> Result<(), String> {
+    println!(
+        "# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>"
+    );
+    println!("# SPDX-License-Identifier: CC-BY-4.0\n");
+    for case in dl_proof_golden_vectors()? {
+        let proved = prove_to_string(
+            case.input(),
+            case.service(),
+            case.argument().trim_end(),
+            0,
+            0,
+        )?;
+        assert_eq!(
+            proved.answer(),
+            case.answer(),
+            "{}: answers cannot change in a contract projection",
+            case.name()
+        );
+        let checked = check_dl_proof(
+            case.input(),
+            case.service(),
+            case.argument().trim_end(),
+            proved.answer(),
+            proved.certificate(),
+            proved.proof_document(),
+        )?;
+        println!(
+            "@case {}\n@service {}\n@argument\n{}@input\n{}@answer\n{}@proof\n{}@check\n{}@end\n",
+            case.name(),
+            case.service(),
+            case.argument(),
+            case.input(),
+            proved.answer(),
+            proved.proof_document(),
+            checked
+        );
+    }
+    Ok(())
+}

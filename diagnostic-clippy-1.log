@@ -1,0 +1,267 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/hash)
+    Checking cpufeatures v0.3.0
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+   Compiling crossbeam-utils v0.8.21
+    Checking regex-syntax v0.8.11
+    Checking hybrid-array v0.4.15
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf-events)
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+    Checking digest v0.11.3
+    Checking regex-automata v0.4.14
+    Checking crossbeam-deque v0.8.6
+    Checking sha2 v0.11.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf-core)
+   Compiling libc v0.2.186
+    Checking regex v1.12.4
+    Checking either v1.16.0
+    Checking hashbrown v0.17.1
+    Checking rayon v1.12.0
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/stack)
+    Checking ctutils v0.4.2
+    Checking cpubits v0.1.1
+    Checking universal-hash v0.6.1
+    Checking cipher v0.5.2
+    Checking polyval v0.7.3
+   Compiling getrandom v0.3.4
+    Checking ghash v0.6.0
+    Checking aes v0.9.3
+    Checking ctr v0.10.1
+    Checking aead v0.6.1
+    Checking fastrand v2.4.1
+    Checking twox-hash v2.1.2
+    Checking aes-gcm v0.11.1
+    Checking structured-zstd v0.0.49
+    Checking visual-hashing v1.0.0
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/alloc-probe)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/deflate)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/testkit)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/ed25519)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/cdt)
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/gts)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/sparql-algebra)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/datalog)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/sparql-eval)
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/entail)
+warning: consider adding a `;` to the last statement for consistent formatting
+    --> crates/entail/src/owl_dl/graph.rs:2474:37
+     |
+2474 | ...                   enqueue(to)?
+     |                       ^^^^^^^^^^^^ help: add a `;` here: `enqueue(to)?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+     = note: `-D clippy::semicolon-if-nothing-returned` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::semicolon_if_nothing_returned)]`
+     = note: the `clippy::semicolon_if_nothing_returned` lint ignores `-D warnings`
+
+warning: consider adding a `;` to the last statement for consistent formatting
+    --> crates/entail/src/owl_dl/graph.rs:2477:37
+     |
+2477 | ...                   enqueue(from)?
+     |                       ^^^^^^^^^^^^^^ help: add a `;` here: `enqueue(from)?;`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#semicolon_if_nothing_returned
+
+warning: it looks like you're trying to convert a tuple to an array
+    --> crates/entail/src/owl_dl/parser.rs:1269:33
+     |
+1269 |                 for property in [left, right] {
+     |                                 ^^^^^^^^^^^^^
+     |
+     = help: use `.into()` instead, or `<[T; N]>::from` if type annotations are needed
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#tuple_array_conversions
+     = note: `-D clippy::tuple-array-conversions` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::tuple_array_conversions)]`
+     = note: the `clippy::tuple_array_conversions` lint ignores `-D warnings`
+
+warning: wildcard matches only a single variant and will also match any future added variants
+  --> crates/entail/src/owl_dl/roles.rs:79:13
+   |
+79 |             error => Self::Graph(error),
+   |             ^^^^^ help: try: `error @ GraphError::InvalidEdge { .. }`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#match_wildcard_for_single_variants
+   = note: `-D clippy::match-wildcard-for-single-variants` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::match_wildcard_for_single_variants)]`
+   = note: the `clippy::match_wildcard_for_single_variants` lint ignores `-D warnings`
+
+warning: unnecessary structure name repetition
+   --> crates/entail/src/owl_dl/roles.rs:856:25
+    |
+856 |                 source: Hierarchy::default(),
+    |                         ^^^^^^^^^ help: use the applicable keyword: `Self`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+    = note: `-D clippy::use-self` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::use_self)]`
+    = note: the `clippy::use_self` lint ignores `-D warnings`
+
+warning: this function has too many arguments (8/7)
+    --> crates/entail/src/owl_dl/roles.rs:1037:5
+     |
+1037 | /     fn component_automaton<S: Admission + ?Sized>(
+1038 | |         &self,
+1039 | |         root: usize,
+1040 | |         representatives: &[usize],
+...    |
+1045 | |         memory: &mut Memory<'_, S>,
+1046 | |     ) -> Result<Automaton, RoleHierarchyError> {
+     | |______________________________________________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#too_many_arguments
+     = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+     = note: the `clippy::too_many_arguments` lint ignores `-D warnings`
+
+warning: this `if` statement can be collapsed
+    --> crates/entail/src/owl_dl/roles.rs:1093:13
+     |
+1093 | /             if let Some(letter) = edge.letter {
+1094 | |                 if representatives[order.position(letter)] != root {
+1095 | |                     machine.substitute(
+1096 | |                         edge,
+...    |
+1102 | |             }
+     | |_____________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#collapsible_if
+     = note: `-D clippy::collapsible-if` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+     = note: the `clippy::collapsible_if` lint ignores `-D warnings`
+help: collapse nested if block
+     |
+1093 ~             if let Some(letter) = edge.letter
+1094 ~                 && representatives[order.position(letter)] != root {
+1095 |                     machine.substitute(
+ ...
+1100 |                     )?;
+1101 ~                 }
+     |
+
+warning: struct constructor field order is inconsistent with struct definition field order
+   --> crates/entail/src/reasoner/profile.rs:295:9
+    |
+295 | /         violations,
+296 | |         role_hierarchy_refusal,
+    | |______________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#inconsistent_struct_constructor
+    = note: `-D clippy::inconsistent-struct-constructor` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::inconsistent_struct_constructor)]`
+    = note: the `clippy::inconsistent_struct_constructor` lint ignores `-D warnings`
+help: try
+    |
+295 ~         role_hierarchy_refusal,
+296 ~         violations,
+    |
+
+warning: `purrdf-entail` (lib) generated 8 warnings (run `cargo clippy --fix --lib -p purrdf-entail -- --cap-lints warn` to apply 5 suggestions)
+warning: used `assert!` to check that a value is empty
+   --> crates/entail/tests/regular_role_chains.rs:101:5
+    |
+101 |     assert!(answer.certificate().boundaries().is_empty());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+    = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+    = note: the `clippy::assert_is_empty` lint ignores `-D warnings`
+help: use `assert_eq!` to show the value on failure
+    |
+101 -     assert!(answer.certificate().boundaries().is_empty());
+101 +     assert_eq!(answer.certificate().boundaries(), []);
+    |
+
+warning: `purrdf-entail` (test "regular_role_chains") generated 1 warning (run `cargo clippy --fix --test "regular_role_chains" -p purrdf-entail -- --cap-lints warn` to apply 1 suggestion)
+warning: the loop variable `from` is used to index `expected[3]`
+    --> crates/entail/src/owl_dl/roles.rs:1498:25
+     |
+1498 |             for from in 0..3 {
+     |                         ^^^^
+     |
+note: for this index operation
+    --> crates/entail/src/owl_dl/roles.rs:1507:25
+     |
+1507 |                         expected[3][from][to],
+     |                         ^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_range_loop
+     = note: `-D clippy::needless-range-loop` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_range_loop)]`
+     = note: the `clippy::needless_range_loop` lint ignores `-D warnings`
+help: consider using an iterator and `.enumerate()`
+     |
+1498 -             for from in 0..3 {
+1498 +             for (from, <item>) in expected[3].iter().enumerate() {
+     |
+
+warning: the loop variable `to` is used to index `expected[3][from]`
+    --> crates/entail/src/owl_dl/roles.rs:1499:27
+     |
+1499 |                 for to in 0..3 {
+     |                           ^^^^
+     |
+note: for this index operation
+    --> crates/entail/src/owl_dl/roles.rs:1507:25
+     |
+1507 |                         expected[3][from][to],
+     |                         ^^^^^^^^^^^^^^^^^^^^^
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_range_loop
+help: consider using an iterator and `.enumerate()`
+     |
+1499 -                 for to in 0..3 {
+1499 +                 for (to, <item>) in expected[3][from].iter().enumerate() {
+     |
+
+warning: avoid using `collect()` when not needed
+    --> crates/entail/src/owl_dl/mod.rs:1470:14
+     |
+1470 |             .collect();
+     |              ^^^^^^^
+1471 |         assert!(constructs.is_empty());
+     |                 --------------------- the iterator could be used here instead
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_collect
+     = note: `-D clippy::needless-collect` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_collect)]`
+     = note: the `clippy::needless_collect` lint ignores `-D warnings`
+help: check if the original Iterator has anything instead of collecting it and seeing if it's empty
+     |
+1466 ~         
+1467 ~         assert!(report
+1468 +             .boundaries()
+1469 +             .iter()
+1470 ~             .map(|boundary| boundary.construct()).next().is_none());
+     |
+
+warning: used `assert!` to check that a value is empty
+    --> crates/entail/src/owl_dl/mod.rs:1471:9
+     |
+1471 |         assert!(constructs.is_empty());
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#assert_is_empty
+     = note: `-D clippy::assert-is-empty` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::assert_is_empty)]`
+     = note: the `clippy::assert_is_empty` lint ignores `-D warnings`
+help: use `assert_eq!` to show the value on failure
+     |
+1471 -         assert!(constructs.is_empty());
+1471 +         assert_eq!(constructs, [] as [report::Construct; 0]);
+     |
+
+warning: `purrdf-entail` (lib test) generated 12 warnings (8 duplicates) (run `cargo clippy --fix --lib -p purrdf-entail --tests -- --cap-lints warn` to apply 1 suggestion)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/shapes)
+    Checking purrdf-validate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/validate)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 41.69s

@@ -1,0 +1,77 @@
+    Checking typenum v1.20.1
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/hash)
+    Checking hybrid-array v0.4.15
+    Checking cpufeatures v0.3.0
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/lex)
+    Checking cfg-if v1.0.4
+    Checking const-oid v0.10.2
+   Compiling crossbeam-utils v0.8.21
+    Checking digest v0.11.3
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/iri)
+    Checking sha2 v0.11.0
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/xsd)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf-events)
+    Checking regex-syntax v0.8.11
+    Checking crossbeam-epoch v0.9.18
+   Compiling rayon-core v1.13.0
+    Checking regex-automata v0.4.14
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/cdt)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/deflate)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf-core)
+    Checking regex v1.12.4
+   Compiling libc v0.2.186
+    Checking hashbrown v0.17.1
+    Checking either v1.16.0
+    Checking rayon v1.12.0
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/stack)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/testkit)
+    Checking purrdf-datalog v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/datalog)
+    Checking inout v0.2.2
+    Checking cmov v0.5.4
+    Checking ctutils v0.4.2
+    Checking cpubits v0.1.1
+    Checking universal-hash v0.6.1
+    Checking cipher v0.5.2
+    Checking polyval v0.7.3
+   Compiling getrandom v0.3.4
+    Checking ghash v0.6.0
+    Checking aes v0.9.3
+    Checking ctr v0.10.1
+    Checking aead v0.6.1
+    Checking fastrand v2.4.1
+    Checking twox-hash v2.1.2
+    Checking structured-zstd v0.0.49
+    Checking aes-gcm v0.11.1
+    Checking purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/entail)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/sparql-results)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/sparql-algebra)
+    Checking purrdf-ed25519 v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/ed25519)
+    Checking visual-hashing v1.0.0
+    Checking purrdf-gts v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/gts)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/sparql-eval)
+    Checking purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf)
+    Checking purrdf-slice v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/slice)
+    Checking purrdf-shapes v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/shapes)
+error: this looks like a formatting argument but it is not part of a formatting macro
+   --> crates/entail/src/owl_dl/roles.rs:192:18
+    |
+192 |                 "{classification}; original lower {first}, upper {second}"
+    |                  ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+    = note: `-D clippy::literal-string-with-formatting-args` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::literal_string_with_formatting_args)]`
+
+error: this looks like a formatting argument but it is not part of a formatting macro
+   --> crates/entail/src/owl_dl/roles.rs:194:18
+    |
+194 |                 "{classification}; original source {first}"
+    |                  ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#literal_string_with_formatting_args
+
+error: could not compile `purrdf-entail` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...

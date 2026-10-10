@@ -1,0 +1,25 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/entail)
+    Finished `test` profile [optimized] target(s) in 46.15s
+     Running tests/regular_role_chains.rs (/opt/.cargo/slots/1e00e87a12d7031b/0/build/debug/build/purrdf-entail/806846aa0c139a3c/out/regular_role_chains-806846aa0c139a3c)
+
+running 2 tests
+test top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling ... FAILED
+test stopping_during_regular_role_reads_never_publishes_a_completed_answer ... ok
+
+failures:
+
+---- top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling stdout ----
+thread 'top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling' panicked at crates/entail/tests/regular_role_chains.rs:97:5:
+assertion `left == right` failed: [Boundary { construct: BuiltinRole }]
+  left: DecidedWithinBoundaries
+ right: Decided
+
+
+failures:
+    top_outside_the_rbox_retains_universal_semantics_and_source_refusal_spelling
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p purrdf-entail --test regular_role_chains`

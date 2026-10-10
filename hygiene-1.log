@@ -1,0 +1,256 @@
+cargo metadata --no-deps --format-version 1 >/dev/null
+bash scripts/check-generated.sh --write
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.46
+   Compiling purrdf-jsonschema v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/jsonschema)
+   Compiling syn v2.0.118
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 6.20s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_loss_matrix rdf`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.12s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_loss_matrix transcode`
+   Compiling purrdf-entail v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/entail)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 20.77s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_rule_inventory`
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf-core)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.42s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_unicode_blocks`
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/testkit)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 11.03s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_unicode_tables normalization`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.64s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_unicode_tables case-context`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.11s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_unicode_tables text`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.10s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_unicode_tables idna`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_unicode_tables ecma-properties`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_unicode_tables ecma-ranges`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_unicode_tables xpath`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_unicode_tables xpath-compatibility`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_unicode_tables xpath-dated-names`
+    Finished `dev` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_unicode_tables xpath-dated-blocks`
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/lex)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.68s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_html_entities`
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/text)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 11.68s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/gen_lexicons --check`
+cjdict: 315964 -> 315956 entries, 8 collision groups, 4833368 bytes, 64998fa3ecf9f4ed8fa230a7a4e632890bdd7e6dd1620d922c68c5aeee4c715f
+thaidict: 26383 -> 26383 entries, 0 collision groups, 620428 bytes, 193fbd2c750ff0404c2aa0c23ca18023f09e70e8fd35521912182b4457674ec0
+laodict: 30550 -> 30505 entries, 45 collision groups, 824965 bytes, 6ac62b45dfe409604fd2518ea7c703061ae8f2d947a5fae228417c80fecc999f
+khmerdict: 81028 -> 81025 entries, 3 collision groups, 2430900 bytes, 90710c9a661c3b43c13a6ecdc7c56661b2864ba04ae9097ea49ed09c43512e4b
+burmesedict: 41120 -> 41120 entries, 0 collision groups, 1362430 bytes, f0fdb5352e8ea4fc11d41140258a6e269baf330510692f07e244a819f77f368a
+OK: 154 documented claim(s) agree with their generated source (stale-name ban swept 2379 file(s); entailment-overclaim ban swept 36 of 250 prose unit(s) — Markdown documents and registry descriptions — sentence by sentence, and matched every marker-bearing claim across the 2390 unit(s) outside that set).
+   Compiling purrdf-rdf v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 4.02s
+     Running `/opt/.cargo/slots/1e00e87a12d7031b/0/target/debug/examples/viz_samples /home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/target/gate-scratch/check-generated.wfJvvK/visualization --svg-only`
+wrote RDF 1.2 visualization artifacts to /home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/target/gate-scratch/check-generated.wfJvvK/visualization
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/452-owl-propertychainaxiom-is-a-property/crates/rdf-core)
+    Finished `test` profile [optimized] target(s) in 59.54s
+     Running unittests src/lib.rs (/opt/.cargo/slots/1e00e87a12d7031b/0/build/debug/build/purrdf-core/7f5c7ffc4f90d92b/out/purrdf_core-7f5c7ffc4f90d92b)
+
+running 1 test
+test sssom::tests::corpus_accessibility_parses_and_validates_clean ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1242 filtered out; finished in 0.00s
+
+make license-bundles
+python3 scripts/fetch-locked-deps.py
+python3 scripts/package-licenses.py --write
+license bundles generated: 36 profiles
+cargo run -q --locked -p helper-census -- --self-test
+PASS: the walk reads every fixture file
+PASS: a renamed, re-spelt copy of a body is one isomorphic group with its original
+PASS: a body of the same size with different control flow is not grouped
+PASS: test-only code is never walked, and a tests/ file is walked as a test crate of its own
+PASS: the home resolves to its package
+PASS: a decimal spelling of a forbidden hex constant is a copy outside the home
+PASS: a hex-digit table is a forbidden fingerprint and a near-miss table is not
+PASS: a forbidden constant in a tests/ file is a copy too
+PASS: --count counts all three copies
+PASS: --check reports the unsanctioned group and all three copies
+PASS: an isomorphic variant row sanctions its group
+PASS: a forbidden variant row removes its copy from the count
+PASS: a distinct row naming exactly its group's members sanctions it
+PASS: a distinct row of the other kind does not sanction the group, and is STALE
+PASS: a group that gains a member its distinct row does not name fails, and the row is STALE
+PASS: a distinct row whose members are no group is STALE, and the group still fails
+PASS: a distinct row naming a member that no longer exists is STALE
+PASS: a distinct row whose anchor carries no documentation fails
+PASS: a distinct row whose anchor does not resolve fails
+PASS: the near-miss fixture walks cleanly
+PASS: two breadth-first searches that differ only in `&next`/`parent[&cursor]` against `next.as_str()`/`parent[cursor]` are one group
+PASS: a helper copied between two tests/ files is one group
+PASS: a copy below the old thirty-token floor is one group
+PASS: a support module every test target declares is one source, not a group
+PASS: a small body of the same shape with a different constant is another table
+PASS: two accessors of the same shape over different fields are not grouped
+PASS: a const generic argument is kept: `::<true, _>` and `::<false, _>` are not grouped
+PASS: a function whose body declares a nested struct and impl is one group with its copy once the nested type is renamed
+PASS: --check fails on exactly the four seeded near-miss groups
+PASS: feature cfg
+PASS: feature cfg valid neighbor
+PASS: nested feature cfg_attr
+PASS: cfg_attr valid neighbor
+PASS: raw feature macro
+PASS: macro valid neighbor
+PASS: braced feature macro
+PASS: braced macro valid neighbor
+PASS: bracketed feature macro
+PASS: bracketed macro valid neighbor
+PASS: cfg_select feature condition
+PASS: cfg_select payload is not a feature condition
+PASS: cfg_select macro transcriber feature condition
+PASS: cfg_select macro transcriber valid neighbor
+PASS: feature in macro body
+PASS: feature prose is data
+PASS: test cfg
+PASS: test cfg valid neighbor
+PASS: nested inner test cfg_attr
+PASS: cfg_attr test valid neighbor
+PASS: raw test cfg macro
+PASS: test macro valid neighbor
+PASS: braced test macro
+PASS: braced test macro valid neighbor
+PASS: bracketed test macro
+PASS: bracketed test macro valid neighbor
+PASS: cfg_select nested test condition
+PASS: cfg_select payload is not a test condition
+PASS: cfg_select bracketed test condition
+PASS: cfg_select parenthesized valid neighbor
+PASS: bare test attribute
+PASS: test attribute valid neighbor
+PASS: cfg_attr emits test
+PASS: named test value is not predicate
+PASS: test in macro body
+PASS: test prose is data
+PASS: exact empty capi marker
+PASS: missing capi marker
+PASS: expanded capi marker
+PASS: extra capi feature
+PASS: ordinary Cargo feature
+PASS: optional dependency implicit feature
+PASS: missing capi package
+PASS: invalid metadata is refused
+PASS: unbalanced Rust tokens are refused
+OK: helper-census self-test
+python3 scripts/check-shared-helpers.py --self-test
+PASS: a ledger that holds passes
+PASS: a home that does not resolve fails
+PASS: an undocumented anchor fails
+PASS: a variant defined outside its file fails
+PASS: a site measuring another crate fails
+PASS: a site measuring the home crate passes
+PASS: an unbanned replaces_external fails
+PASS: a missing vectors file fails
+PASS: an unknown bench id fails
+PASS: a forbidden variant that matches nothing is STALE
+PASS: a forbidden match outside the home of an enforced job fails
+PASS: the same match in an unenforced job is reported only by --census
+PASS: an unenforced job with no copies left is STALE
+PASS: a body fingerprint that matches nothing is STALE
+PASS: an isomorphic variant in a group passes
+PASS: an isomorphic variant in no group is STALE
+PASS: an IRI-gate variant the gate still matches passes
+PASS: an IRI-gate variant the gate no longer matches is STALE
+PASS: an unknown detector fails
+PASS: a #[path] include of another crate's file is a finding
+PASS: a #[path] include inside its own crate, in a comment or in a string passes
+PASS: a #[path] include that climbs above the repository is a finding
+PASS: a delegated rule's hit fails the enforced job naming it
+PASS: the same job with no delegated hit passes
+PASS: a delegated hit in an unenforced job is reported only by --census
+PASS: a declared shared-domain exception passes
+PASS: an undeclared shared domain fails the job
+PASS: a declared shared-domain exception the gate no longer matches is STALE
+PASS: a declared undomained digest the gate still matches passes
+PASS: a declared undomained digest that now opens under a Domain is STALE
+PASS: every rule check-hash-domains.py reports is a delegated rule id
+PASS: a declared exception whose anchor carries no documentation fails
+PASS: a [[distinct]] row naming exactly its group's members sanctions it
+PASS: a group that gains a member its [[distinct]] row does not name fails, and the row is STALE
+PASS: a [[distinct]] row that equals no current group is STALE, and the group still fails
+PASS: a [[distinct]] row naming a member that no longer exists is STALE
+PASS: a [[distinct]] row whose anchor carries no documentation fails
+PASS: every seeded std-default-hasher spelling is reported
+PASS: a named hasher, a hasher alias, an annotated let and a foreign map are not reported
+PASS: each hit is a copy of the enforced job
+PASS: every seeded vocabulary literal (a retyped term, a namespace, a format string, a raw string) is reported
+PASS: a bracketed term, a sibling namespace, an embedded document and test-only code are not vocabulary hits
+PASS: a token the home spells is reported outside it, and a longer word is not
+PASS: a vocabulary job whose modules declare no namespace constant is itself a copy
+PASS: each literal hit is a copy of its enforced job
+PASS: every seeded two-digit hex format inside a loop or closure is reported
+PASS: a pair formatted once, a pair in an assertion message, an escaped brace and a wider spec are not
+PASS: every seeded base16 copy (loop, pair parse, table) is reported
+PASS: a u32 code-point parse and a near-miss table are not reported
+PASS: the home's own digit table is the home's, not a copy
+PASS: each base16 hit is a copy of the enforced job
+PASS: every seeded grammar-ws spelling in shipping code is reported
+PASS: the grammar-ws neighbours (the shared spelling, test code, the home) are not reported
+PASS: each grammar-ws hit is a copy of the enforced job
+PASS: every seeded json-pointer spelling in shipping code is reported
+PASS: the json-pointer neighbours (the shared spelling, test code, the home) are not reported
+PASS: each json-pointer hit is a copy of the enforced job
+PASS: every seeded escape-decode spelling in shipping code is reported
+PASS: the escape-decode neighbours (the shared spelling, test code, the home) are not reported
+PASS: each escape-decode hit is a copy of the enforced job
+PASS: the pointer escape inside its home is the home's, not a copy
+PASS: every seeded reifier-rows spelling is reported
+PASS: the reifier-rows neighbours (the home's own walk or import, the shared entry point, other imports) are not reported
+PASS: each reifier-rows hit is a copy of the enforced job
+PASS: every seeded fixed-hasher-everywhere spelling is reported
+PASS: the fixed-hasher-everywhere neighbours (the home's own walk or import, the shared entry point, other imports) are not reported
+PASS: each fixed-hasher-everywhere hit is a copy of the enforced job
+PASS: every seeded rdf-collection spelling is reported
+PASS: the rdf-collection neighbours (the home's own walk or import, the shared entry point, other imports) are not reported
+PASS: each rdf-collection hit is a copy of the enforced job
+PASS: every seeded wasm-host-clock spelling is reported
+PASS: the wasm-host-clock neighbours (the home's own walk or import, the shared entry point, other imports) are not reported
+PASS: each wasm-host-clock hit is a copy of the enforced job
+PASS: every seeded wasm-host-reflect-get spelling is reported
+PASS: the wasm-host-reflect-get neighbours (the home's own walk or import, the shared entry point, other imports) are not reported
+PASS: each wasm-host-reflect-get hit is a copy of the enforced job
+PASS: every seeded framing, slice-indexed integer, alignment mask and hand ceiling division is reported
+PASS: a count before a loop, a varint, a hasher's integer, a first_chunk read, a flag mask, std div_ceil and test code are not
+PASS: the framing inside the home package is the home's
+PASS: a forbidden variant row sanctions its rule hit
+PASS: every seeded normalization copy and second Unicode-version authority is reported
+PASS: a longer name, a plural and a constant are not; a copy in a tests/ file is
+PASS: the pinned Unicode version is the sanctioned variant, not a copy
+PASS: the home's own entry points are the home's
+PASS: each copy counts against the enforced job
+PASS: every hand-written first-mismatch word loop, in place or through bound loads, is reported
+PASS: a word mix with no zero count, a one-load byte scan, a CRC step and test code are not
+PASS: the word loop inside the home package is the home's
+PASS: each hand-written loop is a copy of the enforced job
+PASS: every seeded term-conversion copy, in shipping code and in a tests/ file, is reported
+PASS: the term-conversion neighbours (shims, longer names, #[cfg(test)] items) are not reported
+PASS: each term-conversion hit is a copy of the enforced job
+PASS: the term-conversion names inside the home crate are the home's
+PASS: every seeded term-constructor copy, in shipping code and in a tests/ file, is reported
+PASS: the term-constructor neighbours (shims, longer names, #[cfg(test)] items) are not reported
+PASS: each term-constructor hit is a copy of the enforced job
+PASS: the term-constructor names inside the home crate are the home's
+PASS: the datalog pair, a test helper copied between tests/ files and a sub-30-token copy are each one group
+PASS: each seeded near-miss group fails the gate
+PASS: the same small shape over another constant, and accessors of different fields, are not grouped
+OK: check-shared-helpers self-test
+python3 scripts/check-shared-helpers.py
+FAIL: isomorphic shim group shim:4373974dbf825441 is sanctioned by no variant or [[distinct]] row: purrdf_core::graph::GraphError::from, purrdf_entail::owl_dl::proof::FiniteRoleRefusal::from, purrdf_entail::owl_dl::roles::RoleHierarchyError::from
+FAIL: isomorphic shim group shim:5b449ffa375623c4 is sanctioned by no variant or [[distinct]] row: purrdf_core::test_crate::paged_stack::iri, purrdf_entail::test_crate::regular_role_chains::iri
+make: *** [Makefile:491: helpers-hygiene] Error 1
