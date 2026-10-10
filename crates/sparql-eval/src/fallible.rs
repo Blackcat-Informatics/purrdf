@@ -121,10 +121,11 @@ impl std::error::Error for QueryControlFailure {}
 ///
 /// # Why this type carries no `PartialEq`/`Eq`
 ///
-/// [`Self::BudgetExhausted`] carries a materialized [`SparqlResult`], which is
-/// deliberately not comparable — it holds an `Arc<RdfDataset>`, whose equality is a
-/// dataset isomorphism question rather than a derive. Comparing two of these values was
-/// never the right test anyway: a test asserts the *discriminant* and the evidence, both
+/// [`Self::BudgetExhausted`] carries a materialized [`RetainedSparqlResult`],
+/// which is deliberately not comparable: its graph variant retains a dataset owner,
+/// whose equality is a dataset isomorphism question rather than a derive. Comparing
+/// two of these values was never the right test anyway: a test asserts the
+/// *discriminant* and the evidence, both
 /// of which are still comparable on their own.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
