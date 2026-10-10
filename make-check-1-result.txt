@@ -1,0 +1,8 @@
+Command: /opt/purrdf-text-ranking-qualification/run make check
+Working directory: /home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max
+Authoritative unified session: 69458
+Terminal exit code: 0
+Full-gate ledger: 1 invocation of the maximum 3; this invocation passed.
+Final output: Finished `release` profile [optimized] target(s) in 13m 17s
+Complete command output: make-check-1.log
+Source remained frozen throughout the invocation. No prefix/suffix restart occurred.

@@ -1,0 +1,6 @@
+OK: non-Rust ratchet: 0 changed non-Rust path(s) in the staged index against 3ac169b96bb3 (merge-base with origin/main); nothing legacy grew and every new file says why it is not Rust
+[paudley/482-text-rank-inputs-past-query-terms-max d577e6a0b] fix(text): derive exact BM25F capacity from inputs
+ 20 files changed, 1005 insertions(+), 423 deletions(-)
+ create mode 100644 crates/text/tests/support/ranking_oracle.rs
+ create mode 100644 crates/text/tests/support/unrestricted_ranking_cases.rs
+ create mode 100644 crates/text/tests/unrestricted_ranking.rs

@@ -1,0 +1,65 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/hash)
+    Checking typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+    Checking regex-syntax v0.8.11
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/rdf-events)
+    Checking hybrid-array v0.4.15
+    Checking cpufeatures v0.3.0
+   Compiling libc v0.2.186
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/lex)
+    Checking regex-automata v0.4.14
+    Checking crypto-common v0.2.2
+    Checking block-buffer v0.12.1
+    Checking digest v0.11.3
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/xsd)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/iri)
+    Checking sha2 v0.11.0
+    Checking crossbeam-epoch v0.9.18
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/rdf-core)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/cdt)
+   Compiling rayon-core v1.13.0
+    Checking crossbeam-deque v0.8.6
+    Checking regex v1.12.4
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/deflate)
+    Checking hashbrown v0.17.1
+   Compiling getrandom v0.3.4
+    Checking either v1.16.0
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/sparql-algebra)
+    Checking rayon v1.12.0
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/stack)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/testkit)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/alloc-probe)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/text)
+error[E0277]: the trait bound `i128: std::convert::From<usize>` is not satisfied
+    --> crates/text/src/relation.rs:1466:32
+     |
+1466 |             TermValue::integer(hit.matched),
+     |             ------------------ ^^^^^^^^^^^ the trait `std::convert::From<usize>` is not implemented for `i128`
+     |             |
+     |             required by a bound introduced by this call
+     |
+     = help: `i128` implements trait `std::convert::From<T>`:
+               std::convert::From<bool>
+               std::convert::From<i16>
+               std::convert::From<i32>
+               std::convert::From<i64>
+               std::convert::From<i8>
+               std::convert::From<purrdf_lex::cbor::Integer>
+               std::convert::From<u16>
+               std::convert::From<u32>
+             and 2 others
+     = note: required for `usize` to implement `std::convert::Into<i128>`
+note: required by a bound in `purrdf_core::TermValue::integer`
+    --> crates/rdf-core/src/ir/term.rs:477:32
+     |
+ 477 |     pub fn integer(value: impl Into<i128>) -> Self {
+     |                                ^^^^^^^^^^ required by this bound in `TermValue::integer`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-text` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-text` (lib test) due to 1 previous error

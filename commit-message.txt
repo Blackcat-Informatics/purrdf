@@ -1,0 +1,12 @@
+fix(text): derive exact BM25F capacity from inputs
+
+Preserve the published operation-level truncation while promoting overflowing
+intermediates through the existing exact integer home. Remove chosen query,
+field, frequency, population, weight and score ceilings, and carry a certified
+query-derived score bound through native ranking and public scoring.
+
+Use dynamic field buffers and addressable query counts. Identify the complete
+admission and certificate law with the v2 profile; retain the original score
+lexicals and independent reference vectors.
+
+Closes #482.

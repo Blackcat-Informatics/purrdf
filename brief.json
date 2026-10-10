@@ -1,0 +1,40 @@
+{
+  "issue": 482,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "text: rank inputs past QUERY_TERMS_MAX, DOCUMENTS_MAX and FIELD_LENGTH_MAX exactly instead of refusing them",
+  "state": "OPEN",
+  "adrs": [
+    {
+      "id": "ADR-0030",
+      "path": null,
+      "title": "",
+      "files": [],
+      "history": []
+    }
+  ],
+  "linked_issues": {
+    "423": "Arbitrary-precision numeric tower for exact reasoned mathematics",
+    "477": "xsd: one binary arbitrary-precision integer for the whole workspace",
+    "298": "text: declare the BM25F score bound and width inside a named ranking-profile identity; decide FM-index ownership under the analyzer-identity contract",
+    "412": "text: BM25F per-field document populations for sparse-field corpora",
+    "422": "Bounded numerics that never fail silently: documented xsd:integer/xsd:decimal limits, typed overflow errors, exact comparison at any size",
+    "463": "geo: deterministic geodesic distance in metres for CRS84 and the native cell grid",
+    "443": "Optimize the exact numeric tower: small-value parity and subquadratic large-value arithmetic",
+    "408": "geo: deterministic geodesic distance in metres for CRS84 (geof:metric*)"
+  },
+  "related": [],
+  "defect_classes": {
+    "none": 19,
+    "semantic-identity-loss": 1,
+    "performance": 1
+  },
+  "coverage": [
+    "issue #482 + 0 comment(s) via github",
+    "link crawl: 8 issue(s) within 2 hop(s) of `#N` references",
+    "ADR-0030 cited by the issue but no file in docs/adr/",
+    "ADRs: 1 cited; 0 resolved on disk",
+    "forge search on ['text:', 'inputs', 'QUERY_TERMS_MAX,']: 0 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}

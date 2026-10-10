@@ -1,0 +1,59 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/hash)
+   Compiling wasm-bindgen-shared v0.2.125
+   Compiling typenum v1.20.1
+   Compiling unicode-ident v1.0.24
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.46
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/lex)
+   Compiling rustversion v1.0.22
+   Compiling hybrid-array v0.4.15
+   Compiling crossbeam-utils v0.8.21
+   Compiling block-buffer v0.12.1
+   Compiling crypto-common v0.2.2
+   Compiling regex-syntax v0.8.11
+   Compiling cfg-if v1.0.4
+   Compiling const-oid v0.10.2
+   Compiling syn v2.0.118
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/xsd)
+   Compiling digest v0.11.3
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/iri)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/rdf-events)
+   Compiling bumpalo v3.20.3
+   Compiling wasm-bindgen v0.2.125
+   Compiling crossbeam-epoch v0.9.18
+   Compiling wasm-bindgen-macro-support v0.2.125
+   Compiling sha2 v0.11.0
+   Compiling regex-automata v0.4.14
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/rdf-core)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/cdt)
+   Compiling rayon-core v1.13.0
+   Compiling wasm-bindgen-macro v0.2.125
+   Compiling crossbeam-deque v0.8.6
+   Compiling regex v1.12.4
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/deflate)
+   Compiling once_cell v1.21.4
+   Compiling hashbrown v0.17.1
+   Compiling either v1.16.0
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/sparql-algebra)
+   Compiling rayon v1.12.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/stack)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/alloc-probe)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/text)
+    Finished `test` profile [optimized] target(s) in 1m 23s
+     Running tests/wasm_determinism.rs (/opt/purrdf-text-ranking-qualification/build/wasm32-unknown-unknown/debug/build/purrdf-text/1ab7cd5fd68cb77a/out/wasm_determinism-1ab7cd5fd68cb77a.wasm)
+
+running 8 tests
+test the_independent_fielded_reference_is_reproduced_on_this_target ... ok
+test the_integer_logarithm_agrees_with_its_hand_values_on_this_target ... ok
+test the_pinned_ranking_is_reproduced_on_this_target ... ok
+test the_sentence_boundaries_are_reproduced_on_this_target ... ok
+test declared_large_corpora_are_exact ... ok
+test five_thousand_term_index ... ok
+test promoted_field_arithmetic_is_exact ... ok
+test thirty_two_index_fields_are_exact ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+

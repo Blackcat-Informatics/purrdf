@@ -1,0 +1,60 @@
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/482-text-rank-inputs-past-query-terms-max/crates/retrieval)
+error[E0277]: a value of type `std::vec::Vec<(u32, u32, u32, std::string::String)>` cannot be built from an iterator over elements of type `(u32, u32, usize, std::string::String)`
+    --> crates/text/tests/scoring.rs:942:10
+     |
+ 942 |         .collect();
+     |          ^^^^^^^ value of type `std::vec::Vec<(u32, u32, u32, std::string::String)>` cannot be built from `std::iter::Iterator<Item=(u32, u32, usize, std::string::String)>`
+     |
+help: the trait `FromIterator<(_, _, usize, String)>` is not implemented for `std::vec::Vec<(u32, u32, u32, std::string::String)>`
+      but trait `FromIterator<(_, _, u32, String)>` is implemented for it
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:4036:1
+     |
+4036 | impl<T> FromIterator<T> for Vec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `u32`, found `usize`
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+error[E0277]: a value of type `std::vec::Vec<(u32, u32, u32, std::string::String)>` cannot be built from an iterator over elements of type `(u32, u32, usize, std::string::String)`
+    --> crates/text/tests/scoring.rs:957:14
+     |
+ 957 |             .collect();
+     |              ^^^^^^^ value of type `std::vec::Vec<(u32, u32, u32, std::string::String)>` cannot be built from `std::iter::Iterator<Item=(u32, u32, usize, std::string::String)>`
+     |
+help: the trait `FromIterator<(_, _, usize, String)>` is not implemented for `std::vec::Vec<(u32, u32, u32, std::string::String)>`
+      but trait `FromIterator<(_, _, u32, String)>` is implemented for it
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/alloc/src/vec/mod.rs:4036:1
+     |
+4036 | impl<T> FromIterator<T> for Vec<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = help: for that trait implementation, expected `u32`, found `usize`
+note: required by a bound in `std::iter::Iterator::collect`
+    --> /kache/rustup/toolchains/nightly-2026-09-14-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:2073:19
+     |
+2073 |     fn collect<B: FromIterator<Self::Item>>(self) -> B
+     |                   ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Iterator::collect`
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `purrdf-text` (test "scoring") due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: `format!(..)` appended to existing `String`
+  --> crates/text/tests/unrestricted_ranking.rs:89:9
+   |
+89 |         lexical.push_str(&format!("chunk{at:02}"));
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: you may need to import the `std::fmt::Write` trait
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#format_push_string
+   = note: `-D clippy::format-push-string` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::format_push_string)]`
+help: consider using `write!` to avoid the extra allocation
+   |
+89 -         lexical.push_str(&format!("chunk{at:02}"));
+89 +         let _ = write!(lexical, "chunk{at:02}");
+   |
+
+error: could not compile `purrdf-text` (test "unrestricted_ranking") due to 1 previous error
