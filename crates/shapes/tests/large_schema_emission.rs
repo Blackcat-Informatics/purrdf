@@ -347,27 +347,56 @@ fn all_three_emitters_keep_the_shared_depth_refusal_and_accept_its_neighbor() {
         losses: purrdf_rdf::loss::LossLedger::default(),
     };
     let deep = compiled(purrdf_shapes::limits::MAX_SCHEMA_DEPTH);
-    let shallow = compiled(8);
+    // Root, `$defs`, class, properties and the leaf schema open five JSON
+    // containers; each `allOf` adds an object and an array. Exercise the last
+    // accepted member of this fixture family and the very next member.
+    let accepted_depth = (purrdf_shapes::limits::MAX_SCHEMA_DEPTH - 5) / 2;
+    let accepted = compiled(accepted_depth);
+    let refused = compiled(accepted_depth + 1);
     let typescript = TypeScriptConfig::new("depth-types", "x", "y").expect("config");
     let graphql = GraphqlConfig::new("Depth", "x", "y", "RdfValue").expect("config");
     let pydantic = PydanticConfig::new("depth_models", "x", "y").expect("config");
-    for error in [
-        emit_typescript(&deep, &typescript)
-            .expect_err("TypeScript preserves depth refusal")
-            .to_string(),
-        emit_graphql(&deep, &graphql)
-            .expect_err("GraphQL preserves depth refusal")
-            .to_string(),
-        emit_pydantic(&deep, &pydantic)
-            .expect_err("Pydantic preserves depth refusal")
-            .to_string(),
-    ] {
-        assert!(
-            error.contains("depth") || error.contains("nesting"),
-            "{error}"
-        );
+    for schema in [&refused, &deep] {
+        for error in [
+            emit_typescript(schema, &typescript)
+                .expect_err("TypeScript preserves depth refusal")
+                .to_string(),
+            emit_graphql(schema, &graphql)
+                .expect_err("GraphQL preserves depth refusal")
+                .to_string(),
+            emit_pydantic(schema, &pydantic)
+                .expect_err("Pydantic preserves depth refusal")
+                .to_string(),
+        ] {
+            assert!(
+                error.contains(&format!(
+                    "JSON nesting limit {}",
+                    purrdf_shapes::limits::MAX_SCHEMA_DEPTH
+                )),
+                "{error}"
+            );
+        }
     }
-    emit_typescript(&shallow, &typescript).expect("shallow TypeScript neighbor");
-    emit_graphql(&shallow, &graphql).expect("shallow GraphQL neighbor");
-    emit_pydantic(&shallow, &pydantic).expect("shallow Pydantic neighbor");
+    assert_eq!(
+        emit_typescript(&accepted, &typescript)
+            .expect("deepest accepted TypeScript neighbor")
+            .type_names
+            .len(),
+        2
+    );
+    assert_eq!(
+        emit_graphql(&accepted, &graphql)
+            .expect("deepest accepted GraphQL neighbor")
+            .names
+            .definitions
+            .len(),
+        2
+    );
+    assert_eq!(
+        emit_pydantic(&accepted, &pydantic)
+            .expect("deepest accepted Pydantic neighbor")
+            .model_paths
+            .len(),
+        2
+    );
 }
