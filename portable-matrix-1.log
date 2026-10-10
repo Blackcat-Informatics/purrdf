@@ -1,0 +1,31 @@
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/hash)
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/rdf-core)
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/stack)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/alloc-probe)
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/deflate)
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/testkit)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/xsd)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/iri)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-eval)
+   Compiling purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/text)
+   Compiling purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/retrieval)
+    Finished `test` profile [optimized] target(s) in 1m 21s
+     Running tests/wasm_determinism.rs (/opt/purrdf-foundation-qualification/build/wasm32-unknown-unknown/debug/build/purrdf-retrieval/bb1c5543ab423d63/out/wasm_determinism-bb1c5543ab423d63.wasm)
+
+running 8 tests
+test a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets ... ok
+test caller_candidate_depths_reach_the_same_native_query_bounds_on_both_targets ... ok
+test a_collided_pair_fuses_to_the_same_order_on_both_targets ... ok
+test a_declared_candidate_domain_bounds_the_same_read_on_both_targets ... ok
+test a_fused_answer_is_the_same_rows_in_the_same_order_on_both_targets ... ok
+test a_fusion_profile_names_the_same_identity_on_both_targets ... ok
+test a_unit_weight_contribution_is_the_same_exact_decimal_on_both_targets ... ok
+test an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

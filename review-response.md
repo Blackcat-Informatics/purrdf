@@ -1,0 +1,5 @@
+Both concrete review findings are addressed in `1bfae60de`: the crate paragraph has one documentation marker, and the planner carries its explicit cardinality-only flag instead of inferring it from float bits. Affected all-target Clippy and all 49 BGP planner tests pass. Normal commit hooks and push pass.
+
+The aggregate documentation percentage does not identify a missing public contract. The candidate and host-cost APIs document their production guarantees; adding comments to private helpers or test fixtures solely to meet the aggregate percentage would not clarify those guarantees. That blanket suggestion is declined. The independent review covers the exact three-file follow-through; the bot's quota-limited review is not being represented as a final-delta source review.
+
+The assembly manifest now selects the actual production DP function, retaining all seven configurations and instruction constraints. Fresh hosted checks and integration acceptance remain pending; neither issue is complete until merged.

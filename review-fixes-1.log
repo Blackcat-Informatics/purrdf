@@ -1,0 +1,120 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/hash)
+    Checking typenum v1.20.1
+   Compiling crossbeam-utils v0.8.21
+    Checking const-oid v0.10.2
+    Checking cfg-if v1.0.4
+    Checking regex-syntax v0.8.11
+    Checking hybrid-array v0.4.15
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/rdf-events)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/lex)
+   Compiling libc v0.2.186
+    Checking cpufeatures v0.3.0
+    Checking block-buffer v0.12.1
+    Checking crypto-common v0.2.2
+    Checking regex-automata v0.4.14
+    Checking digest v0.11.3
+    Checking crossbeam-epoch v0.9.18
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/xsd)
+    Checking sha2 v0.11.0
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/rdf-core)
+   Compiling rayon-core v1.13.0
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/cdt)
+    Checking regex v1.12.4
+    Checking crossbeam-deque v0.8.6
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/deflate)
+   Compiling getrandom v0.3.4
+    Checking hashbrown v0.17.1
+    Checking either v1.16.0
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/stack)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-algebra)
+    Checking rayon v1.12.0
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/testkit)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/alloc-probe)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/retrieval)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 23.91s
+   Compiling purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/hash)
+   Compiling crossbeam-utils v0.8.21
+   Compiling const-oid v0.10.2
+   Compiling purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/rdf-events)
+   Compiling libc v0.2.186
+   Compiling digest v0.11.3
+   Compiling sha2 v0.11.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/rdf-core)
+   Compiling rayon-core v1.13.0
+   Compiling purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/lex)
+   Compiling purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/deflate)
+   Compiling crossbeam-deque v0.8.6
+   Compiling getrandom v0.3.4
+   Compiling hashbrown v0.17.1
+   Compiling either v1.16.0
+   Compiling purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/stack)
+   Compiling rayon v1.12.0
+   Compiling purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/testkit)
+   Compiling purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/alloc-probe)
+   Compiling purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/iri)
+   Compiling purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/xsd)
+   Compiling purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/cdt)
+   Compiling purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-algebra)
+   Compiling purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-results)
+   Compiling purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-eval)
+    Finished `test` profile [optimized] target(s) in 2m 24s
+     Running unittests src/lib.rs (/opt/.cargo/slots/a5f8cda66534f268/0/build/debug/build/purrdf-sparql-eval/5296320bd57509e9/out/purrdf_sparql_eval-5296320bd57509e9)
+
+running 49 tests
+test bgp::positive::tests::canonical_hidden_match_keys_keep_positive_children_connected ... ok
+test bgp::positive::tests::seeded_union_prices_the_full_combined_header ... ok
+test bgp::positive::tests::retained_unit_orders_preserve_native_survey_provenance ... ok
+test bgp::positive::tests::independent_factors_are_priced_once_before_the_product ... ok
+test bgp::term_walk_tests::explain_writes_literals_in_term_syntax_with_the_direction_token ... ok
+test bgp::tests::all_ground_bgp_orders_without_panicking ... ok
+test bgp::tests::absent_constant_yields_empty ... ok
+test bgp::term_walk_tests::binding_agrees_with_its_reference_on_generated_positions ... ok
+test bgp::tests::blank_node_acts_as_a_variable_and_is_projected_out ... ok
+test bgp::tests::annotation_pattern_bound_predicate ... ok
+test bgp::tests::annotation_pattern_bound_subject_indexes ... ok
+test bgp::term_walk_tests::position_walks_agree_with_their_references_on_generated_positions ... ok
+test bgp::tests::connectivity_keeps_connected_before_disconnected ... ok
+test bgp::tests::cardinality_default_preserves_merge_graph_statistic_boundaries ... ok
+test bgp::tests::cost_order_seeds_with_lowest_cardinality_pattern ... ok
+test bgp::tests::disconnected_bgp_yields_a_valid_permutation ... ok
+test bgp::tests::large_bgp_uses_greedy_and_returns_valid_permutation ... ok
+test bgp::tests::join_reifier_to_its_annotation ... ok
+test bgp::tests::host_statistic_snapshot_keeps_order_cache_deterministic_and_current ... ok
+test bgp::tests::dp_is_never_worse_than_greedy ... ok
+test bgp::tests::literal_object_constant_matches ... ok
+test bgp::tests::open_pattern_enumerates_assertions_reifies_edge_and_annotations ... ok
+test bgp::tests::measured_host_work_inverts_native_subset_and_greedy_orders ... ok
+test bgp::tests::order_is_deterministic ... ok
+test bgp::tests::reifies_pattern_on_plain_graph_is_empty ... ok
+test bgp::tests::reifies_pattern_inner_mismatch_is_empty ... ok
+test bgp::tests::reifies_pattern_with_partly_ground_inner ... ok
+test bgp::tests::reifies_pattern_binds_reifier_and_inner_variables ... ok
+test bgp::tests::reifies_pattern_repeated_inner_variable_enforced ... ok
+test bgp::tests::repeated_variable_requires_self_loop ... ok
+test bgp::tests::single_pattern_two_variables_enumerates_all_quads ... ok
+test bgp::tests::reordering_source_patterns_preserves_results ... ok
+test bgp::tests::single_pattern_one_variable ... ok
+test bgp::tests::ties_break_on_lowest_original_index ... ok
+test bgp::tests::star_spokes_follow_hub_ordered_by_cardinality ... ok
+test bgp::tests::work_ranking_does_not_become_cardinality_or_physical_admission ... ok
+test bgp::tests::trivial_bgps_plan_without_probing ... ok
+test bgp::tests::two_pattern_join_on_shared_variable ... ok
+test bgp::tests::actual_bgp_reads_host_cheaper_path_and_preserves_solution_bag ... ok
+test bgp::tests::cardinality_default_preserves_existing_plans_and_prefix_ties ... ok
+test bgp::term_walk_tests::compilation_agrees_with_its_reference_on_generated_patterns ... ok
+test bgp::term_walk_tests::slot_keys_and_rendering_agree_with_their_references_on_generated_patterns ... ok
+test bgp::term_walk_tests::disconnected_and_folded_path_products_keep_their_relation_domains ... ok
+test bgp::tests::the_cost_model_is_correctly_rounded_binary64_in_a_defined_order ... ok
+test bgp::survey_tests::the_survey_agrees_with_its_recursive_reference_on_generated_plans ... ok
+test bgp::tests::cost_order_materialises_fewer_rows_than_structural ... ok
+test bgp::positive::tests::eligibility_is_retained_across_a_deep_plain_join_chain_and_a_barrier ... ok
+test bgp::term_walk_tests::a_hundred_thousand_level_position_is_walked_on_a_128_kib_stack ... ok
+test bgp::survey_tests::a_hundred_thousand_levels_are_surveyed_on_a_128_kib_thread ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 1380 filtered out; finished in 0.67s
+

@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Summary\n\nA `union` stage in `purrdf-retrieval`, beside `fuse`. It takes each stratum's top `depth_s` from `execute` and deduplicates by subject. Every candidate keeps its rank in every stratum that named it, together with each producer's evidence. It orders nothing and adds no score. It is the rung for a caller that orders candidates itself, with a reranker or anything else that knows more than the store.\n\n```text\nplan(request, registry, statistics) -> Plan\ncompile(Plan, environment)          -> per-stratum SPARQL units\nexecute(units, registry, dataset)   -> per-stratum ranked streams\nfuse(streams, profile, k)           -> the top k of one ordered answer\nunion(streams, depths)              -> one candidate set, ranks per stratum kept   (new)\n```\n\n## Why: measured\n\nKatamari ADR-0033 33.16 was amended on 2026-10-09 (Patrick approved) to add this stage. The evidence is `lillith_memetics`' recall measurement (`docs/design/recall-measurement.md`): 111 questions, about 6,600 blind-judged pairs, held out over five 2-fold splits.\n\n- **Union recall:** lexical \u222a vector at depth 50 held 0.90 of the judged relevant records, against 0.75 for lexical alone. On paraphrase questions (relevant records sharing no content word with the question) it held 0.71 against 0.33.\n- **No fusion rule ordered that union better than lexical alone** (nDCG@10 0.512):\n\n  | Rule | nDCG@10 |\n  |---|---|\n  | equal-weight RRF | 0.32-0.35 |\n  | fitted weights | 0.508-0.513 (by turning vectors almost off) |\n  | calibrated log-odds | 0.39-0.41 |\n  | per-term gating | 0.503 |\n\nSo fusion's contribution is candidate recall, not order, and the shape that keeps it is a two-stage one: union, then something that orders.\n\n## What it needs\n\n- **Per-stratum depth that is not derived from `k`.** Today `depth_from` gives `min(declared, statistics-narrowed, k)` (`planner.rs:1106` at `3b6ec4d9f`). For `union`, each `depth_s` is a work bound the caller supplies, measured from that stratum's recall curve, and reported in the answer. The measurement shows the depths are asymmetric: lexical keeps gaining past 20, while vector's contribution is nearly all in its top 20.\n- **Evidence preserved per producer**, as `fuse` does (Katamari ADR-0033 33.2): \"two answered and one could not\" must stay distinguishable.\n- **A top-k shape,** like `fuse`: a candidate's ranks are complete only when every stratum has emitted to its depth.\n- **A place to stop, not a flag on `fuse`.** It is a separate entry point with the same `execute` under it, and `search`'s composition identities stay testable.\n\n## Acceptance criteria\n\n- `union` over the same streams equals the set of subjects in each stratum's top `depth_s`, with each candidate's per-stratum ranks exactly as `execute` produced them.\n- Output is byte-identical across runs and targets.\n- The answer reports each stratum's depth and evidence.\n- `fuse` and `search` are unchanged.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-10-09T08:16:10Z",
+  "labels": [],
+  "milestone": null,
+  "number": 510,
+  "state": "OPEN",
+  "title": "retrieval: a union stage beside fuse -- per-stratum candidates with ranks kept, no score, measured depths",
+  "updatedAt": "2026-10-09T08:16:10Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/510"
+}

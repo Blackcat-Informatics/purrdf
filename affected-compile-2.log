@@ -1,0 +1,49 @@
+    Checking purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/rdf-core)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-eval)
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/text)
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/retrieval)
+error[E0599]: no variant, associated function, or constant named `Lexical` found for enum `purrdf_sparql_eval::TermKind` in the current scope
+   --> crates/retrieval/tests/wasm_determinism.rs:780:53
+    |
+780 |                 vec![TermPattern::of_kind(TermKind::Lexical)],
+    |                                                     ^^^^^^^ variant, associated function, or constant not found in `purrdf_sparql_eval::TermKind`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `purrdf-retrieval` (test "wasm_determinism") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error[E0599]: no variant, associated function, or constant named `Lexical` found for enum `purrdf_sparql_eval::TermKind` in the current scope
+  --> crates/retrieval/tests/candidate_union.rs:70:53
+   |
+70 |                 vec![TermPattern::of_kind(TermKind::Lexical)],
+   |                                                     ^^^^^^^ variant, associated function, or constant not found in `purrdf_sparql_eval::TermKind`
+
+error[E0599]: no variant, associated function, or constant named `Lexical` found for enum `purrdf_sparql_eval::TermKind` in the current scope
+   --> crates/retrieval/tests/candidate_union.rs:238:45
+    |
+238 |         vec![TermPattern::of_kind(TermKind::Lexical)],
+    |                                             ^^^^^^^ variant, associated function, or constant not found in `purrdf_sparql_eval::TermKind`
+
+error[E0599]: no variant, associated function, or constant named `Lexical` found for enum `purrdf_sparql_eval::TermKind` in the current scope
+   --> crates/retrieval/tests/candidate_union.rs:568:49
+    |
+568 |             vec![TermPattern::of_kind(TermKind::Lexical)],
+    |                                                 ^^^^^^^ variant, associated function, or constant not found in `purrdf_sparql_eval::TermKind`
+
+error: could not compile `purrdf-retrieval` (test "candidate_union") due to 3 previous errors
+error[E0308]: mismatched types
+    --> crates/sparql-eval/src/bgp.rs:3853:21
+     |
+3853 |                 let TermRef::Iri(iri) = graph.ds.resolve(id) else {
+     |                     ^^^^^^^^^^^^^^^^^   -------------------- this expression has type `std::result::Result<purrdf_core::TermRef<'_>, !>`
+     |                     |
+     |                     expected `Result<TermRef<'_>, !>`, found `TermRef<'_, _>`
+     |
+     = note: expected enum `std::result::Result<TermRef<'_, purrdf_core::TermId>, !>`
+                found enum `TermRef<'_, _>`
+help: try wrapping the pattern in `Ok`
+     |
+3853 |                 let Ok(TermRef::Iri(iri)) = graph.ds.resolve(id) else {
+     |                     +++                 +
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 1 previous error

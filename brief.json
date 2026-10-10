@@ -1,0 +1,102 @@
+{
+  "issue": 510,
+  "repo": "Blackcat-Informatics/purrdf",
+  "forge": "github",
+  "title": "retrieval: a union stage beside fuse -- per-stratum candidates with ranks kept, no score, measured depths",
+  "state": "OPEN",
+  "adrs": [
+    {
+      "id": "ADR-0033",
+      "path": null,
+      "title": "",
+      "files": [],
+      "history": []
+    }
+  ],
+  "linked_issues": {},
+  "related": [
+    {
+      "number": 407,
+      "title": "text: analyzer stages for stemming, accent folding, dictionary segmentation, void stripping, token bounds, phonetic codes and substring matching",
+      "state": "CLOSED"
+    },
+    {
+      "number": 346,
+      "title": "Bounded read does not reach a multi-modal request: two configurations the narrowing cannot cover",
+      "state": "CLOSED"
+    },
+    {
+      "number": 319,
+      "title": "Design: a composition layer over the ranked property-function producers",
+      "state": "CLOSED"
+    },
+    {
+      "number": 340,
+      "title": "purrdf-retrieval: a fused answer cannot say which strata were served approximately",
+      "state": "CLOSED"
+    },
+    {
+      "number": 339,
+      "title": "Contract for an index-backed ranked producer, and three gaps found meeting it",
+      "state": "CLOSED"
+    },
+    {
+      "number": 366,
+      "title": "Centralize overlapping helpers: one home per job, gates against regrowth, and the defects the survey found",
+      "state": "CLOSED"
+    },
+    {
+      "number": 349,
+      "title": "A selectivity-only statistic narrows a retrieval plan but is not recorded on its snapshot",
+      "state": "CLOSED"
+    },
+    {
+      "number": 338,
+      "title": "purrdf-retrieval: a fused top-k drains every stream \u2014 the documented reading bound does not hold",
+      "state": "CLOSED"
+    },
+    {
+      "number": 358,
+      "title": "Expose async SERVICE resolution to JavaScript/Wasm hosts",
+      "state": "CLOSED"
+    },
+    {
+      "number": 348,
+      "title": "SHACL-AF sh:SPARQLFunction bodies cannot reach a registered relation",
+      "state": "CLOSED"
+    },
+    {
+      "number": 181,
+      "title": "SHACL 1.2 Rules SPARQLRule: blank nodes not serialized correctly",
+      "state": "CLOSED"
+    },
+    {
+      "number": 400,
+      "title": "Opt-in remembered empty named graphs for the mutable dataset and SPARQL Update",
+      "state": "CLOSED"
+    },
+    {
+      "number": 331,
+      "title": "Paged tier: graph-selective queries materialize every page",
+      "state": "CLOSED"
+    },
+    {
+      "number": 323,
+      "title": "perf(sparql-eval,shapes): audit SHACL validation allocation profile on the change path",
+      "state": "CLOSED"
+    }
+  ],
+  "defect_classes": {
+    "semantic-identity-loss": 1,
+    "none": 18,
+    "performance": 1
+  },
+  "coverage": [
+    "issue #510 + 0 comment(s) via github",
+    "link crawl: no `#N` references in the issue or its comments",
+    "ADR-0033 cited by the issue but no file in docs/adr/",
+    "ADRs: 1 cited; 0 resolved on disk",
+    "forge search on ['retrieval:', 'union', 'stage']: 14 other item(s)",
+    "GhpRsq-Defect-Class trailers: 3 distinct class(es) in the last 200 commits"
+  ]
+}

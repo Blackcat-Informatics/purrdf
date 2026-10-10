@@ -1,0 +1,1224 @@
+    Checking purrdf-hash v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/hash)
+    Checking purrdf-events v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/rdf-events)
+   Compiling purrdf-core v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/rdf-core)
+    Checking purrdf-stack v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/stack)
+    Checking purrdf-alloc-probe v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/alloc-probe)
+    Checking purrdf-lex v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/lex)
+    Checking purrdf-deflate v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/deflate)
+    Checking purrdf-testkit v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/testkit)
+    Checking purrdf-iri v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/iri)
+    Checking purrdf-xsd v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/xsd)
+    Checking purrdf-cdt v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/cdt)
+    Checking purrdf-sparql-algebra v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-algebra)
+    Checking purrdf-sparql-results v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-results)
+    Checking purrdf-sparql-eval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/sparql-eval)
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5368:22
+     |
+5368 |         predicates: [TermId; 3],
+     |                      ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5371:46
+     |
+5371 |         first_probe: std::sync::Mutex<Option<TermId>>,
+     |                                              ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `Skewed` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5375:28
+     |
+5375 |         fn over(graph: &'a Skewed, measured: bool) -> Self {
+     |                            ^^^^^^ not found in this scope
+     |
+note: struct `crate::bgp::tests::Skewed` exists but is inaccessible
+    --> crates/sparql-eval/src/bgp.rs:3213:5
+     |
+3213 |     struct Skewed {
+     |     ^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5390:46
+     |
+5390 |         fn take_first_probe(&self) -> Option<TermId> {
+     |                                              ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5399:19
+     |
+5399 |         type Id = TermId;
+     |                   ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `TermRef` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5402:15
+     |
+5402 |             = TermRef<'a, Self::Id>
+     |               ^^^^^^^ not found in this scope
+     |
+help: consider importing one of these enums
+     |
+4603 +     use crate::bgp::TermRef;
+     |
+4603 +     use purrdf_core::TermRef;
+     |
+
+error[E0425]: cannot find type `QuadIds` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5407:49
+     |
+5407 |         fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+     |                                                 ^^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::QuadIds;
+     |
+4603 +     use purrdf_core::QuadIds;
+     |
+
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5411:31
+     |
+5411 |         fn resolve(&self, id: TermId) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+     |                               ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `TermValue` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5415:44
+     |
+5415 |         fn term_id_by_value(&self, value: &TermValue) -> Result<Option<TermId>, Self::ReadError> {
+     |                                            ^^^^^^^^^ not found in this scope
+     |
+     = note: enum `crate::user_fn::tests::invocation_admission::TermValue` exists but is inaccessible
+help: consider importing this enum
+     |
+4603 +     use purrdf_core::TermValue;
+     |
+
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5415:72
+     |
+5415 |         fn term_id_by_value(&self, value: &TermValue) -> Result<Option<TermId>, Self::ReadError> {
+     |                                                                        ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5430:23
+     |
+5430 |             s: Option<TermId>,
+     |                       ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5431:23
+     |
+5431 |             p: Option<TermId>,
+     |                       ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5432:23
+     |
+5432 |             o: Option<TermId>,
+     |                       ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `QuadIds` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5434:35
+     |
+5434 |         ) -> impl Iterator<Item = QuadIds> + '_ {
+     |                                   ^^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::QuadIds;
+     |
+4603 +     use purrdf_core::QuadIds;
+     |
+
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5445:23
+     |
+5445 |             s: Option<TermId>,
+     |                       ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5446:23
+     |
+5446 |             p: Option<TermId>,
+     |                       ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `TermId` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5447:23
+     |
+5447 |             o: Option<TermId>,
+     |                       ^^^^^^ not found in this scope
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::TermId;
+     |
+4603 +     use purrdf_core::TermId;
+     |
+
+error[E0425]: cannot find type `Skewed` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5487:28
+     |
+5487 |     fn cost_spokes(graph: &Skewed, count: usize) -> Vec<CompiledPattern> {
+     |                            ^^^^^^ not found in this scope
+     |
+note: struct `crate::bgp::tests::Skewed` exists but is inaccessible
+    --> crates/sparql-eval/src/bgp.rs:3213:5
+     |
+3213 |     struct Skewed {
+     |     ^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find type `CompiledPattern` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5487:57
+     |
+5487 |     fn cost_spokes(graph: &Skewed, count: usize) -> Vec<CompiledPattern> {
+     |                                                         ^^^^^^^^^^^^^^^ not found in this scope
+     |
+note: similarly named struct `TriplePattern` defined here
+    --> crates/sparql-algebra/src/ast.rs:329:1
+     |
+ 329 | pub struct TriplePattern {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^
+help: a struct with a similar name exists
+     |
+5487 -     fn cost_spokes(graph: &Skewed, count: usize) -> Vec<CompiledPattern> {
+5487 +     fn cost_spokes(graph: &Skewed, count: usize) -> Vec<TriplePattern> {
+     |
+help: consider importing one of these structs
+     |
+4603 +     use crate::bgp::CompiledPattern;
+     |
+4603 +     use purrdf_core::xsd_regex::CompiledPattern;
+     |
+4603 +     use purrdf_core::xsd_regex::xpath::CompiledPattern;
+     |
+
+error[E0425]: cannot find function `cp` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5491:17
+     |
+5491 |                 cp(
+     |                 ^^ not found in this scope
+     |
+note: function `crate::bgp::tests::cp` exists but is inaccessible
+    --> crates/sparql-eval/src/bgp.rs:3174:5
+     |
+3174 |     fn cp(s: Pos, p: Pos, o: Pos) -> CompiledPattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0433]: cannot find type `Pos` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5492:21
+     |
+5492 |                     Pos::Slot(0),
+     |                     ^^^ use of undeclared type `Pos`
+     |
+help: consider importing this enum
+     |
+4603 +     use crate::bgp::Pos;
+     |
+
+error[E0433]: cannot find type `Pos` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5493:21
+     |
+5493 |                     Pos::Bound(predicates[index % 3]),
+     |                     ^^^ use of undeclared type `Pos`
+     |
+help: consider importing this enum
+     |
+4603 +     use crate::bgp::Pos;
+     |
+
+error[E0433]: cannot find type `Pos` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5494:21
+     |
+5494 |                     Pos::Slot(index + 1),
+     |                     ^^^ use of undeclared type `Pos`
+     |
+help: consider importing this enum
+     |
+4603 +     use crate::bgp::Pos;
+     |
+
+error[E0425]: cannot find function `skewed_graph` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5502:21
+     |
+5502 |         let graph = skewed_graph();
+     |                     ^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::bgp::tests::skewed_graph` exists but is inaccessible
+    --> crates/sparql-eval/src/bgp.rs:3221:5
+     |
+3221 |     fn skewed_graph() -> Skewed {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0433]: cannot find type `GraphScope` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5504:21
+     |
+5504 |         let scope = GraphScope::One(GraphMatch::Default);
+     |                     ^^^^^^^^^^ use of undeclared type `GraphScope`
+     |
+help: consider importing this enum
+     |
+4603 +     use crate::dataset_spec::GraphScope;
+     |
+
+error[E0425]: cannot find function `cost_based_order` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5506:20
+     |
+5506 |         assert_eq!(cost_based_order(&small, &*graph.ds, &scope), [2, 1, 0]);
+     |                    ^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::cost_based_order;
+     |
+
+error[E0425]: cannot find function `cost_based_order` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5507:20
+     |
+5507 |         assert_eq!(cost_based_order(&small, &host, &scope), [0, 1, 2]);
+     |                    ^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::cost_based_order;
+     |
+
+error[E0425]: cannot find value `COST_DP_MAX_PATTERNS` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5509:41
+     |
+5509 |         let large = cost_spokes(&graph, COST_DP_MAX_PATTERNS + 1);
+     |                                         ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this constant
+     |
+4603 +     use crate::bgp::COST_DP_MAX_PATTERNS;
+     |
+
+error[E0425]: cannot find function `cost_based_order` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5510:20
+     |
+5510 |         assert_eq!(cost_based_order(&large, &*graph.ds, &scope)[0], 2);
+     |                    ^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::cost_based_order;
+     |
+
+error[E0425]: cannot find function `cost_based_order` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5511:24
+     |
+5511 |         let selected = cost_based_order(&large, &host, &scope);
+     |                        ^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::cost_based_order;
+     |
+
+error[E0425]: cannot find function `cost_based_order` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5514:24
+     |
+5514 |             assert_eq!(cost_based_order(&large, &host, &scope), selected);
+     |                        ^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::cost_based_order;
+     |
+
+error[E0425]: cannot find function `skewed_graph` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5538:21
+     |
+5538 |         let graph = skewed_graph();
+     |                     ^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::bgp::tests::skewed_graph` exists but is inaccessible
+    --> crates/sparql-eval/src/bgp.rs:3221:5
+     |
+3221 |     fn skewed_graph() -> Skewed {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0433]: cannot find type `GraphScope` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5540:21
+     |
+5540 |         let scope = GraphScope::Merge(vec![graph.hub, graph.hot]);
+     |                     ^^^^^^^^^^ use of undeclared type `GraphScope`
+     |
+help: consider importing this enum
+     |
+4603 +     use crate::dataset_spec::GraphScope;
+     |
+
+error[E0425]: cannot find function `base_cardinality` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5554:36
+     |
+5554 |                     .map(|pattern| base_cardinality(&host, pattern, &scope) as f64)
+     |                                    ^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::base_cardinality;
+     |
+
+error[E0425]: cannot find function `cost_base` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5558:17
+     |
+5558 |                 cost_base(&compiled, &host, &scope)
+     |                 ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::cost_base;
+     |
+
+error[E0425]: cannot find function `skewed_graph` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5575:21
+     |
+5575 |         let graph = skewed_graph();
+     |                     ^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::bgp::tests::skewed_graph` exists but is inaccessible
+    --> crates/sparql-eval/src/bgp.rs:3221:5
+     |
+3221 |     fn skewed_graph() -> Skewed {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find value `COST_DP_MAX_PATTERNS` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5576:32
+     |
+5576 |         for count in [0, 1, 3, COST_DP_MAX_PATTERNS, COST_DP_MAX_PATTERNS + 1] {
+     |                                ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this constant
+     |
+4603 +     use crate::bgp::COST_DP_MAX_PATTERNS;
+     |
+
+error[E0425]: cannot find value `COST_DP_MAX_PATTERNS` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5576:54
+     |
+5576 |         for count in [0, 1, 3, COST_DP_MAX_PATTERNS, COST_DP_MAX_PATTERNS + 1] {
+     |                                                      ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this constant
+     |
+4603 +     use crate::bgp::COST_DP_MAX_PATTERNS;
+     |
+
+error[E0433]: cannot find type `GraphScope` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5580:17
+     |
+5580 |                 GraphScope::One(GraphMatch::Any),
+     |                 ^^^^^^^^^^ use of undeclared type `GraphScope`
+     |
+help: consider importing this enum
+     |
+4603 +     use crate::dataset_spec::GraphScope;
+     |
+
+error[E0433]: cannot find type `GraphScope` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5581:17
+     |
+5581 |                 GraphScope::One(GraphMatch::Default),
+     |                 ^^^^^^^^^^ use of undeclared type `GraphScope`
+     |
+help: consider importing this enum
+     |
+4603 +     use crate::dataset_spec::GraphScope;
+     |
+
+error[E0433]: cannot find type `GraphScope` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5582:17
+     |
+5582 |                 GraphScope::One(GraphMatch::Named(graph.hub)),
+     |                 ^^^^^^^^^^ use of undeclared type `GraphScope`
+     |
+help: consider importing this enum
+     |
+4603 +     use crate::dataset_spec::GraphScope;
+     |
+
+error[E0425]: cannot find function `base_cardinality` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5586:36
+     |
+5586 |                     .map(|pattern| base_cardinality(&*graph.ds, pattern, &scope) as f64)
+     |                                    ^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::base_cardinality;
+     |
+
+error[E0425]: cannot find function `cost_base` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5588:30
+     |
+5588 |                 let native = cost_base(&compiled, &*graph.ds, &scope);
+     |                              ^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::cost_base;
+     |
+
+error[E0425]: cannot find value `COST_DP_MAX_PATTERNS` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5594:48
+     |
+5594 |                     let expected = if count <= COST_DP_MAX_PATTERNS {
+     |                                                ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this constant
+     |
+4603 +     use crate::bgp::COST_DP_MAX_PATTERNS;
+     |
+
+error[E0425]: cannot find function `cost_order_dp_from` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5595:25
+     |
+5595 |                         cost_order_dp_from(
+     |                         ^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::cost_order_dp_from;
+     |
+
+error[E0425]: cannot find function `cost_order_greedy_from` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5603:25
+     |
+5603 |                         cost_order_greedy_from(
+     |                         ^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::cost_order_greedy_from;
+     |
+
+error[E0425]: cannot find function `cost_based_order_from` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5612:25
+     |
+5612 |                         cost_based_order_from(&compiled, &*graph.ds, &scope, &initial),
+     |                         ^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::cost_based_order_from;
+     |
+
+error[E0425]: cannot find function `statistic_f64` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5620:17
+     |
+5620 |                 statistic_f64(u128::from(statistic)).to_bits(),
+     |                 ^^^^^^^^^^^^^ not found in this scope
+     |
+help: a local variable with a similar name exists
+     |
+5620 -                 statistic_f64(u128::from(statistic)).to_bits(),
+5620 +                 statistic(u128::from(statistic)).to_bits(),
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::statistic_f64;
+     |
+
+error[E0425]: cannot find function `skewed_graph` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5634:21
+     |
+5634 |         let graph = skewed_graph();
+     |                     ^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::bgp::tests::skewed_graph` exists but is inaccessible
+    --> crates/sparql-eval/src/bgp.rs:3221:5
+     |
+3221 |     fn skewed_graph() -> Skewed {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0433]: cannot find type `TermRef` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5641:21
+     |
+5641 |                 let TermRef::Iri(iri) = graph.ds.resolve(id) else {
+     |                     ^^^^^^^ use of undeclared type `TermRef`
+     |
+help: consider importing one of these enums
+     |
+4603 +     use crate::bgp::TermRef;
+     |
+4603 +     use purrdf_core::TermRef;
+     |
+
+error[E0425]: cannot find function `triple` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5644:17
+     |
+5644 |                 triple(var_pos("hub"), pred(iri), var_pos(variable))
+     |                 ^^^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/sparql-eval/src/basic_profile.rs:684:5
+     |
+ 684 |     fn triple(choices: &mut Choices) -> TriplePattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::basic_profile::walk_tests::triple`: not accessible
+     |
+    ::: crates/sparql-eval/src/bgp.rs:2744:5
+     |
+2744 |     fn triple(s: TermPattern, p: NamedNodePattern, o: TermPattern) -> TriplePattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::bgp::tests::triple`: not accessible
+     |
+    ::: crates/sparql-eval/src/blank_scope.rs:1423:5
+     |
+1423 |     fn triple(choices: &mut Choices) -> TriplePattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::blank_scope::walk_tests::triple`: not accessible
+     |
+    ::: crates/sparql-eval/src/construct.rs:2526:5
+     |
+2526 |     fn triple(n: usize) -> TriplePattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::construct::where_walk_tests::triple`: not accessible
+     |
+    ::: crates/sparql-eval/src/enf.rs:878:5
+     |
+ 878 |     fn triple(s: TermPattern, iri: &str, o: TermPattern) -> TriplePattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::enf::effect_free_gate_tests::triple`: not accessible
+     |
+    ::: crates/sparql-eval/src/eval.rs:5911:5
+     |
+5911 |     fn triple(choices: &mut Choices) -> TriplePattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::eval::syntactic_schema_tests::triple`: not accessible
+     |
+    ::: crates/sparql-eval/src/exists_admission_gate.rs:92:1
+     |
+  92 | fn triple(s: TermPattern, iri: &str, o: TermPattern) -> TriplePattern {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::exists_admission_gate::triple`: not accessible
+     |
+    ::: crates/sparql-eval/src/governor/charge_points.rs:88:1
+     |
+  88 | fn triple(subject: TermPattern, predicate: &str, object: TermPattern) -> TriplePattern {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::governor::charge_points::triple`: not accessible
+     |
+    ::: crates/sparql-eval/src/modifier.rs:4392:5
+     |
+4392 |     fn triple(s: TermValue, p: TermValue, o: TermValue) -> TermValue {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::modifier::tests::triple`: not accessible
+     |
+    ::: crates/sparql-eval/src/nested_exists_gate.rs:558:1
+     |
+ 558 | fn triple(s: &str, p: &str, o: &str) -> GraphPattern {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::nested_exists_gate::triple`: not accessible
+     |
+    ::: crates/sparql-eval/src/nested_lateral_gate.rs:576:1
+     |
+ 576 | fn triple(s: &str, p: &str, o: &str) -> GraphPattern {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::nested_lateral_gate::triple`: not accessible
+     |
+    ::: crates/sparql-eval/src/property_fn_eval.rs:6103:5
+     |
+6103 |     fn triple(choices: &mut Choices) -> TriplePattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::property_fn_eval::walk_tests::triple`: not accessible
+
+error[E0425]: cannot find function `var_pos` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5644:24
+     |
+5644 |                 triple(var_pos("hub"), pred(iri), var_pos(variable))
+     |                        ^^^^^^^ not found in this scope
+     |
+note: function `crate::bgp::tests::var_pos` exists but is inaccessible
+    --> crates/sparql-eval/src/bgp.rs:2732:5
+     |
+2732 |     fn var_pos(name: &str) -> TermPattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find function `pred` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5644:40
+     |
+5644 |                 triple(var_pos("hub"), pred(iri), var_pos(variable))
+     |                                        ^^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/sparql-eval/src/bgp.rs:2740:5
+     |
+2740 |     fn pred(iri: &str) -> NamedNodePattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::bgp::tests::pred`: not accessible
+     |
+    ::: crates/sparql-eval/src/binop.rs:2805:5
+     |
+2805 |     fn pred(iri: &str) -> NamedNodePattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::binop::tests::pred`: not accessible
+     |
+    ::: crates/sparql-eval/src/construct.rs:1132:5
+     |
+1132 |     fn pred(iri: &str) -> NamedNodePattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::construct::tests::pred`: not accessible
+     |
+    ::: crates/sparql-eval/src/exists_admission_gate.rs:83:1
+     |
+  83 | fn pred(iri: &str) -> NamedNodePattern {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::exists_admission_gate::pred`: not accessible
+     |
+    ::: crates/sparql-eval/src/governor/charge_points.rs:80:1
+     |
+  80 | fn pred(local: &str) -> NamedNodePattern {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::governor::charge_points::pred`: not accessible
+
+error[E0425]: cannot find function `var_pos` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5644:51
+     |
+5644 |                 triple(var_pos("hub"), pred(iri), var_pos(variable))
+     |                                                   ^^^^^^^ not found in this scope
+     |
+note: function `crate::bgp::tests::var_pos` exists but is inaccessible
+    --> crates/sparql-eval/src/bgp.rs:2732:5
+     |
+2732 |     fn var_pos(name: &str) -> TermPattern {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0425]: cannot find function `run` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5648:24
+     |
+5648 |         let expected = run(&ordinary, &patterns, &columns);
+     |                        ^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/sparql-eval/src/bgp.rs:2754:5
+     |
+2754 | /     fn run<D: DatasetView<Id = TermId, ReadError = core::convert::Infallible>>(
+2755 | |         ds: &D,
+2756 | |         patterns: &[TriplePattern],
+2757 | |         vars: &[&str],
+...    |
+2782 | |         out
+2783 | |     }
+     | |_____^ `crate::bgp::tests::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/engine.rs:5493:5
+     |
+5493 |       fn run(query: &str) -> SparqlResult {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::engine::tests::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/governor/charge_points.rs:52:1
+     |
+  52 |   fn run(pattern: &GraphPattern, dataset: &RdfDataset, governors: &QueryGovernors) -> Run {
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::governor::charge_points::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/path.rs:2188:5
+     |
+2188 | /     fn run(
+2189 | |         ds: &RdfDataset,
+2190 | |         subject: &TermPattern,
+2191 | |         path: &PropertyPathExpression,
+...    |
+2230 | |         out
+2231 | |     }
+     | |_____^ `crate::path::tests::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/row_checkpoint_gate.rs:95:1
+     |
+  95 | / fn run(
+  96 | |     pattern: &GraphPattern,
+  97 | |     dataset: &RdfDataset,
+  98 | |     governors: &QueryGovernors,
+...    |
+ 127 | | }
+     | |_^ `crate::row_checkpoint_gate::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/service_endpoints.rs:1657:5
+     |
+1657 |       fn run(source: &Endpoints, query: &str) -> Result<Vec<String>, EvalError> {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::service_endpoints::tests::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/update.rs:1698:5
+     |
+1698 |       fn run(text: &str, m: &mut MutableDataset) {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::update::tests::run`: not accessible
+help: consider importing one of these functions
+     |
+4603 +     use purrdf_testkit::harness::run;
+     |
+4603 +     use purrdf_testkit::scalars::run;
+     |
+
+error[E0425]: cannot find function `run` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5650:22
+     |
+5650 |         let actual = run(&host, &patterns, &columns);
+     |                      ^^^ not found in this scope
+     |
+note: these functions exist but are inaccessible
+    --> crates/sparql-eval/src/bgp.rs:2754:5
+     |
+2754 | /     fn run<D: DatasetView<Id = TermId, ReadError = core::convert::Infallible>>(
+2755 | |         ds: &D,
+2756 | |         patterns: &[TriplePattern],
+2757 | |         vars: &[&str],
+...    |
+2782 | |         out
+2783 | |     }
+     | |_____^ `crate::bgp::tests::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/engine.rs:5493:5
+     |
+5493 |       fn run(query: &str) -> SparqlResult {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::engine::tests::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/governor/charge_points.rs:52:1
+     |
+  52 |   fn run(pattern: &GraphPattern, dataset: &RdfDataset, governors: &QueryGovernors) -> Run {
+     |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::governor::charge_points::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/path.rs:2188:5
+     |
+2188 | /     fn run(
+2189 | |         ds: &RdfDataset,
+2190 | |         subject: &TermPattern,
+2191 | |         path: &PropertyPathExpression,
+...    |
+2230 | |         out
+2231 | |     }
+     | |_____^ `crate::path::tests::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/row_checkpoint_gate.rs:95:1
+     |
+  95 | / fn run(
+  96 | |     pattern: &GraphPattern,
+  97 | |     dataset: &RdfDataset,
+  98 | |     governors: &QueryGovernors,
+...    |
+ 127 | | }
+     | |_^ `crate::row_checkpoint_gate::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/service_endpoints.rs:1657:5
+     |
+1657 |       fn run(source: &Endpoints, query: &str) -> Result<Vec<String>, EvalError> {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::service_endpoints::tests::run`: not accessible
+     |
+    ::: crates/sparql-eval/src/update.rs:1698:5
+     |
+1698 |       fn run(text: &str, m: &mut MutableDataset) {
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `crate::update::tests::run`: not accessible
+help: consider importing one of these functions
+     |
+4603 +     use purrdf_testkit::harness::run;
+     |
+4603 +     use purrdf_testkit::scalars::run;
+     |
+
+error[E0425]: cannot find function `skewed_graph` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5658:21
+     |
+5658 |         let graph = skewed_graph();
+     |                     ^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::bgp::tests::skewed_graph` exists but is inaccessible
+    --> crates/sparql-eval/src/bgp.rs:3221:5
+     |
+3221 |     fn skewed_graph() -> Skewed {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0433]: cannot find type `GraphScope` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5661:21
+     |
+5661 |         let scope = GraphScope::One(GraphMatch::Default);
+     |                     ^^^^^^^^^^ use of undeclared type `GraphScope`
+     |
+help: consider importing this enum
+     |
+4603 +     use crate::dataset_spec::GraphScope;
+     |
+
+error[E0425]: cannot find function `replay_cost_estimate_from` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5663:24
+     |
+5663 |         let expected = replay_cost_estimate_from(&compiled, &*graph.ds, &scope, &order, &[], 7);
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::replay_cost_estimate_from;
+     |
+
+error[E0425]: cannot find function `replay_cost_estimate_from` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5664:22
+     |
+5664 |         let actual = replay_cost_estimate_from(&compiled, &host, &scope, &order, &[], 7);
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::replay_cost_estimate_from;
+     |
+
+error[E0425]: cannot find function `skewed_graph` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5670:21
+     |
+5670 |         let graph = skewed_graph();
+     |                     ^^^^^^^^^^^^ not found in this scope
+     |
+note: function `crate::bgp::tests::skewed_graph` exists but is inaccessible
+    --> crates/sparql-eval/src/bgp.rs:3221:5
+     |
+3221 |     fn skewed_graph() -> Skewed {
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not accessible
+
+error[E0433]: cannot find type `GraphScope` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5683:21
+     |
+5683 |         let scope = GraphScope::One(GraphMatch::Default);
+     |                     ^^^^^^^^^^ use of undeclared type `GraphScope`
+     |
+help: consider importing this enum
+     |
+4603 +     use crate::dataset_spec::GraphScope;
+     |
+
+error[E0425]: cannot find function `plan_or_cached_order` in this scope
+    --> crates/sparql-eval/src/bgp.rs:5687:29
+     |
+5687 |                 let order = plan_or_cached_order(
+     |                             ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+     |
+help: consider importing this function
+     |
+4603 +     use crate::bgp::plan_or_cached_order;
+     |
+
+    Checking purrdf-text v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/text)
+error[E0277]: `D` cannot be shared between threads safely
+    --> crates/sparql-eval/src/bgp.rs:2759:32
+     |
+2759 |         let ctx = EvalCtx::new(ds);
+     |                   ------------ ^^ `D` cannot be shared between threads safely
+     |                   |
+     |                   required by a bound introduced by this call
+     |
+note: required by a bound in `eval::EvalCtx::<'d, D>::new`
+    --> crates/sparql-eval/src/eval.rs:946:27
+     |
+ 946 | impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+     |                           ^^^^ required by this bound in `EvalCtx::<'d, D>::new`
+...
+1001 |     pub fn new(dataset: &'d D) -> Self {
+     |            --- required by a bound in this associated function
+help: consider further restricting type parameter `D` with trait `Sync`
+     |
+2754 |     fn run<D: DatasetView<Id = TermId, ReadError = core::convert::Infallible> + std::marker::Sync>(
+     |                                                                               +++++++++++++++++++
+
+error[E0277]: `D` cannot be shared between threads safely
+    --> crates/sparql-eval/src/bgp.rs:2759:19
+     |
+2759 |         let ctx = EvalCtx::new(ds);
+     |                   ^^^^^^^^^^^^^^^^ `D` cannot be shared between threads safely
+     |
+note: required by a bound in `eval::EvalCtx`
+    --> crates/sparql-eval/src/eval.rs:446:41
+     |
+ 446 | pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
+     |                                         ^^^^ required by this bound in `EvalCtx`
+help: consider further restricting type parameter `D` with trait `Sync`
+     |
+2754 |     fn run<D: DatasetView<Id = TermId, ReadError = core::convert::Infallible> + std::marker::Sync>(
+     |                                                                               +++++++++++++++++++
+
+error[E0277]: `D` cannot be shared between threads safely
+    --> crates/sparql-eval/src/bgp.rs:2760:38
+     |
+2760 |         let seq = eval_bgp(patterns, &ctx).expect("bgp");
+     |                   --------           ^^^^ `D` cannot be shared between threads safely
+     |                   |
+     |                   required by a bound introduced by this call
+     |
+note: required by a bound in `bgp::eval_bgp`
+    --> crates/sparql-eval/src/bgp.rs:208:41
+     |
+ 208 | pub(crate) fn eval_bgp<D: DatasetView + Sync>(
+     |                                         ^^^^ required by this bound in `eval_bgp`
+help: consider further restricting type parameter `D` with trait `Sync`
+     |
+2754 |     fn run<D: DatasetView<Id = TermId, ReadError = core::convert::Infallible> + std::marker::Sync>(
+     |                                                                               +++++++++++++++++++
+
+    Checking purrdf-retrieval v3.0.1 (/home/paudley/Active/purrdf/.worktrees/510-retrieval-a-union-stage-beside-fuse-per/crates/retrieval)
+error: this expression creates a reference which is immediately dereferenced by the compiler
+    --> crates/retrieval/src/admission.rs:1462:13
+     |
+1462 |             &plan.request_terms,
+     |             ^^^^^^^^^^^^^^^^^^^ help: change this to: `plan.request_terms`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#needless_borrow
+     = note: `-D clippy::needless-borrow` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::needless_borrow)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/retrieval/src/candidate.rs:111:65
+    |
+ 29 | /     DepthWithoutProbe {
+ 30 | |         /// The affected caller-supplied stratum.
+ 31 | |         stratum: Iri,
+ 32 | |         /// The caller's actual requested depth.
+...   |
+ 35 | |         ceiling: u32,
+ 36 | |     },
+    | |_____- the largest variant contains at least 144 bytes
+ 37 |       /// Two entries tried to choose the work depth of one stratum.
+ 38 | /     DuplicateDepth {
+ 39 | |         /// The repeated stratum.
+ 40 | |         stratum: Iri,
+ 41 | |     },
+    | |_____- the variant `DuplicateDepth` contains at least 136 bytes
+ 42 |       /// A selected producer has no caller work depth.
+ 43 | /     MissingDepth {
+ 44 | |         /// The selected stratum.
+ 45 | |         stratum: Iri,
+ 46 | |     },
+    | |_____- the variant `MissingDepth` contains at least 136 bytes
+ 47 |       /// A depth names no selected producer.
+ 48 | /     UnexpectedDepth {
+ 49 | |         /// The unused caller-supplied stratum.
+ 50 | |         stratum: Iri,
+ 51 | |     },
+    | |_____- the variant `UnexpectedDepth` contains at least 136 bytes
+...
+111 |       pub fn new(depths: impl IntoIterator<Item = (Iri, u32)>) -> Result<Self, CandidatePlanError> {
+    |                                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `candidate::CandidatePlanError`, for example by boxing large elements or replacing it with `Box<candidate::CandidatePlanError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+    = note: `-D clippy::result-large-err` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::result_large_err)]`
+
+error: this pattern matching can be expressed using equality
+   --> crates/retrieval/src/candidate.rs:114:16
+    |
+114 |             if let Err(Unprobeable::PastCeiling) = ProbedDepth::checked_work(depth) {
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `ProbedDepth::checked_work(depth) == Err(Unprobeable::PastCeiling)`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#equatable_if_let
+    = note: `-D clippy::equatable-if-let` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::equatable_if_let)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/retrieval/src/candidate.rs:249:50
+    |
+ 29 | /     DepthWithoutProbe {
+ 30 | |         /// The affected caller-supplied stratum.
+ 31 | |         stratum: Iri,
+ 32 | |         /// The caller's actual requested depth.
+...   |
+ 35 | |         ceiling: u32,
+ 36 | |     },
+    | |_____- the largest variant contains at least 144 bytes
+ 37 |       /// Two entries tried to choose the work depth of one stratum.
+ 38 | /     DuplicateDepth {
+ 39 | |         /// The repeated stratum.
+ 40 | |         stratum: Iri,
+ 41 | |     },
+    | |_____- the variant `DuplicateDepth` contains at least 136 bytes
+ 42 |       /// A selected producer has no caller work depth.
+ 43 | /     MissingDepth {
+ 44 | |         /// The selected stratum.
+ 45 | |         stratum: Iri,
+ 46 | |     },
+    | |_____- the variant `MissingDepth` contains at least 136 bytes
+ 47 |       /// A depth names no selected producer.
+ 48 | /     UnexpectedDepth {
+ 49 | |         /// The unused caller-supplied stratum.
+ 50 | |         stratum: Iri,
+ 51 | |     },
+    | |_____- the variant `UnexpectedDepth` contains at least 136 bytes
+...
+249 |       pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, CandidatePlanError> {
+    |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `candidate::CandidatePlanError`, for example by boxing large elements or replacing it with `Box<candidate::CandidatePlanError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/retrieval/src/candidate.rs:310:30
+    |
+ 29 | /     DepthWithoutProbe {
+ 30 | |         /// The affected caller-supplied stratum.
+ 31 | |         stratum: Iri,
+ 32 | |         /// The caller's actual requested depth.
+...   |
+ 35 | |         ceiling: u32,
+ 36 | |     },
+    | |_____- the largest variant contains at least 144 bytes
+ 37 |       /// Two entries tried to choose the work depth of one stratum.
+ 38 | /     DuplicateDepth {
+ 39 | |         /// The repeated stratum.
+ 40 | |         stratum: Iri,
+ 41 | |     },
+    | |_____- the variant `DuplicateDepth` contains at least 136 bytes
+ 42 |       /// A selected producer has no caller work depth.
+ 43 | /     MissingDepth {
+ 44 | |         /// The selected stratum.
+ 45 | |         stratum: Iri,
+ 46 | |     },
+    | |_____- the variant `MissingDepth` contains at least 136 bytes
+ 47 |       /// A depth names no selected producer.
+ 48 | /     UnexpectedDepth {
+ 49 | |         /// The unused caller-supplied stratum.
+ 50 | |         stratum: Iri,
+ 51 | |     },
+    | |_____- the variant `UnexpectedDepth` contains at least 136 bytes
+...
+310 |       pub fn certify(&self) -> Result<(), CandidatePlanError> {
+    |                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `candidate::CandidatePlanError`, for example by boxing large elements or replacing it with `Box<candidate::CandidatePlanError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/retrieval/src/candidate.rs:378:6
+    |
+ 29 | /     DepthWithoutProbe {
+ 30 | |         /// The affected caller-supplied stratum.
+ 31 | |         stratum: Iri,
+ 32 | |         /// The caller's actual requested depth.
+...   |
+ 35 | |         ceiling: u32,
+ 36 | |     },
+    | |_____- the largest variant contains at least 144 bytes
+ 37 |       /// Two entries tried to choose the work depth of one stratum.
+ 38 | /     DuplicateDepth {
+ 39 | |         /// The repeated stratum.
+ 40 | |         stratum: Iri,
+ 41 | |     },
+    | |_____- the variant `DuplicateDepth` contains at least 136 bytes
+ 42 |       /// A selected producer has no caller work depth.
+ 43 | /     MissingDepth {
+ 44 | |         /// The selected stratum.
+ 45 | |         stratum: Iri,
+ 46 | |     },
+    | |_____- the variant `MissingDepth` contains at least 136 bytes
+ 47 |       /// A depth names no selected producer.
+ 48 | /     UnexpectedDepth {
+ 49 | |         /// The unused caller-supplied stratum.
+ 50 | |         stratum: Iri,
+ 51 | |     },
+    | |_____- the variant `UnexpectedDepth` contains at least 136 bytes
+...
+378 |   ) -> Result<CandidatePlan, CandidatePlanError> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `candidate::CandidatePlanError`, for example by boxing large elements or replacing it with `Box<candidate::CandidatePlanError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: unnecessary structure name repetition
+    --> crates/retrieval/src/compile.rs:1625:9
+     |
+1625 |         CompiledRetrieval::tagged_as_assembled(self)
+     |         ^^^^^^^^^^^^^^^^^ help: use the applicable keyword: `Self`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#use_self
+     = note: `-D clippy::use-self` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::use_self)]`
+
+error: the `Err`-variant returned from this function is very large
+   --> crates/retrieval/src/union.rs:401:6
+    |
+119 | /     DepthMismatch {
+120 | |         /// The affected stratum.
+121 | |         stratum: Iri,
+122 | |         /// The actual execution depth, or absence.
+...   |
+125 | |         requested: Option<u32>,
+126 | |     },
+    | |_____- the largest variant contains at least 152 bytes
+...
+133 | /     RowsPastDepth {
+134 | |         /// The producer.
+135 | |         stratum: Iri,
+136 | |         /// The actual row's rank.
+...   |
+139 | |         depth: u32,
+140 | |     },
+    | |_____- the variant `RowsPastDepth` contains at least 148 bytes
+141 |       /// The shared native ranked-stream protocol refused.
+142 |       Protocol(ProtocolError),
+    |       ----------------------- the variant `Protocol` contains at least 128 bytes
+...
+401 |   ) -> Result<(), UnionError> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: try reducing the size of `union::UnionError`, for example by boxing large elements or replacing it with `Box<union::UnionError>`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/main/index.html#result_large_err
+
+error: could not compile `purrdf-retrieval` (lib) due to 8 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `purrdf-retrieval` (lib test) due to 8 previous errors
+Some errors have detailed explanations: E0277, E0425, E0433.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `purrdf-sparql-eval` (lib test) due to 66 previous errors
