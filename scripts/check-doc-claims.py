@@ -6291,8 +6291,8 @@ def build_claims(
             "the OWL 2 divergence count in the entailment chapter",
             _ENTAILMENT,
             _flow(
-                r"Every one of the (?P<ledgered>\d+) divergences is named in a typed "
-                r"ledger"
+                r"The typed ledger contains (?P<ledgered>\d+) divergences\. Every "
+                r"disagreement"
             ),
             {"ledgered": owl2_ledger},
             mat,
@@ -6318,7 +6318,7 @@ def build_claims(
         Claim(
             "the ledgered-gap summary in the book's conformance chapter",
             _BOOK_CONFORMANCE,
-            _flow(r"strictly ledgered \((?P<ledgered>\d+) typed OWL 2 divergences;"),
+            _flow(r"with (?P<ledgered>\d+) typed OWL 2 divergences;"),
             {"ledgered": owl2_ledger},
             mat,
         ),

@@ -6,8 +6,8 @@
 //! invariants that tie `satisfiability` to `contains`.
 
 use purrdf_xsd::range::{
-    Cardinality, DataRange, Facet, Known, Satisfiability, cardinality, contains,
-    is_exactly_decided, same_value, satisfiability,
+    Cardinality, DataRange, Facet, Known, Satisfiability, TermSpace, cardinality, containment,
+    contains, contains_term, is_exactly_decided, same_value, satisfiability,
 };
 use purrdf_xsd::{XsdDatatype as D, XsdValue, parse, value_eq};
 
@@ -770,5 +770,185 @@ mod prop {
                 Ok(())
             })
             .expect("satisfiability and contains agree on every generated range");
+    }
+}
+
+#[test]
+fn datetime_stamp_requires_a_timezone_at_both_native_parse_doors() {
+    assert_eq!(D::from_iri(D::DateTimeStamp.iri()), Some(D::DateTimeStamp));
+    for lexical in [
+        "2002-10-10T17:00:00Z",
+        "2002-10-10T12:00:00-05:00",
+        "2000-02-29T24:00:00+14:00",
+    ] {
+        let stamp = v(lexical, D::DateTimeStamp);
+        assert!(same_value(&stamp, &v(lexical, D::DateTime)));
+        let native = purrdf_xsd::temporal::parse_datetime_stamp(lexical)
+            .expect("native dateTimeStamp parser");
+        assert!(same_value(&XsdValue::DateTime(native), &stamp));
+        let xsd10 = purrdf_xsd::value::parse_xsd10(lexical, D::DateTimeStamp)
+            .expect("operand-mapping dispatcher");
+        assert!(same_value(&xsd10, &stamp));
+    }
+    for lexical in [
+        "2002-10-10T17:00:00",
+        "2002-10-10T17:00:00+14:01",
+        "2001-02-29T12:00:00Z",
+        "not a dateTime",
+    ] {
+        assert!(parse(lexical, D::DateTimeStamp).is_err(), "{lexical}");
+        assert!(
+            purrdf_xsd::temporal::parse_datetime_stamp(lexical).is_err(),
+            "{lexical}"
+        );
+        assert!(
+            purrdf_xsd::value::parse_xsd10(lexical, D::DateTimeStamp).is_err(),
+            "{lexical}"
+        );
+    }
+    assert!(parse("2002-10-10T17:00:00", D::DateTime).is_ok());
+}
+
+#[test]
+fn datetime_stamp_is_the_exact_proper_timezone_stratum_of_datetime() {
+    let datetime = DataRange::Datatype(D::DateTime);
+    let stamp = DataRange::Datatype(D::DateTimeStamp);
+    let unzoned = DataRange::And(vec![
+        datetime.clone(),
+        DataRange::Not(Box::new(stamp.clone())),
+    ]);
+    let utc = v("2002-10-10T17:00:00Z", D::DateTimeStamp);
+    let local = v("2002-10-10T17:00:00", D::DateTime);
+    assert_eq!(containment(&stamp, &datetime), Satisfiability::Empty);
+    assert_eq!(containment(&datetime, &stamp), Satisfiability::Inhabited);
+    assert_eq!(contains(&stamp, &utc), Known::Yes);
+    assert_eq!(contains(&stamp, &local), Known::No);
+    assert_eq!(contains(&unzoned, &local), Known::Yes);
+    assert_eq!(contains(&unzoned, &utc), Known::No);
+    for range in [&datetime, &stamp, &unzoned] {
+        assert!(is_exactly_decided(range));
+        assert_eq!(cardinality(range), Cardinality::Unbounded);
+    }
+    let impossible = DataRange::And(vec![stamp, DataRange::Not(Box::new(datetime))]);
+    assert_eq!(satisfiability(&impossible), Satisfiability::Empty);
+    assert_eq!(cardinality(&impossible), Cardinality::Exactly(0));
+    assert!(is_exactly_decided(&impossible));
+}
+
+#[test]
+fn datetime_stamp_enumerations_count_value_identity_and_complements_exactly() {
+    let utc = v("2002-10-10T17:00:00Z", D::DateTimeStamp);
+    let offset = v("2002-10-10T12:00:00-05:00", D::DateTime);
+    let local = v("2002-10-10T17:00:00", D::DateTime);
+    let one = DataRange::OneOf(vec![utc.clone(), offset]);
+    assert_eq!(cardinality(&one), Cardinality::Exactly(1));
+    assert_eq!(contains(&one, &local), Known::No);
+    let within_stamp = DataRange::And(vec![DataRange::Datatype(D::DateTimeStamp), one.clone()]);
+    assert!(is_exactly_decided(&within_stamp));
+    assert_eq!(cardinality(&within_stamp), Cardinality::Exactly(1));
+    let remaining = DataRange::And(vec![
+        DataRange::Datatype(D::DateTimeStamp),
+        DataRange::Not(Box::new(one)),
+    ]);
+    assert!(is_exactly_decided(&remaining));
+    assert_eq!(cardinality(&remaining), Cardinality::Unbounded);
+    assert_eq!(contains(&remaining, &utc), Known::No);
+    assert_eq!(
+        contains(&remaining, &v("2002-10-11T17:00:00Z", D::DateTimeStamp)),
+        Known::Yes
+    );
+}
+
+#[test]
+fn normalized_rdf_language_spaces_are_disjoint_infinite_exact_ranges() {
+    let lang = DataRange::TermDatatype(TermSpace::LangString);
+    let directed = DataRange::TermDatatype(TermSpace::DirLangString);
+    let string = DataRange::Datatype(D::String);
+    for range in [&lang, &directed] {
+        assert!(is_exactly_decided(range));
+        assert_eq!(cardinality(range), Cardinality::Unbounded);
+        assert_eq!(contains(range, &v("chat", D::String)), Known::No);
+    }
+    for other in [directed, string] {
+        let intersection = DataRange::And(vec![lang.clone(), other]);
+        assert_eq!(satisfiability(&intersection), Satisfiability::Empty);
+        assert_eq!(cardinality(&intersection), Cardinality::Exactly(0));
+        assert!(is_exactly_decided(&intersection));
+    }
+    assert_eq!(contains_term(&lang, TermSpace::LangString, 7), Known::Yes);
+    assert_eq!(contains_term(&lang, TermSpace::DirLangString, 7), Known::No);
+}
+
+#[test]
+fn tagged_enumerations_and_their_boolean_combinations_have_exact_finite_counts() {
+    let a = DataRange::TermOneOf {
+        space: TermSpace::LangString,
+        values: vec![1, 2, 2],
+    };
+    let b = DataRange::TermOneOf {
+        space: TermSpace::LangString,
+        values: vec![2, 3],
+    };
+    let difference = DataRange::And(vec![a.clone(), DataRange::Not(Box::new(b.clone()))]);
+    assert_eq!(cardinality(&a), Cardinality::Exactly(2));
+    assert_eq!(cardinality(&difference), Cardinality::Exactly(1));
+    assert_eq!(
+        contains_term(&difference, TermSpace::LangString, 1),
+        Known::Yes
+    );
+    for identity in [2, 3] {
+        assert_eq!(
+            contains_term(&difference, TermSpace::LangString, identity),
+            Known::No
+        );
+    }
+    let union = DataRange::Or(vec![
+        a,
+        b,
+        DataRange::TermOneOf {
+            space: TermSpace::DirLangString,
+            values: vec![2],
+        },
+    ]);
+    assert_eq!(
+        cardinality(&union),
+        Cardinality::Exactly(4),
+        "an identical carrier id in a different space is a different value"
+    );
+    assert!(is_exactly_decided(&union));
+    let remainder = DataRange::And(vec![
+        DataRange::TermDatatype(TermSpace::LangString),
+        DataRange::Not(Box::new(union)),
+    ]);
+    assert_eq!(cardinality(&remainder), Cardinality::Unbounded);
+    assert!(is_exactly_decided(&remainder));
+    assert_eq!(
+        contains_term(&remainder, TermSpace::LangString, 1),
+        Known::No
+    );
+    assert_eq!(
+        contains_term(&remainder, TermSpace::LangString, 4),
+        Known::Yes
+    );
+}
+
+#[test]
+fn contradictory_datetime_endpoints_refute_zoned_and_local_value_strata() {
+    let lower = v("2026-01-02T00:00:00Z", D::DateTime);
+    let upper = v("2026-01-01T00:00:00Z", D::DateTime);
+    for base in [D::DateTime, D::DateTimeStamp] {
+        let impossible = DataRange::Restriction {
+            base,
+            facets: vec![
+                Facet::MinInclusive(lower.clone()),
+                Facet::MaxInclusive(upper.clone()),
+            ],
+        };
+        assert_eq!(
+            satisfiability(&impossible),
+            Satisfiability::Empty,
+            "no zoned or timezone-less value can lie between reversed endpoints"
+        );
+        assert_eq!(cardinality(&impossible), Cardinality::Exactly(0));
     }
 }

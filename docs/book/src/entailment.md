@@ -370,13 +370,12 @@ Two corpora measure two different things, and the distinction matters:
   ledgered residuals: the RDF/RDFS/OWL-RL chase, the OWL-Direct (DL) tableau, the
   RIF-Core rule engine, and RDF-axiomatic predicate typing, all run through the
   SPARQL conformance harness.
-- **W3C OWL 2 test suite — 258 of 262 cases agree, 4 ledgered**, zero
+- **W3C OWL 2 test suite — 262 of 262 cases agree, 0 ledgered**, zero
   unledgered. This corpus is *consistency*-shaped: all 262 vendored cases are
   `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (36). It therefore
   grades the DL/tableau lane's satisfiability verdicts and says nothing about
-  the OWL 2 RL rule table. Every one of the 4 divergences is named in a typed
-  ledger; an unledgered divergence, and a ledgered case that has started
-  agreeing, are both hard failures.
+  the OWL 2 RL rule table. The typed ledger contains 0 divergences. Every disagreement and
+  every stale ledger entry remains a hard failure.
 
   Two things this row does **not** say. First, the upstream material is not
   free of entailment tests — the W3C manifest holds **206 positive and 23
@@ -388,7 +387,7 @@ Two corpora measure two different things, and the distinction matters:
   **172 the tableau decided when the exclusion was measured** (108 consistent, 64
   inconsistent), 0 did not terminate under a 40 s ceiling, 25 were withheld (20
   reasoner, 5 parse), and 23 carry no RDF/XML premise — so the exclusion was
-  payload triage, not a capability limit, and "258 of 262" is a number over a
+  payload triage, not a capability limit, and "262 of 262" is a number over a
   corpus rather than over what W3C published.
 
   Those five figures are a **dated measurement**, recorded in `census.tsv`'s

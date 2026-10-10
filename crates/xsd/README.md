@@ -30,7 +30,8 @@ Coverage:
 
 - **Numeric** — `integer` (i128), the twelve derived-integer facets
   (range-checked), `decimal`, `float`, `double`, with SPARQL numeric promotion.
-- **Temporal** — `dateTime`/`date`/`time`, `duration` plus
+- **Temporal** — `dateTime`/`dateTimeStamp`/`date`/`time` (`dateTimeStamp`
+  requires a timezone), `duration` plus
   `dayTimeDuration`/`yearMonthDuration`, and the gregorian family, honoring the
   spec's timezone-indeterminate partial order.
 - **Binary** — `hexBinary`/`base64Binary` with hand-rolled (still zero-dep)
@@ -67,6 +68,19 @@ Spec-pinned consumers that need the XSD 1.0 lexical space (e.g. conformance
 suites written against 1.0) call the explicit `parse_xsd10` family — as an
 opt-in function, not a feature flag, so default behavior never changes
 underneath a caller.
+
+## Datatype ranges
+
+`range` judges emptiness, membership and cardinality of Boolean datatype ranges.
+`dateTimeStamp` is the exact timezone-bearing subset of `dateTime`; offset
+spellings of the same instant remain one value in finite enumerations. Temporal
+bound facets retain the documented partial-order boundaries.
+
+The range algebra also has two disjoint, infinite term-identified spaces for
+`rdf:langString` and `rdf:dirLangString`. Its consumer supplies normalized term
+identities for finite members; language and direction normalization stay in the
+RDF home. This keeps the XSD foundation over its existing lexical and hash
+layers, while complements and cardinalities share the same range algebra.
 
 ## Part of PurRDF
 

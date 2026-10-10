@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-08T07:35:43-06:00\n"
+"POT-Creation-Date: 2026-10-09T20:44:26-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -19485,22 +19485,22 @@ msgstr ""
 
 #: src/entailment.md:373
 msgid ""
-"**W3C OWL 2 test suite — 258 of 262 cases agree, 4 ledgered**, zero "
+"**W3C OWL 2 test suite — 262 of 262 cases agree, 0 ledgered**, zero "
 "unledgered. This corpus is _consistency_\\-shaped: all 262 vendored cases "
 "are `otest:ConsistencyTest` (226) or `otest:InconsistencyTest` (36). It "
 "therefore grades the DL/tableau lane's satisfiability verdicts and says "
-"nothing about the OWL 2 RL rule table. Every one of the 4 divergences is "
-"named in a typed ledger; an unledgered divergence, and a ledgered case that "
-"has started agreeing, are both hard failures."
+"nothing about the OWL 2 RL rule table. The typed ledger contains 0 "
+"divergences. Every disagreement and every stale ledger entry remains a hard "
+"failure."
 msgstr ""
-"**W3C OWL 2 测试套件——262 个用例中 258 个裁决一致，4 例入台账**，未入台账者为"
+"**W3C OWL 2 测试套件——262 个用例中 262 个裁决一致，0 例入台账**，未入台账者为"
 "零。这份语料是*相容性*（consistency）形态的：全部 262 个随库固化的用例都是 "
 "`otest:ConsistencyTest`（226 个）或 `otest:InconsistencyTest`（36 个）。因此"
 "它评判的是 DL/tableau 通道的可满足性裁决，对 OWL 2 RL 规则表则什么也没有说"
-"明。4 个分歧中的每一个都在一个带类型的台账中点名列出；未入台账的分歧，以及已"
-"入台账却开始一致的用例，都是硬失败。"
+"明。带类型的台账包含 0 个分歧。每一个分歧和每一条过时的台账条目仍会导致硬"
+"失败。"
 
-#: src/entailment.md:381
+#: src/entailment.md:380
 msgid ""
 "Two things this row does **not** say. First, the upstream material is not "
 "free of entailment tests — the W3C manifest holds **206 positive and 23 "
@@ -19512,7 +19512,7 @@ msgid ""
 "**172 the tableau decided when the exclusion was measured** (108 consistent, "
 "64 inconsistent), 0 did not terminate under a 40 s ceiling, 25 were withheld "
 "(20 reasoner, 5 parse), and 23 carry no RDF/XML premise — so the exclusion "
-"was payload triage, not a capability limit, and \"258 of 262\" is a number "
+"was payload triage, not a capability limit, and \"262 of 262\" is a number "
 "over a corpus rather than over what W3C published."
 msgstr ""
 "这一行**没有**说明的有两点。第一，上游材料并非不含蕴涵测试——W3C 清单中有 "
@@ -19522,10 +19522,10 @@ msgstr ""
 "性形态用例中的 262 个。在它排除的 220 个中，**有 172 个在测量排除情况时被 "
 "tableau 判定**（108 个相容，64 个不相容），0 个在 40 s 上限内未终止，25 个被"
 "扣留（20 个因推理机，5 个因解析），23 个不带 RDF/XML 前提——因此这种排除是对载"
-"荷的分拣，而非能力限制，而「262 个中 258 个」是基于一份语料的数字，而不是基"
+"荷的分拣，而非能力限制，而「262 个中 262 个」是基于一份语料的数字，而不是基"
 "于 W3C 所发布内容的数字。"
 
-#: src/entailment.md:394
+#: src/entailment.md:393
 msgid ""
 "Those five figures are a **dated measurement**, recorded in `census.tsv`'s "
 "`dl_probe` column and described in that suite's `PROVENANCE.md`. The harness "
@@ -19540,7 +19540,7 @@ msgstr ""
 "归。重新推导这些数字意味着重新运行探测，这是一项有意的操作，而不是把关检查的"
 "一部分。"
 
-#: src/entailment.md:400
+#: src/entailment.md:399
 msgid ""
 "**W3C OWL 2 RL entailment tests — 50 of 50 cases agree, 0 ledgered**, zero "
 "unledgered. This is the independent oracle for the rule table: W3C's own "
@@ -19553,7 +19553,7 @@ msgstr ""
 "`Regime::OwlRl` 下调用一次 `purrdf_entail::entails()` 作答。两个通道证明的是"
 "不同的事，分开报告。"
 
-#: src/entailment.md:406
+#: src/entailment.md:405
 msgid ""
 "**The negative lane is 23 of 23: no unsoundness.** The chase never derived a "
 "triple W3C publishes as _not_ entailed. That is the safety result, and it "
@@ -19564,14 +19564,14 @@ msgstr ""
 "被蕴涵的三元组。这是安全性结果，它在*全部* 23 个负向用例上都成立——可靠性是每"
 "个用例都必须满足的，因此没有按 profile 过滤任何用例。"
 
-#: src/entailment.md:411
+#: src/entailment.md:410
 msgid ""
 "**Those 23 agreements are two different results, and the harness prints the "
 "split** on a scoreboard line of its own:"
 msgstr ""
 "**这 23 次一致是两种不同的结果，测试框架会打印其划分**，单独占一行记分板："
 
-#: src/entailment.md:418
+#: src/entailment.md:417
 msgid ""
 "Three are _decided_ non-entailments — both halves of Theorem PR1's "
 "hypothesis hold, so the closure's failure to contain the non-conclusion is a "
@@ -19589,7 +19589,7 @@ msgstr ""
 "`refuted 0`。`23 of 23` 应读作「未发现不可靠性」，绝不能读作「证明了 23 个非"
 "蕴涵」。"
 
-#: src/entailment.md:427
+#: src/entailment.md:426
 msgid ""
 "The positive lane is **27 of 27** — the 27 positive entailments W3C itself "
 "places inside the RL profile under RDF-Based semantics — and the typed "
@@ -19604,7 +19604,7 @@ msgstr ""
 "`imports-unresolved` 为 0，且**需要采取行动的项为 0**（`missing-rule` 为 "
 "0）。"
 
-#: src/entailment.md:434
+#: src/entailment.md:433
 msgid ""
 "Every class it used to hold is closed, and the rule table did not change "
 "once to close any of them. `entails()` reaches a conclusion six ways, and "
@@ -19613,7 +19613,7 @@ msgstr ""
 "它过去包含的每一类都已关闭，而为了关闭其中任何一类，规则表一次也没有改变。"
 "`entails()` 以六种方式得出结论，其中五种不是匹配："
 
-#: src/entailment.md:438
+#: src/entailment.md:437
 msgid ""
 "**refutation.** A negative fact still has no head anywhere in Tables 4–9 — "
 "no rule concludes `owl:differentFrom`, and none concludes membership in an "
@@ -19636,7 +19636,7 @@ msgstr ""
 "态，并且恰好在每一对都被驳倒时才被蕴涵——这就是为什么有两个条目随之离开了 "
 "`schema-conclusion` 类。"
 
-#: src/entailment.md:449
+#: src/entailment.md:448
 msgid ""
 "**freeze-and-chase.** `p rdf:type owl:TransitiveProperty` abbreviates a "
 "universally quantified Horn implication, and an implication is decided by "
@@ -19654,7 +19654,7 @@ msgstr ""
 "的一次查找，而且这一步不可省略：模式公理是一个合取式，只确立其中有意思的那一"
 "半，就会声称该语义并不许可的结论。"
 
-#: src/entailment.md:457
+#: src/entailment.md:456
 msgid ""
 "**comprehension.** A conclusion may assert that a CLASS EXISTS — an "
 "anonymous `owl:unionOf`, an anonymous `owl:Restriction` — which the RDF-"
@@ -19667,7 +19667,7 @@ msgstr ""
 "件所许可，但须满足一个关于运算对象的类型附加条件。只生成结论所点名的那些脚手"
 "架，且所用的空节点已检查在两份文档中都不存在。"
 
-#: src/entailment.md:462
+#: src/entailment.md:461
 msgid ""
 "**reflexivity.** `owl:ReflexiveProperty` is outside the RL syntax, so the "
 "profile states no rule for it — and a rule that did would range over every "
@@ -19679,7 +19679,7 @@ msgstr ""
 "给出规则——而如果有这样一条规则，它的取值范围将是每一个资源，从而扩大每个使用"
 "方默认都会计算的推理闭包。结论自身的自环改为从前提的自反类型声明中读出。"
 
-#: src/entailment.md:467
+#: src/entailment.md:466
 msgid ""
 "**datatype containment.** A property's declared `rdfs:range` datatypes "
 "intersect, and the intersection may be contained in one the premise never "
@@ -19693,7 +19693,7 @@ msgstr ""
 "⊓ unsignedInt ⊑ unsignedShort`，这两者都无法通过对三元组做连接来发现。在 XSD "
 "值空间上判定，采用三值逻辑，否定答案只有在反例范围被精确判定时才会给出。"
 
-#: src/entailment.md:474
+#: src/entailment.md:473
 msgid ""
 "The last case needed no mechanism at all, only the document its premise "
 "names: `webont-imports-011` `owl:imports` a support ontology the upstream "
@@ -19706,7 +19706,7 @@ msgstr ""
 "W3C 自己的 URL 获取后随库固化在这些用例旁边，并作为调用方持有的配置提供给 "
 "`entails()`。该库仍然不获取任何内容。"
 
-#: src/entailment.md:480
+#: src/entailment.md:479
 msgid ""
 "Nothing about the inventory moves: `rules(Regime::OwlRl)` and "
 "`implemented(Regime::OwlRl)` are still exactly the same 78, "
@@ -19726,7 +19726,7 @@ msgstr ""
 "结的常量、规则体与规则头；生成的三元组以及许可它们的推理闭包三元组），以及它"
 "自己的检查器，无需运行推理机即可重新判定全部内容。"
 
-#: src/entailment.md:490
+#: src/entailment.md:489
 msgid ""
 "The one case that used to be actionable is closed by an **extension**, and "
 "the extension is labelled rather than absorbed. `a owl:differentFrom b` "
@@ -19754,7 +19754,7 @@ msgstr ""
 "到的推理闭包是表 4–9 再加上一份它可以阅读并拒绝的清单，而 `OWL-RL 78 / 78` 仍"
 "然只是关于表 4–9 的声明，别无其他。"
 
-#: src/entailment.md:504
+#: src/entailment.md:503
 msgid ""
 "The live scoreboard is [`docs/CONFORMANCE.md`](https://github.com/Blackcat-"
 "Informatics/purrdf/blob/main/docs/CONFORMANCE.md)."
@@ -21980,10 +21980,10 @@ msgstr "rdflib 7.6 自身的、随库固化的测试 + 第一方对等性测试"
 msgid ""
 "At the time of writing every suite is green — for example 1,105/1,105 "
 "attempted shexTest validation cases, 129/129 W3C SHACL, 264/264 codec round-"
-"trips, 70/70 W3C SPARQL entailment-regime cases, and 258/262 agreeing "
-"verdicts on the vendored W3C OWL 2 DL-consistency corpus — with the "
-"remaining non-passes strictly ledgered (4 typed OWL 2 divergences; no SPARQL "
-"case is ledgered). Two of those numbers need their scope stated: the OWL 2 "
+"trips, 70/70 W3C SPARQL entailment-regime cases, and 262/262 agreeing "
+"verdicts on the vendored W3C OWL 2 DL-consistency corpus, with 0 typed OWL 2 "
+"divergences; 0 SPARQL ledger entries. Other suites' non-passes remain "
+"strictly ledgered. Two of those numbers need their scope stated: the OWL 2 "
 "DL corpus is a _subset_, 262 of the 482 consistency-shaped cases W3C "
 "published, and rule-table coverage is not entailment conformance — on this "
 "vendored W3C corpus of OWL 2 RL entailment tests the chase scores 50/50, "
@@ -21994,8 +21994,9 @@ msgid ""
 msgstr ""
 "撰写本文时，每个套件都是绿色的——例如，已尝试的 shexTest 验证用例 "
 "1,105/1,105、W3C SHACL 129/129、编解码器往返 264/264、W3C SPARQL 蕴涵机制用"
-"例 70/70，以及在随库固化的 W3C OWL 2 DL 相容性语料上 258/262 个裁决一致——其余"
-"未通过者都严格入台账（4 个带类型的 OWL 2 分歧；没有 SPARQL 用例入台账）。其中"
+"例 70/70，以及在随库固化的 W3C OWL 2 DL 相容性语料上 262/262 个裁决一致，带类"
+"型的 OWL 2 分歧为 0 个；SPARQL 台账条目为 0 个。其他套件中未通过的用例仍严"
+"格入台账。其中"
 "两个数字需要说明其范围：OWL 2 DL 语料是一个*子集*，即 W3C 所发布的 482 个相容"
 "性形态用例中的 262 个；而规则表覆盖并不等于蕴涵一致性——在这份随库固化的 W3C "
 "OWL 2 RL 蕴涵测试语料上，chase 得分 50/50，即正向 27 个中 27 个、负向 23 个"
@@ -25054,8 +25055,42 @@ msgstr ""
 #~ "单个编解码值各 16 MiB；定义数、每个对象的字段数或有限值数各 65,536；深度 "
 #~ "128；每个 GraphQL 名称 255 字节。"
 
-#~ msgid "Eleven workspace members are deliberately never published to crates.io: `purrdf-capi` (built via cargo-c, distributed as `libpurrdf`), `purrdf-sparql-conformance` (the test harness), `purrdf-hash-conformance` (the frozen-vector suites of `purrdf-hash`), `purrdf-cli` (the `purrdf` binary), `purrdf-envelope-probe` (the micro-hardware envelope capture tool), `purrdf-bench` (benchmark tooling), `purrdf-alloc-probe` (the shared counting allocator the allocation tests and benches measure with), `purrdf-testkit` (the shared test support: goldens, temporary paths, frozen vectors and the `harness = false` runner), `wasm-link` (the wasm package's post-link step), `helper-census` (the structural census behind the shared-helpers gate), and `purrdf-python` (the extension crate, which ships to PyPI via maturin instead)."
-#~ msgstr "有十一个工作区成员有意从不发布到 crates.io：`purrdf-capi`（经由 cargo-c 构建，以 `libpurrdf` 的形式分发）、`purrdf-sparql-conformance`（测试框架）、`purrdf-hash-conformance`（`purrdf-hash` 的冻结向量测试套件）、`purrdf-cli`（`purrdf` 二进制文件）、`purrdf-envelope-probe`（微型硬件包络采集工具）、`purrdf-bench`（基准测试工具）、`purrdf-alloc-probe`（分配测试与基准测试进行测量时所共用的计数分配器）、`purrdf-testkit`（共用测试支持：黄金文件、临时路径、冻结向量与 `harness = false` 运行器）、`wasm-link`（wasm 包的链接后处理工具）、`helper-census`（共享辅助函数门禁背后的结构普查工具），以及 `purrdf-python`（扩展 crate，改为经由 maturin 发布到 PyPI）。"
+#~ msgid ""
+#~ "Eleven workspace members are deliberately never published to crates.io: "
+#~ "`purrdf-capi` (built via cargo-c, distributed as `libpurrdf`), `purrdf-"
+#~ "sparql-conformance` (the test harness), `purrdf-hash-conformance` (the "
+#~ "frozen-vector suites of `purrdf-hash`), `purrdf-cli` (the `purrdf` "
+#~ "binary), `purrdf-envelope-probe` (the micro-hardware envelope capture "
+#~ "tool), `purrdf-bench` (benchmark tooling), `purrdf-alloc-probe` (the "
+#~ "shared counting allocator the allocation tests and benches measure with), "
+#~ "`purrdf-testkit` (the shared test support: goldens, temporary paths, "
+#~ "frozen vectors and the `harness = false` runner), `wasm-link` (the wasm "
+#~ "package's post-link step), `helper-census` (the structural census behind "
+#~ "the shared-helpers gate), and `purrdf-python` (the extension crate, which "
+#~ "ships to PyPI via maturin instead)."
+#~ msgstr ""
+#~ "有十一个工作区成员有意从不发布到 crates.io：`purrdf-capi`（经由 cargo-c 构"
+#~ "建，以 `libpurrdf` 的形式分发）、`purrdf-sparql-conformance`（测试框架）、"
+#~ "`purrdf-hash-conformance`（`purrdf-hash` 的冻结向量测试套件）、`purrdf-"
+#~ "cli`（`purrdf` 二进制文件）、`purrdf-envelope-probe`（微型硬件包络采集工"
+#~ "具）、`purrdf-bench`（基准测试工具）、`purrdf-alloc-probe`（分配测试与基准"
+#~ "测试进行测量时所共用的计数分配器）、`purrdf-testkit`（共用测试支持：黄金文"
+#~ "件、临时路径、冻结向量与 `harness = false` 运行器）、`wasm-link`（wasm 包"
+#~ "的链接后处理工具）、`helper-census`（共享辅助函数门禁背后的结构普查工"
+#~ "具），以及 `purrdf-python`（扩展 crate，改为经由 maturin 发布到 PyPI）。"
 
-#~ msgid "`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the eleven that published crates depend on, and they reach them solely through `[dev-dependencies]`. Their root `[workspace.dependencies]` entries are therefore path-only, with no `version` key, which is what makes cargo drop them from the packaged manifest: an unpublished crate cannot be a versioned dependency of a published one, and `cargo publish`'s verification step resolves dev-dependencies too."
-#~ msgstr "这十一个成员中，只有 `purrdf-alloc-probe` 和 `purrdf-testkit` 被已发布的 crate 所依赖，并且仅通过 `[dev-dependencies]` 引入。因此，它们在根 `[workspace.dependencies]` 中的条目只有路径、没有 `version` 键，这正是 cargo 将它们从打包后的清单中去除的原因：未发布的 crate 不能成为已发布 crate 的带版本依赖，而 `cargo publish` 的验证步骤也会解析 dev-dependencies。"
+#~ msgid ""
+#~ "`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the eleven "
+#~ "that published crates depend on, and they reach them solely through `[dev-"
+#~ "dependencies]`. Their root `[workspace.dependencies]` entries are "
+#~ "therefore path-only, with no `version` key, which is what makes cargo "
+#~ "drop them from the packaged manifest: an unpublished crate cannot be a "
+#~ "versioned dependency of a published one, and `cargo publish`'s "
+#~ "verification step resolves dev-dependencies too."
+#~ msgstr ""
+#~ "这十一个成员中，只有 `purrdf-alloc-probe` 和 `purrdf-testkit` 被已发布的 "
+#~ "crate 所依赖，并且仅通过 `[dev-dependencies]` 引入。因此，它们在根 "
+#~ "`[workspace.dependencies]` 中的条目只有路径、没有 `version` 键，这正是 "
+#~ "cargo 将它们从打包后的清单中去除的原因：未发布的 crate 不能成为已发布 "
+#~ "crate 的带版本依赖，而 `cargo publish` 的验证步骤也会解析 dev-"
+#~ "dependencies。"

@@ -353,6 +353,9 @@ pub fn cast_calendar(source: &XsdValue, target: XsdDatatype) -> Result<Option<Xs
     }
     let (year, month, day, tz) = match source {
         XsdValue::DateTime(value) => {
+            if target == XsdDatatype::DateTimeStamp {
+                return Ok(value.tz.map(|_| source.clone()));
+            }
             if target == XsdDatatype::Time {
                 return Ok(Some(XsdValue::Time(Time {
                     hour: value.hour % 24,
@@ -371,7 +374,10 @@ pub fn cast_calendar(source: &XsdValue, target: XsdDatatype) -> Result<Option<Xs
             (year, month, day, value.tz)
         }
         XsdValue::Date(value) => {
-            if target == XsdDatatype::DateTime {
+            if matches!(target, XsdDatatype::DateTime | XsdDatatype::DateTimeStamp) {
+                if target == XsdDatatype::DateTimeStamp && value.tz.is_none() {
+                    return Ok(None);
+                }
                 return Ok(Some(XsdValue::DateTime(DateTime {
                     year: value.year,
                     month: value.month,
@@ -817,11 +823,26 @@ fn parse_hms(
 
 /// `xsd:dateTime` = `date 'T' time tz?`.
 pub fn parse_datetime(s: &str) -> Result<DateTime, XsdError> {
-    let dt = XsdDatatype::DateTime;
+    parse_datetime_as(XsdDatatype::DateTime, s)
+}
+
+/// `xsd:dateTimeStamp`: the same dateTime grammar with a required timezone.
+pub fn parse_datetime_stamp(s: &str) -> Result<DateTime, XsdError> {
+    parse_datetime_as(XsdDatatype::DateTimeStamp, s)
+}
+
+fn parse_datetime_as(dt: XsdDatatype, s: &str) -> Result<DateTime, XsdError> {
     let (date_part, time_part) = s
         .split_once('T')
         .ok_or_else(|| XsdError::invalid(dt, s, "missing 'T'"))?;
     let (time_no_tz, tz) = split_tz(dt, s, time_part)?;
+    if dt == XsdDatatype::DateTimeStamp && tz.is_none() {
+        return Err(XsdError::invalid(
+            dt,
+            s,
+            "dateTimeStamp requires a timezone",
+        ));
+    }
     let (year, month, day) = parse_ymd(dt, s, date_part)?;
     let (hour, minute, second) = parse_hms(dt, s, &time_no_tz)?;
     let (year, second) = (year?, second?);
@@ -2032,7 +2053,9 @@ enum SecondAction {
 /// compile error here until it is classified, not a silent gap.
 const fn actions(datatype: XsdDatatype) -> (MonthAction, SecondAction) {
     match datatype {
-        XsdDatatype::DateTime => (MonthAction::Clamped, SecondAction::Free),
+        XsdDatatype::DateTime | XsdDatatype::DateTimeStamp => {
+            (MonthAction::Clamped, SecondAction::Free)
+        }
         XsdDatatype::Date => (MonthAction::Clamped, SecondAction::MidnightTruncating),
         XsdDatatype::Time => (MonthAction::Absent, SecondAction::CyclicDay),
         XsdDatatype::GYearMonth => (MonthAction::Free, SecondAction::Absent),

@@ -622,12 +622,15 @@ kind: a value is any node (an IRI may denote a data value) or any well-typed
 literal. A literal is well typed when its lexical form is in its datatype's
 lexical space, so `"abc"^^xsd:integer` is no value; a literal typed
 `rdf:XMLLiteral`, whose lexical space no pattern states, or typed with a
-datatype outside the map, is admitted with its lexical form unjudged. The one
-rule then narrows the values:
+datatype outside the map, is admitted with its lexical form unjudged. Every
+coverage cell that admits unchecked XML reports `representation_approximation`,
+including an authoritative SHACL property or a class outside the configured
+ontology vocabulary. A shape cell proven to exclude XML can still report
+`exact`. The one rule then narrows the values:
 
 - a property no range constrains admits every node and every well-typed
-  literal, which is exactly its extension, so its cell is exact, and
-  `∀p.owl:Thing` is projected exactly;
+  literal. Because an XML literal's lexical form remains unjudged, that
+  cell reports `representation_approximation`, including `∀p.owl:Thing`;
 - a data range (`xsd:string`, a facet restriction, a literal `owl:oneOf`)
   holds literals to its value space and admits a node, whose data value is not
   judged, so it is reported as an approximation;
@@ -687,13 +690,18 @@ it is stated on every string literal and projected exactly. The schema `$id` und
 (`http://purl.org/goodrelations/v1/schema/instance.schema.json`), as draft
 2020-12 requires.
 
-The fixed ceilings are 65,536 properties, 65,536 classes, 1,048,576 relation or
-coverage cells, OWL expression depth 64, 1,048,576 expanded expression nodes
-per request, 16,777,216 inherited class-expression references, and 16,777,216
-memberships in the class hierarchy's closure (a subclass chain about 5,790
-deep). A chain of inherited-restriction fragment references is at most 64 long:
-a deeper hierarchy restarts it with a fragment that states its ancestors'
-restrictions, so a validator that bounds reference chains can judge it.
+Class and property widths, hierarchy memberships, inherited expression
+references and class × property coverage cells are bounded by the current
+input with checked arithmetic. The TypeScript, GraphQL and Pydantic catalogs
+likewise derive their definition bounds from the source schema bytes. There is
+no fixed class, cell or definition count ceiling. OWL expression depth remains
+64, and the existing 1,048,576 expanded-expression occurrence guard remains at
+its separate home: it bounds exponential anonymous subtree expansion, rather
+than class or coverage width. A cached expression consumes its original expanded
+occurrence count and original depth before it is copied. A chain of
+inherited-restriction fragment references is at most 64 long: a deeper hierarchy
+restarts it with a fragment that states its ancestors' restrictions, so a
+validator that bounds reference chains can judge it.
 
 Every catalogued property appears exactly once in `SchemaCoverageReport`, with
 sorted class decisions, inclusion/exclusion reasons, precision, and source
@@ -1141,14 +1149,16 @@ names, malformed keyword values, `$id` rebasing, external, indirect, or
 dangling `$ref`, `$dynamicRef`/`$recursiveRef`, pure-alias cycles,
 unsatisfiable closed required fields, and any generated type, field, helper,
 scalar, or enum name collision. The value codec likewise rejects unmapped or
-structurally incompatible values. Fixed platform-independent limits make
-resource behavior deterministic:
+structurally incompatible values. Definition and traversal widths derive from
+the current source bytes with checked arithmetic; the remaining
+platform-independent limits keep resource behavior deterministic:
 
 | Resource | Limit |
 |---|---:|
 | each emitted artifact | 4 bytes per input byte, at least 16 MiB |
 | one codec JSON value | 16 MiB |
-| definitions, fields in one object, or values in one finite set | 65,536 |
+| definitions | bounded by source schema bytes |
+| fields in one object or values in one finite set | 65,536 |
 | schema-expression or codec-value depth | 128 |
 | generated or caller-supplied GraphQL name | 255 bytes |
 

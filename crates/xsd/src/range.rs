@@ -34,13 +34,14 @@
 //! | boolean | `xsd:boolean` | the two-element set |
 //! | string | `xsd:string` | length-selected, length in CHARACTERS |
 //! | hex / base64 | `xsd:hexBinary`, `xsd:base64Binary` | length-selected, length in OCTETS |
-//! | one space each | `dateTime`, `date`, `time`, the `duration` family, and the five Gregorian types | listed sets and their complements |
+//! | one space each | `dateTime` (its zoned `dateTimeStamp` subset and timezone-less remainder), `date`, `time`, the `duration` family, and the five Gregorian types | listed sets and their complements |
+//! | two term-identified spaces | `rdf:langString`, `rdf:dirLangString` | disjoint infinite sets; finite members are normalized identities supplied by the consumer |
 //!
 //! The `duration` family is ONE space because the `xsd:dayTimeDuration` and
 //! `xsd:yearMonthDuration` value spaces overlap at the zero duration.
 //!
 //! Beyond those spaces lies the **remainder**: the values of datatypes this module does
-//! not model (`owl:real`, `owl:rational`, `xsd:anyURI`, `rdf:langString`, a
+//! not model (`owl:real`, `owl:rational`, `xsd:anyURI`, a
 //! user-defined datatype). [`DataRange::Any`] holds the remainder, a modelled
 //! [`DataRange::Datatype`] does not, and [`DataRange::Opaque`] leaves it — and every
 //! modelled space — unknown, because an unmodelled value space may overlap a modelled
@@ -156,6 +157,17 @@ pub enum DataRange {
     Any,
     /// A whole datatype value space.
     Datatype(XsdDatatype),
+    /// An RDF language-string value space whose normalized identity is supplied by
+    /// the term carrier; no RDF grammar or datatype dependency enters this crate.
+    TermDatatype(TermSpace),
+    /// A finite set of normalized term identities in one RDF value space. Identities
+    /// must come from one immutable identity context, with equal values sharing an id.
+    TermOneOf {
+        /// The RDF value space the identities denote.
+        space: TermSpace,
+        /// Pairwise value identities; duplicates are removed by the shared set algebra.
+        values: Vec<u32>,
+    },
     /// `owl:onDatatype` + `owl:withRestrictions`.
     Restriction {
         /// The datatype being restricted.
@@ -176,6 +188,19 @@ pub enum DataRange {
     /// A range this module models nothing about: a datatype outside the XSD value
     /// spaces, an `xsd:pattern` or `rdf:langRange` facet, or an n-ary data range.
     Opaque,
+}
+
+/// The two disjoint RDF language-string value spaces.
+///
+/// The caller's term carrier validates tags, directions and lexical identity. This
+/// range algebra only needs that equality, and never interprets an arbitrary id as an
+/// XSD scalar. Both spaces are infinite and disjoint from every XSD value space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermSpace {
+    /// Pairs of a string and normalized language tag (`rdf:langString`).
+    LangString,
+    /// Triples of a string, normalized language tag and base direction (`rdf:dirLangString`).
+    DirLangString,
 }
 
 /// Whether a data range is empty. `Empty` and `Inhabited` are PROVED; `Undecided`
@@ -270,6 +295,13 @@ pub fn satisfiability(range: &DataRange) -> Satisfiability {
 #[must_use]
 pub fn contains(range: &DataRange, value: &XsdValue) -> Known {
     extent(range).contains(value)
+}
+
+/// Whether a range holds a normalized RDF language-string value identity.
+/// The identity context must be the same as that of its [`DataRange::TermOneOf`] operands.
+#[must_use]
+pub fn contains_term(range: &DataRange, space: TermSpace, identity: u32) -> Known {
+    extent(range).term[space as usize].holds(&identity)
 }
 
 /// How many distinct values `range` holds.
@@ -579,8 +611,10 @@ enum TextSpace {
 #[cfg_attr(test, derive(Debug))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TemporalSpace {
-    /// `xsd:dateTime`.
+    /// Zoned `xsd:dateTime` values, exactly `xsd:dateTimeStamp`.
     DateTime,
+    /// The remaining `xsd:dateTime` values, without a timezone.
+    DateTimeUnzoned,
     /// `xsd:date`.
     Date,
     /// `xsd:time`.
@@ -607,8 +641,9 @@ const TEXT_SPACES: [TextSpace; 3] = [
 ];
 
 /// The temporal spaces, in [`Extent::temporal`] order.
-const TEMPORAL_SPACES: [TemporalSpace; 9] = [
+const TEMPORAL_SPACES: [TemporalSpace; 10] = [
     TemporalSpace::DateTime,
+    TemporalSpace::DateTimeUnzoned,
     TemporalSpace::Date,
     TemporalSpace::Time,
     TemporalSpace::Duration,
@@ -674,7 +709,7 @@ fn space_of_datatype(dt: XsdDatatype) -> Space {
         D::String => Space::Text(TextSpace::String),
         D::HexBinary => Space::Text(TextSpace::HexBinary),
         D::Base64Binary => Space::Text(TextSpace::Base64Binary),
-        D::DateTime => Space::Temporal(TemporalSpace::DateTime),
+        D::DateTime | D::DateTimeStamp => Space::Temporal(TemporalSpace::DateTime),
         D::Date => Space::Temporal(TemporalSpace::Date),
         D::Time => Space::Temporal(TemporalSpace::Time),
         D::Duration | D::DayTimeDuration | D::YearMonthDuration => {
@@ -690,7 +725,11 @@ fn space_of_datatype(dt: XsdDatatype) -> Space {
 
 /// The value space a value belongs to.
 fn space_of_value(value: &XsdValue) -> Space {
-    space_of_datatype(value.datatype())
+    if matches!(value, XsdValue::DateTime(value) if value.timezone_minutes().is_none()) {
+        Space::Temporal(TemporalSpace::DateTimeUnzoned)
+    } else {
+        space_of_datatype(value.datatype())
+    }
 }
 
 /// Whether a datatype's value space is the WHOLE of its [`Space`].
@@ -1140,6 +1179,8 @@ fn decimal_point(value: &XsdValue) -> Option<exact::Decimal> {
 
 /// A set exactly represented in one value space's own closed algebra.
 trait Algebra: Clone {
+    /// The value identity this space accepts.
+    type Value;
     /// The space's complement of this set.
     fn complement(&self) -> Self;
     /// Intersection.
@@ -1151,7 +1192,7 @@ trait Algebra: Clone {
     /// How many values the set holds.
     fn count(&self) -> Cardinality;
     /// Whether the set holds `value`, which the caller has routed to this space.
-    fn holds(&self, value: &XsdValue) -> bool;
+    fn holds(&self, value: &Self::Value) -> bool;
 }
 
 /// The decimal space: the integers and the non-integral decimals, each an interval set
@@ -1302,6 +1343,7 @@ impl DecimalSet {
 }
 
 impl Algebra for DecimalSet {
+    type Value = XsdValue;
     fn complement(&self) -> Self {
         Self {
             integral: self.integral.complement(),
@@ -1455,6 +1497,7 @@ impl FloatSet {
 }
 
 impl Algebra for FloatSet {
+    type Value = XsdValue;
     fn complement(&self) -> Self {
         Self {
             width: self.width,
@@ -1562,6 +1605,7 @@ impl BoolSet {
 }
 
 impl Algebra for BoolSet {
+    type Value = XsdValue;
     fn complement(&self) -> Self {
         Self {
             has_false: !self.has_false,
@@ -1785,6 +1829,7 @@ impl LengthSet {
 }
 
 impl Algebra for LengthSet {
+    type Value = XsdValue;
     fn complement(&self) -> Self {
         Self {
             kind: self.kind,
@@ -1881,8 +1926,26 @@ fn length_admitted(lengths: &IntervalSet, value: &XsdValue) -> bool {
 }
 
 /// Whether a list already holds a value identical to `value`.
-fn holds_same(values: &[XsdValue], value: &XsdValue) -> bool {
-    values.iter().any(|v| same_value(v, value))
+/// Equality law of one listed value space.
+trait ListedValue: Clone {
+    /// Whether these denote one value in the same space.
+    fn same(&self, other: &Self) -> bool;
+}
+
+impl ListedValue for XsdValue {
+    fn same(&self, other: &Self) -> bool {
+        same_value(self, other)
+    }
+}
+
+impl ListedValue for u32 {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+fn holds_same<T: ListedValue>(values: &[T], value: &T) -> bool {
+    values.iter().any(|v| v.same(value))
 }
 
 /// `base.pow(exp)`, saturating at `u64::MAX`.
@@ -1897,53 +1960,53 @@ fn saturating_pow(base: u64, exp: u64) -> u64 {
 /// space does NOT produce one of these shapes: the XSD order there is partial, so an
 /// interval's complement is not a union of intervals.
 #[derive(Clone)]
-struct ListedSet {
-    /// Which temporal space this set lives in.
-    space: TemporalSpace,
+struct ListedSet<T> {
+    /// The finite space size, or `None` for an infinite space.
+    size: Option<u64>,
     /// Whether `values` lists the NON-members.
     negated: bool,
     /// The listed values, pairwise distinct under [`same_value`].
-    values: Vec<XsdValue>,
+    values: Vec<T>,
 }
 
-impl ListedSet {
+impl<T: ListedValue> ListedSet<T> {
     /// The whole space.
-    fn full(space: TemporalSpace) -> Self {
+    fn full(size: Option<u64>) -> Self {
         Self {
-            space,
+            size,
             negated: true,
             values: Vec::new(),
         }
     }
 
     /// The empty set.
-    fn empty(space: TemporalSpace) -> Self {
+    fn empty(size: Option<u64>) -> Self {
         Self {
-            space,
+            size,
             negated: false,
             values: Vec::new(),
         }
     }
 
     /// The set listing exactly `values`.
-    fn listed(space: TemporalSpace, values: Vec<XsdValue>) -> Self {
-        let mut deduped: Vec<XsdValue> = Vec::with_capacity(values.len());
+    fn listed(size: Option<u64>, values: Vec<T>) -> Self {
+        let mut deduped: Vec<T> = Vec::with_capacity(values.len());
         for value in values {
             if !holds_same(&deduped, &value) {
                 deduped.push(value);
             }
         }
         Self {
-            space,
+            size,
             negated: false,
             values: deduped,
         }
     }
 
     /// A set over the same space with the given polarity and listed values.
-    fn with(&self, negated: bool, values: Vec<XsdValue>) -> Self {
+    fn with(&self, negated: bool, values: Vec<T>) -> Self {
         Self {
-            space: self.space,
+            size: self.size,
             negated,
             values,
         }
@@ -1951,8 +2014,8 @@ impl ListedSet {
 }
 
 /// The union of two value lists, deduplicated under [`same_value`].
-fn union_values(a: &[XsdValue], b: &[XsdValue]) -> Vec<XsdValue> {
-    let mut out: Vec<XsdValue> = a.to_vec();
+fn union_values<T: ListedValue>(a: &[T], b: &[T]) -> Vec<T> {
+    let mut out: Vec<T> = a.to_vec();
     for value in b {
         if !holds_same(&out, value) {
             out.push(value.clone());
@@ -1962,7 +2025,7 @@ fn union_values(a: &[XsdValue], b: &[XsdValue]) -> Vec<XsdValue> {
 }
 
 /// The values of `a` that also appear in `b`.
-fn common_values(a: &[XsdValue], b: &[XsdValue]) -> Vec<XsdValue> {
+fn common_values<T: ListedValue>(a: &[T], b: &[T]) -> Vec<T> {
     a.iter()
         .filter(|value| holds_same(b, value))
         .cloned()
@@ -1970,14 +2033,16 @@ fn common_values(a: &[XsdValue], b: &[XsdValue]) -> Vec<XsdValue> {
 }
 
 /// The values of `a` that do not appear in `b`.
-fn other_values(a: &[XsdValue], b: &[XsdValue]) -> Vec<XsdValue> {
+fn other_values<T: ListedValue>(a: &[T], b: &[T]) -> Vec<T> {
     a.iter()
         .filter(|value| !holds_same(b, value))
         .cloned()
         .collect()
 }
 
-impl Algebra for ListedSet {
+impl<T: ListedValue> Algebra for ListedSet<T> {
+    type Value = T;
+
     fn complement(&self) -> Self {
         self.with(!self.negated, self.values.clone())
     }
@@ -2003,8 +2068,7 @@ impl Algebra for ListedSet {
     fn is_empty(&self) -> bool {
         if self.negated {
             // Only a finite space can be exhausted by a finite list of non-members.
-            self.space
-                .size()
+            self.size
                 .is_some_and(|size| size <= u64::try_from(self.values.len()).unwrap_or(u64::MAX))
         } else {
             self.values.is_empty()
@@ -2013,7 +2077,7 @@ impl Algebra for ListedSet {
 
     fn count(&self) -> Cardinality {
         if self.negated {
-            match self.space.size() {
+            match self.size {
                 None => Cardinality::Unbounded,
                 Some(size) => Cardinality::Exactly(
                     size.saturating_sub(u64::try_from(self.values.len()).unwrap_or(u64::MAX)),
@@ -2024,7 +2088,7 @@ impl Algebra for ListedSet {
         }
     }
 
-    fn holds(&self, value: &XsdValue) -> bool {
+    fn holds(&self, value: &T) -> bool {
         holds_same(&self.values, value) != self.negated
     }
 }
@@ -2106,7 +2170,7 @@ impl<A: Algebra> SpaceSet<A> {
     }
 
     /// Whether this space's part of the range holds `value`.
-    fn holds(&self, value: &XsdValue) -> Known {
+    fn holds(&self, value: &A::Value) -> Known {
         match self {
             Self::Exact(set) => {
                 if set.holds(value) {
@@ -2136,7 +2200,9 @@ struct Extent {
     /// The length-selected spaces, in [`TEXT_SPACES`] order.
     text: [SpaceSet<LengthSet>; 3],
     /// The temporal spaces, in [`TEMPORAL_SPACES`] order.
-    temporal: [SpaceSet<ListedSet>; 9],
+    temporal: [SpaceSet<ListedSet<XsdValue>>; 10],
+    /// The two disjoint, infinite RDF language-string spaces.
+    term: [SpaceSet<ListedSet<u32>>; 2],
     /// Whether the range holds the values of the datatypes this module does not model.
     remainder: Known,
 }
@@ -2160,8 +2226,9 @@ impl Extent {
             boolean: SpaceSet::Exact(BoolSet::empty()),
             text: std::array::from_fn(|i| SpaceSet::Exact(LengthSet::empty(TEXT_SPACES[i].kind()))),
             temporal: std::array::from_fn(|i| {
-                SpaceSet::Exact(ListedSet::empty(TEMPORAL_SPACES[i]))
+                SpaceSet::Exact(ListedSet::empty(TEMPORAL_SPACES[i].size()))
             }),
+            term: std::array::from_fn(|_| SpaceSet::Exact(ListedSet::empty(None))),
             remainder: Known::No,
         }
     }
@@ -2174,7 +2241,10 @@ impl Extent {
             double: SpaceSet::Exact(FloatSet::full(FloatWidth::Double)),
             boolean: SpaceSet::Exact(BoolSet::full()),
             text: std::array::from_fn(|i| SpaceSet::Exact(LengthSet::full(TEXT_SPACES[i].kind()))),
-            temporal: std::array::from_fn(|i| SpaceSet::Exact(ListedSet::full(TEMPORAL_SPACES[i]))),
+            temporal: std::array::from_fn(|i| {
+                SpaceSet::Exact(ListedSet::full(TEMPORAL_SPACES[i].size()))
+            }),
+            term: std::array::from_fn(|_| SpaceSet::Exact(ListedSet::full(None))),
             remainder: Known::Yes,
         }
     }
@@ -2189,6 +2259,7 @@ impl Extent {
             boolean: SpaceSet::Unknown,
             text: std::array::from_fn(|_| SpaceSet::Unknown),
             temporal: std::array::from_fn(|_| SpaceSet::Unknown),
+            term: std::array::from_fn(|_| SpaceSet::Unknown),
             remainder: Known::Unknown,
         }
     }
@@ -2202,6 +2273,7 @@ impl Extent {
             boolean: self.boolean.complement(),
             text: std::array::from_fn(|i| self.text[i].complement()),
             temporal: std::array::from_fn(|i| self.temporal[i].complement()),
+            term: std::array::from_fn(|i| self.term[i].complement()),
             remainder: self.remainder.negate(),
         }
     }
@@ -2215,6 +2287,7 @@ impl Extent {
             boolean: self.boolean.intersect(&other.boolean),
             text: zip_spaces(&self.text, &other.text, SpaceSet::intersect),
             temporal: zip_spaces(&self.temporal, &other.temporal, SpaceSet::intersect),
+            term: zip_spaces(&self.term, &other.term, SpaceSet::intersect),
             remainder: self.remainder.conjoin(other.remainder),
         }
     }
@@ -2228,6 +2301,7 @@ impl Extent {
             boolean: self.boolean.union(&other.boolean),
             text: zip_spaces(&self.text, &other.text, SpaceSet::union),
             temporal: zip_spaces(&self.temporal, &other.temporal, SpaceSet::union),
+            term: zip_spaces(&self.term, &other.term, SpaceSet::union),
             remainder: self.remainder.disjoin(other.remainder),
         }
     }
@@ -2251,6 +2325,7 @@ impl Extent {
             .into_iter()
             .chain(self.text.iter().map(SpaceSet::satisfiability))
             .chain(self.temporal.iter().map(SpaceSet::satisfiability))
+            .chain(self.term.iter().map(SpaceSet::satisfiability))
         {
             match verdict {
                 Satisfiability::Inhabited => return Satisfiability::Inhabited,
@@ -2279,6 +2354,9 @@ impl Extent {
         for set in &self.temporal {
             total = total.plus(set.count());
         }
+        for set in &self.term {
+            total = total.plus(set.count());
+        }
         total.plus(match self.remainder {
             // The unmodelled part of the data domain is infinite (`xsd:anyURI` alone).
             Known::Yes => Cardinality::Unbounded,
@@ -2295,6 +2373,7 @@ impl Extent {
             && self.boolean.is_exact()
             && self.text.iter().all(SpaceSet::is_exact)
             && self.temporal.iter().all(SpaceSet::is_exact)
+            && self.term.iter().all(SpaceSet::is_exact)
             && self.remainder != Known::Unknown
     }
 
@@ -2320,6 +2399,16 @@ fn extent(range: &DataRange) -> Extent {
         DataRange::Any => Extent::full(),
         DataRange::Opaque => Extent::unknown(),
         DataRange::Datatype(dt) => datatype_extent(*dt),
+        DataRange::TermDatatype(space) => {
+            let mut ex = Extent::empty();
+            ex.term[*space as usize] = SpaceSet::Exact(ListedSet::full(None));
+            ex
+        }
+        DataRange::TermOneOf { space, values } => {
+            let mut ex = Extent::empty();
+            ex.term[*space as usize] = SpaceSet::Exact(ListedSet::listed(None, values.clone()));
+            ex
+        }
         DataRange::Restriction { base, facets } => restriction_extent(*base, facets),
         DataRange::OneOf(values) => values
             .iter()
@@ -2347,13 +2436,17 @@ fn datatype_extent(dt: XsdDatatype) -> Extent {
         }
         Space::Temporal(space) => {
             ex.temporal[space as usize] = if covers_whole_space(dt) {
-                SpaceSet::Exact(ListedSet::full(space))
+                SpaceSet::Exact(ListedSet::full(space.size()))
             } else {
                 // A duration subtype is an infinite proper subspace of the shared
                 // duration space; the zero duration witnesses it.
                 SpaceSet::Inhabited
             };
         }
+    }
+    if dt == XsdDatatype::DateTime {
+        ex.temporal[TemporalSpace::DateTimeUnzoned as usize] =
+            SpaceSet::Exact(ListedSet::full(None));
     }
     ex
 }
@@ -2378,7 +2471,7 @@ fn value_extent(value: &XsdValue) -> Extent {
         }
         Space::Temporal(space) => {
             ex.temporal[space as usize] =
-                SpaceSet::Exact(ListedSet::listed(space, vec![value.clone()]));
+                SpaceSet::Exact(ListedSet::listed(space.size(), vec![value.clone()]));
         }
     }
     ex
@@ -2510,6 +2603,10 @@ fn restriction_extent(base: XsdDatatype, facets: &[Facet]) -> Extent {
             ex.temporal[space as usize] = temporal_restriction(base, space, facets);
         }
     }
+    if base == XsdDatatype::DateTime {
+        ex.temporal[TemporalSpace::DateTimeUnzoned as usize] =
+            temporal_restriction(base, TemporalSpace::DateTimeUnzoned, facets);
+    }
     ex
 }
 
@@ -2593,12 +2690,12 @@ fn temporal_restriction(
     base: XsdDatatype,
     space: TemporalSpace,
     facets: &[Facet],
-) -> SpaceSet<ListedSet> {
+) -> SpaceSet<ListedSet<XsdValue>> {
     match temporal_bounds(space, facets) {
-        TemporalBounds::Contradiction => SpaceSet::Exact(ListedSet::empty(space)),
+        TemporalBounds::Contradiction => SpaceSet::Exact(ListedSet::empty(space.size())),
         TemporalBounds::Unconstrained => {
             if covers_whole_space(base) {
-                SpaceSet::Exact(ListedSet::full(space))
+                SpaceSet::Exact(ListedSet::full(space.size()))
             } else {
                 SpaceSet::Inhabited
             }
@@ -2616,7 +2713,16 @@ fn temporal_bounds(space: TemporalSpace, facets: &[Facet]) -> TemporalBounds {
             // A length facet does not apply to a temporal value.
             return TemporalBounds::Indeterminate;
         };
-        if space_of_value(value) != Space::Temporal(space) {
+        let value_space = space_of_value(value);
+        // dateTime's zoned and local strata share the same partial order.
+        // Contradictory endpoints refute both strata; an endpoint itself is
+        // a witness only in the stratum it inhabits.
+        if value_space != Space::Temporal(space)
+            && !(matches!(
+                space,
+                TemporalSpace::DateTime | TemporalSpace::DateTimeUnzoned
+            ) && matches!(value, XsdValue::DateTime(_)))
+        {
             return TemporalBounds::Indeterminate;
         }
         bounds.push((side, value));
@@ -2639,7 +2745,9 @@ fn temporal_bounds(space: TemporalSpace, facets: &[Facet]) -> TemporalBounds {
     }
     let witnessed = bounds
         .iter()
-        .filter(|(side, _)| side.is_inclusive())
+        .filter(|(side, candidate)| {
+            side.is_inclusive() && space_of_value(candidate) == Space::Temporal(space)
+        })
         .any(|(_, candidate)| {
             bounds
                 .iter()
