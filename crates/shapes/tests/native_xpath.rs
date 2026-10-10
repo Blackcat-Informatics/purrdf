@@ -248,7 +248,7 @@ fn alternating_laws_and_failed_admission_preserve_the_actual_warm_program() {
     let selected = PreparedShapes::new(Arc::new(turtle::loads(
         PREFIXES,
         r#"ex:S a sh:NodeShape; sh:targetNode ex:n;
-            sh:property [ sh:path ex:p; sh:pattern "(?:a|b)" ] ."#,
+            sh:property [ sh:path ex:p; sh:pattern "(?:a|ab)" ] ."#,
     )))
     .with_xpath_regex(Profile::Xpath31, Limits::new());
     selected.admit_declared_patterns().unwrap();
@@ -1584,5 +1584,63 @@ fn counted_pattern_shapes_validate_at_the_production_defaults_like_the_compatibi
             .map(|result| format!("{:?}", result.focus_node))
             .collect::<Vec<_>>();
         assert_eq!(empty, [format!("{:?}", ex("pairs"))], "{profile:?}");
+    }
+}
+
+#[test]
+fn large_finite_facets_preserve_complete_shacl_findings_under_both_laws() {
+    let mut prose = purrdf_testkit::text::word_prose(4 << 20);
+    prose.truncate(4 << 20);
+    let ab = purrdf_testkit::text::binary_text(4 << 20, 0x00AB_CAFE);
+    let interrupted = format!("{}c{}", &ab[..3_999_999], &ab[..194_305]);
+    let mut data_text = String::new();
+    for (subject, value) in [
+        ("prose", prose.as_str()),
+        ("ab", ab.as_str()),
+        ("bad_class", &format!("{prose}<!")),
+        ("too_long", &format!("{ab}a")),
+        ("too_short", &ab[..3_999_999]),
+        ("interrupted", interrupted.as_str()),
+    ] {
+        writeln!(data_text, "ex:{subject} ex:p \"{value}\" .").unwrap();
+    }
+    let data = turtle::data(PREFIXES, &data_text);
+    let cases = [
+        (r"^[\s\S]{0,10000000}$", "prose", true),
+        (r"^[^\n]{0,10000000}$", "prose", true),
+        (r"^[^<>]{1,5000000}$", "prose", true),
+        (r"^[\p{L} ]{1,5000000}$", "prose", true),
+        (r"^(\w+\s?){1,5000000}$", "prose", true),
+        ("^(a|b){4194304}$", "ab", true),
+        ("(a|b){4000000}", "ab", true),
+        (r"^[^<>]{1,5000000}$", "bad_class", false),
+        (r"^(\w+\s?){1,5000000}$", "bad_class", false),
+        ("^(a|b){4194304}$", "too_long", false),
+        ("(a|b){4000000}", "too_short", false),
+        ("(a|b){4000000}", "interrupted", false),
+    ];
+    let mut shapes_text = String::new();
+    let mut expected = Vec::new();
+    for (index, (pattern, subject, conforms)) in cases.into_iter().enumerate() {
+        writeln!(
+            shapes_text,
+            "ex:S{index} a sh:NodeShape; sh:targetNode ex:{subject}; sh:property ex:P{index} .
+             ex:P{index} sh:path ex:p; sh:pattern \"{}\" .",
+            pattern.replace('\\', "\\\\")
+        )
+        .unwrap();
+        if !conforms {
+            expected.push(format!("{:?}", ex(&format!("P{index}"))));
+        }
+    }
+    expected.sort();
+    let preparation = PreparedShapes::new(Arc::new(turtle::loads(PREFIXES, &shapes_text)));
+    for profile in Profile::ALL {
+        let selected = preparation.clone().with_xpath_regex(profile, Limits::new());
+        let bound = selected.bind_shared_dataset(Arc::clone(&data)).unwrap();
+        let report = bound.validate().unwrap();
+        assert!(!report.conforms);
+        assert_eq!(failing_pattern_shapes(&report), expected, "{profile:?}");
+        assert_eq!(report.results.len(), 5, "no duplicate or missing finding");
     }
 }

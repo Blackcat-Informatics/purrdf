@@ -142,11 +142,22 @@ pub(super) enum Node {
         min: Count,
         max: Option<Count>,
         greedy: bool,
-        /// The set of the character atom that immediately follows this
-        /// repetition in its sequence: a stop before any other character, or
-        /// at the end of the input, cannot continue.
-        follow: Option<usize>,
+        /// The atom that immediately follows this repetition in its
+        /// sequence, when it is a character atom or `$`: a stop where it
+        /// fails cannot continue.
+        follow: Option<Follow>,
     },
+}
+
+/// An atom that immediately follows a repetition in its sequence, which a
+/// stop of the repetition must satisfy at once.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum Follow {
+    /// A character atom of this set: a stop before any other character, or
+    /// at the end of the input, cannot continue.
+    Set(usize),
+    /// `$`: a stop it does not hold at cannot continue.
+    End,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -356,6 +367,12 @@ impl CompiledPattern {
                 self.windows
                     .capacity()
                     .saturating_mul(size_of::<(usize, u64)>()),
+            )
+            .saturating_add(
+                self.links
+                    .normal
+                    .capacity()
+                    .saturating_mul(size_of::<u32>()),
             )
     }
 
@@ -798,7 +815,12 @@ impl<'a> Parser<'a, '_> {
                     Node::Sequence(_, right) => right,
                     _ => previous,
                 };
-                if let Node::Character(next) = self.nodes[atom]
+                let next = match self.nodes[atom] {
+                    Node::Character(set) => Some(Follow::Set(set)),
+                    Node::End => Some(Follow::End),
+                    _ => None,
+                };
+                if let Some(next) = next
                     && let Node::Repeat { follow, .. } = &mut self.nodes[last]
                 {
                     *follow = Some(next);

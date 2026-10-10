@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-10-09T20:44:26-06:00\n"
+"POT-Creation-Date: 2026-10-10T14:42:23-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -5359,8 +5359,8 @@ msgstr ""
 #: src/project/diagnostic-codes.md:50 src/project/diagnostic-codes.md:77
 #: src/project/diagnostic-codes.md:94 src/project/diagnostic-codes.md:105
 #: src/project/diagnostic-codes.md:126 src/project/diagnostic-codes.md:148
-#: src/project/diagnostic-codes.md:250 src/project/diagnostic-codes.md:263
-#: src/project/diagnostic-codes.md:273 src/project/diagnostic-codes.md:283
+#: src/project/diagnostic-codes.md:255 src/project/diagnostic-codes.md:268
+#: src/project/diagnostic-codes.md:278 src/project/diagnostic-codes.md:288
 msgid "Code"
 msgstr "代码"
 
@@ -19497,8 +19497,8 @@ msgstr ""
 "零。这份语料是*相容性*（consistency）形态的：全部 262 个随库固化的用例都是 "
 "`otest:ConsistencyTest`（226 个）或 `otest:InconsistencyTest`（36 个）。因此"
 "它评判的是 DL/tableau 通道的可满足性裁决，对 OWL 2 RL 规则表则什么也没有说"
-"明。带类型的台账包含 0 个分歧。每一个分歧和每一条过时的台账条目仍会导致硬"
-"失败。"
+"明。带类型的台账包含 0 个分歧。每一个分歧和每一条过时的台账条目仍会导致硬失"
+"败。"
 
 #: src/entailment.md:380
 msgid ""
@@ -21995,14 +21995,13 @@ msgstr ""
 "撰写本文时，每个套件都是绿色的——例如，已尝试的 shexTest 验证用例 "
 "1,105/1,105、W3C SHACL 129/129、编解码器往返 264/264、W3C SPARQL 蕴涵机制用"
 "例 70/70，以及在随库固化的 W3C OWL 2 DL 相容性语料上 262/262 个裁决一致，带类"
-"型的 OWL 2 分歧为 0 个；SPARQL 台账条目为 0 个。其他套件中未通过的用例仍严"
-"格入台账。其中"
-"两个数字需要说明其范围：OWL 2 DL 语料是一个*子集*，即 W3C 所发布的 482 个相容"
-"性形态用例中的 262 个；而规则表覆盖并不等于蕴涵一致性——在这份随库固化的 W3C "
-"OWL 2 RL 蕴涵测试语料上，chase 得分 50/50，即正向 27 个中 27 个、负向 23 个"
-"中 23 个，后者意味着未发现不可靠性。请始终以 [`docs/CONFORMANCE.md`](https://"
-"github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md) 中的当"
-"前数字为准，而不是这份快照。"
+"型的 OWL 2 分歧为 0 个；SPARQL 台账条目为 0 个。其他套件中未通过的用例仍严格"
+"入台账。其中两个数字需要说明其范围：OWL 2 DL 语料是一个*子集*，即 W3C 所发布"
+"的 482 个相容性形态用例中的 262 个；而规则表覆盖并不等于蕴涵一致性——在这份随"
+"库固化的 W3C OWL 2 RL 蕴涵测试语料上，chase 得分 50/50，即正向 27 个中 27 "
+"个、负向 23 个中 23 个，后者意味着未发现不可靠性。请始终以 [`docs/"
+"CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
+"docs/CONFORMANCE.md) 中的当前数字为准，而不是这份快照。"
 
 #: src/project/conformance.md:65
 msgid "Ledger discipline"
@@ -22732,18 +22731,18 @@ msgstr ""
 #: src/project/diagnostic-codes.md:36 src/project/diagnostic-codes.md:50
 #: src/project/diagnostic-codes.md:77 src/project/diagnostic-codes.md:94
 #: src/project/diagnostic-codes.md:105 src/project/diagnostic-codes.md:126
-#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:250
-#: src/project/diagnostic-codes.md:263 src/project/diagnostic-codes.md:273
-#: src/project/diagnostic-codes.md:283
+#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:255
+#: src/project/diagnostic-codes.md:268 src/project/diagnostic-codes.md:278
+#: src/project/diagnostic-codes.md:288
 msgid "Meaning"
 msgstr "含义"
 
 #: src/project/diagnostic-codes.md:36 src/project/diagnostic-codes.md:50
 #: src/project/diagnostic-codes.md:77 src/project/diagnostic-codes.md:94
 #: src/project/diagnostic-codes.md:105 src/project/diagnostic-codes.md:126
-#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:250
-#: src/project/diagnostic-codes.md:263 src/project/diagnostic-codes.md:273
-#: src/project/diagnostic-codes.md:283
+#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:255
+#: src/project/diagnostic-codes.md:268 src/project/diagnostic-codes.md:278
+#: src/project/diagnostic-codes.md:288
 msgid "Remedy"
 msgstr "补救办法"
 
@@ -24554,81 +24553,78 @@ msgstr ""
 
 #: src/project/diagnostic-codes.md:222
 msgid ""
-"The bounds apply to every pattern. For a fixed pattern without a "
-"backreference, matching is linear in input length, but its cost can depend "
-"on repetition counts. The following measured searches cost 1 to 3.2 matcher "
-"steps per input byte at the production bounds:"
+"The bounds apply to every pattern. Matching charges the work actually "
+"performed: character comparisons, choices, state copies, search advances and "
+"replacement output. A matcher step has no universal nanosecond cost, and "
+"neither one step per byte nor a one-to-three-step range describes every "
+"search."
 msgstr ""
-"这些上限适用于每个模式。对于不含反向引用的固定模式，匹配时间随输入长度线性增"
-"长，但其代价可能取决于重复次数。在生产上限下，以下经过测量的搜索每个输入字节"
-"花费 1 到 3.2 个匹配器步数："
-
-#: src/project/diagnostic-codes.md:226
-msgid "literal and single-character runs;"
-msgstr "字面量与单字符连续段；"
+"这些上限适用于每个模式。匹配会计入实际执行的工作：字符比较、分支选择、状态复"
+"制、搜索位置推进和替换输出。匹配器的一步没有通用的纳秒耗时；每字节一步或一到"
+"三步的范围都不能描述所有搜索。"
 
 #: src/project/diagnostic-codes.md:227
-msgid "counted repetitions such as `(ab){1,1000}c` or `(\\w+\\s){3,5}zzz`;"
-msgstr "计数重复，例如 `(ab){1,1000}c` 或 `(\\w+\\s){3,5}zzz`；"
-
-#: src/project/diagnostic-codes.md:228
-msgid "whole-input group matches such as `^([a-z]+ ?)+$`;"
-msgstr "匹配整个输入的组，例如 `^([a-z]+ ?)+$`；"
-
-#: src/project/diagnostic-codes.md:229
-msgid "searches with several unbounded runs, such as `node.*graph.*zzz`."
-msgstr "含多个无界连续段的搜索，例如 `node.*graph.*zzz`。"
-
-#: src/project/diagnostic-codes.md:231
 msgid ""
-"A step cost about 3.5 to 11 ns on the measured host. The low-cost measured "
-"searches reached about 74 to 83 MiB before step refusal; this is not a "
-"universal input threshold or timing guarantee. Large finite or nested "
-"repetitions can reach step or storage bounds on much shorter input, "
-"including yes-or-no tests. Locating the match itself (SPARQL `REPLACE`, for "
-"example) also costs more in these measured examples:"
+"Under a dated law, a finite maximum that the input cannot reach no longer "
+"creates distinct count states. Compatibility nullable bodies keep their "
+"finite bounds and original capture priority. Greedy single-character runs, "
+"including choices and capture chains, scan once and retain their priority-"
+"ordered stops. Large nonnullable counts can reuse relative states while "
+"their bound comparisons stay unchanged, with exact counts restored near a "
+"bound."
 msgstr ""
-"在被测主机上，一步约花费 3.5 到 11 ns。经过测量的低代价搜索在达到约 74 到 83 "
-"MiB 后触发步数拒绝；这并非通用的输入阈值或耗时保证。较大的有限重复或嵌套重复"
-"可能在短得多的输入上达到步数或存储上限，是非判断也不例外。在以下经过测量的示"
-"例中，定位匹配本身（例如 SPARQL `REPLACE`）还会增加代价："
+"在按日期指定的法则下，输入不可能达到的有限最大次数不再产生不同的计数状态。"
+"兼容性法则中能匹配空串的主体仍保留有限次数边界和原有捕获优先级。贪婪的单字符"
+"连续段，包括选择分支和捕获链，只扫描一次，并按优先级保留可停位置。主体不能"
+"匹配空串的大计数重复在边界比较保持不变时可以复用相对状态，并在接近边界时"
+"恢复精确计数。"
 
-#: src/project/diagnostic-codes.md:237
+#: src/project/diagnostic-codes.md:235
 msgid ""
-"`(a|aa){1,100000}b` costs about 98 steps per byte, so it is refused past "
-"about 2.5 MiB of match;"
+"Production-default tests cover four mebibytes of `^[\\s\\S]{0,10000000}$`, "
+"`^[^\\n]{0,10000000}$`, `^[^<>]{1,5000000}$`, `^[\\p{L} ]{1,5000000}$` and "
+"`^(\\w+\\s?){1,5000000}$`, and four mebibytes of the exact-count choices "
+"`^(a|b){4194304}$` and `(a|b){4000000}`. Decision and capture searches have "
+"integer work bounds of four steps per byte for these classes/grouped words "
+"and six for these choices. Nonbinding maxima ten times larger spend the same "
+"work; these fixture bounds are not universal admission or timing guarantees. "
+"`REPLACE` over two mebibytes of grouped words retains the final iteration's "
+"capture and also charges template and output work. The `native_xpath_large` "
+"benchmark group measures these forms and their count/input-size ladders "
+"beside the original literal, grouped and adversarial neighbours."
 msgstr ""
-"`(a|aa){1,100000}b` 约为每字节 98 步，因此匹配超过约 2.5 MiB 时被拒绝；"
+"采用生产默认值的测试覆盖四 mebibyte 输入上的 `^[\\s\\S]{0,10000000}$`、"
+"`^[^\\n]{0,10000000}$`、`^[^<>]{1,5000000}$`、`^[\\p{L} ]{1,5000000}$` 和 "
+"`^(\\w+\\s?){1,5000000}$`，以及四 mebibyte 输入上的精确次数选择 `^(a|b)"
+"{4194304}$` 和 `(a|b){4000000}`。是非判断和捕获搜索的整数工作量上限为：这些字"
+"符类与分组单词每字节四步，这些选择分支每字节六步。将不约束输入的最大次数扩大"
+"十倍，工作量保持不变；这些测试夹具的上限并不是通用的准入或耗时保证。对两 "
+"mebibyte 分组单词执行 `REPLACE` 会保留最后一次迭代的捕获，并计入模板和输出工"
+"作。`native_xpath_large` 基准组测量这些形式及其计数和输入大小阶梯，同时保留原"
+"有的字面量、分组和对抗性邻例。"
 
-#: src/project/diagnostic-codes.md:239
+#: src/project/diagnostic-codes.md:247
 msgid ""
-"`(|a){18446744073709551616}b`, an empty-preferring body below a minimum "
-"beyond 64 bits, costs about 250, so it is refused past about 1 MiB."
+"Nested counted repetitions whose bodies can repeat empty still distinguish "
+"count combinations. On `aaab`, `((a?){3000}){3000}b` answers while `((a?)"
+"{5000}){5000}b` reaches an operational bound. There is no universal minimum-"
+"count threshold: the pattern and input determine which states coexist. A "
+"backreference keeps the backtracking matcher, whose exponential exploration "
+"(`^(a|aa)*c\\1$` over forty `a`) can reach the step bound. Such refusal is a "
+"hard operational error, not `false`, an absent capture or a partial "
+"replacement."
 msgstr ""
-"`(|a){18446744073709551616}b` 是低于超出 64 位的最小次数、优先匹配空串的主"
-"体，约为每字节 250 步，因此超过约 1 MiB 时被拒绝。"
+"主体能重复空串的嵌套计数重复仍会区分计数组合。在 `aaab` 上，`((a?){3000})"
+"{3000}b` 能给出答案，而 `((a?){5000}){5000}b` 会达到操作上限。没有通用的最小"
+"计数阈值：哪些状态同时存在取决于模式和输入。含反向引用的模式保留回溯匹配器，"
+"其指数级探索（在四十个 `a` 上的 `^(a|aa)*c\\1$`）可能达到步数上限。这种拒绝是"
+"使操作失败的硬错误，不是 `false`、缺失的捕获或部分替换结果。"
 
-#: src/project/diagnostic-codes.md:242
-msgid ""
-"A counted repetition nested in another, both with bodies that can repeat "
-"empty, keeps one entry per count value. Storage depends on the combination "
-"of counts: `((a?){100000}){100000}` is one measured storage refusal, not a "
-"minimum count threshold. Searching for the match of `((a?){1000}){1000}b` "
-"over 100 KB reaches the step bound. A backreference keeps the backtracking "
-"matcher, whose exponential exploration (`^(a|aa)*c\\1$` over forty `a`) the "
-"step bound refuses after about 3 s of work."
-msgstr ""
-"嵌套在另一个计数重复中、且两者的主体都能重复空串的计数重复，会为每个计数值保"
-"留一项。存储量取决于计数的组合：`((a?){100000}){100000}` 是经过测量的存储拒绝"
-"示例，并非最小计数阈值。在 100 KB 上搜索 `((a?){1000}){1000}b` 的匹配会达到步"
-"数上限。含反向引用的模式保留回溯匹配器，其指数级探索（在四十个 `a` 上的 `^(a|"
-"aa)*c\\1$`）会在约 3 秒的工作后被步数上限拒绝。"
-
-#: src/project/diagnostic-codes.md:252
+#: src/project/diagnostic-codes.md:257
 msgid "`xpath-pattern-bytes`"
 msgstr "`xpath-pattern-bytes`"
 
-#: src/project/diagnostic-codes.md:252
+#: src/project/diagnostic-codes.md:257
 msgid ""
 "`Resource::PatternBytes`: the pattern source has more UTF-8 bytes than the "
 "bound (64 KiB). The source is refused before parsing, whether or not its "
@@ -24637,15 +24633,15 @@ msgstr ""
 "`Resource::PatternBytes`：模式源文本的 UTF-8 字节数超过上限（64 KiB）。无论其"
 "语法是否有效，源文本都会在解析之前被拒绝。"
 
-#: src/project/diagnostic-codes.md:252
+#: src/project/diagnostic-codes.md:257
 msgid "Shorten the pattern."
 msgstr "缩短该模式。"
 
-#: src/project/diagnostic-codes.md:253
+#: src/project/diagnostic-codes.md:258
 msgid "`xpath-compile-steps`"
 msgstr "`xpath-compile-steps`"
 
-#: src/project/diagnostic-codes.md:253
+#: src/project/diagnostic-codes.md:258
 msgid ""
 "`Resource::CompileSteps`: compiling the pattern needs more compiler "
 "operations, scanned characters and set operations included, than the bound "
@@ -24654,111 +24650,113 @@ msgstr ""
 "`Resource::CompileSteps`：编译该模式所需的编译器操作（包括扫描的字符与集合运"
 "算）超过上限（4,000,000）。"
 
-#: src/project/diagnostic-codes.md:253
+#: src/project/diagnostic-codes.md:258
 msgid "Simplify the pattern, for example its character-class arithmetic."
 msgstr "简化该模式，例如其字符类运算。"
 
-#: src/project/diagnostic-codes.md:254
+#: src/project/diagnostic-codes.md:259
 msgid "`xpath-program-nodes`"
 msgstr "`xpath-program-nodes`"
 
-#: src/project/diagnostic-codes.md:254
+#: src/project/diagnostic-codes.md:259
 msgid ""
 "`Resource::ProgramNodes`: the compiled program needs more nodes than the "
 "bound (262,144)."
 msgstr ""
 "`Resource::ProgramNodes`：编译后的程序所需的节点数超过上限（262,144）。"
 
-#: src/project/diagnostic-codes.md:254 src/project/diagnostic-codes.md:255
+#: src/project/diagnostic-codes.md:259 src/project/diagnostic-codes.md:260
 msgid "Simplify the pattern or reduce its counted repetitions."
 msgstr "简化该模式，或减少其计数重复。"
 
-#: src/project/diagnostic-codes.md:255
+#: src/project/diagnostic-codes.md:260
 msgid "`xpath-compile-slots`"
 msgstr "`xpath-compile-slots`"
 
-#: src/project/diagnostic-codes.md:255
+#: src/project/diagnostic-codes.md:260
 msgid ""
 "`Resource::CompileSlots`: building the program needs more construction cells "
 "than the bound (2,097,152)."
 msgstr ""
 "`Resource::CompileSlots`：构建程序所需的构造单元数超过上限（2,097,152）。"
 
-#: src/project/diagnostic-codes.md:256
+#: src/project/diagnostic-codes.md:261
 msgid "`xpath-match-steps`"
 msgstr "`xpath-match-steps`"
 
-#: src/project/diagnostic-codes.md:256
+#: src/project/diagnostic-codes.md:261
 msgid ""
-"`Resource::MatchSteps`: matching needs more matcher operations, search "
-"advances and compared code points included, than the bound (250,000,000). "
-"Refusal depends on the pattern and input, including backtracking, large "
-"finite repetitions and the measured searches described above."
+"`Resource::MatchSteps`: actual matching, capture search or replacement work "
+"exceeds 250,000,000 operations. Large nonbinding maxima and eligible single-"
+"character counts do not multiply per-byte work; nested count combinations, "
+"state closures, backreferences and replacement output can still exhaust it. "
+"No answer or partial replacement is published."
 msgstr ""
-"`Resource::MatchSteps`：匹配所需的匹配器操作（包括搜索推进与比较的码位）超过"
-"上限（250,000,000）。是否拒绝取决于模式和输入，包括回溯、较大的有限重复，以及"
-"上文所述经过测量的搜索。"
+"`Resource::MatchSteps`：实际匹配、捕获搜索或替换工作超过 250,000,000 次操作。"
+"较大的非约束最大次数和符合条件的单字符计数不会使每字节工作量成倍增加；嵌套计"
+"数组合、状态闭包、反向引用和替换输出仍可能耗尽这一上限。不发布答案或部分替"
+"换。"
 
-#: src/project/diagnostic-codes.md:256
-msgid "Remove the backreference, simplify repetition, or match shorter input."
-msgstr "去掉反向引用，简化重复，或匹配更短的输入。"
+#: src/project/diagnostic-codes.md:261
+msgid ""
+"Simplify the costly pattern structure, remove a backreference where its "
+"semantics are unnecessary, or process shorter input."
+msgstr "简化代价高的模式结构，在不需要其语义时移除反向引用，或处理更短的输入。"
 
-#: src/project/diagnostic-codes.md:257
+#: src/project/diagnostic-codes.md:262
 msgid "`xpath-match-states`"
 msgstr "`xpath-match-states`"
 
-#: src/project/diagnostic-codes.md:257
+#: src/project/diagnostic-codes.md:262
 msgid ""
 "`Resource::MatchStates`: matching needs more simultaneously pending "
 "alternative states than the bound (65,536)."
 msgstr ""
 "`Resource::MatchStates`：匹配所需的同时待定的备选状态数超过上限（65,536）。"
 
-#: src/project/diagnostic-codes.md:257
+#: src/project/diagnostic-codes.md:262
 msgid "Reduce the pattern's alternation and repetition."
 msgstr "减少该模式的选择分支与重复。"
 
-#: src/project/diagnostic-codes.md:258
+#: src/project/diagnostic-codes.md:263
 msgid "`xpath-match-slots`"
 msgstr "`xpath-match-slots`"
 
-#: src/project/diagnostic-codes.md:258
+#: src/project/diagnostic-codes.md:263
 msgid ""
 "`Resource::MatchSlots`: the live states, captures and continuations need "
-"more cells than the bound (1,048,576). The measured low-cost patterns hold a "
-"few hundred cells independently of input length; nested empty-capable "
-"repetitions can reach the bound depending on their combination of counts."
+"more cells than the bound (1,048,576). Nested empty-capable repetitions can "
+"reach the bound depending on their combination of counts."
 msgstr ""
 "`Resource::MatchSlots`：活动状态、捕获与续延所需的单元超过上限（1,048,576）。"
-"经过测量的低代价模式占用几百个单元，且不随输入长度变化；主体能匹配空串的嵌套"
-"重复是否达到该上限取决于其计数的组合。"
+"主体能匹配空串的嵌套重复是否达到该上限取决于其计数的组合。"
 
-#: src/project/diagnostic-codes.md:258
+#: src/project/diagnostic-codes.md:263
 msgid "Reduce the pattern's captures and repetition, or match shorter input."
 msgstr "减少该模式的捕获与重复，或匹配更短的输入。"
 
-#: src/project/diagnostic-codes.md:259
+#: src/project/diagnostic-codes.md:264
 msgid "`xpath-output-bytes`"
 msgstr "`xpath-output-bytes`"
 
-#: src/project/diagnostic-codes.md:259
+#: src/project/diagnostic-codes.md:264
 msgid "`Resource::OutputBytes`: `REPLACE` output exceeds the bound (64 MiB)."
 msgstr "`Resource::OutputBytes`：`REPLACE` 的输出超过上限（64 MiB）。"
 
-#: src/project/diagnostic-codes.md:259
+#: src/project/diagnostic-codes.md:264
 msgid "Replace over shorter input or with shorter replacement text."
 msgstr "在更短的输入上替换，或使用更短的替换文本。"
 
-#: src/project/diagnostic-codes.md:261
+#: src/project/diagnostic-codes.md:266
 msgid "`reasoning-*` — SPARQL under an entailment regime (`purrdf`)"
 msgstr ""
 "`reasoning-*`——在蕴涵机制（entailment regime）下执行的 SPARQL（`purrdf`）"
 
-#: src/project/diagnostic-codes.md:265
+#: src/project/diagnostic-codes.md:270
 msgid "`reasoning-closure-relation-witness`"
 msgstr "`reasoning-closure-relation-witness`"
 
-#: src/project/diagnostic-codes.md:265
+#: src/project/diagnostic-codes.md:270
 msgid ""
 "Property-function relations derived from the closure cannot be combined with "
 "an OWL Direct-Semantics run whose restricted chase minted existential "
@@ -24769,7 +24767,7 @@ msgstr ""
 "Direct-Semantics 运行组合使用：遍历闭包的关系可能返回一个生成的空节点，而该机"
 "制的作用域图并不包含它。"
 
-#: src/project/diagnostic-codes.md:265
+#: src/project/diagnostic-codes.md:270
 msgid ""
 "Query under a regime that mints no witnesses (`rdf`, `rdfs`, `owl-rl`, `d`, "
 "`rif`, `simple`), or drop the dataset-derived relations from the call."
@@ -24777,98 +24775,98 @@ msgstr ""
 "在不生成见证的机制（`rdf`、`rdfs`、`owl-rl`、`d`、`rif`、`simple`）下查询，或"
 "从该调用中去掉由数据集派生的关系。"
 
-#: src/project/diagnostic-codes.md:266
+#: src/project/diagnostic-codes.md:271
 msgid "`reasoning-closure-relation-rebuild`"
 msgstr "`reasoning-closure-relation-rebuild`"
 
-#: src/project/diagnostic-codes.md:266
+#: src/project/diagnostic-codes.md:271
 msgid "Rebuilding the property-function relations over the closure failed."
 msgstr "在推理闭包上重建属性函数关系失败。"
 
-#: src/project/diagnostic-codes.md:266
+#: src/project/diagnostic-codes.md:271
 msgid "The relation builder's own error is in the message."
 msgstr "关系构建器自身的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:268
+#: src/project/diagnostic-codes.md:273
 msgid "`statements-*` — statement-metadata ingestion (`purrdf-rdf`)"
 msgstr "`statements-*`——陈述元数据的摄入（`purrdf-rdf`）"
 
-#: src/project/diagnostic-codes.md:270
+#: src/project/diagnostic-codes.md:275
 msgid ""
 "These arise when a document's `rdf:reifies` and `owl:Axiom` statements are "
 "read into the statement layer."
 msgstr ""
 "当把文档的 `rdf:reifies` 与 `owl:Axiom` 陈述读入陈述层时，会出现这些代码。"
 
-#: src/project/diagnostic-codes.md:275
+#: src/project/diagnostic-codes.md:280
 msgid "`statements-turtle-parse`"
 msgstr "`statements-turtle-parse`"
 
-#: src/project/diagnostic-codes.md:275
+#: src/project/diagnostic-codes.md:280
 msgid "The statement-metadata Turtle failed to parse."
 msgstr "陈述元数据 Turtle 解析失败。"
 
-#: src/project/diagnostic-codes.md:275
+#: src/project/diagnostic-codes.md:280
 msgid "Fix the Turtle."
 msgstr "修正该 Turtle。"
 
-#: src/project/diagnostic-codes.md:276
+#: src/project/diagnostic-codes.md:281
 msgid "`statements-non-iri`"
 msgstr "`statements-non-iri`"
 
-#: src/project/diagnostic-codes.md:276
+#: src/project/diagnostic-codes.md:281
 msgid "A term that must be an IRI in this context is not one."
 msgstr "在此上下文中必须是 IRI 的某个项不是 IRI。"
 
-#: src/project/diagnostic-codes.md:276
+#: src/project/diagnostic-codes.md:281
 msgid "Use an IRI."
 msgstr "使用 IRI。"
 
-#: src/project/diagnostic-codes.md:277
+#: src/project/diagnostic-codes.md:282
 msgid "`statements-reifies-non-triple`"
 msgstr "`statements-reifies-non-triple`"
 
-#: src/project/diagnostic-codes.md:277
+#: src/project/diagnostic-codes.md:282
 msgid "The object of `rdf:reifies` is not a triple term."
 msgstr "`rdf:reifies` 的宾语不是三元组项。"
 
-#: src/project/diagnostic-codes.md:277
+#: src/project/diagnostic-codes.md:282
 msgid "Reify a triple term."
 msgstr "对一个三元组项进行具体化。"
 
-#: src/project/diagnostic-codes.md:278
+#: src/project/diagnostic-codes.md:283
 msgid "`statements-malformed-axiom`"
 msgstr "`statements-malformed-axiom`"
 
-#: src/project/diagnostic-codes.md:278
+#: src/project/diagnostic-codes.md:283
 msgid "An `owl:Axiom` lacks its source, property or target."
 msgstr "某个 `owl:Axiom` 缺少其源、属性或目标。"
 
-#: src/project/diagnostic-codes.md:278
+#: src/project/diagnostic-codes.md:283
 msgid "Complete the axiom."
 msgstr "补全该公理。"
 
-#: src/project/diagnostic-codes.md:279
+#: src/project/diagnostic-codes.md:284
 msgid "`statements-conflicting-structural`"
 msgstr "`statements-conflicting-structural`"
 
-#: src/project/diagnostic-codes.md:279
+#: src/project/diagnostic-codes.md:284
 msgid "One subject carries two different values for a structural field."
 msgstr "同一个主语在某个结构字段上带有两个不同的值。"
 
-#: src/project/diagnostic-codes.md:279
+#: src/project/diagnostic-codes.md:284
 msgid "Keep one value."
 msgstr "只保留一个值。"
 
-#: src/project/diagnostic-codes.md:281
+#: src/project/diagnostic-codes.md:286
 msgid "Other single-code families"
 msgstr "其他单代码族"
 
-#: src/project/diagnostic-codes.md:285
+#: src/project/diagnostic-codes.md:290
 msgid "`sssom-tsv-parse`"
 msgstr "`sssom-tsv-parse`"
 
-#: src/project/diagnostic-codes.md:285
+#: src/project/diagnostic-codes.md:290
 msgid ""
 "An SSSOM TSV document is malformed: a missing or unreadable header row, a "
 "malformed `curie_map` entry or set comment, a malformed row, or a non-"
@@ -24877,15 +24875,15 @@ msgstr ""
 "某个 SSSOM TSV 文档格式错误：缺少表头行或表头行不可读、`curie_map` 条目或集合"
 "注释格式错误、某行格式错误，或置信度不是数值；位置信息指明所在行。"
 
-#: src/project/diagnostic-codes.md:285
+#: src/project/diagnostic-codes.md:290
 msgid "Fix the TSV at the reported line."
 msgstr "在所报告的行修正该 TSV。"
 
-#: src/project/diagnostic-codes.md:286
+#: src/project/diagnostic-codes.md:291
 msgid "`content-id-scheme`"
 msgstr "`content-id-scheme`"
 
-#: src/project/diagnostic-codes.md:286
+#: src/project/diagnostic-codes.md:291
 msgid ""
 "A content-id scheme prefix is invalid: empty, non-ASCII, or ending in a "
 "hexadecimal digit (which would make it ambiguous with the 64-hex-character "
@@ -24894,17 +24892,17 @@ msgstr ""
 "某个内容 id 的 scheme 前缀无效：为空、含非 ASCII 字符，或以十六进制数字结尾"
 "（这会使它与 64 个十六进制字符的尾部产生歧义）。"
 
-#: src/project/diagnostic-codes.md:286
+#: src/project/diagnostic-codes.md:291
 msgid ""
 "Choose a prefix that is non-empty ASCII and does not end in `0-9`, `a-f` or "
 "`A-F`."
 msgstr "选择一个非空、纯 ASCII 且不以 `0-9`、`a-f` 或 `A-F` 结尾的前缀。"
 
-#: src/project/diagnostic-codes.md:288
+#: src/project/diagnostic-codes.md:293
 msgid "Where the code reaches you"
 msgstr "代码在何处呈现给调用方"
 
-#: src/project/diagnostic-codes.md:290
+#: src/project/diagnostic-codes.md:295
 msgid ""
 "**Rust** — `RdfDiagnostic::code` on the returned error; its `Display` form "
 "is `<severity> <code>: <message>`."
@@ -24912,7 +24910,7 @@ msgstr ""
 "**Rust**——返回错误上的 `RdfDiagnostic::code`；其 `Display` 形式为 "
 "`<severity> <code>: <message>`。"
 
-#: src/project/diagnostic-codes.md:292
+#: src/project/diagnostic-codes.md:297
 msgid ""
 "**Python** — the `ValueError` message is that `Display` form (for example "
 "`error native-codec-parse: …`); an IRI failure is rendered as `<code>: "
@@ -24922,7 +24920,7 @@ msgstr ""
 "parse: …`）；IRI 失败则输出为 `<code>: <message>`（例如 `iri-relative-no-"
 "base: …`）。"
 
-#: src/project/diagnostic-codes.md:295
+#: src/project/diagnostic-codes.md:300
 msgid ""
 "**JavaScript** — the thrown `Error` message carries the same text, and its "
 "`code` property carries the code itself. The wasm package's own refusals "
@@ -24942,12 +24940,12 @@ msgstr ""
 "environment`（无法构建聚合注册表）、`purrdf-wasm-shacl` 与 `purrdf-wasm-"
 "shacl-product-refusal`（某个 SHACL 接口失败，或拒绝了一个预备好的产物）。"
 
-#: src/project/diagnostic-codes.md:304
+#: src/project/diagnostic-codes.md:309
 msgid ""
 "**C** — the error string returned through the C ABI carries the same text."
 msgstr "**C**——经由 C ABI 返回的错误字符串携带相同的文本。"
 
-#: src/project/diagnostic-codes.md:305
+#: src/project/diagnostic-codes.md:310
 msgid ""
 "**SARIF** — the `ruleId` of each result is the code, with a "
 "`reportingDescriptor` in the run's rule table ([`purrdf-validate`](https://"
@@ -24956,6 +24954,68 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
+
+#~ msgid ""
+#~ "The bounds apply to every pattern. For a fixed pattern without a "
+#~ "backreference, matching is linear in input length, but its cost can "
+#~ "depend on repetition counts. The following measured searches cost 1 to "
+#~ "3.2 matcher steps per input byte at the production bounds:"
+#~ msgstr ""
+#~ "这些上限适用于每个模式。对于不含反向引用的固定模式，匹配时间随输入长度线性"
+#~ "增长，但其代价可能取决于重复次数。在生产上限下，以下经过测量的搜索每个输入"
+#~ "字节花费 1 到 3.2 个匹配器步数："
+
+#~ msgid "literal and single-character runs;"
+#~ msgstr "字面量与单字符连续段；"
+
+#~ msgid "counted repetitions such as `(ab){1,1000}c` or `(\\w+\\s){3,5}zzz`;"
+#~ msgstr "计数重复，例如 `(ab){1,1000}c` 或 `(\\w+\\s){3,5}zzz`；"
+
+#~ msgid "whole-input group matches such as `^([a-z]+ ?)+$`;"
+#~ msgstr "匹配整个输入的组，例如 `^([a-z]+ ?)+$`；"
+
+#~ msgid "searches with several unbounded runs, such as `node.*graph.*zzz`."
+#~ msgstr "含多个无界连续段的搜索，例如 `node.*graph.*zzz`。"
+
+#~ msgid ""
+#~ "A step cost about 3.5 to 11 ns on the measured host. The low-cost "
+#~ "measured searches reached about 74 to 83 MiB before step refusal; this is "
+#~ "not a universal input threshold or timing guarantee. Large finite or "
+#~ "nested repetitions can reach step or storage bounds on much shorter "
+#~ "input, including yes-or-no tests. Locating the match itself (SPARQL "
+#~ "`REPLACE`, for example) also costs more in these measured examples:"
+#~ msgstr ""
+#~ "在被测主机上，一步约花费 3.5 到 11 ns。经过测量的低代价搜索在达到约 74 到 "
+#~ "83 MiB 后触发步数拒绝；这并非通用的输入阈值或耗时保证。较大的有限重复或嵌"
+#~ "套重复可能在短得多的输入上达到步数或存储上限，是非判断也不例外。在以下经过"
+#~ "测量的示例中，定位匹配本身（例如 SPARQL `REPLACE`）还会增加代价："
+
+#~ msgid ""
+#~ "`(a|aa){1,100000}b` costs about 98 steps per byte, so it is refused past "
+#~ "about 2.5 MiB of match;"
+#~ msgstr ""
+#~ "`(a|aa){1,100000}b` 约为每字节 98 步，因此匹配超过约 2.5 MiB 时被拒绝；"
+
+#~ msgid ""
+#~ "`(|a){18446744073709551616}b`, an empty-preferring body below a minimum "
+#~ "beyond 64 bits, costs about 250, so it is refused past about 1 MiB."
+#~ msgstr ""
+#~ "`(|a){18446744073709551616}b` 是低于超出 64 位的最小次数、优先匹配空串的主"
+#~ "体，约为每字节 250 步，因此超过约 1 MiB 时被拒绝。"
+
+#~ msgid ""
+#~ "`Resource::MatchSteps`: matching needs more matcher operations, search "
+#~ "advances and compared code points included, than the bound (250,000,000). "
+#~ "Refusal depends on the pattern and input, including backtracking, large "
+#~ "finite repetitions and the measured searches described above."
+#~ msgstr ""
+#~ "`Resource::MatchSteps`：匹配所需的匹配器操作（包括搜索推进与比较的码位）超"
+#~ "过上限（250,000,000）。是否拒绝取决于模式和输入，包括回溯、较大的有限重"
+#~ "复，以及上文所述经过测量的搜索。"
+
+#~ msgid ""
+#~ "Remove the backreference, simplify repetition, or match shorter input."
+#~ msgstr "去掉反向引用，简化重复，或匹配更短的输入。"
 
 #~ msgid ""
 #~ "rdflib 7.6's `initBindings` is not the reference for this behaviour: it "

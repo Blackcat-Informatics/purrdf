@@ -88,7 +88,7 @@ fn reused_schema_selects_the_actual_dated_law_and_preserves_compatibility() {
 fn compilation_and_matching_refusals_remain_typed_with_valid_neighbors() {
     let data = empty_dataset();
     let options = ValidationOptions::default();
-    let parsed = schema(&node("^(a|b)+$", ""));
+    let parsed = schema(&node("^(a|ab)+$", ""));
     let map = [association("aab")];
     for resource in [
         Resource::PatternBytes,
@@ -141,7 +141,7 @@ fn compilation_and_matching_refusals_remain_typed_with_valid_neighbors() {
 fn current_bounds_are_admitted_before_a_reused_program_and_fuel_is_fresh() {
     let data = empty_dataset();
     let options = ValidationOptions::default();
-    let parsed = schema(&node("^(?:a|b)$", ""));
+    let parsed = schema(&node("^(?:a|ab)$", ""));
     let map = [association("a")];
     let mut validator = XPathValidator::new(&parsed);
     assert!(
@@ -562,5 +562,40 @@ fn counted_repetition_patterns_conform_at_the_production_defaults_like_the_compa
             .all_conformant(),
             "{profile:?}"
         );
+    }
+}
+
+#[test]
+fn large_finite_facets_keep_shex_verdicts_and_negative_neighbors() {
+    let data = empty_dataset();
+    let options = ValidationOptions::default();
+    let mut prose = purrdf_testkit::text::word_prose(4 << 20);
+    prose.truncate(4 << 20);
+    let ab = purrdf_testkit::text::binary_text(4 << 20, 0x00AB_CAFE);
+    let bad_class = format!("{prose}<!");
+    let too_long = format!("{ab}a");
+    let interrupted = format!("{}c{}", &ab[..3_999_999], &ab[..194_305]);
+    for (pattern, value, expected) in [
+        (r"^[\s\S]{0,10000000}$", prose.as_str(), true),
+        (r"^[^\n]{0,10000000}$", prose.as_str(), true),
+        (r"^[^<>]{1,5000000}$", prose.as_str(), true),
+        (r"^[\p{L} ]{1,5000000}$", prose.as_str(), true),
+        (r"^(\w+\s?){1,5000000}$", prose.as_str(), true),
+        ("^(a|b){4194304}$", ab.as_str(), true),
+        ("(a|b){4000000}", ab.as_str(), true),
+        (r"^[^<>]{1,5000000}$", bad_class.as_str(), false),
+        (r"^(\w+\s?){1,5000000}$", bad_class.as_str(), false),
+        ("^(a|b){4194304}$", too_long.as_str(), false),
+        ("(a|b){4000000}", &ab[..3_999_999], false),
+        ("(a|b){4000000}", interrupted.as_str(), false),
+    ] {
+        let parsed = schema(&node(pattern, ""));
+        let map = [association(value)];
+        for profile in Profile::ALL {
+            let result =
+                validate_with_xpath(&parsed, &data, &map, &options, profile, Limits::new())
+                    .unwrap_or_else(|error| panic!("{profile:?} {pattern}: {error}"));
+            assert_eq!(result.all_conformant(), expected, "{profile:?} {pattern}");
+        }
     }
 }

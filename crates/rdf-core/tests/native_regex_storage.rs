@@ -96,6 +96,93 @@ fn percent_output_retains_exact_original_buffer_and_refuses_before_birth() {
 }
 
 #[test]
+fn large_count_compiler_retains_the_original_normalization_table_owner() {
+    let source = "a{1200,1400}".repeat(48);
+    let window = CurrentThreadWindow::open();
+    let program = xpath::compile_with_storage(
+        Profile::Xpath31,
+        &source,
+        "",
+        Limits::new(),
+        Account::new(2_000_000),
+    )
+    .unwrap();
+    let measured = window.close();
+    assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= program.storage().peak);
+    assert_eq!(
+        usize::try_from(measured.retained_bytes).unwrap(),
+        program.storage().live
+    );
+    assert_eq!(
+        program.storage().live,
+        program.value().storage_bytes() - size_of::<xpath::CompiledPattern>()
+    );
+    let limit = program.storage().peak - 1;
+    drop(program);
+    let window = CurrentThreadWindow::open();
+    let failure = xpath::compile_with_storage(
+        Profile::Xpath31,
+        &source,
+        "",
+        Limits::new(),
+        Account::new(limit),
+    )
+    .unwrap_err();
+    let measured = window.close();
+    assert!(matches!(
+        failure.value(),
+        xpath::Error::Storage(StorageError::AdmissionFailed)
+    ));
+    assert!(failure.storage().refused.unwrap() > limit);
+    assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= failure.storage().peak);
+    assert_eq!(measured.retained_bytes, 0);
+}
+
+#[test]
+fn large_count_relative_cache_and_choice_spills_are_admitted_before_growth() {
+    let pairs = format!("{}c", "ab".repeat(1800));
+    let choice = format!("^({}){{4096}}$", vec!["a"; 40].join("|"));
+    let run = "a".repeat(4096);
+    for (source, input, expected) in [
+        ("(ab){1200,1400}c", pairs.as_str(), Some(800..pairs.len())),
+        (choice.as_str(), run.as_str(), Some(0..run.len())),
+    ] {
+        let program = xpath::compile(Profile::Xpath31, source, "", Limits::new()).unwrap();
+        let window = CurrentThreadWindow::open();
+        let found = program
+            .find_with_storage(input, Limits::new(), Account::new(4_000_000))
+            .unwrap();
+        let measured = window.close();
+        assert_eq!(
+            found.value().as_ref().and_then(|captures| captures.get(0)),
+            expected
+        );
+        assert!(
+            usize::try_from(measured.peak_working_bytes).unwrap() <= found.storage().peak,
+            "{source}: every relative count, checkpoint and choice spill has its original owner"
+        );
+        assert_eq!(
+            usize::try_from(measured.retained_bytes).unwrap(),
+            found.storage().live
+        );
+        let limit = found.storage().peak - 1;
+        drop(found);
+        let window = CurrentThreadWindow::open();
+        let failure = program
+            .find_with_storage(input, Limits::new(), Account::new(limit))
+            .unwrap_err();
+        let measured = window.close();
+        assert!(matches!(
+            failure.value(),
+            xpath::Error::Storage(StorageError::AdmissionFailed)
+        ));
+        assert!(failure.storage().refused.unwrap() > limit);
+        assert!(usize::try_from(measured.peak_working_bytes).unwrap() <= failure.storage().peak);
+        assert_eq!(measured.retained_bytes, 0);
+    }
+}
+
+#[test]
 fn compiler_peak_and_retained_layout_cover_actual_native_buffers() {
     let source = "(a|b){1,20}[c-z-[d-f]]\\p{Lu}".repeat(48);
     for flags in ["", "ix", "qsimx"] {
@@ -667,6 +754,9 @@ fn compatibility_replacement_preserves_empty_match_suppression_utf8_and_template
         ("a*", ""),
         ("a*|b", ""),
         ("(a*)*", ""),
+        ("(a?){0,2}", ""),
+        ("(a?){0,2}b", ""),
+        ("((a)?){0,3}b", ""),
         ("(a?){2,5}", ""),
         ("^$", "m"),
         ("$", "m"),

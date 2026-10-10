@@ -247,68 +247,53 @@ pub struct Limits {
 impl Limits {
     /// The production bounds, with every resource finite.
     ///
-    /// Compilation is linear in the source, so the program and construction
-    /// bounds admit every source the 64 KiB source bound admits: the largest
-    /// measured requirement is about 3 nodes and 28 construction cells per
-    /// source byte, for a literal under the x flag, including the parent table
-    /// the matchers walk the program with. An oversized pattern is refused by
-    /// its source bytes, before any parsing.
+    /// The 64 KiB source-byte bound is checked before parsing. Compilation
+    /// separately admits actual operations, program nodes and construction
+    /// cells; passing the source-byte check does not itself establish admission
+    /// by those other bounds.
     ///
-    /// Matching first runs the backtracking machine. A program without a
-    /// backreference whose attempt spends more than 16 steps per search start
-    /// it has passed, 2 per input byte it has examined (one greedy
-    /// single-character run's own cost) and 64 per program node, or exceeds a
-    /// live-storage bound, continues on the linear-time machines; a program
-    /// with a backreference stays on the backtracking machine. Measured with
-    /// the `native_xpath_large` bench group
-    /// (`crates/rdf-core/benches/xsd_regex.rs`, release build, one pinned
-    /// core), per input byte at these bounds:
+    /// Matching first runs the backtracking machine. For a program without a
+    /// backreference its attempt has an allowance linear in search starts,
+    /// examined input and program size. Greedy runs and other first-time
+    /// progress credit their actual linear work; revisiting the same input
+    /// does not earn that credit. Past the allowance or a live-state bound,
+    /// the original set/thread machines continue on the remaining fuel. A
+    /// backreference stays on the backtracking machine.
     ///
-    /// * the backtracking machine spends 1.4 steps on a literal search
-    ///   through 1 MiB of filler and 2.0 on a greedy single-character run;
-    /// * the set machine spends 1.00 to 1.02 steps deciding every counted
-    ///   repetition the thread machine alone refused (`(ab){1,1000}c`,
-    ///   `(ab){2,50}c`, `(ab|cd){1,20}e`, `((a|b){3}){5,9}c`,
-    ///   `((a|b){2}){2,5}c`, `(a|b){1,30}c`, `(a|b){3,9}c`,
-    ///   `(\w+\s){3,5}zzz` over 128 KiB to 4 MiB) and searches with several
-    ///   unbounded runs in these measured fixtures, where each position's
-    ///   state was seen before; a position whose state is new
-    ///   costs its closure, about 95 steps for `(a|b){100000}c`;
-    /// * a search for the match itself adds one reverse step per byte from the
-    ///   end of the input, and one more for every stretch the walk reaches;
-    ///   the walk spends about one step per byte of a match whose steps
-    ///   repeat, so `^([a-z]+ ?)+$`, `^(\w+\s)*\w+$`, `^(a|b)*$`,
-    ///   `^(ab)*$` and `^(a|aa)*$` matched whole cost 3.1 to 3.2 steps per
-    ///   byte in all, over 1 MiB and over 64 MiB, and `(a|aa){1,1000}b`
-    ///   closing a run of `a` 4.9;
-    /// * an abandoned attempt has spent at most about 2: `node.*graph.*zzz`
-    ///   without a match costs 3.0 steps per byte in all, over 1 MiB and over
-    ///   64 MiB.
+    /// Under a dated law, a finite maximum beyond the input-derived possible
+    /// iteration count makes the same choices as no maximum. Compatibility
+    /// nullable bodies keep their finite bounds and ordered capture histories.
+    /// Greedy single-character bodies, including choices and capture chains,
+    /// scan once and revisit their
+    /// admissible stops in priority order. Large nonnullable count states can
+    /// reuse transitions relative to offsets when every bound comparison is
+    /// unchanged; near a bound their exact counts decide the transition.
+    /// These paths preserve the match and captures while removing work that
+    /// grew with a nonbinding maximum or an exact single-character count.
     ///
-    /// Reverse states that never repeat cost a closure at every position, and
-    /// the stretches the walk reaches are recomputed: `(a|aa){1,100000}b`
-    /// over 1 MiB, whose reverse states hold the least number of further
-    /// iterations a position needs, costs about 98 steps per byte, and an
-    /// empty-preferring body below a minimum beyond `u64`,
-    /// `(|a){18446744073709551616}b`, about 250 per byte of its match. The
-    /// measured patterns keep a few states and a few hundred cells independent
-    /// of the input length, beside a reverse state every 16 KiB. These figures
-    /// do not establish admission for every finite repetition: large or nested
-    /// counts can reach the step or storage bounds on much shorter input. A
-    /// count of a counted repetition nested in another that both can repeat
-    /// empty iterations is kept one entry per value. Its storage depends on
-    /// the combination of counts; `((a?){100000}){100000}` is one measured
-    /// storage refusal, not a minimum count threshold.
+    /// The production-default fixtures cover four mebibytes of the large
+    /// classes `^[\s\S]{0,10000000}$`, `^[^\n]{0,10000000}$`,
+    /// `^[^<>]{1,5000000}$`, `^[\p{L} ]{1,5000000}$`, the grouped
+    /// words `^(\w+\s?){1,5000000}$` and exact-count choices
+    /// `^(a|b){4194304}$` and `(a|b){4000000}`. They assert integer work
+    /// bounds of four steps per byte for these classes/grouped words and six
+    /// for these choices, for decision and capture search. Nonbinding maxima
+    /// ten times larger spend exactly the same work. These are named fixture
+    /// bounds, not a universal one-to-three-step claim. Replacement has its
+    /// own search, template and output-copy work.
     ///
-    /// A step costs 3.5 to 11 ns: 6.8 ns in the set machine at a cached
-    /// position (one hash probe) and 3.5 ns at a new one, 3.7 to 10.5 ns in the
-    /// reverse scan and walk of a search for a match, and 6.8 to 10.9 ns in the
-    /// backtracking machine on the measured host. The measured low-cost
-    /// searches admitted more than 64 MiB of input in under three seconds;
-    /// this is neither a universal input threshold nor a timing guarantee.
-    /// The step bound also refuses the exponential exploration that only a
-    /// backreference can still reach, `^(a|aa)*c\1$` over forty `a`, after
-    /// 2.7 s of work.
+    /// Nested counted repetitions with nullable bodies can still distinguish
+    /// many count combinations and reach a bound on short input. On `aaab`,
+    /// `((a?){3000}){3000}b` answers whereas `((a?){5000}){5000}b` is an
+    /// operational refusal at these bounds; no single minimum count is a
+    /// universal storage threshold. Backreference exploration can also reach
+    /// the work bound, for example `^(a|aa)*c\1$` over forty `a`.
+    ///
+    /// The `native_xpath_large` bench group in
+    /// `crates/rdf-core/benches/xsd_regex.rs` measures literal, grouped,
+    /// counted, adversarial and replacement inputs. Time depends on the
+    /// selected path, pattern and host; a matcher step has no universal
+    /// nanosecond cost or guaranteed maximum input size.
     #[must_use]
     pub const fn new() -> Self {
         Self {
