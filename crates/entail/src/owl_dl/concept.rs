@@ -303,6 +303,13 @@ pub(crate) struct ConceptTable {
 }
 
 impl ConceptTable {
+    pub(crate) fn id_of(&self, concept: &Concept) -> Option<u32> {
+        let hash = purrdf_core::FastHasher::default().hash_one(concept);
+        self.index
+            .find(hash, |&id| self.concepts[id as usize] == *concept)
+            .copied()
+    }
+
     /// Intern `c` (normalized to NNF), returning its stable concept id.
     ///
     /// Children are interned first so their ids are available in the parent's

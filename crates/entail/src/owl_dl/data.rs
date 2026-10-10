@@ -112,6 +112,43 @@ impl DataRangeTable {
         id
     }
 
+    /// Exact finite extent; every new native product is admitted at the range home.
+    pub(crate) fn try_exact_cardinality(
+        &self,
+        id: u32,
+        storage: &mut dyn purrdf_xsd::range::Storage,
+    ) -> Result<Option<u64>, purrdf_xsd::range::StorageError> {
+        let Some(decided) = self.ranges.get(id as usize).filter(|range| range.exact) else {
+            return Ok(None);
+        };
+        Ok(
+            match purrdf_xsd::range::try_cardinality(&decided.range, storage)? {
+                Cardinality::Exactly(count) => Some(count),
+                _ => None,
+            },
+        )
+    }
+
+    /// Exact containment only; an opaque approximation cannot license a transfer.
+    pub(crate) fn try_exactly_contains(
+        &self,
+        sub: u32,
+        sup: u32,
+        storage: &mut dyn purrdf_xsd::range::Storage,
+    ) -> Result<bool, purrdf_xsd::range::StorageError> {
+        let (Some(sub), Some(sup)) = (self.ranges.get(sub as usize), self.ranges.get(sup as usize))
+        else {
+            return Ok(false);
+        };
+        if !sub.exact || !sup.exact {
+            return Ok(false);
+        }
+        Ok(matches!(
+            purrdf_xsd::range::try_containment(&sub.range, &sup.range, storage)?,
+            Satisfiability::Empty
+        ))
+    }
+
     /// Whether the range with this id is provably empty on its own.
     ///
     /// Read by the consequence-based classifier, which turns an empty range into the axiom

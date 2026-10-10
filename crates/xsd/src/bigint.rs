@@ -18,7 +18,7 @@ mod storage;
 mod tower_tests;
 use scratch::{Allocate, Unbounded};
 pub use scratch::{LimbScratch, LimbScratchError};
-use storage::Mag;
+pub(crate) use storage::Mag;
 
 /// Number of decimal digits processed per limb-sized chunk.
 ///
@@ -1463,8 +1463,14 @@ impl BigInt {
     /// # Errors
     /// Returns checked layout or physical native destination refusal.
     pub fn prepare_decimal_digits(&self) -> Result<PreparedDecimalDigits, LimbScratchError> {
+        self.prepare_decimal_digits_using(&scratch::Fallible)
+    }
+
+    pub(crate) fn prepare_decimal_digits_using(
+        &self,
+        storage: &impl Allocate,
+    ) -> Result<PreparedDecimalDigits, LimbScratchError> {
         let layout = self.decimal_render_layout(0)?;
-        let storage = scratch::Fallible;
         let mut groups = storage.destination(layout.group_capacity(), 0)?;
         if self.is_zero() {
             storage.push(&mut groups, 0)?;
@@ -1475,7 +1481,7 @@ impl BigInt {
                 if current.is_empty() {
                     break;
                 }
-                let (next, remainder) = mag_divmod_small(current, CHUNK_BASE, &storage)?;
+                let (next, remainder) = mag_divmod_small(current, CHUNK_BASE, storage)?;
                 storage.push(&mut groups, remainder)?;
                 quotient = Some(next);
             }
@@ -1566,7 +1572,8 @@ impl BigInt {
     /// Multiply by an exact power of ten.
     #[must_use]
     pub fn mul_pow10(&self, exp: u32) -> Self {
-        self.mul(&Self::pow10(exp))
+        self.mul_pow10_using(exp, &Unbounded)
+            .expect("unbounded integer storage")
     }
 
     pub(crate) fn mul_pow10_using(
@@ -1581,7 +1588,7 @@ impl BigInt {
     /// # Errors
     /// Refuses scratch limb/destination exhaustion without allocating.
     pub fn mul_pow10_in(&self, exp: u32, scratch: &LimbScratch) -> Result<Self, LimbScratchError> {
-        self.mul_in(&Self::pow10_in(exp, scratch)?, scratch)
+        self.mul_pow10_using(exp, scratch)
     }
 
     /// Exact multiplication by a machine factor.

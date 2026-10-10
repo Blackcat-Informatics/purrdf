@@ -201,6 +201,8 @@ impl std::fmt::Display for DlCompleteness {
 /// the interesting failure of a reasoner is a missing answer presented as a complete one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DlCertificate {
+    /// Source preparation refusal, kept distinct from tableau work exhaustion.
+    schema_obstruction: Option<super::SchemaObstruction>,
     /// Whether any decision this run made reached its round cap or its work cap.
     ///
     /// Together with [`Self::boundaries`] and [`Self::stopped`], this is the minimal state
@@ -239,6 +241,11 @@ pub struct DlCertificate {
 }
 
 impl DlCertificate {
+    /// A class preparation refusal never means an exhaustive no-clash result.
+    #[must_use]
+    pub const fn schema_obstruction(&self) -> Option<super::SchemaObstruction> {
+        self.schema_obstruction
+    }
     /// A CONSUMER's reading of a certificate they were handed, for checking a proof's
     /// stopping receipt against.
     ///
@@ -279,6 +286,7 @@ impl DlCertificate {
         peak_depth: u64,
     ) -> Self {
         Self {
+            schema_obstruction: None,
             exhausted,
             stopped,
             boundaries,
@@ -291,6 +299,16 @@ impl DlCertificate {
             disjunctions,
             peak_depth,
         }
+    }
+
+    /// Attach the source-preparation obstruction read beside this certificate.
+    ///
+    /// This is a consumer's stated reading, like [`Self::stated`], not a measured
+    /// preparation. An obstruction always makes the certificate incomplete.
+    #[must_use]
+    pub const fn with_schema_obstruction(mut self, obstruction: super::SchemaObstruction) -> Self {
+        self.schema_obstruction = Some(obstruction);
+        self
     }
 
     /// How complete the answer is.
@@ -306,7 +324,7 @@ impl DlCertificate {
     /// the two to disagree over.
     #[must_use]
     pub fn completeness(&self) -> DlCompleteness {
-        if self.exhausted || self.stopped {
+        if self.exhausted || self.stopped || self.schema_obstruction.is_some() {
             DlCompleteness::BudgetExhausted
         } else if self.boundaries.is_empty() {
             DlCompleteness::Decided
@@ -783,6 +801,7 @@ impl<'a> Session<'a> {
             .map(Boundary::of)
             .collect();
         DlCertificate {
+            schema_obstruction: self.kb.schema.stats.obstruction,
             exhausted: self.exhausted,
             stopped: self.stopped,
             boundaries,

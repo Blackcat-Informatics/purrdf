@@ -1059,6 +1059,31 @@ impl Decimal {
         )
     }
 
+    /// The shared total order with every new magnitude in caller-owned storage.
+    pub(crate) fn cmp_using(
+        &self,
+        other: &Self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Ordering, crate::bigint::LimbScratchError> {
+        cmp_parts_admitted_using(
+            &self.unscaled,
+            self.scale,
+            &other.unscaled,
+            other.scale,
+            storage,
+            &mut |_| Ok(()),
+        )
+    }
+
+    pub(crate) fn round_to_integer_using(
+        &self,
+        rounding: Rounding,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Integer, crate::bigint::LimbScratchError> {
+        self.round_admitted_using(0, rounding, storage, &mut |_| Ok(()))
+            .map(|value| value.unscaled)
+    }
+
     // ----- resource governance ---------------------------------------------
 
     /// The coefficient's size in binary `u64` limbs.
@@ -1645,6 +1670,7 @@ fn shape_parts(coefficient: &Integer, scale: u32) -> cost::Shape {
 fn exact_exponent_admitted(
     coefficient: &Integer,
     scale: u32,
+    storage: &impl crate::bigint::scratch::Allocate,
     admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
 ) -> Result<i64, crate::bigint::LimbScratchError> {
     use crate::bigint::LimbScratchError::SizeOverflow;
@@ -1656,7 +1682,7 @@ fn exact_exponent_admitted(
             layout.temporary_bytes(),
             0,
         )?)?;
-        let groups = coefficient.prepare_decimal_digits()?;
+        let groups = coefficient.prepare_decimal_digits_using(storage)?;
         u64::try_from(groups.digits_len()).map_err(|_| SizeOverflow)?
     };
     Ok(i64::try_from(digits).map_err(|_| SizeOverflow)? - i64::from(scale))
@@ -1724,8 +1750,8 @@ fn cmp_parts_admitted_using(
     } else if bl > ah {
         Ordering::Less
     } else {
-        let a = exact_exponent_admitted(left, ls, admit)?;
-        let b = exact_exponent_admitted(right, rs, admit)?;
+        let a = exact_exponent_admitted(left, ls, storage, admit)?;
+        let b = exact_exponent_admitted(right, rs, storage, admit)?;
         match a.cmp(&b) {
             Ordering::Equal => {
                 admit(aligned_parts_layout(left, ls, right, rs)?)?;
@@ -1753,7 +1779,7 @@ fn cmp_magnitude_binary_admitted_using(
     storage: &impl crate::bigint::scratch::Allocate,
     admit: &mut impl FnMut(cost::NumericOperationLayout) -> Result<(), crate::bigint::LimbScratchError>,
 ) -> Result<Ordering, crate::bigint::LimbScratchError> {
-    let decimal_exponent = exact_exponent_admitted(unscaled, scale, admit)?;
+    let decimal_exponent = exact_exponent_admitted(unscaled, scale, storage, admit)?;
     let binade = i64::from(significand.ilog2()) + i64::from(exponent);
     if super::binary::log2_of_pow10(decimal_exponent) + 2 <= binade {
         return Ok(Ordering::Less);
@@ -2156,15 +2182,8 @@ impl fmt::Debug for Decimal {
 
 impl Ord for Decimal {
     fn cmp(&self, other: &Self) -> Ordering {
-        cmp_parts_admitted_using(
-            &self.unscaled,
-            self.scale,
-            &other.unscaled,
-            other.scale,
-            &crate::bigint::scratch::Unbounded,
-            &mut |_| Ok(()),
-        )
-        .expect("unbounded integer storage")
+        self.cmp_using(other, &crate::bigint::scratch::Unbounded)
+            .expect("unbounded integer storage")
     }
 }
 

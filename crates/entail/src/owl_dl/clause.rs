@@ -479,6 +479,9 @@ pub(crate) struct ClauseSet {
     /// carry no such flag — `C ⊓ ¬C ⊑ ⊥` and the decomposition of a concept a node's label
     /// actually carries are statements about that concept, valid over either domain.
     tbox: Vec<bool>,
+    /// Number of original admitted schema guards appended logically to this
+    /// compilation. Their bodies and sorted trigger directory remain in the Kb.
+    schema_count: usize,
     /// Per clause, the transitive patterns its body atoms read — see [`Self::reads`].
     reads: Vec<u64>,
     /// See [`Self::transitive_readers`].
@@ -487,20 +490,61 @@ pub(crate) struct ClauseSet {
 
 impl ClauseSet {
     /// The clause at `index`.
-    pub(crate) fn clause(&self, index: usize) -> &DlClause {
-        &self.clauses[index]
+    pub(crate) fn schema_class(
+        &self,
+        index: usize,
+        schema: &super::bounds::Preparation,
+    ) -> Option<u32> {
+        let ordinal = index.checked_sub(self.clauses.len())?;
+        schema.guards.get(ordinal).map(|(class, _)| *class)
+    }
+
+    pub(crate) fn schema_clauses<'a>(
+        &'a self,
+        schema: &'a super::bounds::Preparation,
+    ) -> impl Iterator<Item = (usize, u32)> + 'a {
+        schema
+            .guards
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (class, _))| (self.clauses.len() + ordinal, *class))
+    }
+
+    pub(crate) fn clause<'a>(
+        &'a self,
+        index: usize,
+        schema: &'a super::bounds::Preparation,
+    ) -> &'a DlClause {
+        if let Some(clause) = self.clauses.get(index) {
+            clause
+        } else {
+            &schema.guards[index - self.clauses.len()].1
+        }
     }
 
     /// How many clauses the knowledge base produced.
     pub(crate) fn count(&self) -> usize {
-        self.clauses.len()
+        self.clauses.len() + self.schema_count
     }
 
     /// The clauses `concept` can make applicable, in derivation order.
-    pub(crate) fn triggered_by(&self, concept: u32) -> &[usize] {
+    pub(crate) fn triggered_by<'a>(
+        &'a self,
+        concept: u32,
+        schema: &'a super::bounds::Preparation,
+    ) -> impl Iterator<Item = usize> + 'a {
         self.by_trigger
             .get(&concept)
-            .map_or(&[] as &[usize], Vec::as_slice)
+            .into_iter()
+            .flatten()
+            .copied()
+            .chain(
+                schema
+                    .guards
+                    .binary_search_by_key(&concept, |(class, _)| *class)
+                    .ok()
+                    .map(|ordinal| self.clauses.len() + ordinal),
+            )
     }
 
     /// How many neighbourhood READS a clause match rooted at one node can chain: an upper
@@ -552,7 +596,15 @@ impl ClauseSet {
     /// The transitive patterns ([`TransitivePatterns::bit`]) the clause at `index` can read
     /// through some body atom, as a mask: zero for a clause no transitive closure reaches.
     pub(crate) fn reads(&self, index: usize) -> u64 {
-        self.reads[index]
+        if index < self.clauses.len() {
+            self.reads[index]
+        } else {
+            assert!(
+                index < self.count(),
+                "clause index is outside this compilation"
+            );
+            0 // A schema guard reads only its current class membership.
+        }
     }
 
     /// The clauses whose body reads some transitive closure, ascending — the only ones a
@@ -572,7 +624,15 @@ impl ClauseSet {
 
     /// Whether the clause at `index` is TBox-derived, and so scoped to the object domain.
     pub(crate) fn is_tbox(&self, index: usize) -> bool {
-        self.tbox[index]
+        if index < self.clauses.len() {
+            self.tbox[index]
+        } else {
+            assert!(
+                index < self.count(),
+                "clause index is outside this compilation"
+            );
+            true // A schema guard quantifies over the object domain.
+        }
     }
 
     /// Record one clause, indexing it by its trigger.
@@ -623,6 +683,7 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
         by_edge: BTreeMap::new(),
         role_first: Vec::new(),
         tbox: Vec::new(),
+        schema_count: kb.schema.guards.len(),
         reads: Vec::new(),
         transitive_readers: Vec::new(),
     };
@@ -731,6 +792,9 @@ pub(crate) fn derive(kb: &Kb) -> ClauseSet {
     // variable it starts at, in the role's own direction, and a match rooted at variable 0
     // makes its first read through one of the atoms starting there. Every atom counts, not
     // only those, which over-approximates and can only widen what a round re-matches.
+    // Schema guards are appended logically, preserving every unrelated legacy
+    // clause index and proof encoding. The original admitted preparation owns
+    // their bodies and trigger directory, so this compilation copies neither.
     let patterns = TransitivePatterns::of(kb);
     out.reads = out
         .clauses
@@ -1080,7 +1144,7 @@ mod tests {
             kb.disjoint_roles.insert((21, 20));
             let clauses = derive(&kb);
             for index in 0..clauses.count() {
-                let clause = clauses.clause(index);
+                let clause = clauses.clause(index, &kb.schema);
                 assert!(
                     clause.is_matchable(),
                     "{concept:?} derived an unmatchable clause: {clause:?}"
@@ -1101,7 +1165,7 @@ mod tests {
             1,
             "one disjunction, one disjunctive clause"
         );
-        let clause = clauses.clause(disjunctive[0]);
+        let clause = clauses.clause(disjunctive[0], &kb.schema);
         assert_eq!(clause.head.len(), 2, "two disjuncts");
         assert!(
             clause
@@ -1124,7 +1188,7 @@ mod tests {
         ));
         let clauses = derive(&kb);
         let counting = (0..clauses.count())
-            .map(|index| clauses.clause(index))
+            .map(|index| clauses.clause(index, &kb.schema))
             .find(|clause| {
                 clause
                     .head
@@ -1152,7 +1216,7 @@ mod tests {
         ));
 
         let choose = (0..clauses.count())
-            .map(|index| clauses.clause(index))
+            .map(|index| clauses.clause(index, &kb.schema))
             .find(|clause| {
                 clause.head.len() == 2
                     && clause
@@ -1175,7 +1239,7 @@ mod tests {
         let existential = clauses.with_head_form(HeadForm::Existential);
         assert_eq!(existential.len(), 1);
         assert!(matches!(
-            clauses.clause(existential[0]).head[0][0],
+            clauses.clause(existential[0], &kb.schema).head[0][0],
             HeadAtom::AtLeast { n: 2, .. }
         ));
 
@@ -1203,7 +1267,7 @@ mod tests {
         ));
         let clauses = derive(&kb);
         let counting = (0..clauses.count())
-            .map(|index| clauses.clause(index))
+            .map(|index| clauses.clause(index, &kb.schema))
             .find(|clause| {
                 clause
                     .head
@@ -1227,7 +1291,7 @@ mod tests {
         let clauses = derive(&kb);
         let conjunctive = clauses.with_head_form(HeadForm::Conjunctive);
         assert_eq!(conjunctive.len(), 1);
-        assert_eq!(clauses.clause(conjunctive[0]).head[0].len(), 2);
+        assert_eq!(clauses.clause(conjunctive[0], &kb.schema).head[0].len(), 2);
     }
 
     /// A complementary pair, `⊥`, a negated self restriction, a negated nominal and the two
@@ -1247,13 +1311,13 @@ mod tests {
         assert!(
             inconsistency
                 .iter()
-                .all(|&index| clauses.clause(index).head.is_empty())
+                .all(|&index| clauses.clause(index, &kb.schema).head.is_empty())
         );
         // The asymmetry clause opens with a role atom, so an incident edge over that role
         // triggers it rather than every node.
         assert_eq!(clauses.untriggered(), &[] as &[usize]);
         assert_eq!(clauses.edge_triggered((21, true)).len(), 1);
-        let asymmetry = clauses.clause(clauses.edge_triggered((21, true))[0]);
+        let asymmetry = clauses.clause(clauses.edge_triggered((21, true))[0], &kb.schema);
         assert_eq!(asymmetry.trigger(), None);
         assert_eq!(asymmetry.arity(), 2);
         assert_eq!(asymmetry.head, [] as [Vec<HeadAtom>; 0]);
@@ -1271,7 +1335,7 @@ mod tests {
             .into_iter()
             .filter(|&index| {
                 matches!(
-                    clauses.clause(index).head[0][0],
+                    clauses.clause(index, &one.schema).head[0][0],
                     HeadAtom::EqualIndividual { .. }
                 )
             })
@@ -1285,7 +1349,7 @@ mod tests {
             .into_iter()
             .filter(|&index| {
                 clauses
-                    .clause(index)
+                    .clause(index, &two.schema)
                     .head
                     .iter()
                     .flatten()
@@ -1293,7 +1357,7 @@ mod tests {
             })
             .collect();
         assert_eq!(disjunctive.len(), 1, "two members, one branch of two");
-        assert_eq!(clauses.clause(disjunctive[0]).head.len(), 2);
+        assert_eq!(clauses.clause(disjunctive[0], &two.schema).head.len(), 2);
     }
 
     /// The absorbed TBox becomes an atomic-head clause triggered by the named class, which is
@@ -1305,10 +1369,10 @@ mod tests {
         kb.finalize();
         let named = kb.table.intern(Concept::Named(10));
         let clauses = derive(&kb);
-        let triggered = clauses.triggered_by(named);
+        let triggered: Vec<usize> = clauses.triggered_by(named, &kb.schema).collect();
         assert!(
             triggered.iter().any(|&index| {
-                let clause = clauses.clause(index);
+                let clause = clauses.clause(index, &kb.schema);
                 clause.head_form() == HeadForm::Atomic
                     && matches!(clause.head[0][0], HeadAtom::Concept { var: 0, .. })
             }),
@@ -1335,9 +1399,9 @@ mod tests {
             clauses.untriggered()
         );
         assert!(
-            clauses.triggered_by(filler).iter().any(|&index| {
+            clauses.triggered_by(filler, &kb.schema).any(|index| {
                 matches!(
-                    clauses.clause(index).body.as_slice(),
+                    clauses.clause(index, &kb.schema).body.as_slice(),
                     [
                         BodyAtom::Concept { var: 0, .. },
                         BodyAtom::Role {
@@ -1396,7 +1460,7 @@ mod tests {
             clauses
                 .untriggered()
                 .iter()
-                .map(|&index| clauses.clause(index))
+                .map(|&index| clauses.clause(index, &kb.schema))
                 .collect::<Vec<&DlClause>>()
         );
         // The range, the domain and the two role axioms open with a role atom, so each is
@@ -1412,7 +1476,7 @@ mod tests {
             "range, domain, asymmetry, disjointness"
         );
         for &index in &edge_indexed {
-            let clause = clauses.clause(index);
+            let clause = clauses.clause(index, &kb.schema);
             assert_eq!(clause.trigger(), None);
             assert!(clause.first_role().is_some(), "{clause:?}");
         }

@@ -1089,9 +1089,18 @@ fn poll(stop: Option<&dyn StopSignal>) -> Result<(), EntailError> {
 ///
 /// [`EntailError::Parse`] on a malformed class-expression graph (a restriction with no
 /// `owl:onProperty`, a non-integer cardinality literal, a broken RDF list, …).
+#[cfg(test)]
 pub(crate) fn build_until<D: DatasetView>(
     ds: &D,
     stop: Option<&dyn StopSignal>,
+) -> Result<Kb, EntailError> {
+    build_with_preparation(ds, stop, super::bounds::SchemaPreparationBudget::default())
+}
+
+pub(crate) fn build_with_preparation<D: DatasetView>(
+    ds: &D,
+    stop: Option<&dyn StopSignal>,
+    budget: super::bounds::SchemaPreparationBudget,
 ) -> Result<Kb, EntailError> {
     ds.checked_read(|ds| {
         poll(stop)?;
@@ -1183,9 +1192,20 @@ pub(crate) fn build_until<D: DatasetView>(
         }
 
         poll(stop)?;
+        let source_terms = u32::try_from(interner.len()).expect("term count fits u32");
         let mut kb = Kb {
             interner,
+            source_terms,
             table,
+            schema: super::bounds::Preparation::default(),
+            schema_budget: budget,
+            keys_applied: false,
+            #[cfg(test)]
+            schema_reference: false,
+            #[cfg(test)]
+            schema_reference_stats: std::cell::Cell::default(),
+            #[cfg(test)]
+            schema_recording_budget: None,
             top,
             bottom,
             tbox: acc.tbox,

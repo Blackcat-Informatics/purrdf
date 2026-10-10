@@ -95,6 +95,9 @@ use crate::report::Construct;
 /// carries. Bytes written under `v1` therefore cannot be read as if they were current, which is
 /// what the tag is for.
 const SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-service-proof-v2");
+const PREPARATION_SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-service-proof-v3");
+
+mod current;
 
 /// Wire kind for [`TermValue::Iri`].
 const TERM_IRI: u8 = 0;
@@ -508,6 +511,8 @@ impl Claim {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum StopCause {
+    /// Source-owned schema preparation did not complete under its admitted limits.
+    SchemaPreparation,
     /// The caller's stop signal fired.
     CallerStop,
     /// The run reached its WORK cap — the matcher, scan, closure and clone work done inside a
@@ -530,6 +535,7 @@ impl StopCause {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::SchemaPreparation => "schema-preparation",
             Self::CallerStop => "caller-stop",
             Self::WorkCap => "work-cap",
             Self::RoundCap => "round-cap",
@@ -563,6 +569,8 @@ impl StopCause {
 /// [`Self::session_work`] carry the certificate's sums beside them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StopReceipt {
+    /// The actual typed source-preparation refusal, when it stopped the service.
+    schema_obstruction: Option<super::SchemaObstruction>,
     /// Whether the caller's stop signal fired.
     stopped: bool,
     /// The run that did not decide, into [`ServiceProof::runs`].
@@ -597,6 +605,11 @@ pub struct StopReceipt {
 }
 
 impl StopReceipt {
+    /// Source preparation's original obstruction, distinct from search caps.
+    #[must_use]
+    pub const fn schema_obstruction(&self) -> Option<super::SchemaObstruction> {
+        self.schema_obstruction
+    }
     /// WHY the search stopped, derived from the counters on every call.
     ///
     /// A caller cancellation first — it can fire with either cap still far away — then the work
@@ -605,7 +618,9 @@ impl StopReceipt {
     /// [`StopCause::NestedCeiling`].
     #[must_use]
     pub const fn cause(&self) -> StopCause {
-        if self.stopped {
+        if self.schema_obstruction.is_some() {
+            StopCause::SchemaPreparation
+        } else if self.stopped {
             StopCause::CallerStop
         } else if self.work >= self.work_budget {
             StopCause::WorkCap
@@ -1016,15 +1031,38 @@ impl ServiceProof {
                     ),
                 });
             }
+            if proof
+                .clashes()
+                .iter()
+                .any(|step| step.schema_evidence().is_some())
+            {
+                current::check_run(self, index, ctx)?;
+            }
             match run.answer {
                 ProofAnswer::Inconsistent => {
-                    checks.absorb(proof.replay_refutation(ctx)?.checks());
+                    let assumptions = Assumptions {
+                        include_abox: run.assumptions.include_abox,
+                        types: &run.assumptions.types,
+                        roles: &run.assumptions.roles,
+                        fresh_types: &run.assumptions.fresh_types,
+                    };
+                    checks.absorb(
+                        proof
+                            .replay_refutation_assuming(ctx, &assumptions)?
+                            .checks(),
+                    );
                 }
                 ProofAnswer::Consistent => {
                     checks.absorb(proof.replay_completion(ctx)?.checks());
                 }
                 ProofAnswer::Undecided => {
-                    checks.absorb(proof.replay_partial(ctx)?.checks());
+                    let assumptions = Assumptions {
+                        include_abox: run.assumptions.include_abox,
+                        types: &run.assumptions.types,
+                        roles: &run.assumptions.roles,
+                        fresh_types: &run.assumptions.fresh_types,
+                    };
+                    checks.absorb(proof.replay_partial_assuming(ctx, &assumptions)?.checks());
                 }
             }
             replayed += 1;
@@ -1172,6 +1210,11 @@ impl ServiceProof {
                     .to_owned(),
             )
         })?;
+        if receipt.schema_obstruction != certificate.schema_obstruction() {
+            return Err(mismatch(
+                "schema-preparation obstruction differs from the original certificate".to_owned(),
+            ));
+        }
         let bounded: Vec<String> = certificate
             .boundaries()
             .iter()
@@ -1312,7 +1355,18 @@ impl ServiceProof {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        frame_le(&mut out, SERVICE_ENCODING_TAG.as_bytes());
+        let preparation = self
+            .receipt
+            .as_ref()
+            .is_some_and(|receipt| receipt.schema_obstruction.is_some());
+        frame_le(
+            &mut out,
+            if preparation {
+                PREPARATION_SERVICE_ENCODING_TAG.as_bytes()
+            } else {
+                SERVICE_ENCODING_TAG.as_bytes()
+            },
+        );
         out.extend_from_slice(&self.input);
         out.push(self.service.ordinal() as u8);
         out.push(u8::from(self.truncated));
@@ -1365,6 +1419,26 @@ impl ServiceProof {
             }
             None => out.push(0),
         }
+        if preparation {
+            let obstruction = self
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.schema_obstruction)
+                .expect("version selected from the receipt");
+            match obstruction {
+                super::SchemaObstruction::Work { spent, limit } => {
+                    out.push(0);
+                    out.extend_from_slice(&spent.to_le_bytes());
+                    out.extend_from_slice(&limit.to_le_bytes());
+                }
+                super::SchemaObstruction::Storage { requested, limit } => {
+                    out.push(1);
+                    length(&mut out, requested);
+                    length(&mut out, limit);
+                }
+                super::SchemaObstruction::Allocation => out.push(2),
+            }
+        }
         out
     }
 
@@ -1408,7 +1482,9 @@ impl ServiceProof {
     /// [`DlProofError::Malformed`].
     pub fn decode(bytes: &[u8]) -> Result<Self, DlProofError> {
         let mut reader = Reader::new(bytes);
-        if reader.frame()? != SERVICE_ENCODING_TAG.as_bytes() {
+        let tag = reader.frame()?;
+        let preparation = tag == PREPARATION_SERVICE_ENCODING_TAG.as_bytes();
+        if !preparation && tag != SERVICE_ENCODING_TAG.as_bytes() {
             return Err(malformed(
                 "the service proof encoding tag is absent or from another layout",
             ));
@@ -1445,10 +1521,28 @@ impl ServiceProof {
             let subject = decode_subject(&mut reader)?;
             claims.push(Claim::new(subject, decode_basis(&mut reader)?));
         }
-        let receipt = reader
+        let mut receipt = reader
             .flag()?
             .then(|| decode_receipt(&mut reader))
             .transpose()?;
+        if preparation {
+            let obstruction = match reader.byte()? {
+                0 => super::SchemaObstruction::Work {
+                    spent: reader.u64()?,
+                    limit: reader.u64()?,
+                },
+                1 => super::SchemaObstruction::Storage {
+                    requested: reader.length()?,
+                    limit: reader.length()?,
+                },
+                2 => super::SchemaObstruction::Allocation,
+                _ => return Err(malformed("unknown schema-preparation obstruction")),
+            };
+            receipt
+                .as_mut()
+                .ok_or_else(|| malformed("preparation receipt is absent"))?
+                .schema_obstruction = Some(obstruction);
+        }
         if !reader.is_exhausted() {
             return Err(malformed(
                 "trailing bytes after the service proof's last field",
@@ -1587,6 +1681,7 @@ pub(crate) fn receipt_of(
 ) -> StopReceipt {
     let trace = runs.get(point.run).and_then(RunProof::proof);
     StopReceipt {
+        schema_obstruction: certificate.schema_obstruction(),
         stopped: point.stopped,
         run: point.run,
         steps: point.steps,
@@ -2178,6 +2273,7 @@ fn decode_receipt(reader: &mut Reader<'_>) -> Result<StopReceipt, DlProofError> 
     }
     let branches_reached = reader.length()?;
     Ok(StopReceipt {
+        schema_obstruction: None,
         stopped,
         run,
         steps: counters[0],

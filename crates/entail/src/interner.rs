@@ -24,6 +24,10 @@ pub(crate) struct Interner {
 }
 
 impl Interner {
+    pub(crate) fn len(&self) -> usize {
+        self.values.len()
+    }
+
     /// Intern `v`, returning its stable dense id (assigned in first-seen order).
     pub(crate) fn intern(&mut self, v: TermValue) -> u32 {
         let hash = purrdf_core::FastHasher::default().hash_one(&v);
@@ -51,10 +55,14 @@ impl Interner {
     /// The id already assigned to `iri`, if it has been interned (lookup only).
     #[cfg(test)]
     pub(crate) fn id_of_iri(&self, iri: &str) -> Option<u32> {
-        let value = TermValue::Iri(iri.to_owned());
-        let hash = purrdf_core::FastHasher::default().hash_one(&value);
+        self.id_of(&TermValue::Iri(iri.to_owned()))
+    }
+
+    /// Borrowed term lookup at the sole interner home.
+    pub(crate) fn id_of(&self, value: &TermValue) -> Option<u32> {
+        let hash = purrdf_core::FastHasher::default().hash_one(value);
         self.index
-            .find(hash, |&id| self.values[id as usize] == value)
+            .find(hash, |&id| self.values[id as usize] == *value)
             .copied()
     }
 

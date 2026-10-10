@@ -61,6 +61,25 @@ impl Mag {
         }
     }
 
+    /// A fully sized native arithmetic destination, refusing physical allocation.
+    pub(crate) fn try_destination(
+        capacity: usize,
+        length: usize,
+    ) -> Result<Self, super::LimbScratchError> {
+        if length > capacity {
+            return Err(super::LimbScratchError::SizeOverflow);
+        }
+        if capacity <= 3 {
+            return Ok(Self::zeroed(length));
+        }
+        let mut words = Vec::new();
+        words
+            .try_reserve_exact(capacity)
+            .map_err(|_| super::LimbScratchError::SizeOverflow)?;
+        words.resize(length, 0);
+        Ok(Self::Heap(words))
+    }
+
     pub(super) fn push(&mut self, word: u64) {
         match self {
             Self::Inline { words, length } if length.get() <= 3 => {

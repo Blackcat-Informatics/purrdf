@@ -64,6 +64,47 @@ mod scalar;
 
 pub use scalar::{DebugScalar, write_debug_scalars};
 
+/// A buffer owner that reserves storage before publishing vector elements.
+///
+/// The owner chooses the growth, admission and refund policy. These shared
+/// construction methods introduce no separate allocator or ownership account.
+pub trait VecReserve {
+    /// The owner's original admission or physical allocation failure.
+    type Error;
+
+    /// Ensure room for `additional` elements before any element is copied.
+    ///
+    /// Success must leave capacity for the current length plus `additional`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the owner's original failure before publishing new elements.
+    fn reserve<T>(&mut self, values: &mut Vec<T>, additional: usize) -> Result<(), Self::Error>;
+
+    /// Publish one element after its destination is reserved.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reservation failure before changing the vector's length.
+    fn push<T>(&mut self, values: &mut Vec<T>, value: T) -> Result<(), Self::Error> {
+        self.reserve(values, 1)?;
+        values.push(value);
+        Ok(())
+    }
+
+    /// Copy borrowed elements into an originally reserved destination.
+    ///
+    /// # Errors
+    ///
+    /// Returns the owner's reservation failure before copying any element.
+    fn copy<T: Copy>(&mut self, input: &[T]) -> Result<Vec<T>, Self::Error> {
+        let mut values = Vec::new();
+        self.reserve(&mut values, input.len())?;
+        values.extend_from_slice(input);
+        Ok(values)
+    }
+}
+
 /// A stack holding its first `N` entries inline and the rest on the heap.
 ///
 /// A walk over a shallow tree — the common case — never grows past `N` pending

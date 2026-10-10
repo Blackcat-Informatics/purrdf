@@ -248,6 +248,13 @@ impl Integer {
         self.with_bigint(BigInt::prepare_decimal_digits)
     }
 
+    pub(crate) fn prepare_decimal_digits_using(
+        &self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<crate::bigint::PreparedDecimalDigits, crate::bigint::LimbScratchError> {
+        self.with_bigint(|value| value.prepare_decimal_digits_using(storage))
+    }
+
     /// Checked render layout including sign, point and fractional padding.
     /// # Errors
     /// Returns physical address-space overflow without allocation.
