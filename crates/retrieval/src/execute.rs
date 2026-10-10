@@ -311,8 +311,7 @@ use purrdf_sparql_eval::{
 
 use crate::admission::BoundMode;
 use crate::compile::{
-    BLOCK_NAME, CANDIDATE_NAME, CompiledRetrieval, EXCLUSION_LIMIT, ReadReach, ReadSchedule,
-    StratumUnit,
+    BLOCK_NAME, CANDIDATE_NAME, CompiledRead, EXCLUSION_LIMIT, ReadReach, ReadSchedule, StratumUnit,
 };
 use crate::fuse::TopK;
 use crate::fusion_stream::ProducerStatus;
@@ -396,6 +395,47 @@ pub struct ExecutionResult<'d> {
     pub streams: Vec<StratumStream<'d>>,
     /// Every stratum's own terminal status.
     pub statuses: FastMap<Iri, ProducerStatus>,
+}
+
+/// One actual native ranked read with an independent prefix depth.
+///
+/// No fusion weight, TopK or score is attached. contract and attestation are the
+/// original producer facts; stream owns the same invocation/receipt/cost state.
+#[derive(Debug)]
+pub struct ReadStratum<'d> {
+    /// The actual producer stratum.
+    pub stratum: Iri,
+    /// The pinned candidate or fusion plan.
+    pub plan_id: PlanId,
+    /// The actual independent unit depth, without its read-only probe row.
+    pub requested_depth: u32,
+    /// The producer's declared duplicate/domain/fidelity/exclusion promises.
+    pub contract: StreamContract,
+    /// The original generation/service announcement before the first row.
+    pub attestation: PfAttestation,
+    /// The native read, preserving rank, settlement and producer cost.
+    pub stream: RankedStreamImpl<'d>,
+}
+
+/// Unscored candidate streams and the failures of producers that did not open.
+#[derive(Debug)]
+pub struct CandidateExecutionResult<'d> {
+    /// The actual native unit reads, ascending by stratum.
+    pub streams: Vec<ReadStratum<'d>>,
+    /// Original terminal statuses known at execute time, including failures.
+    pub statuses: FastMap<Iri, ProducerStatus>,
+    /// The explicit candidate-plan identity.
+    pub plan_id: PlanId,
+    /// The caller work depths compiled into the actual units.
+    pub depths: crate::candidate::CandidateDepths,
+    /// The admitted contract of every selected stratum, including failed reads.
+    pub contracts: FastMap<Iri, StreamContract>,
+    /// Request terms and placements no selected producer could serve.
+    pub unserved_terms: Vec<crate::plan::UnservedTerm>,
+    /// The actual term-to-producer binding records.
+    pub producer_bindings: Vec<crate::plan::ProducerBinding>,
+    /// All producer selection/rejection decisions.
+    pub producer_decisions: Vec<crate::plan::ProducerDecision>,
 }
 
 /// A whole-execution failure, as distinct from a per-stratum one.
@@ -1520,11 +1560,15 @@ impl<'d> RankedStreamImpl<'d> {
     clippy::unused_async_trait_impl,
     clippy::future_not_send
 )]
-pub async fn execute<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
-    compiled: &CompiledRetrieval,
+pub async fn execute<
+    'd,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    C: CompiledRead,
+>(
+    compiled: &C,
     registry: &PropertyFunctionRegistry,
     dataset: &'d D,
-) -> Result<ExecutionResult<'d>, ExecutionError> {
+) -> Result<C::Output<'d>, ExecutionError> {
     execute_within(compiled, registry, dataset, ReadSchedule::Materialised).await
 }
 
@@ -1567,15 +1611,19 @@ pub async fn execute<'d, D: DatasetView<ReadError = std::convert::Infallible> + 
     clippy::unused_async_trait_impl,
     clippy::future_not_send
 )]
-pub async fn execute_within<'d, D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
-    compiled: &CompiledRetrieval,
+pub async fn execute_within<
+    'd,
+    D: DatasetView<ReadError = std::convert::Infallible> + Sync,
+    C: CompiledRead,
+>(
+    compiled: &C,
     registry: &PropertyFunctionRegistry,
     dataset: &'d D,
     schedule: ReadSchedule,
-) -> Result<ExecutionResult<'d>, ExecutionError> {
-    if compiled.registry_id != registry.instance_id() {
+) -> Result<C::Output<'d>, ExecutionError> {
+    if compiled.registry_id() != registry.instance_id() {
         return Err(ExecutionError::RegistryMismatch {
-            expected: compiled.registry_id,
+            expected: compiled.registry_id(),
             got: registry.instance_id(),
         });
     }
@@ -1589,7 +1637,7 @@ pub async fn execute_within<'d, D: DatasetView<ReadError = std::convert::Infalli
     // One engine for the whole call, shared with the exclusion lookups it
     // compiles: they run after this call returns, on executions prepared here.
     let engine = Rc::new(NativeSparqlEngine::new());
-    let mut streams = Vec::with_capacity(compiled.units.len());
+    let mut streams = Vec::with_capacity(compiled.units().len());
     // The lookups this call compiled, attached once every ranking read is open —
     // see `CandidateIndex` — beside the index of each candidate those reads named.
     // The index is filled only when some stratum compiled a lookup, because it is
@@ -1598,9 +1646,9 @@ pub async fn execute_within<'d, D: DatasetView<ReadError = std::convert::Infalli
     // candidate, because the fusion asks only about candidates it has pulled.
     let mut lookups: Vec<PendingLookup> = Vec::new();
     let candidates: Rc<RefCell<CandidateIndex<D::Id>>> = Rc::new(RefCell::new(FastMap::default()));
-    let index_candidates = compiled.units.iter().any(StratumUnit::declares_exclusion);
+    let index_candidates = compiled.units().iter().any(StratumUnit::declares_exclusion);
     let mut statuses =
-        FastMap::with_capacity_and_hasher(compiled.units.len(), FastHasher::default());
+        FastMap::with_capacity_and_hasher(compiled.units().len(), FastHasher::default());
     // The registry is named identically at prepare and at evaluation: the
     // evaluator refuses a plan prepared against a different registry than the
     // one it is run under, because a plan prepared without one has already
@@ -1624,7 +1672,7 @@ pub async fn execute_within<'d, D: DatasetView<ReadError = std::convert::Infalli
     })?);
     let options = || QueryOptions::new().with_env(env.as_ref());
 
-    for unit in &compiled.units {
+    for unit in compiled.units() {
         // There is no empty-text arm here, and there is nothing left for one to catch.
         // An empty supplied text is not a query, so `StratumUnit::new` refuses it
         // outright (`UnitError::NotAQuery`), and a rendered text is assembled from a
@@ -1778,10 +1826,10 @@ pub async fn execute_within<'d, D: DatasetView<ReadError = std::convert::Infalli
                             pinned: attestation.clone(),
                         });
                     }
-                    streams.push(StratumStream {
+                    streams.push(ReadStratum {
                         stratum: unit.stratum.clone(),
-                        plan_id: compiled.plan_id,
-                        fused_bound: compiled.fused_bound,
+                        plan_id: compiled.plan_id(),
+                        requested_depth: depth.get(),
                         contract: unit.contract.clone(),
                         attestation,
                         stream: RankedStreamImpl::on_demand(Box::new(read)),
@@ -1869,10 +1917,10 @@ pub async fn execute_within<'d, D: DatasetView<ReadError = std::convert::Infalli
                                 pinned: attestation.clone(),
                             });
                         }
-                        streams.push(StratumStream {
+                        streams.push(ReadStratum {
                             stratum: unit.stratum.clone(),
-                            plan_id: compiled.plan_id,
-                            fused_bound: compiled.fused_bound,
+                            plan_id: compiled.plan_id(),
+                            requested_depth: depth.get(),
                             contract: unit.contract.clone(),
                             attestation,
                             stream,
@@ -1955,7 +2003,7 @@ pub async fn execute_within<'d, D: DatasetView<ReadError = std::convert::Infalli
             }));
     }
 
-    Ok(ExecutionResult { streams, statuses })
+    Ok(compiled.finish(streams, statuses))
 }
 
 /// Record how each of `ranked`'s candidates is bound into an exclusion lookup —
@@ -2144,8 +2192,10 @@ fn bound_to_depth(
     // observed, and the honest report names the bound that made the row past it
     // unaskable. `Exhausted` here would be the one ending that names no
     // stopper, minted from the producer's registration rather than from a read.
-    if reach == ReadReach::AtDepth && ranked.len() == ceiling {
-        let rank = u64::from(depth);
+    if matches!(reach, ReadReach::AtDepth) && ranked.len() == ceiling
+        || matches!(reach, ReadReach::AtBound(bound) if u64::try_from(ranked.len()) == Ok(bound))
+    {
+        let rank = u64::try_from(ranked.len()).unwrap_or(u64::MAX);
         return Ok((
             ranked,
             StreamEnding::RowBoundReached { rank },
@@ -2414,7 +2464,12 @@ impl<D: DatasetView + Sync> OnDemandRead for CallRead<'_, D> {
                         rank: u64::from(self.depth),
                     }
                 }
-                ReadReach::AtDepth | ReadReach::PastDepth => StreamEnding::Exhausted,
+                ReadReach::AtBound(bound) if self.materialised == bound => {
+                    StreamEnding::RowBoundReached { rank: bound }
+                }
+                ReadReach::AtDepth | ReadReach::AtBound(_) | ReadReach::PastDepth => {
+                    StreamEnding::Exhausted
+                }
             };
             return Ok(ReadStep::Ended(ending));
         };
@@ -2989,9 +3044,7 @@ mod tests {
     }
 
     fn incomplete(reason: &str) -> ServiceLevel {
-        ServiceLevel::Incomplete {
-            reason: reason.to_owned(),
-        }
+        ServiceLevel::incomplete(reason)
     }
 
     /// A witness built the way the evaluator builds one: by recording

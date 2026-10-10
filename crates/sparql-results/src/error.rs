@@ -34,6 +34,8 @@ pub enum Error {
     InvalidNamespace(String),
     /// An internal invariant failed. Used sparingly; prefer a specific variant.
     Internal(String),
+    /// Original native producer admission or allocator refusal.
+    Storage(purrdf_lex::allocation::StorageError),
     /// The destination a streaming serialization was writing into failed.
     ///
     /// Carries the failure's description rather than the `io::Error` itself,
@@ -67,6 +69,7 @@ impl fmt::Display for Error {
             Self::MalformedTerm(msg) => write!(f, "malformed result term: {msg}"),
             Self::Format(msg) => write!(f, "result format error: {msg}"),
             Self::InvalidNamespace(msg) => write!(f, "invalid provenance namespace: {msg}"),
+            Self::Storage(error) => write!(f, "{error}"),
             Self::Internal(msg) => write!(f, "internal error: {msg}"),
             Self::Write { message, .. } => write!(f, "result write error: {message}"),
         }

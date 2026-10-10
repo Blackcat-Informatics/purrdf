@@ -513,7 +513,7 @@ _SPELLED = {
     1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
     8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
     14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen",
-    19: "nineteen", 20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three",
+    19: "nineteen", 20: "twenty", 21: "twenty-one", 22: "twenty-two", 23: "twenty-three", 24: "twenty-four",
 }
 
 # The same table read backwards, for `_int`. Derived rather than written out, so a
@@ -6291,8 +6291,8 @@ def build_claims(
             "the OWL 2 divergence count in the entailment chapter",
             _ENTAILMENT,
             _flow(
-                r"Every one of the (?P<ledgered>\d+) divergences is named in a typed "
-                r"ledger"
+                r"The typed ledger contains (?P<ledgered>\d+) divergences\. Every "
+                r"disagreement"
             ),
             {"ledgered": owl2_ledger},
             mat,
@@ -6318,7 +6318,7 @@ def build_claims(
         Claim(
             "the ledgered-gap summary in the book's conformance chapter",
             _BOOK_CONFORMANCE,
-            _flow(r"strictly ledgered \((?P<ledgered>\d+) typed OWL 2 divergences;"),
+            _flow(r"with (?P<ledgered>\d+) typed OWL 2 divergences;"),
             {"ledgered": owl2_ledger},
             mat,
         ),

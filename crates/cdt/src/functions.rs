@@ -64,8 +64,8 @@ use alloc::vec::Vec;
 use purrdf_xsd::XsdValue;
 
 use crate::error::{CdtError, CdtTypeError};
-use crate::limits::{check_extent, list_extent, map_extent};
-use crate::literal::LiteralValue;
+use crate::limits::{check_extent, try_list_extent, try_map_extent};
+use crate::memory::{Memory, Resident, Storage, StorageError};
 use crate::ops::total_key_cmp;
 use crate::term::{CdtEntry, CdtKey, CdtTerm};
 use crate::value::{CdtContents, CdtValue};
@@ -490,27 +490,9 @@ fn raise<T>(reason: &'static str) -> CdtOutcome<T> {
 /// ```
 #[must_use]
 pub fn integer_argument(term: &CdtTerm) -> Option<i128> {
-    let CdtTerm::Literal(literal) = term else {
-        return None;
-    };
-    if literal.language.is_some() {
-        return None;
-    }
-    // Routed through the crate's single lexical-to-value choke point rather than
-    // through `purrdf_xsd::parse_by_iri`, so the tri-state is never collapsed by
-    // accident here either. `cdt:get`'s contract makes all three non-integer outcomes
-    // one answer — `get-error-05.rq` (a string) and `get-error-06.rq` (an
-    // `xsd:decimal`) both require the call to be unbound — so this function returns
-    // `None` for an unmodelled datatype and for an ill-typed one alike. The
-    // distinction is preserved where it is observable, which is the comparison
-    // relations in `crate::ops`, not here.
-    match crate::literal::parse_literal(&literal.lexical, &literal.datatype) {
-        LiteralValue::Xsd(XsdValue::Integer { value, .. }) => Some(value),
-        LiteralValue::Xsd(_)
-        | LiteralValue::Cdt(_)
-        | LiteralValue::IllTyped { .. }
-        | LiteralValue::Opaque => None,
-    }
+    integer_argument_admitted(term, &mut Resident)
+        .expect("resident CDT index capacity")
+        .0
 }
 
 // ── cdt:List and cdt:Map — the two constructors ─────────────────────────────────
@@ -544,11 +526,9 @@ pub fn integer_argument(term: &CdtTerm) -> Option<i128> {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn list_constructor(items: Vec<CdtTerm>) -> CdtOutcome<CdtValue> {
-    let extent = list_extent(items.iter());
-    if let Err(error) = check_extent(&extent) {
-        return CdtOutcome::Bound(error);
-    }
-    CdtOutcome::Value(CdtValue::from_checked_items(items, extent))
+    list_constructor_admitted(items, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:Map(…)` — build a map from alternating key and value arguments.
@@ -590,29 +570,9 @@ pub fn list_constructor(items: Vec<CdtTerm>) -> CdtOutcome<CdtValue> {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn map_constructor(pairs: &[(CdtTerm, CdtTerm)]) -> CdtOutcome<CdtValue> {
-    // Index only the pairs whose key term can be a key at all, then sort by key with
-    // the LATEST authoring position first, so `dedup_by` — which keeps the first of
-    // each run — keeps the last binding.
-    let mut keyed: Vec<(CdtKey, usize)> = pairs
-        .iter()
-        .enumerate()
-        .filter_map(|(index, (key, _))| CdtKey::from_term(key).map(|key| (key, index)))
-        .collect();
-    keyed.sort_by(|a, b| total_key_cmp(&a.0, &b.0).then_with(|| b.1.cmp(&a.1)));
-    keyed.dedup_by(|a, b| a.0 == b.0);
-
-    let extent = map_extent(keyed.iter().map(|(key, index)| (key, &pairs[*index].1)));
-    if let Err(error) = check_extent(&extent) {
-        return CdtOutcome::Bound(error);
-    }
-    let entries = keyed
-        .into_iter()
-        .map(|(key, index)| CdtEntry {
-            key,
-            value: pairs[index].1.clone(),
-        })
-        .collect();
-    CdtOutcome::Value(CdtValue::from_checked_entries(entries, extent))
+    map_constructor_admitted(pairs, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 // ── The list functions ──────────────────────────────────────────────────────────
@@ -685,22 +645,9 @@ pub fn list_size(items: &[CdtTerm]) -> usize {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn list_get(items: &[CdtTerm], index: &CdtTerm) -> CdtOutcome<CdtTerm> {
-    let Some(index) = integer_argument(index) else {
-        return raise("cdt:get on a cdt:List needs an xsd:integer index");
-    };
-    if index < 1 {
-        return raise("cdt:get on a cdt:List needs an index of at least 1");
-    }
-    let Ok(offset) = usize::try_from(index - 1) else {
-        return raise("cdt:get on a cdt:List was given an index beyond any list");
-    };
-    let Some(item) = items.get(offset) else {
-        return raise("cdt:get on a cdt:List was given an index past the end");
-    };
-    if item.is_null() {
-        return raise("cdt:get on a cdt:List addressed a null element");
-    }
-    CdtOutcome::Value(item.clone())
+    list_get_admitted(items, index, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:head(list)` — the first element.
@@ -723,13 +670,9 @@ pub fn list_get(items: &[CdtTerm], index: &CdtTerm) -> CdtOutcome<CdtTerm> {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn list_head(items: &[CdtTerm]) -> CdtOutcome<CdtTerm> {
-    let Some(item) = items.first() else {
-        return raise("cdt:head on an empty cdt:List");
-    };
-    if item.is_null() {
-        return raise("cdt:head on a cdt:List whose first element is null");
-    }
-    CdtOutcome::Value(item.clone())
+    list_head_admitted(items, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:tail(list)` — every element but the first, as a list.
@@ -752,11 +695,9 @@ pub fn list_head(items: &[CdtTerm]) -> CdtOutcome<CdtTerm> {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn list_tail(items: &[CdtTerm]) -> CdtOutcome<CdtValue> {
-    let Some((_, rest)) = items.split_first() else {
-        return raise("cdt:tail on an empty cdt:List");
-    };
-    let extent = list_extent(rest.iter());
-    CdtOutcome::Value(CdtValue::from_checked_items(rest.to_vec(), extent))
+    list_tail_admitted(items, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:reverse(list)` — the same elements in the opposite order.
@@ -783,10 +724,9 @@ pub fn list_tail(items: &[CdtTerm]) -> CdtOutcome<CdtValue> {
 /// ```
 #[must_use]
 pub fn list_reverse(items: &[CdtTerm]) -> CdtValue {
-    let mut reversed = items.to_vec();
-    reversed.reverse();
-    let extent = list_extent(reversed.iter());
-    CdtValue::from_checked_items(reversed, extent)
+    list_reverse_admitted(items, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:subseq(list, start[, length])` — a contiguous run of elements.
@@ -846,42 +786,9 @@ pub fn list_subseq(
     start: &CdtTerm,
     length: Option<&CdtTerm>,
 ) -> CdtOutcome<CdtValue> {
-    let Some(start) = integer_argument(start) else {
-        return raise("cdt:subseq needs an xsd:integer start position");
-    };
-    if start < 1 {
-        return raise("cdt:subseq needs a start position of at least 1");
-    }
-    let Ok(from) = usize::try_from(start - 1) else {
-        return raise("cdt:subseq was given a start position beyond any list");
-    };
-    if from > items.len() {
-        return raise("cdt:subseq was given a start position past the end of the list");
-    }
-    let to = match length {
-        None => items.len(),
-        Some(length) => {
-            let Some(length) = integer_argument(length) else {
-                return raise("cdt:subseq needs an xsd:integer length");
-            };
-            let Ok(length) = usize::try_from(length) else {
-                return raise("cdt:subseq needs a length of at least 0");
-            };
-            let Some(to) = from.checked_add(length) else {
-                return raise("cdt:subseq was given a length beyond any list");
-            };
-            if to > items.len() {
-                return raise("cdt:subseq was given a range that ends past the end of the list");
-            }
-            to
-        }
-    };
-    let taken = &items[from..to];
-    let extent = list_extent(taken.iter());
-    if let Err(error) = check_extent(&extent) {
-        return CdtOutcome::Bound(error);
-    }
-    CdtOutcome::Value(CdtValue::from_checked_items(taken.to_vec(), extent))
+    list_subseq_admitted(items, start, length, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:concat(…)` — the concatenation of the argument lists, in argument order.
@@ -913,12 +820,9 @@ pub fn list_subseq(
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn list_concat(lists: &[&[CdtTerm]]) -> CdtOutcome<CdtValue> {
-    let extent = list_extent(lists.iter().copied().flatten());
-    if let Err(error) = check_extent(&extent) {
-        return CdtOutcome::Bound(error);
-    }
-    let items: Vec<CdtTerm> = lists.iter().copied().flatten().cloned().collect();
-    CdtOutcome::Value(CdtValue::from_checked_items(items, extent))
+    list_concat_admitted(lists, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:contains(list, term)` — does the list hold an element **equal by value** to
@@ -982,22 +886,9 @@ pub fn list_concat(lists: &[&[CdtTerm]]) -> CdtOutcome<CdtValue> {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn list_contains(items: &[CdtTerm], term: &CdtTerm) -> CdtOutcome<bool> {
-    let mut withheld: Option<CdtTypeError> = None;
-    for item in items {
-        match crate::ops::membership_equal(item, term) {
-            Ok(true) => return CdtOutcome::Value(true),
-            Ok(false) => {}
-            Err(error) => {
-                if withheld.is_none() {
-                    withheld = Some(error);
-                }
-            }
-        }
-    }
-    match withheld {
-        Some(error) => CdtOutcome::Error(error),
-        None => CdtOutcome::Value(false),
-    }
+    list_contains_admitted(items, term, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 // ── The map functions ───────────────────────────────────────────────────────────
@@ -1068,16 +959,9 @@ pub fn map_size(entries: &[CdtEntry]) -> usize {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn map_get(entries: &[CdtEntry], key: &CdtTerm) -> CdtOutcome<CdtTerm> {
-    let Some(key) = CdtKey::from_term(key) else {
-        return raise("cdt:get on a cdt:Map was given a term that cannot be a map key");
-    };
-    let Ok(index) = entries.binary_search_by(|entry| total_key_cmp(&entry.key, &key)) else {
-        return raise("cdt:get on a cdt:Map addressed a key the map does not hold");
-    };
-    if entries[index].value.is_null() {
-        return raise("cdt:get on a cdt:Map addressed a key whose value is null");
-    }
-    CdtOutcome::Value(entries[index].value.clone())
+    map_get_admitted(entries, key, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:containsKey(map, key)` — is this term one of the map's keys?
@@ -1115,11 +999,9 @@ pub fn map_get(entries: &[CdtEntry], key: &CdtTerm) -> CdtOutcome<CdtTerm> {
 /// ```
 #[must_use]
 pub fn map_contains_key(entries: &[CdtEntry], key: &CdtTerm) -> bool {
-    CdtKey::from_term(key).is_some_and(|key| {
-        entries
-            .binary_search_by(|entry| total_key_cmp(&entry.key, &key))
-            .is_ok()
-    })
+    map_contains_key_admitted(entries, key, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:keys(map)` — the map's keys, as a `cdt:List`.
@@ -1153,9 +1035,9 @@ pub fn map_contains_key(entries: &[CdtEntry], key: &CdtTerm) -> bool {
 /// ```
 #[must_use]
 pub fn map_keys(entries: &[CdtEntry]) -> CdtValue {
-    let items: Vec<CdtTerm> = entries.iter().map(|entry| entry.key.to_term()).collect();
-    let extent = list_extent(items.iter());
-    CdtValue::from_checked_items(items, extent)
+    map_keys_admitted(entries, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:put(map, key[, value])` — the map with one entry set to a value.
@@ -1216,44 +1098,9 @@ pub fn map_keys(entries: &[CdtEntry]) -> CdtValue {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn map_put(entries: &[CdtEntry], key: &CdtTerm, value: &CdtTerm) -> CdtOutcome<CdtValue> {
-    let Some(key) = CdtKey::from_term(key) else {
-        return raise("cdt:put was given a term that cannot be a map key");
-    };
-    let position = entries.binary_search_by(|entry| total_key_cmp(&entry.key, &key));
-    let mut pairs: Vec<(&CdtKey, &CdtTerm)> = Vec::with_capacity(entries.len() + 1);
-    match position {
-        Ok(replaced) => {
-            for (index, entry) in entries.iter().enumerate() {
-                let stored = if index == replaced {
-                    value
-                } else {
-                    &entry.value
-                };
-                pairs.push((&entry.key, stored));
-            }
-        }
-        Err(insert) => {
-            for entry in &entries[..insert] {
-                pairs.push((&entry.key, &entry.value));
-            }
-            pairs.push((&key, value));
-            for entry in &entries[insert..] {
-                pairs.push((&entry.key, &entry.value));
-            }
-        }
-    }
-    let extent = map_extent(pairs.iter().copied());
-    if let Err(error) = check_extent(&extent) {
-        return CdtOutcome::Bound(error);
-    }
-    let built = pairs
-        .into_iter()
-        .map(|(key, value)| CdtEntry {
-            key: key.clone(),
-            value: value.clone(),
-        })
-        .collect();
-    CdtOutcome::Value(CdtValue::from_checked_entries(built, extent))
+    map_put_admitted(entries, key, value, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// What `cdt:remove` did.
@@ -1310,17 +1157,9 @@ pub enum MapRemoval {
 /// ```
 #[must_use]
 pub fn map_remove(entries: &[CdtEntry], key: &CdtTerm) -> MapRemoval {
-    let Some(key) = CdtKey::from_term(key) else {
-        return MapRemoval::Unchanged;
-    };
-    let Ok(index) = entries.binary_search_by(|entry| total_key_cmp(&entry.key, &key)) else {
-        return MapRemoval::Unchanged;
-    };
-    let mut kept = Vec::with_capacity(entries.len() - 1);
-    kept.extend_from_slice(&entries[..index]);
-    kept.extend_from_slice(&entries[index + 1..]);
-    let extent = map_extent(kept.iter().map(|entry| (&entry.key, &entry.value)));
-    MapRemoval::Removed(CdtValue::from_checked_entries(kept, extent))
+    map_remove_admitted(entries, key, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:merge(…)` — the union of the argument maps.
@@ -1357,27 +1196,9 @@ pub fn map_remove(entries: &[CdtEntry], key: &CdtTerm) -> MapRemoval {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn map_merge(maps: &[&[CdtEntry]]) -> CdtOutcome<CdtValue> {
-    // Flatten in argument order, so a lower position means an earlier map. Sorting by
-    // key and then by that position puts the winning entry of each key first, and
-    // `dedup_by` keeps the first of every run.
-    let mut selected: Vec<(usize, &CdtEntry)> = Vec::new();
-    for entries in maps {
-        for entry in *entries {
-            selected.push((selected.len(), entry));
-        }
-    }
-    selected.sort_by(|a, b| total_key_cmp(&a.1.key, &b.1.key).then_with(|| a.0.cmp(&b.0)));
-    selected.dedup_by(|a, b| a.1.key == b.1.key);
-
-    let extent = map_extent(selected.iter().map(|(_, entry)| (&entry.key, &entry.value)));
-    if let Err(error) = check_extent(&extent) {
-        return CdtOutcome::Bound(error);
-    }
-    let entries = selected
-        .into_iter()
-        .map(|(_, entry)| entry.clone())
-        .collect();
-    CdtOutcome::Value(CdtValue::from_checked_entries(entries, extent))
+    map_merge_admitted(maps, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 // ── Dispatch on the runtime composite datatype ──────────────────────────────────
@@ -1432,10 +1253,9 @@ pub fn size(value: &CdtValue) -> usize {
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn get(value: &CdtValue, argument: &CdtTerm) -> CdtOutcome<CdtTerm> {
-    match value.contents() {
-        CdtContents::List(items) => list_get(items, argument),
-        CdtContents::Map(entries) => map_get(entries, argument),
-    }
+    get_admitted(value, argument, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:contains(list, term)` — raising for a `cdt:Map`.
@@ -1447,44 +1267,37 @@ pub fn get(value: &CdtValue, argument: &CdtTerm) -> CdtOutcome<CdtTerm> {
 /// this value" or "contains this key" — inventing an answer where the spec has none
 /// is what `.goals` forbids.
 pub fn contains(value: &CdtValue, term: &CdtTerm) -> CdtOutcome<bool> {
-    match value.contents() {
-        CdtContents::List(items) => list_contains(items, term),
-        CdtContents::Map(_) => {
-            raise("cdt:contains applies to a cdt:List; a cdt:Map has cdt:containsKey")
-        }
-    }
+    contains_admitted(value, term, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:head(list)` — raising for a `cdt:Map`.
 pub fn head(value: &CdtValue) -> CdtOutcome<CdtTerm> {
-    match value.contents() {
-        CdtContents::List(items) => list_head(items),
-        CdtContents::Map(_) => raise("cdt:head applies to a cdt:List"),
-    }
+    head_admitted(value, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:tail(list)` — raising for a `cdt:Map`.
 pub fn tail(value: &CdtValue) -> CdtOutcome<CdtValue> {
-    match value.contents() {
-        CdtContents::List(items) => list_tail(items),
-        CdtContents::Map(_) => raise("cdt:tail applies to a cdt:List"),
-    }
+    tail_admitted(value, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:reverse(list)` — raising for a `cdt:Map`.
 pub fn reverse(value: &CdtValue) -> CdtOutcome<CdtValue> {
-    match value.contents() {
-        CdtContents::List(items) => CdtOutcome::Value(list_reverse(items)),
-        CdtContents::Map(_) => raise("cdt:reverse applies to a cdt:List"),
-    }
+    reverse_admitted(value, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:subseq(list, start[, length])` — raising for a `cdt:Map`.
 pub fn subseq(value: &CdtValue, start: &CdtTerm, length: Option<&CdtTerm>) -> CdtOutcome<CdtValue> {
-    match value.contents() {
-        CdtContents::List(items) => list_subseq(items, start, length),
-        CdtContents::Map(_) => raise("cdt:subseq applies to a cdt:List"),
-    }
+    subseq_admitted(value, start, length, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:concat(…)` — raising when any argument is a `cdt:Map`.
@@ -1505,56 +1318,37 @@ pub fn subseq(value: &CdtValue, start: &CdtTerm, length: Option<&CdtTerm>) -> Cd
 /// # Ok::<(), purrdf_cdt::CdtError>(())
 /// ```
 pub fn concat(values: &[CdtValue]) -> CdtOutcome<CdtValue> {
-    let mut lists: Vec<&[CdtTerm]> = Vec::with_capacity(values.len());
-    for value in values {
-        match value.contents() {
-            CdtContents::List(items) => lists.push(items),
-            CdtContents::Map(_) => {
-                return raise("cdt:concat applies to cdt:List arguments only");
-            }
-        }
-    }
-    list_concat(&lists)
+    concat_admitted(values, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:containsKey(map, key)` — raising for a `cdt:List`.
 pub fn contains_key(value: &CdtValue, key: &CdtTerm) -> CdtOutcome<bool> {
-    match value.contents() {
-        CdtContents::Map(entries) => CdtOutcome::Value(map_contains_key(entries, key)),
-        CdtContents::List(_) => {
-            raise("cdt:containsKey applies to a cdt:Map; a cdt:List has cdt:contains")
-        }
-    }
+    contains_key_admitted(value, key, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:keys(map)` — raising for a `cdt:List`.
 pub fn keys(value: &CdtValue) -> CdtOutcome<CdtValue> {
-    match value.contents() {
-        CdtContents::Map(entries) => CdtOutcome::Value(map_keys(entries)),
-        CdtContents::List(_) => raise("cdt:keys applies to a cdt:Map"),
-    }
+    keys_admitted(value, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:merge(…)` — raising when any argument is a `cdt:List`.
 pub fn merge(values: &[CdtValue]) -> CdtOutcome<CdtValue> {
-    let mut maps: Vec<&[CdtEntry]> = Vec::with_capacity(values.len());
-    for value in values {
-        match value.contents() {
-            CdtContents::Map(entries) => maps.push(entries),
-            CdtContents::List(_) => {
-                return raise("cdt:merge applies to cdt:Map arguments only");
-            }
-        }
-    }
-    map_merge(&maps)
+    merge_admitted(values, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:put(map, key[, value])` — raising for a `cdt:List`.
 pub fn put(value: &CdtValue, key: &CdtTerm, item: &CdtTerm) -> CdtOutcome<CdtValue> {
-    match value.contents() {
-        CdtContents::Map(entries) => map_put(entries, key, item),
-        CdtContents::List(_) => raise("cdt:put applies to a cdt:Map"),
-    }
+    put_admitted(value, key, item, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
 }
 
 /// `cdt:remove(map, key)` — raising for a `cdt:List`.
@@ -1562,8 +1356,1036 @@ pub fn put(value: &CdtValue, key: &CdtTerm, item: &CdtTerm) -> CdtOutcome<CdtVal
 /// See [`MapRemoval`] for why the "nothing was removed" case has to be distinguished
 /// from "here is an equal map".
 pub fn remove(value: &CdtValue, key: &CdtTerm) -> CdtOutcome<MapRemoval> {
-    match value.contents() {
-        CdtContents::Map(entries) => CdtOutcome::Value(map_remove(entries, key)),
-        CdtContents::List(_) => raise("cdt:remove applies to a cdt:Map"),
+    remove_admitted(value, key, &mut Resident)
+        .expect("resident CDT function capacity")
+        .0
+}
+
+/// The original `list_constructor` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn list_constructor_admitted(
+    items: Vec<CdtTerm>,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| list_constructor_with_memory(items, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `map_constructor` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn map_constructor_admitted(
+    pairs: &[(CdtTerm, CdtTerm)],
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| map_constructor_with_memory(pairs, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `list_get` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn list_get_admitted(
+    items: &[CdtTerm],
+    index: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtTerm>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| list_get_with_memory(items, index, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `list_head` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn list_head_admitted(
+    items: &[CdtTerm],
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtTerm>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| list_head_with_memory(items, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `list_tail` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn list_tail_admitted(
+    items: &[CdtTerm],
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| list_tail_with_memory(items, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `list_reverse` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn list_reverse_admitted(
+    items: &[CdtTerm],
+    storage: &mut dyn Storage,
+) -> Result<(CdtValue, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| list_reverse_with_memory(items, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `list_subseq` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn list_subseq_admitted(
+    items: &[CdtTerm],
+    start: &CdtTerm,
+    length: Option<&CdtTerm>,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| list_subseq_with_memory(items, start, length, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `list_concat` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn list_concat_admitted(
+    lists: &[&[CdtTerm]],
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| list_concat_with_memory(lists, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `list_contains` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn list_contains_admitted(
+    items: &[CdtTerm],
+    term: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<bool>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| list_contains_with_memory(items, term, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `map_get` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn map_get_admitted(
+    entries: &[CdtEntry],
+    key: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtTerm>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| map_get_with_memory(entries, key, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `map_contains_key` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn map_contains_key_admitted(
+    entries: &[CdtEntry],
+    key: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(bool, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| map_contains_key_with_memory(entries, key, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `map_keys` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn map_keys_admitted(
+    entries: &[CdtEntry],
+    storage: &mut dyn Storage,
+) -> Result<(CdtValue, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| map_keys_with_memory(entries, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `map_put` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn map_put_admitted(
+    entries: &[CdtEntry],
+    key: &CdtTerm,
+    value: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| map_put_with_memory(entries, key, value, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `map_remove` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn map_remove_admitted(
+    entries: &[CdtEntry],
+    key: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(MapRemoval, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| map_remove_with_memory(entries, key, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `map_merge` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn map_merge_admitted(
+    maps: &[&[CdtEntry]],
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| map_merge_with_memory(maps, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `get` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn get_admitted(
+    value: &CdtValue,
+    argument: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtTerm>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| get_with_memory(value, argument, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `contains` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn contains_admitted(
+    value: &CdtValue,
+    term: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<bool>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| contains_with_memory(value, term, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `head` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn head_admitted(
+    value: &CdtValue,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtTerm>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| head_with_memory(value, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `tail` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn tail_admitted(
+    value: &CdtValue,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| tail_with_memory(value, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `reverse` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn reverse_admitted(
+    value: &CdtValue,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| reverse_with_memory(value, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `subseq` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn subseq_admitted(
+    value: &CdtValue,
+    start: &CdtTerm,
+    length: Option<&CdtTerm>,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| subseq_with_memory(value, start, length, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `concat` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn concat_admitted(
+    values: &[CdtValue],
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| concat_with_memory(values, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `contains_key` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn contains_key_admitted(
+    value: &CdtValue,
+    key: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<bool>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| contains_key_with_memory(value, key, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `keys` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn keys_admitted(
+    value: &CdtValue,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| keys_with_memory(value, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `merge` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn merge_admitted(
+    values: &[CdtValue],
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| merge_with_memory(values, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `put` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn put_admitted(
+    value: &CdtValue,
+    key: &CdtTerm,
+    item: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<CdtValue>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| put_with_memory(value, key, item, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+/// The original `remove` body with native physical admission before growth.
+/// Owned factory inputs keep their caller's original account; returned bytes
+/// cover newly surviving payload after construction scratch has died.
+///
+/// # Errors
+/// Returns checked physical layout, allocator or original admission refusal.
+pub fn remove_admitted(
+    value: &CdtValue,
+    key: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(CdtOutcome<MapRemoval>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let value = memory.scope(|memory| remove_with_memory(value, key, memory))?;
+    Ok((value, memory.admitted_bytes()))
+}
+
+fn integer_argument_with_memory(
+    term: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<Option<i128>, StorageError> {
+    let CdtTerm::Literal(literal) = term else {
+        return Ok(None);
+    };
+    if literal.language.is_some() {
+        return Ok(None);
     }
+    let value =
+        crate::literal::resolve_literal_with_memory(&literal.lexical, &literal.datatype, memory)?;
+    Ok(match value {
+        crate::literal::NativeLiteralValue::Xsd(value) => {
+            let integer = match &value {
+                XsdValue::Integer { value, .. } => Some(*value),
+                _ => None,
+            };
+            let bytes = value.owned_heap_bytes().ok_or(StorageError::SizeOverflow)?;
+            drop(value);
+            memory.release_bytes(bytes)?;
+            integer
+        }
+        crate::literal::NativeLiteralValue::Cdt(value) => {
+            value.release_with_memory(memory)?;
+            None
+        }
+        crate::literal::NativeLiteralValue::IllTyped
+        | crate::literal::NativeLiteralValue::Opaque => None,
+    })
+}
+
+fn clone_terms<'a>(
+    items: impl IntoIterator<Item = &'a CdtTerm>,
+    memory: &mut Memory<'_>,
+) -> Result<Vec<CdtTerm>, StorageError> {
+    let iterator = items.into_iter();
+    let mut output = Vec::new();
+    memory.reserve(&mut output, iterator.size_hint().0)?;
+    for item in iterator {
+        let term = item.clone_with_memory(memory)?;
+        memory.push(&mut output, term)?;
+    }
+    Ok(output)
+}
+
+fn list_constructor_with_memory(
+    items: Vec<CdtTerm>,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    Ok(match CdtValue::list_with_memory(items, memory)? {
+        Ok(value) => CdtOutcome::Value(value),
+        Err(error) => CdtOutcome::Bound(error),
+    })
+}
+
+fn list_get_with_memory(
+    items: &[CdtTerm],
+    index: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtTerm>, StorageError> {
+    let Some(index) = integer_argument_with_memory(index, memory)? else {
+        return Ok(raise("cdt:get on a cdt:List needs an xsd:integer index"));
+    };
+    if index < 1 {
+        return Ok(raise("cdt:get on a cdt:List needs an index of at least 1"));
+    }
+    let Ok(offset) = usize::try_from(index - 1) else {
+        return Ok(raise(
+            "cdt:get on a cdt:List was given an index beyond any list",
+        ));
+    };
+    let Some(item) = items.get(offset) else {
+        return Ok(raise(
+            "cdt:get on a cdt:List was given an index past the end",
+        ));
+    };
+    if item.is_null() {
+        return Ok(raise("cdt:get on a cdt:List addressed a null element"));
+    }
+    Ok(CdtOutcome::Value(item.clone_with_memory(memory)?))
+}
+
+fn list_head_with_memory(
+    items: &[CdtTerm],
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtTerm>, StorageError> {
+    let Some(item) = items.first() else {
+        return Ok(raise("cdt:head on an empty cdt:List"));
+    };
+    if item.is_null() {
+        return Ok(raise("cdt:head on a cdt:List whose first element is null"));
+    }
+    Ok(CdtOutcome::Value(item.clone_with_memory(memory)?))
+}
+
+fn list_tail_with_memory(
+    items: &[CdtTerm],
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let Some((_, rest)) = items.split_first() else {
+        return Ok(raise("cdt:tail on an empty cdt:List"));
+    };
+    let extent = try_list_extent(rest.iter(), memory)?;
+    let items = clone_terms(rest, memory)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_items(
+        items, extent,
+    )))
+}
+
+fn list_reverse_with_memory(
+    items: &[CdtTerm],
+    memory: &mut Memory<'_>,
+) -> Result<CdtValue, StorageError> {
+    let mut reversed = clone_terms(items, memory)?;
+    reversed.reverse();
+    let extent = try_list_extent(reversed.iter(), memory)?;
+    Ok(CdtValue::from_checked_items(reversed, extent))
+}
+
+fn list_subseq_with_memory(
+    items: &[CdtTerm],
+    start: &CdtTerm,
+    length: Option<&CdtTerm>,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let Some(start) = integer_argument_with_memory(start, memory)? else {
+        return Ok(raise("cdt:subseq needs an xsd:integer start position"));
+    };
+    if start < 1 {
+        return Ok(raise("cdt:subseq needs a start position of at least 1"));
+    }
+    let Ok(from) = usize::try_from(start - 1) else {
+        return Ok(raise(
+            "cdt:subseq was given a start position beyond any list",
+        ));
+    };
+    if from > items.len() {
+        return Ok(raise(
+            "cdt:subseq was given a start position past the end of the list",
+        ));
+    }
+    let to = match length {
+        None => items.len(),
+        Some(length) => {
+            let Some(length) = integer_argument_with_memory(length, memory)? else {
+                return Ok(raise("cdt:subseq needs an xsd:integer length"));
+            };
+            let Ok(length) = usize::try_from(length) else {
+                return Ok(raise("cdt:subseq needs a length of at least 0"));
+            };
+            let Some(to) = from.checked_add(length) else {
+                return Ok(raise("cdt:subseq was given a length beyond any list"));
+            };
+            if to > items.len() {
+                return Ok(raise(
+                    "cdt:subseq was given a range that ends past the end of the list",
+                ));
+            }
+            to
+        }
+    };
+    let taken = &items[from..to];
+    let extent = try_list_extent(taken.iter(), memory)?;
+    if let Err(error) = check_extent(&extent) {
+        return Ok(CdtOutcome::Bound(error));
+    }
+    let items = clone_terms(taken, memory)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_items(
+        items, extent,
+    )))
+}
+
+fn list_concat_with_memory(
+    lists: &[&[CdtTerm]],
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let extent = try_list_extent(lists.iter().copied().flatten(), memory)?;
+    if let Err(error) = check_extent(&extent) {
+        return Ok(CdtOutcome::Bound(error));
+    }
+    let items = clone_terms(lists.iter().copied().flatten(), memory)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_items(
+        items, extent,
+    )))
+}
+
+fn list_contains_with_memory(
+    items: &[CdtTerm],
+    term: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<bool>, StorageError> {
+    let mut withheld: Option<CdtTypeError> = None;
+    for item in items {
+        match crate::ops::membership_equal_with_memory(item, term, memory)? {
+            Ok(true) => return Ok(CdtOutcome::Value(true)),
+            Ok(false) => {}
+            Err(error) => {
+                if withheld.is_none() {
+                    withheld = Some(error);
+                }
+            }
+        }
+    }
+    Ok(match withheld {
+        Some(error) => CdtOutcome::Error(error),
+        None => CdtOutcome::Value(false),
+    })
+}
+
+fn release_keyed(
+    mut keyed: Vec<(CdtKey, usize)>,
+    memory: &mut Memory<'_>,
+) -> Result<(), StorageError> {
+    // Preserve original key order and the admitted backing allocation until
+    // release_vec destroys it. Empty replacement leaves own no allocation.
+    for (key, _) in &mut keyed {
+        let key = core::mem::replace(key, CdtKey::Iri(alloc::string::String::new()));
+        key.release_with_memory(memory)?;
+    }
+    memory.release_vec(keyed)
+}
+
+fn map_constructor_with_memory(
+    pairs: &[(CdtTerm, CdtTerm)],
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let mut keyed: Vec<(CdtKey, usize)> = Vec::new();
+    for (index, (key, _)) in pairs.iter().enumerate() {
+        if let Some(key) = CdtKey::from_term_with_memory(key, memory)? {
+            memory.push(&mut keyed, (key, index))?;
+        }
+    }
+    // Unique author indices make this exact original latest-binding-first order
+    // strict. The unstable sorter therefore changes no tie or winning key.
+    keyed.sort_unstable_by(|a, b| total_key_cmp(&a.0, &b.0).then_with(|| b.1.cmp(&a.1)));
+    let mut kept = 0usize;
+    for read in 0..keyed.len() {
+        if kept != 0 && keyed[kept - 1].0 == keyed[read].0 {
+            let key = core::mem::replace(
+                &mut keyed[read].0,
+                CdtKey::Iri(alloc::string::String::new()),
+            );
+            key.release_with_memory(memory)?;
+        } else {
+            keyed.swap(kept, read);
+            kept += 1;
+        }
+    }
+    keyed.truncate(kept);
+    let extent = try_map_extent(
+        keyed.iter().map(|(key, index)| (key, &pairs[*index].1)),
+        memory,
+    )?;
+    if let Err(error) = check_extent(&extent) {
+        release_keyed(keyed, memory)?;
+        return Ok(CdtOutcome::Bound(error));
+    }
+    let mut entries = Vec::new();
+    memory.reserve(&mut entries, keyed.len())?;
+    // Move each original key only after its copied value exists. The key
+    // table's backing allocation stays covered until release_vec destroys it.
+    for (key, index) in &mut keyed {
+        let value = pairs[*index].1.clone_with_memory(memory)?;
+        let key = core::mem::replace(key, CdtKey::Iri(alloc::string::String::new()));
+        entries.push(CdtEntry { key, value });
+    }
+    memory.release_vec(keyed)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_entries(
+        entries, extent,
+    )))
+}
+
+fn map_get_with_memory(
+    entries: &[CdtEntry],
+    key: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtTerm>, StorageError> {
+    let Some(key) = CdtKey::from_term_with_memory(key, memory)? else {
+        return Ok(raise(
+            "cdt:get on a cdt:Map was given a term that cannot be a map key",
+        ));
+    };
+    let found = entries.binary_search_by(|entry| total_key_cmp(&entry.key, &key));
+    key.release_with_memory(memory)?;
+    let Ok(index) = found else {
+        return Ok(raise(
+            "cdt:get on a cdt:Map addressed a key the map does not hold",
+        ));
+    };
+    if entries[index].value.is_null() {
+        return Ok(raise(
+            "cdt:get on a cdt:Map addressed a key whose value is null",
+        ));
+    }
+    Ok(CdtOutcome::Value(
+        entries[index].value.clone_with_memory(memory)?,
+    ))
+}
+
+fn map_contains_key_with_memory(
+    entries: &[CdtEntry],
+    key: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<bool, StorageError> {
+    let Some(key) = CdtKey::from_term_with_memory(key, memory)? else {
+        return Ok(false);
+    };
+    let found = entries
+        .binary_search_by(|entry| total_key_cmp(&entry.key, &key))
+        .is_ok();
+    key.release_with_memory(memory)?;
+    Ok(found)
+}
+
+fn map_keys_with_memory(
+    entries: &[CdtEntry],
+    memory: &mut Memory<'_>,
+) -> Result<CdtValue, StorageError> {
+    let mut items = Vec::new();
+    memory.reserve(&mut items, entries.len())?;
+    for entry in entries {
+        items.push(entry.key.to_term_with_memory(memory)?);
+    }
+    let extent = try_list_extent(items.iter(), memory)?;
+    Ok(CdtValue::from_checked_items(items, extent))
+}
+
+fn map_put_with_memory(
+    entries: &[CdtEntry],
+    key: &CdtTerm,
+    value: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let Some(key) = CdtKey::from_term_with_memory(key, memory)? else {
+        return Ok(raise("cdt:put was given a term that cannot be a map key"));
+    };
+    let position = entries.binary_search_by(|entry| total_key_cmp(&entry.key, &key));
+    let mut pairs: Vec<(&CdtKey, &CdtTerm)> = Vec::new();
+    memory.reserve(
+        &mut pairs,
+        entries
+            .len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?,
+    )?;
+    match position {
+        Ok(replaced) => {
+            for (index, entry) in entries.iter().enumerate() {
+                let stored = if index == replaced {
+                    value
+                } else {
+                    &entry.value
+                };
+                pairs.push((&entry.key, stored));
+            }
+        }
+        Err(insert) => {
+            pairs.extend(
+                entries[..insert]
+                    .iter()
+                    .map(|entry| (&entry.key, &entry.value)),
+            );
+            pairs.push((&key, value));
+            pairs.extend(
+                entries[insert..]
+                    .iter()
+                    .map(|entry| (&entry.key, &entry.value)),
+            );
+        }
+    }
+    let extent = try_map_extent(pairs.iter().copied(), memory)?;
+    if let Err(error) = check_extent(&extent) {
+        memory.release_vec(pairs)?;
+        key.release_with_memory(memory)?;
+        return Ok(CdtOutcome::Bound(error));
+    }
+    let mut built = Vec::new();
+    memory.reserve(&mut built, pairs.len())?;
+    for (key, value) in &pairs {
+        built.push(CdtEntry {
+            key: key.clone_with_memory(memory)?,
+            value: value.clone_with_memory(memory)?,
+        });
+    }
+    memory.release_vec(pairs)?;
+    key.release_with_memory(memory)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_entries(
+        built, extent,
+    )))
+}
+
+fn map_remove_with_memory(
+    entries: &[CdtEntry],
+    key: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<MapRemoval, StorageError> {
+    let Some(key) = CdtKey::from_term_with_memory(key, memory)? else {
+        return Ok(MapRemoval::Unchanged);
+    };
+    let found = entries.binary_search_by(|entry| total_key_cmp(&entry.key, &key));
+    key.release_with_memory(memory)?;
+    let Ok(index) = found else {
+        return Ok(MapRemoval::Unchanged);
+    };
+    let mut kept = Vec::new();
+    memory.reserve(&mut kept, entries.len() - 1)?;
+    for entry in entries[..index].iter().chain(entries[index + 1..].iter()) {
+        kept.push(entry.clone_with_memory(memory)?);
+    }
+    let extent = try_map_extent(kept.iter().map(|entry| (&entry.key, &entry.value)), memory)?;
+    Ok(MapRemoval::Removed(CdtValue::from_checked_entries(
+        kept, extent,
+    )))
+}
+
+fn map_merge_with_memory(
+    maps: &[&[CdtEntry]],
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let mut selected: Vec<(usize, &CdtEntry)> = Vec::new();
+    for entries in maps {
+        for entry in *entries {
+            let ordinal = selected.len();
+            memory.push(&mut selected, (ordinal, entry))?;
+        }
+    }
+    // Unique flattened positions preserve the original earliest-map winner.
+    selected.sort_unstable_by(|a, b| total_key_cmp(&a.1.key, &b.1.key).then_with(|| a.0.cmp(&b.0)));
+    selected.dedup_by(|a, b| a.1.key == b.1.key);
+    let extent = try_map_extent(
+        selected.iter().map(|(_, entry)| (&entry.key, &entry.value)),
+        memory,
+    )?;
+    if let Err(error) = check_extent(&extent) {
+        memory.release_vec(selected)?;
+        return Ok(CdtOutcome::Bound(error));
+    }
+    let mut entries = Vec::new();
+    memory.reserve(&mut entries, selected.len())?;
+    for (_, entry) in &selected {
+        entries.push(entry.clone_with_memory(memory)?);
+    }
+    memory.release_vec(selected)?;
+    Ok(CdtOutcome::Value(CdtValue::from_checked_entries(
+        entries, extent,
+    )))
+}
+
+fn get_with_memory(
+    value: &CdtValue,
+    argument: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtTerm>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => list_get_with_memory(items, argument, memory),
+        CdtContents::Map(entries) => map_get_with_memory(entries, argument, memory),
+    }
+}
+fn contains_with_memory(
+    value: &CdtValue,
+    term: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<bool>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => list_contains_with_memory(items, term, memory),
+        CdtContents::Map(_) => Ok(raise(
+            "cdt:contains applies to a cdt:List; a cdt:Map has cdt:containsKey",
+        )),
+    }
+}
+fn head_with_memory(
+    value: &CdtValue,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtTerm>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => list_head_with_memory(items, memory),
+        CdtContents::Map(_) => Ok(raise("cdt:head applies to a cdt:List")),
+    }
+}
+fn tail_with_memory(
+    value: &CdtValue,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => list_tail_with_memory(items, memory),
+        CdtContents::Map(_) => Ok(raise("cdt:tail applies to a cdt:List")),
+    }
+}
+fn reverse_with_memory(
+    value: &CdtValue,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => Ok(CdtOutcome::Value(list_reverse_with_memory(items, memory)?)),
+        CdtContents::Map(_) => Ok(raise("cdt:reverse applies to a cdt:List")),
+    }
+}
+fn subseq_with_memory(
+    value: &CdtValue,
+    start: &CdtTerm,
+    length: Option<&CdtTerm>,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    match value.contents() {
+        CdtContents::List(items) => list_subseq_with_memory(items, start, length, memory),
+        CdtContents::Map(_) => Ok(raise("cdt:subseq applies to a cdt:List")),
+    }
+}
+fn concat_with_memory(
+    values: &[CdtValue],
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let mut lists: Vec<&[CdtTerm]> = Vec::new();
+    memory.reserve(&mut lists, values.len())?;
+    for value in values {
+        match value.contents() {
+            CdtContents::List(items) => lists.push(items),
+            CdtContents::Map(_) => {
+                memory.release_vec(lists)?;
+                return Ok(raise("cdt:concat applies to cdt:List arguments only"));
+            }
+        }
+    }
+    let result = list_concat_with_memory(&lists, memory)?;
+    memory.release_vec(lists)?;
+    Ok(result)
+}
+fn contains_key_with_memory(
+    value: &CdtValue,
+    key: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<bool>, StorageError> {
+    match value.contents() {
+        CdtContents::Map(entries) => Ok(CdtOutcome::Value(map_contains_key_with_memory(
+            entries, key, memory,
+        )?)),
+        CdtContents::List(_) => Ok(raise(
+            "cdt:containsKey applies to a cdt:Map; a cdt:List has cdt:contains",
+        )),
+    }
+}
+fn keys_with_memory(
+    value: &CdtValue,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    match value.contents() {
+        CdtContents::Map(entries) => Ok(CdtOutcome::Value(map_keys_with_memory(entries, memory)?)),
+        CdtContents::List(_) => Ok(raise("cdt:keys applies to a cdt:Map")),
+    }
+}
+fn merge_with_memory(
+    values: &[CdtValue],
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    let mut maps: Vec<&[CdtEntry]> = Vec::new();
+    memory.reserve(&mut maps, values.len())?;
+    for value in values {
+        match value.contents() {
+            CdtContents::Map(entries) => maps.push(entries),
+            CdtContents::List(_) => {
+                memory.release_vec(maps)?;
+                return Ok(raise("cdt:merge applies to cdt:Map arguments only"));
+            }
+        }
+    }
+    let result = map_merge_with_memory(&maps, memory)?;
+    memory.release_vec(maps)?;
+    Ok(result)
+}
+fn put_with_memory(
+    value: &CdtValue,
+    key: &CdtTerm,
+    item: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<CdtValue>, StorageError> {
+    match value.contents() {
+        CdtContents::Map(entries) => map_put_with_memory(entries, key, item, memory),
+        CdtContents::List(_) => Ok(raise("cdt:put applies to a cdt:Map")),
+    }
+}
+fn remove_with_memory(
+    value: &CdtValue,
+    key: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<CdtOutcome<MapRemoval>, StorageError> {
+    match value.contents() {
+        CdtContents::Map(entries) => Ok(CdtOutcome::Value(map_remove_with_memory(
+            entries, key, memory,
+        )?)),
+        CdtContents::List(_) => Ok(raise("cdt:remove applies to a cdt:Map")),
+    }
+}
+
+/// Resolve an index through the original native literal denotation home.
+///
+/// # Errors
+/// Keeps physical parsing/refusal separate from a non-integer argument.
+pub fn integer_argument_admitted(
+    term: &CdtTerm,
+    storage: &mut dyn Storage,
+) -> Result<(Option<i128>, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    let result = memory.scope(|memory| integer_argument_with_memory(term, memory))?;
+    Ok((result, memory.admitted_bytes()))
 }

@@ -408,8 +408,8 @@ impl Kb {
         &self.boundaries
     }
 
-    /// Record a general concept inclusion `sub ⊑ sup`. Used by the tableau unit tests and by
-    /// the oracle's generators (the RDF build path records inclusions inline in [`parser`]).
+    /// Record a general concept inclusion `sub ⊑ sup`. Query class-expression definitions,
+    /// tableau unit tests and the oracle's generators use this same TBox ingress.
     ///
     /// Recording is all it does: which ENCODING an inclusion gets — a guarded clause in
     /// [`Kb::absorbed`] or a meta-concept in [`Kb::meta`] — is decided once, over the whole
@@ -420,7 +420,6 @@ impl Kb {
     /// Clears [`Kb::encoded`]: this is the one way [`Kb::tbox`] grows after construction, and
     /// [`Kb::encode_until`]'s absorption pass must see the grown list on the next call rather
     /// than skip itself over an inclusion it has not yet absorbed.
-    #[cfg(test)]
     pub(crate) fn push_gci(&mut self, sub: Concept, sup: Concept) {
         let sub_id = self.table.intern(sub);
         let sup_id = self.table.intern(sup);
@@ -1160,8 +1159,8 @@ mod absorption_tests {
     use super::{Kb, hyper, tableau};
     use crate::owl_dl::graph::{Assumptions, Budget};
     use crate::vocab::{
-        OWL_NOTHING, OWL_ONPROPERTY, OWL_RESTRICTION, OWL_SOMEVALUESFROM, OWL_THING, RDF_TYPE,
-        RDFS_RANGE, RDFS_SUBCLASSOF,
+        OWL_NOTHING, OWL_OBJECTPROPERTY, OWL_ONPROPERTY, OWL_RESTRICTION, OWL_SOMEVALUESFROM,
+        OWL_THING, RDF_FIRST, RDF_NIL, RDF_REST, RDF_TYPE, RDFS_RANGE, RDFS_SUBCLASSOF,
     };
     use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
 
@@ -1271,6 +1270,63 @@ mod absorption_tests {
             "the same axioms over an IRI object ARE refuted, which is what makes the case \
              above a scope and not a dropped clause"
         );
+    }
+    #[test]
+    fn domain_bottom_roles_and_finite_class_cycles_agree_with_the_reference_core() {
+        use purrdf_iri::vocab::owl::{
+            BOTTOM_OBJECT_PROPERTY, COMPLEMENT_OF, EQUIVALENT_CLASS, UNION_OF,
+        };
+        // The object domain cannot disappear merely because no named individual
+        // was stated. The two cores must reject the same empty-domain equation.
+        let mut b = RdfDatasetBuilder::new();
+        let thing = b.intern_iri(OWL_THING);
+        let nothing = b.intern_iri(OWL_NOTHING);
+        let equivalent = b.intern_iri(EQUIVALENT_CLASS);
+        b.push_quad(thing, equivalent, nothing, None);
+        assert!(!consistent_by_both(
+            &b.freeze().expect("empty-domain fixture")
+        ));
+
+        for asserted in [false, true] {
+            let mut b = RdfDatasetBuilder::new();
+            let role = b.intern_iri(BOTTOM_OBJECT_PROPERTY);
+            let kind = b.intern_iri(OWL_OBJECTPROPERTY);
+            let ty = b.intern_iri(RDF_TYPE);
+            b.push_quad(role, ty, kind, None);
+            if asserted {
+                let source = b.intern_iri(EX_SUBJECT);
+                let target = b.intern_iri(EX_OBJECT);
+                b.push_quad(source, role, target, None);
+            }
+            assert_eq!(
+                consistent_by_both(&b.freeze().expect("empty-role fixture")),
+                !asserted
+            );
+        }
+
+        for complement in [false, true] {
+            let mut b = RdfDatasetBuilder::new();
+            let c = b.intern_iri(EX_A);
+            let equivalent = b.intern_iri(EQUIVALENT_CLASS);
+            b.push_quad(c, equivalent, c, None);
+            if complement {
+                let predicate = b.intern_iri(COMPLEMENT_OF);
+                b.push_quad(c, predicate, c, None);
+            } else {
+                let predicate = b.intern_iri(UNION_OF);
+                let list = b.intern_blank("list", BlankScope::DEFAULT);
+                let first = b.intern_iri(RDF_FIRST);
+                let rest = b.intern_iri(RDF_REST);
+                let nil = b.intern_iri(RDF_NIL);
+                b.push_quad(c, predicate, list, None);
+                b.push_quad(list, first, c, None);
+                b.push_quad(list, rest, nil, None);
+            }
+            assert_eq!(
+                consistent_by_both(&b.freeze().expect("finite-cycle fixture")),
+                !complement
+            );
+        }
     }
 }
 

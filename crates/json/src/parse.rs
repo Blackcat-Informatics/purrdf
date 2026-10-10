@@ -88,6 +88,9 @@ const fn kind(kind: lex::Kind) -> Kind {
 fn refusal(error: lex::Error, bounds: Bounds) -> JsonError {
     let at = error.offset();
     match error.kind() {
+        ErrorKind::Storage(error) | ErrorKind::Escape(JsonEscapeErrorKind::Storage(error)) => {
+            JsonError::Storage(error)
+        }
         ErrorKind::Expected(expected) => JsonError::Syntax { at, expected },
         ErrorKind::RawControl => JsonError::Syntax {
             at,
@@ -125,6 +128,7 @@ fn refusal(error: lex::Error, bounds: Bounds) -> JsonError {
 // its text raw, and RFC 8259's grammar admits an unpaired surrogate there.
 fn unescape(raw: &str, at: usize) -> Result<Cow<'_, str>, JsonError> {
     json_escape::unescape(raw).map_err(|error| match error.kind {
+        JsonEscapeErrorKind::Storage(error) => JsonError::Storage(error),
         JsonEscapeErrorKind::UnpairedHigh | JsonEscapeErrorKind::UnpairedLow => {
             JsonError::LoneSurrogate { at }
         }

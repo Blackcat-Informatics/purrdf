@@ -16,6 +16,8 @@
 //! a compatibility scan over all build rows. The common case — two fully-bound BGPs
 //! — stays an O(n+m) hash join.
 
+#[cfg(test)]
+#[cfg(test)]
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, TermId, ViewTermId};
@@ -25,8 +27,7 @@ use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
-use crate::solution::{Solution, SolutionSeq, VarSchema, compatible};
-use crate::{DetHashMap, DetHasher};
+use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema, compatible};
 
 /// A hash-join key over the shared columns of two solutions.
 ///
@@ -42,7 +43,22 @@ pub(crate) enum JoinKey<I: ViewTermId = TermId> {
     /// ([`SolutionTerm::join_key`]). For `I = TermId` this is the historical `u64`.
     Single(I::JoinKeyAtom),
     /// Zero or ≥2 shared columns: the bound terms in shared-column order.
-    Multi(Vec<SolutionTerm<I>>),
+    Multi(RetainedRow<I>),
+}
+
+pub(crate) struct JoinIndex<I: ViewTermId> {
+    entries: hashbrown::HashTable<(JoinKey<I>, crate::AdmittedVec<usize>)>,
+    _allocation: crate::WorkspaceAllocation,
+}
+impl<I: ViewTermId> JoinIndex<I> {
+    fn get(&self, key: &JoinKey<I>) -> Option<&[usize]> {
+        self.entries
+            .find(purrdf_hash::fixed::hash_one(key), |entry| &entry.0 == key)
+            .map(|entry| &*entry.1)
+    }
+    fn contains_key(&self, key: &JoinKey<I>) -> bool {
+        self.get(key).is_some()
+    }
 }
 
 /// Evaluate `left . right` (algebra `Join`) as a hash join on shared variables.
@@ -66,36 +82,39 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let positive = ctx.positive_region(node).unwrap_or(false);
     if positive
-        && let Some(plan) = crate::bgp::PositivePlan::build(
+        && let Some(plan) = crate::bgp::PositivePlan::build_admitted(
             ctx.dataset,
             &ctx.active_dataset,
             ctx.active_graph,
             node,
+            &ctx.workspace,
         )?
     {
-        return eval_positive_join(node, left, right, None, &plan, ctx).map(|evaluated| {
-            match evaluated {
-                Evaluated::Complete(rows) => {
-                    Evaluated::Complete(rows.reorder_like(plan.root_schema()))
-                }
-                Evaluated::Truncated(truncation) => {
-                    let (rows, certificate) = truncation.split();
-                    Evaluated::Truncated(Truncation::new(
-                        rows.reorder_like(plan.root_schema()),
-                        certificate,
-                    ))
-                }
+        let evaluated = eval_positive_join(node, left, right, None, &plan, ctx)?;
+        return Ok(match evaluated {
+            Evaluated::Complete(rows) => {
+                Evaluated::Complete(rows.reorder_like_admitted(plan.root_schema(), &ctx.growth)?)
+            }
+            Evaluated::Truncated(truncation) => {
+                let (rows, certificate) = truncation.split();
+                Evaluated::Truncated(Truncation::new(
+                    rows.reorder_like_admitted(plan.root_schema(), &ctx.growth)?,
+                    certificate,
+                ))
             }
         });
     }
-    let mut lift = Lift::at(node);
+    // Values Insertion keeps the authored leaf on the left and its row on the
+    // right. Preserve that ordinary join: seeding the leaf would change the
+    // actual work its governor and source-node ledger record.
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     // A join is commutative, so a variable-endpoint `SERVICE` in the LEFT operand whose
     // endpoint the right operand binds (`{ SERVICE ?e { … } ?s ex:endpoint ?e }`) is
     // answered over the endpoints the right rows bind, exactly as the mirrored shape is:
     // the right operand is evaluated first, the left over its endpoint list, and the
     // join then runs left against right as always, so the output is the one the
     // left-bound order gives. See `crate::service_endpoints::binds_left_endpoints`.
-    if crate::service_endpoints::binds_left_endpoints(left, right, ctx) {
+    if crate::service_endpoints::binds_left_endpoints(left, right, ctx)? {
         let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
             return Ok(lift.withheld());
         };
@@ -170,12 +189,17 @@ fn eval_binary_yielding<
     delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(right) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
         return Ok(lift.withheld());
     };
     if lift.is_truncated() {
-        return Ok(lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema(node))));
+        return Ok(
+            lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema_admitted(
+                node,
+                &ctx.growth,
+            )?)),
+        );
     }
     crate::eval::yield_transform(
         node,
@@ -183,8 +207,10 @@ fn eval_binary_yielding<
         delivery,
         |left, ctx| {
             let rows = if MINUS {
-                let shared = left.schema.shared_columns(&right.schema);
-                minus_rows(left, &right, &shared, ctx)
+                let shared = left
+                    .schema
+                    .shared_columns_admitted(&right.schema, &ctx.growth)?;
+                minus_rows(left, &right, &shared, ctx)?
             } else {
                 hash_join(&left, &right, ctx)?
             };
@@ -203,31 +229,8 @@ fn finish_join<D: DatasetView + Sync>(
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    if crate::bgp::PositivePlan::seed_eligible(right, &l.schema) {
-        let seed = crate::bgp::SeedEstimate::from_rows(&l);
-        let plan = crate::bgp::PositivePlan::build_seeded(
-            ctx.dataset,
-            &ctx.active_dataset,
-            ctx.active_graph,
-            right,
-            &seed,
-        )?
-        .expect("the right relation was certified seed eligible");
-        let out = l.schema.union(plan.root_schema());
-        let Some(joined) = lift.absorb(
-            1,
-            crate::eval::eval_positive_evaluated(
-                right,
-                Some(crate::eval::PositiveInput::owned(l)),
-                &plan,
-                ctx,
-            )?,
-        ) else {
-            return Ok(lift.withheld());
-        };
-        // The seeded relation already contains each driver occurrence. Joining
-        // it back to the driver would square duplicate multiplicities.
-        return Ok(lift.finish(joined.reorder_like(&out)));
+    if crate::bgp::PositivePlan::seed_eligible_admitted(right, &l.schema, &ctx.growth)? {
+        return finish_seeded_join(lift, l, right, 1, None, ctx);
     }
     // A variable-endpoint `SERVICE` in the right operand is answered over the endpoints
     // the left rows bind — see `crate::service_endpoints`.
@@ -243,6 +246,76 @@ fn finish_join<D: DatasetView + Sync>(
     Ok(lift.finish(hash_join(&l, &r, ctx)?))
 }
 
+/// Execute the ordinary seeded join after one actual child has produced its
+/// driver. A copied correlation supplies the original logical schema; other
+/// joins retain their existing driver-first union schema.
+fn finish_seeded_join<D: DatasetView + Sync>(
+    mut lift: Lift<'_>,
+    driver: SolutionSeq<D::Id>,
+    driven: &GraphPattern,
+    driven_position: usize,
+    output: Option<&VarSchema>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    // A BGP has its original bound-mask/order compiler. Supplying input to the
+    // same leaf kernel needs no positive-region forecast or redundant constant
+    // reverse reads. The node checkpoint and child roles remain unchanged.
+    if let GraphPattern::Bgp { patterns } = driven {
+        let out = match output {
+            Some(output) => output.clone(),
+            None => {
+                let schema = crate::eval::syntactic_schema_admitted(driven, &ctx.growth)?;
+                driver.schema.union_admitted(&schema, &ctx.growth)?
+            }
+        };
+        let Some(joined) = lift.absorb(
+            driven_position,
+            crate::eval::eval_evaluated_with(driven, ctx, |ctx| {
+                crate::bgp::eval_bgp_seeded(
+                    patterns,
+                    Some(crate::eval::PositiveInput::owned(driver)),
+                    None,
+                    ctx,
+                )
+                .map(Evaluated::Complete)
+            })?,
+        ) else {
+            return Ok(lift.withheld());
+        };
+        return Ok(lift.finish(joined.reorder_like_admitted(&out, &ctx.growth)?));
+    }
+    let seed = crate::bgp::SeedEstimate::from_rows_admitted(&driver, &ctx.growth)?;
+    let plan = crate::bgp::PositivePlan::build_seeded_admitted(
+        ctx.dataset,
+        &ctx.active_dataset,
+        ctx.active_graph,
+        driven,
+        &seed,
+        &ctx.workspace,
+    )?
+    .expect("the driven relation was certified seed eligible");
+    let out = match output {
+        Some(output) => output.clone(),
+        None => driver
+            .schema
+            .union_admitted(plan.root_schema(), &ctx.growth)?,
+    };
+    let Some(joined) = lift.absorb(
+        driven_position,
+        crate::eval::eval_positive_evaluated(
+            driven,
+            Some(crate::eval::PositiveInput::owned(driver)),
+            &plan,
+            ctx,
+        )?,
+    ) else {
+        return Ok(lift.withheld());
+    };
+    // The seeded relation already includes its driver occurrence; joining it
+    // back would square multiplicities. Reorder through the same admitted home.
+    Ok(lift.finish(joined.reorder_like_admitted(&out, &ctx.growth)?))
+}
+
 /// Execute one physical positive join. Disjoint unit-driven children keep the
 /// factor-once hash join. A seeded second child's result already contains the
 /// first child's bindings; another join would square driver multiplicities.
@@ -254,7 +327,7 @@ pub(crate) fn eval_positive_join<D: DatasetView + Sync>(
     plan: &crate::bgp::PositivePlan,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let independent = input.is_none() && plan.children_disjoint(node);
     let driver_left = plan.driver_left(node);
     let (driver, driven, first, second) = if driver_left {
@@ -398,8 +471,8 @@ fn eval_substituted_delivered<
     crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
     #[cfg(test)]
     if !DECLARED && crate::deferred_exists::eager_forced() {
-        let substituted = crate::expr::substitute_pattern(pattern, row)?;
-        let mut guard = ctx.enter_substituted_exists(None, None);
+        let substituted = crate::expr::substitute_pattern_admitted(pattern, row, &ctx.growth)?;
+        let mut guard = ctx.enter_substituted_exists(None, None)?;
         return eval_evaluated(&substituted, &mut guard);
     }
     let sites;
@@ -407,7 +480,7 @@ fn eval_substituted_delivered<
     let mut deferral = if DECLARED {
         crate::expr::Deferral::eager()
     } else {
-        sites = crate::deferred_exists::nested_sites(pattern, source, ctx);
+        sites = crate::deferred_exists::nested_sites(pattern, source, ctx)?;
         enclosing_placeholders = ctx.deferred_exists.clone();
         crate::expr::Deferral::new(enclosing_placeholders.as_deref(), &sites)
     };
@@ -427,48 +500,62 @@ fn eval_substituted_delivered<
         // scaffolding straight to the real plan address, and to arbitrate `counts_rows` so
         // nesting never mints more than one counting node per real ordinal — see
         // `crate::expr::SubstitutionSource`'s doc.
-        let enclosing = ctx.correlated_node_maps.last().map(Arc::as_ref);
+        let enclosing = ctx.correlated_node_maps.last().map(AsRef::as_ref);
         let mut map = crate::expr::SubstitutionSourceMap::default();
-        let substituted = crate::expr::substitute_pattern_tracked::<DECLARED>(
+        let substituted = crate::expr::substitute_pattern_tracked_admitted::<DECLARED>(
             pattern,
             row,
             &mut map,
             enclosing,
             &mut deferral,
+            &ctx.growth,
         )?;
         (substituted, Some(map))
     } else {
         (
-            crate::expr::substitute_pattern_deferring::<DECLARED>(pattern, row, &mut deferral)?,
+            crate::expr::substitute_pattern_deferring_admitted::<DECLARED>(
+                pattern,
+                row,
+                &mut deferral,
+                &ctx.growth,
+            )?,
             None,
         )
     };
-    let placeholders = deferral.into_placeholders();
+    let placeholders = deferral.into_placeholders(&ctx.growth)?;
     // `substituted` is a per-row heap temporary whose node addresses do not
     // outlive this call; the guard flags the window so address-keyed
     // memoization is bypassed while it is evaluated, installs its placeholders, and
     // restores the prior flag and placeholders (and pops `ledger_map`, when one was
     // pushed) on drop — even on the `?` this function's caller applies to its result —
     // so nested correlated evaluations compose correctly.
-    let mut guard = ctx.enter_substituted_exists(ledger_map, placeholders);
+    let substituted = if FIRST {
+        substituted.first()?
+    } else {
+        substituted
+    };
+    let first_pushdown = if FIRST {
+        Some(crate::workspace::SharedWorkspace::new_admitted(
+            crate::governor::soundness::plan_cap_pushdown_admitted(
+                &substituted,
+                Some(1),
+                &ctx.growth,
+            )?,
+            &ctx.growth,
+        )?)
+    } else {
+        None
+    };
+    let mut guard = ctx.enter_substituted_exists(ledger_map, placeholders)?;
     if DECLARED {
         // Contextual mappings share labelled BNODE identities across the query.
         // The ordinary specialization retains its per-solution row identity.
         guard.current_row = 0;
     }
     if FIRST {
-        let witness = GraphPattern::Slice {
-            inner: substituted.into(),
-            start: 0,
-            length: Some(1),
-        };
-        let previous = guard.cap_pushdown.take();
+        let previous = std::mem::replace(&mut guard.cap_pushdown, first_pushdown);
         let cursor = guard.cap_at;
-        guard.cap_pushdown = Some(Arc::new(crate::governor::soundness::plan_cap_pushdown(
-            &witness,
-            Some(1),
-        )));
-        let evaluated = eval_evaluated(&witness, &mut guard);
+        let evaluated = eval_evaluated(&substituted, &mut guard);
         guard.cap_pushdown = previous;
         guard.cap_at = cursor;
         evaluated
@@ -524,9 +611,10 @@ fn eval_deferred_lateral<D: DatasetView + Sync>(
             &crate::expr::SubstitutionRow::default(),
             &current,
             &site.vars,
-        ),
+            &ctx.growth,
+        )?,
         crate::deferred_exists::EnvState::Merged(env) => {
-            crate::deferred_exists::with_row(env, &current, &site.vars)
+            crate::deferred_exists::with_row(env, &current, &site.vars, &ctx.growth)?
         }
         crate::deferred_exists::EnvState::Layered => None,
     };
@@ -535,7 +623,8 @@ fn eval_deferred_lateral<D: DatasetView + Sync>(
         // as a deferred `EXISTS` pushes its site's.
         let track_ledger = ctx.ledger.is_some() && !site.plan_map.is_empty();
         if track_ledger {
-            ctx.correlated_node_maps.push(Arc::clone(&site.plan_map));
+            ctx.correlated_node_maps
+                .push(site.plan_map.clone(), &ctx.growth)?;
         }
         let evaluated = eval_substituted(&site.body, &row, source, ctx);
         if track_ledger {
@@ -545,19 +634,27 @@ fn eval_deferred_lateral<D: DatasetView + Sync>(
     }
     // Layers that disagree: each is substituted in turn, the row last, every nested
     // placeholder carried from one copy to the next.
-    let sites = crate::deferred_exists::nested_sites(&site.body, source, ctx);
-    let mut copy: Option<Box<GraphPattern>> = None;
-    let mut placeholders: Option<Arc<crate::deferred_exists::DeferredMap>> = None;
-    for layer in slot.env.then(&current, &site.vars).layers() {
+    let sites = crate::deferred_exists::nested_sites(&site.body, source, ctx)?;
+    let mut copy: Option<crate::expr::CorrelatedPattern> = None;
+    let mut placeholders: Option<
+        crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>,
+    > = None;
+    let layered = slot.env.then(&current, &site.vars, &ctx.growth)?;
+    for layer in layered.layers(&ctx.growth)? {
         let from: &GraphPattern = copy.as_deref().unwrap_or(&site.body);
         let mut deferral = crate::expr::Deferral::new(placeholders.as_deref(), &sites);
-        let next = crate::expr::substitute_pattern_deferring::<false>(from, layer, &mut deferral)?;
-        let next_placeholders = deferral.into_placeholders();
+        let next = crate::expr::substitute_pattern_deferring_admitted::<false>(
+            from,
+            layer,
+            &mut deferral,
+            &ctx.growth,
+        )?;
+        let next_placeholders = deferral.into_placeholders(&ctx.growth)?;
         placeholders = next_placeholders;
         copy = Some(next);
     }
     let body: &GraphPattern = copy.as_deref().unwrap_or(&site.body);
-    let mut guard = ctx.enter_substituted_exists(None, placeholders);
+    let mut guard = ctx.enter_substituted_exists(None, placeholders)?;
     eval_evaluated(body, &mut guard)
 }
 
@@ -641,7 +738,7 @@ pub(crate) fn eval_apply<D: DatasetView + Sync>(
                 "adjacent reduction requires a Reduced operand",
             ));
         };
-        let mut lift = Lift::at(node);
+        let mut lift = Lift::at_admitted(node, &ctx.growth)?;
         if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {
             return Ok(lift.withheld());
         }
@@ -664,7 +761,7 @@ pub(crate) fn eval_apply<D: DatasetView + Sync>(
                 "group mapping domain requires a Group operand",
             ));
         };
-        let mut lift = Lift::at(node);
+        let mut lift = Lift::at_admitted(node, &ctx.growth)?;
         if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {
             return Ok(lift.withheld());
         }
@@ -702,7 +799,7 @@ pub(crate) fn eval_apply_with<D: DatasetView + Sync, M: crate::eval::RowDelivery
                 "adjacent reduction requires a Reduced operand",
             ));
         };
-        let mut lift = Lift::at(node);
+        let mut lift = Lift::at_admitted(node, &ctx.growth)?;
         if lift.absorb(0, eval_evaluated(left, ctx)?).is_none() {
             return Ok(lift.withheld());
         }
@@ -736,8 +833,8 @@ fn eval_application_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<
     mut delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut blocks = purrdf_core::SmallVec::<[SolutionSeq<D::Id>; 2]>::new();
-    let mut lift = Lift::at(node);
+    let mut blocks = crate::AdmittedVec::new(&ctx.growth);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let mut halted = false;
     let ceiling = ctx.row_ceiling();
     let mut emitted = 0usize;
@@ -749,27 +846,29 @@ fn eval_application_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<
         for driver in &drivers.rows {
             let first_block = blocks.len();
             let mut rhs = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
-                let out = Arc::new(drivers.schema.union(&rows.schema));
-                let indices = right_to_out_map(&rows.schema, &out);
+                let out = drivers
+                    .schema
+                    .union_admitted(&rows.schema, &ctx.growth)?
+                    .shared_admitted(&ctx.growth)?;
+                let indices = right_to_out_map(&rows.schema, &out, &ctx.growth)?;
+                let mut output = RowsBuilder::new(&ctx.growth);
+                for row in &rows.rows {
+                    output.push_row(merge_application_row(
+                        driver,
+                        row,
+                        drivers.schema.len(),
+                        &indices,
+                        out.len(),
+                        &ctx.growth,
+                    )?)?;
+                }
                 let rows = SolutionSeq {
-                    schema: Arc::clone(&out),
-                    rows: rows
-                        .rows
-                        .iter()
-                        .map(|row| {
-                            merge_application_row(
-                                driver,
-                                row,
-                                drivers.schema.len(),
-                                &indices,
-                                out.len(),
-                            )
-                        })
-                        .collect(),
+                    schema: out,
+                    rows: output.finish()?,
                 };
                 delivery.deliver(&rows, ctx)?;
                 emitted = emitted.saturating_add(rows.rows.len());
-                blocks.push(rows);
+                blocks.push(rows)?;
                 Ok(
                     if delivery.stopped() || ceiling.is_some_and(|cap| emitted >= cap) {
                         std::ops::ControlFlow::Break(())
@@ -809,7 +908,7 @@ fn eval_application_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<
     if lift.absorb(0, evaluated).is_none() {
         return Ok(lift.withheld());
     }
-    Ok(lift.finish(concat_union(blocks, ctx)))
+    Ok(lift.finish(concat_union(blocks, ctx)?))
 }
 
 // Share the row loop without adding a helper call or frame to the native kernel.
@@ -821,15 +920,17 @@ fn merge_application_row<I: ViewTermId>(
     left_width: usize,
     indices: &[usize],
     width: usize,
-) -> Solution<I> {
-    let mut row = purrdf_core::smallvec![None; width];
-    row[..left_width].copy_from_slice(left);
-    for (column, cell) in right.iter().enumerate() {
-        if let Some(term) = cell {
-            row[indices[column]] = Some(*term);
+    workspace: &crate::WorkspaceCapability,
+) -> Result<RetainedRow<I>, EvalError> {
+    RetainedRow::try_build(width, workspace, |row| {
+        row[..left_width].copy_from_slice(left);
+        for (column, cell) in right.iter().enumerate() {
+            if let Some(term) = cell {
+                row[indices[column]] = Some(*term);
+            }
         }
-    }
-    row
+        Ok(())
+    })
 }
 
 fn evaluate_application_row<D: DatasetView + Sync>(
@@ -863,42 +964,11 @@ fn evaluate_application_row_with<D: DatasetView + Sync, M: crate::eval::RowDeliv
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let outer = crate::expr::outer_bindings_for_substitution(driver, schema, ctx)?;
     let mut run = |inputs: &[(Variable, Variable)], first: bool, ctx: &mut EvalCtx<'_, D>| {
-        let mut row = crate::expr::SubstitutionRow {
-            expr: inputs
-                .iter()
-                .filter_map(|(input, source)| {
-                    outer
-                        .expr
-                        .iter()
-                        .find(|(name, _)| name == source)
-                        .map(|(_, value)| (input.clone(), value.clone()))
-                })
-                .collect(),
-            term: inputs
-                .iter()
-                .filter_map(|(input, source)| {
-                    outer
-                        .term
-                        .iter()
-                        .find(|(name, _)| name == source)
-                        .map(|(_, value)| (input.clone(), value.clone()))
-                })
-                .collect(),
-        };
-        if let Some(optional) = &policy.optional {
-            let literal = purrdf_sparql_algebra::Literal::new_typed(
-                if first { "true" } else { "false" },
-                purrdf_sparql_algebra::NamedNode::new_unchecked(purrdf_xsd::datatype::XSD_BOOLEAN),
-            );
-            row.expr.push((
-                optional.forget_marker.clone(),
-                Expression::Literal(literal.clone()),
-            ));
-            row.term.push((
-                optional.forget_marker.clone(),
-                purrdf_sparql_algebra::GroundTerm::Literal(literal),
-            ));
-        }
+        let marker = policy
+            .optional
+            .as_ref()
+            .map(|optional| (&optional.forget_marker, first));
+        let row = outer.application_inputs(inputs, marker, &ctx.growth)?;
         let source = crate::deferred_exists::CorrelatedSource {
             sites: if ctx.in_substituted_exists {
                 crate::deferred_exists::SiteSlot::Transient
@@ -935,9 +1005,12 @@ fn evaluate_application_row_with<D: DatasetView + Sync, M: crate::eval::RowDeliv
         return Ok(retry);
     };
     if retry.rows.is_empty() {
-        first
-            .rows
-            .push(purrdf_core::smallvec![None; first.schema.len()]);
+        let mut padding = RowsBuilder::new(&ctx.growth);
+        padding.push_cells(
+            first.schema.len(),
+            std::iter::repeat_n(None, first.schema.len()),
+        )?;
+        first.rows = padding.finish()?;
         if M::ACTIVE {
             delivery.deliver(&first, ctx)?;
         }
@@ -973,7 +1046,7 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
     mode: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
         return Ok(lift.withheld());
     };
@@ -1008,7 +1081,7 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
         // operand is.
         let evaluated = match ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
             Err(tripped) => Ok(Evaluated::Truncated(Truncation::origin(
-                SolutionSeq::empty(crate::eval::syntactic_schema(right)),
+                SolutionSeq::empty(crate::eval::syntactic_schema_admitted(right, &ctx.growth)?),
                 tripped,
             ))),
             Ok(()) => {
@@ -1045,15 +1118,14 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
         ));
     }
 
-    let left_schema = Arc::clone(&l.schema);
+    let left_schema = l.schema.clone();
 
     // Evaluate `right` once per left row with μ substituted in; accumulate the
     // per-row results and the union of their schemas (stable across rows for the
     // SERVICE ?var use, but computed generally).
     let mut right_schema = VarSchema::default();
     // Each left row μ paired with the per-row `right` result it drives.
-    type LateralPerRow<I> = Vec<(Solution<I>, SolutionSeq<I>)>;
-    let mut per_row: LateralPerRow<D::Id> = Vec::with_capacity(l.rows.len());
+    let mut per_row = crate::AdmittedVec::with_capacity(l.rows.len(), &ctx.growth)?;
     let mut emitted = 0usize;
     for mu in &l.rows {
         let evaluated = if M::DECLARED {
@@ -1089,25 +1161,26 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
             }
         };
         for v in r.schema.vars() {
-            right_schema.push(v.clone());
+            right_schema.push_admitted(v.clone(), &ctx.growth)?;
         }
         if M::DECLARED {
             emitted = emitted.saturating_add(r.rows.len());
         }
-        per_row.push((Solution::from_slice(mu), r));
+        per_row.push((mu.clone_admitted(&ctx.growth)?, r))?;
         if M::DECLARED && ctx.row_ceiling().is_some_and(|ceiling| emitted >= ceiling) {
             break;
         }
     }
 
-    let out = Arc::new(left_schema.union(&right_schema));
+    let out = left_schema
+        .union_admitted(&right_schema, &ctx.growth)?
+        .shared_admitted(&ctx.growth)?;
     let left_len = left_schema.len();
     let out_len = out.len();
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
-    let mut rows: Vec<Solution<D::Id>> =
-        Vec::with_capacity(cell_ceiling.map_or(per_row.len(), |cap| cap.min(per_row.len())));
+    let mut rows = RowsBuilder::new(&ctx.growth);
     'left: for (mu, r) in &per_row {
-        let right_to_out = right_to_out_map(&r.schema, &out);
+        let right_to_out = right_to_out_map(&r.schema, &out, &ctx.growth)?;
         for nu in &r.rows {
             // Test compatibility before allocating the joined row. The cell ceiling is
             // an admission boundary, so the first over-limit emit-worthy candidate must
@@ -1126,16 +1199,20 @@ fn eval_application<D: DatasetView + Sync, M: ApplicationMode>(
 
             // Start from μ: left columns occupy the output prefix, then
             // overlay the now-known-compatible ν cells.
-            rows.push(merge_application_row(
+            rows.push_row(merge_application_row(
                 mu,
                 nu,
                 left_len,
                 &right_to_out,
                 out_len,
-            ));
+                &ctx.growth,
+            )?)?;
         }
     }
-    Ok(lift.finish(SolutionSeq { schema: out, rows }))
+    Ok(lift.finish(SolutionSeq {
+        schema: out,
+        rows: rows.finish()?,
+    }))
 }
 
 /// Evaluate a `UNION` of `arms` as a multiset concatenation of their solutions, in arm
@@ -1210,7 +1287,7 @@ fn eval_union_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     mut delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let mut blocks = purrdf_core::SmallVec::<[SolutionSeq<D::Id>; 2]>::new();
     for (ordinal, arm) in arms.iter().enumerate() {
         if delivery.stopped() {
@@ -1235,7 +1312,7 @@ fn eval_union_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
             break;
         }
     }
-    Ok(lift.finish(concat_union(blocks, ctx)))
+    Ok(lift.finish(concat_union(blocks, ctx)?))
 }
 
 pub(crate) fn eval_positive_union<D: DatasetView + Sync>(
@@ -1255,7 +1332,7 @@ fn eval_union_with<D: DatasetView + Sync>(
     plan: Option<&crate::bgp::PositivePlan>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     if arms.len() < 2
         || ctx.sequential_operation_required()
         // A governed `UNION` evaluates its arms in source order on one thread: every arm
@@ -1297,7 +1374,7 @@ fn eval_union_with<D: DatasetView + Sync>(
         // The arms have finished borrowing the producer. Release its owned bag
         // before allocating the concatenated output.
         drop(input);
-        return Ok(lift.finish(concat_union(evaluated, ctx)));
+        return Ok(lift.finish(concat_union(evaluated, ctx)?));
     }
 
     let base = ctx.scratch.computed_count();
@@ -1313,7 +1390,7 @@ fn eval_union_with<D: DatasetView + Sync>(
     // portable-materialize round trip. The child (and its scratch) does not survive past
     // this closure.
     let eval_branch = |pattern: &GraphPattern| -> Result<UnionBranch<crate::parallel::MintedRow<D::Id>>, EvalError> {
-        let mut child = ctx_ref.fork_for_worker();
+        let mut child=ctx_ref.fork_for_worker()?;
         let evaluated = match plan {
             Some(plan) => crate::eval::eval_positive_evaluated(pattern, input.as_ref().map(crate::eval::PositiveInput::borrowed), plan, &mut child)?,
             None => eval_evaluated(pattern, &mut child)?,
@@ -1332,8 +1409,11 @@ fn eval_union_with<D: DatasetView + Sync>(
         debug_assert_eq!(truncated, certificate.is_some());
         let minted: Vec<_> = rows
             .into_iter()
-            .map(|row| crate::parallel::minted_row(&child.scratch, base, row))
-            .collect();
+            .map(|row| {
+                let row = row.into_resident().map_err(|_| EvalError::WorkspaceUnpriced("a forked UNION requires resident worker rows"))?;
+                Ok(crate::parallel::minted_row(&child.scratch, base, row))
+            })
+            .collect::<Result<_, EvalError>>()?;
         Ok(UnionBranch {
             schema,
             rows: minted,
@@ -1366,16 +1446,16 @@ fn eval_union_with<D: DatasetView + Sync>(
         branches
             .iter_mut()
             .map(|branch| core::mem::take(&mut branch.witness)),
-    );
+    )?;
 
     let mut out = VarSchema::default();
     for branch in &branches {
         for v in branch.schema.vars() {
-            out.push(v.clone());
+            out.push_admitted(v.clone(), &ctx.growth)?;
         }
     }
     let out_len = out.len();
-    let mut rows = Vec::with_capacity(branches.iter().map(|branch| branch.rows.len()).sum());
+    let mut rows = RowsBuilder::new(&ctx.growth);
     for (ordinal, branch) in branches.into_iter().enumerate() {
         if ordinal == 0 {
             // The first arm's columns are the output's leading columns in order. Same
@@ -1384,28 +1464,30 @@ fn eval_union_with<D: DatasetView + Sync>(
             for minted in branch.rows {
                 let reinterned =
                     crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted)?;
-                let mut row = Solution::with_capacity(out_len);
-                row.extend_from_slice(&reinterned);
-                row.resize(out_len, None);
-                rows.push(row);
+                rows.push_cells(
+                    out_len,
+                    (0..out_len).map(|column| reinterned.get(column).copied().flatten()),
+                )?;
             }
             continue;
         }
-        let arm_to_out = right_to_out_map(&branch.schema, &out);
+        let arm_to_out = right_to_out_map(&branch.schema, &out, &ctx.growth)?;
         for minted in branch.rows {
             let reinterned =
                 crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted)?;
-            let mut row = purrdf_core::smallvec![None; out_len];
-            for (j, &cell) in reinterned.iter().enumerate() {
-                row[arm_to_out[j]] = cell;
-            }
-            rows.push(row);
+            let row = RetainedRow::try_build(out_len, &ctx.growth, |row| {
+                for (j, &cell) in reinterned.iter().enumerate() {
+                    row[arm_to_out[j]] = cell;
+                }
+                Ok(())
+            })?;
+            rows.push_row(row)?;
         }
     }
 
     let united = SolutionSeq {
-        schema: Arc::new(out),
-        rows,
+        schema: out.shared_admitted(&ctx.growth)?,
+        rows: rows.finish()?,
     };
     let Some((ordinal, certificate)) = governing else {
         return Ok(lift.finish(united));
@@ -1425,25 +1507,36 @@ fn eval_union_with<D: DatasetView + Sync>(
 /// capped at the intermediate-cell ceiling for the output's width — the one bag this
 /// node materializes.
 pub(crate) fn concat_union<D: DatasetView + Sync>(
-    mut arms: purrdf_core::SmallVec<[SolutionSeq<D::Id>; 2]>,
+    arms: impl IntoIterator<Item = SolutionSeq<D::Id>>,
     ctx: &EvalCtx<'_, D>,
-) -> SolutionSeq<D::Id> {
-    if arms.len() == 1 {
-        return arms.remove(0);
+) -> Result<SolutionSeq<D::Id>, EvalError> {
+    let mut incoming = arms.into_iter();
+    let first = incoming.next();
+    let second = incoming.next();
+    let (first, second) = match (first, second) {
+        (Some(first), None) => return Ok(first),
+        pair => pair,
+    };
+    let mut arms = crate::AdmittedVec::new(&ctx.growth);
+    if let Some(first) = first {
+        arms.push(first)?;
+    }
+    if let Some(second) = second {
+        arms.push(second)?;
+    }
+    for arm in incoming {
+        arms.push(arm)?;
     }
     let mut out = VarSchema::default();
     for arm in &arms {
         for v in arm.schema.vars() {
-            out.push(v.clone());
+            out.push_admitted(v.clone(), &ctx.growth)?;
         }
     }
     let out_len = out.len();
 
-    let expected = arms
-        .iter()
-        .fold(0_usize, |n, arm| n.saturating_add(arm.rows.len()));
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
-    let mut rows = Vec::with_capacity(cell_ceiling.map_or(expected, |cap| cap.min(expected)));
+    let mut rows = RowsBuilder::new(&ctx.growth);
     'arms: for (ordinal, arm) in arms.iter().enumerate() {
         if ordinal == 0 {
             for lrow in &arm.rows {
@@ -1455,31 +1548,33 @@ pub(crate) fn concat_union<D: DatasetView + Sync>(
                 // None. Same shape as `merge`: one exact-size allocation initialized
                 // from the row directly, no write-None-then-overwrite pass over the
                 // prefix.
-                let mut row = Solution::with_capacity(out_len);
-                row.extend_from_slice(lrow);
-                row.resize(out_len, None);
-                rows.push(row);
+                rows.push_cells(
+                    out_len,
+                    (0..out_len).map(|column| lrow.get(column).copied().flatten()),
+                )?;
             }
             continue;
         }
-        let arm_to_out = right_to_out_map(&arm.schema, &out);
+        let arm_to_out = right_to_out_map(&arm.schema, &out, &ctx.growth)?;
         for rrow in &arm.rows {
             if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                 break 'arms;
             }
-            let mut row = purrdf_core::smallvec![None; out_len];
-            for (j, &cell) in rrow.iter().enumerate() {
-                row[arm_to_out[j]] = cell;
-            }
-            rows.push(row);
+            let row = RetainedRow::try_build(out_len, &ctx.growth, |row| {
+                for (j, &cell) in rrow.iter().enumerate() {
+                    row[arm_to_out[j]] = cell;
+                }
+                Ok(())
+            })?;
+            rows.push_row(row)?;
         }
     }
 
-    SolutionSeq {
-        schema: Arc::new(out),
-        rows,
-    }
+    Ok(SolutionSeq {
+        schema: out.shared_admitted(&ctx.growth)?,
+        rows: rows.finish()?,
+    })
 }
 
 /// One `UNION` branch's forked-child result: its output schema plus every result row
@@ -1495,7 +1590,7 @@ pub(crate) fn concat_union<D: DatasetView + Sync>(
 #[derive(Debug)]
 struct UnionBranch<T> {
     /// The branch's output schema.
-    schema: Arc<VarSchema>,
+    schema: crate::solution::SharedSchema,
     /// The branch's rows.
     rows: Vec<T>,
     /// The certificate, when a governor stopped the arm short.
@@ -1553,15 +1648,19 @@ fn union_branch_order<T>(branches: &mut [UnionBranch<T>]) -> Option<(usize, Chil
 type ChildCertificate = crate::governor::lift::Certificate;
 
 /// The mapping from a right operand's column ordinal to its ordinal in `out`.
-fn right_to_out_map(right: &VarSchema, out: &VarSchema) -> Vec<usize> {
-    right
-        .vars()
-        .iter()
-        .map(|v| {
-            out.index_of(v)
-                .expect("union schema contains every right variable")
-        })
-        .collect()
+fn right_to_out_map(
+    right: &VarSchema,
+    out: &VarSchema,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::workspace::AdmittedVec<usize>, EvalError> {
+    let mut columns = crate::workspace::AdmittedVec::new(workspace);
+    for variable in right.vars() {
+        columns.push(
+            out.index_of(variable)
+                .expect("union schema contains every right variable"),
+        )?;
+    }
+    Ok(columns)
 }
 
 /// Build the right-side join index: rows whose shared columns are all bound are
@@ -1574,19 +1673,53 @@ fn right_to_out_map(right: &VarSchema, out: &VarSchema) -> Vec<usize> {
 pub(crate) fn build_index<I: ViewTermId>(
     r: &SolutionSeq<I>,
     shared: &[(usize, usize)],
-) -> (DetHashMap<JoinKey<I>, Vec<usize>>, Vec<usize>) {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(JoinIndex<I>, crate::AdmittedVec<usize>), EvalError> {
     // Pre-size to the build-row count: the exact upper bound on distinct keys, so a
     // large build side is filled without incremental rehash-and-reallocate churn.
-    let mut keyed: DetHashMap<JoinKey<I>, Vec<usize>> =
-        DetHashMap::with_capacity_and_hasher(r.rows.len(), DetHasher::default());
-    let mut wild: Vec<usize> = Vec::new();
+    let bytes = purrdf_core::hash::hash_table_allocation_bound::<(
+        JoinKey<I>,
+        crate::AdmittedVec<usize>,
+    )>(r.rows.len())
+    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    let allocation =
+        workspace.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    let mut keyed = hashbrown::HashTable::new();
+    keyed
+        .try_reserve(
+            r.rows.len(),
+            |entry: &(JoinKey<I>, crate::AdmittedVec<usize>)| {
+                purrdf_hash::fixed::hash_one(&entry.0)
+            },
+        )
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "join index table",
+        })?;
+    let mut wild = crate::AdmittedVec::new(workspace);
     for (idx, rrow) in r.rows.iter().enumerate() {
-        match bound_key(rrow, shared, KeySide::Right) {
-            Some(key) => keyed.entry(key).or_default().push(idx),
-            None => wild.push(idx),
+        match bound_key(rrow, shared, KeySide::Right, workspace)? {
+            Some(key) => {
+                let hash = purrdf_hash::fixed::hash_one(&key);
+                if let Some(entry) = keyed.find_mut(hash, |entry| entry.0 == key) {
+                    entry.1.push(idx)?;
+                } else {
+                    let mut bucket = crate::AdmittedVec::new(workspace);
+                    bucket.push(idx)?;
+                    keyed.insert_unique(hash, (key, bucket), |entry| {
+                        purrdf_hash::fixed::hash_one(&entry.0)
+                    });
+                }
+            }
+            None => wild.push(idx)?,
         }
     }
-    (keyed, wild)
+    Ok((
+        JoinIndex {
+            entries: keyed,
+            _allocation: allocation,
+        },
+        wild,
+    ))
 }
 
 /// Existence-only probe against a **prebuilt** right-side index: whether any row of
@@ -1604,11 +1737,12 @@ pub(crate) fn build_index<I: ViewTermId>(
 pub(crate) fn probe_has_match<I: ViewTermId>(
     probe: &[Option<SolutionTerm<I>>],
     shared: &[(usize, usize)],
-    keyed: &DetHashMap<JoinKey<I>, Vec<usize>>,
+    keyed: &JoinIndex<I>,
     wild: &[usize],
-    r_rows: &[Solution<I>],
-) -> bool {
-    match bound_key(probe, shared, KeySide::Left) {
+    r_rows: &[RetainedRow<I>],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    Ok(match bound_key(probe, shared, KeySide::Left, workspace)? {
         // Fully bound on shared columns: a present exact-key bucket is a match
         // (`build_index` only inserts non-empty buckets via `or_default().push`),
         // else any compatible wild build row (its `None` shared column matches).
@@ -1617,7 +1751,7 @@ pub(crate) fn probe_has_match<I: ViewTermId>(
         }
         // Unbound shared column ⇒ wildcard probe: scan for any compatible build row.
         None => r_rows.iter().any(|rrow| compatible(probe, rrow, shared)),
-    }
+    })
 }
 
 /// Hash-join two solution sequences on their shared variables.
@@ -1626,15 +1760,15 @@ fn hash_join<D: DatasetView + Sync>(
     r: &SolutionSeq<D::Id>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let out = l.schema.union(&r.schema);
+    let out = l.schema.union_admitted(&r.schema, &ctx.growth)?;
     let out_len = out.len();
     let left_len = l.schema.len();
-    let right_to_out = right_to_out_map(&r.schema, &out);
+    let right_to_out = right_to_out_map(&r.schema, &out, &ctx.growth)?;
     // Shared columns as (left_ordinal, right_ordinal) pairs, in left order.
-    let shared = l.schema.shared_columns(&r.schema);
+    let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
 
     // Build side = right (split into key-indexed + wild rows).
-    let (keyed, wild) = build_index(r, &shared);
+    let (keyed, wild) = build_index(r, &shared, &ctx.growth)?;
 
     // Each left row's worker returns its merged matches in the same order as the
     // sequential path (keyed-bucket matches in `idxs` order, then wild matches; or,
@@ -1643,16 +1777,17 @@ fn hash_join<D: DatasetView + Sync>(
     // row sequence. Captures only read-only borrows: `keyed`/`wild`/`r.rows` (the
     // prebuilt index), `right_to_out`/`shared` (pure layout), `left_len`/`out_len`
     // (`Copy`), and `merge`/`compatible` (pure fns).
-    let rows = if let Some(cell_ceiling) = ctx.cell_row_ceiling(out_len) {
+    let rows = if ctx.growth.is_bounded() || ctx.cell_row_ceiling(out_len).is_some() {
+        let cell_ceiling = ctx.cell_row_ceiling(out_len).unwrap_or(usize::MAX);
         // A global allocation bound cannot be divided among parallel chunks without each
         // chunk receiving (and allocating) the whole allowance. Keep this governed lane in
         // source order and test the ceiling before `merge` constructs the next row.
         // A cell ceiling is permission to hold rows, not evidence that the join
         // produces them. Allocate only when a compatible candidate is emitted;
         // even two enormous bags can have an empty intersection.
-        let mut rows = Vec::new();
+        let mut rows = RowsBuilder::new(&ctx.growth);
         'left: for lrow in &l.rows {
-            match bound_key(lrow, &shared, KeySide::Left) {
+            match bound_key(lrow, &shared, KeySide::Left, &ctx.growth)? {
                 Some(key) => {
                     if let Some(idxs) = keyed.get(&key) {
                         for &idx in idxs {
@@ -1660,8 +1795,14 @@ fn hash_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
-                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                            rows.push_row(merge_admitted(
+                                lrow,
+                                &r.rows[idx],
+                                left_len,
+                                &right_to_out,
+                                out_len,
+                                &ctx.growth,
+                            )?)?;
                         }
                     }
                     for &idx in &wild {
@@ -1670,8 +1811,14 @@ fn hash_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
-                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                            rows.push_row(merge_admitted(
+                                lrow,
+                                &r.rows[idx],
+                                left_len,
+                                &right_to_out,
+                                out_len,
+                                &ctx.growth,
+                            )?)?;
                         }
                     }
                 }
@@ -1682,21 +1829,27 @@ fn hash_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
-                            rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                            rows.push_row(merge_admitted(
+                                lrow,
+                                rrow,
+                                left_len,
+                                &right_to_out,
+                                out_len,
+                                &ctx.growth,
+                            )?)?;
                         }
                     }
                 }
             }
         }
-        rows
+        rows.finish()?
     } else {
         let (rows, _) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             &l.rows,
             || (),
             |(), acc, lrow| {
-                match bound_key(lrow, &shared, KeySide::Left) {
+                match bound_key(lrow, &shared, KeySide::Left, &ctx.growth)? {
                     // Probe is fully bound on shared columns: hit the matching bucket
                     // (exact key ⇒ compatible) plus any wild build rows it is compatible
                     // with (a wild row's None shared column matches anything).
@@ -1704,25 +1857,27 @@ fn hash_join<D: DatasetView + Sync>(
                         if let Some(idxs) = keyed.get(&key) {
                             for &idx in idxs {
                                 reserve_join_rows(acc, 1, usize::MAX)?;
-                                acc.push(merge(
+                                acc.push(merge_admitted(
                                     lrow,
                                     &r.rows[idx],
                                     left_len,
                                     &right_to_out,
                                     out_len,
-                                ));
+                                    &ctx.growth,
+                                )?);
                             }
                         }
                         for &idx in &wild {
                             if compatible(lrow, &r.rows[idx], &shared) {
                                 reserve_join_rows(acc, 1, usize::MAX)?;
-                                acc.push(merge(
+                                acc.push(merge_admitted(
                                     lrow,
                                     &r.rows[idx],
                                     left_len,
                                     &right_to_out,
                                     out_len,
-                                ));
+                                    &ctx.growth,
+                                )?);
                             }
                         }
                     }
@@ -1732,7 +1887,14 @@ fn hash_join<D: DatasetView + Sync>(
                         for rrow in &r.rows {
                             if compatible(lrow, rrow, &shared) {
                                 reserve_join_rows(acc, 1, usize::MAX)?;
-                                acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                                acc.push(merge_admitted(
+                                    lrow,
+                                    rrow,
+                                    left_len,
+                                    &right_to_out,
+                                    out_len,
+                                    &ctx.growth,
+                                )?);
                             }
                         }
                     }
@@ -1741,11 +1903,15 @@ fn hash_join<D: DatasetView + Sync>(
             },
             |()| (),
         )?;
-        rows
+        RowsBuilder::from_storage(
+            crate::AdmittedVec::from_parts(rows, None, &ctx.growth),
+            &ctx.growth,
+        )
+        .finish()?
     };
 
     Ok(SolutionSeq {
-        schema: Arc::new(out),
+        schema: out.shared_admitted(&ctx.growth)?,
         rows,
     })
 }
@@ -1753,11 +1919,7 @@ fn hash_join<D: DatasetView + Sync>(
 /// Grow the output for candidates actually being emitted, with amortized growth
 /// capped by the governor's remaining row allowance. No hypothetical Cartesian
 /// product participates in the reservation, and failure stays on the error channel.
-fn reserve_join_rows<I: ViewTermId>(
-    rows: &mut Vec<Solution<I>>,
-    needed: usize,
-    ceiling: usize,
-) -> Result<(), EvalError> {
+fn reserve_join_rows<T>(rows: &mut Vec<T>, needed: usize, ceiling: usize) -> Result<(), EvalError> {
     if needed > rows.capacity() - rows.len() {
         let remaining = ceiling.saturating_sub(rows.len());
         debug_assert!(needed <= remaining);
@@ -1787,20 +1949,25 @@ fn bound_key<I: ViewTermId>(
     row: &[Option<SolutionTerm<I>>],
     shared: &[(usize, usize)],
     side: KeySide,
-) -> Option<JoinKey<I>> {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<JoinKey<I>>, EvalError> {
     let col_of = |ia: usize, ib: usize| match side {
         KeySide::Left => ia,
         KeySide::Right => ib,
     };
     if let [(ia, ib)] = *shared {
         // Single shared column: no heap allocation for the key.
-        return Some(JoinKey::Single(row[col_of(ia, ib)]?.join_key()));
+        return Ok(row[col_of(ia, ib)].map(|term| JoinKey::Single(term.join_key())));
     }
-    let mut key = Vec::with_capacity(shared.len());
-    for &(ia, ib) in shared {
-        key.push(row[col_of(ia, ib)]?);
+    if shared.iter().any(|&(ia, ib)| row[col_of(ia, ib)].is_none()) {
+        return Ok(None);
     }
-    Some(JoinKey::Multi(key))
+    let key = RetainedRow::from_cells(
+        shared.len(),
+        shared.iter().map(|&(ia, ib)| row[col_of(ia, ib)]),
+        workspace,
+    )?;
+    Ok(Some(JoinKey::Multi(key)))
 }
 
 /// Merge a compatible `(left_row, right_row)` pair into one solution over the output
@@ -1808,41 +1975,31 @@ fn bound_key<I: ViewTermId>(
 /// output slot only if still unbound, so a shared column unbound on the left is
 /// filled from the right (and an already-bound shared column — equal by
 /// compatibility — is left intact).
-fn merge<I: ViewTermId>(
-    left_row: &Solution<I>,
-    right_row: &Solution<I>,
+fn merge_admitted<I: ViewTermId>(
+    left: &[Option<SolutionTerm<I>>],
+    right: &[Option<SolutionTerm<I>>],
     left_len: usize,
     right_to_out: &[usize],
-    out_len: usize,
-) -> Solution<I> {
+    width: usize,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<RetainedRow<I>, EvalError> {
     #[cfg(test)]
     MERGE_COUNT.with(|count| {
         if let Some(current) = count.get() {
             count.set(Some(current.saturating_add(1)));
         }
     });
-    debug_assert_eq!(left_row.len(), left_len);
-    // One exact-size allocation, initialized from the left row directly (no
-    // write-None-then-overwrite pass over the left prefix).
-    let mut merged = Solution::with_capacity(out_len);
-    merged.extend_from_slice(left_row);
-    merged.resize(out_len, None);
-    for (j, &cell) in right_row.iter().enumerate() {
-        let p = right_to_out[j];
-        if merged[p].is_none() {
-            merged[p] = cell;
+    debug_assert_eq!(left.len(), left_len);
+    RetainedRow::try_build(width, workspace, |row| {
+        row[..left_len].copy_from_slice(left);
+        for (column, &cell) in right.iter().enumerate() {
+            let output = right_to_out[column];
+            if row[output].is_none() {
+                row[output] = cell;
+            }
         }
-    }
-    merged
-}
-
-/// Emit an unmatched driver's values followed by the OPTIONAL's unbound columns.
-/// The caller establishes that the complete right relation has no accepted match.
-fn padded_left_row<I: ViewTermId>(left: &Solution<I>, width: usize) -> Solution<I> {
-    let mut row = Solution::with_capacity(width);
-    row.extend_from_slice(left);
-    row.resize(width, None);
-    row
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -1917,18 +2074,19 @@ fn finish_left_join<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     if let Evaluated::Complete(rows) = &evaluated
-        && crate::bgp::PositivePlan::seed_eligible(right, &rows.schema)
+        && crate::bgp::PositivePlan::seed_eligible_admitted(right, &rows.schema, &ctx.growth)?
     {
-        let mut seed = crate::bgp::SeedEstimate::from_rows(rows);
+        let mut seed = crate::bgp::SeedEstimate::from_rows_admitted(rows, &ctx.growth)?;
         // OPTIONAL commits one driver occurrence at a time. Its working bag
         // therefore has one incoming row, even when the outer bag is large.
         seed.rows = 1;
-        if let Some(plan) = crate::bgp::PositivePlan::build_seeded(
+        if let Some(plan) = crate::bgp::PositivePlan::build_seeded_admitted(
             ctx.dataset,
             &ctx.active_dataset,
             ctx.active_graph,
             right,
             &seed,
+            &ctx.workspace,
         )? {
             let Evaluated::Complete(rows) = evaluated else {
                 unreachable!("the inspected left arm was complete")
@@ -1965,8 +2123,11 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
     plan: &crate::bgp::PositivePlan,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
-    let schema = Arc::new(left.schema.union(plan.root_schema()));
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
+    let schema = left
+        .schema
+        .union_admitted(plan.root_schema(), &ctx.growth)?
+        .shared_admitted(&ctx.growth)?;
     let cell_ceiling = ctx.cell_row_ceiling(schema.len());
     let row_ceiling = ctx.row_ceiling();
     // Restore the ordinary ungoverned outer join's driver parallelism. Every
@@ -1983,17 +2144,19 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
         let rows = parallel_seeded_optional(node, &left, right, plan, &schema, ctx)?;
         return Ok(lift.finish(SolutionSeq { schema, rows }));
     }
-    let mut rows = Vec::new();
+    let mut rows = RowsBuilder::new(&ctx.growth);
     let mut bgp = None;
     for row in left.rows {
         let (seed, padding) = if expression.is_none() {
-            (row.clone(), Some(row))
+            (row.clone_admitted(&ctx.growth)?, Some(row))
         } else {
             (row, None)
         };
+        let mut seed_rows = RowsBuilder::new(&ctx.growth);
+        seed_rows.push_row(seed)?;
         let unit = SolutionSeq {
-            schema: Arc::clone(&left.schema),
-            rows: vec![seed],
+            schema: left.schema.clone(),
+            rows: seed_rows.finish()?,
         };
         let SeededOptionalBlock {
             evaluated,
@@ -2008,7 +2171,7 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
         };
         if !append_seeded_optional_block(
             block,
-            padding.as_ref().filter(|_| pad_unmatched),
+            padding.as_deref().filter(|_| pad_unmatched),
             &mut rows,
             &schema,
             row_ceiling,
@@ -2018,7 +2181,10 @@ fn eval_seeded_left_join<D: DatasetView + Sync>(
             break;
         }
     }
-    Ok(lift.finish(SolutionSeq { schema, rows }))
+    Ok(lift.finish(SolutionSeq {
+        schema,
+        rows: rows.finish()?,
+    }))
 }
 
 /// One driver's inspected relation. Only a complete empty unfiltered relation
@@ -2080,8 +2246,8 @@ fn seeded_optional_block<D: DatasetView + Sync>(
 fn append_seeded_optional_block<D: DatasetView + Sync>(
     block: SolutionSeq<D::Id>,
     padding: Option<&Solution<D::Id>>,
-    rows: &mut Vec<Solution<D::Id>>,
-    schema: &Arc<VarSchema>,
+    rows: &mut RowsBuilder<D::Id>,
+    schema: &crate::solution::SharedSchema,
     row_ceiling: Option<usize>,
     cell_ceiling: Option<usize>,
     ctx: &EvalCtx<'_, D>,
@@ -2094,11 +2260,17 @@ fn append_seeded_optional_block<D: DatasetView + Sync>(
             return Ok(false);
         }
         return push_seeded_join_row(rows, schema.len(), row_ceiling, cell_ceiling, ctx, || {
-            padded_left_row(padding, schema.len())
+            RetainedRow::from_cells(
+                schema.len(),
+                (0..schema.len()).map(|column| padding.get(column).copied().flatten()),
+                &ctx.growth,
+            )
         });
     }
-    for row in block.reorder_like(schema).rows {
-        if !push_seeded_join_row(rows, schema.len(), row_ceiling, cell_ceiling, ctx, || row)? {
+    for row in block.reorder_like_admitted(schema, &ctx.growth)?.rows {
+        if !push_seeded_join_row(rows, schema.len(), row_ceiling, cell_ceiling, ctx, || {
+            Ok(row)
+        })? {
             return Ok(false);
         }
     }
@@ -2113,17 +2285,19 @@ fn parallel_seeded_optional<D: DatasetView + Sync>(
     left: &SolutionSeq<D::Id>,
     right: &GraphPattern,
     plan: &crate::bgp::PositivePlan,
-    schema: &Arc<VarSchema>,
+    schema: &crate::solution::SharedSchema,
     ctx: &EvalCtx<'_, D>,
-) -> Result<Vec<Solution<D::Id>>, EvalError> {
-    let (rows, _) = crate::parallel::par_chunk_try_map_init(
+) -> Result<crate::solution::RowBag<D::Id>, EvalError> {
+    let (rows, _) = crate::parallel::par_chunk_try_map_init_fallible(
         ctx.sequential_operation_required(),
         &left.rows,
-        || (ctx.fork_for_worker(), None),
+        || Ok((ctx.fork_for_worker()?, None)),
         |(child, bgp), rows, row| {
+            let mut seeds = RowsBuilder::new(&child.growth);
+            seeds.push_row(row.clone_admitted(&child.growth)?)?;
             let unit = SolutionSeq {
-                schema: Arc::clone(&left.schema),
-                rows: vec![row.clone()],
+                schema: left.schema.clone(),
+                rows: seeds.finish()?,
             };
             let SeededOptionalBlock {
                 evaluated,
@@ -2134,10 +2308,11 @@ fn parallel_seeded_optional<D: DatasetView + Sync>(
                     "an ungoverned uncapped BGP driver unexpectedly truncated",
                 ));
             };
+            let mut output = RowsBuilder::new(&child.growth);
             if !append_seeded_optional_block(
                 block,
                 pad_unmatched.then_some(row),
-                rows,
+                &mut output,
                 schema,
                 None,
                 None,
@@ -2147,22 +2322,27 @@ fn parallel_seeded_optional<D: DatasetView + Sync>(
                     "an ungoverned uncapped BGP driver unexpectedly reached a cap",
                 ));
             }
+            rows.extend(output.finish()?);
             Ok(())
         },
         |_| (),
     )?;
-    Ok(rows)
+    RowsBuilder::from_storage(
+        crate::AdmittedVec::from_parts(rows, None, &ctx.growth),
+        &ctx.growth,
+    )
+    .finish()
 }
 
 /// Admit a completed seeded row before constructing padding or growing its sink.
 /// Matched and unmatched occurrences share the parent's answer and cell ceilings.
 fn push_seeded_join_row<D: DatasetView + Sync>(
-    rows: &mut Vec<Solution<D::Id>>,
+    rows: &mut RowsBuilder<D::Id>,
     width: usize,
     row_ceiling: Option<usize>,
     cell_ceiling: Option<usize>,
     ctx: &EvalCtx<'_, D>,
-    make_row: impl FnOnce() -> Solution<D::Id>,
+    make_row: impl FnOnce() -> Result<RetainedRow<D::Id>, EvalError>,
 ) -> Result<bool, EvalError> {
     if row_ceiling.is_some_and(|cap| rows.len() >= cap) {
         return Ok(false);
@@ -2171,8 +2351,7 @@ fn push_seeded_join_row<D: DatasetView + Sync>(
         let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
         return Ok(false);
     }
-    reserve_join_rows(rows, 1, cell_ceiling.unwrap_or(usize::MAX))?;
-    rows.push(make_row());
+    rows.push_row(make_row()?)?;
     Ok(true)
 }
 
@@ -2193,7 +2372,7 @@ fn left_join_lift<D: DatasetView + Sync>(
     expression: Option<&Expression>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(l) = lift.absorb(0, left) else {
         return Ok(lift.withheld());
     };
@@ -2224,7 +2403,7 @@ fn left_join_lift<D: DatasetView + Sync>(
         return Ok(Evaluated::Truncated(Truncation::barred_at(
             node,
             tripped,
-            Arc::clone(&joined.schema),
+            joined.schema,
         )));
     }
     Ok(lift.finish(joined))
@@ -2247,15 +2426,16 @@ enum Candidates<'a> {
 fn filtered_candidates<'a, I: ViewTermId>(
     lrow: &[Option<SolutionTerm<I>>],
     shared: &[(usize, usize)],
-    keyed: &'a DetHashMap<JoinKey<I>, Vec<usize>>,
+    keyed: &'a JoinIndex<I>,
     wild: &[usize],
-) -> Candidates<'a> {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Candidates<'a>, EvalError> {
     if wild.is_empty()
-        && let Some(key) = bound_key(lrow, shared, KeySide::Left)
+        && let Some(key) = bound_key(lrow, shared, KeySide::Left, workspace)?
     {
-        return Candidates::Bucket(keyed.get(&key).map_or(&[], Vec::as_slice));
+        return Ok(Candidates::Bucket(keyed.get(&key).unwrap_or(&[])));
     }
-    Candidates::Scan
+    Ok(Candidates::Scan)
 }
 
 /// A left outer join whose right-side pairings must additionally satisfy `expr`
@@ -2283,11 +2463,14 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     pad_unmatched: bool,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let out = Arc::new(l.schema.union(&r.schema));
+    let out = l
+        .schema
+        .union_admitted(&r.schema, &ctx.growth)?
+        .shared_admitted(&ctx.growth)?;
     let out_len = out.len();
     let left_len = l.schema.len();
-    let right_to_out = right_to_out_map(&r.schema, &out);
-    let shared = l.schema.shared_columns(&r.schema);
+    let right_to_out = right_to_out_map(&r.schema, &out, &ctx.growth)?;
+    let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
 
     // Hash-index the right side (as the unfiltered `left_outer_join` does) so the
     // per-left-row candidate set is a bucket lookup, not an O(|R|) compatibility scan.
@@ -2302,18 +2485,19 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     // emitted rows, padding decisions, cell-ceiling trip points and charges are
     // unchanged. A left row with an unbound shared column (`bound_key` → `None`)
     // keeps the full scan, and so does an index with any wild row.
-    let (keyed, wild) = build_index(r, &shared);
+    let (keyed, wild) = build_index(r, &shared, &ctx.growth)?;
 
     // A left outer join emits at least one row per left row.
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
-    let program = crate::vm::program_at(ctx, node, expr);
-    let mut linked = crate::vm::Linked::link(program, expr, &out, ctx);
+    let program = crate::vm::program_at(ctx, node, expr)?;
+    let mut linked = crate::vm::Linked::link_admitted(program, expr, &out, ctx)?;
     // A governed join forks its predicate loop only without a reachable cell ceiling or
     // other caller ceilings beyond fuel/scratch, through
     // an ordered ledger of its left rows (`crate::row_checkpoint::ItemLedger`): the
     // fuel a predicate charges from inside its evaluation is committed in left-row
     // order, so the row a ceiling trips at is the same on every host.
-    let rows = if cell_ceiling.is_none()
+    let rows = if !ctx.growth.is_bounded()
+        && cell_ceiling.is_none()
         && ctx.may_fork_governed_loop()
         && ctx.may_fork_row_loop(expr)
     {
@@ -2326,13 +2510,20 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
         let join_row = |lrow: &Solution<D::Id>,
                         linked: &mut crate::vm::Linked<'_, D::Id>,
                         ctx: &mut EvalCtx<'_, D>,
-                        acc: &mut Vec<Solution<D::Id>>|
+                        acc: &mut Vec<RetainedRow<D::Id>>|
          -> Result<(), EvalError> {
             let before = acc.len();
-            match filtered_candidates(lrow, &shared, &keyed, &wild) {
+            match filtered_candidates(lrow, &shared, &keyed, &wild, &ctx.growth)? {
                 Candidates::Bucket(idxs) => {
                     for &idx in idxs {
-                        let merged = merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len);
+                        let merged = merge_admitted(
+                            lrow,
+                            &r.rows[idx],
+                            left_len,
+                            &right_to_out,
+                            out_len,
+                            &ctx.growth,
+                        )?;
                         if linked.ebv(&merged, &out, ctx)? == Some(true) {
                             reserve_join_rows(acc, 1, usize::MAX)?;
                             acc.push(merged);
@@ -2344,7 +2535,14 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                         if !compatible(lrow, rrow, &shared) {
                             continue;
                         }
-                        let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
+                        let merged = merge_admitted(
+                            lrow,
+                            rrow,
+                            left_len,
+                            &right_to_out,
+                            out_len,
+                            &ctx.growth,
+                        )?;
                         if linked.ebv(&merged, &out, ctx)? == Some(true) {
                             reserve_join_rows(acc, 1, usize::MAX)?;
                             acc.push(merged);
@@ -2354,20 +2552,24 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
             }
             if pad_unmatched && acc.len() == before {
                 reserve_join_rows(acc, 1, usize::MAX)?;
-                acc.push(padded_left_row(lrow, out_len));
+                acc.push(RetainedRow::from_cells(
+                    out_len,
+                    (0..out_len).map(|column| lrow.get(column).copied().flatten()),
+                    &ctx.growth,
+                )?);
             }
             Ok(())
         };
         let snapshot = ctx.loop_snapshot(l.rows.len());
-        let (rows, harvests) = crate::parallel::par_loop_try_map_init(
+        let (rows, harvests) = crate::parallel::par_loop_try_map_init_fallible(
             ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             &l.rows,
             || {
-                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
+                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref())?;
                 let mut ledger = loop_ledger.clone();
                 ledger.defer(&mut child);
-                (child, linked.fresh(), ledger)
+                Ok((child, linked.fresh(), ledger))
             },
             |(child, linked, ledger), acc, lrow| {
                 if !ledger.admits(crate::parallel::index_in(&l.rows, lrow)) {
@@ -2388,7 +2590,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
             harvests.into_iter().unzip();
         let (mut rows, resume) = loop_ledger.commit_rows(ctx, rows, chunks)?;
-        ctx.absorb_worker_witnesses(witnesses);
+        ctx.absorb_worker_witnesses(witnesses)?;
         // A worker stopped on what its left rows spent, short of what the commit charged
         // for them: the rest of the left rows join here, in order.
         if let Some(resume) = resume {
@@ -2396,22 +2598,32 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                 join_row(lrow, &mut linked, ctx, &mut rows)?;
             }
         }
-        rows
+        RowsBuilder::from_storage(
+            crate::AdmittedVec::from_parts(rows, None, &ctx.growth),
+            &ctx.growth,
+        )
+        .finish()?
     } else {
-        let mut rows = Vec::new();
+        let mut rows = RowsBuilder::new(&ctx.growth);
         'left: for lrow in &l.rows {
             let mut matched = false;
-            match filtered_candidates(lrow, &shared, &keyed, &wild) {
+            match filtered_candidates(lrow, &shared, &keyed, &wild, &ctx.growth)? {
                 Candidates::Bucket(idxs) => {
                     for &idx in idxs {
-                        let merged = merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len);
+                        let merged = merge_admitted(
+                            lrow,
+                            &r.rows[idx],
+                            left_len,
+                            &right_to_out,
+                            out_len,
+                            &ctx.growth,
+                        )?;
                         if linked.ebv(&merged, &out, ctx)? == Some(true) {
                             if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            reserve_join_rows(&mut rows, 1, cell_ceiling.unwrap_or(usize::MAX))?;
-                            rows.push(merged);
+                            rows.push_row(merged)?;
                             matched = true;
                         }
                     }
@@ -2421,14 +2633,20 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                         if !compatible(lrow, rrow, &shared) {
                             continue;
                         }
-                        let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
+                        let merged = merge_admitted(
+                            lrow,
+                            rrow,
+                            left_len,
+                            &right_to_out,
+                            out_len,
+                            &ctx.growth,
+                        )?;
                         if linked.ebv(&merged, &out, ctx)? == Some(true) {
                             if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            reserve_join_rows(&mut rows, 1, cell_ceiling.unwrap_or(usize::MAX))?;
-                            rows.push(merged);
+                            rows.push_row(merged)?;
                             matched = true;
                         }
                     }
@@ -2439,11 +2657,13 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                     let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                     break;
                 }
-                reserve_join_rows(&mut rows, 1, cell_ceiling.unwrap_or(usize::MAX))?;
-                rows.push(padded_left_row(lrow, out_len));
+                rows.push_cells(
+                    out_len,
+                    (0..out_len).map(|column| lrow.get(column).copied().flatten()),
+                )?;
             }
         }
-        rows
+        rows.finish()?
     };
     Ok(SolutionSeq { schema: out, rows })
 }
@@ -2462,13 +2682,13 @@ fn left_outer_join<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     pad_unmatched: bool,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let out = l.schema.union(&r.schema);
+    let out = l.schema.union_admitted(&r.schema, &ctx.growth)?;
     let out_len = out.len();
     let left_len = l.schema.len();
-    let right_to_out = right_to_out_map(&r.schema, &out);
-    let shared = l.schema.shared_columns(&r.schema);
+    let right_to_out = right_to_out_map(&r.schema, &out, &ctx.growth)?;
+    let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
 
-    let (keyed, wild) = build_index(r, &shared);
+    let (keyed, wild) = build_index(r, &shared, &ctx.growth)?;
 
     // A left outer join emits at least one row per left row. Each worker returns the
     // matched merges (keyed then wild, same order as the sequential path) or, when
@@ -2476,11 +2696,12 @@ fn left_outer_join<D: DatasetView + Sync>(
     // alone iff no match" per-row semantics inside the worker so flattening in index
     // order is byte-identical to the sequential path.
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
-    let rows = if let Some(cell_ceiling) = cell_ceiling {
-        let mut rows = Vec::new();
+    let rows = if ctx.growth.is_bounded() || cell_ceiling.is_some() {
+        let cell_ceiling = cell_ceiling.unwrap_or(usize::MAX);
+        let mut rows = RowsBuilder::new(&ctx.growth);
         'left: for lrow in &l.rows {
             let before = rows.len();
-            match bound_key(lrow, &shared, KeySide::Left) {
+            match bound_key(lrow, &shared, KeySide::Left, &ctx.growth)? {
                 Some(key) => {
                     if let Some(idxs) = keyed.get(&key) {
                         for &idx in idxs {
@@ -2488,8 +2709,14 @@ fn left_outer_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
-                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                            rows.push_row(merge_admitted(
+                                lrow,
+                                &r.rows[idx],
+                                left_len,
+                                &right_to_out,
+                                out_len,
+                                &ctx.growth,
+                            )?)?;
                         }
                     }
                     for &idx in &wild {
@@ -2498,8 +2725,14 @@ fn left_outer_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
-                            rows.push(merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len));
+                            rows.push_row(merge_admitted(
+                                lrow,
+                                &r.rows[idx],
+                                left_len,
+                                &right_to_out,
+                                out_len,
+                                &ctx.growth,
+                            )?)?;
                         }
                     }
                 }
@@ -2510,8 +2743,14 @@ fn left_outer_join<D: DatasetView + Sync>(
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
                             }
-                            reserve_join_rows(&mut rows, 1, cell_ceiling)?;
-                            rows.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                            rows.push_row(merge_admitted(
+                                lrow,
+                                rrow,
+                                left_len,
+                                &right_to_out,
+                                out_len,
+                                &ctx.growth,
+                            )?)?;
                         }
                     }
                 }
@@ -2521,11 +2760,13 @@ fn left_outer_join<D: DatasetView + Sync>(
                     let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                     break;
                 }
-                reserve_join_rows(&mut rows, 1, cell_ceiling)?;
-                rows.push(padded_left_row(lrow, out_len));
+                rows.push_cells(
+                    out_len,
+                    (0..out_len).map(|column| lrow.get(column).copied().flatten()),
+                )?;
             }
         }
-        rows
+        rows.finish()?
     } else {
         let (rows, _) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
@@ -2533,30 +2774,32 @@ fn left_outer_join<D: DatasetView + Sync>(
             || (),
             |(), acc, lrow| {
                 let before = acc.len();
-                match bound_key(lrow, &shared, KeySide::Left) {
+                match bound_key(lrow, &shared, KeySide::Left, &ctx.growth)? {
                     Some(key) => {
                         if let Some(idxs) = keyed.get(&key) {
                             for &idx in idxs {
                                 reserve_join_rows(acc, 1, usize::MAX)?;
-                                acc.push(merge(
+                                acc.push(merge_admitted(
                                     lrow,
                                     &r.rows[idx],
                                     left_len,
                                     &right_to_out,
                                     out_len,
-                                ));
+                                    &ctx.growth,
+                                )?);
                             }
                         }
                         for &idx in &wild {
                             if compatible(lrow, &r.rows[idx], &shared) {
                                 reserve_join_rows(acc, 1, usize::MAX)?;
-                                acc.push(merge(
+                                acc.push(merge_admitted(
                                     lrow,
                                     &r.rows[idx],
                                     left_len,
                                     &right_to_out,
                                     out_len,
-                                ));
+                                    &ctx.growth,
+                                )?);
                             }
                         }
                     }
@@ -2564,7 +2807,14 @@ fn left_outer_join<D: DatasetView + Sync>(
                         for rrow in &r.rows {
                             if compatible(lrow, rrow, &shared) {
                                 reserve_join_rows(acc, 1, usize::MAX)?;
-                                acc.push(merge(lrow, rrow, left_len, &right_to_out, out_len));
+                                acc.push(merge_admitted(
+                                    lrow,
+                                    rrow,
+                                    left_len,
+                                    &right_to_out,
+                                    out_len,
+                                    &ctx.growth,
+                                )?);
                             }
                         }
                     }
@@ -2573,17 +2823,25 @@ fn left_outer_join<D: DatasetView + Sync>(
                 // contributed nothing, its variables stay unbound).
                 if pad_unmatched && acc.len() == before {
                     reserve_join_rows(acc, 1, usize::MAX)?;
-                    acc.push(padded_left_row(lrow, out_len));
+                    acc.push(RetainedRow::from_cells(
+                        out_len,
+                        (0..out_len).map(|column| lrow.get(column).copied().flatten()),
+                        &ctx.growth,
+                    )?);
                 }
                 Ok(())
             },
             |()| (),
         )?;
-        rows
+        RowsBuilder::from_storage(
+            crate::AdmittedVec::from_parts(rows, None, &ctx.growth),
+            &ctx.growth,
+        )
+        .finish()?
     };
 
     Ok(SolutionSeq {
-        schema: Arc::new(out),
+        schema: out.shared_admitted(&ctx.growth)?,
         rows,
     })
 }
@@ -2611,7 +2869,7 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
     right: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(l) = lift.absorb(0, eval_evaluated(left, ctx)?) else {
         return Ok(lift.withheld());
     };
@@ -2625,17 +2883,20 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
     // list of endpoints to invoke comes from the left: a row from any other endpoint binds
     // the endpoint variable to a different IRI than every row of the partition, so it
     // could remove none of them. See `crate::service_endpoints`.
-    if let Some(partitions) = crate::service_endpoints::minus_partitions(&l, right, ctx) {
-        let mut removed = vec![false; l.rows.len()];
+    if let Some(partitions) = crate::service_endpoints::minus_partitions(&l, right, ctx)? {
+        let mut removed = crate::AdmittedVec::with_capacity(l.rows.len(), &ctx.growth)?;
+        for _ in 0..l.rows.len() {
+            removed.push(false)?;
+        }
         for partition in &partitions {
             let evaluated = crate::service_endpoints::eval_minus_partition(partition, right, ctx)?;
             let Some(r) = lift.absorb(1, evaluated) else {
                 return Ok(lift.withheld());
             };
-            let shared = l.schema.shared_columns(&r.schema);
+            let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
             for &position in &partition.rows {
                 let lrow = &l.rows[position];
-                removed[position] = r.rows.iter().any(|rrow| {
+                removed.as_mut_slice()[position] = r.rows.iter().any(|rrow| {
                     compatible(lrow, rrow, &shared)
                         && shared
                             .iter()
@@ -2648,16 +2909,15 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
                 break;
             }
         }
-        let rows = l
-            .rows
-            .iter()
-            .zip(&removed)
-            .filter(|&(_, &removed)| !removed)
-            .map(|(row, _)| row.clone())
-            .collect();
+        let mut rows = RowsBuilder::new(&ctx.growth);
+        for (row, removed) in l.rows.into_iter().zip(removed.iter()) {
+            if !removed {
+                rows.push_row(row)?;
+            }
+        }
         return Ok(lift.finish(SolutionSeq {
             schema: l.schema,
-            rows,
+            rows: rows.finish()?,
         }));
     }
     let evaluated = crate::service_endpoints::eval_right_operand(
@@ -2669,9 +2929,9 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
     let Some(r) = lift.absorb(1, evaluated) else {
         return Ok(lift.withheld());
     };
-    let shared = l.schema.shared_columns(&r.schema);
+    let shared = l.schema.shared_columns_admitted(&r.schema, &ctx.growth)?;
 
-    Ok(lift.finish(minus_rows(l, &r, &shared, ctx)))
+    Ok(lift.finish(minus_rows(l, &r, &shared, ctx)?))
 }
 
 // Share the row loop without adding a helper call or frame to the native kernel.
@@ -2682,7 +2942,7 @@ fn minus_rows<D: DatasetView + Sync>(
     r: &SolutionSeq<D::Id>,
     shared: &[(usize, usize)],
     ctx: &EvalCtx<'_, D>,
-) -> SolutionSeq<D::Id> {
+) -> Result<SolutionSeq<D::Id>, EvalError> {
     // Disjoint domains (no shared column): the domain-intersection guard below is
     // `shared.iter().any(..)` over an empty slice, provably `false` for every pair, so
     // no right row can remove anything and the output IS the left bag. Move it
@@ -2690,10 +2950,10 @@ fn minus_rows<D: DatasetView + Sync>(
     // to reach the same answer; `par_retain` performs no governor charge or clock
     // poll (it is a plain filter + clone), so skipping it skips no accounting.
     if shared.is_empty() {
-        return l;
+        return Ok(l);
     }
 
-    let rows = crate::parallel::par_retain(ctx.sequential_operation_required(), &l.rows, |lrow| {
+    let keep = |lrow: &Solution<D::Id>| {
         // Keep the left row unless some right row removes it.
         !r.rows.iter().any(|rrow| {
             compatible(lrow, rrow, shared)
@@ -2701,12 +2961,31 @@ fn minus_rows<D: DatasetView + Sync>(
                     .iter()
                     .any(|&(la, ra)| lrow[la].is_some() && rrow[ra].is_some())
         })
-    });
+    };
+    let rows = if ctx.growth.is_bounded() {
+        let mut output = RowsBuilder::new(&ctx.growth);
+        for row in l.rows {
+            if keep(&row) {
+                output.push_row(row)?;
+            }
+        }
+        output.finish()?
+    } else {
+        let rows =
+            crate::parallel::par_retain(ctx.sequential_operation_required(), &l.rows, |row| {
+                keep(row)
+            });
+        RowsBuilder::from_storage(
+            crate::AdmittedVec::from_parts(rows, None, &ctx.growth),
+            &ctx.growth,
+        )
+        .finish()?
+    };
 
-    SolutionSeq {
+    Ok(SolutionSeq {
         schema: l.schema,
         rows,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -2881,13 +3160,13 @@ mod tests {
             .term_id_by_value(&TermValue::Iri("http://ex/b".to_owned()))
             .expect("right term");
         let left = SolutionSeq {
-            schema: Arc::new(VarSchema::from_vars([Variable::new("left")])),
+            schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("left")])),
             rows: (0..100)
                 .map(|_| purrdf_core::smallvec![Some(SolutionTerm::Existing(left_id))])
                 .collect(),
         };
         let right = SolutionSeq {
-            schema: Arc::new(VarSchema::from_vars([Variable::new("right")])),
+            schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("right")])),
             rows: (0..100)
                 .map(|_| purrdf_core::smallvec![Some(SolutionTerm::Existing(right_id))])
                 .collect(),
@@ -2966,7 +3245,7 @@ mod tests {
     fn sparse_join_bags() -> (SolutionSeq, SolutionSeq) {
         const ROWS: u32 = 21_000;
         let make = |start, end, payload| SolutionSeq {
-            schema: Arc::new(VarSchema::from_vars([
+            schema: VarSchema::shared_resident(VarSchema::from_vars([
                 Variable::new("key"),
                 Variable::new(payload),
             ])),
@@ -2980,7 +3259,7 @@ mod tests {
                 .collect(),
         };
         let mut left = make(ROWS, ROWS * 2, "left");
-        left.rows.push(purrdf_core::smallvec![
+        left.rows.push_resident_fixture(purrdf_core::smallvec![
             Some(SolutionTerm::Existing(TermId::from_index(0))),
             Some(SolutionTerm::Existing(TermId::from_index(0))),
         ]);
@@ -3172,76 +3451,99 @@ mod tests {
 
         // Inner over schema [x]: x=1, x=2, and one wild row (x unbound).
         let inner = SolutionSeq {
-            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
+            schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("x")])),
             rows: vec![
                 purrdf_core::smallvec![t(1)],
                 purrdf_core::smallvec![t(2)],
                 purrdf_core::smallvec![None],
-            ],
+            ]
+            .into(),
         };
         // Probe layout is the FULL outer schema [x, y]; shared = {x} → [(0, 0)].
         let outer = VarSchema::from_vars([Variable::new("x"), Variable::new("y")]);
         let shared = outer.shared_columns(&inner.schema);
         assert_eq!(shared, vec![(0, 0)]);
-        let (keyed, wild) = build_index(&inner, &shared);
+        let workspace = crate::WorkspaceCapability::default();
+        let (keyed, wild) = build_index(&inner, &shared, &workspace).expect("resident index");
         assert_eq!(wild.len(), 1, "the x-unbound inner row is wild");
 
         // Bound probe x=1: exact keyed bucket → match.
-        assert!(probe_has_match(
-            &[t(1), None],
-            &shared,
-            &keyed,
-            &wild,
-            &inner.rows
-        ));
+        assert!(
+            probe_has_match(
+                &[t(1), None],
+                &shared,
+                &keyed,
+                &wild,
+                &inner.rows,
+                &workspace
+            )
+            .expect("resident probe")
+        );
         // Bound probe x=9: no keyed bucket, but the wild inner row matches anything.
-        assert!(probe_has_match(
-            &[t(9), None],
-            &shared,
-            &keyed,
-            &wild,
-            &inner.rows
-        ));
+        assert!(
+            probe_has_match(
+                &[t(9), None],
+                &shared,
+                &keyed,
+                &wild,
+                &inner.rows,
+                &workspace
+            )
+            .expect("resident probe")
+        );
         // Unbound probe (x = None): wildcard → scan branch finds a compatible row.
-        assert!(probe_has_match(
-            &[None, t(5)],
-            &shared,
-            &keyed,
-            &wild,
-            &inner.rows
-        ));
+        assert!(
+            probe_has_match(
+                &[None, t(5)],
+                &shared,
+                &keyed,
+                &wild,
+                &inner.rows,
+                &workspace
+            )
+            .expect("resident probe")
+        );
 
         // Same shape but NO wild inner row, so a keyed miss is a true non-match.
         let inner2 = SolutionSeq {
-            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
-            rows: vec![purrdf_core::smallvec![t(1)], purrdf_core::smallvec![t(2)]],
+            schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("x")])),
+            rows: vec![purrdf_core::smallvec![t(1)], purrdf_core::smallvec![t(2)]].into(),
         };
-        let (keyed2, wild2) = build_index(&inner2, &shared);
-        assert_eq!(wild2, [] as [_; 0]);
+        let (keyed2, wild2) = build_index(&inner2, &shared, &workspace).expect("resident index");
+        assert_eq!(&*wild2, &[] as &[_; 0]);
         assert!(
-            !probe_has_match(&[t(9), None], &shared, &keyed2, &wild2, &inner2.rows),
+            !probe_has_match(
+                &[t(9), None],
+                &shared,
+                &keyed2,
+                &wild2,
+                &inner2.rows,
+                &workspace
+            )
+            .expect("resident probe"),
             "bound probe with no keyed bucket and no wild row does not match"
         );
         // Unbound probe scans a non-empty inner → match; an empty inner → no match.
-        assert!(probe_has_match(
-            &[None, t(5)],
-            &shared,
-            &keyed2,
-            &wild2,
-            &inner2.rows
-        ));
+        assert!(
+            probe_has_match(
+                &[None, t(5)],
+                &shared,
+                &keyed2,
+                &wild2,
+                &inner2.rows,
+                &workspace
+            )
+            .expect("resident probe")
+        );
         let empty = SolutionSeq {
-            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
-            rows: vec![],
+            schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("x")])),
+            rows: vec![].into(),
         };
-        let (ek, ew) = build_index(&empty, &shared);
-        assert!(!probe_has_match(
-            &[None, t(5)],
-            &shared,
-            &ek,
-            &ew,
-            &empty.rows
-        ));
+        let (ek, ew) = build_index(&empty, &shared, &workspace).expect("resident index");
+        assert!(
+            !probe_has_match(&[None, t(5)], &shared, &ek, &ew, &empty.rows, &workspace)
+                .expect("resident probe")
+        );
     }
 
     // ── UNION branch that is only a FILTER (no BGP) ────────────────────────────
@@ -3596,7 +3898,7 @@ mod tests {
         // emitted INSTEAD of the true rows the cut hid, so it is not an upper bound
         // either — the answers `l ⋈ m` past the cut would be missing from a result whose
         // only licence is "absent means definitively not an answer".
-        let empty_right = SolutionSeq::empty(Arc::new(VarSchema::from_vars([
+        let empty_right = SolutionSeq::empty(VarSchema::shared_resident(VarSchema::from_vars([
             Variable::new("y"),
             Variable::new("z"),
         ])));
@@ -3695,7 +3997,7 @@ mod tests {
 
             let mut ctx = EvalCtx::new(&ds);
             let via_entry = eval(&plan, &mut ctx).expect("completion entry point");
-            assert_eq!(via_channel.schema, via_entry.schema);
+            assert_eq!(*via_channel.schema, *via_entry.schema);
             assert_eq!(
                 via_channel.rows, via_entry.rows,
                 "the channel must not change a single row of an ungoverned result"
@@ -3916,7 +4218,7 @@ mod tests {
         // is the same one the sequential body (which never starts the right branch)
         // produces.
         let truncated_left = UnionBranch {
-            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
+            schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("x")])),
             rows: vec!["left-1", "left-2"],
             certificate: Some(crate::governor::lift::Certificate::origin(
                 purrdf_core::TrippedGovernor::Stopped {
@@ -3934,7 +4236,7 @@ mod tests {
             crate::property_fn::ServiceLevel::Undeclared,
         );
         let complete_right = UnionBranch {
-            schema: Arc::new(VarSchema::from_vars([Variable::new("p")])),
+            schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("p")])),
             rows: vec!["right-1", "right-2", "right-3"],
             certificate: None,
             witness: right_witness,
@@ -3964,7 +4266,7 @@ mod tests {
         // And the mirror case: a completed left beside a truncated right keeps both,
         // because the right's partial rows are a genuine suffix of the concatenation.
         let complete_left = UnionBranch {
-            schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
+            schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("x")])),
             rows: vec!["left-1"],
             certificate: None,
             witness: crate::witness::RelationWitness::default(),
@@ -3976,7 +4278,7 @@ mod tests {
             crate::property_fn::ServiceLevel::Undeclared,
         );
         let truncated_right = UnionBranch {
-            schema: Arc::new(VarSchema::from_vars([Variable::new("p")])),
+            schema: VarSchema::shared_resident(VarSchema::from_vars([Variable::new("p")])),
             rows: vec!["right-1"],
             certificate: Some(crate::governor::lift::Certificate::origin(
                 purrdf_core::TrippedGovernor::Stopped {

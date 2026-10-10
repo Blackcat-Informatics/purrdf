@@ -59,7 +59,7 @@
 use std::collections::BTreeMap;
 
 use purrdf_core::TermValue;
-use purrdf_xsd::range::{Cardinality, DataRange, Satisfiability};
+use purrdf_xsd::range::{Cardinality, DataRange, Satisfiability, TermSpace};
 use purrdf_xsd::{XsdDatatype, XsdError, XsdValue};
 
 /// One data range, with everything the tableau asks of it decided once at parse time.
@@ -211,7 +211,7 @@ pub(crate) enum LiteralValue {
     /// the language tag as part of a literal's
     /// identity, so two distinct term ids here denote two distinct values. Value identity is
     /// term identity, and no XSD value is needed to decide it.
-    TermIdentified,
+    TermIdentified(TermSpace),
     /// The lexical form is not in the datatype's lexical space, so the literal denotes NO
     /// value and an ontology that asserts it is inconsistent.
     IllTyped,
@@ -227,13 +227,24 @@ pub(crate) fn literal_value(literal: &TermValue) -> Option<LiteralValue> {
         lexical_form,
         datatype,
         language,
+        direction,
         ..
     } = literal
     else {
         return None;
     };
     if language.is_some() {
-        return Some(LiteralValue::TermIdentified);
+        return Some(LiteralValue::TermIdentified(if direction.is_some() {
+            TermSpace::DirLangString
+        } else {
+            TermSpace::LangString
+        }));
+    }
+    if matches!(
+        datatype.as_str(),
+        purrdf_iri::vocab::rdf::LANG_STRING | purrdf_iri::vocab::rdf::DIR_LANG_STRING
+    ) {
+        return Some(LiteralValue::IllTyped);
     }
     let Some(kind) = XsdDatatype::from_iri(datatype) else {
         return Some(LiteralValue::Unmodelled);
@@ -334,7 +345,7 @@ pub(crate) fn literal_classes_until<E>(
                 }
                 out.class_of.insert(*term, class);
             }
-            LiteralValue::TermIdentified => {
+            LiteralValue::TermIdentified(_) => {
                 out.class_of.insert(*term, next_class);
                 next_class += 1;
             }

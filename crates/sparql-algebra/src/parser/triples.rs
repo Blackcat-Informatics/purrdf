@@ -18,7 +18,7 @@ use crate::algebra::{
 use crate::ast::{
     GroundTerm, GroundTriple, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
 };
-use crate::error::{ParseError, Result};
+use crate::error::Result;
 use crate::lexer::Token;
 use crate::tree::Child;
 use crate::worklist::WorkList;
@@ -60,21 +60,29 @@ enum PredicatePath<'a> {
 /// Certify the whole path before touching parser counters or blocks. Keep the
 /// existing ordered-edge fast path for a linear word. Inversion is an involution
 /// and reverses composition: `^(p/q)` walks `^q` then `^p`.
-fn predicate_path(path: &PropertyPathExpression) -> Option<PredicatePath<'_>> {
+fn predicate_path<'a>(
+    path: &'a PropertyPathExpression,
+    memory: &mut purrdf_lex::allocation::Memory<'_, dyn super::ParserAdmission + '_>,
+) -> Result<Option<PredicatePath<'a>>> {
     let mut pending = WorkList::<_, 16>::with((path, false));
     let mut edges = Vec::new();
     let mut branching = false;
+    let mut supported = true;
     while let Some((path, inverse)) = pending.pop() {
         match path {
             PropertyPathExpression::NamedNode(predicate) => {
                 if !branching {
-                    edges.push(PathEdge { predicate, inverse });
+                    memory.push(&mut edges, PathEdge { predicate, inverse })?;
                 }
             }
-            PropertyPathExpression::Reverse(inner) => pending.push((inner, !inverse)),
+            PropertyPathExpression::Reverse(inner) => {
+                pending.try_push_admitted((inner, !inverse), memory)?;
+            }
             PropertyPathExpression::Sequence(elements) => {
                 let queued = pending.len();
-                pending.extend(elements.iter().map(|element| (element, inverse)));
+                for element in elements {
+                    pending.try_push_admitted((element, inverse), memory)?;
+                }
                 if !inverse {
                     pending.reverse_top(pending.len() - queued);
                 }
@@ -82,24 +90,38 @@ fn predicate_path(path: &PropertyPathExpression) -> Option<PredicatePath<'_>> {
             PropertyPathExpression::Alternative(elements) => {
                 branching = true;
                 edges.clear();
-                pending.extend(elements.iter().map(|element| (element, inverse)));
+                for element in elements {
+                    pending.try_push_admitted((element, inverse), memory)?;
+                }
             }
             PropertyPathExpression::ZeroOrMore(_)
             | PropertyPathExpression::OneOrMore(_)
             | PropertyPathExpression::ZeroOrOne(_)
             | PropertyPathExpression::NegatedPropertySet(_)
             | PropertyPathExpression::Range { .. }
-            | PropertyPathExpression::Wildcard { .. } => return None,
+            | PropertyPathExpression::Wildcard { .. } => {
+                supported = false;
+                break;
+            }
         }
     }
-    Some(if branching {
-        PredicatePath::Branching
+    pending.release_admitted(memory)?;
+    if !supported {
+        memory.release_vec(edges)?;
+        Ok(None)
+    } else if branching {
+        memory.release_vec(edges)?;
+        Ok(Some(PredicatePath::Branching))
     } else {
-        PredicatePath::Linear(edges)
-    })
+        Ok(Some(PredicatePath::Linear(edges)))
+    }
 }
 
 /// One step of the certified predicate path's relational translation.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "path endpoints stay inline in the native worklist, whose full PathTranslation layout is admitted before spill growth; boxing would add a second owner"
+)]
 enum PathTranslation<'a> {
     Path(&'a PropertyPathExpression, bool, TermPattern, TermPattern),
     Sequence(usize),
@@ -115,6 +137,10 @@ pub(super) struct PolState {
 
 /// A triples construct waiting for the node, or the predicate-object list, it handed
 /// over to.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "triples frames stay inline in the native stack, whose exact TFrame array layout is admitted before growth; annotation boxes would add separate allocation owners"
+)]
 pub(super) enum TFrame {
     /// A predicate-object list, waiting for the object of its current verb.
     Object(PolState),
@@ -163,7 +189,7 @@ pub(super) struct PathLevel {
     inverse: bool,
 }
 
-impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
+impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
     // ── the triples machine ─────────────────────────────────────────────────
 
     /// Read one `GraphNode` — a nested blank-node property list, a nested collection, a
@@ -235,8 +261,11 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
             if self.at(&Token::RBracket) {
                 return Err(self.empty_bracket_pair());
             }
-            let node = TermPattern::BlankNode(self.fresh_anon());
-            frames.push(TFrame::PropertyList(node.clone()));
+            let node = TermPattern::BlankNode(self.fresh_anon()?);
+            {
+                let native_value = TFrame::PropertyList(node.clone_with_memory(self.memory)?);
+                self.memory.push(frames, native_value)?;
+            };
             return Ok(TStep::Start(TGoal::PredicateObjectList(SubjectArgs::Term(
                 node,
             ))));
@@ -245,14 +274,17 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
             self.expect(&Token::LParen)?;
             if self.eat(&Token::RParen) {
                 return Ok(TStep::Done(Some(TermPattern::NamedNode(
-                    NamedNode::new_unchecked(RDF_NIL),
+                    self.named_node(RDF_NIL)?,
                 ))));
             }
-            let head = TermPattern::BlankNode(self.fresh_anon());
-            frames.push(TFrame::Collection {
-                cell: head.clone(),
-                head,
-            });
+            let head = TermPattern::BlankNode(self.fresh_anon()?);
+            {
+                let native_value = TFrame::Collection {
+                    cell: head.clone_with_memory(self.memory)?,
+                    head,
+                };
+                self.memory.push(frames, native_value)?;
+            };
             return Ok(TStep::Start(TGoal::Node));
         }
         if self.at(&Token::TripleOpen) {
@@ -269,10 +301,13 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
     fn open_triple_node(&mut self, frames: &mut Vec<TFrame>) -> Result<TStep> {
         self.expect(&Token::TripleOpen)?;
         let is_triple_term = self.eat(&Token::LParen);
-        frames.push(TFrame::TripleNode {
-            is_triple_term,
-            subject: None,
-        });
+        {
+            let native_value = TFrame::TripleNode {
+                is_triple_term,
+                subject: None,
+            };
+            self.memory.push(frames, native_value)?;
+        };
         Ok(TStep::Start(TGoal::Component))
     }
 
@@ -306,21 +341,28 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
     /// in any position (both would emit auxiliary triples a single triple cannot carry);
     /// only the anonymous `[]` (a fresh blank node) is.
     fn start_component(&mut self, frames: &mut Vec<TFrame>) -> Result<TStep> {
-        match self.peek() {
+        match self
+            .tokens
+            .get(self.pos)
+            .and_then(Option::as_ref)
+            .map(|token| &token.token)
+        {
             Some(Token::TripleOpen) => self.open_triple_node(frames),
-            Some(Token::LParen) => Err(ParseError::syntax(
-                "an RDF collection is not allowed inside a triple term or reifying triple",
+            Some(Token::LParen) => Err(super::native_syntax(
+                &"an RDF collection is not allowed inside a triple term or reifying triple",
                 self.span(),
+                self.memory,
             )),
             Some(Token::LBracket) => {
                 self.expect(&Token::LBracket)?;
                 if self.at(&Token::RBracket) {
                     return Err(self.empty_bracket_pair());
                 }
-                Err(ParseError::syntax(
-                    "a populated blank-node property list is not allowed inside a \
+                Err(super::native_syntax(
+                    &"a populated blank-node property list is not allowed inside a \
                      triple term or reifying triple",
                     self.span(),
+                    self.memory,
                 ))
             }
             _ => Ok(TStep::Done(Some(self.parse_term_pattern()?))),
@@ -340,7 +382,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
             // name a property function; a complex path (`p+`, `p1/p2`, `!(…)`, …) never
             // is.
             Some(NamedNodePattern::NamedNode(n)) if self.options.is_property_fn(n.as_str()) => {
-                Verb::PropertyFn(n.as_str().to_owned())
+                Verb::PropertyFn(self.memory.string(n.as_str())?)
             }
             Some(pred) => Verb::Simple(pred),
             None => Verb::Path(path),
@@ -359,25 +401,32 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
         loop {
             let Verb::PropertyFn(iri) = &state.verb else {
                 // The subject must be a term before the object is read.
-                state.subject.as_term(self.span())?;
-                frames.push(TFrame::Object(state));
+                state.subject.as_term(self.span(), self.memory)?;
+                {
+                    let native_value = TFrame::Object(state);
+                    self.memory.push(frames, native_value)?;
+                };
                 return Ok(TStep::Start(TGoal::Node));
             };
             // Both sides are argument VECTORS, captured structurally: an object
             // collection is the call's argument list, not a cons-cell chain, so the
             // `GraphNode` reader is bypassed here.
             let object_args = self.parse_prop_fn_args()?;
-            let subject_args = state.subject.as_args();
-            sink.push_property_function(PropertyFunctionCall {
-                iri: iri.clone(),
-                subject_args,
-                object_args,
-            });
+            let subject_args = state.subject.as_args(self.memory)?;
+            sink.push_property_function(
+                PropertyFunctionCall {
+                    iri: self.memory.string(iri)?,
+                    subject_args,
+                    object_args,
+                },
+                self.memory,
+            )?;
             if self.at(&Token::Tilde) || self.at(&Token::AnnotationOpen) {
-                return Err(ParseError::syntax(
-                    "RDF 1.2 annotation syntax cannot annotate a property-function call \
+                return Err(super::native_syntax(
+                    &"RDF 1.2 annotation syntax cannot annotate a property-function call \
                      (no triple is asserted)",
                     self.span(),
+                    self.memory,
                 ));
             }
             match self.next_object(state)? {
@@ -449,17 +498,20 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
         loop {
             if self.eat(&Token::Tilde) {
                 let reifier = self.parse_reifier_id()?;
-                self.emit_reifies(&reifier, &base, &mut sink.triples);
+                self.emit_reifies(&reifier, &base, &mut sink.triples)?;
                 pending = Some(reifier);
             } else if self.eat(&Token::AnnotationOpen) {
                 let reifier = if let Some(r) = pending.take() {
                     r
                 } else {
-                    let r = TermPattern::BlankNode(self.fresh_anon());
-                    self.emit_reifies(&r, &base, &mut sink.triples);
+                    let r = TermPattern::BlankNode(self.fresh_anon()?);
+                    self.emit_reifies(&r, &base, &mut sink.triples)?;
                     r
                 };
-                frames.push(TFrame::Annotation(state, base));
+                {
+                    let native_value = TFrame::Annotation(state, base);
+                    self.memory.push(frames, native_value)?;
+                };
                 return Ok(TStep::Start(TGoal::PredicateObjectList(SubjectArgs::Term(
                     reifier,
                 ))));
@@ -481,15 +533,21 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
         match frame {
             TFrame::Object(state) => {
                 let object = value.expect("an object is a node");
-                let subject = state.subject.as_term(self.span())?.clone();
+                let subject = state
+                    .subject
+                    .as_term(self.span(), self.memory)?
+                    .clone_with_memory(self.memory)?;
                 match &state.verb {
                     Verb::Simple(pred) => {
                         let pred = pred.clone();
-                        sink.triples.push(TriplePattern {
-                            subject: subject.clone(),
-                            predicate: pred.clone(),
-                            object: object.clone(),
-                        });
+                        {
+                            let native_value = TriplePattern {
+                                subject: subject.clone_with_memory(self.memory)?,
+                                predicate: pred.clone(),
+                                object: object.clone_with_memory(self.memory)?,
+                            };
+                            self.memory.push(&mut sink.triples, native_value)?;
+                        };
                         // RDF 1.2 annotation syntax (`~ reifier`, `{| … |}`) may trail the
                         // object, reifying the triple just asserted.
                         let base = TriplePattern {
@@ -500,22 +558,28 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
                         self.annotations(state, base, None, frames, sink)
                     }
                     Verb::Path(path) => {
-                        let translation = (sink.context == TripleContext::Pattern)
-                            .then(|| predicate_path(path))
-                            .flatten();
+                        let translation = if sink.context == TripleContext::Pattern {
+                            predicate_path(path, self.memory)?
+                        } else {
+                            None
+                        };
                         match translation {
                             Some(PredicatePath::Linear(edges)) => {
-                                self.push_linear_path(subject, &edges, object, &mut sink.triples);
+                                self.push_linear_path(subject, &edges, object, &mut sink.triples)?;
+                                self.memory.release_vec(edges)?;
                             }
                             Some(PredicatePath::Branching) => {
-                                sink.paths
-                                    .push(self.translate_predicate_path(path, subject, object));
+                                let value = self.translate_predicate_path(path, subject, object)?;
+                                self.memory.push(&mut sink.paths, value)?;
                             }
-                            None => sink.paths.push(GraphPattern::Path {
-                                subject,
-                                path: path.clone(),
-                                object,
-                            }),
+                            None => {
+                                let native_value = GraphPattern::Path {
+                                    subject,
+                                    path: path.clone_with_memory(self.memory)?,
+                                    object,
+                                };
+                                self.memory.push(&mut sink.paths, native_value)?;
+                            }
                         }
                         self.continue_objects(state, frames, sink)
                     }
@@ -534,30 +598,42 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
             }
             TFrame::Collection { head, cell } => {
                 let element = value.expect("a collection element is a node");
-                sink.triples.push(TriplePattern {
-                    subject: cell.clone(),
-                    predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_FIRST)),
-                    object: element,
-                });
-                let rest = NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_REST));
+                {
+                    let native_value = TriplePattern {
+                        subject: cell.clone_with_memory(self.memory)?,
+                        predicate: NamedNodePattern::NamedNode(self.named_node(RDF_FIRST)?),
+                        object: element,
+                    };
+                    self.memory.push(&mut sink.triples, native_value)?;
+                };
+                let rest = NamedNodePattern::NamedNode(self.named_node(RDF_REST)?);
                 if self.at(&Token::RParen) {
                     // Last element: terminate the chain with rdf:nil.
-                    sink.triples.push(TriplePattern {
-                        subject: cell,
-                        predicate: rest,
-                        object: TermPattern::NamedNode(NamedNode::new_unchecked(RDF_NIL)),
-                    });
+                    {
+                        let native_value = TriplePattern {
+                            subject: cell,
+                            predicate: rest,
+                            object: TermPattern::NamedNode(self.named_node(RDF_NIL)?),
+                        };
+                        self.memory.push(&mut sink.triples, native_value)?;
+                    };
                     self.expect(&Token::RParen)?;
                     return Ok(TStep::Done(Some(head)));
                 }
                 // Another element follows: link to a fresh tail cell.
-                let next = TermPattern::BlankNode(self.fresh_anon());
-                sink.triples.push(TriplePattern {
-                    subject: cell,
-                    predicate: rest,
-                    object: next.clone(),
-                });
-                frames.push(TFrame::Collection { head, cell: next });
+                let next = TermPattern::BlankNode(self.fresh_anon()?);
+                {
+                    let native_value = TriplePattern {
+                        subject: cell,
+                        predicate: rest,
+                        object: next.clone_with_memory(self.memory)?,
+                    };
+                    self.memory.push(&mut sink.triples, native_value)?;
+                };
+                {
+                    let native_value = TFrame::Collection { head, cell: next };
+                    self.memory.push(frames, native_value)?;
+                };
                 Ok(TStep::Start(TGoal::Node))
             }
             TFrame::TripleNode {
@@ -566,10 +642,13 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
             } => {
                 let subject = value.expect("a triple node's subject is a node");
                 let predicate = self.parse_predicate_name()?;
-                frames.push(TFrame::TripleNode {
-                    is_triple_term,
-                    subject: Some((subject, predicate)),
-                });
+                {
+                    let native_value = TFrame::TripleNode {
+                        is_triple_term,
+                        subject: Some((subject, predicate)),
+                    };
+                    self.memory.push(frames, native_value)?;
+                };
                 Ok(TStep::Start(TGoal::Component))
             }
             TFrame::TripleNode {
@@ -584,16 +663,19 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
                 if is_triple_term {
                     self.expect(&Token::RParen)?;
                     self.expect(&Token::TripleClose)?;
-                    return Ok(TStep::Done(Some(TermPattern::Triple(Child::new(inner)))));
+                    return Ok(TStep::Done(Some(TermPattern::Triple(Child::try_new(
+                        inner,
+                        self.memory,
+                    )?))));
                 }
                 // Reifying triple: optional `~ reifier`, else a fresh blank reifier.
                 let reifier = if self.eat(&Token::Tilde) {
                     self.parse_reifier_id()?
                 } else {
-                    TermPattern::BlankNode(self.fresh_anon())
+                    TermPattern::BlankNode(self.fresh_anon()?)
                 };
                 self.expect(&Token::TripleClose)?;
-                self.emit_reifies(&reifier, &inner, &mut sink.triples);
+                self.emit_reifies(&reifier, &inner, &mut sink.triples)?;
                 Ok(TStep::Done(Some(reifier)))
             }
         }
@@ -608,16 +690,29 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
         edges: &[PathEdge<'_>],
         object: TermPattern,
         triples: &mut Vec<TriplePattern>,
-    ) {
+    ) -> Result<()> {
         let (last, prefix) = edges.split_last().expect("a linear path has an IRI leaf");
-        triples.reserve(edges.len());
+        self.memory.reserve(
+            triples,
+            triples
+                .len()
+                .checked_add(edges.len())
+                .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?,
+        )?;
         let mut current = subject;
         for edge in prefix {
-            let next = TermPattern::BlankNode(self.fresh_anon());
-            triples.push(edge.triple(current, next.clone()));
+            let next = TermPattern::BlankNode(self.fresh_anon()?);
+            {
+                let native_value = edge.triple(current, next.clone_with_memory(self.memory)?);
+                self.memory.push(triples, native_value)?;
+            };
             current = next;
         }
-        triples.push(last.triple(current, object));
+        {
+            let native_value = last.triple(current, object);
+            self.memory.push(triples, native_value)?;
+        };
+        Ok(())
     }
 
     /// Translate a certified predicate-only path as compact joins and bag unions
@@ -629,7 +724,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
         path: &PropertyPathExpression,
         subject: TermPattern,
         object: TermPattern,
-    ) -> GraphPattern {
+    ) -> Result<GraphPattern> {
         let mut pending =
             WorkList::<_, 16>::with(PathTranslation::Path(path, false, subject, object));
         let mut results = Vec::new();
@@ -637,59 +732,92 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
             match step {
                 PathTranslation::Path(path, inverse, subject, object) => match path {
                     PropertyPathExpression::NamedNode(predicate) => {
-                        results.push(GraphPattern::Bgp {
-                            patterns: vec![PathEdge { predicate, inverse }.triple(subject, object)],
-                        });
+                        {
+                            let native_value = GraphPattern::Bgp {
+                                patterns: self.memory.collect([
+                                    PathEdge { predicate, inverse }.triple(subject, object)
+                                ])?,
+                            };
+                            self.memory.push(&mut results, native_value)?;
+                        };
                     }
                     PropertyPathExpression::Reverse(inner) => {
-                        pending.push(PathTranslation::Path(inner, !inverse, subject, object));
+                        {
+                            let native_value =
+                                PathTranslation::Path(inner, !inverse, subject, object);
+                            pending.try_push_admitted(native_value, self.memory)?;
+                        };
                     }
                     PropertyPathExpression::Sequence(elements) => {
-                        pending.push(PathTranslation::Sequence(elements.len()));
+                        {
+                            let native_value = PathTranslation::Sequence(elements.len());
+                            pending.try_push_admitted(native_value, self.memory)?;
+                        };
                         let first = pending.len();
                         let mut current = subject;
                         for index in 0..elements.len() {
                             let next = if index + 1 == elements.len() {
-                                object.clone()
+                                object.clone_with_memory(self.memory)?
                             } else {
-                                TermPattern::BlankNode(self.fresh_anon())
+                                TermPattern::BlankNode(self.fresh_anon()?)
                             };
                             let element = &elements[if inverse {
                                 elements.len() - index - 1
                             } else {
                                 index
                             }];
-                            pending.push(PathTranslation::Path(
-                                element,
-                                inverse,
-                                current,
-                                next.clone(),
-                            ));
+                            {
+                                let native_value = PathTranslation::Path(
+                                    element,
+                                    inverse,
+                                    current,
+                                    next.clone_with_memory(self.memory)?,
+                                );
+                                pending.try_push_admitted(native_value, self.memory)?;
+                            };
                             current = next;
                         }
                         pending.reverse_top(pending.len() - first);
                     }
                     PropertyPathExpression::Alternative(elements) => {
-                        pending.push(PathTranslation::Alternative(elements.len()));
-                        pending.extend(elements.iter().rev().map(|element| {
-                            PathTranslation::Path(element, inverse, subject.clone(), object.clone())
-                        }));
+                        {
+                            let native_value = PathTranslation::Alternative(elements.len());
+                            pending.try_push_admitted(native_value, self.memory)?;
+                        };
+                        for element in elements.iter().rev() {
+                            let item = PathTranslation::Path(
+                                element,
+                                inverse,
+                                subject.clone_with_memory(self.memory)?,
+                                object.clone_with_memory(self.memory)?,
+                            );
+                            pending.try_push_admitted(item, self.memory)?;
+                        }
                     }
                     _ => unreachable!("the whole path was certified before translation"),
                 },
                 PathTranslation::Sequence(count) | PathTranslation::Alternative(count) => {
-                    let parts = results.split_off(results.len() - count);
+                    let first = results.len() - count;
+                    let mut parts = results.drain(first..);
+                    let mut result = parts
+                        .next()
+                        .expect("a path chain has at least two elements");
                     let alternative = matches!(step, PathTranslation::Alternative(_));
-                    let result = parts.into_iter().reduce(if alternative {
-                        GraphPattern::union
-                    } else {
-                        super::join
-                    });
-                    results.push(result.expect("a path chain has at least two elements"));
+                    for part in parts {
+                        result = if alternative {
+                            GraphPattern::union_with_memory(result, part, self.memory)?
+                        } else {
+                            super::join_with_memory(result, part, self.memory)?
+                        };
+                    }
+                    self.memory.push(&mut results, result)?;
                 }
             }
         }
-        results.pop().expect("the path has a predicate leaf")
+        let result = results.pop().expect("the path has a predicate leaf");
+        self.memory.release_vec(results)?;
+        pending.release_admitted(self.memory)?;
+        Ok(result)
     }
 
     // ── property paths (§18.1.7 / §9) ────────────────────────────────────────
@@ -723,15 +851,23 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
             let mut value =
                 if self.peek_kw("a") && matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
                     self.pos += 1;
-                    PropertyPathExpression::NamedNode(NamedNode::new_unchecked(RDF_TYPE))
+                    PropertyPathExpression::NamedNode(self.named_node(RDF_TYPE)?)
                 } else {
-                    match self.peek() {
+                    match self
+                        .tokens
+                        .get(self.pos)
+                        .and_then(Option::as_ref)
+                        .map(|token| &token.token)
+                    {
                         Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
                             PropertyPathExpression::NamedNode(self.expect_iri_node()?)
                         }
                         Some(Token::LParen) => {
                             self.pos += 1;
-                            levels.push(std::mem::take(&mut level));
+                            {
+                                let native_value = std::mem::take(&mut level);
+                                self.memory.push(levels, native_value)?;
+                            };
                             continue 'element;
                         }
                         Some(Token::Bang) => {
@@ -739,26 +875,32 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
                             self.parse_negated_property_set()?
                         }
                         other => {
-                            return Err(ParseError::syntax(
-                                format!("expected a property path, found {other:?}"),
+                            return Err(super::native_syntax(
+                                &format_args!("expected a property path, found {other:?}"),
                                 self.span(),
+                                self.memory,
                             ));
                         }
                     }
                 };
             loop {
-                value = match self.peek() {
+                value = match self
+                    .tokens
+                    .get(self.pos)
+                    .and_then(Option::as_ref)
+                    .map(|token| &token.token)
+                {
                     Some(Token::Star) => {
                         self.pos += 1;
-                        PropertyPathExpression::ZeroOrMore(Child::new(value))
+                        PropertyPathExpression::ZeroOrMore(Child::try_new(value, self.memory)?)
                     }
                     Some(Token::Plus) => {
                         self.pos += 1;
-                        PropertyPathExpression::OneOrMore(Child::new(value))
+                        PropertyPathExpression::OneOrMore(Child::try_new(value, self.memory)?)
                     }
                     Some(Token::Question) => {
                         self.pos += 1;
-                        PropertyPathExpression::ZeroOrOne(Child::new(value))
+                        PropertyPathExpression::ZeroOrOne(Child::try_new(value, self.memory)?)
                     }
                     // `{n}` / `{n,}` / `{n,m}` / `{,m}` — bounded repetition (a PurRDF
                     // extension beyond SPARQL 1.1 §9; symmetric parse for the serializer).
@@ -766,11 +908,13 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
                     _ => value,
                 };
                 if level.inverse {
-                    value = PropertyPathExpression::Reverse(Child::new(value));
+                    value = PropertyPathExpression::Reverse(Child::try_new(value, self.memory)?);
                 }
                 level.sequence = Some(match level.sequence.take() {
                     None => value,
-                    Some(left) => PropertyPathExpression::sequence(left, value),
+                    Some(left) => {
+                        PropertyPathExpression::sequence_with_memory(left, value, self.memory)?
+                    }
                 });
                 if self.eat(&Token::Slash) {
                     continue 'element;
@@ -781,7 +925,11 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
                     .expect("a sequence holds the element just read");
                 level.alternative = Some(match level.alternative.take() {
                     None => sequence,
-                    Some(left) => PropertyPathExpression::alternative(left, sequence),
+                    Some(left) => PropertyPathExpression::alternative_with_memory(
+                        left,
+                        sequence,
+                        self.memory,
+                    )?,
                 });
                 if self.eat(&Token::Pipe) {
                     continue 'element;
@@ -817,9 +965,10 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
         let (min, max) = if has_comma {
             // `{,}` — both bounds absent — is a silent-degrade to `*`; hard-fail instead.
             if lower.is_none() && upper.is_none() {
-                return Err(ParseError::syntax(
-                    "empty path range {,} is not allowed (use * for zero-or-more)",
+                return Err(super::native_syntax(
+                    &"empty path range {,} is not allowed (use * for zero-or-more)",
                     self.span(),
+                    self.memory,
                 ));
             }
             // `{n,}` / `{n,m}` / `{,m}` (missing lower ⇒ 0).
@@ -829,9 +978,10 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
             match lower {
                 Some(n) => (n, Some(n)),
                 None => {
-                    return Err(ParseError::syntax(
-                        "empty path range {} is not allowed",
+                    return Err(super::native_syntax(
+                        &"empty path range {} is not allowed",
                         self.span(),
+                        self.memory,
                     ));
                 }
             }
@@ -839,13 +989,14 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
         if let Some(m) = max
             && min > m
         {
-            return Err(ParseError::syntax(
-                format!("path range lower bound {min} exceeds upper bound {m}"),
+            return Err(super::native_syntax(
+                &format_args!("path range lower bound {min} exceeds upper bound {m}"),
                 self.span(),
+                self.memory,
             ));
         }
         Ok(PropertyPathExpression::Range {
-            inner: Child::new(primary),
+            inner: Child::try_new(primary, self.memory)?,
             min,
             max,
         })
@@ -864,9 +1015,10 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
                 self.pos += 1;
                 Ok(Some(n))
             }
-            Err(_) => Err(ParseError::syntax(
-                format!("path range bound {lex:?} is not a valid u32"),
+            Err(_) => Err(super::native_syntax(
+                &format_args!("path range bound {lex:?} is not a valid u32"),
                 self.span(),
+                self.memory,
             )),
         }
     }
@@ -875,14 +1027,20 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
         let mut nodes = Vec::new();
         if self.eat(&Token::LParen) {
             loop {
-                nodes.push(self.parse_path_one_in_set()?);
+                {
+                    let native_value = self.parse_path_one_in_set()?;
+                    self.memory.push(&mut nodes, native_value)?;
+                };
                 if !self.eat(&Token::Pipe) {
                     break;
                 }
             }
             self.expect(&Token::RParen)?;
         } else {
-            nodes.push(self.parse_path_one_in_set()?);
+            {
+                let native_value = self.parse_path_one_in_set()?;
+                self.memory.push(&mut nodes, native_value)?;
+            };
         }
         Ok(PropertyPathExpression::NegatedPropertySet(nodes))
     }
@@ -896,7 +1054,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
         if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
             self.pos += 1;
             return Ok(NegatedPathElement {
-                predicate: NamedNode::new_unchecked(RDF_TYPE),
+                predicate: self.named_node(RDF_TYPE)?,
                 inverse,
             });
         }
@@ -918,13 +1076,17 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
                 if self.at(&Token::TripleOpen) {
                     self.expect(&Token::TripleOpen)?;
                     let parens = self.eat(&Token::LParen);
-                    open.push((parens, None));
+                    {
+                        let native_value = (parens, None);
+                        self.memory.push(&mut open, native_value)?;
+                    };
                     continue;
                 }
                 break self.parse_plain_term()?;
             };
             loop {
                 let Some((parens, subject)) = open.last_mut() else {
+                    self.memory.release_vec(open)?;
                     return Ok(term);
                 };
                 let parens = *parens;
@@ -940,11 +1102,14 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
                             self.expect(&Token::RParen)?;
                         }
                         self.expect(&Token::TripleClose)?;
-                        term = TermPattern::Triple(Child::new(TriplePattern {
-                            subject,
-                            predicate,
-                            object: term,
-                        }));
+                        term = TermPattern::Triple(Child::try_new(
+                            TriplePattern {
+                                subject,
+                                predicate,
+                                object: term,
+                            },
+                            self.memory,
+                        )?);
                     }
                 }
             }
@@ -953,7 +1118,12 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
 
     /// A term that is not a quoted triple.
     fn parse_plain_term(&mut self) -> Result<TermPattern> {
-        match self.peek() {
+        match self
+            .tokens
+            .get(self.pos)
+            .and_then(Option::as_ref)
+            .map(|token| &token.token)
+        {
             Some(Token::Variable(_)) => Ok(TermPattern::Variable(self.expect_var()?)),
             Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
                 Ok(TermPattern::NamedNode(self.expect_iri_node()?))
@@ -967,7 +1137,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
             }
             Some(Token::Anon) => {
                 self.pos += 1;
-                Ok(TermPattern::BlankNode(self.fresh_anon()))
+                Ok(TermPattern::BlankNode(self.fresh_anon()?))
             }
             Some(
                 Token::StringLit(_)
@@ -981,9 +1151,10 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
             Some(Token::Word(w)) if super::boolean_keyword(w).is_some() => {
                 Ok(TermPattern::Literal(self.parse_literal()?))
             }
-            other => Err(ParseError::syntax(
-                format!("expected an RDF term, found {other:?}"),
+            other => Err(super::native_syntax(
+                &format_args!("expected an RDF term, found {other:?}"),
                 self.span(),
+                self.memory,
             )),
         }
     }
@@ -995,14 +1166,22 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
         let mut open: Vec<(bool, Option<(GroundTerm, NamedNode)>)> = Vec::new();
         loop {
             let mut term = loop {
-                match self.peek() {
+                match self
+                    .tokens
+                    .get(self.pos)
+                    .and_then(Option::as_ref)
+                    .map(|token| &token.token)
+                {
                     Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
                         break GroundTerm::NamedNode(self.expect_iri_node()?);
                     }
                     Some(Token::TripleOpen) => {
                         self.expect(&Token::TripleOpen)?;
                         let parens = self.eat(&Token::LParen);
-                        open.push((parens, None));
+                        {
+                            let native_value = (parens, None);
+                            self.memory.push(&mut open, native_value)?;
+                        };
                     }
                     // Every other legal ground term — a string, a boolean, or a numeral
                     // (optionally signed: `-1`, `+0.5`) — is `parse_literal`'s grammar;
@@ -1012,23 +1191,25 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
             };
             loop {
                 let Some((parens, subject)) = open.last_mut() else {
+                    self.memory.release_vec(open)?;
                     return Ok(term);
                 };
                 let parens = *parens;
                 match subject.take() {
                     None => {
                         if matches!(term, GroundTerm::Triple(_) | GroundTerm::Literal(_)) {
-                            return Err(ParseError::syntax(
-                                "a literal or nested triple term may not be the subject of a \
+                            return Err(super::native_syntax(
+                                &"a literal or nested triple term may not be the subject of a \
                                  triple term",
                                 self.span(),
+                                self.memory,
                             ));
                         }
                         // The predicate is an IRI or the `a` keyword (rdf:type).
                         let predicate = if matches!(self.peek(), Some(Token::Word(w)) if *w == "a")
                         {
                             self.pos += 1;
-                            NamedNode::new_unchecked(RDF_TYPE)
+                            self.named_node(RDF_TYPE)?
                         } else {
                             self.expect_iri_node()?
                         };
@@ -1041,11 +1222,14 @@ impl<const RDFLIB: bool> Parser<'_, '_, RDFLIB> {
                             self.expect(&Token::RParen)?;
                         }
                         self.expect(&Token::TripleClose)?;
-                        term = GroundTerm::Triple(Child::new(GroundTriple {
-                            subject,
-                            predicate,
-                            object: term,
-                        }));
+                        term = GroundTerm::Triple(Child::try_new(
+                            GroundTriple {
+                                subject,
+                                predicate,
+                                object: term,
+                            },
+                            self.memory,
+                        )?);
                     }
                 }
             }

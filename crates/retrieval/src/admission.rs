@@ -658,7 +658,15 @@ impl ProbedDepth {
     /// registry says either. The registry's own declared row bound is a third,
     /// separate dimension, decided by the caller once it holds one of these.
     pub(crate) const fn checked(depth: u32) -> Result<Self, Unprobeable> {
-        if depth == 0 {
+        Self::checked_for(depth, false)
+    }
+
+    pub(crate) const fn checked_work(depth: u32) -> Result<Self, Unprobeable> {
+        Self::checked_for(depth, true)
+    }
+
+    const fn checked_for(depth: u32, allow_zero: bool) -> Result<Self, Unprobeable> {
+        if depth == 0 && !allow_zero {
             return Err(Unprobeable::Zero);
         }
         if depth > MAX_READ_DEPTH {
@@ -676,8 +684,8 @@ impl ProbedDepth {
     /// refused here came from a plan that was hand-built or edited, whatever the
     /// registry says about that stratum. The refusals name that stratum because the
     /// value belongs to the plan in hand and a caller has to be able to find it.
-    fn admit(depth: u32, stratum: &Iri) -> Result<Self, AdmissionError> {
-        Self::checked(depth).map_err(|reason| match reason {
+    fn admit_for(depth: u32, stratum: &Iri, allow_zero: bool) -> Result<Self, AdmissionError> {
+        Self::checked_for(depth, allow_zero).map_err(|reason| match reason {
             Unprobeable::Zero => AdmissionError::ZeroDepth {
                 stratum: Box::new(stratum.clone()),
             },
@@ -1015,7 +1023,7 @@ pub(crate) fn declared_row_bound(
 /// A descriptor that is absent, or present with no ranked declaration, accepts
 /// nothing: a relation that declares nothing is read back as nothing, and the
 /// binding loop further down refuses a plan that binds such a producer anyway.
-fn accepted_request_terms(plan: &Plan, descriptor: Option<&PfDescriptor>) -> Vec<u32> {
+fn accepted_request_terms(plan: ReadPlan<'_>, descriptor: Option<&PfDescriptor>) -> Vec<u32> {
     let Some(declaration) = descriptor.and_then(|descriptor| descriptor.ranked.as_ref()) else {
         return Vec::new();
     };
@@ -1047,7 +1055,7 @@ fn accepted_request_terms(plan: &Plan, descriptor: Option<&PfDescriptor>) -> Vec
 ///
 /// The rule is [`carries_content`] — the planner's own, called here rather than
 /// restated.
-fn carried_request_terms(plan: &Plan, descriptor: Option<&PfDescriptor>) -> Vec<u32> {
+fn carried_request_terms(plan: ReadPlan<'_>, descriptor: Option<&PfDescriptor>) -> Vec<u32> {
     let Some(declaration) = descriptor.and_then(|descriptor| descriptor.ranked.as_ref()) else {
         return Vec::new();
     };
@@ -1109,14 +1117,96 @@ fn describe(registry: &PropertyFunctionRegistry) -> Result<Vec<PfDescriptor>, Ad
 /// revision, mandatory producers and their bindings, then per-stratum depth
 /// bounds. The first violated dimension is returned; admission does not
 /// accumulate refusals.
+/// The original admission facts, borrowed from either typed planning route.
+#[derive(Clone, Copy)]
+struct ReadPlan<'a> {
+    version: u16,
+    expected_version: u16,
+    request_terms: &'a [crate::request::RequestTerm],
+    producer_bindings: &'a [ProducerBinding],
+    unserved_terms: &'a [crate::plan::UnservedTerm],
+    stratum_depths: &'a purrdf_core::FastMap<Iri, u32>,
+    statistics_snapshot: &'a crate::plan::StatisticsSnapshot,
+    registry_instance_id: RegistryId,
+    registry_content_fingerprint: &'a str,
+    origin: PlanOrigin,
+    candidate_depths: bool,
+}
+
 pub(crate) fn admit_plan<'a>(
     plan: &'a Plan,
+    env: &AdmissionEnvironment<'_>,
+) -> Result<AdmittedRegistry<'a>, AdmissionError> {
+    admit_read(
+        ReadPlan {
+            version: plan.version,
+            expected_version: PLAN_VERSION,
+            request_terms: &plan.request_terms,
+            producer_bindings: &plan.producer_bindings,
+            unserved_terms: &plan.unserved_terms,
+            stratum_depths: &plan.stratum_depths,
+            statistics_snapshot: &plan.statistics_snapshot,
+            registry_instance_id: plan.registry_instance_id,
+            registry_content_fingerprint: &plan.registry_content_fingerprint,
+            origin: plan.origin,
+            candidate_depths: false,
+        },
+        env,
+    )
+}
+
+/// Admit caller work depths without treating a declaration as the request.
+///
+/// The same producer/mode declaration still constrains actual emitted rows.
+/// A self-bounding producer can stop before the requested prefix; its ending
+/// then remains RowBoundReached rather than a certified exhaustion.
+pub(crate) fn admit_candidates<'a>(
+    plan: &'a crate::candidate::CandidatePlan,
+    env: &AdmissionEnvironment<'_>,
+) -> Result<AdmittedRegistry<'a>, AdmissionError> {
+    let parts = &plan.parts;
+    let admitted = admit_read(
+        ReadPlan {
+            version: crate::candidate::CandidatePlan::VERSION,
+            expected_version: crate::candidate::CandidatePlan::VERSION,
+            request_terms: &parts.request_terms,
+            producer_bindings: &parts.producer_bindings,
+            unserved_terms: &parts.unserved_terms,
+            stratum_depths: &parts.stratum_depths,
+            statistics_snapshot: &parts.statistics_snapshot,
+            registry_instance_id: parts.registry_instance_id,
+            registry_content_fingerprint: &parts.registry_content_fingerprint,
+            origin: parts.origin,
+            candidate_depths: true,
+        },
+        env,
+    )?;
+    for (stratum, rows) in &parts.declared_rows {
+        if admitted
+            .stratum_row_bounds
+            .get(stratum)
+            .copied()
+            .and_then(RowBound::rows)
+            != Some(*rows)
+        {
+            return Err(AdmissionError::MalformedPlan {
+                reason: format!(
+                    "candidate stratum {stratum} records row declaration {rows} that its actual invocation does not declare"
+                ),
+            });
+        }
+    }
+    Ok(admitted)
+}
+
+fn admit_read<'a>(
+    plan: ReadPlan<'a>,
     env: &AdmissionEnvironment<'_>,
 ) -> Result<AdmittedRegistry<'a>, AdmissionError> {
     // 1. The plan's layout version must be one this build writes. A plan read
     //    from JSON bypasses `from_canonical_bytes`'s own gate, so it is
     //    re-checked here rather than assumed.
-    if plan.version != PLAN_VERSION {
+    if plan.version != plan.expected_version {
         return Err(AdmissionError::InvalidPlanVersion {
             version: plan.version,
         });
@@ -1133,7 +1223,7 @@ pub(crate) fn admit_plan<'a>(
             })?;
     if plan.registry_content_fingerprint != fingerprint {
         return Err(AdmissionError::RegistryFingerprintMismatch {
-            expected: plan.registry_content_fingerprint.clone(),
+            expected: plan.registry_content_fingerprint.to_owned(),
             got: fingerprint,
         });
     }
@@ -1261,7 +1351,7 @@ pub(crate) fn admit_plan<'a>(
     // anywhere saying so. That is the silent narrowing this waist exists to
     // prevent, so the implication is enforced in both directions — the loop
     // below refuses a binding with no depth, and the depth loop further down
-    // refuses a depth that exceeds what the registry declared.
+    // checks its actual invocation declaration under the selected depth policy.
     //
     // The single-binding rule is the plan-side face of the registry's own: the
     // seam refuses a stratum a second producer declares, and the reason —
@@ -1284,7 +1374,7 @@ pub(crate) fn admit_plan<'a>(
     // the one the depth's own refusal would otherwise be derived from.
     let mut stratum_bindings: BTreeMap<Iri, &ProducerBinding> = BTreeMap::new();
     let mut stratum_invocations: BTreeMap<Iri, Invocation> = BTreeMap::new();
-    for binding in &plan.producer_bindings {
+    for binding in plan.producer_bindings {
         let Some(descriptor) = descriptors.get(&binding.producer) else {
             return Err(AdmissionError::MalformedPlan {
                 reason: format!(
@@ -1369,7 +1459,7 @@ pub(crate) fn admit_plan<'a>(
             &binding.producer,
             descriptor,
             declaration,
-            &plan.request_terms,
+            plan.request_terms,
             &binding.request_terms,
         )
         .map_err(|error| unsatisfiable(binding, &error))?;
@@ -1403,7 +1493,7 @@ pub(crate) fn admit_plan<'a>(
     // from the bindings in hand, so the answer reports it regardless of what the
     // list says.
     let mut seen_unserved: BTreeSet<u32> = BTreeSet::new();
-    for entry in &plan.unserved_terms {
+    for entry in plan.unserved_terms {
         if entry.request_term as usize >= plan.request_terms.len() {
             return Err(AdmissionError::MalformedPlan {
                 reason: format!(
@@ -1435,29 +1525,17 @@ pub(crate) fn admit_plan<'a>(
         }
     }
 
-    // 7. Per-stratum depth bounds, from three sides. A recorded depth may be
-    //    lower than the registry's declared row bound (statistics narrow a read)
-    //    and never higher; it may never be zero, because a read of nothing is not
-    //    a read; and it may never be so deep that the emitted bound cannot carry
-    //    the probe row that says how the read ended, because a read whose ending
-    //    nobody could observe must not be reported as an exhaustion.
-    //
-    //    The first is the registry's dimension and is decided here. The other two
-    //    are properties of the depth alone — a zero reads nothing whatever the
-    //    registry declared, and an unprobeable depth cannot report its ending
-    //    whatever the registry declared — so they are `ProbedDepth::admit`'s, and
-    //    the type it returns is what the compiler emits from.
-    //
-    //    The registry's dimension is decided against the declaration read at the mode
-    //    the plan's own binding will be invoked under, which is the mode placement
-    //    derived above. Read at the widest mode instead — which is what taking the
-    //    maximum over the declared modes did — a depth of nine was admitted for an
-    //    invocation whose mode declared three, because a second, larger mode existed on
-    //    the same producer.
+    // 7. The original fused-depth policy refuses zero and depths beyond the
+    // invocation declaration. Independent candidate depths instead describe the
+    // caller's work request: zero is an explicit empty prefix and a declaration
+    // below the request is retained as a possible shortfall, never used to clamp
+    // the request. Both policies require a checked, expressible probe slot.
+    // The same actual placement/mode lookup below supplies every unit's row
+    // declaration, so runtime cap/breach evidence remains truthful in both paths.
     let mut admitted_depths: BTreeMap<Iri, ProbedDepth> = BTreeMap::new();
     let mut stratum_row_bounds: BTreeMap<Iri, RowBound> = BTreeMap::new();
-    for (stratum, depth) in &plan.stratum_depths {
-        let depth = ProbedDepth::admit(*depth, stratum)?;
+    for (stratum, depth) in plan.stratum_depths {
+        let depth = ProbedDepth::admit_for(*depth, stratum, plan.candidate_depths)?;
         // Recorded before the registry's own dimension is decided, because the
         // `Undeclared` arm below leaves this loop without reaching its end and the
         // compiler emits one unit per entry of this map: a stratum missing from it
@@ -1510,7 +1588,7 @@ pub(crate) fn admit_plan<'a>(
             // zero-depth case above already returned.
             None => 0,
         };
-        if u64::from(depth.get()) > declared {
+        if (!plan.candidate_depths || bound.is_none()) && u64::from(depth.get()) > declared {
             return Err(AdmissionError::DepthBoundViolation {
                 stratum: Box::new(stratum.clone()),
                 declared: u32::try_from(declared).unwrap_or(u32::MAX),

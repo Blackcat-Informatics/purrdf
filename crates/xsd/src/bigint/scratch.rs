@@ -33,6 +33,8 @@ pub enum LimbScratchError {
     },
     /// Arena sizing overflows the platform's addressable storage.
     SizeOverflow,
+    /// The allocator refused an explicitly fallible native destination.
+    AllocationFailed,
 }
 
 impl fmt::Display for LimbScratchError {
@@ -57,6 +59,7 @@ impl fmt::Display for LimbScratchError {
                 "cannot replace integer scratch while {held_destinations} of {destinations} destinations are held"
             ),
             Self::SizeOverflow => f.write_str("integer scratch sizing overflow"),
+            Self::AllocationFailed => f.write_str("integer destination allocation failed"),
         }
     }
 }
@@ -249,6 +252,11 @@ impl Drop for Pooled {
 pub(crate) trait Allocate {
     fn destination(&self, capacity: usize, length: usize) -> Result<Mag, LimbScratchError>;
 
+    fn push(&self, destination: &mut Mag, word: u64) -> Result<(), LimbScratchError> {
+        destination.push(word);
+        Ok(())
+    }
+
     fn copy(&self, words: &[u64]) -> Result<Mag, LimbScratchError> {
         let mut result = self.destination(words.len(), words.len())?;
         result.copy_from_slice(words);
@@ -268,6 +276,53 @@ impl Allocate for Unbounded {
         let mut result = Mag::with_capacity(capacity);
         result.resize(length, 0);
         Ok(result)
+    }
+}
+
+pub(crate) struct Fallible;
+impl Allocate for Fallible {
+    fn destination(&self, capacity: usize, length: usize) -> Result<Mag, LimbScratchError> {
+        if length > capacity {
+            return Err(LimbScratchError::SizeOverflow);
+        }
+        std::alloc::Layout::array::<u64>(capacity).map_err(|_| LimbScratchError::SizeOverflow)?;
+        if capacity <= 4 && length <= 3 {
+            let mut result = Mag::new();
+            result.resize(length, 0);
+            return Ok(result);
+        }
+        let mut words = Vec::new();
+        words
+            .try_reserve_exact(capacity)
+            .map_err(|_| LimbScratchError::AllocationFailed)?;
+        words.resize(length, 0);
+        Ok(Mag::Heap(words))
+    }
+
+    fn push(&self, destination: &mut Mag, word: u64) -> Result<(), LimbScratchError> {
+        match destination {
+            Mag::Inline { words, length } if length.get() == 4 => {
+                let mut heap = Vec::new();
+                heap.try_reserve_exact(4)
+                    .map_err(|_| LimbScratchError::AllocationFailed)?;
+                heap.extend_from_slice(words);
+                heap.push(word);
+                *destination = Mag::Heap(heap);
+            }
+            Mag::Heap(words) => {
+                if words.len() == words.capacity() {
+                    words
+                        .try_reserve_exact(1)
+                        .map_err(|_| LimbScratchError::AllocationFailed)?;
+                }
+                words.push(word);
+            }
+            Mag::Inline { .. } => destination.push(word),
+            Mag::Shared(_) | Mag::Pooled(_) => {
+                unreachable!("fallible parse destinations are fresh inline or heap magnitudes");
+            }
+        }
+        Ok(())
     }
 }
 

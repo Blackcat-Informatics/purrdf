@@ -30,10 +30,10 @@
 //!
 //! # What this corpus leaves out
 //!
-//! The 261 vendored cases are a subset of the 482 consistency-shaped cases
-//! upstream. [`exclusions`] tallies the other 221 by what the tableau actually
+//! The 262 vendored cases are a subset of the 482 consistency-shaped cases
+//! upstream. [`exclusions`] tallies the other 220 by what the tableau actually
 //! does with them, and the harness emits that tally next to the scoreboard, so
-//! "256 agreed of 261" is never read as "256 agreed of what W3C published".
+//! "262 agreed of 262" is never read as "262 agreed of what W3C published".
 //!
 //! # Three outcomes, never two
 //!
@@ -77,110 +77,31 @@ impl Verdict {
     }
 }
 
-/// Why PurRDF diverges from the published verdict on a ledgered case.
-///
-/// Each variant names the concrete OWL 2 construct or reasoner behaviour
-/// responsible, so the ledger doubles as a precise inventory of what the tableau
-/// lane does not yet model. A catch-all would defeat the point.
+/// A typed divergence reason. The shipped corpus currently has no divergence;
+/// a future ledgered reason must define its own classification explicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Owl2Gap {
-    /// `owl:bottomObjectProperty` / `owl:bottomDataProperty` are read as ordinary
-    /// named roles rather than as the empty role, so an assertion over one cannot
-    /// clash. The reverse mapping RAISES the `builtin-role` boundary for it, so the
-    /// incompleteness is reported rather than silent — but a boundary is not a
-    /// verdict, and the case still diverges.
-    BottomProperty,
-    /// OWL 2 requires every interpretation domain to be non-empty, so
-    /// `owl:Thing owl:equivalentClass owl:Nothing` is unsatisfiable. The tableau
-    /// admits the empty model instead and reports it satisfiable.
-    EmptyDomain,
-    /// The class-expression graph is cyclic, which the parser refuses rather than
-    /// unfolding, so the run withholds.
-    CyclicClassExpression,
-}
+pub struct Owl2Gap(core::convert::Infallible);
 
 impl Owl2Gap {
-    /// A short human-readable label for the ledger tally and the log.
+    /// The construct label for a ledgered divergence.
     #[must_use]
     pub const fn label(self) -> &'static str {
-        match self {
-            Self::BottomProperty => "bottom-property",
-            Self::EmptyDomain => "empty-domain",
-            Self::CyclicClassExpression => "cyclic-class-expression",
-        }
+        match self.0 {}
     }
 
-    /// Whether this gap is an **unsoundness** — PurRDF committing to a verdict the
-    /// W3C contradicts in the direction that matters (claiming `inconsistent`
-    /// where the ontology is satisfiable).
-    ///
-    /// **No variant is one today.** Every gap left in this enum is an
-    /// incompleteness: an axiom whose whole content this layer cannot model, so a
-    /// real clash is missed, or a graph the run refuses outright. The predicate
-    /// stays — pinned by a test asserting the unsound set is empty, and surfaced as
-    /// `[UNSOUND]` in the harness log — because that is the ledger's most
-    /// consequential distinction: an incompleteness withholds an answer PurRDF is
-    /// entitled to, whereas an unsoundness asserts one it is not. The match below is
-    /// exhaustive on purpose, so a new gap cannot be added without classifying
-    /// itself here.
+    /// Whether a ledgered divergence asserts an incorrect inconsistency.
     #[must_use]
     pub const fn is_unsound(self) -> bool {
-        match self {
-            Self::BottomProperty | Self::EmptyDomain | Self::CyclicClassExpression => false,
-        }
+        match self.0 {}
     }
 }
 
-/// One ledgered divergence: the case's directory name under
-/// `entailment-suite/w3c-owl2/cases/` plus its typed gap.
+/// One ledgered divergence, by its vendored case identity and typed cause.
 pub type LedgerEntry = crate::ledger::LedgerEntry<Owl2Gap>;
 
-/// The divergence ledger: every vendored case PurRDF does not agree with today.
-///
-/// Nothing is skipped at discovery time — all 261 cases run, and a case absent
-/// from this table must agree. Entries are grouped by root cause; each group's
-/// comment states the construct the tableau does not read and what that costs.
-pub const LEDGER: &[LedgerEntry] = &[
-    // --- `owl:bottomObjectProperty` / `owl:bottomDataProperty` ---------------
-    //     Read as ordinary named roles, so an assertion over one is admitted
-    //     instead of clashing against the empty role. The reverse mapping raises
-    //     the `builtin-role` boundary on both of these runs, so the gap is
-    //     reported in the reasoning report even though the verdict diverges.
-    LedgerEntry {
-        case: "new-feature-bottomdataproperty-001",
-        gap: Owl2Gap::BottomProperty,
-    },
-    LedgerEntry {
-        case: "new-feature-bottomobjectproperty-001",
-        gap: Owl2Gap::BottomProperty,
-    },
-    // --- Non-empty interpretation domain --------------------------------------
-    //     `owl:Thing owl:equivalentClass owl:Nothing` is unsatisfiable ONLY
-    //     because OWL 2 forbids the empty domain. The tableau finds the empty
-    //     model and stops.
-    LedgerEntry {
-        case: "webont-thing-003",
-        gap: Owl2Gap::EmptyDomain,
-    },
-    // --- Withheld: the run refused to decide ---------------------------------
-    //     One case where PurRDF returns an `EntailError` rather than a verdict. A
-    //     refusal is an honest capability gap and is bucketed apart from a wrong
-    //     answer, but it is still ledgered — never scored as a pass.
-    LedgerEntry {
-        case: "webont-i5-26-007",
-        gap: Owl2Gap::CyclicClassExpression,
-    },
-    // --- Unsound: PurRDF commits to the wrong verdict -------------------------
-    //     Empty, and it must stay empty. `webont-oneof-003` — which types a
-    //     fourth individual `myT` into an `owl:oneOf` enumeration of three
-    //     others — used to sit here: the tableau clashed because `myT` was a
-    //     named individual outside the enumeration, an implicit unique-name
-    //     assumption OWL 2 does not make. The `o`-rule now *identifies* `myT`
-    //     with a member instead of clashing, and clashes only when every such
-    //     identification is blocked by a recorded `≠`, so the case agrees. Every
-    //     entry above is an incompleteness (a missed clash) or a refusal to
-    //     decide; none is an invented clash.
-];
+/// All 262 cases are graded. Every one must agree with its published verdict;
+/// no old divergence is skipped or carried as an accepted limitation.
+pub const LEDGER: &[LedgerEntry] = &[];
 
 /// One vendored case.
 #[derive(Debug)]
@@ -513,8 +434,8 @@ pub fn run(root: &Path) -> Result<Owl2Summary, String> {
 /// The upstream cases this corpus does **not** vendor, tallied by what PurRDF's
 /// tableau actually does with them.
 ///
-/// The vendored 261 are a subset of the 482 consistency-shaped cases in
-/// `all.rdf`. Reporting `agreed 256 / total 261` without saying so would be
+/// The vendored 262 are a subset of the 482 consistency-shaped cases in
+/// `all.rdf`. Reporting `agreed 262 / total 262` without saying so would be
 /// reporting green over a set the hard cases were removed from, so the harness
 /// emits this alongside the scoreboard and the census names every excluded case
 /// individually.

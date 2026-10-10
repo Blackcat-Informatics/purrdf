@@ -20,20 +20,38 @@
 //! constructor takes `&str` where its neighbour takes `String`) and leaves no
 //! second body to drift.
 
+/// Implement resident `Clone` through a type's original admitted clone body.
+/// Native callers use `clone_with_memory` directly and retain its admission.
+#[macro_export]
+macro_rules! resident_clone {
+    ($type:ty) => {
+        impl Clone for $type {
+            fn clone(&self) -> Self {
+                let mut resident = $crate::allocation::Resident;
+                self.clone_with_memory(&mut $crate::allocation::Memory::new(&mut resident))
+                    .expect("resident diagnostic clone allocation")
+            }
+        }
+    };
+}
+
 /// Inherent constructors whose whole body is one conversion.
 ///
 /// The macro takes one `impl` header (lifetime parameters allowed) and a list
 /// of constructor declarations, each a signature with its body replaced by the
 /// shape it builds. Attributes (documentation, `#[must_use]`, `#[inline]`) and
-/// visibility are copied onto the generated function. A text parameter is
-/// always `impl Into<String>`, converted once more into the field's own type.
+/// visibility are copied onto the generated function. An untyped text parameter
+/// accepts `impl Into<String>`, converted once more into the field's own type.
+/// A declared source type moves its original value directly through `Into`,
+/// including an already admitted immutable text owner.
 ///
 /// | Declaration | Generated body |
 /// |---|---|
-/// | `fn name(text) -> Self::Variant;` | `Self::Variant(text.into().into())` |
-/// | `fn name(text, at: usize) -> Self::Variant { .. };` | `Self::Variant { text: text.into().into(), at }` |
-/// | `fn name(text) -> Self;` | `Self(text.into().into())` |
-/// | `fn name(text) -> Self { .. };` | `Self { text: text.into().into() }` |
+/// | `fn name(text) -> Self::Variant;` | `Self::Variant(text.into())` |
+/// | `fn name(text, at: usize) -> Self::Variant { .. };` | `Self::Variant { text: text.into(), at }` |
+/// | `fn name(text) -> Self;` | `Self(text.into())` |
+/// | `fn name(text) -> Self { .. };` | `Self { text: text.into() }` |
+/// | `fn name(text: Source) -> Self { .. };` | `Self { text: text.into() }` |
 ///
 /// In the brace forms the text parameter's name is its field's name, and every
 /// further `name: Type` parameter is moved into the field of the same name.
@@ -88,6 +106,13 @@ macro_rules! constructors {
         }
     };
     (@items) => {};
+    (@items $(#[$meta:meta])* $visibility:vis fn $name:ident($field:ident: $source:ty) -> Self { .. }; $($rest:tt)*) => {
+        $(#[$meta])*
+        $visibility fn $name($field: $source) -> Self {
+            Self { $field: $field.into() }
+        }
+        $crate::constructors!(@items $($rest)*);
+    };
     (@items
         $(#[$meta:meta])* $vis:vis fn $name:ident($text:ident) -> Self;
         $($rest:tt)*

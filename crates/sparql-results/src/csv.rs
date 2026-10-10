@@ -41,7 +41,7 @@ const FIELDS: FieldWriter = FieldWriter::new(Dialect::SPARQL_RESULTS);
 /// let result = SparqlResult::Solutions {
 ///     variables: vec!["s".to_string()],
 ///     rows: vec![vec![Some(TermValue::Iri("http://example.org/s".to_string()))]],
-///     aux: RdfDatasetBuilder::new().freeze().expect("empty aux dataset"),
+///     aux: RdfDatasetBuilder::new().freeze().expect("empty aux dataset").into(),
 /// };
 ///
 /// let csv = to_csv(&result, &ResultProvenance::default()).expect("SELECT serializes to CSV");
@@ -303,7 +303,7 @@ mod tests {
                     Some(lit("Grace", XSD_STRING)),
                 ],
             ],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let expected = concat!(
             "s,b,name,age,label\r\n",
@@ -324,7 +324,7 @@ mod tests {
                 Some(lit("has \"quote\"", XSD_STRING)),
                 Some(lit("line\nbreak", XSD_STRING)),
             ]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let expected = concat!(
             "a,b,c\r\n",
@@ -343,7 +343,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
             rows: vec![vec![Some(triple)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         // The token contains spaces but no quoting trigger, so it is emitted raw.
         let expected = concat!(
@@ -363,7 +363,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
             rows: vec![vec![Some(triple)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_csv(&result, &ResultProvenance::default())
             .expect_err("literal predicate must be rejected");
@@ -386,7 +386,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
             rows: vec![vec![Some(triple)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_csv(&result, &ResultProvenance::default())
             .expect_err("blank-node predicate must be rejected");
@@ -416,7 +416,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
             rows: vec![vec![Some(outer)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_csv(&result, &ResultProvenance::default())
             .expect_err("nested malformed predicate must be rejected");
@@ -444,8 +444,11 @@ mod tests {
             location: None,
         });
         let dataset = builder.freeze().expect("dataset freezes");
-        let err = to_csv(&SparqlResult::Graph(dataset), &ResultProvenance::default())
-            .expect_err("graph rejected");
+        let err = to_csv(
+            &SparqlResult::Graph(dataset.into()),
+            &ResultProvenance::default(),
+        )
+        .expect_err("graph rejected");
         assert!(matches!(err, Error::Format(_)), "expected Format: {err:?}");
     }
 
@@ -457,7 +460,7 @@ mod tests {
             rows: vec![vec![Some(TermValue::Iri(
                 "http://example.org/x".to_string(),
             ))]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let expected = concat!("a,b,c\r\n", "http://example.org/x,,\r\n",);
         assert_eq!(csv_text(&result, &ResultProvenance::default()), expected);
@@ -470,7 +473,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["a".to_string()],
             rows: vec![vec![Some(iri.clone()), Some(iri)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_csv(&result, &ResultProvenance::default())
             .expect_err("over-wide row must be rejected");
@@ -487,7 +490,7 @@ mod tests {
             rows: vec![vec![Some(TermValue::Iri(
                 "http://example.org/s".to_string(),
             ))]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let provenance = ResultProvenance {
             query_hash: Some("deadbeef".to_string()),

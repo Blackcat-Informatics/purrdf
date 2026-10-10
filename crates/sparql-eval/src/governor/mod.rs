@@ -868,16 +868,24 @@ pub struct GovernorState {
     /// Every invocation a `SILENT` clause absorbed, in the order they were recorded.
     /// Sorted when [`Self::evidence`] reads it, so the report does not depend on how a
     /// forked evaluation was scheduled.
-    silenced: Mutex<Vec<SilencedInvocation>>,
+    silenced: Mutex<purrdf_core::SilencedEvidenceBuilder>,
     /// How many numeric expression errors of each XPath F&O code the evaluation
     /// absorbed into unbound values, by [`purrdf_xsd::ErrorCode::ALL`] position.
     expression_errors: [AtomicU64; purrdf_xsd::ErrorCode::ALL.len()],
+    workspace: crate::WorkspaceCapability,
 }
 
 impl GovernorState {
     /// Fresh state for one execution under `governors`.
     #[must_use]
     pub fn new(governors: &QueryGovernors) -> Self {
+        Self::with_workspace(governors, crate::WorkspaceCapability::default())
+    }
+
+    pub(crate) fn with_workspace(
+        governors: &QueryGovernors,
+        workspace: crate::WorkspaceCapability,
+    ) -> Self {
         Self {
             limits: governors.limits(),
             consumed: std::array::from_fn(|_| AtomicU64::new(0)),
@@ -886,8 +894,9 @@ impl GovernorState {
             abandon: AtomicBool::new(false),
             stop: governors.stop.clone(),
             pending_work: AtomicU64::new(0),
-            silenced: Mutex::new(Vec::new()),
+            silenced: Mutex::new(purrdf_core::SilencedEvidenceBuilder::new()),
             expression_errors: std::array::from_fn(|_| AtomicU64::new(0)),
+            workspace,
         }
     }
 
@@ -902,12 +911,35 @@ impl GovernorState {
         }
     }
 
-    /// Record an invocation a `SILENT` clause absorbed.
-    pub(crate) fn record_silenced(&self, invocation: SilencedInvocation) {
-        self.silenced
+    /// A shared operation state's records may outlive this query. Each admitted
+    /// immutable record retains the producing query's original account.
+    pub(crate) fn record_silenced_admitted(
+        &self,
+        invocation: SilencedInvocation,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), crate::EvalError> {
+        let workspace = if workspace.is_bounded() {
+            workspace
+        } else {
+            &self.workspace
+        };
+        let mut current = self
+            .silenced
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(invocation);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bytes = current
+            .insertion_bytes::<crate::WorkspaceAllocation>(&invocation)
+            .ok_or(crate::EvalError::WorkspaceBoundOverflow)?;
+        let admission = workspace
+            .charge(u64::try_from(bytes).map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?)?;
+        let insertion = if workspace.is_bounded() {
+            current.insert_admitted(invocation, admission)
+        } else {
+            current.insert_resident(invocation)
+        };
+        insertion.map_err(|_| crate::EvalError::AllocationFailed {
+            construct: "SILENT evidence records",
+        })
     }
 
     /// The inclusive ceilings in force.
@@ -1146,13 +1178,11 @@ impl GovernorState {
                 .set(dimension, self.consumed_in(dimension));
         }
         evidence.tripped = self.tripped();
-        let mut silenced = self
+        evidence.silenced = self
             .silenced
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        silenced.sort();
-        evidence.silenced = silenced;
+            .snapshot();
         evidence.expression_errors = purrdf_xsd::ErrorCode::ALL
             .iter()
             .zip(&self.expression_errors)
@@ -2064,24 +2094,38 @@ impl GovernorState {
 /// one `label\tcost` line per entry in table order, every line terminated by `\n`. Tab and
 /// newline cannot occur in a label, so no entry can be encoded two ways and no two
 /// distinct schedules can encode alike.
-fn schedule_preimage(id: &str, version: u32, schedule: &[(&str, u64)]) -> String {
-    let mut preimage = String::new();
-    preimage.push_str(id);
-    preimage.push('\n');
-    preimage.push_str(&version.to_string());
-    preimage.push('\n');
+fn write_schedule(
+    out: &mut impl std::fmt::Write,
+    id: &str,
+    version: u32,
+    schedule: &[(&str, u64)],
+) -> std::fmt::Result {
+    writeln!(out, "{id}")?;
+    writeln!(out, "{version}")?;
     for (label, cost) in schedule {
-        preimage.push_str(label);
-        preimage.push('\t');
-        preimage.push_str(&cost.to_string());
-        preimage.push('\n');
+        writeln!(out, "{label}\t{cost}")?;
     }
-    preimage
+    Ok(())
+}
+
+/// Hash the one schedule spelling directly from its borrowed fields. No
+/// temporary preimage String or decimal conversion String is constructed.
+fn schedule_hash(id: &str, version: u32, schedule: &[(&str, u64)]) -> [u8; 32] {
+    struct HashText(sha2::Sha256);
+    impl std::fmt::Write for HashText {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0.update(text.as_bytes());
+            Ok(())
+        }
+    }
+    let mut text = HashText(sha2::Sha256::new());
+    write_schedule(&mut text, id, version, schedule).expect("the SHA text sink cannot fail");
+    text.0.finalize().into()
 }
 
 /// The lowercase-hex SHA-256 of [`schedule_preimage`].
 fn schedule_digest(id: &str, version: u32, schedule: &[(&str, u64)]) -> String {
-    let digest = sha2::Sha256::digest(schedule_preimage(id, version, schedule).as_bytes());
+    let digest = schedule_hash(id, version, schedule);
     purrdf_hash::hex::encode(&digest)
 }
 

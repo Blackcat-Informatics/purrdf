@@ -552,6 +552,266 @@ impl SilencedInvocation {
     }
 }
 
+/// Admission carried by an immutable receipt allocation. The provider decides
+/// the concrete reservation type; receipts expose only the covered data.
+pub trait EvidenceLease: std::fmt::Debug + Send + Sync {}
+impl<T: std::fmt::Debug + Send + Sync> EvidenceLease for T {}
+
+#[derive(Debug)]
+struct SilencedPayload {
+    records: Vec<SilencedInvocation>,
+    _lease: Option<Box<dyn EvidenceLease>>,
+}
+
+/// Immutable invocation records. Ordinary evidence clones share both the
+/// allocation and its admission; an empty receipt owns no heap allocation.
+#[derive(Debug, Clone, Default)]
+pub struct SilencedEvidence {
+    payload: Option<crate::small::Shared<SilencedPayload>>,
+}
+
+/// Actual allocation failure while freezing immutable invocation evidence.
+#[derive(Debug)]
+pub enum SilencedEvidenceAllocationError {
+    /// Native vector, string or concrete lease-box allocation refusal.
+    Reserve(std::collections::TryReserveError),
+    /// Immutable shared control allocation refusal.
+    Shared(crate::small::SharedAllocError),
+}
+purrdf_lex::variant_from!(SilencedEvidenceAllocationError {
+    Reserve(std::collections::TryReserveError),
+    Shared(crate::small::SharedAllocError),
+});
+impl std::fmt::Display for SilencedEvidenceAllocationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reserve(error) => error.fmt(f),
+            Self::Shared(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for SilencedEvidenceAllocationError {}
+
+impl SilencedEvidence {
+    /// Empty, allocation-free invocation evidence.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self { payload: None }
+    }
+
+    /// Freeze records owned by a resident operation.
+    #[must_use]
+    pub fn resident(records: Vec<SilencedInvocation>) -> Self {
+        if records.is_empty() {
+            return Self::empty();
+        }
+        Self {
+            payload: Some(
+                crate::small::Shared::try_new(SilencedPayload {
+                    records,
+                    _lease: None,
+                })
+                .expect("resident invocation evidence allocation"),
+            ),
+        }
+    }
+
+    /// Freeze records under a previously admitted owner. The enclosing engine
+    /// must admit the records, shared control and concrete lease box first.
+    /// # Errors
+    /// Returns the actual shared-control or concrete lease-box allocator refusal.
+    pub fn admitted(
+        records: Vec<SilencedInvocation>,
+        lease: impl EvidenceLease + 'static,
+    ) -> Result<Self, SilencedEvidenceAllocationError> {
+        if records.is_empty() {
+            return Ok(Self::empty());
+        }
+        let lease = crate::small::try_boxed(lease)?;
+        Ok(Self {
+            payload: Some(crate::small::Shared::try_new(SilencedPayload {
+                records,
+                _lease: Some(lease),
+            })?),
+        })
+    }
+
+    /// Shared allocation control layout, excluding records and concrete lease.
+    #[must_use]
+    pub const fn owner_bytes() -> usize {
+        crate::small::Shared::<SilencedPayload>::allocation_layout().size()
+    }
+
+    /// Capacity of the covered record vector, for an admitted replacement.
+    #[must_use]
+    pub fn record_capacity(&self) -> usize {
+        self.payload
+            .as_ref()
+            .map_or(0, |payload| payload.records.capacity())
+    }
+
+    /// Checked capacity of this receipt's shared allocation.
+    #[must_use]
+    pub fn retained_bytes(&self) -> Option<usize> {
+        let Some(payload) = &self.payload else {
+            return Some(0);
+        };
+        let mut bytes = Self::owner_bytes().checked_add(
+            payload
+                .records
+                .capacity()
+                .checked_mul(size_of::<SilencedInvocation>())?,
+        )?;
+        for invocation in &payload.records {
+            let target = match &invocation.target {
+                SilencedTarget::Service { endpoint } => endpoint,
+                SilencedTarget::Load { iri } => iri,
+            };
+            bytes = bytes
+                .checked_add(target.capacity())?
+                .checked_add(invocation.message.capacity())?;
+        }
+        Some(bytes)
+    }
+}
+
+impl std::ops::Deref for SilencedEvidence {
+    type Target = [SilencedInvocation];
+    fn deref(&self) -> &Self::Target {
+        self.payload
+            .as_ref()
+            .map_or(&[], |payload| payload.records.as_slice())
+    }
+}
+
+impl PartialEq for SilencedEvidence {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+impl Eq for SilencedEvidence {}
+
+/// An operation's mutable invocation ledger. Published snapshots expose no
+/// builder, mutable vector or admission replacement capability.
+#[derive(Debug, Default)]
+pub struct SilencedEvidenceBuilder {
+    evidence: SilencedEvidence,
+}
+
+impl SilencedEvidenceBuilder {
+    /// Allocation-free empty ledger.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            evidence: SilencedEvidence::empty(),
+        }
+    }
+
+    /// Borrow a snapshot without copying any record allocation.
+    #[must_use]
+    pub fn snapshot(&self) -> SilencedEvidence {
+        self.evidence.clone()
+    }
+
+    /// Checked replacement layout before insertion, including the concrete
+    /// admission carrier. The current snapshot remains owned during growth.
+    #[must_use]
+    pub fn insertion_bytes<L>(&self, invocation: &SilencedInvocation) -> Option<usize> {
+        let capacity = self
+            .evidence
+            .record_capacity()
+            .max(self.evidence.len().checked_add(1)?);
+        let mut bytes = capacity
+            .checked_mul(size_of::<SilencedInvocation>())?
+            .checked_add(SilencedEvidence::owner_bytes())?
+            .checked_add(size_of::<L>())?;
+        for record in self.evidence.iter().chain(std::iter::once(invocation)) {
+            let target = match &record.target {
+                SilencedTarget::Service { endpoint } => endpoint,
+                SilencedTarget::Load { iri } => iri,
+            };
+            bytes = bytes
+                .checked_add(target.capacity())?
+                .checked_add(record.message.capacity())?;
+        }
+        Some(bytes)
+    }
+
+    /// Insert a record under a previously admitted replacement layout. Any
+    /// snapshot already returned retains its original allocation and lease.
+    ///
+    /// # Errors
+    /// Returns the actual failed record-vector or string-copy allocation, leaving
+    /// the previous evidence intact.
+    pub fn insert_admitted(
+        &mut self,
+        invocation: SilencedInvocation,
+        lease: impl EvidenceLease + 'static,
+    ) -> Result<(), SilencedEvidenceAllocationError> {
+        let records = self.copy_insert(invocation)?;
+        self.evidence = SilencedEvidence::admitted(records, lease)?;
+        Ok(())
+    }
+
+    /// Insert into a resident ledger with the same ordered snapshot law.
+    ///
+    /// # Errors
+    /// Returns an actual allocation refusal without changing the prior receipt.
+    pub fn insert_resident(
+        &mut self,
+        invocation: SilencedInvocation,
+    ) -> Result<(), SilencedEvidenceAllocationError> {
+        let records = self.copy_insert(invocation)?;
+        self.evidence = SilencedEvidence {
+            payload: Some(crate::small::Shared::try_new(SilencedPayload {
+                records,
+                _lease: None,
+            })?),
+        };
+        Ok(())
+    }
+
+    fn copy_insert(
+        &self,
+        invocation: SilencedInvocation,
+    ) -> Result<Vec<SilencedInvocation>, std::collections::TryReserveError> {
+        fn copy(text: &str) -> Result<String, std::collections::TryReserveError> {
+            let mut owned = String::new();
+            owned.try_reserve_exact(text.len())?;
+            owned.push_str(text);
+            Ok(owned)
+        }
+        let mut records = Vec::new();
+        records.try_reserve_exact(
+            self.evidence
+                .len()
+                .checked_add(1)
+                .expect("record layout was checked before insertion"),
+        )?;
+        for record in self.evidence.iter() {
+            let target = match &record.target {
+                SilencedTarget::Service { endpoint } => SilencedTarget::Service {
+                    endpoint: copy(endpoint)?,
+                },
+                SilencedTarget::Load { iri } => SilencedTarget::Load { iri: copy(iri)? },
+            };
+            records.push(SilencedInvocation::new(
+                target,
+                record.kind,
+                copy(&record.message)?,
+            ));
+        }
+        let ordinal = records.partition_point(|record| record <= &invocation);
+        records.insert(ordinal, invocation);
+        Ok(records)
+    }
+}
+
+/// Numeric error records have a finite vocabulary. Every engine snapshot fits
+/// inline and therefore needs no allocation, even after an operational refusal.
+pub type ExpressionErrorEvidence =
+    crate::SmallVec<[(purrdf_xsd::ErrorCode, u64); purrdf_xsd::ErrorCode::ALL.len()]>;
+
 /// Deterministic evidence accumulated by one governed operation.
 ///
 /// Evidence is returned on the complete path as well as the exhausted one: "completed,
@@ -573,17 +833,23 @@ pub struct GovernorEvidence {
     /// Every invocation a `SILENT` clause absorbed, one record per failed invocation,
     /// in ascending order ([`SilencedInvocation`]'s `Ord`) so the list does not depend on
     /// how the evaluation was scheduled.
-    pub silenced: Vec<SilencedInvocation>,
+    pub silenced: SilencedEvidence,
     /// Every XPath F&O error a numeric operation raised that the query language
     /// absorbed into an unbound value — an expression error is not a query error
     /// (SPARQL 1.1 §17.2) — counted per code, in code order: `1 / 0` is
     /// `err:FOAR0001`, a cast outside the target's value space `err:FORG0001`, a
     /// cast of `NaN` to a decimal `err:FOCA0002`. A code that never occurred is
     /// absent, so the complete path of an error-free query reports an empty list.
-    pub expression_errors: Vec<(purrdf_xsd::ErrorCode, u64)>,
+    pub expression_errors: ExpressionErrorEvidence,
 }
 
 impl GovernorEvidence {
+    /// Owned capacity of the receipt's variable-sized invocation/error records.
+    /// Fixed fields are included by the enclosing receipt's own layout.
+    #[must_use]
+    pub fn retained_bytes(&self) -> Option<usize> {
+        self.silenced.retained_bytes()
+    }
     /// Start fresh evidence for an operation running under `limits`.
     ///
     /// Build this per execution. Governor state is operation-local; sharing it across
@@ -594,8 +860,8 @@ impl GovernorEvidence {
             consumed: ResourceVector::ZERO,
             limits,
             tripped: None,
-            silenced: Vec::new(),
-            expression_errors: Vec::new(),
+            silenced: SilencedEvidence::empty(),
+            expression_errors: crate::SmallVec::new(),
         }
     }
 

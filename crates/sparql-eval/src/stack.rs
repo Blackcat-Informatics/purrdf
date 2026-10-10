@@ -27,13 +27,9 @@
 //!   every correlated evaluation
 //!   (a `LATERAL` right side or a correlated `EXISTS`, per outer row, in `binop`) and
 //!   every user-defined function call (`user_fn`) — each through [`check`].
-//! * **The correlated substitution** — the per-row copy of a correlated body with the
-//!   outer row's bindings written in (`expr::substitute_pattern_impl` and
-//!   `expr::substitute_expr`) — is a walk with no error channel that runs while
-//!   evaluating, over a subtree as tall as the stack that parsed it held. It runs inside
-//!   a [`walk`] scope: each level asks [`walk_is_low`]; the first that finds the margin
-//!   gone latches the refusal and returns a placeholder, and the scope discards whatever
-//!   the walk built and returns the error.
+//! * **Correlated substitution** copies and rewrites bodies through an iterative
+//!   native walk. Its work buffers are admitted before growth and a refused walk
+//!   returns its original typed failure before publishing the body.
 //! * **The height admission** ([`height`], through
 //!   `governor::soundness::validate_graph_pattern_depth` and `engine`'s preparation)
 //!   measures a whole plan, iteratively, against the stack the evaluation starts on at a
@@ -92,43 +88,6 @@ pub(crate) fn check(construct: &'static str) -> Result<(), EvalError> {
 #[inline]
 pub(crate) fn is_low() -> bool {
     purrdf_stack::is_low()
-}
-
-/// Run `body` — an infallible recursive walk over part of the plan (an analysis, a
-/// substitution, a copy) — so that it can refuse when the stack runs low.
-///
-/// This is [`purrdf_stack::walk`], with its refusal typed as the evaluator's: a level of
-/// the walk that finds less than [`purrdf_stack::MARGIN_BYTES`] left calls
-/// [`walk_is_low`], which latches the refusal in this scope and tells the walk to stop
-/// descending and return a placeholder; the scope then discards whatever `body` produced,
-/// so a placeholder never escapes. Anything the walk wrote through a reference must be
-/// discarded with it, which is why every caller hands its walk state it owns (a fresh
-/// table, a fresh map) and drops it on the error. Once a level has refused, every check
-/// in the running context refuses at once until the scope closes, so the walk unwinds
-/// without computing over the placeholder it left.
-///
-/// The scope state lives in [`purrdf_stack`] beside the stack floor, as one
-/// [`purrdf_stack::Context`] per running computation: a host that suspends an evaluation
-/// inside a scope swaps the context out, so whatever runs while it waits neither sees
-/// the open scope nor latches its own refusals in it.
-///
-/// # Errors
-///
-/// [`EvalError::StackExhausted`] naming the construct that refused, when any level of the
-/// walk did.
-pub(crate) fn walk<T>(body: impl FnOnce() -> T) -> Result<T, EvalError> {
-    purrdf_stack::walk(body).map_err(|construct| EvalError::StackExhausted { construct })
-}
-
-/// Whether a level of an infallible walk must stop descending: inside a [`walk`] scope,
-/// less than [`purrdf_stack::MARGIN_BYTES`] of stack are left (the refusal is latched
-/// for the scope to report), or a level of the same walk already refused. Outside any
-/// scope this is always `false`. `construct` names the walk, for the error.
-///
-/// [`purrdf_stack::walk_is_low`]; its hot path is [`is_low`]'s.
-#[inline]
-pub(crate) fn walk_is_low(construct: &'static str) -> bool {
-    purrdf_stack::walk_is_low(construct)
 }
 
 #[cfg(test)]

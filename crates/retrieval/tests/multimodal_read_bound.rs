@@ -586,9 +586,7 @@ impl CountingProducer {
             }
         });
         reason.map_or(ServiceLevel::Undeclared, |reason| {
-            ServiceLevel::Incomplete {
-                reason: reason.to_owned(),
-            }
+            ServiceLevel::incomplete_static(reason)
         })
     }
 }

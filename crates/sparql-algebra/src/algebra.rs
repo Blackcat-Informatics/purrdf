@@ -26,6 +26,7 @@ use crate::ast::{
     Variable,
 };
 use crate::tree::{Args, Chain, Child, NonEmpty};
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 use purrdf_lex::term_syntax::{
     TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
 };
@@ -92,10 +93,23 @@ impl SparqlVersion {
     /// `"1.2-basic"`; anything else becomes [`Self::Other`] verbatim.
     #[must_use]
     pub fn parse(raw: &str) -> Self {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        Self::parse_with_memory(raw, &mut memory).expect("resident version storage")
+    }
+
+    /// Classify a declaration before allocating its unknown spelling.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal for an owned unknown spelling.
+    pub fn parse_with_memory<S: Admission + ?Sized>(
+        raw: &str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
         match raw {
-            "1.2" => Self::V12,
-            "1.2-basic" => Self::V12Basic,
-            other => Self::Other(other.to_owned()),
+            "1.2" => Ok(Self::V12),
+            "1.2-basic" => Ok(Self::V12Basic),
+            other => Ok(Self::Other(memory.string(other)?)),
         }
     }
 
@@ -120,7 +134,7 @@ impl SparqlVersion {
 
 /// A parsed SPARQL query. The four query forms differ only in their head; the
 /// `WHERE` clause and all solution modifiers live inside `pattern` as algebra.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum Query {
     /// `SELECT` query. `pattern` is the full modifier-wrapped algebra.
     Select {
@@ -202,7 +216,143 @@ pub enum Query {
     },
 }
 
+impl Clone for Query {
+    fn clone(&self) -> Self {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        self.clone_with_memory(&mut memory)
+            .expect("resident parsed query clone storage")
+    }
+}
+
 impl Query {
+    /// Clone the full parsed query through its original native storage account.
+    ///
+    /// Templates, target/dataset arrays and an unknown VERSION spelling are
+    /// admitted before copying. Immutable term and base-IRI leaves remain shared;
+    /// the WHERE tree uses the same bottom-up clone as resident callers. Keep
+    /// this memory's original grant with the returned query.
+    ///
+    /// # Errors
+    /// Returns checked layout overflow, admission or allocator refusal.
+    pub fn clone_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        self.clone_with_pattern_by(memory, |memory| self.pattern().clone_with_memory(memory))
+    }
+
+    /// Copy query head/prologue while moving an already admitted WHERE payload.
+    ///
+    /// # Errors
+    /// Returns checked original-account storage refusal before a copied head grows.
+    pub fn clone_with_pattern_with_memory<S: Admission + ?Sized>(
+        &self,
+        pattern: GraphPattern,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        self.clone_with_pattern_by(memory, |_| Ok(pattern))
+    }
+
+    fn clone_with_pattern_by<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+        pattern_copy: impl FnOnce(&mut Memory<'_, S>) -> Result<GraphPattern, StorageError>,
+    ) -> Result<Self, StorageError> {
+        use crate::owned::{clone_shallow_vec_with_memory, clone_vec_with_memory};
+        let original = self.dataset();
+        let dataset = QueryDataset {
+            default: clone_shallow_vec_with_memory(&original.default, memory)?,
+            named: clone_shallow_vec_with_memory(&original.named, memory)?,
+        };
+        let base_iri = self.base_iri().cloned();
+        let version = self
+            .version()
+            .map(|version| SparqlVersion::parse_with_memory(version.raw(), memory))
+            .transpose()?;
+        Ok(match self {
+            Self::Select { .. } => Self::Select {
+                pattern: pattern_copy(memory)?,
+                dataset,
+                base_iri,
+                version,
+            },
+            Self::Construct { template, .. } => Self::Construct {
+                template: clone_vec_with_memory(template, memory, |quad, memory| {
+                    Ok(QuadPattern {
+                        triple: quad.triple.clone_with_memory(memory)?,
+                        graph: quad.graph.clone(),
+                    })
+                })?,
+                pattern: pattern_copy(memory)?,
+                dataset,
+                base_iri,
+                version,
+            },
+            Self::Describe { targets, .. } => Self::Describe {
+                pattern: pattern_copy(memory)?,
+                targets: clone_shallow_vec_with_memory(targets, memory)?,
+                dataset,
+                base_iri,
+                version,
+            },
+            Self::Ask { .. } => Self::Ask {
+                pattern: pattern_copy(memory)?,
+                dataset,
+                base_iri,
+                version,
+            },
+        })
+    }
+
+    /// The same full query identity with admitted recursive comparison spill.
+    ///
+    /// # Errors
+    /// Returns checked native traversal storage refusal.
+    pub fn eq_with_memory<S: Admission + ?Sized>(
+        &self,
+        other: &Self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<bool, StorageError> {
+        if core::mem::discriminant(self) != core::mem::discriminant(other)
+            || self.dataset() != other.dataset()
+            || self.base_iri() != other.base_iri()
+            || self.version() != other.version()
+        {
+            return Ok(false);
+        }
+        match (self, other) {
+            (
+                Self::Construct { template: left, .. },
+                Self::Construct {
+                    template: right, ..
+                },
+            ) => {
+                if left.len() != right.len() {
+                    return Ok(false);
+                }
+                for (left, right) in left.iter().zip(right) {
+                    if left.graph != right.graph
+                        || !crate::traits::nodes_eq_with_memory(
+                            crate::walk::NodeRef::Triple(&left.triple),
+                            crate::walk::NodeRef::Triple(&right.triple),
+                            memory,
+                        )?
+                    {
+                        return Ok(false);
+                    }
+                }
+            }
+            (Self::Describe { targets: left, .. }, Self::Describe { targets: right, .. })
+                if left != right =>
+            {
+                return Ok(false);
+            }
+            _ => {}
+        }
+        self.pattern().eq_with_memory(other.pattern(), memory)
+    }
+
     /// The query's `WHERE`-body pattern, whichever query form it is.
     #[must_use]
     pub const fn pattern(&self) -> &GraphPattern {
@@ -1319,25 +1469,55 @@ impl Expression {
     /// bracketted `a || (b || c)` it came from.
     #[must_use]
     pub fn or(left: Self, right: Self) -> Self {
-        match left {
-            Self::Or(mut operands) => {
-                operands.push(right);
-                Self::Or(operands)
-            }
-            left => Self::Or(Chain::new(left, right, [])),
-        }
+        let mut resident = Resident;
+        Self::or_with_memory(left, right, &mut Memory::new(&mut resident))
+            .expect("resident disjunction storage")
+    }
+
+    /// Build the same disjunction through its original physical account.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before growing an operand buffer.
+    pub fn or_with_memory<S: Admission + ?Sized>(
+        left: Self,
+        right: Self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self::Or(append_chain(
+            match left {
+                Self::Or(operands) => Ok(operands),
+                left => Err(left),
+            },
+            right,
+            memory,
+        )?))
     }
 
     /// `left && right`, as the parser builds it: see [`Self::or`].
     #[must_use]
     pub fn and(left: Self, right: Self) -> Self {
-        match left {
-            Self::And(mut operands) => {
-                operands.push(right);
-                Self::And(operands)
-            }
-            left => Self::And(Chain::new(left, right, [])),
-        }
+        let mut resident = Resident;
+        Self::and_with_memory(left, right, &mut Memory::new(&mut resident))
+            .expect("resident conjunction storage")
+    }
+
+    /// Build the same conjunction through its original physical account.
+    ///
+    /// # Errors
+    /// Returns physical storage refusal before growing an operand buffer.
+    pub fn and_with_memory<S: Admission + ?Sized>(
+        left: Self,
+        right: Self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self::And(append_chain(
+            match left {
+                Self::And(operands) => Ok(operands),
+                left => Err(left),
+            },
+            right,
+            memory,
+        )?))
     }
 
     /// `left op right`, as the parser builds it: a `left` that is already an
@@ -1346,12 +1526,52 @@ impl Expression {
     /// `op` applies to the value of everything before it.
     #[must_use]
     pub fn arithmetic(left: Self, op: ArithmeticOperator, right: Self) -> Self {
+        let mut resident = Resident;
+        Self::arithmetic_with_memory(left, op, right, &mut Memory::new(&mut resident))
+            .expect("resident arithmetic storage")
+    }
+
+    /// Build the same arithmetic spine through original physical admission.
+    ///
+    /// # Errors
+    /// Returns physical refusal before allocating a child or growing steps.
+    pub fn arithmetic_with_memory<S: Admission + ?Sized>(
+        left: Self,
+        op: ArithmeticOperator,
+        right: Self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
         match left {
             Self::Arithmetic(first, mut steps) => {
-                steps.push((op, right));
-                Self::Arithmetic(first, steps)
+                steps.try_push((op, right), memory)?;
+                Ok(Self::Arithmetic(first, steps))
             }
-            left => Self::Arithmetic(Child::new(left), NonEmpty::new((op, right))),
+            left => {
+                let first = Child::try_new(left, memory)?;
+                let mut steps = Vec::new();
+                memory.push(&mut steps, (op, right))?;
+                Ok(Self::Arithmetic(first, NonEmpty::from_vec_unchecked(steps)))
+            }
+        }
+    }
+}
+
+fn append_chain<T: crate::tree::Subtree, S: Admission + ?Sized>(
+    left: Result<Chain<T>, T>,
+    right: T,
+    memory: &mut Memory<'_, S>,
+) -> Result<Chain<T>, StorageError> {
+    match left {
+        Ok(mut chain) => {
+            chain.try_push(right, memory)?;
+            Ok(chain)
+        }
+        Err(left) => {
+            let mut nodes = Vec::new();
+            memory.reserve(&mut nodes, 2)?;
+            nodes.push(left);
+            nodes.push(right);
+            Ok(Chain::from_vec_unchecked(nodes))
         }
     }
 }
@@ -1363,25 +1583,55 @@ impl PropertyPathExpression {
     /// bracketed `a/(b/c)` it came from.
     #[must_use]
     pub fn sequence(left: Self, right: Self) -> Self {
-        match left {
-            Self::Sequence(mut elements) => {
-                elements.push(right);
-                Self::Sequence(elements)
-            }
-            left => Self::Sequence(Chain::new(left, right, [])),
-        }
+        let mut resident = Resident;
+        Self::sequence_with_memory(left, right, &mut Memory::new(&mut resident))
+            .expect("resident path sequence storage")
+    }
+
+    /// Build the same path sequence under original physical admission.
+    ///
+    /// # Errors
+    /// Returns physical refusal before growing path elements.
+    pub fn sequence_with_memory<S: Admission + ?Sized>(
+        left: Self,
+        right: Self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self::Sequence(append_chain(
+            match left {
+                Self::Sequence(elements) => Ok(elements),
+                left => Err(left),
+            },
+            right,
+            memory,
+        )?))
     }
 
     /// `left | right`, as the parser builds it: see [`Self::sequence`].
     #[must_use]
     pub fn alternative(left: Self, right: Self) -> Self {
-        match left {
-            Self::Alternative(mut elements) => {
-                elements.push(right);
-                Self::Alternative(elements)
-            }
-            left => Self::Alternative(Chain::new(left, right, [])),
-        }
+        let mut resident = Resident;
+        Self::alternative_with_memory(left, right, &mut Memory::new(&mut resident))
+            .expect("resident path alternative storage")
+    }
+
+    /// Build the same path alternative under original physical admission.
+    ///
+    /// # Errors
+    /// Returns physical refusal before growing path elements.
+    pub fn alternative_with_memory<S: Admission + ?Sized>(
+        left: Self,
+        right: Self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self::Alternative(append_chain(
+            match left {
+                Self::Alternative(elements) => Ok(elements),
+                left => Err(left),
+            },
+            right,
+            memory,
+        )?))
     }
 }
 
@@ -1425,15 +1675,30 @@ impl GraphPattern {
     /// A `right` that is a `Union` stays one arm, as the braced group it came from.
     #[must_use]
     pub fn union(left: Self, right: Self) -> Self {
-        match left {
-            Self::Union { mut arms } => {
-                arms.push(right);
-                Self::Union { arms }
-            }
-            left => Self::Union {
-                arms: Chain::new(left, right, []),
-            },
-        }
+        let mut resident = Resident;
+        Self::union_with_memory(left, right, &mut Memory::new(&mut resident))
+            .expect("resident union storage")
+    }
+
+    /// Build the same union under original physical admission.
+    ///
+    /// # Errors
+    /// Returns physical refusal before growing union arms.
+    pub fn union_with_memory<S: Admission + ?Sized>(
+        left: Self,
+        right: Self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self::Union {
+            arms: append_chain(
+                match left {
+                    Self::Union { arms } => Ok(arms),
+                    left => Err(left),
+                },
+                right,
+                memory,
+            )?,
+        })
     }
 }
 
@@ -1977,6 +2242,17 @@ impl AggregateExpression {
     #[must_use]
     pub fn order_by(&self) -> &[OrderExpression] {
         &self.order_by
+    }
+
+    /// Borrow the existing argument slots, then the existing FOLD sort-key slots,
+    /// in source order. Replacing a slot changes neither arity nor which function,
+    /// scalar arguments or sort-key count this checked aggregate contains.
+    pub fn expressions_mut(&mut self) -> impl Iterator<Item = &mut Expression> {
+        self.args.iter_mut().chain(
+            self.order_by
+                .iter_mut()
+                .map(OrderExpression::expression_mut),
+        )
     }
 
     /// Decompose into `(function, args, scalarvals, order_by, distinct)`,

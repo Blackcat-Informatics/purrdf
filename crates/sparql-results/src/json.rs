@@ -575,7 +575,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables,
             rows,
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
 
         let expected = concat!(
@@ -648,7 +648,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
             rows: vec![vec![Some(triple)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let text = json_text(&result, &ResultProvenance::default());
         assert!(
@@ -676,7 +676,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
             rows: vec![vec![Some(triple)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let text = json_text(&result, &ResultProvenance::default());
         let expected = concat!(
@@ -704,7 +704,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
             rows: vec![vec![Some(triple)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_json(&result, &ResultProvenance::default(), None)
             .expect_err("non-IRI predicate must be rejected");
@@ -728,7 +728,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["t".to_string()],
             rows: vec![vec![Some(triple)]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let err = to_json(&result, &ResultProvenance::default(), None)
             .expect_err("bnode predicate must be rejected");
@@ -751,7 +751,7 @@ mod tests {
                 language: Some("en".to_string()),
                 direction: Some(RdfTextDirection::Ltr),
             })]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let text = json_text(&result, &ResultProvenance::default());
         assert!(
@@ -765,7 +765,7 @@ mod tests {
         let result = SparqlResult::Solutions {
             variables: vec!["v".to_string()],
             rows: vec![vec![Some(lit("x", XSD_STRING))]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let text = json_text(&result, &ResultProvenance::default());
         assert!(
@@ -806,7 +806,7 @@ mod tests {
             rows: vec![vec![Some(TermValue::Iri(
                 "http://example.org/s".to_string(),
             ))]],
-            aux: RdfDatasetBuilder::new().freeze().expect("empty aux"),
+            aux: RdfDatasetBuilder::new().freeze().expect("empty aux").into(),
         };
         let provenance = ResultProvenance {
             query_hash: Some("deadbeef".to_string()),
@@ -900,7 +900,7 @@ mod tests {
             location: None,
         });
         let dataset = builder.freeze().expect("dataset freezes");
-        let result = SparqlResult::Graph(dataset);
+        let result = SparqlResult::Graph(dataset.into());
 
         let text = json_text(&result, &ResultProvenance::default());
         assert!(text.starts_with("{\"graph\":\""), "graph envelope: {text}");
@@ -932,7 +932,7 @@ mod tests {
             location: None,
         });
         let dataset = builder.freeze().expect("dataset freezes");
-        let result = SparqlResult::Graph(dataset);
+        let result = SparqlResult::Graph(dataset.into());
 
         let text = json_text(&result, &ResultProvenance::default());
         assert_eq!(

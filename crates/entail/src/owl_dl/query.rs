@@ -86,7 +86,9 @@ use crate::interner::{Interner, intern_into};
 use crate::owl_dl::concept::{Concept, Role};
 use crate::owl_dl::data::DataRangeTable;
 use crate::owl_dl::graph::Assumptions;
-use crate::owl_dl::parser::{CeExtractor, TripleIndex, Vocab, index_insert};
+use crate::owl_dl::parser::{
+    CeExtractor, TripleIndex, Vocab, constrain_bottom_roles, index_insert,
+};
 use crate::owl_dl::saturate::{Taxonomy, saturate};
 use crate::owl_dl::{Kb, class_concept, hyper};
 use crate::report::{Construct, ReasoningReport};
@@ -271,12 +273,25 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
         })
         .collect();
 
+    let has_bottom_constraints = constrain_bottom_roles(
+        &mut kb,
+        resolved.iter().copied().flat_map(<[_; 3]>::from).flatten(),
+    );
+
     // Extract query class expressions (borrows the interner immutably; the concept
     // table is a disjoint field, interned below). A class expression written in the QUERY
     // can meet a boundary just as one written in the data can, so the extractor's
     // boundaries join the knowledge base's.
-    let (raw_tasks, query_boundaries) =
+    let (raw_tasks, query_boundaries, definitions) =
         extract_tasks(&kb.interner, &mut kb.data_ranges, &q_index, &v, &resolved)?;
+    // The same finite class equations used by RDF ontology extraction also
+    // constrain query-written cycle cut points. They are internal concept
+    // identities and do not declare or emit a library vocabulary.
+    let has_definitions = !definitions.is_empty();
+    for (node, body) in definitions {
+        kb.push_gci(Concept::Named(node), body.clone());
+        kb.push_gci(body, Concept::Named(node));
+    }
     let mut boundaries = kb.boundaries().clone();
     boundaries.extend(query_boundaries);
     // A data range the query itself wrote lands in the knowledge base's own table, so one the
@@ -304,6 +319,9 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     let roles = intern_queried_roles(&mut kb, &v, &resolved);
     let tasks = intern_tasks(&mut kb.table, &v, &named_classes, raw_tasks);
     kb.finalize();
+    if (has_definitions || has_bottom_constraints) && !kb.is_consistent()? {
+        return Err(EntailError::Unsatisfiable);
+    }
 
     // Build the output: the data verbatim, plus every entailed augmentation. The copy
     // preserves blank-node scopes so an augmentation naming one of the input's blank nodes
@@ -617,13 +635,15 @@ fn inject_roles(
 
 /// Scan the resolved query triples for class-expression / domain / range patterns,
 /// returning the raw tasks and the concepts they reference (in query order).
+type ExtractedTasks = (Vec<RawTask>, BTreeSet<Construct>, Vec<(u32, Concept)>);
+
 fn extract_tasks(
     interner: &Interner,
     ranges: &mut DataRangeTable,
     q_index: &TripleIndex,
     v: &Vocab,
     resolved: &[(Option<u32>, Option<u32>, Option<u32>)],
-) -> Result<(Vec<RawTask>, BTreeSet<Construct>), EntailError> {
+) -> Result<ExtractedTasks, EntailError> {
     let mut ce = CeExtractor::new(q_index, interner, v, ranges);
     let mut tasks = Vec::new();
     let mut seen: BTreeSet<(u8, u32)> = BTreeSet::new();
@@ -672,7 +692,12 @@ fn extract_tasks(
         }
     }
     let boundaries = ce.boundaries().clone();
-    Ok((tasks, boundaries))
+    let definitions = ce
+        .definitions()
+        .iter()
+        .map(|(&node, body)| (node, body.clone()))
+        .collect();
+    Ok((tasks, boundaries, definitions))
 }
 
 /// Intern each raw task's concepts into the concept table, yielding concept-id tasks.

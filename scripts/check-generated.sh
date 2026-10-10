@@ -61,8 +61,8 @@ cargo run -p purrdf-core --example gen_unicode_blocks --locked \
 # vendored verbatim, and byte-frozen, under `vectors/w3c-recs/`.
 #   xpath-dated-names  - purrdf-core: XML 1.0 Second Edition `\i` and `\c`
 #   xpath-dated-blocks - purrdf-core: XML Schema Part 2 Second Edition blocks
-for set in normalization text idna ecma-properties ecma-ranges xpath \
-  xpath-dated-names xpath-dated-blocks; do
+for set in normalization case-context text idna ecma-properties ecma-ranges xpath \
+  xpath-compatibility xpath-dated-names xpath-dated-blocks; do
   cargo run -p purrdf-lex --example gen_unicode_tables --locked -- "$set" \
     | rustfmt --edition 2024 --emit stdout \
     > "$tmp/unicode-$set.rs"
@@ -75,7 +75,9 @@ cargo run -p purrdf-lex --example gen_html_entities --locked \
   | rustfmt --edition 2024 --emit stdout \
   > "$tmp/html-entities.rs"
 
-# The one Unicode table NOT at `purrdf_lex::unicode::UNICODE_VERSION`, and why:
+# The compatibility Unicode tables differ from the current workspace version.
+# Categories/simple folds and this block table share the locked regex-syntax pin.
+# The native compatibility generator also verifies both UCD16 input identities.
 # the XSD `\p{IsX}` block table of purrdf-core is pinned to the Unicode version of
 # the tables embedded in the locked `regex-syntax`, because every translated XSD
 # pattern runs on the `regex` engine, and a block escape must agree with the
@@ -113,7 +115,7 @@ check_file() {
 sync_file() {
   local generated="$1"
   local committed="$2"
-  if [ "$mode" = "--write" ]; then
+  if [ "$mode" = "--write" ] && ! cmp -s "$generated" "$committed"; then
     cp -- "$generated" "$committed"
   fi
   check_file "$generated" "$committed"
@@ -124,11 +126,13 @@ sync_file "$tmp/transcode-loss-matrix.json" generated/transcode-loss-matrix.json
 sync_file "$tmp/entailment-rules.md" docs/book/src/entailment-rules.md
 sync_file "$tmp/blocks.rs" crates/rdf-core/src/xsd_regex/blocks.rs
 sync_file "$tmp/unicode-normalization.rs" crates/lex/src/unicode_tables.rs
+sync_file "$tmp/unicode-case-context.rs" crates/lex/src/unicode/case_tables.rs
 sync_file "$tmp/unicode-text.rs" crates/text/src/unicode_tables.rs
 sync_file "$tmp/unicode-idna.rs" crates/iri/src/idna_tables.rs
 sync_file "$tmp/unicode-ecma-properties.rs" crates/jsonschema/src/ecma/property_tables.rs
 sync_file "$tmp/unicode-ecma-ranges.rs" crates/jsonschema/src/ecma/unicode_ranges.rs
 sync_file "$tmp/unicode-xpath.rs" crates/rdf-core/src/xsd_regex/xpath/unicode_tables.rs
+sync_file "$tmp/unicode-xpath-compatibility.rs" crates/rdf-core/src/xsd_regex/xpath/compatibility_tables.rs
 sync_file "$tmp/unicode-xpath-dated-names.rs" crates/rdf-core/src/xsd_regex/xpath/dated_names.rs
 sync_file "$tmp/unicode-xpath-dated-blocks.rs" crates/rdf-core/src/xsd_regex/xpath/dated_blocks.rs
 sync_file "$tmp/html-entities.rs" crates/lex/src/html/entities.rs

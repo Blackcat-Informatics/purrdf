@@ -121,11 +121,12 @@ use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{
     Arithmetic, BuildShape, Exact, Reassociated, RecordedPathError, Resolved, Selected,
 };
+use purrdf_sparql_eval::{AdmittedVec, EvalError, WorkspaceCapability};
 use rayon::prelude::*;
 
 use crate::graph::{Graph, Recorded, decode_image};
 use crate::sealed::Compiled;
-use crate::search::{DistanceCache, Query, Visited, greedy_descend, search_layer};
+use crate::search::{DistanceCache, Query, Visited, greedy_descend, search_layer_admitted};
 
 /// The canonical image format version.
 ///
@@ -250,7 +251,16 @@ pub(crate) mod path_hook {
 
 /// One search traversal, as [`Compiled`] holds it.
 pub(crate) type Traverse<A> =
-    for<'q> fn(&HnswIndex<A>, &Query<'q, A>, usize, &mut Visited) -> Result<Vec<Ranked>>;
+    for<'q> fn(&HnswIndex<A>, &Query<'q, A>, usize, &mut Visited) -> Result<AdmittedVec<Ranked>>;
+
+/// Restore the resident API by moving its existing ranked buffer.
+fn resident_ranked(ranked: AdmittedVec<Ranked>) -> Result<Vec<Ranked>> {
+    ranked.try_into_resident().map_err(|_| {
+        HnswError::Workspace(EvalError::WorkspaceUnpriced(
+            "raw extraction of admitted HNSW ranking",
+        ))
+    })
+}
 
 /// One graph build, as [`Compiled`] holds it.
 pub(crate) type BuildGraph<A> =
@@ -649,6 +659,7 @@ impl<A: Arithmetic> HnswIndex<A> {
         let arithmetic = self.resolve_here()?;
         let cache = DistanceCache::default();
         self.with_scratch(|visited| self.search_with(arithmetic, query_row, k, &cache, visited))
+            .and_then(resident_ranked)
     }
 
     /// The `k` nearest rows to `query_row`, together with the number of candidate
@@ -668,7 +679,34 @@ impl<A: Arithmetic> HnswIndex<A> {
         let arithmetic = self.resolve_here()?;
         let cache = DistanceCache::default();
         let ranked = self
-            .with_scratch(|visited| self.search_with(arithmetic, query_row, k, &cache, visited))?;
+            .with_scratch(|visited| self.search_with(arithmetic, query_row, k, &cache, visited))
+            .and_then(resident_ranked)?;
+        Ok((ranked, cache.evaluations()))
+    }
+
+    /// The native row search with actual query-owned storage and retained ranking.
+    /// Unlike resident pooled scratch, buffers created here die with their grants.
+    ///
+    /// # Errors
+    /// As for [Self::search_rows_work], plus typed workspace admission or allocator
+    /// failure before constructing any required native buffer.
+    pub fn search_rows_work_admitted(
+        &self,
+        query_row: usize,
+        k: usize,
+        workspace: &WorkspaceCapability,
+    ) -> Result<(AdmittedVec<Ranked>, u64)> {
+        let arithmetic = self.resolve_here()?;
+        let cache = DistanceCache::admitted(workspace);
+        let ranked = if workspace.is_bounded() {
+            let mut visited =
+                Visited::try_new(if k == 0 { 0 } else { self.matrix.rows() }, workspace)?;
+            self.search_with(arithmetic, query_row, k, &cache, &mut visited)?
+        } else {
+            self.with_scratch(|visited| {
+                self.search_with(arithmetic, query_row, k, &cache, visited)
+            })?
+        };
         Ok((ranked, cache.evaluations()))
     }
 
@@ -698,6 +736,7 @@ impl<A: Arithmetic> HnswIndex<A> {
         let cache = DistanceCache::default();
         let bound = self.bind_vector(query, &cache)?;
         self.with_scratch(|visited| (self.compiled.traverse)(self, &bound, k, visited))
+            .and_then(resident_ranked)
     }
 
     /// [`HnswIndex::search_vector`] with the candidate distance evaluations it cost.
@@ -708,8 +747,9 @@ impl<A: Arithmetic> HnswIndex<A> {
     pub fn search_vector_work(&self, query: &[f64], k: usize) -> Result<(Vec<Ranked>, u64)> {
         let cache = DistanceCache::default();
         let bound = self.bind_vector(query, &cache)?;
-        let ranked =
-            self.with_scratch(|visited| (self.compiled.traverse)(self, &bound, k, visited))?;
+        let ranked = self
+            .with_scratch(|visited| (self.compiled.traverse)(self, &bound, k, visited))
+            .and_then(resident_ranked)?;
         Ok((ranked, cache.evaluations()))
     }
 
@@ -765,6 +805,7 @@ impl<A: Arithmetic> HnswIndex<A> {
                     let arithmetic = arithmetic.clone()?;
                     let cache = DistanceCache::default();
                     self.search_with(arithmetic, query_row, k, &cache, visited)
+                        .and_then(resident_ranked)
                 },
             )
             .collect()
@@ -778,7 +819,7 @@ impl<A: Arithmetic> HnswIndex<A> {
         k: usize,
         cache: &DistanceCache,
         visited: &mut Visited,
-    ) -> Result<Vec<Ranked>> {
+    ) -> Result<AdmittedVec<Ranked>> {
         let rows = self.matrix.rows();
         if query_row >= rows {
             return Err(HnswError::RowOutOfBounds {
@@ -807,12 +848,12 @@ impl<A: Arithmetic> HnswIndex<A> {
         query: &Query<'_, A>,
         k: usize,
         visited: &mut Visited,
-    ) -> Result<Vec<Ranked>> {
+    ) -> Result<AdmittedVec<Ranked>> {
         if k == 0 {
-            return Ok(Vec::new());
+            return Ok(AdmittedVec::new(query.workspace()));
         }
         let Some(entry) = self.graph.entry() else {
-            return Ok(Vec::new());
+            return Ok(AdmittedVec::new(query.workspace()));
         };
         // `ef_search` is part of the declared artifact identity, so it is never widened to
         // fit a request. A `k` larger than the beam is answered with fewer than `k` rows:
@@ -821,7 +862,7 @@ impl<A: Arithmetic> HnswIndex<A> {
         // the guard committed to.
         let ef = self.params.ef_search().min(self.matrix.rows());
         let (start, _) = greedy_descend(&self.graph, query, entry, self.graph.max_level(), 1)?;
-        let mut result = search_layer(&self.graph, query, visited, &[start], 0, ef)?;
+        let mut result = search_layer_admitted(&self.graph, query, visited, &[start], 0, ef)?;
         result.truncate(k);
         Ok(result)
     }

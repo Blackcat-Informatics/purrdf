@@ -78,7 +78,7 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::knn::{
     KNN_ARITY, KNN_COUNT, KNN_DISTANCE, KNN_MEMBERSHIP_MODE, KNN_MODE, KNN_NEIGHBOUR, KNN_QUERY,
-    KnnInvocation, RankSource, RankedCursor, TermRows,
+    KnnInvocation, RankSource, TermRows,
 };
 use purrdf_sparql_eval::{
     AcceptedTerm, CandidateDomains, Completeness, DepthPlacement, DuplicatePolicy, EvalError,
@@ -98,7 +98,25 @@ use crate::{HnswIndex, IndexArithmetic, profile};
 fn eval_error(context: &str, error: HnswError) -> EvalError {
     match error {
         HnswError::FloatEnvironment(refusal) => EvalError::FloatEnvironment(refusal),
+        HnswError::Workspace(error) => error,
         other => EvalError::data(format!("{context}: {other}")),
+    }
+}
+
+/// Native query failures preserve typed storage causes without formatting them.
+fn eval_error_admitted(
+    context: &str,
+    error: HnswError,
+    workspace: &purrdf_sparql_eval::WorkspaceCapability,
+) -> EvalError {
+    match error {
+        HnswError::FloatEnvironment(refusal) => EvalError::FloatEnvironment(refusal),
+        HnswError::Workspace(error) => error,
+        other => purrdf_sparql_eval::NativeDiagnostic::error(
+            purrdf_sparql_eval::NativeDiagnosticKind::Data,
+            format_args!("{context}: {other}"),
+            workspace,
+        ),
     }
 }
 
@@ -848,21 +866,32 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        let invocation = KnnInvocation::open(
+        self.open_admitted(
+            args,
+            ceiling,
+            purrdf_sparql_eval::WorkspaceCapability::resident(),
+        )
+    }
+
+    fn open_admitted(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        workspace: purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        KnnInvocation::open_owned(
             "the HNSW relation",
             args,
             ceiling,
             &self.space.rows,
             self.space.guard(),
             &self.observations.membership_lookups,
-        )?;
-        Ok(Box::new(RankedCursor::new(
-            HnswSource {
-                space: Arc::clone(&self.space),
-                observations: Arc::clone(&self.observations),
-            },
-            invocation,
-        )))
+            workspace,
+        )?
+        .cursor(HnswSource {
+            space: Arc::clone(&self.space),
+            observations: Arc::clone(&self.observations),
+        })
     }
 }
 
@@ -881,12 +910,29 @@ impl<A: Arithmetic> RankSource for HnswSource<A> {
     /// The **only** call site of [`HnswIndex::search_rows_work`] in this relation, which
     /// is what makes [`HnswObservations::searches`] a measurement rather than an estimate.
     fn search(&self, query_row: usize, select_k: usize) -> Result<(Vec<Ranked>, u64), EvalError> {
+        let (ranked, work) = self.search_admitted(
+            query_row,
+            select_k,
+            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+        )?;
+        let ranked = ranked.try_into_resident().map_err(|_| {
+            EvalError::WorkspaceUnpriced("raw extraction of admitted HNSW source ranking")
+        })?;
+        Ok((ranked, work))
+    }
+
+    fn search_admitted(
+        &self,
+        query_row: usize,
+        select_k: usize,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<(purrdf_sparql_eval::AdmittedVec<Ranked>, u64), EvalError> {
         self.observations.searches.fetch_add(1, Ordering::Relaxed);
         let (ranked, work) = self
             .space
             .index
-            .search_rows_work(query_row, select_k)
-            .map_err(|e| eval_error("the HNSW search failed", e))?;
+            .search_rows_work_admitted(query_row, select_k, workspace)
+            .map_err(|error| eval_error_admitted("the HNSW search failed", error, workspace))?;
         self.observations
             .graph_candidates
             .fetch_add(work, Ordering::Relaxed);
@@ -895,13 +941,28 @@ impl<A: Arithmetic> RankSource for HnswSource<A> {
 
     /// One pairwise evaluation: no node is visited and no layer is consulted.
     fn distance(&self, query_row: usize, row: usize) -> Result<f64, EvalError> {
+        self.distance_admitted(
+            query_row,
+            row,
+            &purrdf_sparql_eval::WorkspaceCapability::resident(),
+        )
+    }
+
+    fn distance_admitted(
+        &self,
+        query_row: usize,
+        row: usize,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<f64, EvalError> {
         self.observations
             .membership_distances
             .fetch_add(1, Ordering::Relaxed);
         self.space
             .index
             .row_distance(query_row, row)
-            .map_err(|e| eval_error("the HNSW membership lookup failed", e))
+            .map_err(|error| {
+                eval_error_admitted("the HNSW membership lookup failed", error, workspace)
+            })
     }
 
     fn term(&self, row: usize) -> Option<&TermValue> {

@@ -59,6 +59,8 @@ use purrdf_lex::literal_escape::{self, Carrier};
 use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri};
 use purrdf_lex::text_out::TextOut;
 
+use crate::memory::{Memory, Resident, Storage, StorageError};
+
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm};
 use crate::value::{CdtContents, CdtValue};
 
@@ -74,7 +76,7 @@ enum Job<'a> {
 
 /// Where the canonical renderer puts its output.
 ///
-/// There are exactly two implementations — [`String`], which materialises the form,
+/// There are exactly two implementations — [`FixedText`], which materialises the form,
 /// and [`Measure`], which keeps only its byte length — and **one** walker drives
 /// both. Measuring is therefore guaranteed to agree with rendering, byte for byte,
 /// with no second description of the form to fall out of step.
@@ -83,13 +85,12 @@ enum Job<'a> {
 /// directly and the measure counts exactly the bytes they would write.
 trait Sink: TextOut {
     /// A nested composite: schedule its rendering, or account for its length.
-    fn composite<'a>(&mut self, jobs: &mut Vec<Job<'a>>, value: &'a CdtValue);
-}
-
-impl Sink for String {
-    fn composite<'a>(&mut self, jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
-        push_value(jobs, value);
-    }
+    fn composite<'a>(
+        &mut self,
+        jobs: &mut Vec<Job<'a>>,
+        value: &'a CdtValue,
+        memory: &mut Memory<'_>,
+    ) -> Result<(), StorageError>;
 }
 
 /// A [`Sink`] that materialises nothing and accumulates only the byte length.
@@ -120,8 +121,14 @@ impl TextOut for Measure {
 }
 
 impl Sink for Measure {
-    fn composite<'a>(&mut self, _jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
+    fn composite<'a>(
+        &mut self,
+        _jobs: &mut Vec<Job<'a>>,
+        value: &'a CdtValue,
+        _memory: &mut Memory<'_>,
+    ) -> Result<(), StorageError> {
         self.0 = self.0.saturating_add(value.extent().bytes);
+        Ok(())
     }
 }
 
@@ -150,11 +157,75 @@ impl Sink for Measure {
 /// ```
 #[must_use]
 pub fn canonical_lexical(value: &CdtValue) -> String {
-    let mut out = String::new();
-    let mut jobs: Vec<Job<'_>> = Vec::new();
-    push_value(&mut jobs, value);
-    run(&mut out, jobs);
-    out
+    try_canonical_lexical(value, &mut Resident)
+        .expect("resident renderer capacity")
+        .0
+}
+
+/// Render the original canonical spelling under caller-owned admission.
+/// The returned byte count belongs to the caller's original storage grant.
+/// # Errors
+/// Returns original admission, allocator or checked-layout refusal.
+pub fn try_canonical_lexical(
+    value: &CdtValue,
+    storage: &mut impl Storage,
+) -> Result<(String, usize), StorageError> {
+    let mut memory = Memory::new(storage);
+    memory.scope(|memory| {
+        let expected = canonical_lexical_len(value);
+        let mut out = FixedText {
+            text: String::new(),
+            failed: false,
+        };
+        memory.reserve_string(&mut out.text, expected)?;
+        let mut jobs = Vec::new();
+        push_value(&mut jobs, value, memory)?;
+        run(&mut out, jobs, memory)?;
+        if out.failed || out.text.len() != expected {
+            return Err(StorageError::FormattingFailed);
+        }
+        Ok((out.text, memory.admitted_bytes()))
+    })
+}
+
+/// The immutable value's exact canonical extent is admitted before rendering.
+/// The same emitter writes into this checked destination; a broken extent can
+/// never trigger an unpriced String reallocation or publish partial output.
+struct FixedText {
+    text: String,
+    failed: bool,
+}
+impl fmt::Write for FixedText {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        if self.failed || self.text.capacity().saturating_sub(self.text.len()) < text.len() {
+            self.failed = true;
+            return Err(fmt::Error);
+        }
+        self.text.push_str(text);
+        Ok(())
+    }
+}
+impl TextOut for FixedText {
+    fn push_str(&mut self, text: &str) {
+        let _ = fmt::Write::write_str(self, text);
+    }
+    fn push(&mut self, ch: char) {
+        let mut bytes = [0; 4];
+        TextOut::push_str(self, ch.encode_utf8(&mut bytes));
+    }
+    fn failed(&self) -> bool {
+        self.failed
+    }
+}
+impl Sink for FixedText {
+    fn composite<'a>(
+        &mut self,
+        jobs: &mut Vec<Job<'a>>,
+        value: &'a CdtValue,
+        memory: &mut Memory<'_>,
+    ) -> Result<(), StorageError> {
+        push_value(jobs, value, memory)
+    }
 }
 
 /// The **byte length** of [`canonical_lexical`], without allocating it.
@@ -184,18 +255,53 @@ pub fn canonical_lexical_len(value: &CdtValue) -> usize {
 /// diagnostic.
 #[must_use]
 pub fn canonical_key_lexical(key: &CdtKey) -> String {
-    let mut out = String::new();
-    write_key(&mut out, key);
-    out
+    try_canonical_key_lexical(key, &mut Memory::new(&mut Resident))
+        .expect("resident canonical key storage")
+}
+
+pub(crate) fn try_canonical_key_lexical(
+    key: &CdtKey,
+    memory: &mut Memory<'_>,
+) -> Result<String, StorageError> {
+    memory.scope(|memory| {
+        let length = key_lexical_len(key);
+        let mut output = FixedText {
+            text: String::new(),
+            failed: false,
+        };
+        memory.reserve_string(&mut output.text, length)?;
+        write_key(&mut output, key);
+        if output.failed || output.text.len() != length {
+            return Err(StorageError::FormattingFailed);
+        }
+        Ok(output.text)
+    })
 }
 
 /// The byte length one element occupies in a canonical form, without allocating it.
 /// A nested composite answers from its carried measure, so this costs the element's
 /// own leaves and nothing below a composite.
-pub(crate) fn term_lexical_len(term: &CdtTerm) -> usize {
+pub(crate) fn try_term_lexical_len(
+    term: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<usize, StorageError> {
     let mut out = Measure(0);
-    run(&mut out, alloc::vec![Job::Term(term)]);
-    out.0
+    let mut jobs = Vec::new();
+    memory.push(&mut jobs, Job::Term(term))?;
+    run(&mut out, jobs, memory)?;
+    Ok(out.0)
+}
+
+/// Measure the original triple renderer before its checked box is born.
+pub(crate) fn try_triple_lexical_len(
+    triple: &CdtTripleTerm,
+    memory: &mut Memory<'_>,
+) -> Result<usize, StorageError> {
+    let mut output = Measure(0);
+    let mut jobs = Vec::new();
+    push_triple(&mut jobs, triple, memory)?;
+    run(&mut output, jobs, memory)?;
+    Ok(output.0)
 }
 
 /// The byte length one map key occupies in a canonical form, without allocating it.
@@ -207,14 +313,18 @@ pub(crate) fn key_lexical_len(key: &CdtKey) -> usize {
 
 /// Drive the renderer's job stack into a sink. Iterative: nesting costs heap, never
 /// stack.
-fn run<S: Sink>(out: &mut S, mut jobs: Vec<Job<'_>>) {
+fn run<S: Sink>(
+    out: &mut S,
+    mut jobs: Vec<Job<'_>>,
+    memory: &mut Memory<'_>,
+) -> Result<(), StorageError> {
     while let Some(job) = jobs.pop() {
         match job {
             Job::Punct(text) => out.push_str(text),
             Job::Key(key) => write_key(out, key),
             Job::Term(term) => match term {
-                CdtTerm::Composite(inner) => out.composite(&mut jobs, inner.as_ref()),
-                CdtTerm::TripleTerm(triple) => push_triple(&mut jobs, triple.as_ref()),
+                CdtTerm::Composite(inner) => out.composite(&mut jobs, inner.as_ref(), memory)?,
+                CdtTerm::TripleTerm(triple) => push_triple(&mut jobs, triple.as_ref(), memory)?,
                 CdtTerm::Iri(iri) => write_iri(iri, out),
                 CdtTerm::Blank(label) => write_blank(label, out),
                 CdtTerm::Literal(literal) => write_literal(out, literal),
@@ -222,47 +332,58 @@ fn run<S: Sink>(out: &mut S, mut jobs: Vec<Job<'_>>) {
             },
         }
     }
+    memory.release_vec(jobs)
 }
 
 /// Push the jobs for a composite, in reverse emission order (the stack pops LIFO).
-fn push_value<'a>(jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
+fn push_value<'a>(
+    jobs: &mut Vec<Job<'a>>,
+    value: &'a CdtValue,
+    memory: &mut Memory<'_>,
+) -> Result<(), StorageError> {
     match value.contents() {
         CdtContents::List(items) => {
-            jobs.push(Job::Punct("]"));
+            memory.push(jobs, Job::Punct("]"))?;
             for (index, item) in items.iter().enumerate().rev() {
-                jobs.push(Job::Term(item));
+                memory.push(jobs, Job::Term(item))?;
                 if index > 0 {
-                    jobs.push(Job::Punct(","));
+                    memory.push(jobs, Job::Punct(","))?;
                 }
             }
-            jobs.push(Job::Punct("["));
+            memory.push(jobs, Job::Punct("["))?;
         }
         CdtContents::Map(entries) => {
-            jobs.push(Job::Punct("}"));
+            memory.push(jobs, Job::Punct("}"))?;
             for (index, CdtEntry { key, value: item }) in entries.iter().enumerate().rev() {
-                jobs.push(Job::Term(item));
-                jobs.push(Job::Punct(":"));
-                jobs.push(Job::Key(key));
+                memory.push(jobs, Job::Term(item))?;
+                memory.push(jobs, Job::Punct(":"))?;
+                memory.push(jobs, Job::Key(key))?;
                 if index > 0 {
-                    jobs.push(Job::Punct(","));
+                    memory.push(jobs, Job::Punct(","))?;
                 }
             }
-            jobs.push(Job::Punct("{"));
+            memory.push(jobs, Job::Punct("{"))?;
         }
     }
+    Ok(())
 }
 
 /// Push the jobs for a triple term, in reverse emission order.
-fn push_triple<'a>(jobs: &mut Vec<Job<'a>>, triple: &'a CdtTripleTerm) {
-    jobs.push(Job::Punct(TRIPLE_TERM_CLOSE));
-    jobs.push(Job::Punct(" "));
-    jobs.push(Job::Term(&triple.object));
-    jobs.push(Job::Punct(" "));
-    jobs.push(Job::Term(&triple.predicate));
-    jobs.push(Job::Punct(" "));
-    jobs.push(Job::Term(&triple.subject));
-    jobs.push(Job::Punct(" "));
-    jobs.push(Job::Punct(TRIPLE_TERM_OPEN));
+fn push_triple<'a>(
+    jobs: &mut Vec<Job<'a>>,
+    triple: &'a CdtTripleTerm,
+    memory: &mut Memory<'_>,
+) -> Result<(), StorageError> {
+    memory.push(jobs, Job::Punct(TRIPLE_TERM_CLOSE))?;
+    memory.push(jobs, Job::Punct(" "))?;
+    memory.push(jobs, Job::Term(&triple.object))?;
+    memory.push(jobs, Job::Punct(" "))?;
+    memory.push(jobs, Job::Term(&triple.predicate))?;
+    memory.push(jobs, Job::Punct(" "))?;
+    memory.push(jobs, Job::Term(&triple.subject))?;
+    memory.push(jobs, Job::Punct(" "))?;
+    memory.push(jobs, Job::Punct(TRIPLE_TERM_OPEN))?;
+    Ok(())
 }
 
 fn write_key<S: Sink>(out: &mut S, key: &CdtKey) {

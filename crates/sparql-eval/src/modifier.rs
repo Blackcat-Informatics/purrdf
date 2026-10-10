@@ -99,8 +99,12 @@
 //! (`None`), the same unbound-for-error reading `AVG`/`SAMPLE` already use for
 //! their own empty-group `error` case.
 
+pub(crate) mod owners;
+use crate::workspace::AdmittedVec;
+use owners::DedupState;
+pub(crate) use owners::order_permutation;
+
 use std::cmp::Ordering;
-use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, GraphMatch, TermValue, ViewTermId};
@@ -109,25 +113,24 @@ use purrdf_sparql_algebra::{
     OrderExpression, PropertyPathExpression, Variable,
 };
 use purrdf_xsd::exact::DivisionPolicy;
-use purrdf_xsd::numeric::numeric_div_with_policy;
-use purrdf_xsd::{
-    BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_total_cmp,
-};
+#[cfg(test)]
+use purrdf_xsd::numeric_div;
+use purrdf_xsd::{XsdDatatype, XsdValue, parse_by_iri, value_total_cmp};
 
-use purrdf_xsd::datatype::XSD_INTEGER;
 use purrdf_xsd::datatype::XSD_STRING;
 
 use crate::agg_fn::AggregateAccumulator as _;
-use crate::convert::{ground_term_to_value, literal_to_value, named_node_to_value};
+use crate::convert::ground_term_to_workspace_value;
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
+#[cfg(test)]
 use crate::expr::xsd_of;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Lift, Truncation};
+use crate::parsed_value::ParsedValue;
 use crate::scratch::SolutionTerm;
-use crate::solution::{Solution, SolutionSeq, VarSchema};
+use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
 use crate::user_fn::Volatility;
-use crate::{DetHashMap, DetHashSet, DetHasher};
 
 /// Inline `VALUES`: one solution per binding row, each cell an interned ground term
 /// (or unbound for `UNDEF`).
@@ -138,7 +141,12 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
     bindings: &[Vec<Option<purrdf_sparql_algebra::GroundTerm>>],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let schema = VarSchema::interned(variables);
+    let schema = if ctx.growth.is_bounded() {
+        VarSchema::from_vars_admitted(variables.iter().cloned(), &ctx.growth)?
+            .shared_admitted(&ctx.growth)?
+    } else {
+        VarSchema::interned(variables)
+    };
     let width = schema.len();
     // `VALUES` is 1:1 with its inline bindings, in order, so the pushed row ceiling is
     // simply how many of them are worth interning. Interning is not free — every ground
@@ -146,13 +154,7 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
     // thousand rows under a `LIMIT 5` stops after five.
     let semantic_ceiling = ctx.row_ceiling();
     let cell_ceiling = ctx.cell_row_ceiling(width);
-    let capacity = semantic_ceiling
-        .into_iter()
-        .chain(cell_ceiling)
-        .min()
-        .unwrap_or(bindings.len())
-        .min(bindings.len());
-    let mut rows = Vec::with_capacity(capacity);
+    let mut rows = RowsBuilder::new(&ctx.growth);
     for binding in bindings {
         if semantic_ceiling.is_some_and(|cap| rows.len() >= cap) {
             break;
@@ -161,60 +163,72 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
             let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
             break;
         }
-        let mut row = purrdf_core::smallvec![None; width];
-        for (i, cell) in binding.iter().enumerate() {
-            if let Some(ground) = cell {
-                // The PLAIN door, deliberately: an unbound cell here is not the
-                // §17.2 unbound RESULT, it is `UNDEF`, which is compatible with
-                // every solution — so degrading a term to `None` would delete a
-                // constraint and answer with MORE rows, silently. A `VALUES`
-                // cell is an algebra ground term, never an extension-computed
-                // value, and every way one arrives is gated upstream: query text
-                // by the SPARQL parser, a hand-built `Query` by
-                // `purrdf_sparql_algebra`'s algebra validator (which
-                // `PreparedQuery::rewritten` runs, and which refuses an
-                // "invalid language tag in query algebra" on this same profile),
-                // a `SparqlRequest` pre-binding by `crate::substitute`'s ingress
-                // — the one door the validator cannot see, because substitution
-                // happens after admission — and a SEP-0007 Values-Insertion row
-                // by the fact that its cells are already-admitted solution terms
-                // being put back. See `ScratchInterner::intern`.
-                row[i] = Some(
-                    ctx.scratch
-                        .try_intern(ctx.dataset, ground_term_to_value(ground))
-                        .map_err(EvalError::source_read)?,
-                );
-            }
-        }
-        rows.push(row);
+        let workspace = ctx.growth.clone();
+        let row = RetainedRow::try_from_cells(
+            width,
+            binding.iter().map(|cell| {
+                if let Some(ground) = cell {
+                    // The PLAIN door, deliberately: an unbound cell here is not the
+                    // §17.2 unbound RESULT, it is `UNDEF`, which is compatible with
+                    // every solution — so degrading a term to `None` would delete a
+                    // constraint and answer with MORE rows, silently. A `VALUES`
+                    // cell is an algebra ground term, never an extension-computed
+                    // value, and every way one arrives is gated upstream: query text
+                    // by the SPARQL parser, a hand-built `Query` by
+                    // `purrdf_sparql_algebra`'s algebra validator (which
+                    // `PreparedQuery::rewritten` runs, and which refuses an
+                    // "invalid language tag in query algebra" on this same profile),
+                    // a `SparqlRequest` pre-binding by `crate::substitute`'s ingress
+                    // — the one door the validator cannot see, because substitution
+                    // happens after admission — and a SEP-0007 Values-Insertion row
+                    // by the fact that its cells are already-admitted solution terms
+                    // being put back. See `ScratchInterner::intern`.
+                    let value = ground_term_to_workspace_value(ground, &ctx.growth)?;
+                    ctx.intern_workspace_term(value)
+                } else {
+                    Ok(None)
+                }
+            }),
+            &workspace,
+        )?;
+        rows.push_row(row)?;
     }
-    Ok(SolutionSeq { schema, rows })
+    Ok(SolutionSeq {
+        schema,
+        rows: rows.finish()?,
+    })
 }
 
 // One authored projection kernel with caller-local iterator identities: sharing
 // one generic closure made its outer bulk specialization a two-use outlined call.
 // Bind each input once, in argument order, while retaining the safe container homes.
 macro_rules! eval_project_sequence {
-    ($seq:expr, $out:expr) => {{
+    ($seq:expr, $out:expr, $workspace:expr) => {{
         let seq = $seq;
         let out = $out;
+        let workspace = $workspace;
         // For each projected column, the source column in the inner schema (if any).
-        let src: Vec<Option<usize>> = out.vars().iter().map(|v| seq.schema.index_of(v)).collect();
+        let mut src = crate::workspace::AdmittedVec::new(workspace);
+        for variable in out.vars() {
+            src.push(seq.schema.index_of(variable))?;
+        }
         // Reserve the exact row count, then use Vec's bulk extension so row capacity
         // and final length publication stay outside the per-row projection work.
-        let mut rows = Vec::with_capacity(seq.rows.len());
-        rows.extend(seq.rows.iter().map(|row| {
+        let mut rows = RowsBuilder::new(workspace);
+        for row in seq.rows.iter() {
             let row = row.as_slice();
             // Use SmallVec's reserved-slot bulk loop without a FromIterator wrapper
             // or repeated push capacity/tag/length work for each projected cell.
-            let mut projected = Solution::new();
-            projected.extend(
+            rows.push_cells(
+                src.len(),
                 src.iter()
                     .map(|source| source.and_then(|column| row[column])),
-            );
-            projected
-        }));
-        SolutionSeq { schema: out, rows }
+            )?;
+        }
+        SolutionSeq {
+            schema: out,
+            rows: rows.finish()?,
+        }
     }};
 }
 
@@ -228,20 +242,22 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
     variables: &[Variable],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
+    let workspace = ctx.growth.clone();
     let layout = || {
-        if ctx.dataset.storage_live_budget().is_some() {
-            Arc::new(VarSchema::from_vars(variables.iter().cloned()))
+        if workspace.is_bounded() {
+            VarSchema::from_vars_admitted(variables.iter().cloned(), &workspace)?
+                .shared_admitted(&workspace)
         } else {
-            VarSchema::interned(variables)
+            Ok(VarSchema::interned(variables))
         }
     };
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let evaluated = crate::service_endpoints::eval_projected(inner, variables, ctx)?;
     let Some(seq) = lift.absorb(0, evaluated) else {
-        let schema = layout();
+        let schema = layout()?;
         return Ok(lift.finish(SolutionSeq::empty(schema)));
     };
-    let projected = eval_project_sequence!(&seq, layout());
+    let projected = eval_project_sequence!(&seq, layout()?, &workspace);
     Ok(lift.finish(projected))
 }
 
@@ -262,12 +278,13 @@ pub(crate) fn eval_project_with<D: DatasetView + Sync, M: crate::eval::RowDelive
             delivery,
             |seq, ctx| {
                 let out = if ctx.dataset.storage_live_budget().is_some() {
-                    Arc::new(VarSchema::from_vars(variables.iter().cloned()))
+                    VarSchema::from_vars_admitted(variables.iter().cloned(), &ctx.growth)?
+                        .shared_admitted(&ctx.growth)?
                 } else {
                     VarSchema::interned(variables)
                 };
-                let lift = Lift::at(node);
-                let projected = eval_project_sequence!(&seq, out);
+                let lift = Lift::at_admitted(node, &ctx.growth)?;
+                let projected = eval_project_sequence!(&seq, out, &ctx.growth);
                 Ok(lift.finish(projected))
             },
             ctx,
@@ -304,15 +321,14 @@ pub(crate) fn eval_dedup_with<D: DatasetView + Sync, const ADJACENT: bool>(
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         return Ok(lift.withheld());
     };
     // A shared blank's column is not part of a solution: two rows that differ only
     // there are the same solution (see `crate::blank_scope`).
-    Ok(lift.finish(dedup::<_, ADJACENT>(
-        crate::blank_scope::without_joined_blanks(seq),
-    )))
+    let seq = crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?;
+    Ok(lift.finish(dedup::<_, ADJACENT>(seq, &ctx.growth)?))
 }
 
 // Erase the static delivery wrapper; the native operator retains its call boundary.
@@ -349,24 +365,18 @@ fn eval_dedup_yielding<
     delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut seen = DetHashSet::default();
-    let mut previous = None;
+    let mut state = DedupState::<D::Id, ADJACENT>::new(&ctx.growth);
     crate::eval::yield_transform(
         node,
         inner,
         delivery,
-        |seq, _ctx| {
-            let mut seq = crate::blank_scope::without_joined_blanks(seq);
-            seq.rows.retain(|row| {
-                if ADJACENT {
-                    let keep = previous.as_ref() != Some(row);
-                    previous = Some(row.clone());
-                    keep
-                } else {
-                    seen.insert(row.clone())
-                }
-            });
-            Ok(Evaluated::Complete(seq))
+        |seq, ctx| {
+            let seq = crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?;
+            Ok(Evaluated::Complete(dedup_with_state(
+                seq,
+                &mut state,
+                &ctx.growth,
+            )?))
         },
         ctx,
     )
@@ -374,26 +384,29 @@ fn eval_dedup_yielding<
 
 /// Drop duplicate rows, preserving first-seen order (SolutionTerm equality is exact
 /// RDF-term identity — see the scratch-interner promotion rule).
-fn dedup<I: ViewTermId, const ADJACENT: bool>(mut seq: SolutionSeq<I>) -> SolutionSeq<I> {
-    if ADJACENT {
-        seq.rows.dedup();
-        return seq;
-    }
-    let mut unique = DetHashMap::with_capacity_and_hasher(seq.rows.len(), DetHasher::default());
-    for (ordinal, row) in seq.rows.into_iter().enumerate() {
-        if let Entry::Vacant(entry) = unique.entry(row) {
-            entry.insert(ordinal);
+fn dedup<I: ViewTermId, const ADJACENT: bool>(
+    seq: SolutionSeq<I>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<SolutionSeq<I>, EvalError> {
+    let mut state = DedupState::<I, ADJACENT>::new(workspace);
+    dedup_with_state(seq, &mut state, workspace)
+}
+
+fn dedup_with_state<I: ViewTermId, const ADJACENT: bool>(
+    seq: SolutionSeq<I>,
+    state: &mut DedupState<I, ADJACENT>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<SolutionSeq<I>, EvalError> {
+    let mut rows = RowsBuilder::new(workspace);
+    for row in seq.rows {
+        if state.keep(&row)? {
+            rows.push_row(row)?;
         }
     }
-    let mut rows: Vec<_> = unique
-        .into_iter()
-        .map(|(row, ordinal)| (ordinal, row))
-        .collect();
-    rows.sort_unstable_by_key(|(ordinal, _)| *ordinal);
-    SolutionSeq {
+    Ok(SolutionSeq {
         schema: seq.schema,
-        rows: rows.into_iter().map(|(_, row)| row).collect(),
-    }
+        rows: rows.finish()?,
+    })
 }
 
 /// `LIMIT`/`OFFSET`: skip `start` solutions then keep at most `length`.
@@ -413,19 +426,22 @@ pub(crate) fn eval_slice<D: DatasetView + Sync>(
     length: Option<usize>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         return Ok(lift.withheld());
     };
-    let rows = seq
+    let mut rows = RowsBuilder::new(&ctx.growth);
+    for row in seq
         .rows
         .into_iter()
         .skip(start)
         .take(length.unwrap_or(usize::MAX))
-        .collect();
+    {
+        rows.push_row(row)?;
+    }
     Ok(lift.finish(SolutionSeq {
         schema: seq.schema,
-        rows,
+        rows: rows.finish()?,
     }))
 }
 
@@ -455,22 +471,33 @@ fn eval_slice_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     mut delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     if length == Some(0) {
-        return Ok(lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema(inner))));
+        return Ok(
+            lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema_admitted(
+                inner,
+                &ctx.growth,
+            )?)),
+        );
     }
     let mut index = 0usize;
     let mut kept = 0usize;
-    let mut blocks = purrdf_core::SmallVec::<[SolutionSeq<D::Id>; 2]>::new();
+    let mut rows = RowsBuilder::new(&ctx.growth);
+    let mut schema = None;
     let mut consume = |seq: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
         for row in &seq.rows {
             if index >= start {
+                let mut output_rows = RowsBuilder::new(&ctx.growth);
+                output_rows.push_row(row.clone_admitted(&ctx.growth)?)?;
                 let output = SolutionSeq {
-                    schema: Arc::clone(&seq.schema),
-                    rows: vec![row.clone()],
+                    schema: seq.schema.clone(),
+                    rows: output_rows.finish()?,
                 };
                 delivery.deliver(&output, ctx)?;
-                blocks.push(output);
+                schema = Some(output.schema.clone());
+                for row in output.rows {
+                    rows.push_row(row)?;
+                }
                 kept = kept.saturating_add(1);
             }
             index = index.saturating_add(1);
@@ -486,7 +513,14 @@ fn eval_slice_yielding<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     if lift.absorb(0, evaluated).is_none() {
         return Ok(lift.withheld());
     }
-    Ok(lift.finish(crate::binop::concat_union(blocks, ctx)))
+    let schema = match schema {
+        Some(schema) => schema,
+        None => crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?,
+    };
+    Ok(lift.finish(SolutionSeq {
+        schema,
+        rows: rows.finish()?,
+    }))
 }
 
 /// `ORDER BY`: stable-sort by the sort keys under SPARQL ordering (§15.1).
@@ -498,7 +532,7 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     exprs: &[OrderExpression],
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         return Ok(lift.withheld());
     };
@@ -509,27 +543,45 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     // O(n log n) comparator. Row `i`'s keys are `keys[i * width..][..width]`, and
     // sorting the PERMUTATION leaves them where their borrows point.
     let width = exprs.len();
-    let mut linked = Vec::with_capacity(width);
+    let cells = seq
+        .rows
+        .len()
+        .checked_mul(width)
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    let mut linked = AdmittedVec::with_capacity(width, &ctx.growth)?;
     for oe in exprs {
         let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = oe;
-        let program = crate::vm::program_at(ctx, node, e);
-        linked.push(crate::vm::Linked::link(program, e, &schema, ctx));
+        let program = crate::vm::program_at(ctx, node, e)?;
+        linked.push(crate::vm::Linked::link_admitted(program, e, &schema, ctx)?)?;
     }
-    let mut values: Vec<Option<TermValue>> = Vec::with_capacity(seq.rows.len() * width);
+    let mut values = AdmittedVec::with_capacity(cells, &ctx.growth)?;
     for row in &seq.rows {
-        for key in &mut linked {
+        for key in linked.as_mut_slice() {
             let term = key.term(row, &schema, ctx)?;
             values.push(
-                term.map(|t| ctx.scratch.try_value_of(ctx.dataset, t))
-                    .transpose()
-                    .map_err(EvalError::source_read)?,
-            );
+                term.map(|t| {
+                    ctx.scratch
+                        .try_owned_value_of(ctx.dataset, t, &ctx.growth, |error| {
+                            ctx.workspace.source_error(error)
+                        })
+                })
+                .transpose()?,
+            )?;
         }
     }
-    let keys: Vec<SortKey<'_>> = values.iter().map(|v| project(v.as_ref())).collect();
+    let mut keys = AdmittedVec::with_capacity(cells, &ctx.growth)?;
+    for value in &values {
+        keys.push(project_admitted(value.as_deref(), &ctx.growth)?)?;
+    }
     // Numbers past the bounded variants align their coefficients to compare: the
     // sort's worst case is priced before it runs, and a refusal truncates here.
-    if !crate::expr::numeric_step_admitted(ctx, sort_keys_numeric_cost(&keys, width)) {
+    let cost = sort_keys_numeric_cost_admitted(
+        &keys.iter().map(|key| &key.key),
+        keys.len(),
+        width,
+        &ctx.growth,
+    )?;
+    if !crate::expr::numeric_step_admitted(ctx, cost) {
         let tripped = ctx
             .expression_barrier
             .observed()
@@ -540,13 +592,15 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
             schema.clone(),
         )));
     }
-    let mut order: Vec<usize> = (0..seq.rows.len()).collect();
-    order.sort_by(|a, b| compare_keys(&keys[a * width..], &keys[b * width..], exprs));
-    let mut source = seq.rows;
-    let rows = order
-        .into_iter()
-        .map(|i| std::mem::take(&mut source[i]))
-        .collect();
+    let order = order_permutation(seq.rows.len(), &ctx.growth, |left, right| {
+        compare_keys_admitted(
+            &keys[left * width..],
+            &keys[right * width..],
+            exprs,
+            &ctx.growth,
+        )
+    })?;
+    let rows = seq.rows.ordered_admitted(order, &ctx.growth)?;
     // An `EXISTS` inside a sort key is an opaque edge; see `eval_left_join`.
     if let Some(tripped) = ctx.expression_barrier.observed() {
         return Ok(Evaluated::Truncated(Truncation::barred_at(
@@ -563,41 +617,55 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
 /// [`purrdf_xsd::exact::cost::compare_chain`] at `⌈log2 n⌉` rounds per value, the
 /// most a merge sort makes it the moving side of. Zero when no key is a number past
 /// the bounded variants.
-pub(crate) fn sort_keys_numeric_cost(
-    keys: &[SortKey<'_>],
+pub(crate) fn sort_keys_numeric_cost_admitted<
+    'key,
+    'value: 'key,
+    V: std::borrow::Borrow<XsdValue> + 'key,
+>(
+    keys: &(impl Iterator<Item = &'key SortKey<'value, V>> + Clone),
+    count: usize,
     width: usize,
-) -> purrdf_xsd::exact::Cost {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<purrdf_xsd::exact::Cost, EvalError> {
     let mut total = purrdf_xsd::exact::Cost::ZERO;
     // Only a number past the machine words aligns at any cost; a sort without one
     // pays this scan of the variants and nothing else.
-    let any_big = keys.iter().any(|key| {
-        matches!(
-            key,
-            SortKey::Literal(LiteralKey {
-                value: Some(XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_)),
-                ..
-            })
-        )
+    let any_big = (*keys).clone().any(|key| {
+        if let SortKey::Literal(literal) = key {
+            matches!(
+                literal.value.as_ref().map(std::borrow::Borrow::borrow),
+                Some(XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_))
+            )
+        } else {
+            false
+        }
     });
     if width == 0 || !any_big {
-        return total;
+        return Ok(total);
     }
-    let rounds = purrdf_xsd::exact::cost::sort_rounds(keys.len() / width);
+    let rows = count / width;
+    let rounds = purrdf_xsd::exact::cost::sort_rounds(rows);
     for column in 0..width {
-        let shapes: Vec<purrdf_xsd::exact::cost::Shape> = keys
-            .iter()
-            .skip(column)
-            .step_by(width)
-            .filter_map(|key| match key {
-                SortKey::Literal(LiteralKey {
-                    value: Some(value), ..
-                }) => purrdf_xsd::exact::cost::Shape::of_value(value),
-                _ => None,
-            })
-            .collect();
-        total = total.then(purrdf_xsd::exact::cost::compare_chain(&shapes, rounds));
+        let mut shapes = AdmittedVec::with_capacity(rows, workspace)?;
+        for key in (*keys).clone().skip(column).step_by(width) {
+            if let SortKey::Literal(LiteralKey {
+                value: Some(value), ..
+            }) = key
+                && let Some(shape) = purrdf_xsd::exact::cost::Shape::of_value(value.borrow())
+            {
+                shapes.push(shape)?;
+            }
+        }
+        let mut keyed = AdmittedVec::with_capacity(shapes.len(), workspace)?;
+        for key in purrdf_xsd::exact::cost::comparison_keys(&shapes) {
+            keyed.push(key)?;
+        }
+        total = total.then(purrdf_xsd::exact::cost::compare_keyed(
+            keyed.as_mut_slice(),
+            rounds,
+        ));
     }
-    total
+    Ok(total)
 }
 
 /// [`OrderExpression::expression`]'s write half: put a rewritten expression back under
@@ -623,11 +691,12 @@ pub(crate) fn eval_graph_with<D: DatasetView + Sync, M: crate::eval::RowDelivery
 ) -> Result<Evaluated<D::Id>, EvalError> {
     match name {
         NamedNodePattern::NamedNode(n) => {
-            let mut lift = Lift::at(node);
+            let mut lift = Lift::at_admitted(node, &ctx.growth)?;
+            let name = crate::convert::named_node_to_workspace_value(n, &ctx.growth)?;
             match ctx
                 .dataset
-                .term_id_by_value(&named_node_to_value(n))
-                .map_err(EvalError::source_read)?
+                .term_id_by_value(&name)
+                .map_err(|error| ctx.workspace.source_error(error))?
             {
                 // Addressable only if the term names a graph of the dataset — the same
                 // set `GRAPH ?g` ranges over, so a term known only in another position
@@ -667,7 +736,12 @@ pub(crate) fn eval_graph_with<D: DatasetView + Sync, M: crate::eval::RowDelivery
                 }
                 // The IRI is not a term, names no graph, or is not in the named
                 // dataset → empty.
-                _ => Ok(lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema(inner)))),
+                _ => Ok(
+                    lift.finish(SolutionSeq::empty(crate::eval::syntactic_schema_admitted(
+                        inner,
+                        &ctx.growth,
+                    )?)),
+                ),
             }
         }
         NamedNodePattern::Variable(v) => eval_graph_var(node, v, inner, delivery, ctx),
@@ -978,15 +1052,16 @@ fn eval_graph_var<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     mut delivery: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     // Enumerate every named graph the dataset knows about, restricted to those the
     // active dataset admits (a `FROM NAMED` / `USING NAMED` may limit which graphs
     // `GRAPH ?g` binds to).
-    let graphs: Vec<D::Id> = ctx
-        .dataset
-        .named_graphs()
-        .filter(|g| ctx.active_dataset.named_allows(*g))
-        .collect();
+    let mut graphs = AdmittedVec::new(&ctx.growth);
+    for graph in ctx.dataset.named_graphs() {
+        if ctx.active_dataset.named_allows(graph) {
+            graphs.push(graph)?;
+        }
+    }
 
     // Whether a graph the dataset reports row-free can be passed over instead of driven
     // through a full inner evaluation. Decided ONCE from the pattern's shape — it cannot
@@ -1000,7 +1075,7 @@ fn eval_graph_var<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     // after it (the last graph's schema wins either way): one allocation, not one per
     // named graph.
     let mut out_schema: Option<VarSchema> = None;
-    let mut rows = Vec::new();
+    let mut rows = RowsBuilder::new(&ctx.growth);
     let mut truncated = false;
     // Whether any graph was passed over below, which is the one case the schema fallback
     // must NOT answer by re-evaluating the inner pattern (see the `match` after the loop).
@@ -1021,15 +1096,20 @@ fn eval_graph_var<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
         ctx.active_graph = GraphMatch::Named(g);
         let evaluated = if M::ACTIVE {
             let mut consume = |seq: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
-                let mut rows = Vec::new();
-                let schema =
-                    append_graph_rows(seq.clone(), var, SolutionTerm::Existing(g), &mut rows);
+                let mut rows = RowsBuilder::new(&ctx.growth);
+                let schema = append_graph_rows(
+                    seq.clone(),
+                    var,
+                    SolutionTerm::Existing(g),
+                    &mut rows,
+                    &ctx.growth,
+                )?;
                 let producer_graph = ctx.active_graph;
                 ctx.active_graph = saved;
                 let delivered = delivery.deliver(
                     &SolutionSeq {
-                        schema: Arc::new(schema),
-                        rows,
+                        schema: schema.shared_admitted(&ctx.growth)?,
+                        rows: rows.finish()?,
                     },
                     ctx,
                 );
@@ -1060,12 +1140,20 @@ fn eval_graph_var<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
                 return Err(e);
             }
         };
-        out_schema = Some(append_graph_rows(
+        let appended = append_graph_rows(
             inner_seq,
             var,
             SolutionTerm::Existing(g),
             &mut rows,
-        ));
+            &ctx.growth,
+        );
+        match appended {
+            Ok(schema) => out_schema = Some(schema),
+            Err(error) => {
+                ctx.active_graph = saved;
+                return Err(error);
+            }
+        }
     }
     ctx.active_graph = saved;
 
@@ -1077,40 +1165,27 @@ fn eval_graph_var<D: DatasetView + Sync, M: crate::eval::RowDelivery<D>>(
     // OUTSIDE this node's scope (`active_graph` is restored above) and undo the very
     // work the narrowing saved, so the syntactic schema answers instead — the same
     // answer the `GRAPH <iri>` arm already gives an empty named-graph result.
-    let schema = match out_schema {
-        Some(s) => Arc::new(s),
-        None if truncated => lift.absorbed_schema().map_or_else(
-            || {
-                let mut schema = (*crate::eval::syntactic_schema(inner)).clone();
-                schema.push(var.clone());
-                Arc::new(schema)
-            },
-            |schema| {
-                let mut schema = (*schema).clone();
-                schema.push(var.clone());
-                Arc::new(schema)
-            },
-        ),
-        None if passed_over_a_graph => {
-            let mut schema = (*crate::eval::syntactic_schema(inner)).clone();
-            schema.push(var.clone());
-            Arc::new(schema)
-        }
-        None if M::ACTIVE => {
-            let mut schema = (*crate::eval::syntactic_schema(inner)).clone();
-            schema.push(var.clone());
-            Arc::new(schema)
+    let mut schema = match out_schema {
+        Some(s) => s,
+        None if truncated => match lift.absorbed_schema() {
+            Some(schema) => (*schema).clone(),
+            None => (*crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?).clone(),
+        },
+        None if passed_over_a_graph || M::ACTIVE => {
+            (*crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?).clone()
         }
         None => {
             let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
                 return Ok(lift.withheld());
             };
-            let mut sch = (*seq.schema).clone();
-            sch.push(var.clone());
-            Arc::new(sch)
+            (*seq.schema).clone()
         }
     };
-    Ok(lift.finish(SolutionSeq { schema, rows }))
+    schema.push_admitted(var.clone(), &ctx.growth)?;
+    Ok(lift.finish(SolutionSeq {
+        schema: schema.shared_admitted(&ctx.growth)?,
+        rows: rows.finish()?,
+    }))
 }
 
 /// Match a graph candidate against an existing column, or append its new column.
@@ -1122,51 +1197,73 @@ fn append_graph_rows<I: ViewTermId>(
     seq: SolutionSeq<I>,
     var: &Variable,
     candidate: SolutionTerm<I>,
-    rows: &mut Vec<Solution<I>>,
-) -> VarSchema {
+    rows: &mut RowsBuilder<I>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
     let mut schema = (*seq.schema).clone();
     match schema.index_of(var) {
         Some(column) => {
-            for mut row in seq.rows {
+            for row in seq.rows {
                 if !matches!(row[column], Some(existing) if existing != candidate) {
-                    row[column] = Some(candidate);
-                    rows.push(row);
+                    rows.push_cells(
+                        schema.len(),
+                        row.iter().enumerate().map(|(index, cell)| {
+                            if index == column {
+                                Some(candidate)
+                            } else {
+                                *cell
+                            }
+                        }),
+                    )?;
                 }
             }
         }
         None => {
-            let column = schema.push(var.clone());
+            let column = schema.push_admitted(var.clone(), workspace)?;
             let width = schema.len();
-            for mut row in seq.rows {
-                row.resize(width, None);
-                row[column] = Some(candidate);
-                rows.push(row);
+            for row in seq.rows {
+                rows.push_cells(
+                    width,
+                    (0..width).map(|index| {
+                        if index == column {
+                            Some(candidate)
+                        } else {
+                            row.get(index).copied().flatten()
+                        }
+                    }),
+                )?;
             }
         }
     }
-    schema
+    Ok(schema)
 }
 
 // ---------------------------------------------------------------------------
 // ordering
 // ---------------------------------------------------------------------------
 
-/// Compare two rows' projected sort keys, applying each key's `ASC`/`DESC`.
-pub(crate) fn compare_keys(
-    a: &[SortKey<'_>],
-    b: &[SortKey<'_>],
+/// Native project_admitted returns a key together with its parse/box owner.
+/// The source TermValue array outlives these borrowed parsed keys.
+pub(crate) struct OwnedSortKey<'a> {
+    pub(crate) key: SortKey<'a, ParsedValue>,
+}
+
+pub(crate) fn compare_keys_admitted(
+    left: &[OwnedSortKey<'_>],
+    right: &[OwnedSortKey<'_>],
     exprs: &[OrderExpression],
-) -> Ordering {
-    for ((ka, kb), oe) in a.iter().zip(b).zip(exprs) {
-        let mut ord = total_order(ka, kb);
-        if matches!(oe, OrderExpression::Desc(_)) {
-            ord = ord.reverse();
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Ordering, EvalError> {
+    for ((left, right), expression) in left.iter().zip(right).zip(exprs) {
+        let mut order = total_order_admitted(&left.key, &right.key, workspace)?;
+        if matches!(expression, OrderExpression::Desc(_)) {
+            order = order.reverse();
         }
-        if ord != Ordering::Equal {
-            return ord;
+        if order != Ordering::Equal {
+            return Ok(order);
         }
     }
-    Ordering::Equal
+    Ok(Ordering::Equal)
 }
 
 /// A literal's value-space **comparability class** — the coarsest partition under
@@ -1230,16 +1327,22 @@ impl ValueClass {
     /// no value space, or its lexical does not parse), answering the class with
     /// the value it orders BY — `None` for the three value-less blocks, which
     /// therefore never reach [`value_total_cmp`].
-    fn of(parsed: Option<XsdValue>, lexical: &str) -> (Self, Option<XsdValue>) {
+    fn of<V: std::borrow::Borrow<XsdValue>>(parsed: Option<V>, lexical: &str) -> (Self, Option<V>) {
         let Some(value) = parsed else {
             return (Self::Opaque, None);
         };
+        let class = Self::classify(value.borrow(), lexical);
+        let ordered = !matches!(class, Self::Opaque | Self::NotANumber | Self::Duration);
+        (class, ordered.then_some(value))
+    }
+
+    fn classify(value: &XsdValue, lexical: &str) -> Self {
         // A timezone is a trailing `Z` or the six-byte `(+|-)hh:mm` offset, whose
         // `':'` three from the end tells it from an untimezoned `2000-01-01`.
         let b = lexical.as_bytes();
         let zoned = b.last() == Some(&b'Z')
             || (b.len() >= 6 && matches!(b[b.len() - 6], b'+' | b'-') && b[b.len() - 3] == b':');
-        let class = match &value {
+        match value {
             XsdValue::Boolean(_) => Self::Boolean,
             XsdValue::Float(f) if f.is_nan() => Self::NotANumber,
             XsdValue::Double(d) if d.is_nan() => Self::NotANumber,
@@ -1263,9 +1366,7 @@ impl ValueClass {
             // `XsdValue` is `#[non_exhaustive]`: an undecided value space is
             // opaque, never guessed at.
             _ => Self::Opaque,
-        };
-        let ordered = !matches!(class, Self::Opaque | Self::NotANumber | Self::Duration);
-        (class, ordered.then_some(value))
+        }
     }
 
     /// The class of a value held OUTSIDE a term, where there is no lexical form
@@ -1293,7 +1394,7 @@ impl ValueClass {
         ) {
             return Self::Opaque;
         }
-        Self::of(Some(value.clone()), "").0
+        Self::classify(value, "")
     }
 }
 
@@ -1301,9 +1402,9 @@ impl ValueClass {
 /// orders by, and the `(datatype, language, lexical)` tiebreak the value-less
 /// classes and the value-space ties fall back on (a base direction plays no part,
 /// matching §15.1's silence about it).
-pub(crate) struct LiteralKey<'a> {
+pub(crate) struct LiteralKey<'a, V = XsdValue> {
     class: ValueClass,
-    value: Option<XsdValue>,
+    value: Option<V>,
     datatype: &'a str,
     language: Option<&'a str>,
     lexical: &'a str,
@@ -1324,7 +1425,7 @@ pub(crate) struct LiteralKey<'a> {
 /// keys puts them back through `total_order`'s pair walk, as [`SortKey::Triple`]
 /// does, so the category inherits the whole relation instead of restating any of
 /// it. [`SortKey::Composite`] is the worked example of a leaf category.
-pub(crate) enum SortKey<'a> {
+pub(crate) enum SortKey<'a, V = XsdValue> {
     /// Unbound — sorts before every bound term.
     Unbound,
     /// Blank node, by `(scope ordinal, label)`.
@@ -1332,7 +1433,7 @@ pub(crate) enum SortKey<'a> {
     /// IRI, by its string.
     Iri(&'a str),
     /// Literal — see [`LiteralKey`].
-    Literal(LiteralKey<'a>),
+    Literal(LiteralKey<'a, V>),
     /// A SEP-0009 composite literal (`cdt:List` / `cdt:Map`) whose lexical form
     /// parses, ordered by the value it denotes rather than by that lexical form.
     ///
@@ -1350,9 +1451,9 @@ pub(crate) enum SortKey<'a> {
     /// lexical form does NOT parse never reaches this variant at all — it is an
     /// ordinary [`ValueClass::Opaque`] literal, sorted by its lexical form, one
     /// rank below every composite that does parse.
-    Composite(purrdf_cdt::CdtValue),
+    Composite(crate::composite_value::CompositeValue),
     /// RDF 1.2 triple term, componentwise over `(s, p, o)`.
-    Triple(TripleKey<'a>),
+    Triple(TripleKey<'a, V>),
 }
 
 /// The three component keys of a triple term's [`SortKey`], boxed.
@@ -1360,44 +1461,76 @@ pub(crate) enum SortKey<'a> {
 /// Reads like a `Box<[SortKey; 3]>` — it dereferences to the array — and its drop takes
 /// the nested keys apart over a work list, so the key of a term nested to any depth is
 /// dropped without recursion.
-pub(crate) struct TripleKey<'a>(Option<Box<[SortKey<'a>; 3]>>);
+pub(crate) struct TripleKey<'a, V = XsdValue>(purrdf_lex::walk::Nested<TripleParts<'a, V>>);
 
-impl<'a> TripleKey<'a> {
-    /// The key of a triple term whose components project to `components`.
-    fn new(components: [SortKey<'a>; 3]) -> Self {
-        Self(Some(Box::new(components)))
+struct TripleParts<'a, V> {
+    components: [SortKey<'a, V>; 3],
+    // Components and their payloads die before the node's own admission.
+    _allocation: crate::WorkspaceAllocation,
+}
+
+impl<'a, V> TripleKey<'a, V> {
+    fn new(components: [SortKey<'a, V>; 3]) -> Self {
+        Self(purrdf_lex::walk::Nested::new(TripleParts {
+            components,
+            _allocation: crate::WorkspaceCapability::default()
+                .charge(0)
+                .expect("resident admission"),
+        }))
+    }
+
+    fn new_admitted(
+        components: [SortKey<'a, V>; 3],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let bytes = u64::try_from(std::alloc::Layout::new::<TripleParts<'a, V>>().size())
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        let allocation = workspace.charge(bytes)?;
+        let boxed = purrdf_core::small::try_boxed(TripleParts {
+            components,
+            _allocation: allocation,
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "sort triple key",
+        })?;
+        Ok(Self(purrdf_lex::walk::Nested::from(boxed)))
     }
 }
 
-impl<'a> std::ops::Deref for TripleKey<'a> {
-    type Target = [SortKey<'a>; 3];
-
+impl<'a, V> std::ops::Deref for TripleKey<'a, V> {
+    type Target = [SortKey<'a, V>; 3];
     fn deref(&self) -> &Self::Target {
-        self.0
-            .as_deref()
-            .expect("a triple key is emptied only by its own drop")
+        &self.0.components
     }
 }
 
-impl Drop for TripleKey<'_> {
-    fn drop(&mut self) {
-        let Some(root) = self.0.take() else {
-            return;
-        };
-        let mut pending: Vec<Box<[SortKey<'_>; 3]>> = vec![root];
-        while let Some(mut components) = pending.pop() {
-            for component in &mut *components {
-                if let SortKey::Triple(nested) = component
-                    && let Some(inner) = nested.0.take()
-                {
-                    pending.push(inner);
-                }
-            }
-        }
+impl<V> purrdf_lex::walk::Dismantle for TripleParts<'_, V> {
+    fn dismantle(node: Box<Self>) {
+        purrdf_lex::walk::dismantle_tree(node);
     }
 }
 
-impl SortKey<'_> {
+impl<V> purrdf_lex::walk::DismantleTree for TripleParts<'_, V> {
+    fn next_child(&mut self) -> Option<&mut purrdf_lex::walk::Nested<Self>> {
+        self.components
+            .iter_mut()
+            .find_map(|component| match component {
+                SortKey::Triple(key) if !key.0.is_taken() => Some(&mut key.0),
+                _ => None,
+            })
+    }
+    fn last_child(&mut self) -> Option<&mut purrdf_lex::walk::Nested<Self>> {
+        self.components
+            .iter_mut()
+            .rev()
+            .find_map(|component| match component {
+                SortKey::Triple(key) if key.0.is_taken() => Some(&mut key.0),
+                _ => None,
+            })
+    }
+}
+
+impl<V> SortKey<'_, V> {
     /// §15.1's kind order, extended with the composite and triple terms it does not
     /// mention. The ranks are declaration order and nothing else reads them.
     const fn rank(&self) -> u8 {
@@ -1446,6 +1579,83 @@ pub(crate) fn project(value: Option<&TermValue>) -> SortKey<'_> {
         .expect("the root term's key is the last one assembled")
 }
 
+/// The owned native projection used by operational ORDER and extrema.
+/// XSD parse payloads retain their own immutable grants; each triple owns its box.
+pub(crate) fn project_admitted<'a>(
+    value: Option<&'a TermValue>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<OwnedSortKey<'a>, EvalError> {
+    enum Step<'v> {
+        Term(&'v TermValue),
+        Assemble,
+    }
+    let Some(root @ TermValue::Triple { .. }) = value else {
+        return project_shallow_admitted(value, workspace).map(|key| OwnedSortKey { key });
+    };
+    let mut steps = AdmittedVec::new(workspace);
+    let mut keys = AdmittedVec::new(workspace);
+    steps.push(Step::Term(root))?;
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Term(TermValue::Triple { s, p, o }) => {
+                steps.push(Step::Assemble)?;
+                steps.push(Step::Term(o))?;
+                steps.push(Step::Term(p))?;
+                steps.push(Step::Term(s))?;
+            }
+            Step::Term(leaf) => keys.push(project_shallow_admitted(Some(leaf), workspace)?)?,
+            Step::Assemble => {
+                let o = keys.pop().expect("a triple object's key is ready");
+                let p = keys.pop().expect("a triple predicate's key is ready");
+                let s = keys.pop().expect("a triple subject's key is ready");
+                keys.push(SortKey::Triple(TripleKey::new_admitted(
+                    [s, p, o],
+                    workspace,
+                )?))?;
+            }
+        }
+    }
+    Ok(OwnedSortKey {
+        key: keys.pop().expect("the root sort key is ready"),
+    })
+}
+
+fn project_shallow_admitted<'a>(
+    value: Option<&'a TermValue>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<SortKey<'a, ParsedValue>, EvalError> {
+    Ok(match value {
+        None => SortKey::Unbound,
+        Some(TermValue::Blank { label, scope }) => SortKey::Blank(scope.ordinal(), label),
+        Some(TermValue::Iri(iri)) => SortKey::Iri(iri),
+        Some(TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            ..
+        }) => {
+            if let Some(composite) =
+                crate::composite_value::CompositeValue::parse(lexical_form, datatype, workspace)?
+            {
+                return Ok(SortKey::Composite(composite));
+            }
+            let parsed = match XsdDatatype::from_iri(datatype) {
+                Some(datatype) => ParsedValue::parse(lexical_form, datatype, false, workspace)?,
+                None => None,
+            };
+            let (class, value) = ValueClass::of(parsed, lexical_form);
+            SortKey::Literal(LiteralKey {
+                class,
+                value,
+                datatype,
+                language: language.as_deref(),
+                lexical: lexical_form,
+            })
+        }
+        Some(TermValue::Triple { .. }) => unreachable!("triples are projected over the worklist"),
+    })
+}
+
 /// [`project`] for an unbound cell or a term that is not a triple term.
 fn project_shallow(value: Option<&TermValue>) -> SortKey<'_> {
     match value {
@@ -1469,7 +1679,9 @@ fn project_shallow(value: Option<&TermValue>) -> SortKey<'_> {
                 purrdf_cdt::CDT_LIST | purrdf_cdt::CDT_MAP
             ) && let Ok(Some(composite)) = purrdf_cdt::parse_cdt_by_iri(lexical_form, datatype)
             {
-                return SortKey::Composite(composite);
+                return SortKey::Composite(crate::composite_value::CompositeValue::resident(
+                    composite,
+                ));
             }
             let parsed = parse_by_iri(lexical_form, datatype).ok().flatten();
             let (class, value) = ValueClass::of(parsed, lexical_form);
@@ -1514,48 +1726,78 @@ fn project_shallow(value: Option<&TermValue>) -> SortKey<'_> {
 /// triple terms puts its three component pairs in front of whatever follows it — so
 /// two terms nested to any depth cost no more machine stack.
 pub(crate) fn total_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
+    total_order_admitted(a, b, &crate::WorkspaceCapability::default()).expect("resident sort order")
+}
+
+pub(crate) fn total_order_admitted<V: std::borrow::Borrow<XsdValue>>(
+    a: &SortKey<'_, V>,
+    b: &SortKey<'_, V>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Ordering, EvalError> {
     if !matches!((a, b), (SortKey::Triple(_), SortKey::Triple(_))) {
-        return shallow_order(a, b);
+        return shallow_order_admitted(a, b, workspace);
     }
-    let mut pending: Vec<(&SortKey<'_>, &SortKey<'_>)> = vec![(a, b)];
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push((a, b))?;
     while let Some((a, b)) = pending.pop() {
         match (a, b) {
             (SortKey::Triple(x), SortKey::Triple(y)) => {
-                pending.extend([(&x[2], &y[2]), (&x[1], &y[1]), (&x[0], &y[0])]);
+                pending.push((&x[2], &y[2]))?;
+                pending.push((&x[1], &y[1]))?;
+                pending.push((&x[0], &y[0]))?;
             }
-            _ => match shallow_order(a, b) {
+            _ => match shallow_order_admitted(a, b, workspace)? {
                 Ordering::Equal => {}
-                decided => return decided,
+                decided => return Ok(decided),
             },
         }
     }
-    Ordering::Equal
+    Ok(Ordering::Equal)
 }
 
 /// [`total_order`] on two keys of which at most one is a triple term's: two keys of
 /// the same kind by that kind's own order, two of different kinds by their rank.
+#[cfg(test)]
 fn shallow_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
-    match (a, b) {
+    shallow_order_admitted(a, b, &crate::WorkspaceCapability::default())
+        .expect("resident shallow sort order")
+}
+
+fn shallow_order_admitted<V: std::borrow::Borrow<XsdValue>>(
+    a: &SortKey<'_, V>,
+    b: &SortKey<'_, V>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Ordering, EvalError> {
+    Ok(match (a, b) {
         (SortKey::Blank(sa, la), SortKey::Blank(sb, lb)) => (sa, la).cmp(&(sb, lb)),
         (SortKey::Iri(x), SortKey::Iri(y)) => x.cmp(y),
         (SortKey::Literal(x), SortKey::Literal(y)) => {
             if x.class != y.class {
-                return x.class.cmp(&y.class);
+                return Ok(x.class.cmp(&y.class));
             }
-            if let (Some(av), Some(bv)) = (&x.value, &y.value)
-                && let Some(ord) = value_total_cmp(av, bv)
-            {
-                return ord;
+            if let (Some(av), Some(bv)) = (&x.value, &y.value) {
+                let (av, bv) = (av.borrow(), bv.borrow());
+                let order = if x.class == ValueClass::Numeric {
+                    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+                    let result =
+                        purrdf_xsd::numeric::numeric_total_cmp_admitted(av, bv, &mut |layout| {
+                            frame.admit(layout)
+                        });
+                    frame.finish_scalar(result)?
+                } else {
+                    value_total_cmp(av, bv)
+                };
+                if let Some(order) = order {
+                    return Ok(order);
+                }
             }
             (x.datatype, x.language, x.lexical).cmp(&(y.datatype, y.language, y.lexical))
         }
-        (SortKey::Composite(x), SortKey::Composite(y)) => purrdf_cdt::total_value_cmp(x, y),
-        // Two triple terms are decided by their components, which `total_order` walks.
+        (SortKey::Composite(x), SortKey::Composite(y)) => x.total_cmp(y, workspace)?,
         (SortKey::Triple(_), SortKey::Triple(_)) => Ordering::Equal,
         _ => a.rank().cmp(&b.rank()),
-    }
+    })
 }
-
 // ---------------------------------------------------------------------------
 // value-level entry points
 // ---------------------------------------------------------------------------
@@ -1725,24 +1967,38 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
 
 pub(crate) trait GroupDomain: Copy + Sync {
     const CONTEXTUAL: bool;
-    fn visible(&self, schema: &VarSchema) -> Option<Vec<usize>>;
+    fn visible(
+        &self,
+        schema: &VarSchema,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<AdmittedVec<usize>>, EvalError>;
 }
 
 impl GroupDomain for () {
     const CONTEXTUAL: bool = false;
-    fn visible(&self, schema: &VarSchema) -> Option<Vec<usize>> {
-        crate::blank_scope::visible_columns(schema)
+    fn visible(
+        &self,
+        schema: &VarSchema,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<AdmittedVec<usize>>, EvalError> {
+        crate::blank_scope::visible_columns_admitted(schema, workspace)
     }
 }
 
 impl GroupDomain for &[Variable] {
     const CONTEXTUAL: bool = true;
-    fn visible(&self, schema: &VarSchema) -> Option<Vec<usize>> {
-        Some(
-            self.iter()
-                .filter_map(|name| schema.index_of(name))
-                .collect(),
-        )
+    fn visible(
+        &self,
+        schema: &VarSchema,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<AdmittedVec<usize>>, EvalError> {
+        let mut columns = AdmittedVec::new(workspace);
+        for name in *self {
+            if let Some(column) = schema.index_of(name) {
+                columns.push(column)?;
+            }
+        }
+        Ok(Some(columns))
     }
 }
 
@@ -1758,17 +2014,18 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
 ) -> Result<Evaluated<D::Id>, EvalError> {
     // The output schema is syntactic, including when the input is truncated.
     // Check aggregate targets once before either path can publish its columns.
-    let mut out_schema = VarSchema::from_vars(variables.iter().cloned());
-    let var_count = out_schema.len();
+    let mut schema = crate::solution::SchemaBuilder::new(&ctx.growth);
+    schema.try_extend(variables.iter().cloned())?;
+    let var_count = schema.vars().len();
     for (out_var, _) in aggregates {
-        let next = out_schema.len();
-        if out_schema.push(out_var.clone()) != next {
+        let next = schema.vars().len();
+        if schema.push(out_var.clone())? != next {
             return Err(EvalError::config(
                 "aggregate output collides with another group output",
             ));
         }
     }
-    let out_schema = Arc::new(out_schema);
+    let out_schema = schema.finish()?.shared_admitted(&ctx.growth)?;
     if M::CONTEXTUAL
         && !aggregates
             .iter()
@@ -1776,7 +2033,7 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
     {
         return contextual_group_rows(node, inner, variables, aggregates, out_schema, domain, ctx);
     }
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         // No rows cross an opaque edge, but the COLUMNS still do: a `GROUP BY`'s output
         // schema is syntactic — the grouping variables followed by the aggregate output
@@ -1788,32 +2045,44 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
     // Redundant GROUP BY keys do not create extra output columns. Derive both
     // partition keys and row offsets from the same first-seen schema, so adding
     // an aggregate after a repeated key cannot index past the output row.
-    let key_cols: Vec<Option<usize>> = out_schema.vars()[..var_count]
-        .iter()
-        .map(|v| in_schema.index_of(v))
-        .collect();
+    let mut key_cols = AdmittedVec::with_capacity(var_count, &ctx.growth)?;
+    for variable in &out_schema.vars()[..var_count] {
+        key_cols.push(in_schema.index_of(variable))?;
+    }
 
     // Partition rows into groups, keeping groups in first-seen order.
-    let mut groups: DetHashMap<Solution<D::Id>, (usize, Vec<usize>)> = DetHashMap::default();
+    let mut group_index = crate::AdmittedMap::<RetainedRow<D::Id>, usize>::default();
+    let mut groups = AdmittedVec::new(&ctx.growth);
     for (idx, row) in seq.rows.iter().enumerate() {
-        let key: Solution<D::Id> = key_cols.iter().map(|c| c.and_then(|c| row[c])).collect();
+        let key = RetainedRow::from_cells(
+            key_cols.len(),
+            key_cols.iter().map(|c| c.and_then(|c| row[c])),
+            &ctx.growth,
+        )?;
         let next_ordinal = groups.len();
-        match groups.entry(key) {
-            Entry::Occupied(mut entry) => entry.get_mut().1.push(idx),
-            Entry::Vacant(entry) => {
-                entry.insert((next_ordinal, vec![idx]));
-            }
+        if let Some(&ordinal) = group_index.get(&key) {
+            let (_, _, members): &mut (usize, RetainedRow<D::Id>, AdmittedVec<usize>) =
+                &mut groups.as_mut_slice()[ordinal];
+            members.push(idx)?;
+        } else {
+            let mut members = AdmittedVec::new(&ctx.growth);
+            members.push(idx)?;
+            let _ = group_index.insert_admitted(
+                key.clone_admitted(&ctx.growth)?,
+                next_ordinal,
+                &ctx.growth,
+            )?;
+            groups.push((next_ordinal, key, members))?;
         }
     }
     // No GROUP BY + empty input + aggregates → a single empty group.
     if groups.is_empty() && variables.is_empty() && !aggregates.is_empty() {
-        groups.insert(Solution::new(), (0, Vec::new()));
+        groups.push((
+            0,
+            RetainedRow::from_cells(0, std::iter::empty(), &ctx.growth)?,
+            AdmittedVec::new(&ctx.growth),
+        ))?;
     }
-    let mut groups: Vec<_> = groups
-        .into_iter()
-        .map(|(key, (ordinal, rows))| (ordinal, key, rows))
-        .collect();
-    groups.sort_unstable_by_key(|(ordinal, _, _)| *ordinal);
 
     let out_width = out_schema.len();
 
@@ -1830,11 +2099,12 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
     // and the commit charges the entries in group order, so the group a ceiling trips at
     // is the same on every host (`crate::row_checkpoint::ItemLedger`). Under any other
     // ceiling the groups fold in order on the evaluation's own context.
-    let safe = ctx.may_fork_governed_loop()
+    let safe = !ctx.growth.is_bounded()
+        && ctx.may_fork_governed_loop()
         && aggregates
             .iter()
             .all(|(_, agg)| ctx.may_fork_aggregate(agg));
-    let mut links = link_aggregates(node, aggregates, &in_schema, ctx);
+    let mut links = link_aggregates(node, aggregates, &in_schema, ctx)?;
 
     let rows = if safe {
         let base = ctx.scratch.computed_count();
@@ -1843,7 +2113,7 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
         // the per-group worker's attestation must reach the parent's receipt.
         let loop_ledger = crate::row_checkpoint::ItemLedger::for_items(ctx);
         let snapshot = ctx.loop_snapshot(groups.len());
-        let (minted, harvests) = crate::parallel::par_loop_try_map_init(
+        let (minted, harvests) = crate::parallel::par_loop_try_map_init_fallible(
             ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             &groups,
@@ -1852,10 +2122,10 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
                     .iter()
                     .map(|agg| agg.iter().map(crate::vm::Linked::fresh).collect())
                     .collect();
-                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
+                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref())?;
                 let mut ledger = loop_ledger.clone();
                 ledger.defer(&mut child);
-                (child, fresh, ledger)
+                Ok((child, fresh, ledger))
             },
             |(child, links, ledger), acc, (ordinal, key, idxs)| {
                 if !ledger.admits(*ordinal) {
@@ -1886,12 +2156,17 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
         // at its group.
         let admit_row = |ctx: &mut EvalCtx<'_, D>, row| {
             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
+                .map(RetainedRow::from_resident)
         };
         let (mut rows, resume) = if ctx.governor_state().is_none() {
             // Group workers have finished reading the input. A plain fold has no
             // continuation. Reuse its input only when that capacity does not exceed
             // the exact grouped output; otherwise release it before fresh admission.
-            let input = core::mem::take(&mut seq.rows);
+            let input = core::mem::take(&mut seq.rows)
+                .into_resident_rows()
+                .map_err(|_| {
+                    EvalError::WorkspaceUnpriced("worker row buffer requires resident ownership")
+                })?;
             let out = if input.capacity() <= minted.len() {
                 input
             } else {
@@ -1902,34 +2177,63 @@ pub(crate) fn eval_group_with<D: DatasetView + Sync, M: GroupDomain>(
         } else {
             loop_ledger.commit(ctx, minted, chunks, admit_row)?
         };
-        ctx.absorb_worker_witnesses(witnesses);
+        ctx.absorb_worker_witnesses(witnesses)?;
         // A worker stopped on what its groups minted, short of what the commit charged for
         // them: the rest of the groups fold here, in order, as the sequential loop does.
         if let Some(resume) = resume {
             for (_, key, idxs) in &groups[resume..] {
                 let mut row = purrdf_core::smallvec![None; out_width];
                 row[..var_count].copy_from_slice(key);
-                for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
-                    row[var_count + j] =
-                        eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, domain, ctx)?;
+                for (j, ((_, agg), links)) in aggregates
+                    .iter()
+                    .zip(links.as_mut_slice().iter_mut())
+                    .enumerate()
+                {
+                    row[var_count + j] = eval_aggregate(
+                        agg,
+                        links.as_mut_slice(),
+                        idxs,
+                        &seq.rows,
+                        &in_schema,
+                        domain,
+                        ctx,
+                    )?;
                 }
-                rows.push(row);
+                rows.push(RetainedRow::from_resident(row));
             }
         }
-        rows
+        RowsBuilder::from_storage(
+            AdmittedVec::from_parts(rows, None, &ctx.growth),
+            &ctx.growth,
+        )
+        .finish()?
     } else {
-        let mut rows = Vec::with_capacity(groups.len());
+        let mut rows = RowsBuilder::new(&ctx.growth);
         for (_, key, idxs) in &groups {
-            let mut row = purrdf_core::smallvec![None; out_width];
-            // `key.len() == var_count` (built from `key_cols`): one memcpy, no index loop.
-            row[..var_count].copy_from_slice(key);
-            for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
-                row[var_count + j] =
-                    eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, domain, ctx)?;
-            }
-            rows.push(row);
+            let growth = ctx.growth.clone();
+            let row = RetainedRow::try_build(out_width, &growth, |row| {
+                // `key.len() == var_count` (built from `key_cols`): one memcpy, no index loop.
+                row[..var_count].copy_from_slice(key);
+                for (j, ((_, agg), links)) in aggregates
+                    .iter()
+                    .zip(links.as_mut_slice().iter_mut())
+                    .enumerate()
+                {
+                    row[var_count + j] = eval_aggregate(
+                        agg,
+                        links.as_mut_slice(),
+                        idxs,
+                        &seq.rows,
+                        &in_schema,
+                        domain,
+                        ctx,
+                    )?;
+                }
+                Ok(())
+            })?;
+            rows.push_row(row)?;
         }
-        rows
+        rows.finish()?
     };
 
     // An `EXISTS` inside an aggregate argument is an opaque edge; see `eval_left_join`.
@@ -1951,20 +2255,23 @@ fn link_aggregates<'e, D: DatasetView + Sync>(
     aggregates: &'e [(Variable, AggregateExpression)],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
-) -> Vec<Vec<crate::vm::Linked<'e, D::Id>>> {
-    aggregates
-        .iter()
-        .map(|(_, agg)| {
-            agg.args()
-                .iter()
-                .chain(agg.order_by().iter().map(OrderExpression::expression))
-                .map(|expr| {
-                    let program = crate::vm::program_at(ctx, node, expr);
-                    crate::vm::Linked::link(program, expr, schema, ctx)
-                })
-                .collect()
-        })
-        .collect()
+) -> Result<AdmittedVec<AdmittedVec<crate::vm::Linked<'e, D::Id>>>, EvalError> {
+    let mut groups = AdmittedVec::with_capacity(aggregates.len(), &ctx.growth)?;
+    for (_, aggregate) in aggregates {
+        let mut links = AdmittedVec::new(&ctx.growth);
+        for expression in aggregate
+            .args()
+            .iter()
+            .chain(aggregate.order_by().iter().map(OrderExpression::expression))
+        {
+            let program = crate::vm::program_at(ctx, node, expression)?;
+            links.push(crate::vm::Linked::link_admitted(
+                program, expression, schema, ctx,
+            )?)?;
+        }
+        groups.push(links)?;
+    }
+    Ok(groups)
 }
 
 /// Stateful scheduling of the existing accumulators. Contextual aggregates update
@@ -1972,108 +2279,160 @@ fn link_aggregates<'e, D: DatasetView + Sync>(
 /// an accepted update are separate VM evaluations; the update's value enters the
 /// witness set. SAMPLE retires after its first bound update.
 enum ContextualFold {
-    Builtin(Box<dyn crate::agg_fn::AggregateAccumulator>),
+    Builtin {
+        accumulator: Box<dyn crate::agg_fn::AggregateAccumulator>,
+        _allocation: crate::WorkspaceAllocation,
+    },
     Numeric(Option<NumericFold>, NumericAggregate),
-    Custom(Box<ContextualCustomFold>),
+    Custom {
+        value: Box<ContextualCustomFold>,
+        // The actual box dies before its external control grant.
+        allocation: crate::WorkspaceAllocation,
+    },
 }
 
 struct ContextualCustomFold {
-    accumulator: Box<dyn crate::agg_fn::AggregateAccumulator>,
+    accumulator: crate::agg_fn::WorkspaceAccumulator,
     aggregate: Arc<dyn crate::agg_fn::CustomAggregate>,
-    iri: String,
-    scalarvals: Vec<(String, TermValue)>,
-    survivors: Vec<Vec<TermValue>>,
+    iri: purrdf_lex::allocation::SharedText,
+    scalarvals: AggregateScalarvals,
+    survivors: AdmittedVec<Vec<TermValue>>,
+    survivor_owners: AdmittedVec<AggregateSurvivorOwners>,
     admitted_work: u64,
 }
 
 impl ContextualFold {
+    fn builtin<A: crate::agg_fn::AggregateAccumulator>(
+        value: A,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let allocation = workspace.charge(
+            u64::try_from(size_of::<A>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        let accumulator =
+            purrdf_core::small::try_boxed(value).map_err(|_| EvalError::AllocationFailed {
+                construct: "contextual aggregate control",
+            })?;
+        Ok(Self::Builtin {
+            accumulator,
+            _allocation: allocation,
+        })
+    }
+
     fn start<D: DatasetView + Sync>(
         agg: &AggregateExpression,
         ctx: &EvalCtx<'_, D>,
         local_trip: &std::cell::Cell<Option<purrdf_core::TrippedGovernor>>,
     ) -> Result<Option<Self>, EvalError> {
         Ok(Some(match agg.function() {
-            AggregateFunction::Count => Self::Builtin(Box::<CountAccumulator>::default()),
+            AggregateFunction::Count => Self::builtin(CountAccumulator::default(), &ctx.growth)?,
             AggregateFunction::Sum => {
                 Self::Numeric(Some(NumericFold::Empty), NumericAggregate::Sum)
             }
             AggregateFunction::Avg => {
                 Self::Numeric(Some(NumericFold::Empty), NumericAggregate::Avg)
             }
-            AggregateFunction::Min => Self::Builtin(Box::<MinAccumulator>::default()),
-            AggregateFunction::Max => Self::Builtin(Box::<MaxAccumulator>::default()),
-            AggregateFunction::Sample => Self::Builtin(Box::<SampleAccumulator>::default()),
-            AggregateFunction::GroupConcat => Self::Builtin(Box::new(GroupConcatAccumulator::new(
-                agg.separator().unwrap_or(" ").to_owned(),
-            ))),
+            AggregateFunction::Min => Self::builtin(MinAccumulator::default(), &ctx.growth)?,
+            AggregateFunction::Max => Self::builtin(MaxAccumulator::default(), &ctx.growth)?,
+            AggregateFunction::Sample => Self::builtin(SampleAccumulator::default(), &ctx.growth)?,
+            AggregateFunction::GroupConcat => Self::builtin(
+                GroupConcatAccumulator::new_admitted(agg.separator().unwrap_or(" "), &ctx.growth)?,
+                &ctx.growth,
+            )?,
             AggregateFunction::Custom(iri) => {
                 let iri = iri.as_str();
-                let custom = ctx.aggregates.resolve(iri).cloned().ok_or_else(|| {
-                    EvalError::function(format!("no custom aggregate is registered for <{iri}>"))
-                })?;
-                let bound = crate::agg_fn::state_bound_contained(custom.as_ref(), iri)?;
+                let custom = ctx
+                    .aggregates
+                    .resolve(iri)
+                    .cloned()
+                    .ok_or_else(|| missing_custom_aggregate(iri, &ctx.growth))?;
+                let bound = crate::agg_fn::state_bound_contained_admitted(
+                    custom.as_ref(),
+                    iri,
+                    &ctx.growth,
+                )?;
                 if let Err(tripped) =
                     ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, bound)
                 {
                     record_contextual_trip(ctx, local_trip, tripped);
                     return Ok(None);
                 }
-                let scalarvals: Vec<_> = agg
-                    .scalarvals()
-                    .iter()
-                    .map(|(name, value)| (name.clone(), literal_to_value(value)))
-                    .collect();
-                let initial = crate::agg_fn::exact_numeric_cost_contained(
+                let scalarvals = AggregateScalarvals::resolve(agg, &ctx.growth)?;
+                let initial = crate::agg_fn::exact_numeric_cost_contained_admitted(
                     custom.as_ref(),
                     iri,
                     &[],
                     &scalarvals,
                     ctx.division,
+                    &ctx.growth,
                 )?;
                 if let Err(tripped) = ctx.charge_exact_numeric(initial) {
                     record_contextual_trip(ctx, local_trip, tripped);
                     return Ok(None);
                 }
-                Self::Custom(Box::new(ContextualCustomFold {
-                    accumulator: crate::agg_fn::init_contained(
-                        custom.as_ref(),
-                        iri,
-                        &scalarvals,
-                        ctx.division,
-                    )?,
+                let allocation = ctx.growth.charge(
+                    u64::try_from(size_of::<ContextualCustomFold>())
+                        .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+                )?;
+                let iri = ctx.growth.authored_text(iri)?;
+                let accumulator = crate::agg_fn::init_contained_admitted(
+                    custom.as_ref(),
+                    &iri,
+                    &scalarvals,
+                    ctx.division,
+                    &ctx.growth,
+                )?;
+                let value = purrdf_core::small::try_boxed(ContextualCustomFold {
+                    accumulator,
                     aggregate: custom,
-                    iri: iri.to_owned(),
+                    iri,
                     scalarvals,
-                    survivors: Vec::new(),
+                    survivors: AdmittedVec::new(&ctx.growth),
+                    survivor_owners: AdmittedVec::new(&ctx.growth),
                     admitted_work: initial.work(),
-                }))
+                })
+                .map_err(|_| EvalError::AllocationFailed {
+                    construct: "contextual custom aggregate control",
+                })?;
+                Self::Custom { value, allocation }
             }
-            AggregateFunction::Fold => Self::Builtin(Box::new(
-                crate::cdt_agg::FoldAccumulator::for_arguments(agg.args().len()),
-            )),
+            AggregateFunction::Fold => Self::builtin(
+                crate::cdt_agg::FoldAccumulator::for_arguments_admitted(
+                    agg.args().len(),
+                    &ctx.growth,
+                ),
+                &ctx.growth,
+            )?,
         }))
     }
 
     fn step<D: DatasetView + Sync>(
         &mut self,
-        values: Vec<TermValue>,
+        values: AggregateSurvivors,
         ctx: &EvalCtx<'_, D>,
     ) -> Result<Option<purrdf_core::TrippedGovernor>, EvalError> {
         match self {
-            Self::Builtin(acc) => acc.step(&values).map(|()| None),
-            Self::Custom(custom) => {
+            Self::Builtin { accumulator, .. } => accumulator
+                .step_admitted(&values, &ctx.growth)
+                .map(|()| None),
+            Self::Custom { value: custom, .. } => {
                 // Price the complete fold before its arithmetic; argument
                 // expressions have already run in contextual row order.
-                custom.survivors.push(values);
+                custom.survivors.reserve_next()?;
+                custom.survivor_owners.reserve_next()?;
+                let (values, owners) = values.into_parts();
+                custom.survivors.push_reserved(values);
+                custom.survivor_owners.push_reserved(owners);
                 // Preserve update order and early host errors. A complete-only
                 // declaration requires accepted-prefix preflight before each
                 // step; charge only growth in its conservative work bound.
-                let cost = crate::agg_fn::exact_numeric_cost_contained(
+                let cost = crate::agg_fn::exact_numeric_cost_contained_admitted(
                     custom.aggregate.as_ref(),
                     &custom.iri,
                     &custom.survivors,
                     &custom.scalarvals,
                     ctx.division,
+                    &ctx.growth,
                 )?;
                 let growth = purrdf_xsd::exact::Cost::new(
                     cost.work().saturating_sub(custom.admitted_work),
@@ -2083,20 +2442,23 @@ impl ContextualFold {
                     return Ok(Some(tripped));
                 }
                 custom.admitted_work = custom.admitted_work.max(cost.work());
-                crate::agg_fn::step_contained(
-                    custom.accumulator.as_mut(),
+                crate::agg_fn::step_contained_admitted(
+                    &mut custom.accumulator,
                     &custom.iri,
                     custom.survivors.last().expect("accepted tuple"),
+                    &ctx.growth,
                 )?;
                 Ok(None)
             }
             Self::Numeric(fold, _) => {
-                if let Some(value) = values.first()
-                    && !xsd_of(value).is_some_and(|value| {
-                        fold.as_mut().is_some_and(|fold| fold.step_xsd(&value))
-                    })
-                {
-                    *fold = None;
+                if let (Some(value), Some(state)) = (values.first(), fold.as_mut()) {
+                    let accepted = match parse_numeric_fold_value(value, &ctx.growth)? {
+                        Some(value) => state.step_parsed(value, &ctx.growth)?,
+                        None => false,
+                    };
+                    if !accepted {
+                        *fold = None;
+                    }
                 }
                 Ok(None)
             }
@@ -2107,34 +2469,54 @@ impl ContextualFold {
         self,
         division: DivisionPolicy,
         absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
-    ) -> Result<Option<TermValue>, EvalError> {
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
         match self {
-            Self::Builtin(acc) => acc.finish(),
-            Self::Custom(custom) => {
-                let ContextualCustomFold {
-                    accumulator, iri, ..
-                } = *custom;
-                crate::agg_fn::finish_contained(accumulator, &iri, absorb)
+            Self::Builtin {
+                accumulator,
+                _allocation: allocation,
+            } => {
+                let result = accumulator.finish_admitted(workspace);
+                drop(allocation);
+                result
             }
-            Self::Numeric(fold, aggregate) => Ok(fold.and_then(|fold| match aggregate {
-                NumericAggregate::Sum => fold.finish_sum(),
-                NumericAggregate::Avg if matches!(fold, NumericFold::Empty) => {
-                    Some(TermValue::integer(0))
-                }
-                NumericAggregate::Avg => fold.finish_avg(division, absorb),
-            })),
+            Self::Custom { value, allocation } => {
+                // The consuming native body has destroyed the original box
+                // before its outside control admission is released here.
+                let result = value.finish(absorb, workspace);
+                drop(allocation);
+                result
+            }
+            Self::Numeric(fold, aggregate) => match fold {
+                None => Ok(None),
+                Some(fold) => match aggregate {
+                    NumericAggregate::Sum => fold.finish_sum_admitted(workspace),
+                    NumericAggregate::Avg => fold.finish_avg_admitted(division, absorb, workspace),
+                },
+            },
         }
+    }
+}
+
+impl ContextualCustomFold {
+    fn finish(
+        self: Box<Self>,
+        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        let Self {
+            accumulator, iri, ..
+        } = *self;
+        crate::agg_fn::finish_contained_admitted(accumulator, &iri, absorb, workspace)
     }
 }
 
 struct ContextualLane<I: ViewTermId> {
     fold: ContextualFold,
     numeric_cost: ContextualNumericCost,
-    seen: Option<DetHashSet<Vec<Option<SolutionTerm<I>>>>>,
+    seen: Option<crate::AdmittedMap<RetainedRow<I>, ()>>,
     retired: bool,
 }
-
-type ContextualGroups<I> = DetHashMap<Solution<I>, (usize, Vec<ContextualLane<I>>)>;
 
 #[derive(Default)]
 struct ContextualNumericCost {
@@ -2201,78 +2583,117 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
     inner: &GraphPattern,
     variables: &[Variable],
     aggregates: &[(Variable, AggregateExpression)],
-    out_schema: Arc<VarSchema>,
+    out_schema: crate::solution::SharedSchema,
     domain: M,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let in_schema = crate::eval::syntactic_schema(inner);
+    let in_schema = crate::eval::syntactic_schema_admitted(inner, &ctx.growth)?;
     let var_count = out_schema.len() - aggregates.len();
-    let key_cols: Vec<_> = out_schema.vars()[..var_count]
-        .iter()
-        .map(|name| in_schema.index_of(name))
-        .collect();
-    let mut links = link_aggregates(node, aggregates, &in_schema, ctx);
-    let mut states = ContextualGroups::<D::Id>::default();
+    let mut key_cols = AdmittedVec::with_capacity(var_count, &ctx.growth)?;
+    for name in &out_schema.vars()[..var_count] {
+        key_cols.push(in_schema.index_of(name))?;
+    }
+    let mut links = link_aggregates(node, aggregates, &in_schema, ctx)?;
+    let mut group_index = crate::AdmittedMap::<RetainedRow<D::Id>, usize>::default();
+    let mut states =
+        AdmittedVec::<(RetainedRow<D::Id>, AdmittedVec<ContextualLane<D::Id>>)>::new(&ctx.growth);
     let local_trip = std::cell::Cell::new(None);
-    let visible = domain.visible(&in_schema);
+    let visible = domain.visible(&in_schema, &ctx.growth)?;
     let mut consume = |input: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
         if ctx.expression_barrier.observed().is_some() || ctx.stop_check().is_some() {
             return Ok(std::ops::ControlFlow::Break(()));
         }
         let restore = ctx.enter_node(node);
         let result = (|| {
-            let seq = input.clone().reorder_like(&in_schema);
+            let seq = input
+                .clone()
+                .reorder_like_admitted(&in_schema, &ctx.growth)?;
             for row in &seq.rows {
                 // Labelled BNODE uses the contextual query's shared identity,
                 // including argument evaluation performed by an accumulator.
                 ctx.current_row = 0;
-                let key: Solution<D::Id> = key_cols
-                    .iter()
-                    .map(|column| column.and_then(|column| row[column]))
-                    .collect();
-                if !states.contains_key(&key) {
+                let key = RetainedRow::try_build(var_count, &ctx.growth, |key| {
+                    for (slot, column) in key.iter_mut().zip(key_cols.iter()) {
+                        *slot = column.and_then(|column| row[column]);
+                    }
+                    Ok(())
+                })?;
+                let ordinal = if let Some(&ordinal) = group_index.get(&key) {
+                    ordinal
+                } else {
                     let ordinal = states.len();
                     let Some(lanes) = contextual_lanes(aggregates, ctx, &local_trip)? else {
                         return Ok(std::ops::ControlFlow::Break(()));
                     };
-                    states.insert(key.clone(), (ordinal, lanes));
-                }
-                let lanes = &mut states
-                    .get_mut(&key)
-                    .expect("first row initialized its group")
-                    .1;
-                for ((lane, (_, agg)), links) in
-                    lanes.iter_mut().zip(aggregates).zip(links.iter_mut())
+                    let _ = group_index.insert_admitted(
+                        key.clone_admitted(&ctx.growth)?,
+                        ordinal,
+                        &ctx.growth,
+                    )?;
+                    states.push((key, lanes))?;
+                    ordinal
+                };
+                let lanes = &mut states.as_mut_slice()[ordinal].1;
+                for ((lane, (_, agg)), links) in lanes
+                    .as_mut_slice()
+                    .iter_mut()
+                    .zip(aggregates)
+                    .zip(links.as_mut_slice().iter_mut())
                 {
                     if lane.retired {
                         continue;
                     }
-                    let identity = |row: &Solution<D::Id>| -> Vec<Option<SolutionTerm<D::Id>>> {
-                        visible.as_ref().map_or_else(
-                            || row.to_vec(),
-                            |keep| keep.iter().map(|&column| row[column]).collect(),
+                    let identity_growth = ctx.growth.clone();
+                    let identity = |row: &Solution<D::Id>| {
+                        RetainedRow::try_build(
+                            visible.as_ref().map_or(row.len(), |columns| columns.len()),
+                            &identity_growth,
+                            |identity| {
+                                if let Some(keep) = &visible {
+                                    for (slot, &column) in identity.iter_mut().zip(keep) {
+                                        *slot = row[column];
+                                    }
+                                } else {
+                                    identity.copy_from_slice(row);
+                                }
+                                Ok(())
+                            },
                         )
                     };
                     if let Some(seen) = &lane.seen {
                         let probe = if agg.args().is_empty() {
-                            identity(row)
+                            identity(row)?
                         } else {
-                            links[..agg.args().len()]
-                                .iter_mut()
-                                .map(|link| link.term(row, &seq.schema, ctx))
-                                .collect::<Result<Vec<_>, _>>()?
+                            RetainedRow::try_build(
+                                agg.args().len(),
+                                &ctx.growth.clone(),
+                                |probe| {
+                                    for (slot, link) in probe
+                                        .iter_mut()
+                                        .zip(&mut links.as_mut_slice()[..agg.args().len()])
+                                    {
+                                        *slot = link.term(row, &seq.schema, ctx)?;
+                                    }
+                                    Ok(())
+                                },
+                            )?
                         };
-                        if seen.contains(&probe) {
+                        if seen.get(&probe).is_some() {
                             continue;
                         }
                     }
                     let terms = if agg.args().is_empty() {
-                        identity(row)
+                        identity(row)?
                     } else {
-                        links[..agg.args().len()]
-                            .iter_mut()
-                            .map(|link| link.term(row, &seq.schema, ctx))
-                            .collect::<Result<Vec<_>, _>>()?
+                        RetainedRow::try_build(agg.args().len(), &ctx.growth.clone(), |terms| {
+                            for (slot, link) in terms
+                                .iter_mut()
+                                .zip(&mut links.as_mut_slice()[..agg.args().len()])
+                            {
+                                *slot = link.term(row, &seq.schema, ctx)?;
+                            }
+                            Ok(())
+                        })?
                     };
                     if !agg.args().is_empty()
                         && terms.iter().any(Option::is_none)
@@ -2288,19 +2709,18 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                         record_contextual_trip(ctx, &local_trip, tripped);
                         return Ok(std::ops::ControlFlow::Break(()));
                     }
-                    let values = if agg.args().is_empty() {
-                        Vec::new()
-                    } else {
-                        terms
-                            .iter()
-                            .filter_map(|term| *term)
-                            .map(|term| {
-                                ctx.scratch
-                                    .try_value_of(ctx.dataset, term)
-                                    .map_err(EvalError::source_read)
-                            })
-                            .collect::<Result<Vec<_>, _>>()?
-                    };
+                    let mut values = AggregateSurvivors::new(&ctx.growth);
+                    if !agg.args().is_empty() {
+                        for term in terms.iter().filter_map(|term| *term) {
+                            values.reserve_next()?;
+                            values.push(ctx.scratch.try_owned_value_of(
+                                ctx.dataset,
+                                term,
+                                &ctx.growth,
+                                |error| ctx.workspace.source_error(error),
+                            )?)?;
+                        }
+                    }
                     let bytes = values
                         .iter()
                         .map(crate::scratch::value_bytes)
@@ -2322,7 +2742,7 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                         return Ok(std::ops::ControlFlow::Break(()));
                     }
                     if let Some(seen) = &mut lane.seen {
-                        seen.insert(terms);
+                        let _ = seen.insert_admitted(terms, (), &ctx.growth)?;
                     }
                     lane.retired = matches!(agg.function(), AggregateFunction::Sample);
                 }
@@ -2335,7 +2755,7 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
     let evaluated =
         crate::eval::eval_yielding(inner, &mut crate::eval::RowConsumer::new(&mut consume), ctx)?;
     drop(consume);
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     if lift.absorb(0, evaluated).is_none() {
         return Ok(lift.finish(SolutionSeq::empty(out_schema)));
     }
@@ -2357,16 +2777,13 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                 out_schema,
             )));
         };
-        states.insert(Solution::new(), (0, lanes));
+        states.push((RetainedRow::try_build(0, &ctx.growth, |_| Ok(()))?, lanes))?;
     }
-    let mut groups: Vec<_> = states.into_iter().collect();
-    groups.sort_unstable_by_key(|(_, (ordinal, _))| *ordinal);
-    let rows = groups
-        .into_iter()
-        .map(|(key, (_, lanes))| {
-            let mut row = purrdf_core::smallvec![None; out_schema.len()];
+    let mut rows = RowsBuilder::new(&ctx.growth);
+    for (key, lanes) in states {
+        let row = RetainedRow::try_build(out_schema.len(), &ctx.growth.clone(), |row| {
             if local_trip.get().is_some() {
-                return Ok(row);
+                return Ok(());
             }
             row[..var_count].copy_from_slice(&key);
             for (column, lane) in lanes.into_iter().enumerate() {
@@ -2375,21 +2792,25 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
                         .finish(aggregates[column].1.function(), ctx.division),
                 ) {
                     record_contextual_trip(ctx, &local_trip, tripped);
-                    return Ok(row);
+                    return Ok(());
                 }
                 row[var_count + column] = lane
                     .fold
-                    .finish(ctx.division, &mut |code| {
-                        ctx.record_expression_error(Some(code));
-                    })?
-                    .map(|value| ctx.scratch.try_intern_checked(ctx.dataset, value))
-                    .transpose()
-                    .map_err(EvalError::source_read)?
+                    .finish(
+                        ctx.division,
+                        &mut |code| {
+                            ctx.record_expression_error(Some(code));
+                        },
+                        &ctx.growth.clone(),
+                    )?
+                    .map(|value| ctx.intern_workspace_term(value))
+                    .transpose()?
                     .flatten();
             }
-            Ok(row)
-        })
-        .collect::<Result<Vec<_>, EvalError>>()?;
+            Ok(())
+        })?;
+        rows.push_row(row)?;
+    }
     if let Some(tripped) = local_trip.get() {
         return Ok(Evaluated::Truncated(Truncation::barred_at(
             node, tripped, out_schema,
@@ -2397,7 +2818,7 @@ fn contextual_group_rows<D: DatasetView + Sync, M: GroupDomain>(
     }
     Ok(lift.finish(SolutionSeq {
         schema: out_schema,
-        rows,
+        rows: rows.finish()?,
     }))
 }
 
@@ -2405,8 +2826,8 @@ fn contextual_lanes<D: DatasetView + Sync>(
     aggregates: &[(Variable, AggregateExpression)],
     ctx: &EvalCtx<'_, D>,
     local_trip: &std::cell::Cell<Option<purrdf_core::TrippedGovernor>>,
-) -> Result<Option<Vec<ContextualLane<D::Id>>>, EvalError> {
-    let mut lanes = Vec::with_capacity(aggregates.len());
+) -> Result<Option<AdmittedVec<ContextualLane<D::Id>>>, EvalError> {
+    let mut lanes = AdmittedVec::with_capacity(aggregates.len(), &ctx.growth)?;
     for (_, agg) in aggregates {
         if let Err(tripped) = ctx.charge(ChargePoint::AggregateInvocation) {
             record_contextual_trip(ctx, local_trip, tripped);
@@ -2423,9 +2844,9 @@ fn contextual_lanes<D: DatasetView + Sync>(
                     agg.function(),
                     AggregateFunction::Min | AggregateFunction::Max | AggregateFunction::Sample
                 ))
-            .then(DetHashSet::default),
+            .then(crate::AdmittedMap::default),
             retired: false,
-        });
+        })?;
     }
     Ok(Some(lanes))
 }
@@ -2474,11 +2895,161 @@ fn contextual_lanes<D: DatasetView + Sync>(
 /// unbound — the same doctrine [`crate::user_fn::eval_native_function`]'s
 /// invocation charge follows — leaving [`eval_group`] to notice the barrier and
 /// withhold the whole grouped output.
+struct AggregateSurvivors {
+    values: AdmittedVec<TermValue>,
+    // Original term owners outlive all of the values and the values' vector.
+    grants: AdmittedVec<crate::WorkspaceAllocation>,
+}
+
+struct AggregateSurvivorOwners {
+    _values: Option<crate::WorkspaceAllocation>,
+    _terms: AdmittedVec<crate::WorkspaceAllocation>,
+}
+
+impl std::ops::Deref for AggregateSurvivors {
+    type Target = [TermValue];
+    fn deref(&self) -> &[TermValue] {
+        &self.values
+    }
+}
+
+impl AggregateSurvivors {
+    fn into_parts(self) -> (Vec<TermValue>, AggregateSurvivorOwners) {
+        let (values, allocation) = self.values.into_parts();
+        (
+            values,
+            AggregateSurvivorOwners {
+                _values: allocation,
+                _terms: self.grants,
+            },
+        )
+    }
+    fn new(workspace: &crate::WorkspaceCapability) -> Self {
+        Self {
+            values: AdmittedVec::new(workspace),
+            grants: AdmittedVec::new(workspace),
+        }
+    }
+
+    fn reserve_next(&mut self) -> Result<(), EvalError> {
+        self.values.reserve_next()?;
+        self.grants.reserve_next()
+    }
+
+    fn push(&mut self, value: crate::WorkspaceTerm) -> Result<(), EvalError> {
+        self.reserve_next()?;
+        let (value, allocation) = value.into_parts();
+        // Both destinations were admitted before moving the original payload.
+        self.values.push_reserved(value);
+        self.grants.push_reserved(allocation);
+        Ok(())
+    }
+}
+
+/// Borrowed custom-aggregate ABI metadata with its original lexical/term owners.
+/// Values and the values' array are destroyed before either grant array.
+struct AggregateScalarvals {
+    values: AdmittedVec<(String, TermValue)>,
+    owners: AdmittedVec<[crate::WorkspaceAllocation; 2]>,
+}
+
+impl std::ops::Deref for AggregateScalarvals {
+    type Target = [(String, TermValue)];
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
+
+impl AggregateScalarvals {
+    fn resolve(
+        aggregate: &AggregateExpression,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let length = aggregate.scalarvals().len();
+        let mut result = Self {
+            values: AdmittedVec::with_capacity(length, workspace)?,
+            owners: AdmittedVec::with_capacity(length, workspace)?,
+        };
+        for (name, literal) in aggregate.scalarvals() {
+            // Both metadata destinations exist before creating their payload.
+            // `string` uses one fallible exact-capacity copy at the shared home.
+            let name_owner = workspace.charge(
+                u64::try_from(name.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+            )?;
+            let name = crate::workspace::string(name, "aggregate scalarval name")?;
+            let term = crate::convert::literal_to_workspace_value(literal, workspace)?;
+            let (value, term_owner) = term.into_parts();
+            result.values.push_reserved((name, value));
+            result.owners.push_reserved([name_owner, term_owner]);
+        }
+        Ok(result)
+    }
+}
+
+/// DISTINCT's identity witnesses borrow the already retained survivor payloads.
+/// Hash collisions still compare exact RDF terms through the admitted native walk.
+/// No second term copy or independently unowned recursive Hash/Eq is created.
+#[derive(Default)]
+struct AggregateTupleWitnesses {
+    buckets: crate::AdmittedMap<u64, AdmittedVec<usize>>,
+}
+
+impl AggregateTupleWitnesses {
+    fn keep(
+        &mut self,
+        tuple: &[TermValue],
+        survivors: &[Vec<TermValue>],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<bool, EvalError> {
+        use std::hash::Hasher as _;
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
+        hasher.write_usize(tuple.len());
+        for value in tuple {
+            hasher.write_u64(workspace.term_hash(value)?);
+        }
+        let hash = hasher.finish();
+        if let Some(bucket) = self.buckets.get(&hash) {
+            for &ordinal in bucket {
+                let previous = &survivors[ordinal];
+                let mut equal = previous.len() == tuple.len();
+                if equal {
+                    for (left, right) in previous.iter().zip(tuple) {
+                        if !workspace.terms_equal(left, right)? {
+                            equal = false;
+                            break;
+                        }
+                    }
+                }
+                if equal {
+                    return Ok(false);
+                }
+            }
+        }
+        let ordinal = survivors.len();
+        if let Some(bucket) = self.buckets.get_mut(&hash) {
+            bucket.push(ordinal)?;
+        } else {
+            let mut bucket = AdmittedVec::new(workspace);
+            bucket.push(ordinal)?;
+            self.buckets.insert_admitted(hash, bucket, workspace)?;
+        }
+        Ok(true)
+    }
+}
+
+fn missing_custom_aggregate(iri: &str, workspace: &crate::WorkspaceCapability) -> EvalError {
+    crate::NativeDiagnostic::error(
+        crate::NativeDiagnosticKind::Function,
+        format_args!("no custom aggregate is registered for <{iri}>"),
+        workspace,
+    )
+}
+
 fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
     agg: &AggregateExpression,
     links: &mut [crate::vm::Linked<'_, D::Id>],
     idxs: &[usize],
-    rows: &[Solution<D::Id>],
+    rows: &[RetainedRow<D::Id>],
     schema: &VarSchema,
     domain: M,
     ctx: &mut EvalCtx<'_, D>,
@@ -2532,9 +3103,13 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
         // A solution is its pattern's variables only, so a shared blank's column
         // (see `crate::blank_scope`) is left out of the row identity `DISTINCT *`
         // compares; `None` — every schema without one — compares the row itself.
-        let visible = agg.distinct.then(|| domain.visible(schema)).flatten();
-        let mut seen: Option<DetHashSet<std::borrow::Cow<'_, Solution<D::Id>>>> =
-            agg.distinct.then(DetHashSet::default);
+        let visible = if agg.distinct {
+            domain.visible(schema, &ctx.growth)?
+        } else {
+            None
+        };
+        let mut seen: Option<crate::AdmittedMap<RetainedRow<D::Id>, ()>> =
+            agg.distinct.then(crate::AdmittedMap::default);
         let mut survivors: usize = 0;
         // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
         // latched trip first, then the `aggregate-accumulation` charge and its poll.
@@ -2549,28 +3124,33 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
             }
             if let Some(seen) = seen.as_mut() {
                 let identity = match &visible {
-                    None => std::borrow::Cow::Borrowed(&rows[i]),
-                    Some(keep) => std::borrow::Cow::Owned(
-                        keep.iter().map(|&column| rows[i][column]).collect(),
-                    ),
+                    None => rows[i].clone_admitted(&ctx.growth)?,
+                    Some(keep) => RetainedRow::try_build(keep.len(), &ctx.growth, |identity| {
+                        for (slot, &column) in identity.iter_mut().zip(keep) {
+                            *slot = rows[i][column];
+                        }
+                        Ok(())
+                    })?,
                 };
-                if !seen.insert(identity) {
+                if seen.get(&identity).is_some() {
                     continue;
                 }
+                let _ = seen.insert_admitted(identity, (), &ctx.growth)?;
             }
             survivors += 1;
         }
-        let value = fold_builtin(
+        let capability = ctx.growth.clone();
+        let value = fold_builtin_admitted(
             ctx.sequential_operation_required(),
             &vec![(); survivors],
-            CountAccumulator::default,
-            |acc, ()| acc.step(&[]),
+            || Ok(CountAccumulator::default()),
+            |acc, ()| acc.step_admitted(&[], &capability),
+            &capability,
         )?;
-        return Ok(value
-            .map(|v| ctx.scratch.try_intern_checked(ctx.dataset, v))
+        return value
+            .map(|value| ctx.intern_workspace_term(value))
             .transpose()
-            .map_err(EvalError::source_read)?
-            .flatten());
+            .map(Option::flatten);
     }
 
     // Every built-in aggregate reaching here is `COUNT(?x)`/`SUM`/`AVG`/`MIN`/
@@ -2583,12 +3163,12 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
     // state that should be provably unreachable, an empty `args` here folds
     // zero survivors (the SAME answer a genuinely empty group already gives)
     // instead of trusting the invariant with an `unreachable!()`.
-    let mut seen: Option<DetHashSet<SolutionTerm<D::Id>>> = agg.distinct.then(DetHashSet::default);
+    let mut seen: Option<crate::AdmittedMap<SolutionTerm<D::Id>, ()>> =
+        agg.distinct.then(crate::AdmittedMap::default);
     // Without `DISTINCT` every bound row survives, so `idxs.len()` is the exact upper
     // bound: one allocation instead of doubling growth. `DISTINCT` starts empty since
     // its survivor count is unknowable up front.
-    let mut survivors: Vec<TermValue> =
-        Vec::with_capacity(if agg.distinct { 0 } else { idxs.len() });
+    let mut survivors = AggregateSurvivors::new(&ctx.growth);
     if let Some(first_arg) = links[..agg.args().len()].first_mut() {
         // Phase 1: evaluate every row's argument expression against `ctx`, charge
         // `AggregateAccumulation` for each one, apply `DISTINCT`, and charge
@@ -2632,15 +3212,18 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
                 ctx.record_barrier(tripped);
                 return Ok(None);
             }
-            if let Some(seen) = seen.as_mut()
-                && !seen.insert(term)
-            {
-                continue;
+            if let Some(seen) = seen.as_mut() {
+                if seen.get(&term).is_some() {
+                    continue;
+                }
+                let _ = seen.insert_admitted(term, (), &ctx.growth)?;
             }
-            let value = ctx
-                .scratch
-                .try_value_of(ctx.dataset, term)
-                .map_err(EvalError::source_read)?;
+            survivors.reserve_next()?;
+            let value =
+                ctx.scratch
+                    .try_owned_value_of(ctx.dataset, term, &ctx.growth, |error| {
+                        ctx.workspace.source_error(error)
+                    })?;
             if let Err(tripped) = ctx.charge_amount(
                 purrdf_core::ResourceDimension::ScratchBytes,
                 crate::scratch::value_bytes(&value),
@@ -2648,7 +3231,7 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
                 ctx.record_barrier(tripped);
                 return Ok(None);
             }
-            survivors.push(value);
+            survivors.push(value)?;
         }
     }
 
@@ -2673,52 +3256,60 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
     // volatility concern: nothing here can reach `RAND`/`BNODE`/an `EXISTS`
     // re-entry, because nothing here evaluates an expression.
     let sequential = ctx.sequential_operation_required();
+    let capability = ctx.growth.clone();
     let value = match agg.function() {
-        AggregateFunction::Count => fold_builtin(
+        AggregateFunction::Count => fold_builtin_admitted(
             sequential,
             &survivors,
-            CountAccumulator::default,
-            acc_step_one,
+            || Ok(CountAccumulator::default()),
+            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+            &capability,
         )?,
-        AggregateFunction::Sum => fold_numeric(
+        AggregateFunction::Sum => fold_numeric_admitted(
             sequential,
             &survivors,
             NumericAggregate::Sum,
             ctx.division,
             &mut |code| ctx.record_expression_error(Some(code)),
+            &capability,
         )?,
-        AggregateFunction::Avg => fold_numeric(
+        AggregateFunction::Avg => fold_numeric_admitted(
             sequential,
             &survivors,
             NumericAggregate::Avg,
             ctx.division,
             &mut |code| ctx.record_expression_error(Some(code)),
+            &capability,
         )?,
-        AggregateFunction::Min => fold_builtin(
+        AggregateFunction::Min => fold_builtin_admitted(
             sequential,
             &survivors,
-            MinAccumulator::default,
-            acc_step_one,
+            || Ok(MinAccumulator::default()),
+            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+            &capability,
         )?,
-        AggregateFunction::Max => fold_builtin(
+        AggregateFunction::Max => fold_builtin_admitted(
             sequential,
             &survivors,
-            MaxAccumulator::default,
-            acc_step_one,
+            || Ok(MaxAccumulator::default()),
+            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+            &capability,
         )?,
-        AggregateFunction::Sample => fold_builtin(
+        AggregateFunction::Sample => fold_builtin_admitted(
             sequential,
             &survivors,
-            SampleAccumulator::default,
-            acc_step_one,
+            || Ok(SampleAccumulator::default()),
+            |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+            &capability,
         )?,
         AggregateFunction::GroupConcat => {
-            let sep = agg.separator().unwrap_or(" ").to_owned();
-            fold_builtin(
+            let sep = agg.separator().unwrap_or(" ");
+            fold_builtin_admitted(
                 sequential,
                 &survivors,
-                || GroupConcatAccumulator::new(sep.clone()),
-                acc_step_one,
+                || GroupConcatAccumulator::new_admitted(sep, &capability),
+                |acc, value| acc.step_admitted(std::slice::from_ref(value), &capability),
+                &capability,
             )?
         }
         // `Custom` was dispatched away at the top of this function, before any
@@ -2749,11 +3340,10 @@ fn eval_aggregate<D: DatasetView + Sync, M: GroupDomain>(
             ));
         }
     };
-    Ok(value
-        .map(|v| ctx.scratch.try_intern_checked(ctx.dataset, v))
+    value
+        .map(|value| ctx.intern_workspace_term(value))
         .transpose()
-        .map_err(EvalError::source_read)?
-        .flatten())
+        .map(Option::flatten)
 }
 
 /// The exact tower's share of folding `survivors` through the built-in `function`
@@ -2879,14 +3469,51 @@ pub(crate) fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
     init: impl Fn() -> A + Sync,
     step: impl Fn(&mut A, &T) -> Result<(), EvalError> + Sync,
 ) -> Result<Option<TermValue>, EvalError> {
-    let fold = crate::parallel::par_chunk_reduce_init(
+    fold_builtin_admitted(
         sequential,
         survivors,
         || Ok(init()),
         step,
-        |acc: &mut A, other: A| acc.combine(Box::new(other)),
+        &crate::WorkspaceCapability::resident(),
+    )?
+    .map(|value| {
+        value.into_resident().map_err(|_| {
+            EvalError::WorkspaceUnpriced("a resident aggregate cannot detach bounded output")
+        })
+    })
+    .transpose()
+}
+
+pub(crate) fn fold_builtin_admitted<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
+    sequential: bool,
+    survivors: &[T],
+    init: impl Fn() -> Result<A, EvalError> + Sync,
+    step: impl Fn(&mut A, &T) -> Result<(), EvalError> + Sync,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+    let fold = crate::parallel::par_chunk_reduce_init(
+        sequential || workspace.is_bounded(),
+        survivors,
+        init,
+        step,
+        |acc: &mut A, other: A| {
+            let _control = workspace.charge(
+                u64::try_from(size_of::<A>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+            )?;
+            acc.combine(purrdf_core::small::try_boxed(other).map_err(|_| {
+                EvalError::AllocationFailed {
+                    construct: "aggregate partial control",
+                }
+            })?)
+        },
     )?;
-    Box::new(fold).finish()
+    let _control = workspace
+        .charge(u64::try_from(size_of::<A>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    purrdf_core::small::try_boxed(fold)
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "aggregate finish control",
+        })?
+        .finish_admitted(workspace)
 }
 
 /// Fold a group through a registered [`crate::agg_fn::CustomAggregate`], its arguments
@@ -2909,20 +3536,20 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     agg: &AggregateExpression,
     links: &mut [crate::vm::Linked<'_, D::Id>],
     idxs: &[usize],
-    rows: &[Solution<D::Id>],
+    rows: &[RetainedRow<D::Id>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let custom = ctx.aggregates.resolve(iri).cloned().ok_or_else(|| {
-        EvalError::function(format!("no custom aggregate is registered for <{iri}>"))
-    })?;
+    let custom = ctx
+        .aggregates
+        .resolve(iri)
+        .cloned()
+        .ok_or_else(|| missing_custom_aggregate(iri, &ctx.growth))?;
 
-    // Meter the declared per-accumulator state bound against the scratch-arena
-    // ceiling AT ADMISSION (once per group's accumulator), because a custom
-    // accumulator's retained state is opaque host Rust the evaluator cannot
-    // observe mid-fold the way it observes a minted `TermValue` the instant the
-    // scratch interner produces one — see `CustomAggregate::state_bound`'s docs.
-    let state_bound = crate::agg_fn::state_bound_contained(custom.as_ref(), iri)?;
+    // The existing governor charge is a declared host-state meter; physical
+    // factories and growth are separately admitted at their native lifecycle.
+    let state_bound =
+        crate::agg_fn::state_bound_contained_admitted(custom.as_ref(), iri, &ctx.growth)?;
     if let Err(tripped) =
         ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, state_bound)
     {
@@ -2930,59 +3557,45 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         return Ok(None);
     }
 
-    // Phase 1: evaluate every row's positional argument tuple against `ctx`,
-    // charge `AggregateAccumulation` for each one, apply `DISTINCT` on the full
-    // tuple, and charge `ScratchBytes` for each tuple actually retained into
-    // `survivors` — otherwise unchanged from before within-group chunking
-    // existed. See `eval_aggregate`'s matching phase-1 comment for why the REST
-    // of this phase's spend stays a pure function of `idxs`/`ctx` regardless of
-    // what phase 2 below does, and for why `survivors`' retained `TermValue`
-    // clones need their own `ScratchBytes` charge: `ctx.scratch.value_of` mints
-    // nothing, so [`EvalCtx::charge_scratch_growth`]'s automatic arena charge
-    // never sees them, and this per-group buffer is otherwise-uncharged memory
-    // proportional to the group's cardinality.
-    let mut seen: Option<DetHashSet<Vec<TermValue>>> = agg.distinct.then(DetHashSet::default);
-    let mut tuple: Vec<TermValue> = Vec::with_capacity(agg.args().len());
-    // As in `eval_aggregate`'s phase 1: `idxs.len()` is the exact upper bound on
-    // survivors without `DISTINCT`, so reserve it once instead of growing by doubling.
-    let mut survivors: Vec<Vec<TermValue>> =
-        Vec::with_capacity(if agg.distinct { 0 } else { idxs.len() });
-    // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
-    // latched trip first, then the `aggregate-accumulation` charge and its poll.
+    let mut seen = agg.distinct.then(AggregateTupleWitnesses::default);
+    let capacity = if agg.distinct { 0 } else { idxs.len() };
+    // Locals drop in reverse declaration order: all survivor values and their
+    // containing array die before the independent original payload grants.
+    let mut survivor_owners = AdmittedVec::with_capacity(capacity, &ctx.growth)?;
+    let mut survivors = AdmittedVec::<Vec<TermValue>>::with_capacity(capacity, &ctx.growth)?;
     let mut checkpoint =
         crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
     for &i in idxs {
-        tuple.clear();
+        let mut tuple = AggregateSurvivors::new(&ctx.growth);
         let mut every_position_bound = true;
         for argument in &mut links[..agg.args().len()] {
             let Some(term) = argument.term(&rows[i], schema, ctx)? else {
                 every_position_bound = false;
                 break;
             };
-            tuple.push(
-                ctx.scratch
-                    .try_value_of(ctx.dataset, term)
-                    .map_err(EvalError::source_read)?,
-            );
+            tuple.reserve_next()?;
+            tuple.push(ctx.scratch.try_owned_value_of(
+                ctx.dataset,
+                term,
+                &ctx.growth,
+                |error| ctx.workspace.source_error(error),
+            )?)?;
         }
         if !every_position_bound {
             continue;
         }
-        // The `aggregate-accumulation` charge point, charged once the row's whole
-        // argument tuple is bound — BEFORE the `DISTINCT` check below, exactly as
-        // the built-in fold path in `eval_aggregate` charges it: producing and
-        // inspecting the tuple is the work this point prices, whether or not
-        // `DISTINCT` goes on to discard it.
+        // Preserve callback/governor order: every bound tuple is charged before
+        // DISTINCT, even when the identity witness then rejects a duplicate.
         if let Err(tripped) = checkpoint.pass(ctx) {
             ctx.record_barrier(tripped);
             return Ok(None);
         }
-        if let Some(seen) = seen.as_mut()
-            && !seen.insert(tuple.clone())
+        if let Some(seen) = &mut seen
+            && !seen.keep(&tuple, &survivors, &ctx.growth)?
         {
             continue;
         }
-        let tuple_bytes: u64 = tuple
+        let tuple_bytes = tuple
             .iter()
             .map(crate::scratch::value_bytes)
             .fold(0u64, u64::saturating_add);
@@ -2992,38 +3605,16 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
             ctx.record_barrier(tripped);
             return Ok(None);
         }
-        // Move the tuple into `survivors` rather than cloning it a second time: the
-        // `seen` clone above (when `DISTINCT` is engaged) is the one genuinely
-        // unavoidable copy, because that set and this buffer are two independent
-        // owners of the same content. `tuple` is replaced with a fresh, correctly
-        // sized buffer so the next iteration's `tuple.clear()` still has the
-        // capacity this loop already paid for.
-        survivors.push(std::mem::replace(
-            &mut tuple,
-            Vec::with_capacity(agg.args().len()),
-        ));
+        survivors.reserve_next()?;
+        survivor_owners.reserve_next()?;
+        let (values, owners) = tuple.into_parts();
+        survivors.push_reserved(values);
+        survivor_owners.push_reserved(owners);
     }
 
-    // Phase 2: fold the (already `DISTINCT`-resolved, already in row order)
-    // survivor tuples — chunked in parallel for a large enough group, but ONLY
-    // when `custom` declares `Volatility::Stable` (mirrors
-    // `EvalCtx::may_fork_aggregate`'s own per-group gate at the finer,
-    // within-group grain: a `Volatile` aggregate's `step`/`combine` may depend
-    // on state this evaluator does not control, so it stays on ONE
-    // accumulator, sequentially, exactly as before this increment existed).
-    //
-    // A chunked fold creates MORE than one live accumulator at once (one per
-    // chunk, combined down afterward) — [`CustomAggregate::state_bound`]'s
-    // admission charge above metered exactly ONE accumulator's declared bound,
-    // so chunking must charge the EXTRA accumulators beyond that first one
-    // before creating them, using [`crate::parallel::planned_aggregate_chunk_count`]
-    // (the exact count [`crate::parallel::par_chunk_reduce_init`] will create, not
-    // an estimate) so this stays an honest upper bound on peak retained state. That
-    // count is a pure function of `survivors.len()` alone — see
-    // [`crate::parallel::aggregate_chunk_size_for`]'s doc comment — so this charge,
-    // unlike an earlier increment's, cannot vary with the host's thread count.
-    let stable = crate::agg_fn::volatility_contained(custom.as_ref(), iri)? == Volatility::Stable;
-    // A `Volatile` aggregate folds on one accumulator whatever the evaluation decided.
+    // Keep the exact existing chunk plan and chunk-index reduction/error order.
+    let stable = crate::agg_fn::volatility_contained_admitted(custom.as_ref(), iri, &ctx.growth)?
+        == Volatility::Stable;
     let sequential = ctx.sequential_operation_required() || !stable;
     let chunk_count = crate::parallel::planned_aggregate_chunk_count(sequential, survivors.len());
     if chunk_count > 1 {
@@ -3034,572 +3625,420 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
             return Ok(None);
         }
     }
-    // The call site's `; NAME=value` scalarval clauses, resolved to `TermValue`
-    // ONCE, ahead of every accumulator this fold creates — a scalarval is ONE
-    // value for the WHOLE aggregation (see `AggregateExpression::scalarvals`'s
-    // docs), never re-evaluated per row or per chunk. Already validated at
-    // prepare time (`crate::property_fn_plan::plan_aggregate`) against
-    // `custom`'s declared `CustomAggregate::scalarvals`: every name known, no
-    // duplicate, every declared name present, every value the right kind — so
-    // `CustomAggregate::init` below can trust this slice without re-checking it.
-    let scalarvals: Vec<(String, TermValue)> = agg
-        .scalarvals()
-        .iter()
-        .map(|(name, literal)| (name.clone(), literal_to_value(literal)))
-        .collect();
-    // The fold's arbitrary-precision arithmetic, priced by the aggregate itself from
-    // the operands' sizes and charged before any of it runs.
-    let cost = crate::agg_fn::exact_numeric_cost_contained(
+    let scalarvals = AggregateScalarvals::resolve(agg, &ctx.growth)?;
+    let cost = crate::agg_fn::exact_numeric_cost_contained_admitted(
         custom.as_ref(),
         iri,
         &survivors,
         &scalarvals,
         ctx.division,
+        &ctx.growth,
     )?;
     if !crate::expr::numeric_step_admitted(ctx, cost) {
         return Ok(None);
     }
-    let accumulator = crate::parallel::par_chunk_reduce_init(
+    let accumulator = crate::parallel::par_chunk_reduce_init_admitted(
         sequential,
         &survivors,
-        || crate::agg_fn::init_contained(custom.as_ref(), iri, &scalarvals, ctx.division),
-        |accumulator, tuple| crate::agg_fn::step_contained(accumulator.as_mut(), iri, tuple),
-        |accumulator, other| crate::agg_fn::combine_contained(accumulator.as_mut(), iri, other),
+        &ctx.growth,
+        || {
+            crate::agg_fn::init_contained_admitted(
+                custom.as_ref(),
+                iri,
+                &scalarvals,
+                ctx.division,
+                &ctx.growth,
+            )
+        },
+        |accumulator, tuple| {
+            crate::agg_fn::step_contained_admitted(accumulator, iri, tuple, &ctx.growth)
+        },
+        |accumulator, other| {
+            crate::agg_fn::combine_contained_admitted(accumulator, iri, other, &ctx.growth)
+        },
     )?;
-
-    let value = crate::agg_fn::finish_contained(accumulator, iri, &mut |code| {
-        ctx.record_expression_error(Some(code));
-    })?;
-    // THE custom-aggregate seam. `AggregateAccumulator::finish` returns an
-    // `Option<TermValue>` with no constraint on the language string at all, and
-    // this is where that value would otherwise become a solution term. `and_then`
-    // routes a refused tag onto the same unbound answer an accumulator that
-    // returned `None` gets — see `ScratchInterner::intern_checked`.
+    let value = crate::agg_fn::finish_contained_admitted(
+        accumulator,
+        iri,
+        &mut |code| {
+            ctx.record_expression_error(Some(code));
+        },
+        &ctx.growth,
+    )?;
     Ok(value
-        .map(|v| ctx.scratch.try_intern_checked(ctx.dataset, v))
-        .transpose()
-        .map_err(EvalError::source_read)?
+        .map(|value| ctx.intern_workspace_term(value))
+        .transpose()?
         .flatten())
 }
 
-/// The running numeric fold `SUM`/`AVG` share, wrapped `Option`-poisonable by
-/// [`fold_numeric`]'s chain (the poisoned state lives one level up, as `None`,
-/// rather than as a variant here).
+/// The source-order `SUM`/`AVG` fold, poisoned by its caller's `Option`.
 ///
-/// `SUM`/`AVG` are the two built-ins that do NOT go through
-/// [`crate::agg_fn::AggregateAccumulator`]'s `combine`: SPARQL defines them as a
-/// left-to-right chain of `op:numeric-add`, and a combine of two partial sums is
-/// a different expression — see [`fold_numeric`] for the fold that keeps the
-/// chain's value bit for bit while still chunking the exact tiers.
+/// Integer and decimal totals use the existing native exact kernels. Their
+/// immutable parsed carriers retain all heap magnitudes while operands are
+/// borrowed; cloning a partial shares that owner instead of copying its digits.
+/// A singleton integer keeps its original datatype, while addition produces
+/// plain `xsd:integer` through the native numeric law.
 ///
-/// A **pure-integer** running group ([`Self::Int`]) accumulates through
-/// [`BigInt`] — arbitrary precision, so it never overflows regardless of how
-/// large the true total gets; only a genuinely non-numeric value poisons it.
-/// The moment a `decimal`/`float`/`double` value joins the group, the fold
-/// promotes to [`Self::Ok`] and continues through `numeric_add`'s spec-defined
-/// promotion tower — see [`int_sum_promote_base`] for the promotion step, exact
-/// for `decimal` at any size and correctly rounded for `float`/`double`.
-/// [`Self::Ok`]'s own arithmetic is `numeric_add`'s: `xsd:decimal` exact at every
-/// size (on the arbitrary-precision tower once it leaves the machine words) and
-/// `xsd:float`/`xsd:double` IEEE, inf/NaN included.
+/// Floating-point additions cannot reassociate. [`NumericSummary`] merges only
+/// exact partials proven equal to the chain and replays its remaining operands
+/// in source order.
 ///
-/// ## `SUM`/`AVG` over `xsd:duration` — a PurRDF extension
-///
-/// SPARQL 1.1 §18.5.1.3 defines `SUM` as repeated `op:numeric-add`, whose domain
-/// is the numeric tower alone; F&O has no `SUM`/`AVG` for `xsd:duration` either.
-/// [`Self::Dur`] extends the aggregate algebra to the duration group, which
-/// `.goals`' MAXIMAL UTILITY line asks for once nothing in [`XsdValue::is_numeric`]'s
-/// gate has to move to reach it (see [`NumericFold::step_xsd`]'s doc for the exact
-/// gate). The RAW `(months, seconds)` pair is an abelian group under
-/// componentwise `+` unconditionally — see [`Self::Dur`]'s own doc for why the
-/// fold accumulates that raw pair (rather than folding through
-/// [`purrdf_xsd::temporal::add_durations`]'s validated `Duration` at every
-/// step, which is NOT closed under `+` and made an earlier revision of this
-/// fold order-dependent) — so the group sum is well-defined for any nonempty
-/// multiset, independent of fold order and chunk boundaries; `AVG` is that
-/// sum divided by the folded count.
+/// Duration aggregates extend the fold over the RAW group `ℤ × Decimal`.
+/// Months are checked `i128` totals; seconds use the same native decimal
+/// additions as numeric SUM. Mixed-sign partials remain valid running state:
+/// [`purrdf_xsd::temporal::Duration::new`] validates the finished sum or mean
+/// once. This preserves the existing order-independent duration result and
+/// joined subtype, including groups with an unrepresentable intermediate.
 #[derive(Debug, Clone)]
 enum NumericFold {
-    /// No value has been folded in yet.
+    /// No value has been folded.
     Empty,
-    /// Every value folded in so far has been `xsd:integer` (or a derived
-    /// integer facet): an exact, unbounded running total, plus the count of
-    /// values folded (only `AVG` reads it) and the datatype to report if the
-    /// fold never grows past this single value (see [`int_sum_value`]'s docs
-    /// on why a singleton group preserves its one literal's exact subtype,
-    /// e.g. `xsd:byte`, while two or more folded values normalize to plain
-    /// `xsd:integer` — `datatype` here mirrors that: it starts as the first
-    /// value's own datatype and is stamped to [`XsdDatatype::Integer`] the
-    /// instant a second value (via `step` OR `combine_owned`) is actually
-    /// folded in).
-    Int {
-        sum: BigInt,
-        count: u64,
-        datatype: XsdDatatype,
-    },
-    /// A running sum plus the count of values folded so far (only `AVG` reads
-    /// the count) — at `decimal`/`float`/`double` tier or higher; promotion is
-    /// monotonic (`integer ⊂ decimal ⊂ float ⊂ double`), so once here the fold
-    /// never returns to [`Self::Int`].
-    Ok { acc: XsdValue, count: u64 },
-    /// A running duration sum, carried as its own RAW `(months, seconds)`
-    /// components rather than as an already-validated `XsdValue::Duration` —
-    /// this decomposition is the fix for a real nondeterminism defect, not a
-    /// stylistic choice; see the paragraph below for why.
-    ///
-    /// XSD 1.1 Part 2 §3.3.6's duration value space is the pair `(months,
-    /// seconds)` with BOTH components non-negative or BOTH non-positive
-    /// ([`purrdf_xsd::temporal::Duration::new`] enforces this — sign
-    /// coherence). That set is NOT closed under componentwise `+`: e.g.
-    /// `(12, 0) + (0, -86400) = (12, -86400)` is mixed-sign and therefore
-    /// unrepresentable, even though summing the SAME three durations in a
-    /// different order (or after a different chunk boundary) can land on a
-    /// representable total instead. An earlier revision of this variant
-    /// carried `acc: XsdValue::Duration` and folded through
-    /// [`purrdf_xsd::temporal::add_durations`]/`purrdf_xsd::value_add` at every
-    /// intermediate row — validating sign coherence at EVERY step, not just
-    /// the final one — which therefore poisoned or not depending on fold
-    /// order and on chunk boundaries: a genuine nondeterminism bug, since
-    /// [`crate::parallel::par_chunk_reduce_init`] chunks a large group
-    /// differently than a small one folds sequentially
-    /// (`crate::parallel::PARALLEL_MIN_ROWS`), and both are legitimate ways to
-    /// fold the identical multiset of rows to the identical answer.
-    ///
-    /// Sign coherence is a property of the RESULT, not of every partial sum on
-    /// the way to it: the (months, seconds) pair sums over the free abelian
-    /// group `ℤ × Decimal`, which IS totally order-independent (ordinary
-    /// integer/decimal addition — no partiality anywhere in the group itself).
-    /// So this variant accumulates the two components raw — `months` as a
-    /// `checked_add`ed running `i128`, never validated against sign coherence
-    /// mid-fold; `seconds` as an `XsdValue::Decimal` accumulated through
-    /// [`numeric_add`] (the SAME function [`Self::Ok`]'s own decimal SUM uses,
-    /// so duration seconds and a plain `xsd:decimal` SUM overflow identically)
-    /// — and defers the ONE sign-coherence check to [`Self::finish_sum`]/
-    /// [`Self::finish_avg`], on the fully-summed total. Because the raw
-    /// accumulation itself is now genuinely order-independent, that single
-    /// validation is order-independent too: sequential folding and every
-    /// chunking agree on the SAME raw total and therefore on the SAME
-    /// validation outcome — representable → the same value; unrepresentable →
-    /// unbound, deterministically, every time.
-    ///
-    /// `months` is `i128`, not the `i64` [`purrdf_xsd::temporal::Duration::new`]
-    /// itself requires: a running sum of `n` `i64`-bounded values cannot
-    /// overflow `i128` until `n` exceeds roughly `2^64` rows, which is not a
-    /// group size any real query reaches, so the accumulation is total in
-    /// practice — only the narrowing back to `i64` at `finish` can fail
-    /// (checked anyway, for honesty, not because it is expected to fire).
-    ///
-    /// `datatype` is the joined result tag
-    /// ([`purrdf_xsd::temporal::duration_result_datatype`]: `dayTimeDuration` iff every folded value declared it, likewise
-    /// `yearMonthDuration`, else the general `xsd:duration`) — a genuine
-    /// semilattice join (associative, commutative, idempotent on its own), so
-    /// folding it per step, unlike the sign check, stays safe.
+    /// Only integer values have contributed. The first carrier keeps its facet;
+    /// every subsequent native addition normalizes to plain xsd:integer.
+    Int { sum: ParsedValue, count: u64 },
+    /// A decimal or IEEE total, with the native monotone numeric promotion law.
+    Ok { acc: ParsedValue, count: u64 },
+    /// Raw duration components; coherence is checked only on the final value.
     Dur {
-        /// Raw running months total — see this variant's own doc.
         months: i128,
-        /// Raw running seconds total, always `XsdValue::Decimal(_)` — see this
-        /// variant's own doc.
-        seconds: XsdValue,
-        /// The joined result tag — see this variant's own doc.
+        seconds: ParsedValue,
         datatype: XsdDatatype,
-        /// The folded row count (`AVG` reads it).
         count: u64,
     },
 }
 
+/// Numeric inputs use the one admitted native parser. Other families poison
+/// this fold without constructing an unused string/binary parse destination.
+fn parse_numeric_fold_value(
+    value: &TermValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<ParsedValue>, EvalError> {
+    let TermValue::Literal {
+        lexical_form,
+        datatype,
+        ..
+    } = value
+    else {
+        return Ok(None);
+    };
+    let Some(datatype) = XsdDatatype::from_iri(datatype) else {
+        return Ok(None);
+    };
+    if !datatype.is_numeric()
+        && !matches!(
+            datatype,
+            XsdDatatype::Duration | XsdDatatype::DayTimeDuration | XsdDatatype::YearMonthDuration,
+        )
+    {
+        return Ok(None);
+    }
+    ParsedValue::parse(lexical_form, datatype, false, workspace)
+}
+
+/// New native payloads retain their operation frame's admission. A physical
+/// refusal is propagated, never converted into aggregate poisoning/replay.
+pub(crate) fn numeric_fold_binary(
+    a: &XsdValue,
+    b: &XsdValue,
+    op: purrdf_xsd::numeric::NumericBinaryOperator,
+    division: DivisionPolicy,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Result<ParsedValue, Option<purrdf_xsd::ErrorCode>>, EvalError> {
+    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+    let computed = purrdf_xsd::ops::value_binary_admitted(a, b, op, division, &mut |layout| {
+        frame.admit(layout)
+    });
+    frame.finish_value(computed)
+}
+
 impl NumericFold {
-    /// Fold the already-parsed value `xv` in (the caller parses with
-    /// [`xsd_of`]; a value that does not parse poisons there). `false` means
-    /// `xv` POISONS the fold — a genuinely non-numeric value, or an arithmetic
-    /// failure promoting/adding it — and the sequential chain
-    /// ([`fold_numeric`]/[`NumericSummary::finish`]) turns that into its own
-    /// `None`, discarding this state permanently; `true` means `self` now
-    /// reflects `xv` folded in.
-    ///
-    /// This match is exhaustive over `Empty`/`Int`/`Ok`/`Dur`: poisoning has no
-    /// variant of its own to (mis)match here, because the wrapper's
-    /// `Option<Self>` going from `Some` to `None` — never a fifth variant of
-    /// THIS type — is where "poisoned" is expressed. There is therefore no
-    /// state this match must defensively refuse to handle.
-    ///
-    /// The gate below accepts the numeric tower OR a duration, never both in
-    /// the same group: the duration check sits entirely on
-    /// [`XsdValue::is_numeric`]'s **failure path** (short-circuit `&&`), so a numeric
-    /// value executes exactly the branches it executed before [`Self::Dur`]
-    /// existed — [`XsdValue::is_numeric`] itself is unchanged and untouched by this
-    /// widening (see its own doc for why: widening THAT predicate, rather than
-    /// gating here, would let a mixed numeric+duration group silently coerce
-    /// through whichever other call site trusts it). A group that mixes the
-    /// two poisons: `Self::Int`/`Self::Ok` reject a duration value through
-    /// their own existing arithmetic (`int_sum_promote_base`'s `None` arm, or
-    /// `numeric_add`'s `TypeMismatch`, respectively — neither needed an edit),
-    /// and `Self::Dur` rejects a numeric value explicitly below.
-    ///
-    /// A `false` return leaves `self` exactly as it was: every arm below
-    /// computes its fallible result before assigning anything, which
-    /// [`NumericSummary`] relies on to stop an exact fold at a refused row and
-    /// hand that row to the sequential chain instead.
-    fn step_xsd(&mut self, xv: &XsdValue) -> bool {
-        if !xv.is_numeric() && !matches!(xv, XsdValue::Duration(_)) {
-            return false;
+    /// Fold an already-owned native value. A semantic refusal leaves the state
+    /// unchanged; the caller records poisoning. Physical admission/allocation
+    /// failure remains a hard operational error.
+    fn step_parsed(
+        &mut self,
+        xv: ParsedValue,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<bool, EvalError> {
+        use purrdf_xsd::numeric::NumericBinaryOperator::Add;
+        if !xv.is_numeric() && !matches!(&*xv, XsdValue::Duration(_)) {
+            return Ok(false);
         }
         match self {
             Self::Empty => {
-                *self = match xv {
-                    XsdValue::Integer { value, datatype } => Self::Int {
-                        sum: BigInt::from_i128(*value),
-                        count: 1,
-                        datatype: *datatype,
-                    },
-                    XsdValue::BigInteger { value, datatype } => Self::Int {
-                        sum: value.to_bigint(),
-                        count: 1,
-                        datatype: *datatype,
-                    },
+                *self = match &*xv {
+                    XsdValue::Integer { .. } | XsdValue::BigInteger { .. } => {
+                        Self::Int { sum: xv, count: 1 }
+                    }
                     XsdValue::Duration(dur) => Self::Dur {
                         months: i128::from(dur.months()),
-                        seconds: XsdValue::Decimal(dur.seconds()),
+                        seconds: ParsedValue::from_admitted(
+                            XsdValue::Decimal(dur.seconds()),
+                            None,
+                            0,
+                        )?,
                         datatype: dur.datatype(),
                         count: 1,
                     },
-                    other => Self::Ok {
-                        acc: other.clone(),
-                        count: 1,
-                    },
+                    _ => Self::Ok { acc: xv, count: 1 },
                 };
-                true
+                Ok(true)
             }
-            Self::Int {
-                sum,
-                count,
-                datatype,
-            } => match xv {
-                XsdValue::Integer { value, .. } => {
-                    sum.add_i128(*value);
-                    *count += 1;
-                    *datatype = XsdDatatype::Integer;
-                    true
+            Self::Int { sum, count } => {
+                let next_count = count
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                let Ok(result) =
+                    numeric_fold_binary(sum, &xv, Add, DivisionPolicy::xsd_default(), workspace)?
+                else {
+                    return Ok(false);
+                };
+                if matches!(&*xv, XsdValue::Integer { .. } | XsdValue::BigInteger { .. }) {
+                    *sum = result;
+                    *count = next_count;
+                } else {
+                    *self = Self::Ok {
+                        acc: result,
+                        count: next_count,
+                    };
                 }
-                XsdValue::BigInteger { value, .. } => {
-                    sum.add_assign(&value.to_bigint());
-                    *count += 1;
-                    *datatype = XsdDatatype::Integer;
-                    true
-                }
-                other => match int_sum_promote_base(sum, other) {
-                    Some(base) => match numeric_add(&base, other) {
-                        Ok(result) => {
-                            *self = Self::Ok {
-                                acc: result,
-                                count: *count + 1,
-                            };
-                            true
-                        }
-                        Err(_) => false,
-                    },
-                    None => false,
-                },
-            },
-            Self::Ok { acc, count } => match numeric_add(acc, xv) {
-                Ok(sum) => {
-                    *acc = sum;
-                    *count += 1;
-                    true
-                }
-                Err(_) => false,
-            },
+                Ok(true)
+            }
+            Self::Ok { acc, count } => {
+                let next_count = count
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                let Ok(sum) =
+                    numeric_fold_binary(acc, &xv, Add, DivisionPolicy::xsd_default(), workspace)?
+                else {
+                    return Ok(false);
+                };
+                *acc = sum;
+                *count = next_count;
+                Ok(true)
+            }
             Self::Dur {
                 months,
                 seconds,
                 datatype,
                 count,
             } => {
-                // The top-of-function gate admits only the numeric tower or a
-                // duration; a numeric value reaching an already-`Dur` fold is
-                // exactly the mixed-group case, and poisons.
-                let XsdValue::Duration(dur) = xv else {
-                    return false;
+                let XsdValue::Duration(dur) = &*xv else {
+                    return Ok(false);
                 };
-                // Raw componentwise accumulation — no `Duration::new` call, no
-                // sign check, here. See `Self::Dur`'s own doc for why: the
-                // check belongs once, on the finished total, not on every
-                // partial sum along the way.
                 let Some(new_months) = months.checked_add(i128::from(dur.months())) else {
-                    return false;
+                    return Ok(false);
                 };
-                let Ok(new_seconds) = numeric_add(seconds, &XsdValue::Decimal(dur.seconds()))
+                let next_count = count
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                let Ok(new_seconds) = numeric_fold_binary(
+                    seconds,
+                    &XsdValue::Decimal(dur.seconds()),
+                    Add,
+                    DivisionPolicy::xsd_default(),
+                    workspace,
+                )?
                 else {
-                    return false;
+                    return Ok(false);
                 };
                 *months = new_months;
                 *seconds = new_seconds;
                 *datatype =
                     purrdf_xsd::temporal::duration_result_datatype(*datatype, dur.datatype());
-                *count += 1;
-                true
+                *count = next_count;
+                Ok(true)
             }
         }
     }
 
-    /// `SUM`'s finish: empty group → `0^^xsd:integer` (SPARQL §18.5.1);
-    /// otherwise the running total — exact for a pure-integer group (whatever
-    /// its magnitude, via [`BigInt::to_decimal_string`] when it no longer fits
-    /// `i128`), the `decimal`/`float`/`double`-tower total, or (PurRDF
-    /// extension) the group's duration total, rendered through the same
-    /// [`crate::expr::xsd_literal_value`] [`Self::Ok`] uses. A duration-typed
-    /// group is never `Self::Empty` at finish: [`Self::step_xsd`] only creates
-    /// [`Self::Dur`] on the FIRST folded duration, so the empty-group `0` row
-    /// above is reached only when literally nothing was folded, exactly as
-    /// SPARQL's `SUM(empty) = 0` requires regardless of the group's would-be
-    /// type.
-    ///
-    /// Returns `None` — poisoning to SPARQL unbound — in exactly one case:
-    /// [`Self::Dur`]'s raw `(months, seconds)` total fails
-    /// [`purrdf_xsd::temporal::Duration::new`]'s validation (mixed-sign
-    /// components, or a months total that no longer fits `i64`) — see that
-    /// variant's own doc for why this single, order-independent check is
-    /// deferred all the way to here rather than applied at every fold step.
-    /// `Self::Empty`/`Self::Int`/`Self::Ok` remain unconditionally infallible,
-    /// exactly as before [`Self::Dur`]'s raw-component representation existed:
-    /// nothing past `step_xsd`'s own poisoning (already handled by the chain,
-    /// see [`fold_numeric`]) can make one of those three unrepresentable.
-    fn finish_sum(self) -> Option<TermValue> {
+    /// SUM(empty) = integer zero. Duration validation occurs only here.
+    fn sum_value(self) -> Result<Option<ParsedValue>, EvalError> {
         match self {
-            Self::Empty => Some(TermValue::integer(0)),
-            Self::Int { sum, datatype, .. } => Some(int_sum_value(&sum, datatype)),
-            Self::Ok { acc, .. } => Some(crate::expr::xsd_literal_value(&acc)),
+            Self::Empty => ParsedValue::from_admitted(
+                XsdValue::Integer {
+                    value: 0,
+                    datatype: XsdDatatype::Integer,
+                },
+                None,
+                0,
+            )
+            .map(Some),
+            Self::Int { sum, .. } | Self::Ok { acc: sum, .. } => Ok(Some(sum)),
             Self::Dur {
                 months,
                 seconds,
                 datatype,
                 ..
             } => {
-                let months = i64::try_from(months).ok()?;
-                // A seconds total past the bounded decimal is past every
-                // representable duration.
-                let XsdValue::Decimal(seconds) = seconds else {
-                    return None;
+                let Ok(months) = i64::try_from(months) else {
+                    return Ok(None);
                 };
-                let dur = purrdf_xsd::temporal::Duration::new(months, seconds, datatype).ok()?;
-                Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
+                let XsdValue::Decimal(seconds) = &*seconds else {
+                    return Ok(None);
+                };
+                let Ok(duration) = purrdf_xsd::temporal::Duration::new(months, *seconds, datatype)
+                else {
+                    return Ok(None);
+                };
+                ParsedValue::from_admitted(XsdValue::Duration(duration), None, 0).map(Some)
             }
         }
     }
 
-    /// `AVG`'s finish: empty group → `0^^xsd:integer`; otherwise the running
-    /// total divided by the folded count, through
-    /// [`purrdf_xsd::numeric::numeric_div_with_policy`] under the query's
-    /// `division` — the one quotient `/` computes, so `AVG(?x)` and
-    /// `SUM(?x) / COUNT(?x)` are the same value on every group, at every size.
-    ///
-    /// The quotient is always a value of `xsd:decimal`'s unbounded value space,
-    /// on the arbitrary-precision tower when it leaves the machine words. It is
-    /// unbound where the policy refuses it (a non-terminating mean under
-    /// [`DivisionPolicy::Exact`](purrdf_xsd::exact::DivisionPolicy::Exact)) — an
-    /// aggregate error, whose F&O code goes to `absorb` — and for a duration mean
-    /// no duration can hold.
-    fn finish_avg(
+    /// AVG is SUM / COUNT under the query policy for numeric values. Duration
+    /// seconds keep their existing default division law; months round toward
+    /// positive infinity at ties. The mean, rather than its raw sum, is validated.
+    fn avg_value(
         self,
         division: DivisionPolicy,
         absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
-    ) -> Option<TermValue> {
-        // `AVG` is `SUM ÷ COUNT` under the query's division policy, through the one
-        // quotient `/` computes, so `SUM(?x) / COUNT(?x)` and `AVG(?x)` agree.
-        let mut mean = |sum: &XsdValue, count: u64| {
-            let count_val = XsdValue::Integer {
-                value: i128::from(count),
-                datatype: XsdDatatype::Integer,
-            };
-            match numeric_div_with_policy(sum, &count_val, division) {
-                Ok(avg) => Some(crate::expr::xsd_literal_value(&avg)),
-                Err(error) => {
-                    if let Some(code) = error.code() {
-                        absorb(code);
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<ParsedValue>, EvalError> {
+        use purrdf_xsd::numeric::NumericBinaryOperator::Divide;
+        match self {
+            Self::Empty => Self::Empty.sum_value(),
+            Self::Int { sum, count } | Self::Ok { acc: sum, count } => {
+                let count = XsdValue::Integer {
+                    value: i128::from(count),
+                    datatype: XsdDatatype::Integer,
+                };
+                match numeric_fold_binary(&sum, &count, Divide, division, workspace)? {
+                    Ok(mean) => Ok(Some(mean)),
+                    Err(code) => {
+                        if let Some(code) = code {
+                            absorb(code);
+                        }
+                        Ok(None)
                     }
-                    None
                 }
             }
-        };
-        match self {
-            Self::Empty => Some(TermValue::integer(0)),
-            Self::Int { sum, count, .. } => mean(
-                &XsdValue::from_exact_integer(
-                    purrdf_xsd::exact::Integer::from_bigint(sum),
-                    XsdDatatype::Integer,
-                ),
-                count,
-            ),
-            Self::Ok { acc, count } => mean(&acc, count),
             Self::Dur {
                 months,
                 seconds,
                 datatype,
                 count,
             } => {
-                // Mirrors `finish_sum`'s deferred-validation shape, but the
-                // MEAN — not the sum — is what must pass `Duration::new` here:
-                // a group whose raw SUM would be sign-incoherent can still
-                // have a representable MEAN (and vice versa), so this cannot
-                // simply divide `finish_sum`'s already-summed answer. Months
-                // divide with the same ties-toward-positive-infinity rule
-                // `purrdf_xsd::temporal::divide_duration` applies internally
-                // (its own private `round_decimal_to_i64`), replicated here as
-                // `round_i128_div_to_i64` because the numerator is the fold's
-                // raw `i128` accumulator, not a `Decimal` `divide_duration`
-                // could be handed directly. Seconds divide through
-                // `numeric_div` — the same function [`Self::Ok`]'s own AVG
-                // uses — for the identical truncated-to-18-fractional-digit
-                // `Decimal` result plain decimal AVG gets.
                 let divisor = i128::from(count);
-                let mean = || {
-                    let mean_months = round_i128_div_to_i64(months, divisor)?;
-                    let count_val = XsdValue::Integer {
-                        value: divisor,
-                        datatype: XsdDatatype::Integer,
-                    };
-                    // A seconds mean past the bounded decimal is past every
-                    // representable duration.
-                    let XsdValue::Decimal(mean_seconds) = numeric_div(&seconds, &count_val).ok()?
-                    else {
-                        return None;
-                    };
-                    let dur =
-                        purrdf_xsd::temporal::Duration::new(mean_months, mean_seconds, datatype)
-                            .ok()?;
-                    Some(crate::expr::xsd_literal_value(&XsdValue::Duration(dur)))
+                let Some(months) = round_i128_div_to_i64(months, divisor) else {
+                    return Ok(None);
                 };
-                mean()
+                let count = XsdValue::Integer {
+                    value: divisor,
+                    datatype: XsdDatatype::Integer,
+                };
+                let Ok(mean) = numeric_fold_binary(
+                    &seconds,
+                    &count,
+                    Divide,
+                    DivisionPolicy::xsd_default(),
+                    workspace,
+                )?
+                else {
+                    return Ok(None);
+                };
+                let XsdValue::Decimal(seconds) = &*mean else {
+                    return Ok(None);
+                };
+                let Ok(duration) = purrdf_xsd::temporal::Duration::new(months, *seconds, datatype)
+                else {
+                    return Ok(None);
+                };
+                ParsedValue::from_admitted(XsdValue::Duration(duration), None, 0).map(Some)
             }
         }
     }
 
-    /// Merge `a` and `b` — `a` the earlier (in source/chunk order) partial
-    /// fold, `b` the later one — returning `None` when the merge itself
-    /// poisons (a `decimal`-tier promotion or `numeric_add` failure; see
-    /// [`int_sum_promote_base`]).
-    ///
-    /// This is NOT, by itself, the SPARQL answer for the rows `a` and `b`
-    /// cover. §18.5.1.3 defines `Sum(S)` as the chain `op:numeric-add(S1,
-    /// Sum(S2..n))` of single additions, and adding two partial sums is a
-    /// different expression tree: over `xsd:float`/`xsd:double` it rounds
-    /// differently (over `{−3, −2^53, −1, −0.7}` every chain gives
-    /// `−9007199254740996`, the tree `(a+b)+(c+d)` gives `−9007199254740998`).
-    /// Over `xsd:decimal` every order of exact additions is the chain, but a
-    /// merge is only cheap while both partials stay in the machine words. The
-    /// only caller,
-    /// [`NumericSummary::append`], therefore calls this solely where the
-    /// merge provably equals the chain: `b` holds no `float`/`double` operand
-    /// (the summary stops its exact fold at the first one), and either both
-    /// sides are pure-integer ([`BigInt`] addition is exact and cannot
-    /// overflow, so every order of it is the chain) or the
-    /// [`MagnitudeBound`] over every operand either side absorbed shows no
-    /// chain prefix, operand alignment or total can leave the `i128`
-    /// mantissa, in which case every decimal addition on the way stayed in
-    /// machine words and the merged value — mantissa AND scale, since
-    /// `decimal_add`'s result scale is the maximum of its operands' — is the
-    /// chain's. A group the bound cannot prove small replays in order instead,
-    /// on the tower, to the same exact value.
-    ///
-    /// [`Self::Dur`]'s raw-component representation (see its own doc) sums
-    /// the free abelian group `ℤ × Decimal`, so the same two conditions make
-    /// its merge the chain's too: `months` cannot overflow `i128` for any
-    /// realistic row count, and the seconds decimals are covered by the bound.
-    ///
-    /// [`crate::parallel::par_chunk_reduce_init`] chunks through
-    /// [`crate::parallel::aggregate_chunk_size_for`], which is a pure function of the
-    /// group's row count — never of `rayon::current_num_threads()` — so for a given
-    /// (query, data) pair there is exactly ONE chunking in production, reproduced
-    /// identically on every host and every run.
-    fn combine_owned(a: Self, b: Self) -> Option<Self> {
-        match (a, b) {
+    /// Render through the shared producer home while the native value owner lives.
+    fn finish_sum_admitted(
+        self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        self.sum_value()?
+            .map(|value| crate::expr::xsd_workspace_value(&value, workspace))
+            .transpose()
+    }
+
+    fn finish_avg_admitted(
+        self,
+        division: DivisionPolicy,
+        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        self.avg_value(division, absorb, workspace)?
+            .map(|value| crate::expr::xsd_workspace_value(&value, workspace))
+            .transpose()
+    }
+
+    /// Merge adjacent partials only where NumericSummary proves the result is
+    /// the source-order chain. IEEE partials are not reassociated in production.
+    fn combine_admitted(
+        a: Self,
+        b: Self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<Self>, EvalError> {
+        use purrdf_xsd::numeric::NumericBinaryOperator::Add;
+        Ok(match (a, b) {
             (Self::Empty, other) | (other, Self::Empty) => Some(other),
-            (
-                Self::Int {
-                    sum: mut sum1,
-                    count: count1,
-                    ..
-                },
-                Self::Int {
-                    sum: sum2,
-                    count: count2,
-                    ..
-                },
-            ) => {
-                sum1.add_assign(&sum2);
-                Some(Self::Int {
-                    sum: sum1,
-                    count: count1 + count2,
-                    datatype: XsdDatatype::Integer,
-                })
+            (Self::Int { sum: a, count: ac }, Self::Int { sum: b, count: bc }) => {
+                let count = ac
+                    .checked_add(bc)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                numeric_fold_binary(&a, &b, Add, DivisionPolicy::xsd_default(), workspace)?
+                    .ok()
+                    .map(|sum| Self::Int { sum, count })
             }
             (
-                Self::Ok {
-                    acc: acc1,
-                    count: count1,
-                },
-                Self::Ok {
-                    acc: acc2,
-                    count: count2,
-                },
-            ) => numeric_add(&acc1, &acc2).ok().map(|sum| Self::Ok {
-                acc: sum,
-                count: count1 + count2,
-            }),
-            (
-                Self::Int {
-                    sum, count: count1, ..
-                },
-                Self::Ok { acc, count: count2 },
+                Self::Ok { acc: a, count: ac } | Self::Int { sum: a, count: ac },
+                Self::Ok { acc: b, count: bc },
             )
-            | (
-                Self::Ok { acc, count: count2 },
-                Self::Int {
-                    sum, count: count1, ..
-                },
-            ) => int_sum_promote_base(&sum, &acc)
-                .and_then(|base| numeric_add(&base, &acc).ok())
-                .map(|result| Self::Ok {
-                    acc: result,
-                    count: count1 + count2,
-                }),
+            | (Self::Ok { acc: b, count: bc }, Self::Int { sum: a, count: ac }) => {
+                let count = ac
+                    .checked_add(bc)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                numeric_fold_binary(&a, &b, Add, DivisionPolicy::xsd_default(), workspace)?
+                    .ok()
+                    .map(|acc| Self::Ok { acc, count })
+            }
             (
                 Self::Dur {
-                    months: months1,
-                    seconds: seconds1,
-                    datatype: datatype1,
-                    count: count1,
+                    months: am,
+                    seconds: a,
+                    datatype: ad,
+                    count: ac,
                 },
                 Self::Dur {
-                    months: months2,
-                    seconds: seconds2,
-                    datatype: datatype2,
-                    count: count2,
+                    months: bm,
+                    seconds: b,
+                    datatype: bd,
+                    count: bc,
                 },
-            ) => months1.checked_add(months2).and_then(|months| {
-                numeric_add(&seconds1, &seconds2)
+            ) => {
+                let Some(months) = am.checked_add(bm) else {
+                    return Ok(None);
+                };
+                let count = ac
+                    .checked_add(bc)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                numeric_fold_binary(&a, &b, Add, DivisionPolicy::xsd_default(), workspace)?
                     .ok()
                     .map(|seconds| Self::Dur {
                         months,
                         seconds,
-                        datatype: purrdf_xsd::temporal::duration_result_datatype(
-                            datatype1, datatype2,
-                        ),
-                        count: count1 + count2,
+                        datatype: purrdf_xsd::temporal::duration_result_datatype(ad, bd),
+                        count,
                     })
-            }),
-            // A duration chunk merged with a numeric chunk (either order) is
-            // the cross-group mixing `step` already refuses within one
-            // accumulator — a chunk boundary must not let it back in.
+            }
             (Self::Dur { .. }, Self::Int { .. } | Self::Ok { .. })
             | (Self::Int { .. } | Self::Ok { .. }, Self::Dur { .. }) => None,
-        }
+        })
     }
 }
 
 /// Round `numerator / denominator` (`denominator > 0`) to the nearest `i64`,
 /// ties toward positive infinity — replicates
 /// `purrdf_xsd::temporal::divide_duration`'s internal (private)
-/// `round_decimal_to_i64` rounding rule, used by [`NumericFold::finish_avg`]'s
+/// `round_decimal_to_i64` rounding rule, used by [`NumericFold::finish_avg_admitted`]'s
 /// `Dur` arm to round the duration-AVG months MEAN. Reimplemented here rather
 /// than reused because the numerator is the fold's raw `i128` accumulator
 /// (see [`NumericFold::Dur`]'s own doc for why it stays raw through `finish`),
@@ -3621,63 +4060,6 @@ fn round_i128_div_to_i64(numerator: i128, denominator: i128) -> Option<i64> {
     let doubled_denominator = denominator.checked_mul(2)?;
     let biased = doubled_numerator.checked_add(denominator)?;
     i64::try_from(biased.div_euclid(doubled_denominator)).ok()
-}
-
-/// Convert a pure-integer running sum into the `XsdValue` `numeric_add` needs
-/// once a `decimal`/`float`/`double` value `joining` the fold promotes it out
-/// of [`NumericFold::Int`].
-///
-/// Exact (`XsdValue::Integer`) whenever the running sum still fits `i128` — the
-/// overwhelmingly common case — and exact past it too: a joining
-/// `decimal` (or a big integer) meets the sum as `XsdValue::BigInteger`, which
-/// `numeric_add` adds on the tower at any size. A `joining` float/double is IEEE,
-/// so the sum is converted — correctly rounded, straight to the joining type
-/// ([`BigInt::to_f64`] for `double`, [`BigInt::to_f32`] for `float`, never
-/// `double` then narrowed, which would round twice), exactly as the
-/// `i128 → f64`/`f32` casts in `purrdf_xsd::numeric` round an in-range integer.
-/// `None` only for a joining value outside the numeric tower.
-fn int_sum_promote_base(sum: &BigInt, joining: &XsdValue) -> Option<XsdValue> {
-    if let Some(value) = sum.to_i128() {
-        return Some(XsdValue::Integer {
-            value,
-            datatype: XsdDatatype::Integer,
-        });
-    }
-    match joining {
-        XsdValue::Float(_) => Some(XsdValue::Float(sum.to_f32())),
-        XsdValue::Double(_) => Some(XsdValue::Double(sum.to_f64())),
-        // A decimal of any size joins the exact sum exactly.
-        XsdValue::Decimal(_) | XsdValue::BigDecimal(_) | XsdValue::BigInteger { .. } => {
-            Some(XsdValue::from_exact_integer(
-                purrdf_xsd::exact::Integer::from_bigint(sum.clone()),
-                XsdDatatype::Integer,
-            ))
-        }
-        _ => None,
-    }
-}
-
-/// Render a [`NumericFold::Int`]'s running sum as a `TermValue`: the exact
-/// canonical lexical form either way — [`crate::expr::xsd_literal_value`]'s
-/// usual `XsdValue::Integer` path when `sum` still fits `i128` (preserving
-/// `datatype`, e.g. a singleton `xsd:byte` group — see [`NumericFold::Int`]'s
-/// docs), or a directly-built `xsd:integer` literal from
-/// [`BigInt::to_decimal_string`] when it does not: `XsdValue::Integer`'s
-/// `i128` field cannot hold that magnitude, but `xsd:integer`'s LEXICAL space
-/// is unbounded, so the term is built straight from the exact decimal string
-/// rather than forced through a value representation that would have to lose
-/// precision to accept it. Interning (via [`ScratchInterner`](crate::scratch::ScratchInterner))
-/// happens once, at the caller — see [`fold_builtin`] — not here.
-fn int_sum_value(sum: &BigInt, datatype: XsdDatatype) -> TermValue {
-    match sum.to_i128() {
-        Some(value) => crate::expr::xsd_literal_value(&XsdValue::Integer { value, datatype }),
-        None => TermValue::Literal {
-            lexical_form: sum.to_decimal_string(),
-            datatype: XSD_INTEGER.to_owned(),
-            language: None,
-            direction: None,
-        },
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3721,10 +4103,32 @@ fn int_sum_value(sum: &BigInt, datatype: XsdDatatype) -> TermValue {
 #[derive(Default)]
 struct CountAccumulator(i64);
 
+macro_rules! resident_aggregate_finish {
+    ($refusal:literal) => {
+        fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+            self.finish_admitted(&crate::WorkspaceCapability::resident())?
+                .map(|value| {
+                    value
+                        .into_resident()
+                        .map_err(|_| EvalError::WorkspaceUnpriced($refusal))
+                })
+                .transpose()
+        }
+    };
+}
+
 impl crate::agg_fn::AggregateAccumulator for CountAccumulator {
     fn step(&mut self, _args: &[TermValue]) -> Result<(), EvalError> {
         self.0 += 1;
         Ok(())
+    }
+
+    fn step_admitted(
+        &mut self,
+        args: &[TermValue],
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        self.step(args)
     }
 
     fn combine(
@@ -3740,8 +4144,15 @@ impl crate::agg_fn::AggregateAccumulator for CountAccumulator {
         self
     }
 
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(Some(TermValue::integer(self.0)))
+    resident_aggregate_finish!("a resident count cannot detach bounded output");
+
+    fn finish_admitted(
+        self: Box<Self>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        workspace
+            .literal(self.0, purrdf_xsd::datatype::XSD_INTEGER)
+            .map(Some)
     }
 }
 
@@ -3782,9 +4193,9 @@ fn take_numeric_fold_trace() -> (usize, usize) {
 /// Which finish [`fold_numeric`] applies to the folded [`NumericFold`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NumericAggregate {
-    /// `SUM` — [`NumericFold::finish_sum`].
+    /// `SUM` — [`NumericFold::finish_sum_admitted`].
     Sum,
-    /// `AVG` — [`NumericFold::finish_avg`].
+    /// `AVG` — [`NumericFold::finish_avg_admitted`].
     Avg,
 }
 
@@ -3795,14 +4206,14 @@ enum NumericAggregate {
 ///
 /// # The law
 ///
-/// The answer is ALWAYS the sequential chain's — [`NumericFold::step_xsd`]
+/// The answer is ALWAYS the sequential chain's — [`NumericFold::step_parsed`]
 /// applied to every value in source order, `None` (unbound) from the first
 /// refused value on. At or below [`crate::parallel::PARALLEL_MIN_ROWS`] that
-/// chain is exactly what runs. Above it, [`crate::parallel::par_chunk_reduce_init`]
+/// chain is exactly what runs. Above it, [`crate::parallel::par_chunk_reduce_init_admitted`]
 /// folds each chunk into a [`NumericSummary`] and appends the summaries in
 /// chunk order; [`NumericSummary`]'s doc proves the appended summary finishes
 /// to the chain's state. What stays parallel is everything that is exact: a
-/// pure-integer group ([`BigInt`]) and a decimal/duration group whose
+/// pure-integer group ([`purrdf_xsd::BigInt`]) and a decimal/duration group whose
 /// [`MagnitudeBound`] rules out every `i128`-mantissa overflow merge chunk
 /// partials exactly, while a `float`/`double` operand switches the rest of the
 /// group onto the chain — its operands parsed in parallel, its additions
@@ -3814,43 +4225,59 @@ fn fold_numeric(
     division: DivisionPolicy,
     absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
 ) -> Result<Option<TermValue>, EvalError> {
+    // Raw output belongs only to this explicitly resident public boundary.
+    let workspace = crate::WorkspaceCapability::resident();
+    fold_numeric_admitted(sequential, values, aggregate, division, absorb, &workspace)
+        .map(|value| value.map(|value| value.into_parts().0))
+}
+
+/// The shared production fold; native payloads, tail and chunk metadata retain
+/// their original physical admissions through final lexical publication.
+fn fold_numeric_admitted(
+    sequential: bool,
+    values: &[TermValue],
+    aggregate: NumericAggregate,
+    division: DivisionPolicy,
+    absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
     let fold = if crate::parallel::should_parallelize(sequential, values.len()) {
-        crate::parallel::par_chunk_reduce_init(
+        crate::parallel::par_chunk_reduce_init_admitted(
             sequential,
             values,
-            || Ok(NumericSummary::default()),
-            |summary, value| {
-                summary.step(value);
-                Ok(())
-            },
-            |summary, next| {
-                summary.append(next, values);
-                Ok(())
-            },
+            workspace,
+            || Ok(NumericSummary::new(workspace)),
+            NumericSummary::step,
+            |summary, next| summary.append(next, values),
         )?
-        .finish()
+        .finish()?
     } else {
-        numeric_chain(values)
+        numeric_chain_admitted(values, workspace)?
     };
     match fold {
         None => Ok(None),
         Some(fold) => match aggregate {
-            NumericAggregate::Sum => Ok(fold.finish_sum()),
-            NumericAggregate::Avg => Ok(fold.finish_avg(division, absorb)),
+            NumericAggregate::Sum => fold.finish_sum_admitted(workspace),
+            NumericAggregate::Avg => fold.finish_avg_admitted(division, absorb, workspace),
         },
     }
 }
 
-/// The sequential chain itself: every value folded left to right through
-/// [`NumericFold::step_xsd`], `None` from the first refused value on.
-fn numeric_chain(values: &[TermValue]) -> Option<NumericFold> {
+/// The sequential chain, with the same parser and native addition as summaries.
+fn numeric_chain_admitted(
+    values: &[TermValue],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<NumericFold>, EvalError> {
     let mut fold = NumericFold::Empty;
     for value in values {
-        if !xsd_of(value).is_some_and(|xv| fold.step_xsd(&xv)) {
-            return None;
+        let Some(value) = parse_numeric_fold_value(value, workspace)? else {
+            return Ok(None);
+        };
+        if !fold.step_parsed(value, workspace)? {
+            return Ok(None);
         }
     }
-    Some(fold)
+    Ok(Some(fold))
 }
 
 /// A conservative upper bound on `Σ |x| × 10^scale` over every operand an
@@ -3863,8 +4290,8 @@ fn numeric_chain(values: &[TermValue]) -> Option<NumericFold> {
 /// scaled up by `align_decimals` to the running scale, and every aligned
 /// running total has magnitude at most `Σ |x| × 10^scale`. So each
 /// `decimal_add` on the way is exact, a pure-integer prefix promoted through
-/// `int_sum_promote_base` fits `i128`, and the chain equals the exact sum at
-/// the maximum scale — which is what [`NumericFold::combine_owned`] computes.
+/// the native numeric kernel fits `i128`, and the chain equals the exact sum at
+/// the maximum scale — which is what [`NumericFold::combine_admitted`] computes.
 /// When it does not fit, nothing is concluded: the rows are replayed through
 /// the chain instead.
 #[derive(Clone, Copy, Debug, Default)]
@@ -3923,14 +4350,14 @@ impl MagnitudeBound {
 ///
 /// A summary covers `rows()` consecutive values. It folds them exactly into
 /// `head` until the first value it will not absorb — a `float`/`double`
-/// operand, or any value [`NumericFold::step_xsd`] refuses (non-numeric,
+/// operand, or any value [`NumericFold::step_parsed`] refuses (non-numeric,
 /// mixed with a duration, an overflow) — and from that value on it only
-/// parses: `tail` holds every later value's [`xsd_of`] parse, in order.
+/// parses: `tail` holds every later value's admitted immutable parse, in order.
 ///
 /// # Proof that the appended summary finishes to the chain
 ///
 /// Invariant P for a summary whose first row is the group's first row:
-/// replaying `tail` onto `head` through [`NumericFold::step_xsd`] (poisoning
+/// replaying `tail` onto `head` through [`NumericFold::step_parsed`] (poisoning
 /// at the first refusal) is the chain's state after `rows()` values, and
 /// `head` alone is the chain's state after the `absorbed` values it folded.
 ///
@@ -3943,7 +4370,7 @@ impl MagnitudeBound {
 ///   over every row. If the prefix has not stopped, its `head` is the chain's
 ///   state and the next chunk's absorbed values follow it: when
 ///   [`merge_exact`] proves the merge equals the chain (see
-///   [`NumericFold::combine_owned`] and [`MagnitudeBound`]) the merged value
+///   [`NumericFold::combine_admitted`] and [`MagnitudeBound`]) the merged value
 ///   is the new `head`; when both sides are exact but of incompatible
 ///   families (a duration and a number) the chain poisons at the first of the
 ///   next chunk's values, and so does the summary; otherwise every one of
@@ -3970,20 +4397,8 @@ struct NumericSummary {
     /// Whether the exact fold has stopped; from then on rows go to `tail`.
     stopped: bool,
     /// Every row after the stop, parsed, in source order.
-    tail: Vec<Option<XsdValue>>,
-}
-
-impl Default for NumericSummary {
-    fn default() -> Self {
-        Self {
-            head: NumericFold::Empty,
-            poisoned: false,
-            bound: MagnitudeBound::default(),
-            absorbed: 0,
-            stopped: false,
-            tail: Vec::new(),
-        }
-    }
+    tail: AdmittedVec<Option<ParsedValue>>,
+    workspace: crate::WorkspaceCapability,
 }
 
 /// What [`merge_exact`] concluded about two exact partial folds.
@@ -4004,8 +4419,9 @@ fn merge_exact(
     a_bound: MagnitudeBound,
     b: NumericFold,
     b_bound: MagnitudeBound,
-) -> ExactMerge {
-    match (&a, &b) {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<ExactMerge, EvalError> {
+    Ok(match (&a, &b) {
         (_, NumericFold::Empty) => ExactMerge::Merged(a, a_bound),
         (NumericFold::Empty, _) => ExactMerge::Merged(b, b_bound),
         (NumericFold::Dur { .. }, NumericFold::Int { .. } | NumericFold::Ok { .. })
@@ -4014,82 +4430,114 @@ fn merge_exact(
         }
         (NumericFold::Int { .. }, NumericFold::Int { .. }) => {
             let bound = a_bound.merge(b_bound);
-            NumericFold::combine_owned(a, b).map_or(ExactMerge::Unproven, |merged| {
+            NumericFold::combine_admitted(a, b, workspace)?.map_or(ExactMerge::Unproven, |merged| {
                 ExactMerge::Merged(merged, bound)
             })
         }
         _ => {
             let bound = a_bound.merge(b_bound);
             if !bound.fits() {
-                return ExactMerge::Unproven;
+                return Ok(ExactMerge::Unproven);
             }
-            NumericFold::combine_owned(a, b).map_or(ExactMerge::Unproven, |merged| {
+            NumericFold::combine_admitted(a, b, workspace)?.map_or(ExactMerge::Unproven, |merged| {
                 ExactMerge::Merged(merged, bound)
             })
         }
-    }
+    })
 }
 
 impl NumericSummary {
+    fn new(workspace: &crate::WorkspaceCapability) -> Self {
+        Self {
+            head: NumericFold::Empty,
+            poisoned: false,
+            bound: MagnitudeBound::default(),
+            absorbed: 0,
+            stopped: false,
+            tail: AdmittedVec::new(workspace),
+            workspace: workspace.clone(),
+        }
+    }
+
     /// Rows this summary covers.
-    fn rows(&self) -> usize {
-        self.absorbed + self.tail.len()
+    fn rows(&self) -> Result<usize, EvalError> {
+        self.absorbed
+            .checked_add(self.tail.len())
+            .ok_or(EvalError::WorkspaceBoundOverflow)
     }
 
-    /// Fold one row of the chunk this summary is folding.
-    fn step(&mut self, value: &TermValue) {
-        self.push(xsd_of(value));
+    /// Parse one row through the same admitted native parser as the chain.
+    fn step(&mut self, value: &TermValue) -> Result<(), EvalError> {
+        self.push(parse_numeric_fold_value(value, &self.workspace)?)
     }
 
-    /// Fold one parsed row: absorb it exactly if the fold has not stopped and
-    /// the value is exact-tier and accepted, else stop and record it.
-    fn push(&mut self, parsed: Option<XsdValue>) {
+    /// Exact accepted rows enter the head; every later carrier enters the tail.
+    /// Shared cloning keeps the input owner alive while a native result is built.
+    fn push(&mut self, parsed: Option<ParsedValue>) -> Result<(), EvalError> {
         if !self.stopped {
             if let Some(xv) = &parsed
-                && !matches!(xv, XsdValue::Float(_) | XsdValue::Double(_))
-                && self.head.step_xsd(xv)
+                && !matches!(&**xv, XsdValue::Float(_) | XsdValue::Double(_))
+                && self.head.step_parsed(xv.clone(), &self.workspace)?
             {
                 self.bound.add(xv);
-                self.absorbed += 1;
-                return;
+                self.absorbed = self
+                    .absorbed
+                    .checked_add(1)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                return Ok(());
             }
             self.stopped = true;
         }
-        self.tail.push(parsed);
+        self.tail.push(parsed)
     }
 
-    /// Append `next`, the summary of the chunk that immediately follows the
-    /// rows `self` covers; `values` is the whole group, so `next`'s absorbed
-    /// rows are `values[self.rows()..][..next.absorbed]`.
-    fn append(&mut self, next: Self, values: &[TermValue]) {
+    /// Append an adjacent summary in source order. An unproven mathematical
+    /// merge replays; a physical refusal is propagated immediately.
+    fn append(&mut self, next: Self, values: &[TermValue]) -> Result<(), EvalError> {
         if self.poisoned {
-            return;
+            return Ok(());
         }
-        let start = self.rows();
-        let next_absorbed = &values[start..start + next.absorbed];
+        let start = self.rows()?;
+        let end = start
+            .checked_add(next.absorbed)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let next_absorbed = values
+            .get(start..end)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
         if self.stopped {
-            self.tail.extend(next_absorbed.iter().map(xsd_of));
+            for value in next_absorbed {
+                let parsed = parse_numeric_fold_value(value, &self.workspace)?;
+                self.tail.push(parsed)?;
+            }
             #[cfg(test)]
             note_numeric_replay(next.absorbed);
         } else {
             let head = std::mem::replace(&mut self.head, NumericFold::Empty);
-            match merge_exact(head.clone(), self.bound, next.head, next.bound) {
+            match merge_exact(
+                head.clone(),
+                self.bound,
+                next.head,
+                next.bound,
+                &self.workspace,
+            )? {
                 ExactMerge::Merged(merged, bound) => {
                     self.head = merged;
                     self.bound = bound;
-                    self.absorbed += next.absorbed;
+                    self.absorbed = self
+                        .absorbed
+                        .checked_add(next.absorbed)
+                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
                     #[cfg(test)]
                     note_numeric_exact_merge();
                 }
                 ExactMerge::Poisoned => {
-                    // The chain is `None` from inside `next`'s rows on.
                     self.poisoned = true;
-                    return;
+                    return Ok(());
                 }
                 ExactMerge::Unproven => {
                     self.head = head;
                     for value in next_absorbed {
-                        self.step(value);
+                        self.step(value)?;
                     }
                     #[cfg(test)]
                     note_numeric_replay(next.absorbed);
@@ -4098,22 +4546,28 @@ impl NumericSummary {
         }
         if next.stopped {
             self.stopped = true;
-            self.tail.extend(next.tail);
-        }
-    }
-
-    /// The chain's final state: `tail` replayed onto `head`.
-    fn finish(self) -> Option<NumericFold> {
-        if self.poisoned {
-            return None;
-        }
-        let mut fold = self.head;
-        for parsed in &self.tail {
-            if !parsed.as_ref().is_some_and(|xv| fold.step_xsd(xv)) {
-                return None;
+            for parsed in next.tail {
+                self.tail.push(parsed)?;
             }
         }
-        Some(fold)
+        Ok(())
+    }
+
+    /// The chain's final state; the tail iterator keeps metadata admission alive.
+    fn finish(self) -> Result<Option<NumericFold>, EvalError> {
+        if self.poisoned {
+            return Ok(None);
+        }
+        let mut fold = self.head;
+        for parsed in self.tail {
+            let Some(value) = parsed else {
+                return Ok(None);
+            };
+            if !fold.step_parsed(value, &self.workspace)? {
+                return Ok(None);
+            }
+        }
+        Ok(Some(fold))
     }
 }
 
@@ -4125,14 +4579,23 @@ impl NumericSummary {
 /// element compares strictly better. Shared by [`MinAccumulator`] and
 /// [`MaxAccumulator`]'s `step`/`combine`, parameterized by `want`, rather than
 /// duplicated per direction.
-fn fold_extreme(current: Option<TermValue>, value: TermValue, want: Ordering) -> TermValue {
+fn fold_extreme(
+    current: Option<crate::WorkspaceTerm>,
+    value: crate::WorkspaceTerm,
+    want: Ordering,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::WorkspaceTerm, EvalError> {
     match current {
-        None => value,
+        None => Ok(value),
         Some(current_value) => {
-            if total_order(&project(Some(&value)), &project(Some(&current_value))) == want {
-                value
+            let value_key = project_admitted(Some(&value), workspace)?;
+            let current_key = project_admitted(Some(&current_value), workspace)?;
+            let order = total_order_admitted(&value_key.key, &current_key.key, workspace)?;
+            drop((value_key, current_key));
+            if order == want {
+                Ok(value)
             } else {
-                current_value
+                Ok(current_value)
             }
         }
     }
@@ -4140,12 +4603,26 @@ fn fold_extreme(current: Option<TermValue>, value: TermValue, want: Ordering) ->
 
 /// `MIN` — the running SPARQL-order minimum; see [`fold_extreme`].
 #[derive(Default)]
-struct MinAccumulator(Option<TermValue>);
+struct MinAccumulator(Option<crate::WorkspaceTerm>, crate::WorkspaceCapability);
 
 impl crate::agg_fn::AggregateAccumulator for MinAccumulator {
     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        self.step_admitted(args, &crate::WorkspaceCapability::resident())
+    }
+
+    fn step_admitted(
+        &mut self,
+        args: &[TermValue],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        self.1 = workspace.clone();
         if let Some(value) = args.first() {
-            self.0 = Some(fold_extreme(self.0.take(), value.clone(), Ordering::Less));
+            self.0 = Some(fold_extreme(
+                self.0.take(),
+                workspace.clone_term(value)?,
+                Ordering::Less,
+                workspace,
+            )?);
         }
         Ok(())
     }
@@ -4156,7 +4633,7 @@ impl crate::agg_fn::AggregateAccumulator for MinAccumulator {
     ) -> Result<(), EvalError> {
         let other = crate::agg_fn::downcast_combine_partial::<Self>(other)?;
         if let Some(value) = other.0 {
-            self.0 = Some(fold_extreme(self.0.take(), value, Ordering::Less));
+            self.0 = Some(fold_extreme(self.0.take(), value, Ordering::Less, &self.1)?);
         }
         Ok(())
     }
@@ -4165,23 +4642,36 @@ impl crate::agg_fn::AggregateAccumulator for MinAccumulator {
         self
     }
 
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+    resident_aggregate_finish!("a resident minimum cannot detach bounded output");
+    fn finish_admitted(
+        self: Box<Self>,
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
         Ok(self.0)
     }
 }
 
 /// `MAX` — the running SPARQL-order maximum; see [`fold_extreme`].
 #[derive(Default)]
-struct MaxAccumulator(Option<TermValue>);
+struct MaxAccumulator(Option<crate::WorkspaceTerm>, crate::WorkspaceCapability);
 
 impl crate::agg_fn::AggregateAccumulator for MaxAccumulator {
     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        self.step_admitted(args, &crate::WorkspaceCapability::resident())
+    }
+    fn step_admitted(
+        &mut self,
+        args: &[TermValue],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        self.1 = workspace.clone();
         if let Some(value) = args.first() {
             self.0 = Some(fold_extreme(
                 self.0.take(),
-                value.clone(),
+                workspace.clone_term(value)?,
                 Ordering::Greater,
-            ));
+                workspace,
+            )?);
         }
         Ok(())
     }
@@ -4192,7 +4682,12 @@ impl crate::agg_fn::AggregateAccumulator for MaxAccumulator {
     ) -> Result<(), EvalError> {
         let other = crate::agg_fn::downcast_combine_partial::<Self>(other)?;
         if let Some(value) = other.0 {
-            self.0 = Some(fold_extreme(self.0.take(), value, Ordering::Greater));
+            self.0 = Some(fold_extreme(
+                self.0.take(),
+                value,
+                Ordering::Greater,
+                &self.1,
+            )?);
         }
         Ok(())
     }
@@ -4201,7 +4696,11 @@ impl crate::agg_fn::AggregateAccumulator for MaxAccumulator {
         self
     }
 
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+    resident_aggregate_finish!("a resident maximum cannot detach bounded output");
+    fn finish_admitted(
+        self: Box<Self>,
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
         Ok(self.0)
     }
 }
@@ -4210,14 +4709,21 @@ impl crate::agg_fn::AggregateAccumulator for MaxAccumulator {
 /// (the earlier chunk's) whenever it already has one, exactly mirroring
 /// `step`'s own "only fill an empty slot" rule at chunk-merge granularity.
 #[derive(Default)]
-struct SampleAccumulator(Option<TermValue>);
+struct SampleAccumulator(Option<crate::WorkspaceTerm>);
 
 impl crate::agg_fn::AggregateAccumulator for SampleAccumulator {
     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        self.step_admitted(args, &crate::WorkspaceCapability::resident())
+    }
+    fn step_admitted(
+        &mut self,
+        args: &[TermValue],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
         if self.0.is_none()
             && let Some(value) = args.first()
         {
-            self.0 = Some(value.clone());
+            self.0 = Some(workspace.clone_term(value)?);
         }
         Ok(())
     }
@@ -4237,7 +4743,11 @@ impl crate::agg_fn::AggregateAccumulator for SampleAccumulator {
         self
     }
 
-    fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+    resident_aggregate_finish!("a resident sample cannot detach bounded output");
+    fn finish_admitted(
+        self: Box<Self>,
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
         Ok(self.0)
     }
 }
@@ -4257,6 +4767,9 @@ struct GroupConcatAccumulator {
     /// regardless of what would have followed, and no further value is
     /// appended to `buf` (which is discarded, not returned) once poisoned.
     poisoned: bool,
+    workspace: crate::WorkspaceCapability,
+    buf_allocation: Option<crate::WorkspaceAllocation>,
+    sep_allocation: Option<crate::WorkspaceAllocation>,
 }
 
 impl GroupConcatAccumulator {
@@ -4266,12 +4779,53 @@ impl GroupConcatAccumulator {
             buf: String::new(),
             started: false,
             poisoned: false,
+            workspace: crate::WorkspaceCapability::resident(),
+            buf_allocation: None,
+            sep_allocation: None,
         }
+    }
+
+    fn new_admitted(sep: &str, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
+        let allocation = workspace
+            .charge(u64::try_from(sep.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let mut value = Self::new(crate::workspace::string(sep, "aggregate separator")?);
+        value.workspace = workspace.clone();
+        value.sep_allocation = Some(allocation);
+        Ok(value)
+    }
+
+    fn append(&mut self, lexical: &str) -> Result<(), EvalError> {
+        let separator = if self.started { self.sep.len() } else { 0 };
+        let required = self
+            .buf
+            .len()
+            .checked_add(separator)
+            .and_then(|bytes| bytes.checked_add(lexical.len()))
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        self.workspace
+            .reserve_string(&mut self.buf, &mut self.buf_allocation, required)?;
+        if self.started {
+            self.buf.push_str(&self.sep);
+        } else {
+            self.started = true;
+        }
+        self.buf.push_str(lexical);
+        Ok(())
     }
 }
 
 impl crate::agg_fn::AggregateAccumulator for GroupConcatAccumulator {
     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError> {
+        let workspace = self.workspace.clone();
+        self.step_admitted(args, &workspace)
+    }
+
+    fn step_admitted(
+        &mut self,
+        args: &[TermValue],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        self.workspace = workspace.clone();
         if self.poisoned {
             return Ok(());
         }
@@ -4280,12 +4834,7 @@ impl crate::agg_fn::AggregateAccumulator for GroupConcatAccumulator {
         };
         match lexical_of(value) {
             Some(lexical) => {
-                if self.started {
-                    self.buf.push_str(&self.sep);
-                } else {
-                    self.started = true;
-                }
-                self.buf.push_str(&lexical);
+                self.append(lexical)?;
             }
             // A blank node or a triple term has no lexical form — `STR()`
             // of either is a SPARQL type error (§17.4.2.2/§21 of the
@@ -4311,11 +4860,7 @@ impl crate::agg_fn::AggregateAccumulator for GroupConcatAccumulator {
             self.poisoned = true;
             self.buf.clear();
         } else if other.started {
-            if self.started {
-                self.buf.push_str(&self.sep);
-            }
-            self.buf.push_str(&other.buf);
-            self.started = true;
+            self.append(&other.buf)?;
         }
         Ok(())
     }
@@ -4325,10 +4870,43 @@ impl crate::agg_fn::AggregateAccumulator for GroupConcatAccumulator {
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+        self.finish_admitted(&crate::WorkspaceCapability::resident())?
+            .map(|value| {
+                value.into_resident().map_err(|_| {
+                    EvalError::WorkspaceUnpriced(
+                        "a resident concatenation cannot detach bounded output",
+                    )
+                })
+            })
+            .transpose()
+    }
+
+    fn finish_admitted(
+        mut self: Box<Self>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
         if self.poisoned {
             Ok(None)
         } else {
-            Ok(Some(string_value(self.buf)))
+            let bytes = self
+                .buf
+                .capacity()
+                .checked_add(XSD_STRING.len())
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let bytes = u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+            let allocation = match self.buf_allocation.take() {
+                Some(mut allocation) => {
+                    allocation.resize(bytes)?;
+                    allocation
+                }
+                None => workspace.charge(bytes)?,
+            };
+            let datatype =
+                crate::workspace::string(XSD_STRING, "aggregate concatenation datatype")?;
+            Ok(Some(crate::WorkspaceTerm::new(
+                TermValue::typed_literal(self.buf, datatype),
+                allocation,
+            )))
         }
     }
 }
@@ -4340,21 +4918,11 @@ impl crate::agg_fn::AggregateAccumulator for GroupConcatAccumulator {
 /// [`GroupConcatAccumulator::step`] poisons the fold on `None` rather than
 /// silently dropping the value — see the module-level "Aggregate semantics"
 /// docs' `GROUP_CONCAT` section for the full reading.
-pub(crate) fn lexical_of(value: &TermValue) -> Option<String> {
+pub(crate) fn lexical_of(value: &TermValue) -> Option<&str> {
     match value {
-        TermValue::Literal { lexical_form, .. } => Some(lexical_form.clone()),
-        TermValue::Iri(iri) => Some(iri.clone()),
+        TermValue::Literal { lexical_form, .. } => Some(lexical_form),
+        TermValue::Iri(iri) => Some(iri),
         TermValue::Blank { .. } | TermValue::Triple { .. } => None,
-    }
-}
-
-/// Build an `xsd:string` literal value (not interned — see [`fold_builtin`]).
-fn string_value(lexical: String) -> TermValue {
-    TermValue::Literal {
-        lexical_form: lexical,
-        datatype: XSD_STRING.to_owned(),
-        language: None,
-        direction: None,
     }
 }
 
@@ -7425,19 +7993,28 @@ mod numeric_chain_tests {
         chunk: usize,
         aggregate: ValueAggregate,
     ) -> Option<TermValue> {
+        let workspace = crate::WorkspaceCapability::resident();
         let mut acc = Some(NumericFold::Empty);
         for part in values.chunks(chunk.max(1)) {
-            acc = match (acc, numeric_chain(part)) {
-                (Some(a), Some(b)) => NumericFold::combine_owned(a, b),
+            let next = numeric_chain_admitted(part, &workspace).expect("resident chain");
+            acc = match (acc, next) {
+                (Some(a), Some(b)) => {
+                    NumericFold::combine_admitted(a, b, &workspace).expect("resident partial tree")
+                }
                 _ => None,
             };
         }
-        acc.and_then(|fold| match aggregate {
-            ValueAggregate::Avg => fold.finish_avg(DivisionPolicy::xsd_default(), &mut |code| {
-                panic!("the default policy never refuses: {code:?}")
-            }),
-            _ => fold.finish_sum(),
-        })
+        let fold = acc?;
+        let value = match aggregate {
+            ValueAggregate::Avg => fold.finish_avg_admitted(
+                DivisionPolicy::xsd_default(),
+                &mut |code| panic!("the default policy never refuses: {code:?}"),
+                &workspace,
+            ),
+            _ => fold.finish_sum_admitted(&workspace),
+        }
+        .expect("resident aggregate rendering")?;
+        Some(value.into_parts().0)
     }
 
     fn double_bits(value: Option<&TermValue>) -> u64 {
@@ -8175,5 +8752,204 @@ mod emptiness_proof_tests {
         })
         .expect("spawn");
         assert_eq!(answers, [true, false, true, false]);
+    }
+}
+
+#[cfg(test)]
+mod custom_owner_regressions {
+    use super::*;
+    use crate::agg_fn::{AggregateAccumulator, CustomAggregate, WorkspaceAccumulator};
+    use crate::workspace::QueryWorkspace;
+    use purrdf_core::{RdfDatasetBuilder, WorkspaceReservation};
+    use purrdf_sparql_algebra::{Child, GroundTerm, Literal, NamedNode};
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    struct Reservation(Arc<AtomicU64>);
+    impl WorkspaceReservation for Reservation {
+        type Error = std::convert::Infallible;
+        fn resize(&mut self, bytes: u64) -> Result<(), Self::Error> {
+            self.0.store(bytes, AtomicOrdering::Relaxed);
+            Ok(())
+        }
+    }
+    impl Drop for Reservation {
+        fn drop(&mut self) {
+            self.0.store(0, AtomicOrdering::Relaxed);
+        }
+    }
+
+    struct PairCount {
+        count: u64,
+        workspace: crate::WorkspaceCapability,
+    }
+    impl AggregateAccumulator for PairCount {
+        fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> {
+            Some(&self.workspace)
+        }
+        fn step(&mut self, _: &[TermValue]) -> Result<(), EvalError> {
+            self.count += 1;
+            Ok(())
+        }
+        fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError> {
+            let other = other.into_any().downcast::<Self>().map_err(|_| {
+                crate::NativeDiagnostic::error(
+                    crate::NativeDiagnosticKind::Internal,
+                    "pair-count fixture partial type differs",
+                    &self.workspace,
+                )
+            })?;
+            self.count += other.count;
+            Ok(())
+        }
+        fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+            self
+        }
+        fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
+            Ok(Some(TermValue::typed_literal(
+                self.count.to_string(),
+                purrdf_xsd::datatype::XSD_INTEGER,
+            )))
+        }
+        fn finish_admitted(
+            self: Box<Self>,
+            workspace: &crate::WorkspaceCapability,
+        ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+            workspace
+                .literal(self.count, purrdf_xsd::datatype::XSD_INTEGER)
+                .map(Some)
+        }
+    }
+
+    struct PairCountAggregate;
+    impl CustomAggregate for PairCountAggregate {
+        fn arity(&self) -> crate::user_fn::Arity {
+            crate::user_fn::Arity::Exact(2)
+        }
+        fn volatility(&self) -> Volatility {
+            Volatility::Volatile
+        }
+        fn algebraic_class(&self) -> crate::agg_fn::AlgebraicClass {
+            crate::agg_fn::AlgebraicClass::Commutative
+        }
+        fn state_bound(&self) -> u64 {
+            0
+        }
+        fn init(&self, _: &[(String, TermValue)]) -> Box<dyn AggregateAccumulator> {
+            Box::new(PairCount {
+                count: 0,
+                workspace: crate::WorkspaceCapability::resident(),
+            })
+        }
+        fn init_admitted(
+            &self,
+            _: &[(String, TermValue)],
+            _: DivisionPolicy,
+            workspace: &crate::WorkspaceCapability,
+        ) -> Result<WorkspaceAccumulator, EvalError> {
+            WorkspaceAccumulator::new(
+                PairCount {
+                    count: 0,
+                    workspace: workspace.clone(),
+                },
+                workspace,
+            )
+        }
+        fn exact_numeric_cost_admitted(
+            &self,
+            _: &[Vec<TermValue>],
+            _: &[(String, TermValue)],
+            _: DivisionPolicy,
+            _: &crate::WorkspaceCapability,
+        ) -> Result<purrdf_xsd::exact::Cost, EvalError> {
+            Ok(purrdf_xsd::exact::Cost::ZERO)
+        }
+    }
+
+    #[test]
+    fn contextual_custom_fold_releases_original_control_tuple_and_visibility_owners() {
+        const IRI: &str = "http://example.org/custom-contextual/pair-count";
+        let dataset = RdfDatasetBuilder::new().freeze().unwrap();
+        let mut registry = crate::agg_fn::AggregateRegistry::default();
+        registry.register(IRI, Arc::new(PairCountAggregate));
+        let (a, b) = (Variable::new("a"), Variable::new("b"));
+        let literal = |value| GroundTerm::Literal(Literal::new_simple(value));
+        let inner = GraphPattern::Values {
+            variables: vec![a.clone(), b.clone()],
+            bindings: vec![
+                vec![Some(literal("a")), Some(literal("1"))],
+                vec![Some(literal("a")), Some(literal("1"))],
+                vec![Some(literal("a")), Some(literal("2"))],
+                vec![Some(literal("b")), None],
+            ],
+        };
+        let aggregate = AggregateExpression::new(
+            AggregateFunction::Custom(NamedNode::new_unchecked(IRI)),
+            vec![
+                Expression::Variable(a.clone()),
+                Expression::Variable(b.clone()),
+            ],
+            Vec::new(),
+            Vec::new(),
+            true,
+        )
+        .unwrap();
+        let node = GraphPattern::Group {
+            inner: Child::new(inner),
+            variables: Vec::new(),
+            aggregates: vec![(Variable::new("n"), aggregate)],
+        };
+        let GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } = &node
+        else {
+            unreachable!()
+        };
+        let domain = [a, b];
+        let live = Arc::new(AtomicU64::new(0));
+        let mut reservation = Reservation(live.clone());
+        WorkspaceReservation::resize(
+            &mut reservation,
+            QueryWorkspace::<std::convert::Infallible>::control_bytes().unwrap(),
+        )
+        .unwrap();
+        let workspace = QueryWorkspace::owned(Box::new(reservation), 0).unwrap();
+        let baseline = live.load(AtomicOrdering::Relaxed);
+        let mut ctx = EvalCtx::new(&dataset).with_aggregates(&registry);
+        ctx.growth = workspace.capability();
+        let result = eval_group_with(
+            &node,
+            inner,
+            variables,
+            aggregates,
+            domain.as_slice(),
+            &mut ctx,
+        )
+        .unwrap()
+        .into_complete()
+        .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        let value = ctx
+            .scratch
+            .try_owned_value_of(&dataset, result.rows[0][0].unwrap(), &ctx.growth, |error| {
+                match error {}
+            })
+            .unwrap();
+        assert_eq!(
+            &*value,
+            &TermValue::typed_literal("2", purrdf_xsd::datatype::XSD_INTEGER)
+        );
+        assert!(live.load(AtomicOrdering::Relaxed) > baseline);
+        drop(value);
+        drop(result);
+        drop(ctx);
+        assert_eq!(
+            live.load(AtomicOrdering::Relaxed),
+            baseline,
+            "contextual fold boxes, native tuples, witnesses and visibility arrays are destroyed before their original grants"
+        );
+        drop(workspace);
+        assert_eq!(live.load(AtomicOrdering::Relaxed), 0);
     }
 }

@@ -20,30 +20,32 @@
 //! layer, so blank-node labels and quad ordering here need not be stable —
 //! `freeze` sorts and de-duplicates, and canonicalization relabels blanks.
 
+#[cfg(test)]
 use std::collections::BTreeSet;
+#[cfg(test)]
 use std::sync::Arc;
 
 use purrdf_core::loss::{
     LOSS_ANNOTATION_LAYER_DROPPED, LOSS_REIFIER_LAYER_DROPPED, LOSS_STANDPOINT_SCOPE_DROPPED,
 };
 use purrdf_core::{
-    DatasetView, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermFactory, TermId, TermRef,
-    TermValue, ValidatedRdfDatasetBuilder,
+    DatasetHandle, DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue,
+    ValidatedRdfDatasetBuilder,
 };
 use purrdf_sparql_algebra::{
     GraphPattern, NamedNodePattern, QuadPattern, TermPattern, TriplePattern,
 };
+
+#[cfg(test)]
+use purrdf_core::{RdfLiteral, TermFactory};
 
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::solution::{Solution, VarSchema};
 use crate::template::{
-    PredicateOrdinal, TermOrdinal, TripleOrdinal, instantiate_predicate, instantiate_term,
-    positionally_ill_formed, resolve_predicate, resolve_term, resolve_triple,
+    PredicateOrdinal, TermOrdinal, TripleOrdinal, positionally_ill_formed, resolve_predicate,
 };
-use crate::{DetHashMap, DetHashSet};
-
 /// The `rdf:reifies` predicate IRI — the reification-layer indirection edge.
 use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 /// `rdf:type`.
@@ -74,7 +76,7 @@ use purrdf_xsd::datatype::XSD_STRING;
 /// the certificate travels rather than being discarded here.
 /// A `CONSTRUCT`/`DESCRIBE` result: the graph, and the `WHERE`'s certificate when a
 /// governor stopped it short.
-pub(crate) type ConstructedGraph<I> = (Arc<RdfDataset>, Option<Truncation<I>>);
+pub(crate) type ConstructedGraph<I> = (DatasetHandle, Option<Truncation<I>>);
 
 /// Charge the answer cap against a graph-producing query form's output, truncating the
 /// graph to the prefix the cap admits.
@@ -109,16 +111,16 @@ pub(crate) type ConstructedGraph<I> = (Arc<RdfDataset>, Option<Truncation<I>>);
 /// term table; the ids are re-interned through [`TermValue`], which is dataset-independent
 /// and carries nested triple terms structurally.
 pub(crate) fn commit_answer_triples<D: DatasetView + Sync>(
-    graph: Arc<RdfDataset>,
+    graph: DatasetHandle,
     certificate: Option<Truncation<D::Id>>,
     rows: &crate::solution::SolutionSeq<D::Id>,
     ctx: &EvalCtx<'_, D>,
-) -> ConstructedGraph<D::Id> {
+) -> Result<ConstructedGraph<D::Id>, EvalError> {
     let Some(state) = ctx.governor_state() else {
-        return (graph, certificate);
+        return Ok((graph, certificate));
     };
     if !state.is_engaged_in(purrdf_core::ResourceDimension::AnswerRows) {
-        return (graph, certificate);
+        return Ok((graph, certificate));
     }
     let total = graph_triple_count(&graph);
     let mut admitted = 0_usize;
@@ -133,10 +135,10 @@ pub(crate) fn commit_answer_triples<D: DatasetView + Sync>(
         admitted += 1;
     }
 
-    match (certificate, tripped, cap_cut) {
+    Ok(match (certificate, tripped, cap_cut) {
         (None, None, _) => (graph, None),
         (None, Some(tripped), _) => (
-            truncate_graph(&graph, admitted),
+            truncate_graph(&graph, admitted, &ctx.growth)?,
             // The rows are the `WHERE`'s complete output — the cap stopped the *graph*,
             // not the pattern — so they are their own positional prefix and certify a
             // lower bound, which is what `origin` states.
@@ -145,12 +147,12 @@ pub(crate) fn commit_answer_triples<D: DatasetView + Sync>(
         (Some(certificate), _, true) => {
             let (certificate_rows, certificate) = certificate.split();
             (
-                truncate_graph(&graph, admitted),
+                truncate_graph(&graph, admitted, &ctx.growth)?,
                 Some(Truncation::after_answer_cap(certificate_rows, certificate)),
             )
         }
         (Some(certificate), _, false) => (graph, Some(certificate)),
-    }
+    })
 }
 
 /// The number of statements a graph result carries: quads plus the RDF 1.2 statement
@@ -165,48 +167,161 @@ fn graph_triple_count(graph: &RdfDataset) -> usize {
 
 /// Rebuild `graph` from its first `admitted` statements, in the frozen canonical order the
 /// count above walks: quads, then reifier bindings, then annotations.
-fn truncate_graph(graph: &RdfDataset, admitted: usize) -> Arc<RdfDataset> {
+fn truncate_graph(
+    graph: &RdfDataset,
+    admitted: usize,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<DatasetHandle, EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
     let mut builder = RdfDatasetBuilder::new();
+    let mut remap = purrdf_core::FastMap::default();
     let mut remaining = admitted;
-    let intern = |builder: &mut RdfDatasetBuilder, id: TermId| {
-        let value = graph.term_value(id);
-        builder.intern_value(&value)
+    let copied = (|| {
+        for quad in graph.quads().take(remaining) {
+            let s = purrdf_core::describe::intern_view_term_with_memory(
+                graph,
+                &mut builder,
+                &mut remap,
+                quad.s,
+                &mut memory,
+            )?;
+            let p = purrdf_core::describe::intern_view_term_with_memory(
+                graph,
+                &mut builder,
+                &mut remap,
+                quad.p,
+                &mut memory,
+            )?;
+            let o = purrdf_core::describe::intern_view_term_with_memory(
+                graph,
+                &mut builder,
+                &mut remap,
+                quad.o,
+                &mut memory,
+            )?;
+            let g = quad
+                .g
+                .map(|id| {
+                    purrdf_core::describe::intern_view_term_with_memory(
+                        graph,
+                        &mut builder,
+                        &mut remap,
+                        id,
+                        &mut memory,
+                    )
+                })
+                .transpose()?;
+            builder.push_quad_with_memory(s, p, o, g, &mut memory)?;
+        }
+        remaining = remaining.saturating_sub(graph.quad_count());
+        for (r, t, g) in graph.reifiers_with_graph().take(remaining) {
+            let r = purrdf_core::describe::intern_view_term_with_memory(
+                graph,
+                &mut builder,
+                &mut remap,
+                r,
+                &mut memory,
+            )?;
+            let t = purrdf_core::describe::intern_view_term_with_memory(
+                graph,
+                &mut builder,
+                &mut remap,
+                t,
+                &mut memory,
+            )?;
+            let g = g
+                .map(|id| {
+                    purrdf_core::describe::intern_view_term_with_memory(
+                        graph,
+                        &mut builder,
+                        &mut remap,
+                        id,
+                        &mut memory,
+                    )
+                })
+                .transpose()?;
+            builder.push_reifier_in_graph_with_memory(r, t, g, &mut memory)?;
+        }
+        remaining = remaining.saturating_sub(graph.reifiers().count());
+        for (r, p, o, g) in graph.annotations_with_graph().take(remaining) {
+            let r = purrdf_core::describe::intern_view_term_with_memory(
+                graph,
+                &mut builder,
+                &mut remap,
+                r,
+                &mut memory,
+            )?;
+            let p = purrdf_core::describe::intern_view_term_with_memory(
+                graph,
+                &mut builder,
+                &mut remap,
+                p,
+                &mut memory,
+            )?;
+            let o = purrdf_core::describe::intern_view_term_with_memory(
+                graph,
+                &mut builder,
+                &mut remap,
+                o,
+                &mut memory,
+            )?;
+            let g = g
+                .map(|id| {
+                    purrdf_core::describe::intern_view_term_with_memory(
+                        graph,
+                        &mut builder,
+                        &mut remap,
+                        id,
+                        &mut memory,
+                    )
+                })
+                .transpose()?;
+            builder.push_annotation_in_graph_with_memory(r, p, o, g, &mut memory)?;
+        }
+        Ok::<(), purrdf_core::describe::DescribeError<std::convert::Infallible>>(())
+    })();
+    if let Err(error) = copied {
+        return match error {
+            purrdf_core::describe::DescribeError::Storage(error) => {
+                Err(frame.storage_error(error, "graph truncation storage"))
+            }
+            error => Err(crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Internal,
+                &error,
+                workspace,
+            )),
+        };
+    }
+    let bytes =
+        purrdf_core::hash::hash_table_allocation_bound::<(TermId, TermId)>(remap.capacity())
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    drop(remap);
+    let released = memory.release_bytes(bytes);
+    if let Err(error) = released {
+        return Err(frame.storage_error(error, "graph truncation scratch"));
+    }
+    let live = frame.admitted_bytes();
+    let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, live);
+    let graph = builder.freeze_with_memory(&mut memory);
+    let mut graph = match graph {
+        Ok(graph) => graph,
+        Err(purrdf_core::NativeBuildError::Storage(error)) => {
+            return Err(frame.storage_error(error, "graph truncation storage"));
+        }
+        Err(purrdf_core::NativeBuildError::Diagnostic(error)) => {
+            return Err(EvalError::RetainedDiagnostic(
+                frame.finish_diagnostic(&mut Some(error))?,
+            ));
+        }
     };
-    for quad in graph.quads() {
-        if remaining == 0 {
-            break;
-        }
-        let s = intern(&mut builder, quad.s);
-        let p = intern(&mut builder, quad.p);
-        let o = intern(&mut builder, quad.o);
-        let g = quad.g.map(|g| intern(&mut builder, g));
-        builder.push_quad(s, p, o, g);
-        remaining -= 1;
+    let live = frame.admitted_bytes();
+    let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, live);
+    let warmed = graph.warm_query_indexes_with_memory(&mut memory);
+    if let Err(error) = warmed {
+        return Err(frame.storage_error(error, "graph truncation indexes"));
     }
-    for (reifier, triple, graph_id) in graph.reifiers_with_graph() {
-        if remaining == 0 {
-            break;
-        }
-        let reifier = intern(&mut builder, reifier);
-        let triple = intern(&mut builder, triple);
-        let graph_id = graph_id.map(|g| intern(&mut builder, g));
-        builder.push_reifier_in_graph(reifier, triple, graph_id);
-        remaining -= 1;
-    }
-    for (reifier, predicate, object, graph_id) in graph.annotations_with_graph() {
-        if remaining == 0 {
-            break;
-        }
-        let reifier = intern(&mut builder, reifier);
-        let predicate = intern(&mut builder, predicate);
-        let object = intern(&mut builder, object);
-        let graph_id = graph_id.map(|g| intern(&mut builder, g));
-        builder.push_annotation_in_graph(reifier, predicate, object, graph_id);
-        remaining -= 1;
-    }
-    builder
-        .freeze()
-        .expect("a prefix of a frozen dataset is positionally valid by construction")
+    frame.finish_dataset(&mut Some(graph))
 }
 
 pub(crate) fn eval_construct<D: DatasetView + Sync>(
@@ -216,20 +331,26 @@ pub(crate) fn eval_construct<D: DatasetView + Sync>(
 ) -> Result<ConstructedGraph<D::Id>, EvalError> {
     let StagedConstruct {
         builder,
+        mut frame,
         rows,
         certificate,
     } = eval_construct_staged(template, pattern, ctx)?;
-    Ok(commit_answer_triples(
-        builder.freeze(),
-        certificate,
-        &rows,
-        ctx,
-    ))
+    let live = frame.admitted_bytes();
+    let frozen = (|| {
+        let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, live);
+        let mut graph = builder.freeze_with_memory(&mut memory)?;
+        graph.warm_query_indexes_with_memory(&mut memory)?;
+        Ok::<_, purrdf_lex::allocation::StorageError>(graph)
+    })();
+    let graph = frozen.map_err(|error| frame.storage_error(error, "constructed graph freeze"))?;
+    let graph = frame.finish_dataset(&mut Some(graph))?;
+    commit_answer_triples(graph, certificate, &rows, ctx)
 }
 
 /// Validated graph plus the WHERE rows and their completeness certificate.
 pub(crate) struct StagedConstruct<I: purrdf_core::ViewTermId> {
     pub(crate) builder: ValidatedRdfDatasetBuilder,
+    pub(crate) frame: crate::workspace::LexicalFrame,
     pub(crate) rows: crate::solution::SolutionSeq<I>,
     pub(crate) certificate: Option<Truncation<I>>,
 }
@@ -256,39 +377,39 @@ pub(crate) fn eval_construct_staged<D: DatasetView + Sync>(
     // configured, a dropped annotation cannot be attributed to a standpoint scope
     // and only the generic annotation-layer loss code is emitted — the engine never
     // fabricates a default domain predicate.
-    let loss_vocab = ctx.loss_vocabulary.clone();
-    let dropped: Vec<DroppedReifier> = loss_vocab.as_ref().map_or_default(|_| {
-        let standpoint_according_to: Option<String> = ctx
-            .standpoint_predicates
-            .as_ref()
-            .map(|p| p.according_to.clone());
-        collect_dropped_reifiers(template, pattern, standpoint_according_to.as_deref())
-    });
-
-    // Identify which template quad indices are reifier declarations
-    // (predicate == rdf:reifies, object == TermPattern::Triple).  This scan is
-    // done ONCE before the row loop so that per-row emit can fast-path to plain
-    // push_quad when the template contains no reifier declarations.
-    let reifier_decl_indices: Vec<usize> = template
-        .iter()
-        .enumerate()
-        .filter(|(_, q)| {
-            is_reifies(&q.triple) && matches!(&q.triple.object, TermPattern::Triple(_))
-        })
-        .map(|(i, _)| i)
-        .collect();
+    let dropped = if ctx.loss_vocabulary.is_some() {
+        collect_dropped_reifiers(
+            template,
+            pattern,
+            ctx.standpoint_predicates
+                .as_ref()
+                .map(|value| value.according_to.as_str()),
+            &ctx.growth,
+        )?
+    } else {
+        crate::AdmittedVec::new(&ctx.growth)
+    };
+    let mut reifier_decl_indices = crate::AdmittedVec::new(&ctx.growth);
+    for (index, quad) in template.iter().enumerate() {
+        if is_reifies(&quad.triple) && matches!(&quad.triple.object, TermPattern::Triple(_)) {
+            reifier_decl_indices.push(index)?;
+        }
+    }
+    let loss_vocab = ctx.loss_vocabulary.take();
 
     let plan = ConstructPlan {
         template,
         uniform_graph: uniform_template_graph(template),
         dropped: &dropped,
-        loss_vocab: loss_vocab.as_ref(),
+        loss_vocab: loss_vocab.as_deref(),
         reifier_decl_indices: &reifier_decl_indices,
     };
 
     // Template allocation shares the dataset/scratch vacancy check with BNODE
     // and list constructors, so the graph is built once without a relabel replay.
-    let graph = build_construct_graph(&plan, &seq, ctx)?;
+    let graph = build_construct_graph(&plan, &seq, ctx);
+    ctx.loss_vocabulary = loss_vocab;
+    let (graph, frame) = graph?;
     if certificate.is_none()
         && let Some(tripped) = ctx.expression_barrier.observed()
     {
@@ -300,6 +421,7 @@ pub(crate) fn eval_construct_staged<D: DatasetView + Sync>(
     }
     Ok(StagedConstruct {
         builder: graph,
+        frame,
         rows: seq,
         certificate,
     })
@@ -319,7 +441,7 @@ struct ConstructPlan<'a> {
     /// more than one graph", where no single graph owns the projection.
     uniform_graph: Option<&'a NamedNodePattern>,
     /// The dropped-reifier loss declarations detected in the `WHERE`.
-    dropped: &'a [DroppedReifier],
+    dropped: &'a [DroppedReifier<'a>],
     /// The caller-supplied loss vocabulary, when configured.
     loss_vocab: Option<&'a crate::eval::LossVocabulary>,
     /// Template indices holding reifier declarations (`rdf:reifies` + triple term).
@@ -400,14 +522,17 @@ impl<'a> GraphSlot<'a> {
         graph: Option<&'a NamedNodePattern>,
         schema: &VarSchema,
         builder: &mut RdfDatasetBuilder,
-    ) -> Self {
-        match graph {
+        memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+    ) -> Result<Self, purrdf_lex::allocation::StorageError> {
+        Ok(match graph {
             None => Self::Default,
-            Some(NamedNodePattern::NamedNode(n)) => Self::Fixed(builder.intern_iri(n.as_str())),
+            Some(NamedNodePattern::NamedNode(n)) => {
+                Self::Fixed(builder.intern_iri_with_memory(n.as_str(), memory)?)
+            }
             Some(pattern @ NamedNodePattern::Variable(_)) => {
                 Self::Bound(pattern, resolve_predicate(pattern, schema))
             }
-        }
+        })
     }
 
     /// The graph this slot names for `row`.
@@ -424,18 +549,23 @@ impl<'a> GraphSlot<'a> {
         row: &Solution<D::Id>,
         builder: &mut RdfDatasetBuilder,
         ctx: &EvalCtx<'_, D>,
-    ) -> Result<Option<GraphId>, EvalError> {
+        memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+    ) -> Result<Option<GraphId>, GraphConstructionError> {
         match self {
             Self::Default => Ok(Some(GraphId::DEFAULT)),
             Self::Fixed(id) => Ok(Some(GraphId(Some(*id)))),
             Self::Bound(pattern, ordinal) => {
-                let Some(value) = instantiate_predicate(pattern, ordinal, row, ctx)? else {
+                let Some(value) =
+                    crate::template::instantiate_predicate_admitted(pattern, ordinal, row, ctx)?
+                else {
                     return Ok(None);
                 };
-                if !matches!(value, TermValue::Iri(_)) {
+                if !matches!(&*value, TermValue::Iri(_)) {
                     return Ok(None);
                 }
-                Ok(Some(GraphId(Some(builder.intern_value(&value)))))
+                Ok(Some(GraphId(Some(
+                    builder.intern_value_with_memory(&value, memory)?,
+                ))))
             }
         }
     }
@@ -454,11 +584,46 @@ impl<'a> GraphSlot<'a> {
 /// One full template-instantiation pass over the `WHERE`'s solution rows,
 /// interning into a fresh builder and freezing the result.
 /// Fresh identities are admitted at allocation by the shared context mint.
+enum GraphConstructionError {
+    Evaluation(EvalError),
+    Storage(purrdf_lex::allocation::StorageError),
+    Build(purrdf_core::NativeBuildError),
+}
+purrdf_lex::variant_from!(GraphConstructionError { Evaluation(EvalError) });
+purrdf_lex::variant_from!(GraphConstructionError { Storage(purrdf_lex::allocation::StorageError) });
+purrdf_lex::variant_from!(GraphConstructionError { Build(purrdf_core::NativeBuildError) });
+
 fn build_construct_graph<D: DatasetView + Sync>(
     plan: &ConstructPlan<'_>,
     seq: &crate::solution::SolutionSeq<D::Id>,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<ValidatedRdfDatasetBuilder, EvalError> {
+) -> Result<(ValidatedRdfDatasetBuilder, crate::workspace::LexicalFrame), EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(&ctx.growth);
+    let result = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        build_construct_graph_with_memory(plan, seq, ctx, &mut memory)
+    };
+    match result {
+        Ok(builder) => Ok((builder, frame)),
+        Err(GraphConstructionError::Evaluation(error)) => Err(error),
+        Err(
+            GraphConstructionError::Storage(error)
+            | GraphConstructionError::Build(purrdf_core::NativeBuildError::Storage(error)),
+        ) => Err(frame.storage_error(error, "constructed graph storage")),
+        Err(GraphConstructionError::Build(purrdf_core::NativeBuildError::Diagnostic(error))) => {
+            Err(EvalError::RetainedDiagnostic(
+                frame.finish_diagnostic(&mut Some(error))?,
+            ))
+        }
+    }
+}
+
+fn build_construct_graph_with_memory<D: DatasetView + Sync>(
+    plan: &ConstructPlan<'_>,
+    seq: &crate::solution::SolutionSeq<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<ValidatedRdfDatasetBuilder, GraphConstructionError> {
     let schema = &seq.schema;
     let template = plan.template;
     let mut builder = RdfDatasetBuilder::new();
@@ -466,60 +631,76 @@ fn build_construct_graph<D: DatasetView + Sync>(
     // Pre-intern the caller-supplied loss vocabulary IRIs once, before the
     // per-solution row loop, so the loss-node emission path does not repeat
     // the lookup work for every row.
-    let loss_term_ids: Option<(TermId, TermId, TermId)> = plan.loss_vocab.map(|vocab| {
-        (
-            builder.intern_iri_value(&vocab.projection_loss),
-            builder.intern_iri_value(&vocab.loss_code),
-            builder.intern_iri_value(&vocab.lost_reifies),
-        )
-    });
+    let loss_term_ids: Option<(TermId, TermId, TermId)> = plan
+        .loss_vocab
+        .map(|vocab| -> Result<_, purrdf_lex::allocation::StorageError> {
+            Ok((
+                builder.intern_iri_with_memory(&vocab.projection_loss, memory)?,
+                builder.intern_iri_with_memory(&vocab.loss_code, memory)?,
+                builder.intern_iri_with_memory(&vocab.lost_reifies, memory)?,
+            ))
+        })
+        .transpose()?;
 
     // One graph slot per template quad, resolved as far as it can be BEFORE the
     // row loop: an unscoped slot and a ground IRI both settle here once and for
     // all, so only a graph VARIABLE costs anything per row. A template that
     // names no graph anywhere is all-[`GraphSlot::Default`], which reproduces
     // the previous `push_quad(.., None)` calls exactly.
-    let graph_slots: Vec<GraphSlot<'_>> = template
-        .iter()
-        .map(|quad| GraphSlot::new(quad.graph.as_ref(), schema, &mut builder))
-        .collect();
+    let mut graph_slots = crate::AdmittedVec::new(&ctx.growth);
+    for quad in template {
+        graph_slots.push(GraphSlot::new(
+            quad.graph.as_ref(),
+            schema,
+            &mut builder,
+            memory,
+        )?)?;
+    }
     // The projection-wide graph (loss declarations, folded `rdf:List` cells).
-    let uniform_slot = GraphSlot::new(plan.uniform_graph, schema, &mut builder);
+    let uniform_slot = GraphSlot::new(plan.uniform_graph, schema, &mut builder, memory)?;
 
     // Each template quad's subject/predicate/object column ordinals, resolved
     // ONCE against `schema` — the schema is a plan constant for this whole pass,
     // so this is the row loop's `index_of` cost paid exactly once per template
     // position, not once per (row, position) pair. See `TermOrdinal`'s doc
     // comment.
-    let template_ordinals: Vec<TripleOrdinal> = template
-        .iter()
-        .map(|quad| resolve_triple(&quad.triple, schema))
-        .collect();
-    // Each dropped-reifier's inner triple-term pattern, ordinal-resolved once the
-    // same way — `emit_dropped_losses` runs inside the row loop below.
-    let dropped_ordinals: Vec<TermOrdinal> = plan
-        .dropped
-        .iter()
-        .map(|d| resolve_term(&d.inner, schema))
-        .collect();
+    let mut template_ordinals = crate::AdmittedVec::new(&ctx.growth);
+    for quad in template {
+        template_ordinals.push(crate::template::resolve_triple_admitted(
+            &quad.triple,
+            schema,
+            &ctx.growth,
+        )?)?;
+    }
+    let mut dropped_ordinals = crate::AdmittedVec::new(&ctx.growth);
+    for dropped in plan.dropped {
+        dropped_ordinals.push(crate::template::resolve_term_admitted(
+            dropped.inner,
+            schema,
+            &ctx.growth,
+        )?)?;
+    }
 
     let has_reifier_decls = !plan.reifier_decl_indices.is_empty();
     // Template-position membership mask for pass 2's "already declared in pass 1"
     // skip: built once here so the per-row loop tests one `bool` per template quad
     // instead of a linear `contains` scan over `reifier_decl_indices`.
-    let mut reifier_decl_mask = vec![false; template.len()];
+    let mut reifier_decl_mask = crate::AdmittedVec::new(&ctx.growth);
+    for _ in template {
+        reifier_decl_mask.push(false)?;
+    }
     for &idx in plan.reifier_decl_indices {
-        reifier_decl_mask[idx] = true;
+        reifier_decl_mask.as_mut_slice()[idx] = true;
     }
     // Interned once (idempotent), used by pass 2 below to recognize a
     // *dynamically*-produced `rdf:reifies` edge — see its doc comment.
-    let reifies_id = builder.intern_iri(RDF_REIFIES);
+    let reifies_id = builder.intern_iri_with_memory(RDF_REIFIES, memory)?;
 
     // Template blank labels are fresh per solution row; the map co-refers a label
     // within this row only, so it is CLEARED per row (`fresh_blank` only reads via
     // `get` and inserts; the cross-row freshness comes from `ctx.bnode_counter`, not
     // from this map) — hoisted so its table allocation is reused across rows.
-    let mut blanks: DetHashMap<String, String> = DetHashMap::default();
+    let mut blanks = crate::template::TemplateBlanks::default();
 
     'rows: for row in &seq.rows {
         blanks.clear();
@@ -531,16 +712,23 @@ fn build_construct_graph<D: DatasetView + Sync>(
                 // The graph is resolved FIRST: a statement its graph slot skips
                 // is not instantiated at all, so it mints no blank labels and
                 // consumes no counter values on the way to being dropped.
-                let Some(graph_id) = slot.resolve(row, &mut builder, ctx)? else {
+                let Some(graph_id) = slot.resolve(row, &mut builder, ctx, memory)? else {
                     continue;
                 };
-                let instantiated =
-                    instantiate(&quad.triple, ordinal, row, &mut builder, &mut blanks, ctx)?;
+                let instantiated = instantiate(
+                    &quad.triple,
+                    ordinal,
+                    row,
+                    &mut builder,
+                    &mut blanks,
+                    ctx,
+                    memory,
+                )?;
                 if ctx.expression_barrier.observed().is_some() {
                     break 'rows;
                 }
                 if let Some((s, p, o)) = instantiated {
-                    builder.push_quad(s, p, o, graph_id.term());
+                    builder.push_quad_with_memory(s, p, o, graph_id.term(), memory)?;
                 }
             }
         } else {
@@ -549,33 +737,28 @@ fn build_construct_graph<D: DatasetView + Sync>(
 
             // Instantiate every template quad for this row (None = skipped, by
             // its graph slot or by the ordinary §16.2 template rules).
-            let instantiated: Vec<Option<Instantiated>> = template
-                .iter()
-                .zip(&graph_slots)
-                .zip(&template_ordinals)
-                .map(
-                    |((quad, slot), ordinal)| -> Result<Option<Instantiated>, EvalError> {
-                        if ctx.expression_barrier.observed().is_some() {
-                            return Ok(None);
-                        }
-                        let Some(graph) = slot.resolve(row, &mut builder, ctx)? else {
-                            return Ok(None);
-                        };
-                        let Some((s, p, o)) = instantiate(
-                            &quad.triple,
-                            ordinal,
-                            row,
-                            &mut builder,
-                            &mut blanks,
-                            ctx,
-                        )?
-                        else {
-                            return Ok(None);
-                        };
-                        Ok(Some(Instantiated { s, p, o, graph }))
-                    },
-                )
-                .collect::<Result<_, _>>()?;
+            let mut instantiated = crate::AdmittedVec::new(&ctx.growth);
+            for ((quad, slot), ordinal) in template.iter().zip(&graph_slots).zip(&template_ordinals)
+            {
+                let value = if ctx.expression_barrier.observed().is_some() {
+                    None
+                } else if let Some(graph) = slot.resolve(row, &mut builder, ctx, memory)? {
+                    instantiate(
+                        &quad.triple,
+                        ordinal,
+                        row,
+                        &mut builder,
+                        &mut blanks,
+                        ctx,
+                        memory,
+                    )?
+                    .map(|(s, p, o)| Instantiated { s, p, o, graph })
+                } else {
+                    None
+                };
+                instantiated.push(value)?;
+            }
+
             if ctx.expression_barrier.observed().is_some() {
                 break 'rows;
             }
@@ -590,11 +773,11 @@ fn build_construct_graph<D: DatasetView + Sync>(
             // which is exactly the previous behavior.
             // Membership-only (insert/contains, never iterated), so the fixed-key
             // `DetHashSet` is used: no per-process random seeding per row.
-            let mut reifier_ids: DetHashSet<(GraphId, TermId)> = DetHashSet::default();
+            let mut reifier_ids = crate::workspace::AdmittedMap::default();
             for &idx in plan.reifier_decl_indices {
                 if let Some(e) = instantiated[idx] {
-                    builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
-                    reifier_ids.insert((e.graph, e.s));
+                    builder.push_reifier_in_graph_with_memory(e.s, e.o, e.graph.term(), memory)?;
+                    let _ = reifier_ids.insert_admitted((e.graph, e.s), (), &ctx.growth)?;
                 }
             }
 
@@ -621,11 +804,22 @@ fn build_construct_graph<D: DatasetView + Sync>(
                     let is_dynamic_reifies =
                         e.p == reifies_id && matches!(builder.resolve(e.o), TermRef::Triple { .. });
                     if is_dynamic_reifies {
-                        builder.push_reifier_in_graph(e.s, e.o, e.graph.term());
-                    } else if reifier_ids.contains(&(e.graph, e.s)) {
-                        builder.push_annotation_in_graph(e.s, e.p, e.o, e.graph.term());
+                        builder.push_reifier_in_graph_with_memory(
+                            e.s,
+                            e.o,
+                            e.graph.term(),
+                            memory,
+                        )?;
+                    } else if reifier_ids.get(&(e.graph, e.s)).is_some() {
+                        builder.push_annotation_in_graph_with_memory(
+                            e.s,
+                            e.p,
+                            e.o,
+                            e.graph.term(),
+                            memory,
+                        )?;
                     } else {
-                        builder.push_quad(e.s, e.p, e.o, e.graph.term());
+                        builder.push_quad_with_memory(e.s, e.p, e.o, e.graph.term(), memory)?;
                     }
                 }
             }
@@ -637,16 +831,16 @@ fn build_construct_graph<D: DatasetView + Sync>(
             // a non-IRI) skips the declaration exactly as it skips a statement:
             // the row emitted nothing into a graph, so there is no graph to
             // declare the loss in.
-            && let Some(graph_id) = uniform_slot.resolve(row, &mut builder, ctx)?
+            && let Some(graph_id) = uniform_slot.resolve(row, &mut builder, ctx, memory)?
         {
             emit_dropped_losses(
-                plan.dropped,
-                &dropped_ordinals,
+                (plan.dropped, &dropped_ordinals),
                 row,
                 &mut builder,
                 ctx,
                 ids,
                 graph_id.term(),
+                memory,
             )?;
         }
     }
@@ -668,19 +862,33 @@ fn build_construct_graph<D: DatasetView + Sync>(
     if ctx.expression_barrier.observed().is_some() {
         // Neither an in-flight template nor an auxiliary list may publish after
         // template allocation stops. The caller attaches the typed certificate.
+        builder.discard_with_memory(memory)?;
         builder = RdfDatasetBuilder::new();
     } else if !ctx.constructed.is_empty() {
         let constructed_graph_id = uniform_slot.ground_graph();
-        let (_, rows) = crate::eval::materialize_solutions(seq, ctx)?;
-        for (s, p, o) in ctx.reachable_constructed(&rows) {
-            let s = builder.intern_value(&s);
-            let p = builder.intern_value(&p);
-            let o = builder.intern_value(&o);
-            builder.push_quad(s, p, o, constructed_graph_id.term());
+        let mut seeds = crate::AdmittedVec::new(&ctx.growth);
+        for row in &seq.rows {
+            for term in row.iter().flatten() {
+                seeds.push(ctx.scratch.try_owned_value_of(
+                    ctx.dataset,
+                    *term,
+                    &ctx.growth,
+                    |error| ctx.workspace.source_error(error),
+                )?)?;
+            }
+        }
+        for index in ctx.reachable_from(seeds.iter().map(|value| &**value))? {
+            let (s, p, o) = &ctx.constructed[index];
+            let s = builder.intern_value_with_memory(s, memory)?;
+            let p = builder.intern_value_with_memory(p, memory)?;
+            let o = builder.intern_value_with_memory(o, memory)?;
+            builder.push_quad_with_memory(s, p, o, constructed_graph_id.term(), memory)?;
         }
     }
 
-    builder.validate().map_err(EvalError::Dataset)
+    builder
+        .validate_with_memory(memory)
+        .map_err(GraphConstructionError::Build)
 }
 
 /// A reifies-pattern in the `WHERE` whose reifier variable the template drops.
@@ -688,11 +896,11 @@ fn build_construct_graph<D: DatasetView + Sync>(
 /// Carries the inner triple-term pattern (`<<( s p o )>>`) so the concrete reified
 /// triple can be materialized per solution row, plus the dropped annotation facts
 /// keyed off the same reifier variable.
-struct DroppedReifier {
+struct DroppedReifier<'a> {
     /// The already-boxed triple-term pattern (`TermPattern::Triple(...)`) instantiated
     /// per row to the lost triple term. Stored as `TermPattern` so it can be passed
     /// directly to `instantiate_term` without a per-row `Box::new` / clone.
-    inner: TermPattern,
+    inner: &'a TermPattern,
     /// `true` if the `WHERE` also matched annotation triples on this reifier var
     /// (a triple whose subject is the reifier var, other than the reifies edge).
     has_annotation: bool,
@@ -714,79 +922,109 @@ struct DroppedReifier {
 /// `standpoint_according_to` is the caller-configured standpoint annotation
 /// predicate (from [`crate::eval::StandpointPredicates`]); `None` means no table
 /// is configured and no drop can be attributed a standpoint scope.
-fn collect_dropped_reifiers(
+fn collect_dropped_reifiers<'a>(
     template: &[QuadPattern],
-    pattern: &GraphPattern,
+    pattern: &'a GraphPattern,
     standpoint_according_to: Option<&str>,
-) -> Vec<DroppedReifier> {
-    // Collect every BGP triple pattern reachable in the WHERE, in a stable order.
-    let mut where_triples: Vec<&TriplePattern> = Vec::new();
-    collect_where_triples(pattern, &mut where_triples);
-
-    // The reifies-patterns: predicate == rdf:reifies, subject a variable, object a
-    // quoted triple term. Keyed by the reifier variable name; the object is stored
-    // as a cloned `TermPattern::Triple(...)` so no per-row Box::new is needed later.
-    let mut reifiers: Vec<(String, TermPattern)> = Vec::new();
-    for tp in &where_triples {
-        if is_reifies(tp)
-            && let (TermPattern::Variable(v), obj @ TermPattern::Triple(_)) =
-                (&tp.subject, &tp.object)
-        {
-            reifiers.push((v.as_str().to_owned(), obj.clone()));
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::AdmittedVec<DroppedReifier<'a>>, EvalError> {
+    use purrdf_sparql_algebra::walk::{Flow, NodeRef, Visit, walk_pre_post_with_memory};
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    let mut triples = Vec::new();
+    let mut variables = Vec::new();
+    let scan = (|| {
+        walk_pre_post_with_memory(
+            NodeRef::Pattern(pattern),
+            |phase, node, memory| {
+                if matches!(phase, Visit::Enter)
+                    && matches!(
+                        node,
+                        NodeRef::Expr(_) | NodeRef::Pattern(GraphPattern::Service { .. })
+                    )
+                {
+                    return Ok(Flow::Skip);
+                }
+                if matches!(phase, Visit::Enter)
+                    && let NodeRef::Pattern(GraphPattern::Bgp { patterns }) = node
+                {
+                    for triple in patterns {
+                        memory.push(&mut triples, triple)?;
+                    }
+                }
+                Ok::<_, purrdf_lex::allocation::StorageError>(Flow::Descend)
+            },
+            &mut memory,
+        )?;
+        for quad in template {
+            for term in [&quad.triple.subject, &quad.triple.object] {
+                walk_pre_post_with_memory(
+                    NodeRef::Term(term),
+                    |phase, node, memory| {
+                        if matches!(phase, Visit::Enter) {
+                            match node {
+                                NodeRef::Term(TermPattern::Variable(variable)) => {
+                                    memory.push(&mut variables, variable.as_str())?;
+                                }
+                                NodeRef::Triple(triple) => {
+                                    if let NamedNodePattern::Variable(variable) = &triple.predicate
+                                    {
+                                        memory.push(&mut variables, variable.as_str())?;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok::<_, purrdf_lex::allocation::StorageError>(Flow::Descend)
+                    },
+                    &mut memory,
+                )?;
+            }
+            if let NamedNodePattern::Variable(variable) = &quad.triple.predicate {
+                memory.push(&mut variables, variable.as_str())?;
+            }
+            if let Some(NamedNodePattern::Variable(variable)) = &quad.graph {
+                memory.push(&mut variables, variable.as_str())?;
+            }
         }
+        Ok::<_, purrdf_lex::allocation::StorageError>(())
+    })();
+    if let Err(error) = scan {
+        return Err(frame.storage_error(error, "projection-loss pattern analysis"));
     }
-
-    // FAST NO-OP PATH: no reifies-pattern at all ⇒ nothing to detect.
-    if reifiers.is_empty() {
-        return Vec::new();
-    }
-
-    // The set of all variables mentioned anywhere in the template (descending into
-    // nested quoted-triple terms). A GRAPH variable counts: a template that
-    // routes its output by `?r` carries `?r` just as surely as one that puts it
-    // in subject position, so the reifier it names is not dropped.
-    let mut template_vars: BTreeSet<String> = BTreeSet::new();
-    for quad in template {
-        quad.triple.collect_variable_names(&mut template_vars);
-        if let Some(NamedNodePattern::Variable(v)) = &quad.graph {
-            template_vars.insert(v.as_str().to_owned());
-        }
-    }
-
-    let mut dropped = Vec::new();
-    for (reifier_var, inner) in reifiers {
-        // A reifies-pattern is dropped iff its reifier variable is NOT carried by
-        // the template.
-        if template_vars.contains(&reifier_var) {
+    let mut output = crate::AdmittedVec::new(workspace);
+    for triple in &triples {
+        if !is_reifies(triple) {
             continue;
         }
-        // Sub-codes: do any WHERE annotation triples key off this dropped reifier
-        // var (subject == reifier var, predicate != rdf:reifies)? And is one of
-        // those predicates the configured standpoint `according_to` predicate?
+        let (TermPattern::Variable(variable), inner @ TermPattern::Triple(_)) =
+            (&triple.subject, &triple.object)
+        else {
+            continue;
+        };
+        if variables.contains(&variable.as_str()) {
+            continue;
+        }
         let mut has_annotation = false;
         let mut has_standpoint = false;
-        for tp in &where_triples {
-            if is_reifies(tp) {
-                continue;
-            }
-            if let TermPattern::Variable(s) = &tp.subject
-                && s.as_str() == reifier_var
+        for annotation in &triples {
+            if !is_reifies(annotation)
+                && matches!(&annotation.subject, TermPattern::Variable(subject) if subject == variable)
             {
                 has_annotation = true;
-                if let NamedNodePattern::NamedNode(n) = &tp.predicate
-                    && standpoint_according_to.is_some_and(|at| n.as_str() == at)
-                {
-                    has_standpoint = true;
+                if let NamedNodePattern::NamedNode(predicate) = &annotation.predicate {
+                    has_standpoint |=
+                        standpoint_according_to.is_some_and(|iri| predicate.as_str() == iri);
                 }
             }
         }
-        dropped.push(DroppedReifier {
+        output.push(DroppedReifier {
             inner,
             has_annotation,
             has_standpoint,
-        });
+        })?;
     }
-    dropped
+    Ok(output)
 }
 
 /// `true` if `tp` is an `rdf:reifies` triple pattern (a concrete `rdf:reifies`
@@ -800,6 +1038,7 @@ fn is_reifies(tp: &TriplePattern) -> bool {
 /// — a node's conjuncts before those of its children, left before right, a union's
 /// arms in order — so the dropped set is deterministic. The walk keeps its own work
 /// list, so a tree of any depth costs no more machine stack.
+#[cfg(test)]
 fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
     let mut pending = vec![pattern];
     while let Some(pattern) = pending.pop() {
@@ -860,32 +1099,36 @@ fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a Triple
 /// template quad, so the caller resolves it from the template's uniform graph —
 /// see [`ConstructPlan::uniform_graph`].
 fn emit_dropped_losses<D: DatasetView + Sync>(
-    dropped: &[DroppedReifier],
-    ordinals: &[TermOrdinal],
+    (dropped, ordinals): (&[DroppedReifier<'_>], &[TermOrdinal]),
     row: &Solution<D::Id>,
     builder: &mut RdfDatasetBuilder,
     ctx: &mut EvalCtx<'_, D>,
     (proj_loss_id, loss_code_id, lost_reifies_id): (TermId, TermId, TermId),
     graph_id: Option<TermId>,
-) -> Result<(), EvalError> {
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), GraphConstructionError> {
     // One blank-label scope per dropped reifier, exactly as before — CLEARED per
     // iteration rather than reallocated (`fresh_blank` only `get`s and inserts here).
-    let mut blanks: DetHashMap<String, String> = DetHashMap::default();
+    let mut blanks = crate::template::TemplateBlanks::default();
     for (d, ordinal) in dropped.iter().zip(ordinals) {
         // Materialize the concrete reified triple term for this row. An unbound
         // inner variable yields `None` — there is no concrete triple to declare
         // lost, so the declaration is (correctly) skipped for this row.
         blanks.clear();
-        let Some(inner_term) = instantiate_term(&d.inner, ordinal, row, &mut blanks, ctx)? else {
+        let Some(inner_term) =
+            crate::template::instantiate_term_admitted(d.inner, ordinal, row, &mut blanks, ctx)?
+        else {
             continue;
         };
 
         // Deterministic loss-node label from the resolved triple-term content.
-        let label = loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &inner_term);
-        let loss_node = builder.intern_blank_value(&label, purrdf_core::BlankScope::DEFAULT);
+        let label = loss_node_label_with_memory(LOSS_REIFIER_LAYER_DROPPED, &inner_term, memory)?;
+        let loss_node =
+            builder.intern_blank_with_memory(&label, purrdf_core::BlankScope::DEFAULT, memory)?;
 
-        let rdf_type = builder.intern_iri_value(RDF_TYPE);
-        builder.push_quad(loss_node, rdf_type, proj_loss_id, graph_id);
+        let rdf_type = builder.intern_iri_with_memory(RDF_TYPE, memory)?;
+        memory.release_string(label)?;
+        builder.push_quad_with_memory(loss_node, rdf_type, proj_loss_id, graph_id, memory)?;
 
         // <lossCode> "reifier-layer-dropped"
         push_loss_code(
@@ -894,11 +1137,12 @@ fn emit_dropped_losses<D: DatasetView + Sync>(
             LOSS_REIFIER_LAYER_DROPPED,
             loss_code_id,
             graph_id,
-        );
+            memory,
+        )?;
 
         // <lostReifies> <<( s p o )>>
-        let triple_id = builder.intern_value(&inner_term);
-        builder.push_quad(loss_node, lost_reifies_id, triple_id, graph_id);
+        let triple_id = builder.intern_value_with_memory(&inner_term, memory)?;
+        builder.push_quad_with_memory(loss_node, lost_reifies_id, triple_id, graph_id, memory)?;
 
         // Sub-codes on the SAME loss node (keyed deterministically by the same
         // content-derived label, so they coalesce across rows too).
@@ -909,7 +1153,8 @@ fn emit_dropped_losses<D: DatasetView + Sync>(
                 LOSS_ANNOTATION_LAYER_DROPPED,
                 loss_code_id,
                 graph_id,
-            );
+                memory,
+            )?;
         }
         if d.has_standpoint {
             push_loss_code(
@@ -918,7 +1163,8 @@ fn emit_dropped_losses<D: DatasetView + Sync>(
                 LOSS_STANDPOINT_SCOPE_DROPPED,
                 loss_code_id,
                 graph_id,
-            );
+                memory,
+            )?;
         }
     }
     Ok(())
@@ -931,14 +1177,11 @@ fn push_loss_code(
     code: &str,
     loss_code_id: TermId,
     graph_id: Option<TermId>,
-) {
-    let code_lit = builder.intern_literal_value(RdfLiteral {
-        lexical_form: code.to_owned(),
-        datatype: Some(XSD_STRING.to_owned()),
-        language: None,
-        direction: None,
-    });
-    builder.push_quad(loss_node, loss_code_id, code_lit, graph_id);
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    let literal =
+        builder.intern_literal_parts_with_memory(code, Some(XSD_STRING), None, None, memory)?;
+    builder.push_quad_with_memory(loss_node, loss_code_id, literal, graph_id, memory)
 }
 
 /// A deterministic blank-node label for a loss node, derived PURELY from the loss
@@ -951,11 +1194,29 @@ fn push_loss_code(
 /// [`purrdf_hash::frame::frame_le`] followed by the term's canonical bytes
 /// ([`TermValue::canonical_bytes`]). Both halves are specified and injective,
 /// so the label is the same on every target, build and toolchain release.
+#[cfg(test)]
 fn loss_node_label(code: &str, inner: &TermValue) -> String {
+    let mut frame = crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::default());
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    loss_node_label_with_memory(code, inner, &mut memory).expect("resident loss label")
+}
+
+fn loss_node_label_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+    code: &str,
+    inner: &TermValue,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<String, purrdf_lex::allocation::StorageError> {
     let mut preimage = Vec::new();
+    let required = code
+        .len()
+        .checked_add(8)
+        .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+    memory.reserve(&mut preimage, required)?;
     purrdf_hash::frame::frame_le(&mut preimage, code.as_bytes());
-    inner.canonical_bytes(&mut preimage);
-    format!("loss-{:016x}", purrdf_hash::fnv::fnv1a64(&preimage))
+    inner.canonical_bytes_with_memory(&mut preimage, memory)?;
+    let hash = purrdf_hash::fnv::fnv1a64(&preimage);
+    memory.release_vec(preimage)?;
+    memory.format(&format_args!("loss-{hash:016x}"))
 }
 
 /// Instantiate one template triple for `row`, interning into `builder`. Returns
@@ -966,16 +1227,32 @@ fn instantiate<D: DatasetView + Sync>(
     ordinal: &TripleOrdinal,
     row: &Solution<D::Id>,
     builder: &mut RdfDatasetBuilder,
-    blanks: &mut DetHashMap<String, String>,
+    blanks: &mut crate::template::TemplateBlanks,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<(TermId, TermId, TermId)>, EvalError> {
-    let Some(s) = instantiate_term(&tp.subject, &ordinal.subject, row, blanks, ctx)? else {
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<Option<(TermId, TermId, TermId)>, GraphConstructionError> {
+    let Some(s) = crate::template::instantiate_term_admitted(
+        &tp.subject,
+        &ordinal.subject,
+        row,
+        blanks,
+        ctx,
+    )?
+    else {
         return Ok(None);
     };
-    let Some(p) = instantiate_predicate(&tp.predicate, &ordinal.predicate, row, ctx)? else {
+    let Some(p) = crate::template::instantiate_predicate_admitted(
+        &tp.predicate,
+        &ordinal.predicate,
+        row,
+        ctx,
+    )?
+    else {
         return Ok(None);
     };
-    let Some(o) = instantiate_term(&tp.object, &ordinal.object, row, blanks, ctx)? else {
+    let Some(o) =
+        crate::template::instantiate_term_admitted(&tp.object, &ordinal.object, row, blanks, ctx)?
+    else {
         return Ok(None);
     };
 
@@ -987,9 +1264,9 @@ fn instantiate<D: DatasetView + Sync>(
     }
 
     Ok(Some((
-        builder.intern_value(&s),
-        builder.intern_value(&p),
-        builder.intern_value(&o),
+        builder.intern_value_with_memory(&s, memory)?,
+        builder.intern_value_with_memory(&p, memory)?,
+        builder.intern_value_with_memory(&o, memory)?,
     )))
 }
 
@@ -1058,7 +1335,7 @@ mod tests {
         template: &[TriplePattern],
         pattern: &GraphPattern,
         ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<Arc<RdfDataset>, EvalError> {
+    ) -> Result<DatasetHandle, EvalError> {
         eval_quad_construct(&unscoped(template), pattern, ctx)
     }
 
@@ -1067,7 +1344,7 @@ mod tests {
         template: &[QuadPattern],
         pattern: &GraphPattern,
         ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<Arc<RdfDataset>, EvalError> {
+    ) -> Result<DatasetHandle, EvalError> {
         let (graph, certificate) = super::eval_construct(template, pattern, ctx)?;
         assert!(
             certificate.is_none(),
@@ -1108,7 +1385,7 @@ mod tests {
         NamedNodePattern::Variable(Variable::new(name))
     }
 
-    use purrdf_core::{RdfLiteral, TermRef};
+    use purrdf_core::TermRef;
     use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, Variable};
 
     const KNOWS: &str = "http://ex/knows";
@@ -1881,7 +2158,7 @@ mod tests {
             "the nested triple-term subject is skipped; its well-formed sibling is not"
         );
         for quad in out.quads() {
-            let object = out.term_value(quad.o).unwrap();
+            let object = out.term_value(quad.o);
             assert!(
                 object_term_model_holds(&object),
                 "an emitted object breaks the RDF 1.2 term model: {object:?}"

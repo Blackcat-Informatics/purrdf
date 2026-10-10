@@ -102,6 +102,7 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-retrieval`
 - `purrdf-rdf`
 - `purrdf-markdown`
+- `purrdf-mime`
 - `purrdf-json`
 - `purrdf-slice`
 - `purrdf-shapes`
@@ -175,11 +176,11 @@ first tagged run can publish the complete workspace in dependency order.
    are published only by the normal Trusted Publishing workflow.
 6. After the functional release is published, set `new_crate` to its registered
    name and yank its `0.0.0` version using a token with the separate **yank**
-   permission:
+   permission, with `CARGO_REGISTRY_TOKEN` already exported by the caller:
 
    ```sh
-   CARGO_REGISTRY_TOKEN="${CARGO_TOKEN:?a token with yank permission is required}" \
-     rustup run stable cargo yank --version 0.0.0 "$new_crate"
+   : "${CARGO_REGISTRY_TOKEN:?a token with yank permission is required}"
+   rustup run stable cargo yank --version 0.0.0 "$new_crate"
    ```
 
    Yanking prevents new dependency resolutions from choosing the bootstrap
@@ -187,19 +188,28 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Bootstrap: complete (ledger empty)
+### Outstanding bootstrap: `purrdf-mime`
 
-Every crate in the release set has a crates.io record.
+One crate is in the release set above and requires a new record before tagging.
+`purrdf-mime` is the **twenty-fourth** crate in publish order. Its implementation
+is part of the workspace; the registry's public index has no record for it.
+Create the isolated empty bootstrap package, configure its Trusted Publisher
+entry and lock, then reconcile the ledger after the public preflight verifies
+the record. No functional publication is authorized by this source addition.
+
+### Established records
+
+The other release crates have crates.io records.
 `purrdf-hash`, `purrdf-stack`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`,
 `purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval` received isolated, empty,
 dependency-free **0.0.0** versions on 2026-10-01. Each upload was preceded by
 native/wasm checks, normal package verification and exact empty-source/license
 archive audits; the public registry subsequently confirmed every version.
-`PURRDF_UNBOOTSTRAPPED_CRATES` is therefore empty. The bootstrap script never
+The bootstrap script never
 publishes a functional implementation or token-republishes an existing record.
 
 On 2026-10-01, the maintainer confirmed the matching Trusted Publisher entries
-are configured for all release crates. The strict public preflight independently
+were configured for the then-current release crates. The strict public preflight independently
 verified that all **31** records have **Require trusted publishing** enabled
 (`trustpub_only=true`), including the eight new records. Publisher entries have
 no public API; that confirmation is separate from the registry lock evidence.
@@ -340,7 +350,7 @@ git push origin rust-v0.1.5
 
 The workflow refuses before packaging if any release crate lacks its record
 or publishing lock, or the bootstrap ledger has not been reconciled with the
-registry; see [bootstrap status](#bootstrap-complete-ledger-empty). It publishes
+registry; see [bootstrap status](#outstanding-bootstrap-purrdf-mime). It publishes
 functional crates in the declared dependency order and skips a version already
 present. A partially completed release resumes with `gh run rerun <run-id>`.
 

@@ -54,12 +54,16 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use purrdf_retrieval::{
-    CandidateDomains, DecayRule, DomainTag, DuplicatePolicy, EVIDENCE_VERSION, EvidenceId,
-    ExclusionBasis, ExclusionVerdict, Fixed, FusionProfile, IndexGeneration, Iri, PfAttestation,
-    ProducerReceipt, ProducerStatus, ProtocolError, RankFidelity, RankedRow, RankedStream,
-    RowBlock, ScoreExactness, ServiceLevel, StreamContract, Term, TopK, contribution, fuse,
+    CandidateDepths, CandidateDomains, CandidateExecutionResult, DecayRule, DomainTag,
+    DuplicatePolicy, EVIDENCE_VERSION, EvidenceId, ExclusionBasis, ExclusionVerdict, Fixed,
+    FusionProfile, IndexGeneration, Iri, PfAttestation, PlanId, ProducerReceipt, ProducerStatus,
+    ProtocolError, RankFidelity, RankedRow, RankedStream, RankedStreamImpl, ReadStratum, RowBlock,
+    ScoreExactness, ServiceLevel, StreamContract, StreamEnding, Term, TopK, contribution, fuse,
+    union,
 };
 
+#[path = "support/registry.rs"]
+mod registry;
 #[path = "support/streams.rs"]
 mod streams;
 
@@ -512,9 +516,7 @@ fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
     let mut two = scripted(["beta", "gamma", "alpha"]);
     two.attestation = PfAttestation {
         generation: IndexGeneration::declared("gen-8"),
-        service: ServiceLevel::Incomplete {
-            reason: REASON.to_owned(),
-        },
+        service: ServiceLevel::incomplete_static(REASON),
     };
 
     let result = ready(fuse::<ScriptedStream, Term>(
@@ -537,9 +539,7 @@ fn an_evidence_identity_is_the_same_bytes_and_digest_on_both_targets() {
         result.trailer.attestations[&iri(STRATUM_TWO)],
         PfAttestation {
             generation: IndexGeneration::declared("gen-8"),
-            service: ServiceLevel::Incomplete {
-                reason: REASON.to_owned(),
-            },
+            service: ServiceLevel::incomplete_static(REASON),
         }
     );
 
@@ -660,7 +660,160 @@ fn a_declared_candidate_domain_bounds_the_same_read_on_both_targets() {
     }
 }
 
+/// An unscored set has the same hand-framed original-rank bytes on both targets.
+fn a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets() {
+    let stratum = iri(STRATUM_ONE);
+    let depths = CandidateDepths::new([(stratum.clone(), 3)]).unwrap();
+    let plan_id = PlanId::from_canonical(b"candidate-portable-fixture");
+    let contract = StreamContract::new(
+        DuplicatePolicy::Allowed,
+        RankFidelity::EXACT,
+        CandidateDomains::Unrestricted,
+        ExclusionBasis::Unavailable,
+    );
+    let result = ready(union(
+        CandidateExecutionResult {
+            streams: vec![ReadStratum {
+                stratum: stratum.clone(),
+                plan_id,
+                requested_depth: 3,
+                contract: contract.clone(),
+                attestation: PfAttestation::UNDECLARED,
+                stream: RankedStreamImpl::new(
+                    vec![
+                        (1, Term::new("alpha"), RowBlock::Undeclared),
+                        (2, Term::new("alpha"), RowBlock::Undeclared),
+                        (3, Term::new("beta"), RowBlock::Undeclared),
+                    ],
+                    StreamEnding::Exhausted,
+                ),
+            }],
+            statuses: purrdf_core::FastMap::default(),
+            contracts: std::iter::once((stratum.clone(), contract)).collect(),
+            plan_id,
+            depths: depths.clone(),
+            unserved_terms: Vec::new(),
+            producer_bindings: Vec::new(),
+            producer_decisions: Vec::new(),
+        },
+        &depths,
+    ))
+    .unwrap();
+    assert!(result.completed_prefix);
+    assert_eq!(result.candidates.len(), 2);
+    assert_eq!(
+        result.candidates[&Term::new("alpha")].ranks[&stratum],
+        [1, 2]
+    );
+    assert_eq!(result.candidates[&Term::new("beta")].ranks[&stratum], [3]);
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&1_u16.to_le_bytes());
+    framed(&mut expected, "candidate-union");
+    expected.extend_from_slice(&32_u64.to_le_bytes());
+    expected.extend_from_slice(plan_id.as_bytes());
+    expected.push(1); // all requested prefixes observed
+    expected.extend_from_slice(&2_u64.to_le_bytes());
+    for (subject, ranks) in [("alpha", &[1_u64, 2][..]), ("beta", &[3_u64][..])] {
+        framed(&mut expected, subject);
+        expected.extend_from_slice(&1_u64.to_le_bytes()); // one naming stratum
+        framed(&mut expected, STRATUM_ONE);
+        expected.extend_from_slice(&(ranks.len() as u64).to_le_bytes());
+        for rank in ranks {
+            expected.extend_from_slice(&rank.to_le_bytes());
+        }
+        expected.push(0); // no block witness
+    }
+    expected.extend_from_slice(&1_u64.to_le_bytes()); // one producer
+    framed(&mut expected, STRATUM_ONE);
+    expected.extend_from_slice(&3_u32.to_le_bytes()); // explicit requested depth
+    expected.extend_from_slice(&3_u64.to_le_bytes()); // original rows pulled
+    for _ in 0..2 {
+        // known materialised/emitted rows
+        expected.push(1);
+        expected.extend_from_slice(&3_u64.to_le_bytes());
+    }
+    expected.extend_from_slice(&[1, 1, 1]); // verified receipt, complete prefix, exhausted
+    expected.extend_from_slice(&3_u64.to_le_bytes());
+    expected.extend_from_slice(&[1, 0, 0, 0, 0]); // contract; allowed, complete, faithful, unrestricted
+    framed(&mut expected, "unavailable");
+    expected.push(1); // an announcement, explicitly undeclared
+    let mut announced = Vec::new();
+    announced.extend_from_slice(&EVIDENCE_VERSION.to_le_bytes());
+    announced.extend_from_slice(&1_u64.to_le_bytes());
+    framed(&mut announced, STRATUM_ONE);
+    announced.extend_from_slice(&[0, 0]); // no generation/service declaration
+    expected.extend_from_slice(&(announced.len() as u64).to_le_bytes());
+    expected.extend_from_slice(&announced);
+    expected.extend_from_slice(&[0, 0, 0]); // no native settlement/read/settlement failure
+    for _ in 0..3 {
+        // original bindings, decisions, unserved terms
+        expected.extend_from_slice(&0_u64.to_le_bytes());
+    }
+    assert_eq!(result.canonical_bytes(), expected);
+}
+
+fn caller_candidate_depths_reach_the_same_native_query_bounds_on_both_targets() {
+    use purrdf_core::TermValue;
+    use purrdf_retrieval::{
+        AdmissionEnvironment, CandidatePlan, compile_candidates, plan_candidates,
+    };
+    use purrdf_sparql_eval::{PfArity, PropertyFunctionRegistry, TermKind, TermPattern};
+    let mut registry = PropertyFunctionRegistry::new();
+    for stratum in [STRATUM_TWO, STRATUM_ONE] {
+        registry.register_ranked(
+            format!("{stratum}/producer"),
+            std::sync::Arc::new(registry::MockProducer {
+                arity: PfArity::new(1, 1),
+                mode: PfArity::new(1, 1).all_free_mode(),
+                rows: 20,
+                emitted: vec![vec![
+                    TermValue::iri("http://example.org/a"),
+                    TermValue::simple_literal("needle"),
+                ]],
+            }),
+            registry::ranked(
+                stratum,
+                vec![TermPattern::of_kind(TermKind::Literal)],
+                false,
+            ),
+        );
+    }
+    let depths = CandidateDepths::new([(iri(STRATUM_TWO), 2), (iri(STRATUM_ONE), 5)]).unwrap();
+    // These measurements would floor statistically-derived depths to one.
+    // The candidate route must retain the separately supplied five and two.
+    let statistics = registry::MockStatistics {
+        source: "candidate-fixture".to_owned(),
+        revision: "r1".to_owned(),
+        cardinalities: BTreeMap::from([(iri(STRATUM_ONE), 0), (iri(STRATUM_TWO), 0)]),
+    };
+    let planned =
+        plan_candidates(&[registry::lexical_term()], &depths, &registry, &statistics).unwrap();
+    let decoded = CandidatePlan::from_canonical_bytes(&planned.canonical_bytes()).unwrap();
+    assert_eq!(decoded.canonical_bytes(), planned.canonical_bytes());
+    let compiled = compile_candidates(
+        &decoded,
+        &AdmissionEnvironment {
+            registry: &registry,
+            statistics: &statistics,
+            fusion_profile: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        compiled
+            .units()
+            .iter()
+            .map(|unit| (&unit.stratum, unit.depth()))
+            .collect::<Vec<_>>(),
+        [(&iri(STRATUM_ONE), 5), (&iri(STRATUM_TWO), 2)]
+    );
+    assert!(compiled.units()[0].sparql().contains("LIMIT 6"));
+    assert!(compiled.units()[1].sparql().contains("LIMIT 3"));
+}
+
 purrdf_testkit::harness_main!(
+    a_candidate_union_is_the_same_set_ranks_and_bytes_on_both_targets,
+    caller_candidate_depths_reach_the_same_native_query_bounds_on_both_targets,
     a_collided_pair_fuses_to_the_same_order_on_both_targets,
     a_declared_candidate_domain_bounds_the_same_read_on_both_targets,
     a_fused_answer_is_the_same_rows_in_the_same_order_on_both_targets,

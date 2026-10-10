@@ -705,6 +705,22 @@ pub struct Plan {
     pub origin: PlanOrigin,
 }
 
+/// Native matching/placement output shared by the two depth policies.
+#[derive(Clone, Debug)]
+pub(crate) struct PlanParts {
+    pub(crate) request_terms: Vec<RequestTerm>,
+    pub(crate) producer_bindings: Vec<ProducerBinding>,
+    pub(crate) producer_decisions: Vec<ProducerDecision>,
+    pub(crate) unserved_terms: Vec<UnservedTerm>,
+    pub(crate) stratum_depths: FastMap<Iri, u32>,
+    pub(crate) stratum_derivations: BTreeMap<Iri, DepthInputs>,
+    pub(crate) declared_rows: BTreeMap<Iri, u64>,
+    pub(crate) statistics_snapshot: StatisticsSnapshot,
+    pub(crate) registry_instance_id: RegistryId,
+    pub(crate) registry_content_fingerprint: String,
+    pub(crate) origin: PlanOrigin,
+}
+
 impl PartialEq for Plan {
     /// Equality over the plan's content, which excludes [`Plan::origin`].
     ///
@@ -983,31 +999,43 @@ impl Plan {
     /// and no forged or stale entry can make it claim otherwise.
     #[must_use]
     pub fn unserved_evidence(&self) -> Vec<UnservedTerm> {
-        let mut served = vec![false; self.request_terms.len()];
-        for binding in &self.producer_bindings {
-            for index in &binding.request_terms {
-                if let Some(slot) = served.get_mut(*index as usize) {
-                    *slot = true;
-                }
+        unserved_evidence(
+            self.request_terms.len(),
+            &self.producer_bindings,
+            &self.unserved_terms,
+        )
+    }
+}
+
+/// Derive the same per-term loss for either planning policy.
+pub(crate) fn unserved_evidence(
+    request_terms: usize,
+    bindings: &[ProducerBinding],
+    unserved_terms: &[UnservedTerm],
+) -> Vec<UnservedTerm> {
+    let mut served = vec![false; request_terms];
+    for binding in bindings {
+        for index in &binding.request_terms {
+            if let Some(slot) = served.get_mut(*index as usize) {
+                *slot = true;
             }
         }
-        served
-            .iter()
-            .enumerate()
-            .filter(|(_, served)| !**served)
-            .map(|(index, _)| {
-                let request_term = u32::try_from(index).unwrap_or(u32::MAX);
-                UnservedTerm {
-                    request_term,
-                    reason: self
-                        .unserved_terms
-                        .iter()
-                        .find(|entry| entry.request_term == request_term)
-                        .map_or(UnservedReason::Unbound, |entry| entry.reason),
-                }
-            })
-            .collect()
     }
+    served
+        .iter()
+        .enumerate()
+        .filter(|(_, served)| !**served)
+        .map(|(index, _)| {
+            let request_term = u32::try_from(index).unwrap_or(u32::MAX);
+            UnservedTerm {
+                request_term,
+                reason: unserved_terms
+                    .iter()
+                    .find(|entry| entry.request_term == request_term)
+                    .map_or(UnservedReason::Unbound, |entry| entry.reason),
+            }
+        })
+        .collect()
 }
 
 /// The canonical discriminator byte a vector term's metric is written as.
@@ -1110,7 +1138,7 @@ fn unserved_from_tag(tag: u8) -> Result<UnservedReason, PlanError> {
 /// The list order is the plan's own and is not re-sorted here: the planner
 /// emits it ascending by request-term index, and the encoding reproduces the
 /// field rather than imposing an order the value does not have.
-fn write_unserved_terms(writer: &mut Writer, terms: &[UnservedTerm]) {
+pub(crate) fn write_unserved_terms(writer: &mut Writer, terms: &[UnservedTerm]) {
     writer.u64(terms.len() as u64);
     for term in terms {
         writer.u32(term.request_term);
@@ -1124,7 +1152,7 @@ fn write_unserved_terms(writer: &mut Writer, terms: &[UnservedTerm]) {
 /// count is untrusted input, and reserving what a forged length asks for would
 /// let a short, malformed plan demand an arbitrary allocation before a single
 /// element is read. Every decoder in this module caps the same way.
-fn read_unserved_terms(reader: &mut Reader<'_>) -> Result<Vec<UnservedTerm>, PlanError> {
+pub(crate) fn read_unserved_terms(reader: &mut Reader<'_>) -> Result<Vec<UnservedTerm>, PlanError> {
     let count = reader.count()?;
     let mut terms = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
@@ -1195,7 +1223,7 @@ fn write_iri(writer: &mut Writer, iri: &Iri) {
 /// of a plan: a plan is untrusted input, and an [`Iri`] that skipped validation
 /// would carry span offsets that do not describe its own bytes. `what` names
 /// the field, so a refusal says which IRI was malformed.
-fn read_iri(reader: &mut Reader<'_>, what: &'static str) -> Result<Iri, PlanError> {
+pub(crate) fn read_iri(reader: &mut Reader<'_>, what: &'static str) -> Result<Iri, PlanError> {
     let text = reader.string(what)?;
     Iri::parse(&text)
 }
@@ -1396,7 +1424,7 @@ fn read_request_term(reader: &mut Reader<'_>) -> Result<RequestTerm, PlanError> 
 ///
 /// The order is identity-bearing — producer bindings index into it — so it is
 /// never sorted.
-fn write_request_terms(writer: &mut Writer, terms: &[RequestTerm]) {
+pub(crate) fn write_request_terms(writer: &mut Writer, terms: &[RequestTerm]) {
     writer.u64(terms.len() as u64);
     for term in terms {
         write_request_term(writer, term);
@@ -1404,7 +1432,7 @@ fn write_request_terms(writer: &mut Writer, terms: &[RequestTerm]) {
 }
 
 /// Read the request's terms, preserving the encoded order.
-fn read_request_terms(reader: &mut Reader<'_>) -> Result<Vec<RequestTerm>, PlanError> {
+pub(crate) fn read_request_terms(reader: &mut Reader<'_>) -> Result<Vec<RequestTerm>, PlanError> {
     let count = reader.count()?;
     let mut terms = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
@@ -1419,7 +1447,7 @@ fn read_request_terms(reader: &mut Reader<'_>) -> Result<Vec<RequestTerm>, PlanE
 /// The producer is written as a plain framed string rather than through
 /// [`write_iri`] because a plan carries the registry's key byte-exactly — what
 /// the host registered under, not a re-canonicalized spelling of it.
-fn write_bindings(writer: &mut Writer, bindings: &[ProducerBinding]) {
+pub(crate) fn write_bindings(writer: &mut Writer, bindings: &[ProducerBinding]) {
     writer.u64(bindings.len() as u64);
     for binding in bindings {
         writer.string(&binding.producer);
@@ -1436,7 +1464,7 @@ fn write_bindings(writer: &mut Writer, bindings: &[ProducerBinding]) {
 /// The indices are read as-is. Whether they address the plan's own request is
 /// not this decoder's question — it is a semantic claim, checked once at the
 /// admission waist against the registry the plan will actually run on.
-fn read_bindings(reader: &mut Reader<'_>) -> Result<Vec<ProducerBinding>, PlanError> {
+pub(crate) fn read_bindings(reader: &mut Reader<'_>) -> Result<Vec<ProducerBinding>, PlanError> {
     let count = reader.count()?;
     let mut bindings = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
@@ -1462,7 +1490,7 @@ fn read_bindings(reader: &mut Reader<'_>) -> Result<Vec<ProducerBinding>, PlanEr
 /// Rejections are encoded beside selections rather than dropped: they are the
 /// plan's account of why the answer is the shape it is, and an encoding that
 /// kept only the selections would make two different plans hash alike.
-fn write_decisions(writer: &mut Writer, decisions: &[ProducerDecision]) {
+pub(crate) fn write_decisions(writer: &mut Writer, decisions: &[ProducerDecision]) {
     writer.u64(decisions.len() as u64);
     for decision in decisions {
         match decision {
@@ -1481,7 +1509,7 @@ fn write_decisions(writer: &mut Writer, decisions: &[ProducerDecision]) {
 }
 
 /// Read the producer decisions written by [`write_decisions`].
-fn read_decisions(reader: &mut Reader<'_>) -> Result<Vec<ProducerDecision>, PlanError> {
+pub(crate) fn read_decisions(reader: &mut Reader<'_>) -> Result<Vec<ProducerDecision>, PlanError> {
     let count = reader.count()?;
     let mut decisions = Vec::with_capacity(count.min(1024));
     for _ in 0..count {
@@ -1515,7 +1543,7 @@ fn read_decisions(reader: &mut Reader<'_>) -> Result<Vec<ProducerDecision>, Plan
 /// iteration order would give one plan many identities. Sorting by the
 /// stratum's canonical text makes the bytes — and therefore the plan id — a
 /// pure function of the entries, on every target and in every process.
-fn write_depths(writer: &mut Writer, depths: &FastMap<Iri, u32>) {
+pub(crate) fn write_depths(writer: &mut Writer, depths: &FastMap<Iri, u32>) {
     let mut entries: Vec<(&Iri, u32)> = depths.iter().map(|(key, value)| (key, *value)).collect();
     entries.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
     writer.u64(entries.len() as u64);
@@ -1611,7 +1639,7 @@ fn require_ascending_terms(
 /// of one plan as the section has permutations, each digesting to that plan's
 /// single id. A repeated stratum is refused for a sharper reason still: the map
 /// would silently keep whichever depth arrived last.
-fn read_depths(reader: &mut Reader<'_>) -> Result<FastMap<Iri, u32>, PlanError> {
+pub(crate) fn read_depths(reader: &mut Reader<'_>) -> Result<FastMap<Iri, u32>, PlanError> {
     let count = reader.count()?;
     let mut depths = FastMap::with_capacity_and_hasher(count.min(1024), FastHasher::default());
     let mut previous: Option<Iri> = None;
@@ -1812,7 +1840,7 @@ fn read_derivations(reader: &mut Reader<'_>) -> Result<BTreeMap<Iri, DepthInputs
 /// and its ascending twin would share an identity and compare unequal. The
 /// encoder writes the sequence it is given, exactly as it does for
 /// [`write_derivations`]'s [`BTreeMap`].
-fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
+pub(crate) fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
     writer.string(&snapshot.source);
     writer.string(&snapshot.revision);
     writer.u64(snapshot.entries.len() as u64);
@@ -1844,7 +1872,7 @@ fn write_statistics(writer: &mut Writer, snapshot: &StatisticsSnapshot) {
 ///
 /// Each row's selectivity-term run is held to that same ascending law, by
 /// [`require_ascending_terms`], for the same reason and one nesting level in.
-fn read_statistics(reader: &mut Reader<'_>) -> Result<StatisticsSnapshot, PlanError> {
+pub(crate) fn read_statistics(reader: &mut Reader<'_>) -> Result<StatisticsSnapshot, PlanError> {
     let source = reader.string("statistics source")?;
     let revision = reader.string("statistics revision")?;
     let count = reader.count()?;

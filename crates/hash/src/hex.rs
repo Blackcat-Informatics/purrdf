@@ -557,6 +557,42 @@ fn first_invalid<const ANY_CASE: bool>(digits: &[u8]) -> HexError {
         })
 }
 
+/// Validate either-case hex without heap allocation and return its byte length.
+pub fn decoded_len(text: &str) -> Result<usize, HexError> {
+    validated_len::<true>(text)
+}
+
+fn validated_len<const ANY_CASE: bool>(text: &str) -> Result<usize, HexError> {
+    let digits = text.as_bytes();
+    if !digits.len().is_multiple_of(2) {
+        return Err(HexError::OddLength { len: digits.len() });
+    }
+    let mut output = [0_u8; LANES / 2];
+    for chunk in digits.chunks(LANES) {
+        if !decode_into::<ANY_CASE>(chunk, &mut output[..chunk.len() / 2]) {
+            return Err(first_invalid::<ANY_CASE>(digits));
+        }
+    }
+    Ok(digits.len() / 2)
+}
+
+/// Decode into caller-owned storage, without allocating or growing it.
+/// Lexical/output errors leave the destination unchanged.
+pub fn decode_to_slice(text: &str, output: &mut [u8]) -> Result<usize, HexError> {
+    let needed = decoded_len(text)?;
+    if output.len() < needed {
+        return Err(HexError::OutputTooShort {
+            needed,
+            available: output.len(),
+        });
+    }
+    if decode_into::<true>(text.as_bytes(), &mut output[..needed]) {
+        Ok(needed)
+    } else {
+        Err(first_invalid::<true>(text.as_bytes()))
+    }
+}
+
 #[inline]
 fn decode_vec<const ANY_CASE: bool>(text: &str) -> Result<Vec<u8>, HexError> {
     let digits = text.as_bytes();

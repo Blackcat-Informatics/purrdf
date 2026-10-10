@@ -287,6 +287,7 @@
 // re-export keeps the crate's public module path unchanged for every existing
 // caller.
 pub use purrdf_core::binding_pattern;
+pub mod admission;
 pub mod cache;
 pub mod chase;
 pub mod clause;

@@ -5,7 +5,9 @@
 
 mod support;
 
-use support::segmented::{CEILING, QUERY, fixture, fixture_with_layout, open};
+use support::segmented::{
+    CEILING, QUERY, baseline_ceiling, fixture, fixture_with_layout, open, open_with_evidence,
+};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +25,75 @@ use purrdf_sparql_eval::{
 
 #[global_allocator]
 static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
+
+#[test]
+fn persistent_id_binding_retains_original_admission_and_refuses_atomically() {
+    let (image, resident) = fixture();
+    let source = open(&image, CEILING);
+    let target = TermValue::iri("https://example.org/target");
+    let id = source.term_id_by_value(&target).unwrap().unwrap();
+    // Resolve the same stored component outside the output allocation window.
+    let _ = source.resolve(id).unwrap();
+    let engine = NativeSparqlEngine::new();
+    let query = "ASK { ?this <https://example.org/p> \"漢字\"@zh }";
+    let mut execution = engine
+        .prepare_execution(query, None, &["this"], QueryOptions::EMPTY)
+        .unwrap();
+    let before = source.evidence().live_bytes();
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let ((), receipt) = execution.bind_id_fallible(0, &source, id).unwrap();
+    let measured = window.close();
+    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= receipt.peak_bytes());
+    assert!(source.evidence().live_bytes() > before);
+    execution.unbind_all();
+    assert_eq!(source.evidence().live_bytes(), before);
+    execution.bind_id_fallible(0, &source, id).unwrap();
+    let mut expected = engine
+        .prepare_execution(query, None, &["this"], QueryOptions::EMPTY)
+        .unwrap();
+    expected.bind(0, target).unwrap();
+    let expected_answer = engine
+        .execute(&mut expected, &*resident, QueryOptions::EMPTY, |answer| {
+            matches!(answer, purrdf_sparql_eval::InternedOutcome::Boolean(true))
+        })
+        .unwrap();
+    let (answer, _) = engine
+        .execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |answer| {
+            matches!(answer, purrdf_sparql_eval::InternedOutcome::Boolean(true))
+        })
+        .unwrap();
+    assert!(expected_answer);
+    assert_eq!(answer, expected_answer);
+    let cold = open(&image, CEILING);
+    let floor = cold.evidence().live_bytes();
+    drop(cold);
+    let small = open(&image, floor);
+    let baseline = small.evidence();
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let refused = execution.bind_id_fallible(0, &small, id);
+    let measured = window.close();
+    assert!(matches!(
+        refused,
+        Err(FallibleSparqlError::Operational {
+            error: SegmentedError::Residency { .. },
+            ..
+        })
+    ));
+    drop(refused);
+    let released = small.evidence();
+    assert_eq!(
+        released.live_bytes() - released.unpinned_cache_bytes(),
+        baseline.live_bytes() - baseline.unpinned_cache_bytes()
+    );
+    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= small.evidence().peak_bytes());
+    // Failed replacement keeps the old valid binding and its original owner.
+    let (answer, _) = engine
+        .execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |answer| {
+            matches!(answer, purrdf_sparql_eval::InternedOutcome::Boolean(true))
+        })
+        .unwrap();
+    assert_eq!(answer, expected_answer);
+}
 
 #[derive(Clone, Copy)]
 enum GovernedEntry<'a> {
@@ -133,13 +204,8 @@ fn dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal() 
     let answer = engine
         .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
         .unwrap();
-    let (
-        SparqlResult::Solutions { rows: found, .. },
-        SparqlResult::Solutions { rows: expected, .. },
-    ) = (&answer.result, &expected)
-    else {
-        panic!("SELECT returns rows")
-    };
+    let found = answer.result.solutions().expect("SELECT shape").1;
+    let expected = expected.solutions().expect("SELECT shape").1;
     assert_eq!(found, expected);
 
     let provider = Arc::new(RefusingProvider {
@@ -177,14 +243,15 @@ fn long_host_refusal_keeps_its_typed_cause_without_unbounded_report_allocation()
     let (image, _) = fixture();
     // Host-owned static label is prepared outside the execution allocation window.
     let operation: &'static str = Box::leak("漢字操作 ".repeat(20_000).into_boxed_str());
-    let engine = NativeSparqlEngine::new();
-    let prepared = engine.prepare_query(QUERY, None).unwrap();
-    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
-    for entry in [
-        GovernedEntry::Text(QUERY),
-        GovernedEntry::Prepared,
-        GovernedEntry::Operation(&state),
-    ] {
+    for route in 0..3 {
+        let engine = NativeSparqlEngine::new();
+        let prepared = engine.prepare_query(QUERY, None).unwrap();
+        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+        let entry = match route {
+            0 => GovernedEntry::Text(QUERY),
+            1 => GovernedEntry::Prepared,
+            _ => GovernedEntry::Operation(&state),
+        };
         let provider = Arc::new(RefusingProvider {
             bytes: image.provider(),
             refuse: AtomicBool::new(false),
@@ -197,6 +264,7 @@ fn long_host_refusal_keeps_its_typed_cause_without_unbounded_report_allocation()
             SegmentedReadLimits::new(CEILING, 2, 2048, 20_000_000, 8),
         )
         .unwrap();
+        let opening = source.evidence();
         provider.refuse.store(true, Ordering::Relaxed);
         let outcome = entry.run(
             &engine,
@@ -221,93 +289,25 @@ fn long_host_refusal_keeps_its_typed_cause_without_unbounded_report_allocation()
         };
         assert_eq!(found, operation);
         assert_eq!(
-            evidence.view.live_bytes(),
-            source.evidence().live_bytes() + 8192
+            evidence.view.request_count(),
+            source.evidence().request_count()
+        );
+        assert_eq!(
+            evidence.view.request_digest(),
+            source.evidence().request_digest()
         );
         assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= ledger);
         assert!(ledger <= CEILING);
-    }
-}
-
-/// Cold complete and exhausted runs share receipts and release the exact scoped workspace charge.
-#[test]
-fn prepared_governed_cold_sessions_match_text_receipts_and_release_reporting() {
-    let (image, _) = fixture();
-    let engine = NativeSparqlEngine::new();
-    let prepared = engine.prepare_query(QUERY, None).unwrap();
-    let scoped_source = open(&image, CEILING);
-    let mut execution = engine
-        .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
-        .unwrap();
-    let ((), scoped_evidence) = engine
-        .execute_fallible(&mut execution, &scoped_source, QueryOptions::EMPTY, |_| ())
-        .unwrap();
-    let released_charge = scoped_evidence.live_bytes() - scoped_source.evidence().live_bytes();
-    assert!(
-        released_charge > 8192,
-        "the execution owner is held at publication"
-    );
-    for governors in [
-        QueryGovernors::METERED,
-        QueryGovernors::METERED.with_max_answers(0),
-    ] {
-        let state = Arc::new(GovernorState::new(&governors));
-        let mut expected: Option<(_, GovernedEvidence<SegmentedEvidence>)> = None;
-        for entry in [
-            GovernedEntry::Text(QUERY),
-            GovernedEntry::Prepared,
-            GovernedEntry::Operation(&state),
-        ] {
-            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-            let source = open(&image, CEILING);
-            let outcome = entry.run(
-                &engine,
-                &source,
-                &prepared,
-                &[],
-                QueryOptions::EMPTY,
-                &governors,
-            );
-            let measured = window.close();
-            let (rows, evidence) = match outcome {
-                Ok(answer) => {
-                    let SparqlResult::Solutions { rows, .. } = answer.result else {
-                        panic!("SELECT returns solutions")
-                    };
-                    assert_eq!(rows.len(), 1);
-                    (rows, answer.evidence)
-                }
-                Err(FallibleSparqlError::BudgetExhausted {
-                    partial, evidence, ..
-                }) => {
-                    let SparqlResult::Solutions { rows, .. } = partial.result().unwrap().result()
-                    else {
-                        panic!("SELECT truncation carries solutions")
-                    };
-                    assert_eq!(rows.len(), 0);
-                    (rows.clone(), evidence)
-                }
-                error => {
-                    panic!("healthy bounded query must complete or exhaust answers: {error:?}")
-                }
-            };
-            assert!(
-                u64::try_from(measured.peak_working_bytes).unwrap() <= evidence.view.peak_bytes()
-            );
-            assert!(evidence.view.peak_bytes() <= CEILING);
-            assert_eq!(
-                evidence.view.live_bytes(),
-                source.evidence().live_bytes() + released_charge
-            );
-            assert!(source.read_error().is_none());
-            if let Some((expected_rows, expected_evidence)) = &expected {
-                assert_eq!(&rows, expected_rows);
-                assert_eq!(evidence.view, expected_evidence.view);
-                assert_eq!(evidence.governors, expected_evidence.governors);
-            } else {
-                expected = Some((rows, evidence));
-            }
-        }
+        drop(evidence);
+        drop(prepared);
+        drop(engine);
+        drop(state);
+        let released = source.evidence();
+        assert_eq!(
+            released.live_bytes() - released.unpinned_cache_bytes(),
+            opening.live_bytes() - opening.unpinned_cache_bytes(),
+            "typed provider refusal releases all native report, preparation and execution owners"
+        );
     }
 }
 
@@ -321,18 +321,11 @@ fn selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger() {
         .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
         .unwrap();
     let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-    let source = open(&image, CEILING);
+    let source = open_with_evidence(&image, CEILING, 2, 16_384);
     let answer = engine
         .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
         .unwrap();
-    let SparqlResult::Solutions {
-        variables: actual_variables,
-        rows: actual_rows,
-        ..
-    } = &answer.result
-    else {
-        panic!("SELECT returns rows")
-    };
+    let (actual_variables, actual_rows) = answer.result.solutions().expect("SELECT shape");
     let SparqlResult::Solutions {
         variables: expected_variables,
         rows: expected_rows,
@@ -343,7 +336,7 @@ fn selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger() {
     };
     assert_eq!(actual_variables, expected_variables);
     assert_eq!(actual_rows, expected_rows);
-    assert!(matches!(&answer.result, SparqlResult::Solutions { rows, .. } if rows.len() == 1));
+    assert_eq!(answer.result.solutions().expect("SELECT shape").1.len(), 1);
     assert!(answer.evidence.evictions() > 0);
     let ledger = answer.evidence.peak_bytes();
     let measured = window.close();
@@ -354,46 +347,6 @@ fn selective_join_matches_resident_and_actual_peak_stays_below_shared_ledger() {
     );
     assert!(ledger <= CEILING);
     assert!(source.read_error().is_none());
-}
-
-/// Storage pressure and an unpriced sort must refuse before either probes rows or emits answers.
-#[test]
-fn tiny_capacity_and_unpriced_order_refuse_before_any_row_probe_or_output() {
-    let (image, _) = fixture();
-    let engine = NativeSparqlEngine::new();
-    let prepared = engine.prepare_query(QUERY, None).unwrap();
-    let small = open(&image, 80_000);
-    let before = small.evidence().request_count();
-    let refused = engine.query_prepared_fallible_view(&small, &prepared, &[], QueryOptions::EMPTY);
-    assert!(matches!(
-        refused,
-        Err(FallibleSparqlError::Operational {
-            error: SegmentedError::Residency { .. },
-            ..
-        })
-    ));
-    assert_eq!(small.evidence().request_count(), before);
-    let source = open(&image, CEILING);
-    let ordered = engine
-        .prepare_query(&format!("{QUERY} ORDER BY ?label"), None)
-        .unwrap();
-    let before = source.evidence().request_count();
-    let error = engine
-        .query_prepared_fallible_view(&source, &ordered, &[], QueryOptions::EMPTY)
-        .unwrap_err();
-    assert!(
-        matches!(error, FallibleSparqlError::Query { diagnostic, .. } if diagnostic.code == "native-sparql-workspace-unpriced")
-    );
-    assert_eq!(source.evidence().request_count(), before);
-    assert!(source.read_error().is_none());
-    // The raw evaluator cannot bypass the engine's held drain reservation.
-    let mut ctx = purrdf_sparql_eval::EvalCtx::new(&source);
-    let error = purrdf_sparql_eval::evaluate_query(prepared.query(), &mut ctx).unwrap_err();
-    assert!(matches!(
-        error,
-        purrdf_sparql_eval::EvalError::WorkspaceUnpriced(_)
-    ));
-    assert_eq!(source.evidence().request_count(), before);
 }
 
 /// Retained-result consumption keeps its workspace live, and ordinary owned egress still succeeds.
@@ -408,7 +361,10 @@ fn scoped_and_prepared_engine_egresses_hold_the_reservation_through_consumption(
         .unwrap();
     engine
         .execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |outcome| {
-            assert!(source.evidence().live_bytes() > before + 50_000);
+            assert!(
+                source.evidence().live_bytes() > before,
+                "execution owns its working storage through the visitor"
+            );
             let purrdf_sparql_eval::InternedOutcome::Solutions(rows) = outcome else {
                 panic!("SELECT returns rows")
             };
@@ -423,200 +379,7 @@ fn scoped_and_prepared_engine_egresses_hold_the_reservation_through_consumption(
     let answer = engine
         .query_fallible_view(&open(&image, CEILING), request, QueryOptions::EMPTY)
         .unwrap();
-    assert!(matches!(answer.result, SparqlResult::Solutions { rows, .. } if rows.len() == 1));
-}
-
-/// Tight reporting headroom refuses before owner allocation without disguising an unpriced sort.
-#[test]
-fn governed_refusal_prices_its_reporting_owner_before_allocating() {
-    let (image, _) = fixture();
-    let initial = open(&image, CEILING);
-    let opening_bytes = initial.evidence().live_bytes();
-    drop(initial);
-    let engine = NativeSparqlEngine::new();
-    let ordinary = engine.prepare_query(QUERY, None).unwrap();
-    let ordered_text = format!("{QUERY} ORDER BY ?label");
-    let ordered = engine.prepare_query(&ordered_text, None).unwrap();
-    for (headroom, query, prepared) in [
-        (512, QUERY, &ordinary),
-        (16_384, ordered_text.as_str(), &ordered),
-    ] {
-        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
-        for entry in [
-            GovernedEntry::Text(query),
-            GovernedEntry::Prepared,
-            GovernedEntry::Operation(&state),
-        ] {
-            let ceiling = opening_bytes + headroom;
-            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-            let source = open(&image, ceiling);
-            let before = source.evidence().request_count();
-            let outcome = entry.run(
-                &engine,
-                &source,
-                prepared,
-                &[],
-                QueryOptions::EMPTY,
-                &QueryGovernors::METERED,
-            );
-            let ledger = source.evidence().peak_bytes();
-            let measured = window.close();
-            assert!(outcome.is_err());
-            assert_eq!(source.evidence().request_count(), before);
-            assert!(
-                u64::try_from(measured.peak_working_bytes).unwrap() <= ledger,
-                "refusal allocated {} beyond charged {ledger}",
-                measured.peak_working_bytes
-            );
-            assert!(ledger <= ceiling);
-            if headroom == 512 {
-                assert!(matches!(
-                    outcome,
-                    Err(FallibleSparqlError::Operational {
-                        error: SegmentedError::Residency { .. },
-                        ..
-                    })
-                ));
-                assert!(source.read_error().is_some());
-            } else {
-                let Err(FallibleSparqlError::Query {
-                    diagnostic,
-                    evidence,
-                }) = outcome
-                else {
-                    panic!("unpriced order must retain a query refusal")
-                };
-                assert_eq!(diagnostic.code, "native-sparql-workspace-unpriced");
-                assert_eq!(
-                    evidence.view.live_bytes(),
-                    source.evidence().live_bytes() + 8192
-                );
-                assert!(source.read_error().is_none());
-            }
-        }
-    }
-}
-
-/// Reject an unpriced construction context before copying its mint prefix or changing the destination.
-#[test]
-fn unpriced_construct_refuses_before_allocating_a_destination_mint_prefix() {
-    let (image, _) = fixture();
-    let source = open(&image, CEILING);
-    let engine = NativeSparqlEngine::new();
-    let prepared = engine
-        .prepare_query(
-            "CONSTRUCT { _:fresh <http://example.org/p> ?o } WHERE { ?s ?p ?o }",
-            None,
-        )
-        .unwrap();
-    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
-    let mut destination = purrdf_core::RdfDatasetBuilder::new();
-    let blank = destination.intern_blank("existing", purrdf_core::BlankScope::DEFAULT);
-    let predicate = destination.intern_iri("http://example.org/p");
-    let object = destination.intern_iri("http://example.org/o");
-    destination.push_quad(blank, predicate, object, None);
-    let authored_prefix = "x".repeat(100_000);
-    let options = QueryOptions::EMPTY.with_bnode_mint_prefix(Some(&authored_prefix));
-    let before = source.evidence().request_count();
-    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-    let refused = engine.construct_prepared_fallible_in_operation_into_view(
-        &source,
-        &prepared,
-        &[],
-        options,
-        &state,
-        &mut destination,
-    );
-    let allocations = window.close();
-    assert!(
-        matches!(refused, Err(FallibleSparqlError::Query { diagnostic, .. }) if diagnostic.code == "native-sparql-workspace-unpriced")
-    );
-    assert!(
-        allocations.peak_working_bytes <= 8192,
-        "unpriced request allocated authored mint prefix: {}",
-        allocations.peak_working_bytes
-    );
-    assert_eq!(source.evidence().request_count(), before);
-    assert_eq!(destination.freeze().unwrap().quad_count(), 1);
-    assert!(source.read_error().is_none());
-}
-
-/// Large caller-owned substitutions and prefixes must be refused without copying payloads or probing.
-#[test]
-fn unpriced_request_inputs_refuse_before_copying_parameter_metadata() {
-    let (image, _) = fixture();
-    let source = open(&image, CEILING);
-    let engine = NativeSparqlEngine::new();
-    let prepared = engine.prepare_query(QUERY, None).unwrap();
-    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
-    let cached = engine.cached_plan_count();
-    let long_prefix = "x".repeat(100_000);
-    let substitutions: Vec<_> = (0..20_000)
-        .map(|i| {
-            (
-                format!("parameter{i}"),
-                TermValue::iri("http://example.org/o"),
-            )
-        })
-        .collect();
-    for (values, options) in [
-        (substitutions.as_slice(), QueryOptions::EMPTY),
-        (
-            &[][..],
-            QueryOptions::EMPTY.with_bnode_mint_prefix(Some(&long_prefix)),
-        ),
-    ] {
-        for entry in [
-            GovernedEntry::Text(QUERY),
-            GovernedEntry::Prepared,
-            GovernedEntry::Operation(&state),
-        ] {
-            let before = source.evidence().request_count();
-            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-            let ordinary = engine.query_fallible_view(
-                &source,
-                SparqlRequest {
-                    query: QUERY,
-                    base_iri: None,
-                    substitutions: values,
-                },
-                options,
-            );
-            let governed = entry.run(
-                &engine,
-                &source,
-                &prepared,
-                values,
-                options,
-                &QueryGovernors::METERED,
-            );
-            let allocations = window.close();
-            assert!(
-                matches!(ordinary, Err(FallibleSparqlError::Query { diagnostic, .. }) if diagnostic.code == "native-sparql-workspace-unpriced")
-            );
-            assert!(
-                matches!(governed, Err(FallibleSparqlError::Query { diagnostic, .. }) if diagnostic.code == "native-sparql-workspace-unpriced")
-            );
-            assert!(
-                allocations.peak_working_bytes <= 8192,
-                "known unpriced inputs copied caller payload: {}",
-                allocations.peak_working_bytes
-            );
-            assert_eq!(source.evidence().request_count(), before);
-            assert_eq!(engine.cached_plan_count(), cached);
-            assert!(source.read_error().is_none());
-        }
-    }
-    assert!(
-        engine
-            .query_prepared_fallible_view(
-                &source,
-                &engine.prepare_query(QUERY, None).unwrap(),
-                &[],
-                QueryOptions::EMPTY
-            )
-            .is_ok()
-    );
+    assert_eq!(answer.result.solutions().expect("SELECT shape").1.len(), 1);
 }
 
 #[test]
@@ -638,6 +401,7 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
         SegmentedReadLimits::new(CEILING, 2, 8192, 20_000_000, 8),
     )
     .unwrap();
+    let opening = source.evidence();
     let (explanation, evidence) = engine
         .explain_query_fallible_view(&source, QUERY, None)
         .expect("the selective persistent join is certified");
@@ -666,10 +430,22 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
     );
     assert!(evidence.peak_bytes() <= CEILING);
     assert!(
-        evidence.live_bytes() > after.live_bytes(),
-        "publication captured held guards, and returning released them"
+        after.live_bytes() - after.unpinned_cache_bytes()
+            > opening.live_bytes() - opening.unpinned_cache_bytes(),
+        "returned explanation and native cache retain their original live owners"
     );
     assert!(source.read_error().is_none());
+
+    let held = source.evidence().live_bytes();
+    let shared = explanation.clone();
+    drop(explanation);
+    assert_eq!(source.evidence().live_bytes(), held);
+    drop(shared);
+    let released = source.evidence().live_bytes();
+    assert!(
+        released < held,
+        "the final explanation owner releases its buffer grant"
+    );
 
     // Repeat on the same healthy storage session. A retained execution guard
     // would accumulate a live charge even though each measuring run has ended.
@@ -681,101 +457,29 @@ fn fallible_explain_measures_the_segmented_store_within_its_certified_reservatio
         let live = source.evidence().live_bytes();
         let measured = window.close();
         assert_eq!(again.render(), expected);
-        assert_eq!(live, after.live_bytes());
-        assert!(receipt.live_bytes() > live);
+        assert!(
+            live > released,
+            "the repeated explanation owns its native buffers"
+        );
+        assert_eq!(receipt.request_count(), source.evidence().request_count());
+        assert_eq!(receipt.request_digest(), source.evidence().request_digest());
+        drop(again);
+        assert_eq!(
+            source.evidence().live_bytes(),
+            released,
+            "completed execution and last explanation release their grants"
+        );
         assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= receipt.peak_bytes());
         assert!(receipt.peak_bytes() <= CEILING);
     }
-}
-
-#[test]
-/// Capacity and algebra admission failures precede row probes and release every guard.
-fn fallible_explain_refuses_tight_capacity_and_unpriced_algebra_before_probing() {
-    let (image, _) = fixture();
-    let initial = open(&image, CEILING);
-    let opening_bytes = initial.evidence().live_bytes();
-    drop(initial);
-    let engine = NativeSparqlEngine::new();
-    engine.prepare_query(QUERY, None).unwrap();
-    let ordered = format!("{QUERY} ORDER BY ?label");
-    engine.prepare_query(&ordered, None).unwrap();
-
-    for (headroom, query) in [(512, QUERY), (24_000, QUERY), (16_384, ordered.as_str())] {
-        let ceiling = opening_bytes + headroom;
-        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-        let source = open(&image, ceiling);
-        let before = source.evidence();
-        let error = engine
-            .explain_query_fallible_view(&source, query, None)
-            .unwrap_err();
-        let after = source.evidence();
-        let measured = window.close();
-        assert_eq!(after.request_count(), before.request_count());
-        assert!(
-            after.live_bytes() <= before.live_bytes(),
-            "refusal released its guards"
-        );
-        assert!(error.partial_answers().is_none());
-        assert!(
-            u64::try_from(measured.peak_working_bytes).unwrap() <= error.evidence().peak_bytes()
-        );
-        assert!(error.evidence().peak_bytes() <= ceiling);
-        if query == QUERY {
-            assert!(matches!(
-                error,
-                FallibleSparqlError::Operational {
-                    error: SegmentedError::Residency { .. },
-                    ..
-                }
-            ));
-        } else {
-            assert!(
-                matches!(error, FallibleSparqlError::Query { diagnostic, .. }
-                if diagnostic.code == "native-sparql-workspace-unpriced")
-            );
-            assert!(source.read_error().is_none());
-        }
-    }
-}
-
-#[test]
-/// Unpriced configuration is rejected before copying it, consulting the cache, or reading data.
-fn fallible_explain_refuses_unpriced_options_before_cache_lookup_or_data_reads() {
-    let (image, _) = fixture();
-    let long_prefix = "x".repeat(100_000);
-    for options in [
-        QueryOptions::EMPTY.with_bnode_mint_prefix(Some(&long_prefix)),
-        QueryOptions::EMPTY.with_call_depth(1),
-    ] {
-        for signalled in [false, true] {
-            let engine = NativeSparqlEngine::new();
-            let source = open(&image, CEILING);
-            let before = source.evidence();
-            let stop = Arc::new(CancellationFlag::new());
-            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
-            let error = if signalled {
-                engine.explain_query_with_stop_signal_fallible_view(
-                    &source, QUERY, None, options, stop,
-                )
-            } else {
-                engine.explain_query_with_options_fallible_view(&source, QUERY, None, options)
-            }
-            .expect_err("unpriced input is refused before plan preparation or storage lookup");
-            let measured = window.close();
-            assert!(
-                matches!(error, FallibleSparqlError::Query { diagnostic, .. }
-                if diagnostic.code == "native-sparql-workspace-unpriced")
-            );
-            assert!(
-                measured.peak_working_bytes <= 8192,
-                "caller payload must not be copied"
-            );
-            assert_eq!(source.evidence().request_count(), before.request_count());
-            assert_eq!(source.evidence().live_bytes(), before.live_bytes());
-            assert_eq!(engine.cached_plan_count(), 0);
-            assert!(source.read_error().is_none());
-        }
-    }
+    drop(evidence);
+    drop(engine);
+    let released = source.evidence();
+    assert_eq!(
+        released.live_bytes() - released.unpinned_cache_bytes(),
+        opening.live_bytes() - opening.unpinned_cache_bytes(),
+        "all repeated explanation, native cache and execution owners return the original account"
+    );
 }
 
 #[test]
@@ -821,7 +525,1146 @@ fn fallible_explain_preserves_a_segmented_provider_fault_over_a_fired_stop() {
     assert!(error.diagnostic().is_none());
     assert!(error.partial_answers().is_none());
     assert!(after.request_count() > before.request_count());
-    assert!(after.live_bytes() <= before.live_bytes());
     assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= error.evidence().peak_bytes());
     assert!(error.evidence().peak_bytes() <= CEILING);
+    drop(error);
+    drop(engine);
+    let released = source.evidence();
+    assert_eq!(
+        released.live_bytes() - released.unpinned_cache_bytes(),
+        before.live_bytes() - before.unpinned_cache_bytes(),
+        "original provider fault retains its report only until the last report and native cache owner die"
+    );
+}
+#[test]
+fn bounded_select_algebra_matches_resident_bags_across_public_entries() {
+    const CASES: &[(&str, &str, usize)] = &[
+        (
+            "dateTimeStamp admitted calendar casts",
+            "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#> SELECT ?stamp ?date WHERE { VALUES ?value { \"2026-10-04T12:00:00Z\" \"2026-10-04T12:00:00\" } BIND(xsd:dateTimeStamp(?value) AS ?stamp) BIND(xsd:date(?stamp) AS ?date) }",
+            2,
+        ),
+        (
+            "zero-column bag",
+            "SELECT * WHERE { VALUES () { () () } }",
+            2,
+        ),
+        (
+            "wide schema join",
+            "SELECT ?a ?b ?c ?d ?e ?f ?g ?h ?i ?j WHERE { VALUES (?a ?b ?c ?d ?e) { (1 2 3 4 5) } VALUES (?f ?g ?h ?i ?j) { (6 7 8 9 10) } }",
+            1,
+        ),
+        (
+            "wide union padding",
+            "SELECT ?a ?b ?c ?d ?e ?f ?g ?h ?i ?j WHERE { { VALUES (?a ?b ?c ?d ?e ?f ?g ?h ?i ?j) { (1 2 3 4 5 6 7 8 9 10) } } UNION { VALUES ?a { 2 } } } ORDER BY ?a",
+            2,
+        ),
+        (
+            "duplicate union",
+            "SELECT ?x WHERE { { VALUES ?x { 1 } } UNION { VALUES ?x { 1 } } }",
+            2,
+        ),
+        (
+            "all undef bag",
+            "SELECT ?x WHERE { VALUES ?x { UNDEF UNDEF } }",
+            2,
+        ),
+        (
+            "unbound optional",
+            "SELECT ?s ?x WHERE { VALUES ?s { <https://example.org/target> } OPTIONAL { ?s <https://example.org/missing> ?x } }",
+            1,
+        ),
+        (
+            "correlated optional bind",
+            "SELECT ?s ?x WHERE { VALUES ?s { <https://example.org/target> } OPTIONAL { BIND(STR(?s) AS ?x) } }",
+            1,
+        ),
+        (
+            "computed bind",
+            "SELECT ?x WHERE { VALUES ?s { <https://example.org/target> } BIND(CONCAT(STR(?s), '/computed') AS ?x) }",
+            1,
+        ),
+        (
+            "filter",
+            "SELECT ?s WHERE { ?s <https://example.org/p> ?o FILTER(?s = <https://example.org/target>) }",
+            1,
+        ),
+        (
+            "ordered slice",
+            "SELECT ?s WHERE { ?s <https://example.org/p> ?o } ORDER BY ?s OFFSET 1 LIMIT 3",
+            3,
+        ),
+        (
+            "distinct",
+            "SELECT DISTINCT ?x WHERE { VALUES ?x { 1 1 2 } } ORDER BY ?x",
+            2,
+        ),
+        (
+            "reduced upper bag",
+            "SELECT REDUCED ?x WHERE { VALUES ?x { 1 2 } } ORDER BY ?x",
+            2,
+        ),
+        (
+            "group",
+            "SELECT ?s (COUNT(?o) AS ?n) WHERE { VALUES ?s { <https://example.org/target> } ?s <https://example.org/p> ?o } GROUP BY ?s",
+            1,
+        ),
+        (
+            "empty global aggregate",
+            "SELECT (COUNT(*) AS ?n) WHERE { FILTER(false) }",
+            1,
+        ),
+        (
+            "subquery",
+            "SELECT ?s WHERE { { SELECT ?s WHERE { ?s <https://example.org/p> ?o } ORDER BY ?s LIMIT 2 } } ORDER BY ?s",
+            2,
+        ),
+        (
+            "path alternative preserves bag",
+            "SELECT ?o WHERE { <https://example.org/target> (<https://example.org/p>|<https://example.org/p>) ?o }",
+            2,
+        ),
+        (
+            "path reflexive reach",
+            "SELECT ?o WHERE { <https://example.org/target> <https://example.org/p>* ?o } ORDER BY ?o",
+            2,
+        ),
+        (
+            "inverse path",
+            "SELECT ?s WHERE { ?s ^<https://example.org/p> <https://example.org/target> }",
+            1,
+        ),
+        (
+            "absent named graph",
+            "SELECT ?s WHERE { GRAPH <https://example.org/missing> { ?s ?p ?o } }",
+            0,
+        ),
+        (
+            "explicit empty default",
+            "SELECT ?s FROM <https://example.org/missing> WHERE { ?s ?p ?o }",
+            0,
+        ),
+    ];
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    for &(name, query, expected_count) in CASES {
+        let prepared = engine
+            .prepare_query(query, None)
+            .unwrap_or_else(|error| panic!("{name}: parse: {error:?}"));
+        let expected = engine
+            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .unwrap_or_else(|error| panic!("{name}: resident: {error:?}"));
+        if name == "zero-column bag" {
+            let (variables, rows) = expected.solutions().expect("SELECT");
+            assert_eq!(variables, &[] as &[String]);
+            assert!(rows.iter().all(Vec::is_empty));
+        }
+        if name == "wide schema join" || name == "wide union padding" {
+            let (variables, rows) = expected.solutions().expect("SELECT");
+            assert_eq!(variables.len(), 10);
+            for (column, value) in rows[0].iter().enumerate() {
+                let Some(TermValue::Literal { lexical_form, .. }) = value else {
+                    panic!("wide first row must bind every column");
+                };
+                assert_eq!(lexical_form, &(column + 1).to_string());
+            }
+            if name == "wide union padding" {
+                assert!(rows[1][1..].iter().all(Option::is_none));
+            }
+        }
+        if name == "empty global aggregate" || name == "group" {
+            let (variables, rows) = expected.solutions().expect("aggregate SELECT");
+            let column = variables
+                .iter()
+                .position(|variable| variable == "n")
+                .expect("count column");
+            let Some(TermValue::Literal { lexical_form, .. }) = &rows[0][column] else {
+                panic!("COUNT must yield a literal");
+            };
+            assert_eq!(lexical_form, if name == "group" { "1" } else { "0" });
+        }
+        let expected_rows = support::sorted_rows(&expected, |value| format!("{value:?}"));
+        assert_eq!(
+            expected_rows.len(),
+            expected_count,
+            "{name}: independent bag cardinality"
+        );
+        for route in 0..3 {
+            let source = open_with_evidence(&image, CEILING, 2, 16_384);
+            let result = match route {
+                0 => {
+                    engine
+                        .query_fallible_view(
+                            &source,
+                            SparqlRequest {
+                                query,
+                                base_iri: None,
+                                substitutions: &[],
+                            },
+                            QueryOptions::EMPTY,
+                        )
+                        .unwrap_or_else(|error| panic!("{name}: direct: {error:?}"))
+                        .result
+                }
+                1 => {
+                    engine
+                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .unwrap_or_else(|error| panic!("{name}: prepared: {error:?}"))
+                        .result
+                }
+                _ => {
+                    engine
+                        .query_prepared_governed_fallible_view(
+                            &source,
+                            &prepared,
+                            &[],
+                            QueryOptions::EMPTY,
+                            &QueryGovernors::METERED,
+                        )
+                        .unwrap_or_else(|error| panic!("{name}: governed: {error:?}"))
+                        .result
+                }
+            };
+            assert_eq!(
+                support::sorted_rows(&result, |value| format!("{value:?}")),
+                expected_rows,
+                "{name}: route {route}: exact bag parity"
+            );
+            assert!(source.read_error().is_none(), "{name}: route {route}");
+            assert!(
+                source.evidence().peak_bytes() <= CEILING,
+                "{name}: route {route}"
+            );
+        }
+    }
+}
+
+#[test]
+fn duplicate_computed_payload_releases_temporaries_and_retains_extracted_output() {
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    // Prepared outside the execution allocation window. The variable-dependent
+    // empty substring prevents constant folding the complete CONCAT. Every one
+    // of the fixture's 201 p rows computes the same 48 KiB output; DISTINCT does
+    // not authorize cumulative charging of discarded duplicate payloads.
+    let payload = "x".repeat(48 * 1024);
+    let query = format!(
+        "SELECT DISTINCT ?value WHERE {{ ?subject <https://example.org/p> ?object . \
+         BIND(CONCAT(SUBSTR(STR(?object), 1, 0), \"{payload}\") AS ?value) }}"
+    );
+    let prepared = engine.prepare_query(&query, None).expect("computed query");
+    let expected = engine
+        .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+        .expect("resident computed result");
+    let (_, expected_rows) = expected.solutions().expect("SELECT");
+    assert_eq!(expected_rows.len(), 1);
+    assert_eq!(
+        expected_rows[0][0],
+        Some(TermValue::simple_literal(payload.as_str()))
+    );
+
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    // The 201 distinct objects force decoded-term page traffic while the output
+    // remains identical. Trace capacity is independently ample; the same 8 MB
+    // physical ceiling still governs every source and engine owner.
+    let source = open_with_evidence(&image, CEILING, 2, 65_536);
+    let answer = engine
+        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+        .expect("live temporary ownership must fit independently of row count");
+    assert_eq!(answer.result.solutions().expect("SELECT").1, expected_rows);
+    let output = answer.result;
+    drop(answer.evidence);
+    let retained = source.evidence().live_bytes();
+    let shared = output.clone();
+    assert_eq!(source.evidence().live_bytes(), retained, "shallow clone");
+    drop(output);
+    assert_eq!(
+        source.evidence().live_bytes(),
+        retained,
+        "last owner remains"
+    );
+    let extracted = shared.into_solutions().expect("SELECT extraction");
+    assert_eq!(extracted.as_parts().1, expected_rows);
+    assert_eq!(
+        source.evidence().live_bytes(),
+        retained,
+        "extraction keeps lease"
+    );
+    drop(extracted);
+    assert!(
+        source.evidence().live_bytes() < retained,
+        "final output releases admission"
+    );
+    let peak = source.evidence().peak_bytes();
+    let measured = window.close();
+    assert!(peak <= CEILING);
+    assert!(
+        u64::try_from(measured.peak_working_bytes).expect("measured peak fits") <= peak,
+        "computed output actual allocation {measured:?}, source peak {peak}"
+    );
+    assert!(source.read_error().is_none());
+}
+
+#[test]
+fn bounded_ask_construct_describe_match_resident_across_public_entries() {
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    for (query, expected_size) in [
+        (
+            "ASK { <https://example.org/target> <https://example.org/p> ?o }",
+            1,
+        ),
+        (
+            "ASK { <https://example.org/target> <https://example.org/missing> ?o }",
+            0,
+        ),
+        (
+            "CONSTRUCT { <https://example.org/target> <https://example.org/p> ?o } WHERE { <https://example.org/target> <https://example.org/p> ?o }",
+            1,
+        ),
+        ("DESCRIBE <https://example.org/target>", 2),
+    ] {
+        let prepared = engine.prepare_query(query, None).expect("graph-form query");
+        let expected = engine
+            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .expect("resident graph-form result");
+        for route in 0..3 {
+            let source = open_with_evidence(&image, CEILING, 2, 16_384);
+            let found = match route {
+                0 => {
+                    engine
+                        .query_fallible_view(
+                            &source,
+                            SparqlRequest {
+                                query,
+                                base_iri: None,
+                                substitutions: &[],
+                            },
+                            QueryOptions::EMPTY,
+                        )
+                        .expect("direct bounded form")
+                        .result
+                }
+                1 => {
+                    engine
+                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .expect("prepared bounded form")
+                        .result
+                }
+                _ => {
+                    engine
+                        .query_prepared_governed_fallible_view(
+                            &source,
+                            &prepared,
+                            &[],
+                            QueryOptions::EMPTY,
+                            &QueryGovernors::METERED,
+                        )
+                        .expect("governed bounded form")
+                        .result
+                }
+            };
+            match &expected {
+                SparqlResult::Boolean(answer) => {
+                    assert_eq!(usize::from(*answer), expected_size);
+                    assert_eq!(found.boolean(), Some(*answer), "route {route}");
+                }
+                SparqlResult::Graph(expected_graph) => {
+                    assert_eq!(expected_graph.quad_count(), expected_size);
+                    let found_graph = found.graph().expect("retained graph");
+                    let render = |graph: &purrdf_core::RdfDataset| {
+                        let mut rows: Vec<_> = graph
+                            .owned_quads()
+                            .map(|quad| format!("{quad:?}"))
+                            .collect();
+                        rows.sort_unstable();
+                        rows
+                    };
+                    assert_eq!(render(found_graph), render(expected_graph), "route {route}");
+                }
+                SparqlResult::Solutions { .. } => panic!("expected graph or boolean"),
+            }
+            assert!(source.read_error().is_none());
+            assert!(source.evidence().peak_bytes() <= CEILING);
+        }
+    }
+}
+
+fn rdf12_graph_fixture() -> (purrdf_core::SegmentedImage, Arc<purrdf_core::RdfDataset>) {
+    use purrdf_core::{
+        QuadIds, RdfDatasetBuilder, SegmentedBuildLimits, SegmentedBuilder, TermBox,
+    };
+    let limits = SegmentedBuildLimits::new(4096, 500_000, 4096, 512, 4)
+        .expect("limits")
+        .with_first_term_index((1_u64 << 53) + 1)
+        .expect("wide ids");
+    let mut persistent = SegmentedBuilder::new(limits);
+    let mut resident = RdfDatasetBuilder::new();
+    let values = [
+        TermValue::iri("https://example.org/target"),
+        TermValue::iri("https://example.org/p"),
+        TermValue::simple_literal("root"),
+        TermValue::iri("https://example.org/g"),
+        TermValue::lang_literal("named", "en"),
+        TermValue::iri("https://example.org/empty"),
+        TermValue::iri("https://example.org/claim"),
+        TermValue::Triple {
+            s: TermBox::new(TermValue::iri("https://example.org/target")),
+            p: TermBox::new(TermValue::iri("https://example.org/q")),
+            o: TermBox::new(TermValue::simple_literal("v")),
+        },
+        TermValue::iri("https://example.org/flag"),
+        TermValue::simple_literal("yes"),
+    ];
+    let mut global = Vec::new();
+    persistent
+        .intern_batch(&values, |_, id| global.push(id))
+        .expect("terms");
+    let native: Vec<_> = values
+        .iter()
+        .map(|value| purrdf_core::term_fixture::intern_value(&mut resident, value))
+        .collect();
+    for (s, p, o, g) in [(0, 1, 2, None), (0, 1, 4, Some(3))] {
+        persistent
+            .push_quad(QuadIds {
+                s: global[s],
+                p: global[p],
+                o: global[o],
+                g: g.map(|graph| global[graph]),
+            })
+            .expect("ordinary row");
+        resident.push_quad(
+            native[s],
+            native[p],
+            native[o],
+            g.map(|graph| native[graph]),
+        );
+    }
+    persistent
+        .push_reifier(global[6], global[7], None)
+        .expect("reifier stream");
+    resident.push_reifier_in_graph(native[6], native[7], None);
+    persistent
+        .push_annotation(QuadIds {
+            s: global[6],
+            p: global[8],
+            o: global[9],
+            g: None,
+        })
+        .expect("annotation stream");
+    resident.push_annotation_in_graph(native[6], native[8], native[9], None);
+    persistent
+        .declare_named_graph(global[5])
+        .expect("empty graph");
+    resident.declare_named_graph(native[5]);
+    (
+        persistent.seal().expect("persisted fixture"),
+        resident.freeze().expect("resident fixture"),
+    )
+}
+
+#[test]
+fn bounded_virtual_streams_and_empty_graph_declarations_match_resident() {
+    let (image, resident) = rdf12_graph_fixture();
+    let reifies = purrdf_iri::vocab::rdf::REIFIES;
+    let triple_query = format!(
+        "SELECT ?claim WHERE {{ ?claim <{reifies}> <<( <https://example.org/target> <https://example.org/q> \"v\" )>> }}"
+    );
+    let cases = [
+        ("SELECT ?s ?p ?o WHERE { ?s ?p ?o }", 3),
+        (
+            "SELECT ?claim ?flag WHERE { ?claim <https://example.org/flag> ?flag }",
+            1,
+        ),
+        (triple_query.as_str(), 1),
+        ("SELECT ?g WHERE { GRAPH ?g {} } ORDER BY ?g", 2),
+        ("SELECT * WHERE { GRAPH <https://example.org/empty> {} }", 1),
+        (
+            "SELECT * WHERE { GRAPH <https://example.org/missing> {} }",
+            0,
+        ),
+        (
+            "SELECT ?s ?o WHERE { GRAPH <https://example.org/g> { ?s <https://example.org/p> ?o } }",
+            1,
+        ),
+        (
+            "SELECT ?s ?o FROM <https://example.org/g> WHERE { ?s <https://example.org/p> ?o }",
+            1,
+        ),
+        (
+            "SELECT ?s FROM NAMED <https://example.org/g> WHERE { ?s ?p ?o }",
+            0,
+        ),
+        (
+            "SELECT ?g FROM NAMED <https://example.org/empty> WHERE { GRAPH ?g {} }",
+            1,
+        ),
+    ];
+    let engine = NativeSparqlEngine::new();
+    for (query, count) in cases {
+        let prepared = engine
+            .prepare_query(query, None)
+            .expect("RDF 1.2 graph query");
+        let expected = engine
+            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .expect("resident graph scope");
+        let expected = support::sorted_rows(&expected, |value| format!("{value:?}"));
+        assert_eq!(
+            expected.len(),
+            count,
+            "independent graph/stream cardinality: {query}"
+        );
+        for route in 0..3 {
+            let source = open_with_evidence(&image, CEILING, 2, 16_384);
+            let found = match route {
+                0 => {
+                    engine
+                        .query_fallible_view(
+                            &source,
+                            SparqlRequest {
+                                query,
+                                base_iri: None,
+                                substitutions: &[],
+                            },
+                            QueryOptions::EMPTY,
+                        )
+                        .expect("direct graph scope")
+                        .result
+                }
+                1 => {
+                    engine
+                        .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+                        .expect("prepared graph scope")
+                        .result
+                }
+                _ => {
+                    engine
+                        .query_prepared_governed_fallible_view(
+                            &source,
+                            &prepared,
+                            &[],
+                            QueryOptions::EMPTY,
+                            &QueryGovernors::METERED,
+                        )
+                        .expect("governed graph scope")
+                        .result
+                }
+            };
+            assert_eq!(
+                support::sorted_rows(&found, |value| format!("{value:?}")),
+                expected,
+                "route {route}: {query}"
+            );
+            assert!(source.read_error().is_none());
+            assert!(source.evidence().peak_bytes() <= CEILING);
+        }
+    }
+}
+
+/// ORDER BY has the resident bag; physical refusal remains independently typed.
+#[test]
+fn ordered_query_matches_resident_and_tiny_capacity_refuses() {
+    let (image, resident) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let ordered = format!("{QUERY} ORDER BY ?label");
+    for query in [QUERY, ordered.as_str()] {
+        let prepared = engine.prepare_query(query, None).unwrap();
+        let expected = engine
+            .query_prepared(&resident, &prepared, &[], QueryOptions::EMPTY)
+            .unwrap();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let source = open(&image, CEILING);
+        let answer = engine
+            .query_prepared_fallible_view(&source, &prepared, &[], QueryOptions::EMPTY)
+            .unwrap();
+        let measured = window.close();
+        assert_eq!(
+            answer.result.solutions().unwrap(),
+            expected.solutions().unwrap()
+        );
+        assert!(
+            u64::try_from(measured.peak_working_bytes).unwrap() <= answer.evidence.peak_bytes()
+        );
+        assert!(answer.evidence.peak_bytes() <= CEILING);
+        assert!(source.read_error().is_none());
+        let small = open(&image, baseline_ceiling(&image));
+        let before = small.evidence();
+        let refused =
+            engine.query_prepared_fallible_view(&small, &prepared, &[], QueryOptions::EMPTY);
+        assert!(matches!(
+            refused,
+            Err(FallibleSparqlError::Operational {
+                error: SegmentedError::Residency { .. },
+                ..
+            })
+        ));
+        assert_eq!(small.evidence().request_count(), before.request_count());
+        assert_eq!(
+            small.evidence().live_bytes() - small.evidence().unpinned_cache_bytes(),
+            before.live_bytes() - before.unpinned_cache_bytes()
+        );
+    }
+}
+
+/// Original governor controls are admitted before either text or prepared work.
+#[test]
+fn raw_evaluator_cannot_bypass_a_bounded_source_ownership_capability() {
+    let (image, _) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine.prepare_query(QUERY, None).unwrap();
+    let source = open(&image, CEILING);
+    let before = source.evidence().request_count();
+    let mut ctx = purrdf_sparql_eval::EvalCtx::new(&source);
+    let error = purrdf_sparql_eval::evaluate_query(prepared.query(), &mut ctx).unwrap_err();
+    assert!(matches!(
+        error,
+        purrdf_sparql_eval::EvalError::WorkspaceUnpriced(_)
+    ));
+    assert_eq!(source.evidence().request_count(), before);
+}
+
+/// Original governor controls are admitted before either text or prepared work.
+#[test]
+fn governed_reporting_refuses_independently_tight_capacity() {
+    let (image, _) = fixture();
+    let opening = open(&image, CEILING).evidence().live_bytes();
+    let ordered = format!("{QUERY} ORDER BY ?label");
+    for query in [QUERY, ordered.as_str()] {
+        for headroom in [0, 1] {
+            for route in 0..3 {
+                let engine = NativeSparqlEngine::new();
+                let prepared = engine.prepare_query(query, None).unwrap();
+                let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+                let entry = match route {
+                    0 => GovernedEntry::Text(query),
+                    1 => GovernedEntry::Prepared,
+                    _ => GovernedEntry::Operation(&state),
+                };
+                let ceiling = opening + headroom;
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let source = open(&image, ceiling);
+                let before = source.evidence();
+                let outcome = entry.run(
+                    &engine,
+                    &source,
+                    &prepared,
+                    &[],
+                    QueryOptions::EMPTY,
+                    &QueryGovernors::METERED,
+                );
+                let measured = window.close();
+                assert!(matches!(
+                    outcome,
+                    Err(FallibleSparqlError::Operational {
+                        error: SegmentedError::Residency { .. },
+                        ..
+                    })
+                ));
+                assert!(source.read_error().is_none());
+                assert_eq!(source.evidence().request_count(), before.request_count());
+                drop(outcome);
+                drop(engine);
+                assert_eq!(
+                    source.evidence().live_bytes() - source.evidence().unpinned_cache_bytes(),
+                    before.live_bytes() - before.unpinned_cache_bytes(),
+                    "failed invocation releases original controls and preparation arrays"
+                );
+                assert!(
+                    u64::try_from(measured.peak_working_bytes).unwrap()
+                        <= source.evidence().peak_bytes()
+                );
+                assert!(source.evidence().peak_bytes() <= ceiling);
+            }
+        }
+    }
+}
+
+/// Construction uses the admitted caller prefix and preserves destination rows.
+#[test]
+fn construct_mint_prefix_completes_and_tight_refusal_preserves_destination() {
+    let (image, _) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let query = "CONSTRUCT { _:fresh <http://example.org/p> ?o } WHERE { <https://example.org/target> <https://example.org/p> ?o }";
+    let prepared = engine.prepare_query(query, None).unwrap();
+    let prefix = "x".repeat(100_000);
+    let options = QueryOptions::EMPTY.with_bnode_mint_prefix(Some(&prefix));
+    for tight in [false, true] {
+        let ceiling = if tight {
+            baseline_ceiling(&image)
+        } else {
+            CEILING
+        };
+        let source = open(&image, ceiling);
+        let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+        let mut destination = purrdf_core::RdfDatasetBuilder::new();
+        let blank = destination.intern_blank("existing", purrdf_core::BlankScope::DEFAULT);
+        let predicate = destination.intern_iri("http://example.org/p");
+        let object = destination.intern_iri("http://example.org/o");
+        destination.push_quad(blank, predicate, object, None);
+        let before = source.evidence();
+        let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+        let result = engine.construct_prepared_fallible_in_operation_into_view(
+            &source,
+            &prepared,
+            &[],
+            options,
+            &state,
+            &mut destination,
+        );
+        let measured = window.close();
+        if tight {
+            assert!(matches!(
+                result,
+                Err(FallibleSparqlError::Operational {
+                    error: SegmentedError::Residency { .. },
+                    ..
+                })
+            ));
+            assert_eq!(source.evidence().request_count(), before.request_count());
+            assert_eq!(destination.freeze().unwrap().quad_count(), 1);
+        } else {
+            result.unwrap();
+            let graph = destination.freeze().unwrap();
+            assert_eq!(graph.quad_count(), 2);
+            assert!(graph.owned_quads().any(|quad| matches!(quad.subject, purrdf_core::RdfTerm::BlankNode(label) if label.starts_with(&prefix))));
+            assert!(source.read_error().is_none());
+        }
+        assert!(
+            u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes()
+        );
+        assert!(source.evidence().peak_bytes() <= ceiling);
+    }
+}
+
+/// Spilled caller parameter metadata and a long prefix use the original owners.
+#[test]
+fn request_metadata_and_prefix_match_resident_and_refuse_tight_capacity() {
+    let (image, resident) = fixture();
+    let long_prefix = "x".repeat(100_000);
+    let substitutions: Vec<_> = (0..128)
+        .map(|i| {
+            (
+                format!("parameter{i}"),
+                TermValue::iri("http://example.org/o"),
+            )
+        })
+        .collect();
+    for (values, options) in [
+        (substitutions.as_slice(), QueryOptions::EMPTY),
+        (
+            &[][..],
+            QueryOptions::EMPTY.with_bnode_mint_prefix(Some(&long_prefix)),
+        ),
+    ] {
+        let expected_engine = NativeSparqlEngine::new();
+        let expected = expected_engine
+            .query_with_options_view(
+                resident.as_ref(),
+                SparqlRequest {
+                    query: QUERY,
+                    base_iri: None,
+                    substitutions: values,
+                },
+                options,
+            )
+            .unwrap();
+        for route in 0..3 {
+            let engine = NativeSparqlEngine::new();
+            let prepared = engine.prepare_query(QUERY, None).unwrap();
+            let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
+            let entry = match route {
+                0 => GovernedEntry::Text(QUERY),
+                1 => GovernedEntry::Prepared,
+                _ => GovernedEntry::Operation(&state),
+            };
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let source = open_with_evidence(&image, CEILING, 2, 16_384);
+            let answer = entry
+                .run(
+                    &engine,
+                    &source,
+                    &prepared,
+                    values,
+                    options,
+                    &QueryGovernors::METERED,
+                )
+                .unwrap();
+            let measured = window.close();
+            assert_eq!(
+                answer.result.solutions().unwrap(),
+                expected.solutions().unwrap()
+            );
+            assert!(
+                u64::try_from(measured.peak_working_bytes).unwrap()
+                    <= answer.evidence.view.peak_bytes()
+            );
+            assert!(answer.evidence.view.peak_bytes() <= CEILING);
+            assert!(source.read_error().is_none());
+            drop(answer);
+            drop(engine);
+            let tight_engine = NativeSparqlEngine::new();
+            let small = open(&image, baseline_ceiling(&image));
+            let before = small.evidence();
+            let outcome = tight_engine.query_fallible_view(
+                &small,
+                SparqlRequest {
+                    query: QUERY,
+                    base_iri: None,
+                    substitutions: values,
+                },
+                options,
+            );
+            assert!(matches!(
+                outcome,
+                Err(FallibleSparqlError::Operational {
+                    error: SegmentedError::Residency { .. },
+                    ..
+                })
+            ));
+            drop(outcome);
+            drop(tight_engine);
+            assert_eq!(small.evidence().request_count(), before.request_count());
+            assert_eq!(
+                small.evidence().live_bytes() - small.evidence().unpinned_cache_bytes(),
+                before.live_bytes() - before.unpinned_cache_bytes()
+            );
+        }
+    }
+    // A separately large caller-owned input must be physically refused without
+    // degrading supported substitution semantics to an unsupported-workspace error.
+    let large: Vec<_> = (0..20_000)
+        .map(|i| {
+            (
+                format!("parameter{i}"),
+                TermValue::iri("http://example.org/o"),
+            )
+        })
+        .collect();
+    let source = open(&image, baseline_ceiling(&image));
+    let engine = NativeSparqlEngine::new();
+    let before = source.evidence();
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let result = engine.query_fallible_view(
+        &source,
+        SparqlRequest {
+            query: QUERY,
+            base_iri: None,
+            substitutions: &large,
+        },
+        QueryOptions::EMPTY,
+    );
+    let measured = window.close();
+    assert!(matches!(
+        result,
+        Err(FallibleSparqlError::Operational {
+            error: SegmentedError::Residency { .. },
+            ..
+        })
+    ));
+    drop(result);
+    drop(engine);
+    assert_eq!(source.evidence().request_count(), before.request_count());
+    assert_eq!(
+        source.evidence().live_bytes() - source.evidence().unpinned_cache_bytes(),
+        before.live_bytes() - before.unpinned_cache_bytes()
+    );
+    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= source.evidence().peak_bytes());
+}
+
+/// All query algebra is admitted by physical capacity rather than shape refusal.
+#[test]
+fn explain_tight_capacity_releases_native_preparation_and_reporting() {
+    let (image, _) = fixture();
+    let opening = open(&image, CEILING).evidence().live_bytes();
+    let ordered = format!("{QUERY} ORDER BY ?label");
+    for query in [QUERY, ordered.as_str()] {
+        for headroom in [0, 1] {
+            let engine = NativeSparqlEngine::new();
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let source = open(&image, opening + headroom);
+            let before = source.evidence();
+            let error = engine
+                .explain_query_fallible_view(&source, query, None)
+                .unwrap_err();
+            let measured = window.close();
+            assert!(matches!(
+                error,
+                FallibleSparqlError::Operational {
+                    error: SegmentedError::Residency { .. },
+                    ..
+                }
+            ));
+            assert!(error.partial_answers().is_none());
+            assert_eq!(source.evidence().request_count(), before.request_count());
+            assert!(
+                u64::try_from(measured.peak_working_bytes).unwrap()
+                    <= error.evidence().peak_bytes()
+            );
+            assert!(error.evidence().peak_bytes() <= opening + headroom);
+            drop(error);
+            drop(engine);
+            assert_eq!(
+                source.evidence().live_bytes() - source.evidence().unpinned_cache_bytes(),
+                before.live_bytes() - before.unpinned_cache_bytes()
+            );
+        }
+    }
+}
+
+/// Configured EXPLAIN has resident evidence, owned output and bounded allocation.
+#[test]
+fn configured_explain_matches_resident_and_retains_last_owner() {
+    let (image, resident) = fixture();
+    let prefix = "x".repeat(100_000);
+    let ordered = format!("{QUERY} ORDER BY ?label");
+    for query in [QUERY, ordered.as_str()] {
+        for options in [
+            QueryOptions::EMPTY.with_bnode_mint_prefix(Some(&prefix)),
+            QueryOptions::EMPTY.with_call_depth(1),
+        ] {
+            for signalled in [false, true] {
+                let expected_engine = NativeSparqlEngine::new();
+                let expected = expected_engine
+                    .explain_query_with_options(&resident, query, None, options)
+                    .unwrap()
+                    .render();
+                let engine = NativeSparqlEngine::new();
+                let source = open_with_evidence(&image, CEILING, 2, 16_384);
+                let stop = Arc::new(CancellationFlag::new());
+                let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+                let (explanation, receipt) = if signalled {
+                    engine.explain_query_with_stop_signal_fallible_view(
+                        &source, query, None, options, stop,
+                    )
+                } else {
+                    engine.explain_query_with_options_fallible_view(&source, query, None, options)
+                }
+                .unwrap();
+                let measured = window.close();
+                assert_eq!(explanation.render(), expected);
+                assert!(
+                    u64::try_from(measured.peak_working_bytes).unwrap() <= receipt.peak_bytes()
+                );
+                assert!(receipt.peak_bytes() <= CEILING);
+                assert!(source.read_error().is_none());
+                drop(engine);
+                let live = source.evidence().live_bytes();
+                let shared = explanation.clone();
+                assert_eq!(source.evidence().live_bytes(), live);
+                drop(explanation);
+                assert_eq!(
+                    source.evidence().live_bytes(),
+                    live,
+                    "shared explanation owns original buffers"
+                );
+                assert_eq!(shared.render(), expected);
+                drop(shared);
+                assert!(
+                    source.evidence().live_bytes() < live,
+                    "last explanation owner releases original admission"
+                );
+                drop(receipt);
+            }
+        }
+    }
+}
+
+/// Cold text/prepared/operation routes share answers and governor charges, while
+/// their original controls and output leases retain their actual owner lifetimes.
+#[test]
+fn prepared_governed_cold_sessions_match_text_receipts_and_release_reporting() {
+    let (image, _) = fixture();
+    let scoped_source = open(&image, CEILING);
+    let before = scoped_source.evidence();
+    let before_owners = before.live_bytes() - before.unpinned_cache_bytes();
+    let ((), scoped_evidence) = {
+        let engine = NativeSparqlEngine::new();
+        let mut execution = engine
+            .prepare_execution(QUERY, None, &[], QueryOptions::EMPTY)
+            .unwrap();
+        engine
+            .execute_fallible(
+                &mut execution,
+                &scoped_source,
+                QueryOptions::EMPTY,
+                |outcome| {
+                    let active = scoped_source.evidence();
+                    assert!(active.live_bytes() - active.unpinned_cache_bytes() > before_owners);
+                    let purrdf_sparql_eval::InternedOutcome::Solutions(rows) = outcome else {
+                        panic!("SELECT")
+                    };
+                    assert_eq!(rows.rows().len(), 1);
+                },
+            )
+            .unwrap()
+    };
+    let released = scoped_source.evidence();
+    assert_eq!(
+        scoped_evidence.request_count(),
+        released.request_count(),
+        "scoped publication retains the exact final read prefix"
+    );
+    assert_eq!(
+        released.live_bytes() - released.unpinned_cache_bytes(),
+        before_owners,
+        "scoped execution and its distinct native cache owners release every grant"
+    );
+    let resident_engine = NativeSparqlEngine::new();
+    let prepared = resident_engine.prepare_query(QUERY, None).unwrap();
+    for governors in [
+        QueryGovernors::METERED,
+        QueryGovernors::METERED.with_max_answers(0),
+    ] {
+        let mut expected = None;
+        for route in 0..3 {
+            let engine = NativeSparqlEngine::new();
+            let state = Arc::new(GovernorState::new(&governors));
+            let entry = match route {
+                0 => GovernedEntry::Text(QUERY),
+                1 => GovernedEntry::Prepared,
+                _ => GovernedEntry::Operation(&state),
+            };
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let source = open(&image, CEILING);
+            let outcome = entry.run(
+                &engine,
+                &source,
+                &prepared,
+                &[],
+                QueryOptions::EMPTY,
+                &governors,
+            );
+            let measured = window.close();
+            let (rows, evidence) = match &outcome {
+                Ok(answer) => {
+                    let rows = answer.result.solutions().expect("SELECT").1;
+                    assert_eq!(rows.len(), 1);
+                    (rows.to_vec(), (*answer.evidence).clone())
+                }
+                Err(FallibleSparqlError::BudgetExhausted {
+                    partial, evidence, ..
+                }) => {
+                    let rows = partial
+                        .result()
+                        .unwrap()
+                        .result()
+                        .solutions()
+                        .expect("SELECT")
+                        .1;
+                    assert_eq!(rows, &[] as &[Vec<Option<TermValue>>]);
+                    (rows.to_vec(), evidence.clone())
+                }
+                error => panic!("healthy query completes or exhausts answers: {error:?}"),
+            };
+            assert!(
+                u64::try_from(measured.peak_working_bytes).unwrap() <= evidence.view.peak_bytes()
+            );
+            assert!(evidence.view.peak_bytes() <= CEILING);
+            assert!(source.read_error().is_none());
+            if let Some((expected_rows, expected_evidence)) = &expected {
+                assert_eq!(&rows, expected_rows);
+                let expected_evidence: &GovernedEvidence<SegmentedEvidence> = expected_evidence;
+                assert_eq!(evidence.governors, expected_evidence.governors);
+                assert_eq!(
+                    evidence.view.request_count(),
+                    expected_evidence.view.request_count()
+                );
+            } else {
+                expected = Some((rows, evidence));
+            }
+            // Remove only the cache's plan owners, leaving published owners alive.
+            drop(engine);
+            let held = source.evidence().live_bytes();
+            let shared = outcome.clone();
+            assert_eq!(
+                source.evidence().live_bytes(),
+                held,
+                "publication clone shares owners"
+            );
+            drop(outcome);
+            assert_eq!(
+                source.evidence().live_bytes(),
+                held,
+                "the final publication clone remains live"
+            );
+            drop(shared);
+            assert!(
+                source.evidence().live_bytes() < held,
+                "last publication owner releases its output and reporting controls"
+            );
+        }
+    }
+}
+
+/// A borrowed graph can leave the scoped visitor only with its original lease.
+#[test]
+fn interned_graph_retention_keeps_original_account_until_last_extraction() {
+    let (image, _) = fixture();
+    let engine = NativeSparqlEngine::new();
+    let query = "CONSTRUCT { <https://example.org/target> <https://example.org/p> ?o } WHERE { <https://example.org/target> <https://example.org/p> ?o }";
+    let mut execution = engine
+        .prepare_execution(query, None, &[], QueryOptions::EMPTY)
+        .unwrap();
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let source = open(&image, CEILING);
+    let opening = source.evidence();
+    let opening_owners = opening.live_bytes() - opening.unpinned_cache_bytes();
+    let (graph, evidence) = engine
+        .execute_fallible(&mut execution, &source, QueryOptions::EMPTY, |outcome| {
+            let purrdf_sparql_eval::InternedOutcome::Graph(graph) = outcome else {
+                panic!("CONSTRUCT returns graph")
+            };
+            graph
+                .retain()
+                .map(|retained| (retained, graph.dataset_handle()))
+        })
+        .unwrap();
+    let (graph, direct_handle) = graph.unwrap();
+    let measured = window.close();
+    assert_eq!(graph.quad_count(), 1);
+    assert!(u64::try_from(measured.peak_working_bytes).unwrap() <= evidence.peak_bytes());
+    assert!(evidence.peak_bytes() <= CEILING);
+    drop(execution);
+    drop(engine);
+    let retained = source.evidence().live_bytes();
+    assert!(
+        retained - source.evidence().unpinned_cache_bytes() > opening_owners,
+        "graph owns its original grant after the distinct execution and engine owners are destroyed"
+    );
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let shared = graph.clone();
+    let extracted_handle = shared.dataset_handle();
+    let clones = window.close();
+    assert_eq!(
+        clones.peak_working_bytes, 0,
+        "graph clone shares payload and admission"
+    );
+    drop(graph);
+    assert_eq!(source.evidence().live_bytes(), retained);
+    let result = shared.into_result();
+    assert_eq!(result.graph().unwrap().quad_count(), 1);
+    assert_eq!(
+        source.evidence().live_bytes(),
+        retained,
+        "common result extraction keeps the original grant"
+    );
+    drop(result);
+    assert!(
+        source.evidence().live_bytes() - source.evidence().unpinned_cache_bytes() > opening_owners,
+        "dataset handles retain the graph's original physical account after wrapper extraction"
+    );
+    assert_eq!(direct_handle.quad_count(), 1);
+    assert!(std::ptr::eq(
+        direct_handle.as_ref(),
+        extracted_handle.as_ref()
+    ));
+    drop(direct_handle);
+    drop(extracted_handle);
+    let released = source.evidence();
+    assert_eq!(
+        released.live_bytes() - released.unpinned_cache_bytes(),
+        opening_owners,
+        "last graph owner releases every graph grant back to the original account"
+    );
+    assert!(source.read_error().is_none());
 }

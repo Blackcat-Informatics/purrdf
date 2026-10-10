@@ -55,9 +55,9 @@ use crate::vocab::{
     OWL_REFLEXIVEPROPERTY, OWL_RESTRICTION, OWL_SAMEAS, OWL_SOMEVALUESFROM, OWL_SOURCEINDIVIDUAL,
     OWL_SYMMETRICPROPERTY, OWL_TARGETINDIVIDUAL, OWL_TARGETVALUE, OWL_THING, OWL_TOPDATAPROPERTY,
     OWL_TOPOBJECTPROPERTY, OWL_TRANSITIVEPROPERTY, OWL_UNIONOF, OWL_VERSIONINFO, OWL_VERSIONIRI,
-    OWL_WITHRESTRICTIONS, RDF_FIRST, RDF_NIL, RDF_PROPERTY, RDF_REST, RDF_TYPE, RDFS_CLASS,
-    RDFS_COMMENT, RDFS_DATATYPE, RDFS_DOMAIN, RDFS_ISDEFINEDBY, RDFS_LABEL, RDFS_LITERAL,
-    RDFS_RANGE, RDFS_SEEALSO, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF,
+    OWL_WITHRESTRICTIONS, RDF_DIRLANGSTRING, RDF_FIRST, RDF_LANGSTRING, RDF_NIL, RDF_PROPERTY,
+    RDF_REST, RDF_TYPE, RDFS_CLASS, RDFS_COMMENT, RDFS_DATATYPE, RDFS_DOMAIN, RDFS_ISDEFINEDBY,
+    RDFS_LABEL, RDFS_LITERAL, RDFS_RANGE, RDFS_SEEALSO, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF,
 };
 
 /// The three reserved namespaces the OWL-2-RDF mapping draws its vocabulary from.
@@ -541,26 +541,36 @@ pub(crate) const OWL2_CONSTRUCTS: &[OwlConstruct] = &[
     ),
     bounded(OWL_REAL, Shape::ClassDenotation, Construct::DataRange),
     bounded(OWL_RATIONAL, Shape::ClassDenotation, Construct::DataRange),
+    handled(
+        RDF_LANGSTRING,
+        Shape::ClassDenotation,
+        "the exact language-string value space",
+    ),
+    handled(
+        RDF_DIRLANGSTRING,
+        Shape::ClassDenotation,
+        "the exact directional language-string value space",
+    ),
     // --- OWL 2: built-in roles ---------------------------------------------------------
     bounded(
         OWL_TOPOBJECTPROPERTY,
         Shape::RoleDenotation,
         Construct::BuiltinRole,
     ),
-    bounded(
+    handled(
         OWL_BOTTOMOBJECTPROPERTY,
         Shape::RoleDenotation,
-        Construct::BuiltinRole,
+        "the empty object role",
     ),
     bounded(
         OWL_TOPDATAPROPERTY,
         Shape::RoleDenotation,
         Construct::BuiltinRole,
     ),
-    bounded(
+    handled(
         OWL_BOTTOMDATAPROPERTY,
         Shape::RoleDenotation,
-        Construct::BuiltinRole,
+        "the empty data role",
     ),
     // --- OWL 2: the ontology header ----------------------------------------------------
     inert(

@@ -3889,15 +3889,14 @@ fn counting_literal_values_counts_values_rather_than_terms() {
     assert_concrete_verdict(&[functional, values(0), values(1)], true);
 }
 
-/// `⊤ ⊑ A`, `⊤ ⊑ B`, `A ⊓ B ⊑ ⊥` with `a owl:sameAs "1"^^xsd:integer`.
+/// `⊤ ⊑ A`, `a : B`, `A ⊓ B ⊑ ⊥` with `a owl:sameAs "1"^^xsd:integer`.
 ///
-/// SATISFIABLE. The three inclusions refute any knowledge base with an element of `Δ_I` in it,
-/// and the `owl:sameAs` says the only named element is a literal VALUE — an element of `Δ_D`,
-/// which `owl:Thing` does not denote and which those inclusions therefore never quantified
-/// over. The identification has to WITHDRAW the two unconditional consequents from the node it
-/// produced, in whichever encoding they arrived: a seeded meta-concept under one, a derived
-/// empty-guard clause head under the other. Keeping either would refute the knowledge base on
-/// the strength of an axiom that never ranged over the element it closed. See
+/// SATISFIABLE. The required nonempty object domain can contain an A that is not a B.
+/// The identification says the asserted B is a literal VALUE in `Δ_D`, which `owl:Thing`
+/// does not denote. It must WITHDRAW the unconditional A consequent from that value node,
+/// in whichever encoding it arrived: a seeded meta-concept under one, a derived empty-guard
+/// clause head under the other. Keeping it would refute the knowledge base on the strength
+/// of an axiom that never ranged over the element it closed. See
 /// [`Graph::merge_nodes`](crate::owl_dl::graph).
 ///
 /// The dual is the same terminology with the identification removed, which IS refuted — so
@@ -3907,7 +3906,7 @@ fn an_unconditional_consequent_is_withdrawn_from_a_node_that_denotes_a_value() {
     let class = |i: usize| Concept::Named(DATA_HAND.concept_names()[i]);
     let terminology = [
         Axiom::Gci(Concept::Top, class(0)),
-        Axiom::Gci(Concept::Top, class(1)),
+        Axiom::Type(data_subject(), class(1)),
         Axiom::Gci(Concept::And(vec![class(0), class(1)]), Concept::Bottom),
     ];
     let mut identified = terminology.to_vec();
@@ -3921,6 +3920,17 @@ fn an_unconditional_consequent_is_withdrawn_from_a_node_that_denotes_a_value() {
     let mut abstract_only = terminology.to_vec();
     abstract_only.push(values(0));
     assert_concrete_verdict(&abstract_only, false);
+
+    // If BOTH classes are unconditional, even identifying every named object
+    // with a value cannot remove the required anonymous object-domain witness.
+    // This is the original empty-domain oracle's now-explicit negative control.
+    let impossible_domain = [
+        Axiom::Gci(Concept::Top, class(0)),
+        Axiom::Gci(Concept::Top, class(1)),
+        Axiom::Gci(Concept::And(vec![class(0), class(1)]), Concept::Bottom),
+        Axiom::SameAs(data_subject(), 0),
+    ];
+    assert_concrete_verdict(&impossible_domain, false);
 }
 
 /// WHAT THE CONCRETE-DOMAIN FAMILY'S RANGES ACTUALLY HOLD, stated as literals.

@@ -60,11 +60,13 @@ use purrdf_core::{ContentDigest, DatasetView, RdfDataset, TermValue};
 
 use crate::DetHashMap;
 use crate::error::EvalError;
+use crate::error::{NativeDiagnostic, NativeDiagnosticKind};
 use crate::eval::{
     EvalCtx, EvaluatedOutcome, Outcome, evaluate_query_evaluated, materialize_solutions,
 };
 use crate::registry_id::{RegistryId, append_framed_part};
 use crate::witness::RelationWitness;
+use crate::workspace::{AdmittedVec, WorkspaceCapability, WorkspaceTerm};
 
 /// The result form of a function body: a `sh:select` returns the projected value of
 /// its one solution (a second solution is an error); a `sh:ask` returns an
@@ -414,6 +416,22 @@ impl UserFunctionAdmission for DeferredFunctionAdmission {
 pub type NativeFnBody =
     Arc<dyn Fn(&[&TermValue]) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
 
+/// A native producer sharing the invocation's physical admission capability.
+///
+/// The body admits every temporary before allocating it and returns its original
+/// output owner. An operational refusal must stop production immediately.
+pub type AdmittedNativeFnBody = Arc<
+    dyn Fn(&[&TermValue], &WorkspaceCapability) -> Result<Option<WorkspaceTerm>, EvalError>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone)]
+enum NativeBody {
+    Resident(NativeFnBody),
+    Admitted(AdmittedNativeFnBody),
+}
+
 /// Everything a dataset-aware (expression-bodied) user function is given when it is
 /// called: the IRI it was called through, the already-evaluated arguments, the graph
 /// the calling query is running over, and the current user-function call depth.
@@ -482,6 +500,20 @@ pub struct ExprFnCall<'a> {
 pub type ExprFnBody =
     Arc<dyn Fn(&ExprFnCall<'_>) -> Result<Option<TermValue>, EvalError> + Send + Sync>;
 
+/// A dataset-aware producer using the same physical capability as its caller.
+/// Temporary allocations and the returned term retain their original grants.
+pub type AdmittedExprFnBody = Arc<
+    dyn Fn(&ExprFnCall<'_>, &WorkspaceCapability) -> Result<Option<WorkspaceTerm>, EvalError>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone)]
+enum ExprBody {
+    Resident(ExprFnBody),
+    Admitted(AdmittedExprFnBody),
+}
+
 impl ExprFnCall<'_> {
     /// Record what the relations this body invoked attested, so it reaches the
     /// CALLING query's receipt.
@@ -514,7 +546,7 @@ impl ExprFnCall<'_> {
 /// declaration either way would be a distinction without a difference.
 #[derive(Clone)]
 pub struct ExprFunction {
-    pub(crate) body: ExprFnBody,
+    body: ExprBody,
     pub(crate) arity: Arity,
 }
 
@@ -611,11 +643,22 @@ impl Arity {
     /// happen: it is a variant tag plus its numeric fields, with no wording to
     /// drift.
     pub(crate) fn stable_encoding(self) -> String {
-        match self {
-            Self::Exact(n) => format!("exact:{n}"),
-            Self::Range { min, max } => format!("range:{min}:{max}"),
-            Self::AtLeast(n) => format!("atleast:{n}"),
+        self.stable_display().to_string()
+    }
+
+    /// The stable identity encoding, borrowing no allocated rendering.
+    pub(crate) fn stable_display(self) -> impl core::fmt::Display {
+        struct Encoding(Arity);
+        impl core::fmt::Display for Encoding {
+            fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                match self.0 {
+                    Arity::Exact(n) => write!(out, "exact:{n}"),
+                    Arity::Range { min, max } => write!(out, "range:{min}:{max}"),
+                    Arity::AtLeast(n) => write!(out, "atleast:{n}"),
+                }
+            }
         }
+        Encoding(self)
     }
 }
 
@@ -638,7 +681,7 @@ impl core::fmt::Display for Arity {
 /// itself must uphold.
 #[derive(Clone)]
 pub struct NativeFunction {
-    pub(crate) body: NativeFnBody,
+    body: NativeBody,
     pub(crate) arity: Arity,
     pub(crate) volatility: Volatility,
 }
@@ -742,7 +785,23 @@ impl UserFunctionRegistry {
     /// a [`NativeFunction`] â see [`Self::insert`]'s panic doc for the rationale
     /// (symmetric guard).
     pub fn register_expr(&mut self, iri: impl Into<String>, arity: Arity, body: ExprFnBody) {
-        let iri = iri.into();
+        self.register_expr_body(iri.into(), arity, ExprBody::Resident(body));
+    }
+
+    /// Register a dataset-aware producer with physical ownership of its output.
+    ///
+    /// # Panics
+    /// Panics on a cross-kind IRI collision, as [`Self::register_expr`] does.
+    pub fn register_expr_admitted(
+        &mut self,
+        iri: impl Into<String>,
+        arity: Arity,
+        body: AdmittedExprFnBody,
+    ) {
+        self.register_expr_body(iri.into(), arity, ExprBody::Admitted(body));
+    }
+
+    fn register_expr_body(&mut self, iri: String, arity: Arity, body: ExprBody) {
         assert!(
             !self.fns.contains_key(&iri),
             "IRI <{iri}> is already registered as a SPARQL-bodied function; cannot also register it as expression-bodied"
@@ -780,7 +839,30 @@ impl UserFunctionRegistry {
         volatility: Volatility,
         body: NativeFnBody,
     ) {
-        let iri = iri.into();
+        self.register_native_body(iri.into(), arity, volatility, NativeBody::Resident(body));
+    }
+
+    /// Register a native producer that admits its allocations before production.
+    ///
+    /// # Panics
+    /// Panics on a cross-kind IRI collision, as [`Self::register_native`] does.
+    pub fn register_native_admitted(
+        &mut self,
+        iri: impl Into<String>,
+        arity: Arity,
+        volatility: Volatility,
+        body: AdmittedNativeFnBody,
+    ) {
+        self.register_native_body(iri.into(), arity, volatility, NativeBody::Admitted(body));
+    }
+
+    fn register_native_body(
+        &mut self,
+        iri: String,
+        arity: Arity,
+        volatility: Volatility,
+        body: NativeBody,
+    ) {
         assert!(
             !self.fns.contains_key(&iri),
             "IRI <{iri}> is already registered as a SPARQL-bodied function; cannot also register it as native"
@@ -1405,7 +1487,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // test includes nested SPARQL functions; only a body that can mint needs the
     // parent's concrete identity reservations in its fresh computed-term table.
     if !child.pattern_is_parallel_safe(crate::eval::query_pattern(body.query())) {
-        child.scratch = ctx.scratch.fresh_for_user_function();
+        child.scratch = ctx.scratch.fresh_for_user_function_admitted(&ctx.growth)?;
         // Lazy indexing grows the parent and the copy retains its own labels.
         // Each arena owns a separate watermark against the same request budget.
         if let Err(tripped) = ctx
@@ -1448,7 +1530,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
             // The body's attestations survive the truncation for the same reason the
             // minted identity state does: a relation the body invoked really did serve
             // this query, and the caller's receipt is the only place that fact can land.
-            ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)]);
+            ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)])?;
             return Ok(None);
         }
     };
@@ -1502,11 +1584,12 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // listConcat remain reachable in the enclosing query's results.
     ctx.bnode_counter = child.bnode_counter;
     ctx.rng_state = child.rng_state;
-    ctx.constructed.append(&mut child.constructed);
+    ctx.constructed
+        .append_admitted(&mut child.constructed, &ctx.growth)?;
     // And the body's relation attestations: a SHACL-AF function body is SPARQL like any
     // other and may invoke a registered relation, so what that relation attested belongs
     // on the CALLING query's receipt â there is no second receipt for a function body.
-    ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)]);
+    ctx.absorb_worker_witnesses([core::mem::take(&mut child.witness)])?;
 
     // `sh:returnType` is informational (SHACL-AF Â§5.3): it documents/casts the
     // return and MAY be a class IRI, not a literal datatype. Enforcing it as a
@@ -1544,15 +1627,20 @@ pub(crate) fn eval_native_function(
     native: &NativeFunction,
     iri: &str,
     args: &[Option<TermValue>],
-) -> Result<Option<TermValue>, EvalError> {
+    workspace: &WorkspaceCapability,
+) -> Result<Option<WorkspaceTerm>, EvalError> {
     // Fail-fast: a wrong-count call never reaches the host closure with a short
     // or long slice.
     if !native.arity.accepts(args.len()) {
-        return Err(EvalError::function(format!(
-            "native function <{iri}> expects {} argument(s), got {}",
-            native.arity,
-            args.len()
-        )));
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "native function <{iri}> expects {} argument(s), got {}",
+                native.arity,
+                args.len()
+            ),
+            workspace,
+        ));
     }
 
     // A native function declares no per-parameter optionality: any unbound
@@ -1562,21 +1650,31 @@ pub(crate) fn eval_native_function(
     }
     // Lend the closure borrows into the caller's argument buffer â no per-call
     // deep clone of the (heap-string-owning) TermValues on the scoring hot path.
-    let values: Vec<&TermValue> = args
-        .iter()
-        .map(|arg| arg.as_ref().expect("checked all-Some above"))
-        .collect();
+    if workspace.is_bounded() && matches!(native.body, NativeBody::Resident(_)) {
+        return Err(EvalError::WorkspaceUnpriced(
+            "native function allocation contract",
+        ));
+    }
+    let mut values = AdmittedVec::with_capacity(args.len(), workspace)?;
+    for arg in args {
+        values.push(arg.as_ref().expect("checked all-Some above"))?;
+    }
 
     // Guard the host closure with catch_unwind: a panicking closure (dim
     // mismatch, unwrap, OOB index) must not abort a rayon worker or otherwise
     // surface nondeterministically. The error message is fixed and
     // payload-free so it is identical no matter which worker panicked. Mirrors
     // `purrdf_rdf::native_codecs::parse`'s `native-codec-panic` guard.
-    match catch_unwind(AssertUnwindSafe(|| (native.body)(&values))) {
+    match catch_unwind(AssertUnwindSafe(|| match &native.body {
+        NativeBody::Resident(body) => body(&values).map(|value| value.map(WorkspaceTerm::resident)),
+        NativeBody::Admitted(body) => body(&values, workspace),
+    })) {
         Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
-        Err(_) => Err(EvalError::function_operational(format!(
-            "native function <{iri}> panicked"
-        ))),
+        Err(_) => Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::FunctionOperational,
+            format_args!("native function <{iri}> panicked"),
+            workspace,
+        )),
     }
 }
 
@@ -1619,27 +1717,45 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     iri: &str,
     args: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<TermValue>, EvalError> {
+) -> Result<Option<WorkspaceTerm>, EvalError> {
+    let workspace = ctx.workspace.capability();
     if !func.arity.accepts(args.len()) {
-        return Err(EvalError::function(format!(
-            "expression-bodied function <{iri}> expects {} argument(s), got {}",
-            func.arity,
-            args.len()
-        )));
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "expression-bodied function <{iri}> expects {} argument(s), got {}",
+                func.arity,
+                args.len()
+            ),
+            &workspace,
+        ));
     }
     let Some(focus_graph) = ctx.focus_graph else {
-        return Err(EvalError::function(format!(
-            "expression-bodied function <{iri}> needs the focus graph its body is evaluated \
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::Function,
+            format_args!(
+                "expression-bodied function <{iri}> needs the focus graph its body is evaluated \
              against, and this query supplied none (QueryOptions::focus_graph); the call is \
              refused rather than answered from a graph it never read"
-        )));
+            ),
+            &workspace,
+        ));
     };
     let depth = ctx.udf_depth.saturating_add(1);
     if depth > crate::eval::MAX_UDF_DEPTH {
-        return Err(EvalError::function_operational(format!(
-            "expression-bodied function <{iri}> recursion exceeded the depth bound of {}",
-            crate::eval::MAX_UDF_DEPTH
-        )));
+        return Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::FunctionOperational,
+            format_args!(
+                "expression-bodied function <{iri}> recursion exceeded the depth bound of {}",
+                crate::eval::MAX_UDF_DEPTH
+            ),
+            &workspace,
+        ));
+    }
+    if workspace.is_bounded() && matches!(func.body, ExprBody::Resident(_)) {
+        return Err(EvalError::WorkspaceUnpriced(
+            "expression function allocation contract",
+        ));
     }
     let relations = core::cell::RefCell::new(RelationWitness::default());
     let call = ExprFnCall {
@@ -1652,11 +1768,16 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     // The same `catch_unwind` contract the native path documents: a panicking host
     // closure must not abort a worker or surface nondeterministically, and the
     // message is fixed and payload-free so it does not depend on which thread ran.
-    let result = match catch_unwind(AssertUnwindSafe(|| (func.body)(&call))) {
+    let result = match catch_unwind(AssertUnwindSafe(|| match &func.body {
+        ExprBody::Resident(body) => body(&call).map(|value| value.map(WorkspaceTerm::resident)),
+        ExprBody::Admitted(body) => body(&call, &workspace),
+    })) {
         Ok(inner_result) => inner_result.map_err(EvalError::preserve_function_failure),
-        Err(_) => Err(EvalError::function_operational(format!(
-            "expression-bodied function <{iri}> panicked"
-        ))),
+        Err(_) => Err(NativeDiagnostic::error(
+            NativeDiagnosticKind::FunctionOperational,
+            format_args!("expression-bodied function <{iri}> panicked"),
+            &workspace,
+        )),
     };
 
     // Whatever the body recorded reaches the caller's receipt, and it does so on
@@ -1666,10 +1787,13 @@ pub(crate) fn eval_expr_function<D: DatasetView + Sync>(
     // attestation because the call errored would be the silent-drop this channel
     // exists to prevent, arriving through the failure path instead of the happy one.
     let witness = relations.into_inner();
-    if !witness.is_empty() {
-        ctx.absorb_worker_witnesses([witness]);
-    }
-    result
+    let witness_result = if witness.is_empty() {
+        Ok(())
+    } else {
+        ctx.absorb_worker_witnesses([witness])
+    };
+    // The original function failure wins over a derived receipt refusal.
+    result.and_then(|value| witness_result.map(|()| value))
 }
 
 #[cfg(test)]
@@ -2320,7 +2444,11 @@ mod tests {
                         crate::parallel::par_chunk_try_map_init(
                             false,
                             &queries,
-                            || parent.fork_for_worker(),
+                            || {
+                                parent
+                                    .fork_for_worker()
+                                    .expect("resident worker owner admission")
+                            },
                             |child, _rows, query| {
                                 evaluate_query_evaluated(query, child)?;
                                 Ok(())
@@ -2383,7 +2511,11 @@ mod tests {
                     crate::parallel::par_chunk_try_map_init(
                         false,
                         &queries,
-                        || parent.fork_for_worker(),
+                        || {
+                            parent
+                                .fork_for_worker()
+                                .expect("resident worker owner admission")
+                        },
                         |child, _rows, query| {
                             evaluate_query_evaluated(query, child)?;
                             Ok(())

@@ -41,6 +41,8 @@ pub enum ErrorKind {
     /// An object repeats a member name while
     /// [`super::Limits::unique_members`] is set (RFC 7493 §2.3).
     DuplicateMember,
+    /// Original native buffer admission or allocator refusal.
+    Storage(crate::allocation::StorageError),
 }
 
 /// A refused JSON document: what is wrong, and the byte offset where.
@@ -70,9 +72,11 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "JSON byte {}: ", self.offset)?;
         match self.kind {
+            ErrorKind::Storage(error) => write!(f, "{error}"),
             ErrorKind::Expected(what) => write!(f, "expected {what}"),
             ErrorKind::RawControl => f.write_str("a control character in a string must be escaped"),
             ErrorKind::Escape(kind) => f.write_str(match kind {
+                JsonEscapeErrorKind::Storage(error) => return write!(f, "{error}"),
                 JsonEscapeErrorKind::Truncated => "the input ends inside an escape",
                 JsonEscapeErrorKind::BadEscape => {
                     "a backslash must be followed by one of `\"`, `\\`, `/`, `b`, `f`, `n`, `r`, \

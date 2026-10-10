@@ -19,9 +19,10 @@ predicate a query calls this crate by is caller-supplied configuration.
 ## 1. The arithmetic is exact, and that is a correctness requirement
 
 Every score is computed in base-10 fixed point: a signed integer scaled by a
-fixed number of fractional digits, with each step checked so that an
-intermediate which does not fit is an overflow error rather than a wrapped or
-saturated number. No floating-point value enters the crate at all — the crate
+fixed number of fractional digits, truncating at every specified operation.
+Ranking intermediates promote from checked i128 to the workspace's exact
+Integer/BigInt when needed, preserving the same law without a chosen input
+ceiling. A final value is never wrapped or saturated. No floating-point value enters the crate at all — the crate
 root denies `clippy::float_arithmetic`, so none can.
 
 This is not a stylistic preference for integers. BM25 needs a natural logarithm,
@@ -43,6 +44,14 @@ reproducible byte for byte.
 Because the arithmetic is exact rather than approximate, a document's per-term
 contributions **sum exactly** to its score. The explanation surface reports an
 equality, not a tolerance.
+
+The revision-2 ranking identity binds this unrestricted arithmetic and the
+original rounding law. Each prepared query certifies its score interval from
+its actual corpus/IDFs; the pure result and each native ranked result carry that
+bound and its bit width. Hosts decide their own key representation. Neither the
+number of query terms nor field length, corpus size, weight or field count is
+refused to reserve space for a host tie key. See [the complete ranking
+law](../../crates/text/RANKING.md) for the physical representations and proof.
 
 ## 2. The BM25 constants are constants
 

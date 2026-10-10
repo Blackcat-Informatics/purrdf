@@ -177,7 +177,7 @@ impl Sink {
         let dataset = sink
             .into_dataset()
             .ok_or_else(|| JsError::new("the sink produced no dataset"))?;
-        Dataset::from_frozen(dataset)
+        Dataset::from_frozen(dataset.into())
     }
 }
 

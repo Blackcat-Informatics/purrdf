@@ -63,6 +63,8 @@ mod analysis;
 pub mod character;
 pub use character::{HanCharacterIndex, HanMatchEvidence};
 mod error;
+mod query_workspace;
+pub use query_workspace::CapacityFailure;
 mod fixed;
 mod index;
 pub mod phonetic;
@@ -109,8 +111,6 @@ pub use term_bytes::{FINGERPRINT_BYTES, fingerprint_terms};
 pub const ANALYZER_PROFILE_ID: &str = "purrdf-profiled-text-v4";
 
 pub use ranking::{
-    DOCUMENTS_MAX, FIELD_LENGTH_MAX, FIELD_WEIGHT_MAX, FieldInput, INDEX_CORPUS_PROFILE_ID,
-    MAX_FIELDS, PreparedCorpus, PreparedQuery, QUERY_TERMS_MAX, RANKING_PROFILE_ID,
-    RANKING_PROFILE_VERSION, RankingField, RankingProfile, SCORE_BITS, SCORE_MAX,
-    TERM_FREQUENCY_MAX,
+    BoundedScore, FieldInput, INDEX_CORPUS_PROFILE_ID, PreparedCorpus, PreparedQuery,
+    RANKING_PROFILE_ID, RANKING_PROFILE_VERSION, RankingField, RankingProfile, ScoreBound,
 };

@@ -60,17 +60,38 @@ impl fmt::Debug for DebugScalar<'_> {
 pub fn write_debug_scalars<'a, N, const K: usize>(
     f: &mut fmt::Formatter<'_>,
     root: N,
-    script: impl FnMut(N, &mut WorkList<Tok<N, DebugScalar<'a>>, K>),
+    mut script: impl FnMut(N, &mut WorkList<Tok<N, DebugScalar<'a>>, K>),
 ) -> fmt::Result {
+    let mut resident = crate::allocation::Resident;
+    let mut memory = crate::allocation::Memory::new(&mut resident);
+    let script =
+        |node,
+         pending: &mut WorkList<Tok<N, DebugScalar<'a>>, K>,
+         _: &mut crate::allocation::Memory<'_, crate::allocation::Resident>| {
+            script(node, pending);
+            Ok(())
+        };
     if f.alternate() && f.fill() == '\n' {
         let options = Options::capture(f);
-        write_debug_with(f, root, script, |leaf, out| {
-            options.emit(&mut NewlineFill(out), leaf)
-        })
+        write_debug_with(
+            f,
+            root,
+            script,
+            |leaf, out| options.emit(&mut NewlineFill(out), leaf),
+            &mut memory,
+            false,
+        )
+        .map_err(|_| fmt::Error)
     } else {
-        write_debug_with(f, root, script, |leaf, out| {
-            fmt::Debug::fmt(&leaf, out.formatter()?)
-        })
+        write_debug_with(
+            f,
+            root,
+            script,
+            |leaf, out| fmt::Debug::fmt(&leaf, out.formatter()?),
+            &mut memory,
+            false,
+        )
+        .map_err(|_| fmt::Error)
     }
 }
 

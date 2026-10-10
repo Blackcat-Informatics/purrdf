@@ -45,24 +45,54 @@ use crate::error::EvalError;
 /// # Errors
 ///
 /// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of `read`'s result.
+#[cfg(test)]
 pub(crate) fn declaration_contained<T>(
     kind: &str,
     iri: &str,
     what: &str,
     read: impl FnOnce() -> T,
 ) -> Result<T, EvalError> {
-    match catch_unwind(AssertUnwindSafe(read)) {
+    declaration_contained_admitted(
+        kind,
+        iri,
+        what,
+        read,
+        &crate::WorkspaceCapability::resident(),
+    )
+}
+
+/// The same declaration/panic law with originally admitted immutable diagnostics.
+pub(crate) fn declaration_contained_admitted<T>(
+    kind: &str,
+    iri: &str,
+    what: &str,
+    read: impl FnOnce() -> T,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<T, EvalError> {
+    match read_declaration(read) {
         Ok(value) => Ok(value),
-        Err(_) => Err(EvalError::function_operational(format!(
-            "{kind} <{iri}> panicked while reporting its {what}"
-        ))),
+        Err(()) => Err(crate::error::NativeDiagnostic::error(
+            crate::error::NativeDiagnosticKind::FunctionOperational,
+            format_args!("{kind} <{iri}> panicked while reporting its {what}"),
+            workspace,
+        )),
     }
+}
+
+fn read_declaration<T>(read: impl FnOnce() -> T) -> Result<T, ()> {
+    catch_unwind(AssertUnwindSafe(read)).map_err(|_| ())
+}
+
+/// The existing infeasibility diagnostic alone treats a second modes panic
+/// as an empty suffix. Other declaration failures stay operational.
+pub(crate) fn declaration_best_effort<T>(read: impl FnOnce() -> T) -> Option<T> {
+    read_declaration(read).ok()
 }
 
 /// Run a fallible host **call** (`open`, `step`, `finish`, …) with the panic
 /// contained, producing a fixed, payload-free error naming what panicked.
 ///
-/// The [`declaration_contained`] twin for a call that returns its own
+/// The declaration-containment twin for a call that returns its own
 /// [`Result`] rather than an infallible value.
 ///
 /// # Errors
@@ -75,11 +105,30 @@ pub(crate) fn call_contained<T>(
     what: &str,
     call: impl FnOnce() -> Result<T, EvalError>,
 ) -> Result<T, EvalError> {
+    call_contained_admitted(
+        kind,
+        iri,
+        what,
+        call,
+        &crate::WorkspaceCapability::resident(),
+    )
+}
+
+/// The original host-call and typed-failure law with before-render admission.
+pub(crate) fn call_contained_admitted<T>(
+    kind: &str,
+    iri: &str,
+    what: &str,
+    call: impl FnOnce() -> Result<T, EvalError>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<T, EvalError> {
     match catch_unwind(AssertUnwindSafe(call)) {
         Ok(result) => result.map_err(EvalError::preserve_function_failure),
-        Err(_) => Err(EvalError::function_operational(format!(
-            "{kind} <{iri}> panicked while {what}"
-        ))),
+        Err(_) => Err(crate::error::NativeDiagnostic::error(
+            crate::error::NativeDiagnosticKind::FunctionOperational,
+            format_args!("{kind} <{iri}> panicked while {what}"),
+            workspace,
+        )),
     }
 }
 

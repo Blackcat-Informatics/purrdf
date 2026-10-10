@@ -191,9 +191,7 @@ impl BindingPattern {
     /// Arity 2 yields `"bb"`, `"bf"`, `"fb"` or `"ff"`; arity 3 yields e.g.
     /// `"bfb"`. Round-trips with [`from_code`](BindingPattern::from_code).
     pub fn code(self) -> String {
-        (0..self.arity())
-            .map(|p| if self.is_bound(p) { 'b' } else { 'f' })
-            .collect()
+        self.to_string()
     }
 
     /// Reconstruct a pattern from its per-position [`code`](BindingPattern::code)
@@ -209,6 +207,15 @@ impl BindingPattern {
             'f' => false,
             other => panic!("invalid binding-pattern code char {other:?} in {code:?}"),
         }))
+    }
+}
+
+impl std::fmt::Display for BindingPattern {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for position in 0..self.arity() {
+            formatter.write_str(if self.is_bound(position) { "b" } else { "f" })?;
+        }
+        Ok(())
     }
 }
 

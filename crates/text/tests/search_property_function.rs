@@ -802,7 +802,9 @@ fn attested_generations(
         .get(SEARCH)
         .expect("the relation this query invoked must appear on the receipt")
         .generations
-        .clone()
+        .iter()
+        .cloned()
+        .collect()
 }
 
 /// The single generation `index` attests for the shared needle query, with the

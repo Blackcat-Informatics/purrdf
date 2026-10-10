@@ -88,7 +88,7 @@ fn prepared_delta_binding_observes_suppression_and_new_values_without_freezing_b
         .expect("report");
     assert_eq!(report.results.len(), 1);
     assert_eq!(view.stats().materializations, 0);
-    assert!(Arc::ptr_eq(snapshot.base(), &source));
+    assert!(std::ptr::eq(snapshot.base().as_ref(), source.as_ref()));
     let owned = mutation.freeze().expect("ownership boundary");
     let native = prepared
         .bind_dataset(&owned)

@@ -3,12 +3,16 @@
 
 # BM25F ranking profile and vocabulary-search ownership
 
-`purrdf-bm25f-fixed-v1`, revision 1, is the complete scoring law. A concrete
+`purrdf-bm25f-fixed-v2`, revision 2, is the complete scoring law. A concrete
 profile's BLAKE3 identity includes that name and revision, the index corpus
 construction law `purrdf-text-corpus-graph-language-v1`, the integer logarithm
-algorithm, operation order and rounding, scale, `k1`, all bounds, field names
-and order, weights, length coefficients, sorted predicate mappings, and the
-explicit unclassified destination and population mode. A semantic change changes this identity. The default dense mode preserves the published revision-1 canonical bytes; the explicit carrier mode binds `relative=length*field_documents/total` instead of `relative=length*N/total`.
+algorithm, operation order and rounding, scale, `k1`, the exact-intermediate and
+query-bound laws, field names and order, weights, length coefficients, sorted
+predicate mappings, and the explicit unclassified destination and population
+mode. It contains no chosen input ceiling. Dense mode binds
+`relative=length*N/total`; carrier mode binds
+`relative=length*field_documents/total`. The revision changes profile and index
+identities while preserving every previously admitted score lexical.
 
 There is one scoring implementation. Single-field BM25F is its one-field case.
 The previous classic BM25 expression was algebraically equivalent over real
@@ -41,7 +45,7 @@ For each distinct analyzed query term, in ascending term order:
 `k1` is exactly 1.2. An absent term's field contributes zero after every input
 has been validated; an unused field with total zero therefore has an exact,
 well-defined zero contribution. A zero weight also leaves all input checks
-active. A query has at most 1024 distinct terms; duplicates do not add weight.
+active. A query has no chosen term-count ceiling; duplicates do not add weight.
 The index's existing partition order and canonical document tie order remain
 the ranked relation's total order. Heap ceilings and explanations use the same
 prepared scorer as full ranking.
@@ -63,7 +67,7 @@ in field order. `PreparedCorpus::new` keeps dense normalization. Each constructo
 refuses the other mode rather than score under an incorrect fingerprint.
 
 A population may not exceed the corpus size, and its total may not exceed
-`population * FIELD_LENGTH_MAX`. A nonzero total therefore requires a nonzero
+`population * u64::MAX`. A nonzero total therefore requires a nonzero
 population. Both zero populations with zero totals and nonzero populations with
 zero totals are admitted. Corpus-wide `N` still determines IDF; carrier counts
 only change length normalization. If every document carries every field, both
@@ -77,62 +81,59 @@ field's carriers. Positive-length field inputs must leave enough carriers to
 hold the remaining token total. These checks remain active for zero-frequency
 and zero-weight contributions.
 
-## Bounds and proof
+## Input-derived capacity and score proof
 
-The profile admits:
+Fields and distinct query terms are addressable vectors, not fixed-size
+admission domains. Corpus populations, field lengths and term frequencies use
+u64; exact totals use u128. A field total cannot exceed its population times
+`u64::MAX`, and a scored document must leave enough remaining carriers to hold
+that total. These are consistency consequences of the supplied representation,
+not selected ranking ceilings. All nonnegative weights representable by `Fixed`
+are accepted. Length coefficients remain in the specified interval `[0,1]`.
 
-| Input | Inclusive maximum |
-|---|---:|
-| Fields | 16 |
-| Distinct query terms | 1024 |
-| Documents in a corpus | `2^40` |
-| Field length per document | `2^24` |
-| Term frequency per field | `2^24` and the field's length |
-| Field weight | `2^24` |
-| Field normalization coefficient | 1 |
-| Raw score | `65_536 * 10^12` |
+Corpus preparation validates field counts, populations and exact totals. Query
+preparation requires explicit nonempty keys in strictly sorted, distinct order,
+valid document frequencies and a frequency sum no greater than all corpus tokens.
+The token-total sum across unrestricted fields uses exact integers too.
+Document scoring validates every field before considering zero contributions,
+and checks consistent lengths and the distinct-term frequency sum. An empty
+corpus contains no document to score. A positive field whose specified
+normalization rounds to zero still has an undefined division and raises a typed
+Domain error; no clamp or alternate rounding is used.
 
-Weights and coefficients cannot be negative. Exact field totals use u128
-because the maximum total is `2^40 * 2^24 = 2^64`. Corpus preparation verifies
-that total against its selected population, field count, population and document frequencies. Query preparation
-requires explicit nonempty term keys in strictly sorted, distinct order. The
-arithmetic API accepts already-analyzed keys; the index uses its declared
-analyzer to produce them. Document scoring
-verifies every field and its consistency with the corpus before considering
-zero contributions. Whole-document scoring also checks consistent lengths and
-that distinct query term frequencies sum to no more than each field length.
-An empty corpus contains no document to score, even for an empty query. Prepared inputs own their IDF cache; callers cannot supply
-an IDF from a different corpus or profile.
+The original fixed-point operation boundaries are unchanged. Healthy small
+operations use checked i128 arithmetic and the existing wide product/quotient.
+An intermediate whose rounded result exceeds i128 promotes through
+`purrdf_xsd::exact::Integer`, which uses the workspace's one BigInt. Each
+multiply/divide still truncates at its original scale boundary; there is no
+second scorer and no final-only rational rounding. The count ratio uses the
+same wide kernel on `length*population*S/total`, with `length*population` fitting
+u128. Intermediate promotion does not alter lexical scores.
 
-The positive shifted IDF argument is at most `2*N+2`, even allowing `df=0`.
-For `N <= 2^40`, `ln(2*N+2) <= ln(2^41+2) < 29`. The implemented logarithm
-underestimates this mathematical logarithm on arguments at least one: every
-series term is positive, each truncation rounds down, the omitted tail is
-positive, and the nonnegative exponent multiplies a downward-rounded `ln(2)`.
+`PreparedQuery::score_bound()` returns a private-construction certificate with
+maximum `sum_i floor(idf_i*(k1+1))`, its significant raw-score bit width, and the
+complete profile fingerprint. Every pseudo-frequency is nonnegative. Its
+saturation is at most `k1+1 = 2.2`: truncating its product downward cannot
+increase `pseudo*2.2/(pseudo+1.2)`, and division truncates downward again.
+Multiplication by each prepared nonnegative IDF is monotone. Summing the
+individual ceilings therefore bounds the complete actual query, including all
+rounding. The validator checks its exact inclusive interval, not just its width.
+`PreparedQuery::score` returns `BoundedScore { value, bound }`, and each native
+`Scored` result carries `score_bound`. A host can choose its own key width
+without PurRDF reserving tie bits or refusing the input. Point scoring retains
+the same value-and-bound carrier until the existing six-cell RDF row is emitted;
+the RDF relation's row positions and score lexical stay unchanged.
 
-Every pseudo-frequency is nonnegative. Its saturation is at most 2.2: rounding
-the product downward cannot increase `pseudo*2.2/(pseudo+1.2)`, and division
-rounds downward again. Therefore the exact raw score is bounded above by
-`1024 * 29 * 2.2 * 10^12 = 65_331_200_000_000_000`, strictly below
-`SCORE_MAX = 65_536_000_000_000_000`. This proof includes the actual
-intermediate rounding; it does not infer a bound from sampled scores.
-
-`SCORE_BITS` is derived as the bit length of `SCORE_MAX`, yielding 56. The
-public validator checks the exact interval `[0,SCORE_MAX]`, not just the width.
-A host may use the remaining 72 bits of a u128 for its own tie key. PurRDF
-exports no packed comparator and makes no host-specific tie-key truncation
-decision.
-
-All intermediates also fit the public representation under these bounds.
-The smallest positive field-relative ratio is at least `1/2^24`, so its raw
-value is at least 59604. For raw coefficient `0 <= b <= S`, normalization is
-`S-b + floor(b*relative/S)`, at least `min(S,relative)`, including rounding.
-Thus its raw value is also at least 59604. The maximum weighted field
-pseudo-frequency is bounded by `2^48 * 10^24 / 59604` raw units. Summing
-sixteen fields and multiplying by 2.2 stays below `1.7 * 10^35`, below i128's
-maximum by three orders of magnitude. The count ratio's intermediate is at
-most `2^64 * 10^12`, also representable. Checked arithmetic remains active
-throughout; these inequalities are asserted alongside the score bound.
+The public score representation still fits i128 on every supported 32/64-bit
+target. For any u64 population the shifted IDF argument is at most `2N+2`, at
+most `2^65`. The actual logarithm uses exact range reduction to a mantissa below
+`2*10^18`, positive finite atanh terms truncated downward and a downward-rounded
+`ln(2)` constant. Its computed result is below 46 at public scale, not merely an
+unverified real-log approximation. Every raw term addend is thus below
+`46*2.2*10^12`. Multiplying this by even `u64::MAX` addressable query terms is
+below `1.9*10^33`, below i128's maximum. The prepared certificate and score sums
+remain checked. Field weighting and pseudo-frequency intermediates can be much
+larger, which is why their unbounded promotion is necessary.
 
 ## Conformance and retained facts
 
@@ -140,8 +141,8 @@ throughout; these inequalities are asserted alongside the score bound.
 It uses unbounded integers and reproduces each specified truncation. The
 committed TSV corpus includes heterogeneous field weights, fractional
 coefficients, absent terms, unused fields, sparse and maximum-size corpora,
-the smallest normalization, a maximum-size query, and an ubiquitous term whose
-IDF rounds to zero at the largest corpus size. Matching is independent of
+the former boundary normalizations/query size, and an ubiquitous term whose
+IDF rounds to zero at a large corpus size. Matching is independent of
 score: zero-weight fields and rounded zero IDFs preserve matching rows and
 their canonical tie order. `python
 tests/reference/bm25f.py --check` checks the committed values; Rust compares
@@ -162,9 +163,9 @@ index's statistics. The pure scorer does not construct or discover a corpus:
 external stores supply already-partitioned counts and bind their source and
 partition selection in their own host identity.
 
-The pure scorer admits `2^40` documents for external stores; the in-memory
-index still has a u32 document-address space. The scorer's wider corpus bound
-does not claim the in-memory index can allocate or address that many rows.
+The pure scorer accepts the full u64 population representation for external
+stores. The in-memory index retains its explicit u32 document/position address
+space; wider pure corpus statistics do not claim it can allocate that many rows.
 
 ## Vocabulary substring search decision
 

@@ -475,7 +475,7 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # Document exactly the 31 publishable crates with rustdoc lints promoted
+      # Document exactly the 32 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
       # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
       # crate's output filename in a single --workspace doc run.
@@ -570,6 +570,7 @@ jobs:
             -p purrdf-hnsw \
             -p purrdf-rdf \
             -p purrdf-markdown \
+            -p purrdf-mime \
             -p purrdf-json \
             -p purrdf-slice \
             -p purrdf-shapes \
@@ -1227,6 +1228,9 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Exercise the declared minimum; uv's moving latest can outrun wheel support.
+      UV_PYTHON: "3.13"
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -1329,6 +1333,8 @@ jobs:
     name: conformance (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      UV_PYTHON: "3.13"
     strategy:
       fail-fast: false
       matrix:

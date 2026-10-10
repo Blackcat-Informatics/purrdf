@@ -52,20 +52,16 @@ Run with ``--self-test`` to check the gate detects the three historical rewinds.
 """
 
 from __future__ import annotations
-
 import re
 import sys
 from pathlib import Path
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
 # The trees that emit documents, plus the escaper four of them call.
 SCANNED: tuple[str, ...] = (
     "crates/rdf/src/native_codecs",
     "crates/sparql-results/src",
     "crates/rdf-core/src/xml_escape.rs",
 )
-
 # The four shapes that take back something already produced. `truncate` and
 # `clear` shorten; `pop` removes the last thing written; `insert(0`/`remove(0`
 # rewrite the front, which a drained stream no longer holds at all.
@@ -81,6 +77,10 @@ CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
 # Keyed by receiver rather than by line number so the table survives edits above
 # it: a reasoned exemption should not need renewing every time the file moves.
 ALLOWLIST: dict[tuple[str, str], str] = {
+    ("crates/sparql-results/src/json_read.rs", "scratch.open"): "Native decoder cleanup destroys unfinished binding/triple frames before refunding their original allocation. No emitted bytes are held or changed.",
+    ("crates/sparql-results/src/json_read.rs", "solutions.rows"): "The native decoder ownership regression destroys decoded rows before releasing their original array allocation; these are input values, never emitted bytes.",
+    ("crates/sparql-results/src/json_read.rs", "row"): "The native decoder ownership regression destroys decoded term cells before releasing the row's original array allocation; no output stream is touched.",
+    ("crates/sparql-results/src/json_read.rs", "solutions.variables"): "The native decoder ownership regression releases decoded variable strings before their original array allocation; no serialized document is involved.",
     (
         "crates/rdf/src/native_codecs/ser_model.rs",
         "held",

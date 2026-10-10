@@ -140,6 +140,7 @@ impl Schedule {
 /// A rule program compiled for the ordered schedule.
 #[derive(Debug, Clone)]
 pub struct ScheduledProgram {
+    admission: Option<Arc<crate::admission::NeverDeriveCertificate>>,
     /// The program, in authored order.
     rules: Arc<[DlClause]>,
     /// One store-independent join plan per rule.
@@ -151,6 +152,16 @@ pub struct ScheduledProgram {
 }
 
 impl ScheduledProgram {
+    /// Every source retained by this program's declaration union.
+    #[must_use]
+    pub fn declarations(&self) -> Option<&crate::admission::NeverDeriveDeclarations> {
+        self.admission
+            .as_deref()
+            .map(crate::admission::NeverDeriveCertificate::declarations)
+    }
+
+    crate::admission::program_declarations!();
+
     /// The program's rules, in authored order.
     pub fn rules(&self) -> &[DlClause] {
         &self.rules
@@ -167,6 +178,21 @@ impl ScheduledProgram {
     pub fn contract_hash(&self, options: &EvalOptions) -> ContractHash {
         cache::scheduled_contract_hash(&self.rules, &self.schedule, options)
     }
+}
+
+/// The original [`compile_scheduled`] with sourced full-IR never-derive admission.
+/// # Errors
+/// Returns exact protected/undecidable head refusal before the ordinary
+/// executor's fragment checks, then the same errors as [`compile_scheduled`].
+pub fn compile_scheduled_with_declarations(
+    rules: Vec<DlClause>,
+    schedule: Schedule,
+    declarations: &crate::admission::NeverDeriveDeclarations,
+) -> Result<ScheduledProgram, EvalError> {
+    declarations.admit(&rules).map_err(EvalError::NeverDerive)?;
+    compile_scheduled(rules, schedule)?
+        .admit_declarations(declarations)
+        .map_err(EvalError::NeverDerive)
 }
 
 /// Compile `rules` for the ordered `schedule`, or refuse them.
@@ -221,6 +247,7 @@ pub fn compile_scheduled(
         .map(|(rule, plan)| RuleRuntime::new(rule, plan))
         .collect();
     Ok(ScheduledProgram {
+        admission: None,
         rules: Arc::from(rules),
         plans,
         runtimes,

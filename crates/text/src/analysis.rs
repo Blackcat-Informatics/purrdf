@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! One fallible, source-aligned analysis law for documents and queries.
+use crate::query_workspace::{QueryString, admitted, overflow, query_error};
 use crate::segment::{Dictionary, SegmentationScratch};
 use crate::{AccentFold, AnalyzerProfile, InputMode, Segmentation, Stemming, TextError, unicode};
 use purrdf_hash::{Domain, frame::frame_le};
+use purrdf_sparql_eval::{
+    AdmittedVec, NativeDiagnosticKind, WorkspaceAllocation, WorkspaceCapability,
+};
 const ANALYZER_DOMAIN: Domain = Domain::new(b"purrdf-text/resolved-analyzer/v4\0");
-use purrdf_lex::unicode::{TaggedScalar, compose_tagged, decompose_tagged};
+use purrdf_lex::unicode::{TaggedScalar, compose_tagged};
 use std::{borrow::Cow, collections::BTreeMap, fmt, ops::Range, sync::Arc};
 
 /// A lexical token and its consecutive ordinal.
@@ -148,6 +152,8 @@ pub struct AnalyzerScratch {
     ranges: Vec<Range<usize>>,
     segmentation: SegmentationScratch,
     word: String,
+    ranges_allocation: Option<WorkspaceAllocation>,
+    word_allocation: Option<WorkspaceAllocation>,
 }
 /// Immutable resolved analysis law. No filesystem, network or hidden data access.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -279,6 +285,44 @@ impl Analyzer {
         })?;
         Ok(terms)
     }
+
+    pub(crate) fn terms_owned(
+        &self,
+        input: &str,
+        workspace: &WorkspaceCapability,
+    ) -> Result<AdmittedVec<QueryString>, TextError> {
+        let mut scratch = AnalyzerScratch::default();
+        scratch.normalization.workspace = workspace.clone();
+        let mut terms = AdmittedVec::new(workspace);
+        self.analyze_into(input, &mut scratch, &mut |token| {
+            admitted(terms.push(QueryString::copy(&token.text, workspace)?))
+        })?;
+        Ok(terms)
+    }
+
+    pub(crate) fn analysis_form_owned(
+        &self,
+        input: &str,
+        workspace: &WorkspaceCapability,
+    ) -> Result<QueryString, TextError> {
+        let mut scratch = NormalizationScratch {
+            workspace: workspace.clone(),
+            ..NormalizationScratch::default()
+        };
+        normalize_into(
+            input,
+            self.profile.input_mode(),
+            self.profile.accent_fold(),
+            &mut scratch,
+            &mut Unaligned,
+        )?;
+        // Move the exact existing output and grant; copying it would add another
+        // string owner. The other scratch buffers die here.
+        Ok(QueryString::from_parts(
+            scratch.output,
+            scratch.owners.output,
+        ))
+    }
     /// Consume lexical tokens after a complete successful analysis.
     /// # Errors
     /// Propagates analysis refusal before invoking the sink.
@@ -290,7 +334,10 @@ impl Analyzer {
     ) -> Result<(), TextError> {
         let mut buffers = AnalyzerScratch::default();
         std::mem::swap(scratch, &mut buffers.normalization.output);
-        let result = self.analyze_into(input, &mut buffers, &mut sink);
+        let result = self.analyze_into(input, &mut buffers, &mut |token| {
+            sink(token);
+            Ok(())
+        });
         std::mem::swap(scratch, &mut buffers.normalization.output);
         result
     }
@@ -303,13 +350,16 @@ impl Analyzer {
         scratch: &mut AnalyzerScratch,
         mut sink: impl FnMut(Token<'_>),
     ) -> Result<(), TextError> {
-        self.analyze_into(input, scratch, &mut sink)
+        self.analyze_into(input, scratch, &mut |token| {
+            sink(token);
+            Ok(())
+        })
     }
     fn analyze_into(
         &self,
         input: &str,
         scratch: &mut AnalyzerScratch,
-        sink: &mut impl FnMut(Token<'_>),
+        sink: &mut impl FnMut(Token<'_>) -> Result<(), TextError>,
     ) -> Result<(), TextError> {
         normalize_into(
             input,
@@ -319,6 +369,16 @@ impl Analyzer {
             &mut Unaligned,
         )?;
         let normalized = &scratch.normalization.output;
+        admitted(scratch.normalization.workspace.reserve_vec(
+            &mut scratch.ranges,
+            &mut scratch.ranges_allocation,
+            normalized.chars().count(),
+        ))?;
+        if self.dictionary.is_some() {
+            scratch
+                .segmentation
+                .reserve_for_query(normalized, &scratch.normalization.workspace)?;
+        }
         self.fill_word_ranges(
             normalized,
             true,
@@ -326,7 +386,11 @@ impl Analyzer {
             &mut scratch.segmentation,
         );
         if scratch.ranges.len() > u32::MAX as usize {
-            return Err(TextError::data("token positions exceed u32"));
+            return Err(query_error(
+                &scratch.normalization.workspace,
+                NativeDiagnosticKind::Data,
+                "token positions exceed u32",
+            )?);
         }
         for (position, range) in scratch.ranges.iter().cloned().enumerate() {
             let word = &normalized[range];
@@ -338,6 +402,11 @@ impl Analyzer {
                     });
             let text = if changed {
                 scratch.word.clear();
+                admitted(scratch.normalization.workspace.reserve_string(
+                    &mut scratch.word,
+                    &mut scratch.word_allocation,
+                    word.len(),
+                ))?;
                 scratch.word.extend(
                     unicode::emoji_scalars(word)
                         .filter(|&(_, c, protected)| {
@@ -346,7 +415,10 @@ impl Analyzer {
                         .map(|(_, c, _)| c),
                 );
                 if self.profile.stemming() == Stemming::English && !emoji {
-                    crate::stem::english_in_place(&mut scratch.word);
+                    crate::stem::english_in_place_owned(
+                        &mut scratch.word,
+                        &scratch.normalization.workspace,
+                    )?;
                 }
                 self.bounded(&scratch.word)
             } else {
@@ -355,7 +427,7 @@ impl Analyzer {
             sink(Token {
                 text: Cow::Borrowed(text),
                 position: position as u32,
-            });
+            })?;
         }
         Ok(())
     }
@@ -618,12 +690,69 @@ impl Analyzer {
 
 /// One reusable pipeline, specialized only by the metadata it carries.
 #[derive(Debug, Default)]
+struct NormalizationOwners {
+    output: Option<WorkspaceAllocation>,
+    cleaned: Option<WorkspaceAllocation>,
+    scalars: Option<WorkspaceAllocation>,
+    pending: Option<WorkspaceAllocation>,
+    working: Option<WorkspaceAllocation>,
+    order: Option<WorkspaceAllocation>,
+}
+
+#[derive(Debug, Default)]
 struct NormalizationScratch<M> {
     output: String,
     cleaned: String,
     scalars: Vec<TaggedScalar<M>>,
     pending: Vec<TaggedScalar<M>>,
     working: Vec<TaggedScalar<M>>,
+    order: Vec<usize>,
+    // Keep all payload buffers before the capabilities that admit them.
+    owners: NormalizationOwners,
+    workspace: WorkspaceCapability,
+}
+
+struct DecodedOwner<'a> {
+    resolution: purrdf_lex::html::Resolution<'a>,
+    _text: Option<WorkspaceAllocation>,
+    _sources: Option<WorkspaceAllocation>,
+    _diagnostics: Option<WorkspaceAllocation>,
+}
+
+fn decode_owned<'a>(
+    input: &'a str,
+    mode: purrdf_lex::html::Mode,
+    workspace: &WorkspaceCapability,
+) -> Result<DecodedOwner<'a>, TextError> {
+    // The reader/counter are shared at the HTML home; this does not decode once
+    // unpriced just to discover what the subsequent allocation would require.
+    let layout = purrdf_lex::html::resolution_layout(input, mode).map_err(|_| overflow())?;
+    let (mut text_owner, mut source_owner, mut diagnostic_owner) = (None, None, None);
+    let mut text = String::new();
+    let mut sources = Vec::new();
+    let mut diagnostics = Vec::new();
+    admitted(workspace.reserve_string(&mut text, &mut text_owner, layout.text_bytes))?;
+    admitted(workspace.reserve_vec(&mut sources, &mut source_owner, layout.sources))?;
+    admitted(workspace.reserve_vec(&mut diagnostics, &mut diagnostic_owner, layout.diagnostics))?;
+    let resolution =
+        purrdf_lex::html::resolve_preallocated(input, mode, layout, text, sources, diagnostics)
+            .map_err(|_| TextError::Capacity(crate::CapacityFailure::UnstableDiagnostic))?;
+    let owner = DecodedOwner {
+        resolution,
+        _text: text_owner,
+        _sources: source_owner,
+        _diagnostics: diagnostic_owner,
+    };
+    if !owner.resolution.diagnostics.is_empty() {
+        // The diagnostic vector and every decoded buffer remain live and covered
+        // through rendering. Once this immutable message exists they can die.
+        return Err(query_error(
+            workspace,
+            NativeDiagnosticKind::Data,
+            format_args!("HTML reference errors: {:?}", owner.resolution.diagnostics),
+        )?);
+    }
+    Ok(owner)
 }
 
 /// Source tracking is orthogonal to every normalization decision. Streaming
@@ -652,31 +781,58 @@ fn normalize_into<A: Alignment>(
     scratch: &mut NormalizationScratch<A::Metadata>,
     alignment: &mut A,
 ) -> Result<(), TextError> {
-    admit_source_size(input.len(), "analysis input")?;
+    admit_source_size_owned(input.len(), "analysis input", &scratch.workspace)?;
     scratch.output.clear();
     let mode = match mode {
         InputMode::Plain => purrdf_lex::html::Mode::Plain,
         InputMode::HtmlText => purrdf_lex::html::Mode::Text,
         InputMode::HtmlAttribute => purrdf_lex::html::Mode::Attribute,
     };
-    let decoded = purrdf_lex::html::resolve_strict(input, mode).map_err(TextError::Html)?;
-    admit_source_size(decoded.text.len(), "decoded input")?;
-    let mut cleanup = CleanupCursor::new(&decoded.text);
-    let no_cleanup = if decoded.text.is_ascii() {
-        !decoded
-            .text
-            .char_indices()
-            .any(|(at, c)| !cleanup.survives(at, c, false))
+    let decoded_owner;
+    let resident_decoded;
+    let decoded = if scratch.workspace.is_bounded() {
+        decoded_owner = decode_owned(input, mode, &scratch.workspace)?;
+        &decoded_owner.resolution.decoded
     } else {
-        !unicode::grapheme_bounds(&decoded.text).any(|(at, cluster)| {
-            unicode::emoji_scalars(cluster)
-                .any(|(relative, c, protected)| !cleanup.survives(at + relative, c, protected))
-        })
+        resident_decoded =
+            purrdf_lex::html::resolve_strict(input, mode).map_err(TextError::Html)?;
+        &resident_decoded
     };
+    admit_source_size_owned(decoded.text.len(), "decoded input", &scratch.workspace)?;
+    let mut cleanup = CleanupCursor::new(&decoded.text);
+    let mut surviving_scalars = 0;
+    let mut surviving_bytes = 0;
+    let mut no_cleanup = true;
+    // Count the actual cleaned payload with the same cursor before admitting
+    // it. A discarded tag suffix must not create a query-sized scalar/text
+    // buffer merely to preserve the one emoji that precedes it.
+    let mut observe = |at, c: char, protected| {
+        if cleanup.survives(at, c, protected) {
+            // Both are bounded by this immutable decoded input's byte length.
+            surviving_scalars += 1;
+            surviving_bytes += c.len_utf8();
+        } else {
+            no_cleanup = false;
+        }
+    };
+    if decoded.text.is_ascii() {
+        for (at, c) in decoded.text.char_indices() {
+            observe(at, c, false);
+        }
+    } else {
+        for (at, cluster) in unicode::grapheme_bounds(&decoded.text) {
+            for (relative, c, protected) in unicode::emoji_scalars(cluster) {
+                observe(at + relative, c, protected);
+            }
+        }
+    }
     if decoded.sources.is_empty() && no_cleanup {
-        // These paths preserve byte positions exactly, so neither projection
-        // needs per-scalar source records. Both still apply the same admission.
         if decoded.text.is_ascii() {
+            admitted(scratch.workspace.reserve_string(
+                &mut scratch.output,
+                &mut scratch.owners.output,
+                decoded.text.len(),
+            ))?;
             scratch.output.extend(
                 decoded
                     .text
@@ -685,26 +841,42 @@ fn normalize_into<A: Alignment>(
             );
             return Ok(());
         }
-        let scripts = accent.scripts();
-        let accent_safe = scripts.is_empty()
-            || !decoded.text.chars().any(|c| {
-                unicode::is_nonspacing_mark(c)
-                    || !c.is_ascii() && scripts.iter().any(|script| script.contains(c))
-            });
-        if accent_safe {
-            let mut compare = unicode::Compare::new(&decoded.text);
-            unicode::analysis_form(&decoded.text, &mut compare);
-            if compare.finish() {
-                scratch.output.push_str(&decoded.text);
-                return Ok(());
+        // The resident streaming compare has private Unicode stage storage.
+        // Bounded execution follows this same normalizer's admitted tagged path.
+        if !scratch.workspace.is_bounded() {
+            let scripts = accent.scripts();
+            let accent_safe = scripts.is_empty()
+                || !decoded.text.chars().any(|c| {
+                    unicode::is_nonspacing_mark(c)
+                        || !c.is_ascii() && scripts.iter().any(|script| script.contains(c))
+                });
+            if accent_safe {
+                let mut compare = unicode::Compare::new(&decoded.text);
+                unicode::analysis_form(&decoded.text, &mut compare);
+                if compare.finish() {
+                    admitted(scratch.workspace.reserve_string(
+                        &mut scratch.output,
+                        &mut scratch.owners.output,
+                        decoded.text.len(),
+                    ))?;
+                    scratch.output.push_str(&decoded.text);
+                    return Ok(());
+                }
             }
         }
     }
     scratch.scalars.clear();
     scratch.cleaned.clear();
-    if no_cleanup {
-        scratch.cleaned.reserve(decoded.text.len());
-    }
+    admitted(scratch.workspace.reserve_vec(
+        &mut scratch.scalars,
+        &mut scratch.owners.scalars,
+        surviving_scalars,
+    ))?;
+    admitted(scratch.workspace.reserve_string(
+        &mut scratch.cleaned,
+        &mut scratch.owners.cleaned,
+        surviving_bytes,
+    ))?;
     let mut ordinal = 0;
     let mut cleanup = CleanupCursor::new(&decoded.text);
     for (at, cluster) in unicode::grapheme_bounds(&decoded.text) {
@@ -724,49 +896,88 @@ fn normalize_into<A: Alignment>(
             scratch.cleaned.push(c);
         }
     }
-    scratch.output.reserve(scratch.cleaned.len());
-    // Re-segment after cleanup: deleted controls can reveal new emoji joins or
-    // permit canonical composition across their former positions.
     scratch.pending.clear();
     let mut offset = 0;
+    // Normalization mutates other scratch fields. Borrow this owner's cleaned
+    // text/scalars separately so no clone of either query-sized buffer is needed.
     for (_, cluster) in unicode::grapheme_bounds(&scratch.cleaned) {
         let count = cluster.chars().count();
         let slice = &scratch.scalars[offset..offset + count];
         offset += count;
         if unicode::is_emoji_grapheme(cluster) {
-            normalize_run(
+            normalize_run_owned(
                 &mut scratch.pending,
-                &mut scratch.working,
+                (&mut scratch.working, &mut scratch.owners.working),
+                (&mut scratch.order, &mut scratch.owners.order),
+                &mut scratch.owners.pending,
                 accent,
+                &scratch.workspace,
                 |left, right| alignment.merge(left, right),
-            );
-            emit_scalars(&mut scratch.output, scratch.pending.drain(..), alignment);
-            emit_scalars(&mut scratch.output, slice.iter().cloned(), alignment);
+            )?;
+            emit_scalars_owned(
+                &mut scratch.output,
+                &scratch.pending,
+                alignment,
+                &scratch.workspace,
+                &mut scratch.owners.output,
+            )?;
+            scratch.pending.clear();
+            emit_scalars_owned(
+                &mut scratch.output,
+                slice,
+                alignment,
+                &scratch.workspace,
+                &mut scratch.owners.output,
+            )?;
         } else {
+            admitted(scratch.workspace.reserve_vec_for_append(
+                &mut scratch.pending,
+                &mut scratch.owners.pending,
+                slice.len(),
+            ))?;
             scratch.pending.extend_from_slice(slice);
         }
     }
-    normalize_run(
+    normalize_run_owned(
         &mut scratch.pending,
-        &mut scratch.working,
+        (&mut scratch.working, &mut scratch.owners.working),
+        (&mut scratch.order, &mut scratch.owners.order),
+        &mut scratch.owners.pending,
         accent,
+        &scratch.workspace,
         |left, right| alignment.merge(left, right),
-    );
-    emit_scalars(&mut scratch.output, scratch.pending.drain(..), alignment);
+    )?;
+    emit_scalars_owned(
+        &mut scratch.output,
+        &scratch.pending,
+        alignment,
+        &scratch.workspace,
+        &mut scratch.owners.output,
+    )?;
+    scratch.pending.clear();
     Ok(())
 }
 
-fn emit_scalars<A: Alignment>(
+fn emit_scalars_owned<A: Alignment>(
     output: &mut String,
-    scalars: impl IntoIterator<Item = TaggedScalar<A::Metadata>>,
+    scalars: &[TaggedScalar<A::Metadata>],
     alignment: &mut A,
-) {
-    let scalars = scalars.into_iter();
-    alignment.reserve_output(scalars.size_hint().0);
+    workspace: &WorkspaceCapability,
+    allocation: &mut Option<WorkspaceAllocation>,
+) -> Result<(), TextError> {
+    let added = scalars
+        .iter()
+        .try_fold(0usize, |bytes, scalar| {
+            bytes.checked_add(scalar.value.len_utf8())
+        })
+        .ok_or_else(overflow)?;
+    admitted(workspace.reserve_string_for_append(output, allocation, added))?;
+    alignment.reserve_output(scalars.len());
     for scalar in scalars {
         alignment.emit(output.len(), scalar.metadata);
         output.push(scalar.value);
     }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -823,17 +1034,105 @@ pub(crate) fn merge_ranges(ranges: &mut Vec<Range<usize>>) {
     }
     ranges.truncate(count);
 }
-fn normalize_run<M: Copy>(
+fn normalize_run_owned<M: Copy>(
     scalars: &mut Vec<TaggedScalar<M>>,
-    scratch: &mut Vec<TaggedScalar<M>>,
+    scratch_and_owner: (&mut Vec<TaggedScalar<M>>, &mut Option<WorkspaceAllocation>),
+    order_and_owner: (&mut Vec<usize>, &mut Option<WorkspaceAllocation>),
+    scalar_owner: &mut Option<WorkspaceAllocation>,
     accent: AccentFold,
+    workspace: &WorkspaceCapability,
     merge: impl FnMut(&mut M, M),
-) {
-    decompose_tagged::<false, _>(scalars, scratch);
-    fold_tagged(scalars, scratch);
-    decompose_tagged::<true, _>(scalars, scratch);
-    fold_tagged(scalars, scratch);
-    decompose_tagged::<true, _>(scalars, scratch);
+) -> Result<(), TextError> {
+    let (scratch, scratch_owner) = scratch_and_owner;
+    let (order, order_owner) = order_and_owner;
+    fn decompose<const COMPAT: bool, M: Copy>(
+        scalars: &mut Vec<TaggedScalar<M>>,
+        scratch: &mut Vec<TaggedScalar<M>>,
+        order: &mut Vec<usize>,
+        scalar_owner: &mut Option<WorkspaceAllocation>,
+        scratch_owner: &mut Option<WorkspaceAllocation>,
+        order_owner: &mut Option<WorkspaceAllocation>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<(), TextError> {
+        let count =
+            purrdf_lex::unicode::decomposed_len::<COMPAT, _>(scalars).ok_or_else(overflow)?;
+        admitted(workspace.reserve_vec(scratch, scratch_owner, count))?;
+        admitted(workspace.reserve_vec(order, order_owner, count))?;
+        purrdf_lex::unicode::decompose_tagged_preallocated::<COMPAT, _>(scalars, scratch, order);
+        std::mem::swap(scalar_owner, scratch_owner);
+        Ok(())
+    }
+    fn fold<M: Copy>(
+        scalars: &mut Vec<TaggedScalar<M>>,
+        scratch: &mut Vec<TaggedScalar<M>>,
+        scalar_owner: &mut Option<WorkspaceAllocation>,
+        scratch_owner: &mut Option<WorkspaceAllocation>,
+        workspace: &WorkspaceCapability,
+    ) -> Result<(), TextError> {
+        let mut count = Some(0usize);
+        for scalar in scalars.iter() {
+            unicode::fold_scalar(scalar.value, |_| {
+                count = count.and_then(|n| n.checked_add(1));
+            });
+        }
+        admitted(workspace.reserve_vec(scratch, scratch_owner, count.ok_or_else(overflow)?))?;
+        fold_tagged(scalars, scratch);
+        std::mem::swap(scalar_owner, scratch_owner);
+        Ok(())
+    }
+    decompose::<false, _>(
+        scalars,
+        scratch,
+        order,
+        scalar_owner,
+        scratch_owner,
+        order_owner,
+        workspace,
+    )?;
+    fold(scalars, scratch, scalar_owner, scratch_owner, workspace)?;
+    decompose::<true, _>(
+        scalars,
+        scratch,
+        order,
+        scalar_owner,
+        scratch_owner,
+        order_owner,
+        workspace,
+    )?;
+    fold(scalars, scratch, scalar_owner, scratch_owner, workspace)?;
+    decompose::<true, _>(
+        scalars,
+        scratch,
+        order,
+        scalar_owner,
+        scratch_owner,
+        order_owner,
+        workspace,
+    )?;
+    retain_accents(scalars, accent);
+    // Composition only removes scalars; reserve the real source length first.
+    admitted(workspace.reserve_vec(scratch, scratch_owner, scalars.len()))?;
+    compose_tagged(scalars, scratch, merge);
+    std::mem::swap(scalar_owner, scratch_owner);
+    Ok(())
+}
+
+fn admit_source_size_owned(
+    bytes: usize,
+    kind: &str,
+    workspace: &WorkspaceCapability,
+) -> Result<(), TextError> {
+    if bytes > u32::MAX as usize {
+        return Err(query_error(
+            workspace,
+            NativeDiagnosticKind::Data,
+            format_args!("{kind} exceeds source record space"),
+        )?);
+    }
+    Ok(())
+}
+
+fn retain_accents<M>(scalars: &mut Vec<TaggedScalar<M>>, accent: AccentFold) {
     let scripts = accent.scripts();
     if !scripts.is_empty() {
         let mut base = None;
@@ -849,7 +1148,6 @@ fn normalize_run<M: Copy>(
             }
         });
     }
-    compose_tagged(scalars, scratch, merge);
 }
 fn fold_tagged<M: Copy>(scalars: &mut Vec<TaggedScalar<M>>, scratch: &mut Vec<TaggedScalar<M>>) {
     scratch.clear();
@@ -863,14 +1161,7 @@ fn fold_tagged<M: Copy>(scalars: &mut Vec<TaggedScalar<M>>, scratch: &mut Vec<Ta
     }
     std::mem::swap(scalars, scratch);
 }
-fn admit_source_size(bytes: usize, kind: &str) -> Result<(), TextError> {
-    if bytes > u32::MAX as usize {
-        return Err(TextError::data(format!(
-            "{kind} exceeds source record space"
-        )));
-    }
-    Ok(())
-}
+
 /// Two monotonic scalar walks supply nearest significant neighbors. Each
 /// scalar is visited at most once for context, even across long control runs.
 struct CleanupCursor<'a> {

@@ -133,8 +133,9 @@
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
+pub mod allocation;
 pub mod assoc;
 pub mod cbor;
 pub mod constructors;

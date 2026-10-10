@@ -233,19 +233,40 @@ fn operands(node: &Node) -> [Option<usize>; 2] {
     }
 }
 
-fn reserve_compile<T>(vec: &mut Vec<T>, count: usize) -> Result<(), Error> {
-    vec.try_reserve_exact(count).map_err(|_| Error::Allocation {
-        resource: Resource::CompileSlots,
-        units: count as u64,
-    })
-}
-
 /// Build the parent table and the nesting facts of a parsed program.
 ///
 /// Three linear passes over a breadth-first order of the tree, which lists
 /// every parent before its operands. The table is retained with the program;
 /// the order is released.
-pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget) -> Result<Links, Error> {
+/// The one empty/nullable property law shared by construction and link analysis.
+/// Children are supplied from their original already-built arena metadata.
+pub(super) fn node_properties(node: &Node, child: impl Fn(usize) -> (bool, bool)) -> (bool, bool) {
+    match *node {
+        Node::Character(_) => (false, false),
+        Node::Empty => (true, true),
+        Node::Backreference(_) => (false, true),
+        Node::Start | Node::End => (false, true),
+        Node::Sequence(left, right) => (
+            child(left).0 && child(right).0,
+            child(left).1 && child(right).1,
+        ),
+        Node::Choice(left, right) => (
+            child(left).0 || child(right).0,
+            child(left).1 || child(right).1,
+        ),
+        Node::Capture { body, .. } => (child(body).0, child(body).1),
+        Node::Repeat { body, min, .. } => (
+            min == Count::Finite(0) || child(body).0,
+            min == Count::Finite(0) || child(body).1,
+        ),
+    }
+}
+
+pub(super) fn analyze(
+    nodes: &[Node],
+    root: usize,
+    budget: &mut Budget<'_>,
+) -> Result<Links, Error> {
     let count = nodes.len();
     // A link is five cells: its parent, its two nesting depths, its set and
     // innermost counted repetitions and its two nullability facts; the order
@@ -254,7 +275,7 @@ pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget) -> Resul
     budget.charge_wide(Resource::CompileSlots, count as u128)?;
     budget.charge_wide(Resource::CompileSteps, count as u128 * 3)?;
     let mut links = Vec::new();
-    reserve_compile(&mut links, count)?;
+    budget.reserve(&mut links, count)?;
     links.resize(
         count,
         Link {
@@ -268,7 +289,7 @@ pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget) -> Resul
         },
     );
     let mut order = Vec::new();
-    reserve_compile(&mut order, count)?;
+    budget.reserve(&mut order, count)?;
     order.push(root);
     let mut index = 0;
     let (mut backreferences, mut anchors) = (false, false);
@@ -284,25 +305,9 @@ pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget) -> Resul
     }
     for &node in order.iter().rev() {
         // A backreference to an unset or empty group matches the empty string.
-        let (empty, nullable) = match nodes[node] {
-            Node::Character(_) => (false, false),
-            Node::Empty => (true, true),
-            Node::Backreference(_) => (false, true),
-            Node::Start | Node::End => (false, true),
-            Node::Sequence(left, right) => (
-                links[left].empty && links[right].empty,
-                links[left].nullable && links[right].nullable,
-            ),
-            Node::Choice(left, right) => (
-                links[left].empty || links[right].empty,
-                links[left].nullable || links[right].nullable,
-            ),
-            Node::Capture { body, .. } => (links[body].empty, links[body].nullable),
-            Node::Repeat { body, min, .. } => (
-                min == Count::Finite(0) || links[body].empty,
-                min == Count::Finite(0) || links[body].nullable,
-            ),
-        };
+        let (empty, nullable) = node_properties(&nodes[node], |child| {
+            (links[child].empty, links[child].nullable)
+        });
         links[node].empty = empty;
         links[node].nullable = nullable;
     }
@@ -339,7 +344,7 @@ pub(super) fn analyze(nodes: &[Node], root: usize, budget: &mut Budget) -> Resul
             links[operand].outer = outer;
         }
     }
-    drop(order);
+    budget.release_vec(order)?;
     budget.release_compile_slots(count as u64);
     Ok(Links {
         nodes: links,
@@ -443,11 +448,7 @@ pub(super) fn reserve<T>(
     ctx.budget.limits().admit(Resource::MatchSlots, required)?;
     let units = u64::try_from(capacity as u128 * cells)
         .expect("admitted capacity fits its finite u64 slot bound");
-    vec.try_reserve_exact(capacity - vec.len())
-        .map_err(|_| Error::Allocation {
-            resource: Resource::MatchSlots,
-            units,
-        })?;
+    ctx.budget.reserve_match(vec, capacity, units)?;
     ctx.live_slots = ctx.live_slots - old + vec.capacity() as u128 * cells;
     Ok(())
 }
@@ -593,6 +594,43 @@ pub(super) struct Pike<'a> {
 }
 
 impl<'a> Pike<'a> {
+    /// Only the request budget survives; all native buffers die first.
+    pub(super) fn into_budget(self) -> Result<Budget<'a>, Error> {
+        let Self {
+            mut ctx,
+            scratch,
+            current,
+            next,
+            stack,
+            visited,
+            marks,
+            sets,
+            moves,
+            probe_stack,
+            probe_visited,
+            found,
+            ..
+        } = self;
+        // Move and destroy every heap-owning field explicitly. Ignored fields
+        // of a partially moved value need not die before the next statement.
+        drop((
+            scratch,
+            current,
+            next,
+            stack,
+            visited,
+            marks,
+            sets,
+            moves,
+            probe_stack,
+            probe_visited,
+            found,
+        ));
+        ctx.live_slots = 0;
+        ctx.budget.release_abandoned_machine()?;
+        Ok(ctx.budget)
+    }
+
     pub(super) fn new(ctx: Ctx<'a>) -> Self {
         let program = ctx.program;
         let counters = program.links.counter_depth as usize;
@@ -698,6 +736,13 @@ impl<'a> Pike<'a> {
     ///
     /// Each new state is admitted against the per-position state bound first.
     fn visit(&mut self, point: Pc, level: u32) -> Result<bool, Error> {
+        // Compatibility merges an epsilon control point at the same input
+        // position independent of nullable progress, retaining its first tags.
+        let level = if self.ctx.program.law.is_compatibility() {
+            0
+        } else {
+            level
+        };
         let generation = self.visited.generation;
         if self.visited.dense {
             // One indexed probe, within the transition that reached `point`.
@@ -768,12 +813,9 @@ impl<'a> Pike<'a> {
             size as u128 + (self.visited.entries * key_len) as u128,
         )?;
         let mut table = Vec::new();
-        table
-            .try_reserve_exact(size)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: size as u64 * 2,
-            })?;
+        self.ctx
+            .budget
+            .reserve_match(&mut table, size, size as u64 * 2)?;
         table.resize(size, (0, 0));
         let generation = self.visited.generation;
         let mask = size - 1;
@@ -785,7 +827,9 @@ impl<'a> Pike<'a> {
             }
             table[slot] = (generation, entry);
         }
-        self.visited.table = table;
+        self.ctx
+            .budget
+            .release_vec(std::mem::replace(&mut self.visited.table, table))?;
         self.ctx.live_slots = self.ctx.live_slots - old as u128 * SLOT_CELLS
             + self.visited.table.capacity() as u128 * SLOT_CELLS;
         Ok(())
@@ -991,8 +1035,9 @@ impl<'a> Pike<'a> {
                             // increment, even an empty one.
                             let link = links[parent];
                             let count = next_count(min, self.count(parent));
-                            let stalled =
-                                links[node].stall > link.stall && self.level <= link.stall;
+                            let stalled = !program.law.is_compatibility()
+                                && links[node].stall > link.stall
+                                && self.level <= link.stall;
                             match stalled.then(|| self.chain(parent, count)).transpose()? {
                                 // Every further required iteration would be
                                 // empty too: leave once the minimum is met.
@@ -1034,7 +1079,9 @@ impl<'a> Pike<'a> {
             unreachable!("only a repetition iterates");
         };
         let links = &program.links.nodes;
-        links[body].empty && links[body].counters > links[repeat].counters
+        !program.law.is_compatibility()
+            && links[body].empty
+            && links[body].counters > links[repeat].counters
     }
 
     /// How an empty iteration of `repeat`, completing `count` iterations
@@ -1298,6 +1345,11 @@ impl<'a> Pike<'a> {
             // Leaving instead clears the count again.
             self.set(link.counters as usize, store_count(min, max, count))?;
         }
+        if program.law.is_compatibility() && can_stop && !self.visit(Pc::Enter(node), 0)? {
+            // Merge BEFORE enqueuing the lower-priority exit. An empty loop
+            // must not replace that exit's original captures with later tags.
+            return Ok(None);
+        }
         if !can_stop {
             return Ok(Some(Pc::Iterate(node)));
         }
@@ -1356,15 +1408,19 @@ impl<'a> Pike<'a> {
     }
 
     /// The first match from any start at or after `start`.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(super) fn find_from(&mut self, start: usize) -> Result<Option<Captures>, Error> {
         self.run(start, Self::search)
     }
 
-    /// The match that starts exactly at `start`, which the set machine found
-    /// a match start: one thread follows the first control state, in priority
-    /// order, that can still complete a match.
+    /// Complete the leftmost start certified by the capture-free set machine.
+    /// Dated matching follows one viable control state. Compatibility retains
+    /// every earlier thread's epsilon closure: its first capture tags must merge
+    /// later nullable-loop paths even when those earlier paths are not the one
+    /// the capture-free future would select to consume the next character.
     pub(super) fn walk(&mut self, start: usize) -> Result<Option<Captures>, Error> {
+        if self.ctx.program.law.is_compatibility() {
+            return self.find_from(start);
+        }
         self.mode = Mode::Walk;
         self.run(start, Self::anchored)
     }
@@ -1391,7 +1447,6 @@ impl<'a> Pike<'a> {
 
     /// Run every admissible start from `position` on, as one pass over the
     /// input, until the best match is final or no thread is left.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
     fn search(
         &mut self,
         mut position: usize,
@@ -1491,7 +1546,7 @@ impl<'a> Pike<'a> {
             None => (0x11_0000, u64::MAX),
         };
         if self.moves.epoch != self.sets.epoch() {
-            self.forget_moves();
+            self.forget_moves()?;
             self.moves.epoch = self.sets.epoch();
         }
         let anchors = if self.ctx.program.links.anchors {
@@ -1511,14 +1566,23 @@ impl<'a> Pike<'a> {
     }
 
     /// Clear the walk's transition cache, releasing its storage.
-    fn forget_moves(&mut self) {
+    fn forget_moves(&mut self) -> Result<(), Error> {
         self.ctx.live_slots -= self.moves.used() as u128;
         let (epoch, cleared) = (self.moves.epoch, self.moves.cleared + 1);
-        self.moves = Moves {
-            epoch,
-            cleared,
-            ..Moves::default()
-        };
+        let old = std::mem::replace(
+            &mut self.moves,
+            Moves {
+                epoch,
+                cleared,
+                ..Moves::default()
+            },
+        );
+        self.ctx.budget.release_vec(old.states)?;
+        self.ctx.budget.release_vec(old.index)?;
+        self.ctx.budget.release_vec(old.keys)?;
+        self.ctx.budget.release_vec(old.values)?;
+        self.ctx.budget.release_vec(old.cells)?;
+        Ok(())
     }
 
     /// The id of the control state `state`: a node and its counters.
@@ -1528,7 +1592,7 @@ impl<'a> Pike<'a> {
             .budget
             .charge_wide(Resource::MatchSteps, copy_steps(width))?;
         if self.moves.used() + width + 8 > MOVES_CELLS {
-            self.forget_moves();
+            self.forget_moves()?;
         }
         let hash = purrdf_hash::fixed::hash_one(state);
         if !self.moves.index.is_empty() {
@@ -1562,12 +1626,9 @@ impl<'a> Pike<'a> {
                 .budget
                 .charge_wide(Resource::MatchSteps, (size + id * width) as u128)?;
             let mut index = Vec::new();
-            index
-                .try_reserve_exact(size)
-                .map_err(|_| Error::Allocation {
-                    resource: Resource::MatchSlots,
-                    units: size as u64,
-                })?;
+            self.ctx
+                .budget
+                .reserve_match(&mut index, size, size as u64)?;
             index.resize(size, u32::MAX);
             let mask = size - 1;
             for (held, chunk) in self.moves.states.chunks_exact(width).enumerate() {
@@ -1579,7 +1640,9 @@ impl<'a> Pike<'a> {
             }
             self.ctx.live_slots = self.ctx.live_slots - old.div_ceil(2) as u128
                 + index.capacity().div_ceil(2) as u128;
-            self.moves.index = index;
+            self.ctx
+                .budget
+                .release_vec(std::mem::replace(&mut self.moves.index, index))?;
         } else {
             let mask = self.moves.index.len() - 1;
             let mut slot = hash as usize & mask;
@@ -1648,7 +1711,12 @@ impl<'a> Pike<'a> {
             // Interning cleared the cache: the key's state id is gone.
             return Ok((target != ACCEPT).then_some(target));
         }
-        let (target, reached) = (target, reached.to_vec());
+        let mut reached_copy = Vec::new();
+        self.ctx
+            .budget
+            .reserve_match(&mut reached_copy, reached.len(), reached.len() as u64)?;
+        reached_copy.extend_from_slice(reached);
+        let reached = reached_copy;
         let before = &previous[captures..];
         let start = self.moves.cells.len();
         for (cell, (&old, &new)) in before.iter().zip(&reached).enumerate() {
@@ -1675,12 +1743,12 @@ impl<'a> Pike<'a> {
                 .charge_wide(Resource::MatchSteps, (size + self.moves.held) as u128)?;
             let mut keys = Vec::new();
             let mut values = Vec::new();
-            keys.try_reserve_exact(size)
-                .and_then(|()| values.try_reserve_exact(size))
-                .map_err(|_| Error::Allocation {
-                    resource: Resource::MatchSlots,
-                    units: size as u64 * 5,
-                })?;
+            self.ctx
+                .budget
+                .reserve_match(&mut keys, size, size as u64 * 5)?;
+            self.ctx
+                .budget
+                .reserve_match(&mut values, size, size as u64 * 5)?;
             keys.resize(size, NO_KEY);
             values.resize(size, (0, 0, 0));
             let mask = size - 1;
@@ -1698,8 +1766,12 @@ impl<'a> Pike<'a> {
             self.ctx.live_slots = self.ctx.live_slots - old as u128 * 5
                 + keys.capacity() as u128 * 3
                 + values.capacity() as u128 * 2;
-            self.moves.keys = keys;
-            self.moves.values = values;
+            self.ctx
+                .budget
+                .release_vec(std::mem::replace(&mut self.moves.keys, keys))?;
+            self.ctx
+                .budget
+                .release_vec(std::mem::replace(&mut self.moves.values, values))?;
         }
         let mask = self.moves.keys.len() - 1;
         let mut slot = purrdf_hash::fixed::hash_one(&key) as usize & mask;
@@ -1709,22 +1781,20 @@ impl<'a> Pike<'a> {
         self.moves.keys[slot] = key;
         self.moves.values[slot] = (target, start as u32, len as u32);
         self.moves.held += 1;
+        self.ctx.budget.release_vec(reached)?;
         Ok((target != ACCEPT).then_some(target))
     }
 
-    fn captures(&self) -> Result<Option<Captures>, Error> {
+    fn captures(&mut self) -> Result<Option<Captures>, Error> {
         let groups = self.found.len() / 2;
         self.ctx.budget.limits().admit(
             Resource::MatchSlots,
             self.ctx.live_slots + groups as u128 * 2,
         )?;
         let mut spans = Vec::new();
-        spans
-            .try_reserve_exact(groups)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: groups as u64 * 2,
-            })?;
+        self.ctx
+            .budget
+            .reserve_match(&mut spans, groups, groups as u64 * 2)?;
         spans.extend(self.found.as_chunks::<2>().0.iter().map(|&[start, end]| {
             (end != UNSET).then(|| {
                 debug_assert_ne!(start, UNSET, "a closed group was opened");

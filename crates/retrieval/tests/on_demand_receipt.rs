@@ -180,13 +180,9 @@ impl PfCursor for IndexedCursor {
 
     fn service_level(&self) -> ServiceLevel {
         match self.index {
-            Index::ShortFromTheStart => ServiceLevel::Incomplete {
-                reason: SHORT_REASON.to_owned(),
-            },
+            Index::ShortFromTheStart => ServiceLevel::incomplete_static(SHORT_REASON),
             Index::FoundShortUnderTheRead if self.emitted >= MOVES_AFTER => {
-                ServiceLevel::Incomplete {
-                    reason: SHORT_REASON.to_owned(),
-                }
+                ServiceLevel::incomplete_static(SHORT_REASON)
             }
             _ => ServiceLevel::Undeclared,
         }
@@ -647,9 +643,7 @@ fn a_shortfall_found_after_the_announcement_is_refused_and_one_announced_is_carr
         announced.trailer.attestations[&strata()[0]],
         PfAttestation {
             generation: IndexGeneration::declared(OPENED_ON),
-            service: ServiceLevel::Incomplete {
-                reason: SHORT_REASON.to_owned(),
-            },
+            service: ServiceLevel::incomplete_static(SHORT_REASON),
         },
         "the shortfall is carried, not dropped"
     );

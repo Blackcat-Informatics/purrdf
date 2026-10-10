@@ -34,7 +34,7 @@
 //! ```
 
 use crate::error::{IriError, Result};
-use crate::parse::validate_component;
+use crate::parse::{Diagnostics, IriReadError, validate_component};
 
 /// Which grammar a production is read under.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,42 +212,53 @@ fn reg_name(s: &str, base_off: usize, mode: Mode) -> Result<()> {
 
 /// Validate an authority's `host` (`s`, found at byte `base_off` of the whole
 /// reference).
-pub(crate) fn validate_host(s: &str, base_off: usize, mode: Mode) -> Result<()> {
+pub(crate) fn validate_host_with(
+    s: &str,
+    base_off: usize,
+    mode: Mode,
+    diagnostics: Diagnostics<'_>,
+) -> core::result::Result<(), IriReadError> {
     if let Some(inner) = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
         // IP-literal = "[" ( IPv6address / IPvFuture ) "]". Character
         // membership alone does not establish either production.
-        return validate_ip_literal(inner, base_off + 1);
+        return validate_ip_literal_with(inner, base_off + 1, diagnostics);
     }
     // IPv4address / reg-name. Every IPv4address is a reg-name spelling, so
     // the reg-name check decides the union exactly.
-    reg_name(s, base_off, mode)
+    reg_name(s, base_off, mode).map_err(IriReadError::Lexical)
 }
 
 /// Validate an IP-literal's contents (`inner`, found at byte `base_off`)
 /// without normalizing its spelling.
-fn validate_ip_literal(inner: &str, base_off: usize) -> Result<()> {
+fn validate_ip_literal_with(
+    inner: &str,
+    base_off: usize,
+    diagnostics: Diagnostics<'_>,
+) -> core::result::Result<(), IriReadError> {
     if matches!(inner.as_bytes().first(), Some(b'v' | b'V')) {
         // IPvFuture = "v" 1*HEXDIG "." 1*( unreserved / sub-delims / ":" ).
         // ABNF string literals are case-insensitive.
-        let (version, address) = inner[1..].split_once('.').ok_or_else(|| {
-            IriError::BadAuthority(format!(
+        let Some((version, address)) = inner[1..].split_once('.') else {
+            return Err(IriError::BadAuthority(diagnostics.message(format_args!(
                 "IPvFuture at byte {base_off} requires a version and '.'"
-            ))
-        })?;
+            ))?)
+            .into());
+        };
         if version.is_empty() || address.is_empty() {
-            return Err(IriError::BadAuthority(format!(
+            return Err(IriError::BadAuthority(diagnostics.message(format_args!(
                 "IPvFuture at byte {base_off} needs a nonempty version and address"
-            )));
+            ))?)
+            .into());
         }
         for (at, ch) in version.char_indices() {
             if !ch.is_ascii_hexdigit() {
-                return Err(IriError::DisallowedChar(ch, base_off + 1 + at));
+                return Err(IriError::DisallowedChar(ch, base_off + 1 + at).into());
             }
         }
         let address_off = base_off + version.len() + 2;
         for (at, ch) in address.char_indices() {
             if !crate::terminals::is_ipvfuture_address_char(ch) {
-                return Err(IriError::DisallowedChar(ch, address_off + at));
+                return Err(IriError::DisallowedChar(ch, address_off + at).into());
             }
         }
         return Ok(());
@@ -255,9 +266,10 @@ fn validate_ip_literal(inner: &str, base_off: usize) -> Result<()> {
     if is_ipv6_address(inner) {
         Ok(())
     } else {
-        Err(IriError::BadAuthority(format!(
+        Err(IriError::BadAuthority(diagnostics.message(format_args!(
             "invalid IPv6 address {inner:?} at byte {base_off}"
-        )))
+        ))?)
+        .into())
     }
 }
 

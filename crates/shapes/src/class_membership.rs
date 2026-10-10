@@ -1520,7 +1520,7 @@ mod tests {
             let oracle = eager_oracle(&dataset, rdf_type, subclass);
             let view = ClassMembershipView::new(Arc::clone(&dataset));
             view.prepare();
-            assert!(Arc::ptr_eq(view.base(), &dataset));
+            assert!(std::ptr::eq(view.base().as_ref(), dataset.as_ref()));
 
             let subject_choices = [None, Some(subjects[0]), Some(classes[0])];
             let predicate_choices = [None, Some(rdf_type), Some(other_predicate)];

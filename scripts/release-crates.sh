@@ -68,6 +68,7 @@ PURRDF_RELEASE_CRATES=(
   purrdf-retrieval
   purrdf-rdf
   purrdf-markdown
+  purrdf-mime
   purrdf-json
   purrdf-slice
   purrdf-shapes
@@ -99,4 +100,4 @@ PURRDF_RELEASE_CRATES=(
 # refuses any entry that has a record, by name.
 
 # shellcheck disable=SC2034  # consumed by the sourcing script.
-PURRDF_UNBOOTSTRAPPED_CRATES=()
+PURRDF_UNBOOTSTRAPPED_CRATES=(purrdf-mime)

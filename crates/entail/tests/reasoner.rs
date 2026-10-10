@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfTextDirection, TermValue};
 use purrdf_entail::reasoner::{
     DlAxiom, DlCompleteness, OwlProfile, ProfileCertificate, Reasoner, Verdict, profile,
 };
@@ -82,6 +82,8 @@ enum N {
     B(&'static str),
     /// A typed literal.
     L(&'static str, &'static str),
+    /// A normalized language literal, with optional base direction.
+    Tagged(&'static str, &'static str, Option<RdfTextDirection>),
 }
 
 /// Build a default-graph dataset from fixture triples.
@@ -96,6 +98,12 @@ fn ds(triples: &[(N, N, N)]) -> Arc<RdfDataset> {
             datatype: Some((*datatype).to_owned()),
             language: None,
             direction: None,
+        }),
+        N::Tagged(lexical, language, direction) => b.intern_literal(purrdf_core::RdfLiteral {
+            lexical_form: (*lexical).to_owned(),
+            datatype: None,
+            language: Some((*language).to_owned()),
+            direction: *direction,
         }),
     };
     let resolved: Vec<_> = triples
@@ -1869,4 +1877,378 @@ fn profile_certification_is_reproducible() {
     let mut sorted = profiles.clone();
     sorted.sort_unstable();
     assert_eq!(profiles, sorted, "violations are sorted by profile");
+}
+
+/// A public consistency answer must decide the whole modeled range, including
+/// a clash: recognizing a datatype IRI without checking its values is insufficient.
+fn exact_consistency(dataset: &RdfDataset, expected: Verdict) {
+    let reasoner = Reasoner::new(dataset).expect("the original RDF reverse mapping");
+    let answer = reasoner.consistency();
+    assert_eq!(*answer.answer(), expected);
+    let certificate = honest(&answer);
+    assert_eq!(certificate.completeness(), DlCompleteness::Decided);
+    assert_eq!(certificate.boundaries(), []);
+    assert_eq!(
+        reasoner.consistency(),
+        answer,
+        "the complete decision is deterministic"
+    );
+}
+
+#[test]
+fn datetime_stamp_ranges_check_timezone_and_value_identity_without_a_boundary() {
+    use purrdf_iri::vocab::rdfs::RANGE;
+    use purrdf_xsd::datatype::{XSD_DATE_TIME, XSD_DATE_TIME_STAMP};
+    for (value, expected) in [
+        (
+            N::L("2002-10-10T17:00:00Z", XSD_DATE_TIME_STAMP),
+            Verdict::True,
+        ),
+        (
+            N::L("2002-10-10T12:00:00-05:00", XSD_DATE_TIME),
+            Verdict::True,
+        ),
+        (
+            N::L("2002-10-10T17:00:00", XSD_DATE_TIME_STAMP),
+            Verdict::False,
+        ),
+        (N::L("2002-10-10T17:00:00", XSD_DATE_TIME), Verdict::False),
+        (N::L("chat", XSD_STRING), Verdict::False),
+    ] {
+        exact_consistency(
+            &ds(&[
+                typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+                (N::E("p"), N::V(RANGE), N::V(XSD_DATE_TIME_STAMP)),
+                (N::E("a"), N::E("p"), value),
+            ]),
+            expected,
+        );
+    }
+    for (other, expected) in [
+        ("2002-10-10T12:00:00-05:00", Verdict::True),
+        ("2002-10-10T12:00:01-05:00", Verdict::False),
+    ] {
+        exact_consistency(
+            &ds(&[
+                typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+                typed(N::E("p"), N::V(FUNCTIONAL_PROPERTY)),
+                (N::E("p"), N::V(RANGE), N::V(XSD_DATE_TIME_STAMP)),
+                (
+                    N::E("a"),
+                    N::E("p"),
+                    N::L("2002-10-10T17:00:00Z", XSD_DATE_TIME_STAMP),
+                ),
+                (N::E("a"), N::E("p"), N::L(other, XSD_DATE_TIME)),
+            ]),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn tagged_string_range_clashes_are_exact_in_both_rdf_language_spaces() {
+    use purrdf_iri::vocab::rdf::{DIR_LANG_STRING, LANG_STRING};
+    use purrdf_iri::vocab::rdfs::RANGE;
+    for (range, value, expected) in [
+        (LANG_STRING, N::Tagged("chat", "fr", None), Verdict::True),
+        (
+            LANG_STRING,
+            N::Tagged("chat", "fr", Some(RdfTextDirection::Ltr)),
+            Verdict::False,
+        ),
+        (
+            DIR_LANG_STRING,
+            N::Tagged("chat", "fr", Some(RdfTextDirection::Ltr)),
+            Verdict::True,
+        ),
+        (
+            DIR_LANG_STRING,
+            N::Tagged("chat", "fr", None),
+            Verdict::False,
+        ),
+        (LANG_STRING, N::L("chat", XSD_STRING), Verdict::False),
+        (XSD_STRING, N::Tagged("chat", "fr", None), Verdict::False),
+    ] {
+        exact_consistency(
+            &ds(&[
+                typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+                (N::E("p"), N::V(RANGE), N::V(range)),
+                (N::E("a"), N::E("p"), value),
+            ]),
+            expected,
+        );
+    }
+    for range in [LANG_STRING, DIR_LANG_STRING] {
+        exact_consistency(
+            &ds(&[
+                typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+                (N::E("p"), N::V(RANGE), N::V(range)),
+            ]),
+            Verdict::True,
+        );
+    }
+}
+
+#[test]
+fn tagged_value_identity_counts_normalized_tags_and_base_directions() {
+    let fixtures = [
+        (
+            N::Tagged("chat", "FR", None),
+            N::Tagged("chat", "fr", None),
+            Verdict::True,
+        ),
+        (
+            N::Tagged("chat", "fr", None),
+            N::Tagged("chat", "en", None),
+            Verdict::False,
+        ),
+        (
+            N::Tagged("chat", "fr", Some(RdfTextDirection::Ltr)),
+            N::Tagged("chat", "FR", Some(RdfTextDirection::Ltr)),
+            Verdict::True,
+        ),
+        (
+            N::Tagged("chat", "fr", Some(RdfTextDirection::Ltr)),
+            N::Tagged("chat", "fr", Some(RdfTextDirection::Rtl)),
+            Verdict::False,
+        ),
+    ];
+    for (left, right, expected) in fixtures {
+        exact_consistency(
+            &ds(&[
+                typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+                typed(N::E("p"), N::V(FUNCTIONAL_PROPERTY)),
+                (N::E("a"), N::E("p"), left),
+                (N::E("a"), N::E("p"), right),
+            ]),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn language_enumeration_and_complement_are_checked_on_stored_literal_singletons() {
+    use purrdf_iri::vocab::owl::DATATYPE_COMPLEMENT_OF;
+    use purrdf_iri::vocab::rdf::LANG_STRING;
+    use purrdf_iri::vocab::rdfs::RANGE;
+    for (value, expected) in [
+        (N::Tagged("chat", "FR", None), Verdict::True),
+        (N::Tagged("chat", "en", None), Verdict::False),
+        (
+            N::Tagged("chat", "fr", Some(RdfTextDirection::Ltr)),
+            Verdict::False,
+        ),
+    ] {
+        exact_consistency(
+            &ds(&[
+                typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+                (N::E("p"), N::V(RANGE), N::B("range")),
+                typed(N::B("range"), N::V(RDFS_DATATYPE)),
+                (N::B("range"), N::V(ONE_OF), N::B("cell")),
+                (N::B("cell"), N::V(FIRST), N::Tagged("chat", "fr", None)),
+                (N::B("cell"), N::V(REST), N::V(NIL)),
+                (N::E("a"), N::E("p"), value),
+            ]),
+            expected,
+        );
+    }
+    for (value, expected) in [
+        (N::Tagged("chat", "fr", None), Verdict::False),
+        (N::L("chat", XSD_STRING), Verdict::True),
+    ] {
+        exact_consistency(
+            &ds(&[
+                typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+                (N::E("p"), N::V(RANGE), N::B("not-language")),
+                typed(N::B("not-language"), N::V(RDFS_DATATYPE)),
+                (
+                    N::B("not-language"),
+                    N::V(DATATYPE_COMPLEMENT_OF),
+                    N::V(LANG_STRING),
+                ),
+                (N::E("a"), N::E("p"), value),
+            ]),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn a_finite_tagged_enumeration_cannot_supply_two_distinct_qualified_values() {
+    use purrdf_iri::vocab::owl::{MIN_QUALIFIED_CARDINALITY, ON_DATA_RANGE};
+    for (minimum, expected) in [("1", Verdict::True), ("2", Verdict::False)] {
+        exact_consistency(
+            &ds(&[
+                typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+                typed(N::B("range"), N::V(RDFS_DATATYPE)),
+                (N::B("range"), N::V(ONE_OF), N::B("cell")),
+                (N::B("cell"), N::V(FIRST), N::Tagged("chat", "fr", None)),
+                (N::B("cell"), N::V(REST), N::V(NIL)),
+                typed(N::B("restriction"), N::V(RESTRICTION)),
+                (N::B("restriction"), N::V(ON_PROPERTY), N::E("p")),
+                (
+                    N::B("restriction"),
+                    N::V(MIN_QUALIFIED_CARDINALITY),
+                    N::L(minimum, XSD_NON_NEGATIVE_INTEGER),
+                ),
+                (N::B("restriction"), N::V(ON_DATA_RANGE), N::B("range")),
+                sub(N::E("C"), N::B("restriction")),
+                typed(N::E("a"), N::E("C")),
+            ]),
+            expected,
+        );
+    }
+}
+
+#[test]
+fn bottom_roles_are_empty_through_assertions_subroles_and_restrictions() {
+    use purrdf_iri::vocab::owl::{BOTTOM_DATA_PROPERTY, BOTTOM_OBJECT_PROPERTY};
+    for (role, kind, object) in [
+        (BOTTOM_OBJECT_PROPERTY, OBJECT_PROPERTY, N::E("b")),
+        (
+            BOTTOM_DATA_PROPERTY,
+            DATATYPE_PROPERTY,
+            N::L("value", XSD_STRING),
+        ),
+    ] {
+        exact_consistency(&ds(&[typed(N::V(role), N::V(kind))]), Verdict::True);
+        exact_consistency(
+            &ds(&[(N::E("a"), N::V(role), object.clone())]),
+            Verdict::False,
+        );
+        exact_consistency(
+            &ds(&[
+                typed(N::E("p"), N::V(kind)),
+                (N::E("p"), N::V(SUB_PROPERTY), N::V(role)),
+                (N::E("a"), N::E("p"), object),
+            ]),
+            Verdict::False,
+        );
+        for (facet, value, expected) in [
+            (
+                SOME_VALUES,
+                N::V(if kind == DATATYPE_PROPERTY {
+                    XSD_STRING
+                } else {
+                    THING
+                }),
+                Verdict::False,
+            ),
+            (
+                MIN_CARDINALITY,
+                N::L("1", XSD_NON_NEGATIVE_INTEGER),
+                Verdict::False,
+            ),
+            (
+                MAX_CARDINALITY,
+                N::L("0", XSD_NON_NEGATIVE_INTEGER),
+                Verdict::True,
+            ),
+        ] {
+            exact_consistency(
+                &ds(&[
+                    typed(N::V(role), N::V(kind)),
+                    typed(N::B("r"), N::V(RESTRICTION)),
+                    (N::B("r"), N::V(ON_PROPERTY), N::V(role)),
+                    (N::B("r"), N::V(facet), value),
+                    typed(N::E("a"), N::B("r")),
+                ]),
+                expected,
+            );
+        }
+    }
+}
+
+#[test]
+fn the_object_domain_is_nonempty_even_without_an_abox() {
+    exact_consistency(&ds(&[]), Verdict::True);
+    exact_consistency(
+        &ds(&[(N::V(THING), N::V(EQUIVALENT_CLASS), N::V(NOTHING))]),
+        Verdict::False,
+    );
+    exact_consistency(
+        &ds(&[(N::V(NOTHING), N::V(SUB_CLASS), N::V(THING))]),
+        Verdict::True,
+    );
+    // Only datatype declarations and an empty bottom role do not inhabit the
+    // object domain, and cannot license its being empty.
+    exact_consistency(
+        &ds(&[
+            typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+            (N::V(THING), N::V(EQUIVALENT_CLASS), N::V(NOTHING)),
+        ]),
+        Verdict::False,
+    );
+}
+
+#[test]
+fn finite_cyclic_class_equations_have_meaningful_positive_and_negative_models() {
+    // C = A intersection (C union B). The C=A, B=empty interpretation is a
+    // model; asserting one C outside A refutes every model of the equation.
+    let cycle = [
+        (N::B("c"), N::V(INTERSECTION), N::B("and1")),
+        (N::B("and1"), N::V(FIRST), N::E("A")),
+        (N::B("and1"), N::V(REST), N::B("and2")),
+        (N::B("and2"), N::V(FIRST), N::B("u")),
+        (N::B("and2"), N::V(REST), N::V(NIL)),
+        (N::B("u"), N::V(UNION), N::B("or1")),
+        (N::B("or1"), N::V(FIRST), N::B("c")),
+        (N::B("or1"), N::V(REST), N::B("or2")),
+        (N::B("or2"), N::V(FIRST), N::E("B")),
+        (N::B("or2"), N::V(REST), N::V(NIL)),
+        typed(N::E("x"), N::B("c")),
+    ];
+    exact_consistency(&ds(&cycle), Verdict::True);
+    let mut impossible = cycle.to_vec();
+    impossible.extend([
+        (N::B("notA"), N::V(COMPLEMENT), N::E("A")),
+        typed(N::E("x"), N::B("notA")),
+    ]);
+    exact_consistency(&ds(&impossible), Verdict::False);
+    // A self-complement has no extension satisfying the defining equation:
+    // C=not C contradicts OWL's required nonempty domain, even without an ABox.
+    exact_consistency(
+        &ds(&[
+            (N::E("C"), N::V(COMPLEMENT), N::E("C")),
+            (N::E("C"), N::V(EQUIVALENT_CLASS), N::E("C")),
+        ]),
+        Verdict::False,
+    );
+    // Positive self-reference is not rejected merely for being a cycle.
+    exact_consistency(
+        &ds(&[
+            (N::B("c"), N::V(UNION), N::B("list")),
+            (N::B("list"), N::V(FIRST), N::B("c")),
+            (N::B("list"), N::V(REST), N::V(NIL)),
+            typed(N::E("x"), N::B("c")),
+        ]),
+        Verdict::True,
+    );
+}
+
+#[test]
+fn malformed_lists_and_cyclic_data_ranges_keep_their_structural_refusals() {
+    use purrdf_iri::vocab::owl::DATATYPE_COMPLEMENT_OF;
+    for malformed in [
+        ds(&[
+            (N::B("c"), N::V(UNION), N::B("list")),
+            (N::B("list"), N::V(FIRST), N::E("A")),
+            (N::B("list"), N::V(REST), N::B("list")),
+            typed(N::E("x"), N::B("c")),
+        ]),
+        ds(&[
+            typed(N::B("d"), N::V(RDFS_DATATYPE)),
+            (N::B("d"), N::V(DATATYPE_COMPLEMENT_OF), N::B("d")),
+            typed(N::E("p"), N::V(DATATYPE_PROPERTY)),
+            (N::E("p"), N::V(purrdf_iri::vocab::rdfs::RANGE), N::B("d")),
+        ]),
+    ] {
+        assert!(
+            matches!(
+                Reasoner::new(malformed.as_ref()),
+                Err(purrdf_entail::EntailError::Parse(_))
+            ),
+            "class-expression cut points never turn a malformed RDF list or cyclic data range into a decided answer"
+        );
+    }
 }

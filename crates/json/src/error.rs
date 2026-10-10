@@ -7,6 +7,8 @@ use purrdf_core::{IriError, RdfDiagnostic, cover::ReconstructError};
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum JsonError {
+    /// The shared reader refused physical allocation or admission.
+    Storage(purrdf_lex::allocation::StorageError),
     /// A source or vocabulary IRI is not absolute and well formed.
     Iri(IriError),
     /// The declared profile has an invalid identifier, namespace or bound.
@@ -58,6 +60,7 @@ pub enum JsonError {
 impl std::fmt::Display for JsonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Storage(error) => write!(f, "JSON storage: {error}"),
             Self::Iri(error) => write!(f, "invalid JSON codec IRI: {error}"),
             Self::Profile(message) => write!(f, "invalid JSON profile: {message}"),
             Self::InvalidUtf8 { valid_up_to } => write!(f, "invalid UTF-8 at byte {valid_up_to}"),
@@ -82,6 +85,7 @@ impl std::fmt::Display for JsonError {
 impl std::error::Error for JsonError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Storage(error) => Some(error),
             Self::Iri(error) => Some(error),
             Self::Rdf(error) => Some(error),
             Self::Cover(error) => Some(error),

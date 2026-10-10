@@ -25,9 +25,9 @@ use std::ops::Range;
 
 use purrdf_lex::walk::WorkList;
 
-use super::compile::{CompiledPattern, Count, Lead, Node, Set, case_variants};
+use super::compile::{CompiledPattern, Count, Lead, Node, Set, case_variants, case_variants_for};
 use super::pike::Pike;
-use super::{Budget, Error, Limits, Profile, Refusal, Resource, unicode_tables};
+use super::{Budget, Error, Law, Limits, Profile, Refusal, Resource, unicode_tables};
 
 /// UTF-8 byte spans captured by one ordered successful match.
 #[derive(Debug, PartialEq, Eq)]
@@ -57,7 +57,76 @@ impl Captures {
     }
 }
 
+/// Captures retaining the original caller's physical account.
+pub type OwnedCaptures<S> = super::OwnedPatternValue<Option<Captures>, S>;
+
+fn owned_execution<S: purrdf_lex::allocation::Admission, T>(
+    program: &CompiledPattern,
+    input: &str,
+    limits: Limits,
+    mut storage: S,
+    leg: impl FnOnce(&mut Vm<'_>) -> Result<(T, usize), Error>,
+) -> Result<super::OwnedPatternValue<T, S>, super::OwnedPatternError<S>> {
+    let verdict = (|| {
+        program.admit(limits)?;
+        let mut vm = Vm::with_storage(program, input, limits, &mut storage);
+        leg(&mut vm)
+    })();
+    // Every machine buffer is destroyed before its account is shrunk to the
+    // output that actually survives this operation.
+    match verdict {
+        Ok((value, bytes)) => match storage.resize(bytes) {
+            Ok(()) => Ok(super::OwnedPatternValue::new(value, storage)),
+            Err(error) => {
+                drop(value);
+                Err(super::OwnedPatternValue::new(
+                    Error::Storage(error),
+                    storage,
+                ))
+            }
+        },
+        Err(error) => Err(super::OwnedPatternValue::new(error, storage)),
+    }
+}
+
 impl CompiledPattern {
+    /// Match through the unchanged native machines with physical admission.
+    ///
+    /// # Errors
+    /// Retains the original typed account on language, work, layout, allocator
+    /// or physical-capacity refusal. No partial match is published.
+    pub fn is_match_with_storage<S: purrdf_lex::allocation::Admission>(
+        &self,
+        input: &str,
+        limits: Limits,
+        storage: S,
+    ) -> Result<super::OwnedPatternValue<bool, S>, super::OwnedPatternError<S>> {
+        owned_execution(self, input, limits, storage, |vm| {
+            Ok((vm.is_match_from(0)?, 0))
+        })
+    }
+
+    /// Find ordered captures while retaining their exact buffer admission.
+    ///
+    /// # Errors
+    /// Preserves the same native verdict and original physical account.
+    pub fn find_with_storage<S: purrdf_lex::allocation::Admission>(
+        &self,
+        input: &str,
+        limits: Limits,
+        storage: S,
+    ) -> Result<OwnedCaptures<S>, super::OwnedPatternError<S>> {
+        owned_execution(self, input, limits, storage, |vm| {
+            let found = vm.find_from(0)?;
+            let bytes = found.as_ref().map_or(Ok(0), |captures| {
+                std::alloc::Layout::array::<Option<Range<usize>>>(captures.spans.capacity())
+                    .map(|layout| layout.size())
+                    .map_err(|_| Error::Storage(purrdf_lex::allocation::StorageError::SizeOverflow))
+            })?;
+            Ok((found, bytes))
+        })
+    }
+
     /// Whether the input contains a match under this program's dated law.
     ///
     /// # Errors
@@ -192,12 +261,61 @@ enum Machine<'a> {
 
 impl<'a> Vm<'a> {
     pub(super) fn new(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+        Self::with_context(Ctx::new(program, input, limits))
+    }
+
+    pub(super) fn with_storage(
+        program: &'a CompiledPattern,
+        input: &'a str,
+        limits: Limits,
+        storage: &'a mut dyn purrdf_lex::allocation::Admission,
+    ) -> Self {
+        Self::with_context(Ctx::with_budget(
+            program,
+            input,
+            Budget::with_storage(limits, storage),
+        ))
+    }
+
+    pub(super) fn with_budget(
+        program: &'a CompiledPattern,
+        input: &'a str,
+        budget: Budget<'a>,
+    ) -> Self {
+        Self::with_context(Ctx::with_budget(program, input, budget))
+    }
+
+    /// Destroy all execution buffers before transferring the shared work fuel.
+    pub(super) fn into_budget(self) -> Result<Budget<'a>, Error> {
+        match self.machine {
+            Machine::Backtrack { machine, .. } => Ok(machine.abandon()?.budget),
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            Machine::Pike(machine) => machine.into_budget(),
+            Machine::Linear(machine) => machine.into_budget(),
+            Machine::Exchanging => unreachable!("the machines are exchanged within one call"),
+        }
+    }
+
+    fn with_context(ctx: Ctx<'a>) -> Self {
+        if ctx.program.law.is_compatibility() {
+            // Compatibility has no backreferences. Boolean matching needs no
+            // capture histories; capture matching first certifies the leftmost
+            // viable start, then keeps the compatibility thread-priority law.
+            return Self {
+                machine: Machine::Linear(Pike::new(ctx)),
+            };
+        }
+        let fallback = !ctx.program.links.backreferences;
         Self {
             machine: Machine::Backtrack {
-                machine: Backtrack::new(program, input, limits),
-                fallback: !program.links.backreferences,
+                machine: Backtrack::with_context(ctx),
+                fallback,
             },
         }
+    }
+
+    pub(super) fn release_captures(&mut self, captures: Captures) -> Result<(), Error> {
+        self.budget().release_vec(captures.spans)
     }
 
     /// The backtracking machine alone, which every program can run on.
@@ -209,7 +327,7 @@ impl<'a> Vm<'a> {
     ) -> Self {
         Self {
             machine: Machine::Backtrack {
-                machine: Backtrack::new(program, input, limits),
+                machine: Backtrack::with_context(Ctx::new(program, input, limits)),
                 fallback: false,
             },
         }
@@ -254,7 +372,7 @@ impl<'a> Vm<'a> {
     }
 
     /// This execution's work and storage accounting.
-    pub(super) fn budget(&mut self) -> &mut Budget {
+    pub(super) fn budget(&mut self) -> &mut Budget<'a> {
         match &mut self.machine {
             Machine::Backtrack { machine, .. } => &mut machine.ctx.budget,
             #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -276,7 +394,7 @@ impl<'a> Vm<'a> {
                 fallback: true,
             } => match Self::attempt(machine, start) {
                 Err(Error::Resource(_)) => {
-                    self.hand_over();
+                    self.hand_over()?;
                     self.is_match_from(start)
                 }
                 decided => Ok(decided?.is_some()),
@@ -311,13 +429,14 @@ impl<'a> Vm<'a> {
     /// decides runs only its own code.
     #[cold]
     #[inline(never)]
-    fn hand_over(&mut self) {
+    fn hand_over(&mut self) -> Result<(), Error> {
         let Machine::Backtrack { machine, .. } =
             std::mem::replace(&mut self.machine, Machine::Exchanging)
         else {
             unreachable!("only the backtracking machine hands over");
         };
-        self.machine = Machine::Linear(Pike::new(machine.abandon()));
+        self.machine = Machine::Linear(Pike::new(machine.abandon()?));
+        Ok(())
     }
 
     /// Whether the linear-time machines find a match from `start`.
@@ -349,7 +468,7 @@ impl<'a> Vm<'a> {
                 fallback: true,
             } => match Self::attempt(machine, start) {
                 Err(Error::Resource(_)) => {
-                    self.hand_over();
+                    self.hand_over()?;
                     self.find_from(start)
                 }
                 decided => decided,
@@ -375,16 +494,20 @@ enum SetAction {
 pub(super) struct Ctx<'a> {
     pub(super) program: &'a CompiledPattern,
     pub(super) input: &'a str,
-    pub(super) budget: Budget,
+    pub(super) budget: Budget<'a>,
     pub(super) live_slots: u128,
 }
 
 impl<'a> Ctx<'a> {
     pub(super) fn new(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+        Self::with_budget(program, input, Budget::new(limits))
+    }
+
+    fn with_budget(program: &'a CompiledPattern, input: &'a str, budget: Budget<'a>) -> Self {
         Self {
             program,
             input,
-            budget: Budget::new(limits),
+            budget,
             live_slots: 0,
         }
     }
@@ -397,10 +520,9 @@ impl<'a> Ctx<'a> {
     ) -> Result<(), Error> {
         let required = self.live_slots + u128::from(slots);
         self.budget.limits().admit(Resource::MatchSlots, required)?;
-        stack.try_push(value).map_err(|_| Error::Allocation {
-            resource: Resource::MatchSlots,
-            units: stack.len() as u64 + 1,
-        })?;
+        let units = stack.len() as u64 + 1;
+        self.budget
+            .push_work(stack, value, Resource::MatchSlots, units)?;
         self.live_slots = required;
         Ok(())
     }
@@ -409,7 +531,7 @@ impl<'a> Ctx<'a> {
     pub(super) fn at_start(&self, position: usize) -> bool {
         position == 0
             || (self.program.modes.multiline
-                && position < self.input.len()
+                && (position < self.input.len() || self.program.law.is_compatibility())
                 && self.input[..position].ends_with('\n'))
     }
 
@@ -417,7 +539,8 @@ impl<'a> Ctx<'a> {
     pub(super) fn at_end(&self, position: usize) -> bool {
         if self.program.modes.multiline {
             self.input[position..].starts_with('\n')
-                || (position == self.input.len() && !self.input.ends_with('\n'))
+                || (position == self.input.len()
+                    && (self.program.law.is_compatibility() || !self.input.ends_with('\n')))
         } else {
             position == self.input.len()
         }
@@ -439,7 +562,6 @@ impl<'a> Ctx<'a> {
 
     /// Whether a match can begin at `start`, spending the comparison that
     /// decides it.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(super) fn may_start(&mut self, start: usize) -> Result<bool, Error> {
         match self.program.lead.first {
             Lead::Any => Ok(true),
@@ -480,11 +602,14 @@ impl<'a> Ctx<'a> {
                 // The multiline start: after a newline that is not final.
                 loop {
                     self.budget.charge(Resource::MatchSteps, 1)?;
-                    if start >= self.input.len() {
+                    if start > self.input.len() {
                         return Ok(None);
                     }
-                    if self.input[..start].ends_with('\n') {
+                    if self.at_start(start) {
                         return Ok(Some(start));
+                    }
+                    if start == self.input.len() {
+                        return Ok(None);
                     }
                     start += self.input[start..]
                         .chars()
@@ -567,6 +692,8 @@ impl<'a> Ctx<'a> {
         }
         let value = values.pop().expect("one complete character-set result");
         self.live_slots -= 1;
+        self.budget.release_work(work)?;
+        self.budget.release_work(values)?;
         Ok(value)
     }
 
@@ -576,7 +703,7 @@ impl<'a> Ctx<'a> {
                 if (lo..=hi).contains(&ch) {
                     true
                 } else if folded {
-                    let variants = case_variants(ch);
+                    let variants = case_variants_for(self.program.law, ch);
                     self.budget
                         .charge_wide(Resource::MatchSteps, variants.len() as u128)?;
                     variants
@@ -586,7 +713,32 @@ impl<'a> Ctx<'a> {
                     false
                 }
             }
-            Set::Table(ranges) => purrdf_iri::terminals::in_ranges(ch as u32, ranges),
+            Set::Table { ranges, folded } => {
+                if purrdf_iri::terminals::in_ranges(ch as u32, ranges) {
+                    true
+                } else if folded {
+                    let variants = case_variants_for(self.program.law, ch);
+                    self.budget
+                        .charge_wide(Resource::MatchSteps, variants.len() as u128)?;
+                    variants
+                        .iter()
+                        .any(|&point| purrdf_iri::terminals::in_ranges(point, ranges))
+                } else {
+                    false
+                }
+            }
+            Set::Block { lo, hi, folded } => {
+                if (lo..=hi).contains(&(ch as u32)) {
+                    true
+                } else if folded {
+                    let variants = case_variants_for(self.program.law, ch);
+                    self.budget
+                        .charge_wide(Resource::MatchSteps, variants.len() as u128)?;
+                    variants.iter().any(|point| (lo..=hi).contains(point))
+                } else {
+                    false
+                }
+            }
             Set::Space => purrdf_iri::terminals::is_ws_char(ch),
             Set::Word => {
                 self.budget.charge(Resource::MatchSteps, 3)?;
@@ -599,7 +751,8 @@ impl<'a> Ctx<'a> {
             }
             Set::Dot => {
                 self.program.modes.dot_all
-                    || (ch != '\n' && (self.program.profile == Profile::Xpath20 || ch != '\r'))
+                    || (ch != '\n'
+                        && (self.program.law == Law::Dated(Profile::Xpath20) || ch != '\r'))
             }
             Set::Complement(_) | Set::Union(..) | Set::Difference(..) => {
                 unreachable!("compound character sets are evaluated on the explicit work list");
@@ -647,6 +800,22 @@ struct State {
 }
 
 impl State {
+    fn release(self, budget: &mut Budget<'_>) -> Result<(), Error> {
+        let Self {
+            actions, captures, ..
+        } = self;
+        budget.release_vec(captures)?;
+        budget.release_work(actions)
+    }
+
+    fn into_captures(self, budget: &mut Budget<'_>) -> Result<Captures, Error> {
+        let Self {
+            actions, captures, ..
+        } = self;
+        budget.release_work(actions)?;
+        Ok(Captures { spans: captures })
+    }
+
     fn slots(&self) -> u128 {
         2 + (self.captures.len() as u128) * 2 + (self.actions.len() as u128) * 3
     }
@@ -661,16 +830,16 @@ pub(super) struct Backtrack<'a> {
 }
 
 impl<'a> Backtrack<'a> {
-    fn new(program: &'a CompiledPattern, input: &'a str, limits: Limits) -> Self {
+    fn with_context(ctx: Ctx<'a>) -> Self {
         Self {
-            ctx: Ctx::new(program, input, limits),
+            ctx,
             pending: WorkList::new(),
             attempt: None,
         }
     }
 
     /// Release every pending state and hand over the request's accounting.
-    fn abandon(self) -> Ctx<'a> {
+    fn abandon(self) -> Result<Ctx<'a>, Error> {
         let Self {
             mut ctx, pending, ..
         } = self;
@@ -678,7 +847,8 @@ impl<'a> Backtrack<'a> {
         // A refused attempt may hold its current state and its set-evaluation
         // cells too; all of them are dropped with the machine.
         ctx.live_slots = 0;
-        ctx
+        ctx.budget.release_abandoned_machine()?;
+        Ok(ctx)
     }
 
     fn action(&mut self, state: &mut State, action: Action) -> Result<(), Error> {
@@ -696,12 +866,9 @@ impl<'a> Backtrack<'a> {
             .budget
             .charge_wide(Resource::MatchSteps, count as u128)?;
         let mut captures = Vec::new();
-        captures
-            .try_reserve_exact(count)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: count as u64,
-            })?;
+        self.ctx
+            .budget
+            .reserve_match(&mut captures, count, count as u64)?;
         captures.resize_with(count, || None);
         self.ctx.live_slots += slots;
         let mut state = State {
@@ -730,19 +897,20 @@ impl<'a> Backtrack<'a> {
             state.captures.len() as u128 + state.actions.len() as u128,
         )?;
         let mut captures = Vec::new();
-        captures
-            .try_reserve_exact(state.captures.len())
-            .map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: state.captures.len() as u64,
-            })?;
+        self.ctx.budget.reserve_match(
+            &mut captures,
+            state.captures.len(),
+            state.captures.len() as u64,
+        )?;
         captures.extend(state.captures.iter().cloned());
         let mut actions = WorkList::new();
         for &action in state.actions.iter() {
-            actions.try_push(action).map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: state.actions.len() as u64,
-            })?;
+            self.ctx.budget.push_work(
+                &mut actions,
+                action,
+                Resource::MatchSlots,
+                state.actions.len() as u64,
+            )?;
         }
         self.ctx.live_slots += slots;
         Ok(State {
@@ -759,10 +927,10 @@ impl<'a> Backtrack<'a> {
             .budget
             .limits()
             .admit(Resource::MatchStates, self.pending.len() as u128 + 1)?;
-        self.pending.try_push(state).map_err(|_| Error::Allocation {
-            resource: Resource::MatchStates,
-            units: self.pending.len() as u64 + 1,
-        })
+        let units = self.pending.len() as u64 + 1;
+        self.ctx
+            .budget
+            .push_work(&mut self.pending, state, Resource::MatchStates, units)
     }
 
     /// The first start after a failed `start` that a leading unbounded run
@@ -797,6 +965,7 @@ impl<'a> Backtrack<'a> {
         if let Some(run) = state.run.take() {
             let Some(stop) = self.stop(state.start, state.position, run)? else {
                 self.ctx.live_slots -= state.slots();
+                state.release(&mut self.ctx.budget)?;
                 return Ok(None);
             };
             self.stop_at(&mut state, stop, run)?;
@@ -891,14 +1060,13 @@ impl<'a> Backtrack<'a> {
                     self.ctx.live_slots -= state.slots();
                     while let Some(stale) = self.pending.pop() {
                         self.ctx.live_slots -= stale.slots();
+                        stale.release(&mut self.ctx.budget)?;
                     }
                     debug_assert_eq!(self.ctx.live_slots, 0);
-                    return Ok(Some(Captures {
-                        spans: state.captures,
-                    }));
+                    return state.into_captures(&mut self.ctx.budget).map(Some);
                 }
                 self.ctx.live_slots -= state.slots();
-                drop(state);
+                state.release(&mut self.ctx.budget)?;
                 let mut resumed = None;
                 while let Some(next) = self.pending.pop() {
                     resumed = self.resume(next)?;

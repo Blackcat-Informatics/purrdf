@@ -26,6 +26,7 @@
 //! every rule maps one `char` independently, so escaping a string's fragments
 //! one by one gives the same bytes as escaping the whole.
 
+use crate::allocation::{Admission, Memory, Resident, StorageError};
 use std::borrow::Cow;
 
 use crate::scan::{ByteClass, byte_run_count, find_first_json_string_special};
@@ -238,6 +239,8 @@ pub enum JsonEscapeErrorKind {
     UnpairedHigh,
     /// A low surrogate (`\uDC00`-`\uDFFF`) with no high surrogate before it.
     UnpairedLow,
+    /// Original physical admission or allocator refusal.
+    Storage(StorageError),
 }
 
 /// A refused JSON escape: what is wrong, and where.
@@ -259,7 +262,11 @@ impl JsonEscapeError {
 
 impl core::fmt::Display for JsonEscapeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if let JsonEscapeErrorKind::Storage(error) = self.kind {
+            return write!(f, "{error} (byte {})", self.offset);
+        }
         let what = match self.kind {
+            JsonEscapeErrorKind::Storage(_) => unreachable!("handled above"),
             JsonEscapeErrorKind::Truncated => "the input ends inside an escape",
             JsonEscapeErrorKind::BadEscape => {
                 "a backslash must be followed by one of `\"`, `\\`, `/`, `b`, `f`, `n`, `r`, `t` \
@@ -424,31 +431,62 @@ pub fn decode_escape(bytes: &[u8]) -> Result<(char, usize), JsonEscapeError> {
 /// assert!(unescape(r"\udc00").is_err());
 /// ```
 pub fn unescape(body: &str) -> Result<Cow<'_, str>, JsonEscapeError> {
+    unescape_with_memory(body, &mut Memory::new(&mut Resident))
+}
+
+/// Decode through the original caller's admission before creating escaped text.
+/// # Errors
+/// Returns the original escape defect or typed physical refusal.
+pub fn unescape_with_memory<'a, S: Admission + ?Sized>(
+    body: &'a str,
+    memory: &mut Memory<'_, S>,
+) -> Result<Cow<'a, str>, JsonEscapeError> {
     let bytes = body.as_bytes();
     let Some(first) = bytes.iter().position(|&b| b == b'\\') else {
         return Ok(Cow::Borrowed(body));
     };
-    let mut out = String::with_capacity(body.len());
-    out.push_str(&body[..first]);
-    let mut at = first;
-    loop {
-        let (decoded, width) = decode_escape(&bytes[at..]).map_err(|error| JsonEscapeError {
-            offset: at + error.offset,
-            ..error
-        })?;
-        out.push(decoded);
-        at += width;
-        // The run up to the next backslash is copied whole; a backslash is
-        // ASCII, so both ends are `char` boundaries.
-        let run = bytes[at..]
-            .iter()
-            .position(|&b| b == b'\\')
-            .map_or(bytes.len(), |next| at + next);
-        out.push_str(&body[at..run]);
-        if run == bytes.len() {
-            return Ok(Cow::Owned(out));
+    let mut out = String::new();
+    memory
+        .reserve_string(&mut out, body.len())
+        .map_err(|error| JsonEscapeError::at(JsonEscapeErrorKind::Storage(error), first))?;
+    let result: Result<(), JsonEscapeError> = (|| {
+        memory
+            .push_str(&mut out, &body[..first])
+            .map_err(|error| JsonEscapeError::at(JsonEscapeErrorKind::Storage(error), first))?;
+        let mut at = first;
+        loop {
+            let (decoded, width) =
+                decode_escape(&bytes[at..]).map_err(|error| JsonEscapeError {
+                    offset: at + error.offset,
+                    ..error
+                })?;
+            memory
+                .push_char(&mut out, decoded)
+                .map_err(|error| JsonEscapeError::at(JsonEscapeErrorKind::Storage(error), at))?;
+            at += width;
+            // The run up to the next backslash is copied whole; a backslash is
+            // ASCII, so both ends are `char` boundaries.
+            let run = bytes[at..]
+                .iter()
+                .position(|&b| b == b'\\')
+                .map_or(bytes.len(), |next| at + next);
+            memory
+                .push_str(&mut out, &body[at..run])
+                .map_err(|error| JsonEscapeError::at(JsonEscapeErrorKind::Storage(error), at))?;
+            if run == bytes.len() {
+                return Ok(());
+            }
+            at = run;
         }
-        at = run;
+    })();
+    match result {
+        Ok(()) => Ok(Cow::Owned(out)),
+        Err(error) => {
+            memory.release_string(out).map_err(|storage| {
+                JsonEscapeError::at(JsonEscapeErrorKind::Storage(storage), error.offset)
+            })?;
+            Err(error)
+        }
     }
 }
 

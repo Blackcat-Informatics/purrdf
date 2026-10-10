@@ -140,8 +140,9 @@ use crate::user_fn::Volatility;
 
 use crate::property_fn::ExclusionBasis;
 pub use invocation::{
-    KNN_ARITY, KNN_COUNT, KNN_DISTANCE, KNN_MEMBERSHIP_MODE, KNN_MODE, KNN_NEIGHBOUR, KNN_QUERY,
-    KnnAnswer, KnnInvocation, RankSource, RankedCursor, TermRows, neighbour_count, universe_size,
+    AdmittedKnnInvocation, KNN_ARITY, KNN_COUNT, KNN_DISTANCE, KNN_MEMBERSHIP_MODE, KNN_MODE,
+    KNN_NEIGHBOUR, KNN_QUERY, KnnAnswer, KnnInvocation, RankSource, RankedCursor, TermRows,
+    neighbour_count, universe_size,
 };
 pub use metric::{
     Arithmetic, Bound, Bounded, Exact, Kernel, Ranked, Reassociated, Resolved, Scalar, Selected,
@@ -586,25 +587,26 @@ impl EmbeddingSpace {
     ///
     /// The one arithmetic path: the same batch kernel of `A`, on the same dispatch path
     /// (`declared` when the relation selected one, else this thread's), over the same
-    /// stored components and the same precomputed norms [`Self::search`] uses, so the
+    /// stored components and the same precomputed norms [`Self::search_admitted`] uses, so the
     /// value is bit-identical to the one a scan would have produced for this pair.
     /// There is no second distance formula in this crate and this does not add one.
     ///
     /// # Errors
     ///
-    /// [`EvalError::Data`], as [`Self::search`] raises it, when the distance leaves
+    /// [`EvalError::Data`], as [`Self::search_admitted`] raises it, when the distance leaves
     /// the finite binary64 range. Reporting an infinity as a distance would put a
     /// number that overflowed into an answer. [`EvalError::FloatEnvironment`], as
-    /// [`Self::search`] raises it, when the calling thread's floating-point environment
+    /// [`Self::search_admitted`] raises it, when the calling thread's floating-point environment
     /// is not the IEEE one the arithmetic defines.
     fn row_distance<A: Arithmetic>(
         &self,
         declared: Option<Selected<A>>,
         query_row: usize,
         row: usize,
+        workspace: &crate::WorkspaceCapability,
     ) -> Result<f64, EvalError> {
         let arithmetic = resolve_here(declared)?;
-        let rows = self.rows()?;
+        let rows = self.rows(workspace)?;
         let mut distance = [None];
         arithmetic.distances_indexed(
             self.kernel.measure(),
@@ -615,26 +617,34 @@ impl EmbeddingSpace {
             &mut distance,
         );
         distance[0].ok_or_else(|| {
-            EvalError::data(format!(
-                "the distance from row {query_row} to row {row} left the finite range \
+            crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Data,
+                format_args!(
+                    "the distance from row {query_row} to row {row} left the finite range \
                  under {:?}; the artifact's magnitudes cannot be ranked under this metric",
-                self.metric
-            ))
+                    self.metric
+                ),
+                workspace,
+            )
         })
     }
 
     /// Every row of this space as the batch kernels read it.
-    fn rows(&self) -> Result<RowsRef<'_, f64>, EvalError> {
+    fn rows(&self, workspace: &crate::WorkspaceCapability) -> Result<RowsRef<'_, f64>, EvalError> {
         RowsRef::new(&self.vectors, self.row_count(), self.dimension, &self.norms).ok_or_else(
             || {
-                EvalError::internal(format!(
-                    "the space's {} value(s) and {} norm(s) do not describe {} row(s) of {} \
+                crate::error::NativeDiagnostic::error(
+                    crate::error::NativeDiagnosticKind::Internal,
+                    format_args!(
+                        "the space's {} value(s) and {} norm(s) do not describe {} row(s) of {} \
                      component(s)",
-                    self.vectors.len(),
-                    self.norms.len(),
-                    self.row_count(),
-                    self.dimension
-                ))
+                        self.vectors.len(),
+                        self.norms.len(),
+                        self.row_count(),
+                        self.dimension
+                    ),
+                    workspace,
+                )
             },
         )
     }
@@ -663,41 +673,52 @@ impl EmbeddingSpace {
     /// infinity would sort — last, confidently — from a number that overflowed.
     /// [`EvalError::FloatEnvironment`] if the calling thread's floating-point environment
     /// is not the IEEE one the arithmetic defines.
-    fn search<A: Arithmetic>(
+    /// The same exhaustive batch kernel, with its actual buffers admitted before
+    /// allocation and the selected rows retaining their heap allocation.
+    fn search_admitted<A: Arithmetic>(
         &self,
         declared: Option<Selected<A>>,
         query_row: usize,
         k: usize,
-    ) -> Result<(Vec<Ranked>, u64), EvalError> {
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(crate::AdmittedVec<Ranked>, u64), EvalError> {
         if k == 0 {
             // No neighbours were asked for, so no candidate is examined and no work is
             // reported. A zero request is a well-formed question with an empty answer.
-            return Ok((Vec::new(), 0));
+            return Ok((crate::AdmittedVec::new(workspace), 0));
         }
         let arithmetic = resolve_here(declared)?;
-        let rows = self.rows()?;
-        let mut distances: Vec<Option<f64>> = vec![None; self.row_count()];
+        let rows = self.rows(workspace)?;
+        let mut distances = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
+        for _ in 0..self.row_count() {
+            distances.push(None)?;
+        }
         arithmetic.distances(
             self.kernel.measure(),
             self.vector(query_row),
             self.norm_of(query_row),
             rows,
-            &mut distances,
+            distances.as_mut_slice(),
         );
-        let mut scored: Vec<Ranked> = Vec::with_capacity(self.row_count());
+        let mut scored = crate::AdmittedVec::with_capacity(self.row_count(), workspace)?;
         for (row, distance) in distances.into_iter().enumerate() {
             let distance = distance.ok_or_else(|| {
-                EvalError::data(format!(
-                    "the distance from row {query_row} to row {row} left the finite range \
+                crate::error::NativeDiagnostic::error(
+                    crate::error::NativeDiagnosticKind::Data,
+                    format_args!(
+                        "the distance from row {query_row} to row {row} left the finite range \
                      under {:?}; the artifact's magnitudes cannot be ranked under this \
                      metric",
-                    self.metric
-                ))
+                        self.metric
+                    ),
+                    workspace,
+                )
             })?;
-            scored.push(Ranked { distance, row });
+            scored.push(Ranked { distance, row })?;
         }
-        let examined = scored.len() as u64;
-        Ok((best(k, scored), examined))
+        let examined =
+            u64::try_from(scored.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        Ok((metric::best_admitted(k, scored, workspace)?, examined))
     }
 }
 
@@ -1130,13 +1151,24 @@ impl KnnObservations {
 /// caller first turns the relation into a trait object. The scan, and the batch kernel
 /// and every dispatch path it calls, is then compiled once, here, and the asm evidence
 /// gate measures the copy every registered relation runs.
-type Scan<A> =
-    fn(&EmbeddingSpace, Option<Selected<A>>, usize, usize) -> Result<(Vec<Ranked>, u64), EvalError>;
+type Scan<A> = fn(
+    &EmbeddingSpace,
+    Option<Selected<A>>,
+    usize,
+    usize,
+    &crate::WorkspaceCapability,
+) -> Result<(crate::AdmittedVec<Ranked>, u64), EvalError>;
 
 /// One membership distance under arithmetic `A`: [`EmbeddingSpace::row_distance`] at a
 /// concrete law, instantiated in the constructors for the reason [`Scan`] is, so the
 /// pairwise evaluation a candidate-bound call runs is the copy this crate compiled.
-type Lookup<A> = fn(&EmbeddingSpace, Option<Selected<A>>, usize, usize) -> Result<f64, EvalError>;
+type Lookup<A> = fn(
+    &EmbeddingSpace,
+    Option<Selected<A>>,
+    usize,
+    usize,
+    &crate::WorkspaceCapability,
+) -> Result<f64, EvalError>;
 
 impl EmbeddingKnnRelation {
     /// A nearest-neighbour relation over `space`, ranking under the [`Exact`] arithmetic.
@@ -1195,7 +1227,7 @@ impl<A: Arithmetic> EmbeddingKnnRelation<A> {
                 BindingPattern::from_code(KNN_MEMBERSHIP_MODE),
             ],
             declared,
-            scan: EmbeddingSpace::search::<A>,
+            scan: EmbeddingSpace::search_admitted::<A>,
             lookup: EmbeddingSpace::row_distance::<A>,
             observations: Arc::new(KnnObservations::default()),
         }
@@ -1598,24 +1630,31 @@ impl<A: Arithmetic> PropertyFunction for EmbeddingKnnRelation<A> {
         args: &PfArgs<'_>,
         ceiling: Option<u64>,
     ) -> Result<Box<dyn PfCursor>, EvalError> {
-        let invocation = KnnInvocation::open(
+        self.open_admitted(args, ceiling, crate::WorkspaceCapability::resident())
+    }
+
+    fn open_admitted(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        workspace: crate::WorkspaceCapability,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        KnnInvocation::open_owned(
             "the embedding kNN relation",
             args,
             ceiling,
             &self.space.rows,
             self.space.guard(),
             &self.observations.membership_lookups,
-        )?;
-        Ok(Box::new(RankedCursor::new(
-            KnnSource {
-                space: Arc::clone(&self.space),
-                declared: self.declared,
-                scan: self.scan,
-                lookup: self.lookup,
-                observations: Arc::clone(&self.observations),
-            },
-            invocation,
-        )))
+            workspace,
+        )?
+        .cursor(KnnSource {
+            space: Arc::clone(&self.space),
+            declared: self.declared,
+            scan: self.scan,
+            lookup: self.lookup,
+            observations: Arc::clone(&self.observations),
+        })
     }
 }
 
@@ -1639,8 +1678,20 @@ struct KnnSource<A: Arithmetic> {
 
 impl<A: Arithmetic> RankSource for KnnSource<A> {
     fn search(&self, query_row: usize, select_k: usize) -> Result<(Vec<Ranked>, u64), EvalError> {
+        let (ranked, examined) =
+            self.search_admitted(query_row, select_k, &crate::WorkspaceCapability::default())?;
+        Ok((ranked.into_parts().0, examined))
+    }
+
+    fn search_admitted(
+        &self,
+        query_row: usize,
+        select_k: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(crate::AdmittedVec<Ranked>, u64), EvalError> {
         self.observations.scans.fetch_add(1, Ordering::Relaxed);
-        let (ranked, examined) = (self.scan)(&self.space, self.declared, query_row, select_k)?;
+        let (ranked, examined) =
+            (self.scan)(&self.space, self.declared, query_row, select_k, workspace)?;
         self.observations
             .scanned_candidates
             .fetch_add(examined, Ordering::Relaxed);
@@ -1650,10 +1701,19 @@ impl<A: Arithmetic> RankSource for KnnSource<A> {
     /// One pairwise evaluation: no other row of the space is read and the graph of
     /// ranks is never built.
     fn distance(&self, query_row: usize, row: usize) -> Result<f64, EvalError> {
+        self.distance_admitted(query_row, row, &crate::WorkspaceCapability::default())
+    }
+
+    fn distance_admitted(
+        &self,
+        query_row: usize,
+        row: usize,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<f64, EvalError> {
         self.observations
             .membership_distances
             .fetch_add(1, Ordering::Relaxed);
-        (self.lookup)(&self.space, self.declared, query_row, row)
+        (self.lookup)(&self.space, self.declared, query_row, row, workspace)
     }
 
     fn term(&self, row: usize) -> Option<&TermValue> {

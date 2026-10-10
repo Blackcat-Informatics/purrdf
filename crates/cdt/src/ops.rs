@@ -77,7 +77,6 @@
 //! parse and a few work-list entries per level, and never a native frame — there is
 //! no re-entry into the comparator, and nothing for a depth budget to bound.
 
-use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::mem;
@@ -85,9 +84,12 @@ use core::mem;
 use purrdf_xsd::XsdValue;
 
 use crate::error::CdtTypeError;
-use crate::literal::LiteralValue;
+use crate::literal::{NativeLiteralValue, release_xsd_with_memory};
+use crate::memory::CdtMemory;
+use crate::memory::{Memory, Resident, Storage, StorageError};
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm};
 use crate::value::{CdtContents, CdtParts, CdtValue};
+use core::alloc::Layout;
 
 // ── 1. The syntactic total order ────────────────────────────────────────────────
 
@@ -187,7 +189,21 @@ pub fn total_key_cmp(a: &CdtKey, b: &CdtKey) -> Ordering {
 /// ```
 #[must_use]
 pub fn total_term_cmp(a: &CdtTerm, b: &CdtTerm) -> Ordering {
-    run_cmp(alloc::vec![CmpJob::Pair(a, b)])
+    try_total_term_cmp(a, b, &mut Resident).expect("resident composite comparison capacity")
+}
+
+/// Native syntactic term ordering through the caller's physical storage owner.
+/// # Errors
+/// Checked layout, admission or allocator refusal, separate from comparability.
+pub fn try_total_term_cmp(
+    a: &CdtTerm,
+    b: &CdtTerm,
+    storage: &mut impl Storage,
+) -> Result<Ordering, StorageError> {
+    let mut memory = Memory::new(storage);
+    let mut jobs = Vec::new();
+    memory.push(&mut jobs, CmpJob::Pair(a, b))?;
+    run_cmp(jobs, &mut memory)
 }
 
 /// The crate's syntactic total order over two composite values.
@@ -196,13 +212,25 @@ pub fn total_term_cmp(a: &CdtTerm, b: &CdtTerm) -> Ordering {
 /// the order [`crate::canonical_lexical`] writes a map in.
 #[must_use]
 pub fn total_value_cmp(a: &CdtValue, b: &CdtValue) -> Ordering {
-    let mut jobs: Vec<CmpJob<'_>> = Vec::new();
-    push_value_cmp(&mut jobs, a, b);
-    run_cmp(jobs)
+    try_total_value_cmp(a, b, &mut Resident).expect("resident composite comparison capacity")
+}
+
+/// Native syntactic composite ordering through the same existing relation.
+/// # Errors
+/// Checked layout, admission or allocator refusal, separate from comparability.
+pub fn try_total_value_cmp(
+    a: &CdtValue,
+    b: &CdtValue,
+    storage: &mut impl Storage,
+) -> Result<Ordering, StorageError> {
+    let mut memory = Memory::new(storage);
+    let mut jobs = Vec::new();
+    push_value_cmp(&mut jobs, a, b, &mut memory)?;
+    run_cmp(jobs, &mut memory)
 }
 
 /// Drive the comparison worklist to a verdict.
-fn run_cmp(mut jobs: Vec<CmpJob<'_>>) -> Ordering {
+fn run_cmp(mut jobs: Vec<CmpJob<'_>>, memory: &mut Memory<'_>) -> Result<Ordering, StorageError> {
     while let Some(job) = jobs.pop() {
         let decided = match job {
             CmpJob::Decided(ordering) => ordering,
@@ -210,7 +238,8 @@ fn run_cmp(mut jobs: Vec<CmpJob<'_>>) -> Ordering {
             CmpJob::Pair(x, y) => {
                 let by_rank = x.rank().cmp(&y.rank());
                 if by_rank != Ordering::Equal {
-                    return by_rank;
+                    memory.release_vec(jobs)?;
+                    return Ok(by_rank);
                 }
                 match (x, y) {
                     (CdtTerm::Null, CdtTerm::Null) => Ordering::Equal,
@@ -218,13 +247,13 @@ fn run_cmp(mut jobs: Vec<CmpJob<'_>>) -> Ordering {
                     (CdtTerm::Iri(p), CdtTerm::Iri(q)) => p.cmp(q),
                     (CdtTerm::Literal(p), CdtTerm::Literal(q)) => literal_cmp(p, q),
                     (CdtTerm::TripleTerm(p), CdtTerm::TripleTerm(q)) => {
-                        jobs.push(CmpJob::Pair(&p.object, &q.object));
-                        jobs.push(CmpJob::Pair(&p.predicate, &q.predicate));
-                        jobs.push(CmpJob::Pair(&p.subject, &q.subject));
+                        memory.push(&mut jobs, CmpJob::Pair(&p.object, &q.object))?;
+                        memory.push(&mut jobs, CmpJob::Pair(&p.predicate, &q.predicate))?;
+                        memory.push(&mut jobs, CmpJob::Pair(&p.subject, &q.subject))?;
                         continue;
                     }
                     (CdtTerm::Composite(p), CdtTerm::Composite(q)) => {
-                        push_value_cmp(&mut jobs, p.as_ref(), q.as_ref());
+                        push_value_cmp(&mut jobs, p.as_ref(), q.as_ref(), memory)?;
                         continue;
                     }
                     // Equal ranks imply the same variant; answering `Equal` keeps the
@@ -234,34 +263,44 @@ fn run_cmp(mut jobs: Vec<CmpJob<'_>>) -> Ordering {
             }
         };
         if decided != Ordering::Equal {
-            return decided;
+            memory.release_vec(jobs)?;
+            return Ok(decided);
         }
     }
-    Ordering::Equal
+    memory.release_vec(jobs)?;
+    Ok(Ordering::Equal)
 }
 
 /// Push the jobs comparing two composites, in reverse evaluation order (the
 /// worklist pops LIFO, so the length tie-break goes on first and is consulted last).
-fn push_value_cmp<'a>(jobs: &mut Vec<CmpJob<'a>>, a: &'a CdtValue, b: &'a CdtValue) {
+fn push_value_cmp<'a>(
+    jobs: &mut Vec<CmpJob<'a>>,
+    a: &'a CdtValue,
+    b: &'a CdtValue,
+    memory: &mut Memory<'_>,
+) -> Result<(), StorageError> {
     match (a.contents(), b.contents()) {
-        (CdtContents::List(_), CdtContents::Map(_)) => jobs.push(CmpJob::Decided(Ordering::Less)),
+        (CdtContents::List(_), CdtContents::Map(_)) => {
+            memory.push(jobs, CmpJob::Decided(Ordering::Less))?;
+        }
         (CdtContents::Map(_), CdtContents::List(_)) => {
-            jobs.push(CmpJob::Decided(Ordering::Greater));
+            memory.push(jobs, CmpJob::Decided(Ordering::Greater))?;
         }
         (CdtContents::List(left), CdtContents::List(right)) => {
-            jobs.push(CmpJob::Decided(left.len().cmp(&right.len())));
+            memory.push(jobs, CmpJob::Decided(left.len().cmp(&right.len())))?;
             for (p, q) in left.iter().zip(right.iter()).rev() {
-                jobs.push(CmpJob::Pair(p, q));
+                memory.push(jobs, CmpJob::Pair(p, q))?;
             }
         }
         (CdtContents::Map(left), CdtContents::Map(right)) => {
-            jobs.push(CmpJob::Decided(left.len().cmp(&right.len())));
+            memory.push(jobs, CmpJob::Decided(left.len().cmp(&right.len())))?;
             for (p, q) in left.iter().zip(right.iter()).rev() {
-                jobs.push(CmpJob::Pair(&p.value, &q.value));
-                jobs.push(CmpJob::KeyPair(&p.key, &q.key));
+                memory.push(jobs, CmpJob::Pair(&p.value, &q.value))?;
+                memory.push(jobs, CmpJob::KeyPair(&p.key, &q.key))?;
             }
         }
     }
+    Ok(())
 }
 
 // ── 2. The SEP-0009 value relations ─────────────────────────────────────────────
@@ -313,16 +352,83 @@ enum Denotation {
 /// but this function is total over the type, and a hand-built literal carrying both a
 /// language tag and, say, `xsd:integer` is a language-tagged string with a confused
 /// datatype rather than an ill-typed integer.
-fn denotation(literal: &CdtLiteral) -> Denotation {
+fn denotation(literal: &CdtLiteral, memory: &mut Memory<'_>) -> Result<Denotation, StorageError> {
     if literal.language.is_some() {
-        return Denotation::LanguageTagged;
+        return Ok(Denotation::LanguageTagged);
     }
-    match crate::literal::parse_literal(&literal.lexical, &literal.datatype) {
-        LiteralValue::Cdt(value) => Denotation::Composite(value),
-        LiteralValue::Xsd(value) => Denotation::Xsd(value),
-        LiteralValue::IllTyped { .. } => Denotation::IllTyped,
-        LiteralValue::Opaque => Denotation::Unmodelled,
+    Ok(
+        match crate::literal::resolve_literal_with_memory(
+            &literal.lexical,
+            &literal.datatype,
+            memory,
+        )? {
+            NativeLiteralValue::Cdt(value) => Denotation::Composite(value),
+            NativeLiteralValue::Xsd(value) => Denotation::Xsd(value),
+            NativeLiteralValue::IllTyped => Denotation::IllTyped,
+            NativeLiteralValue::Opaque => Denotation::Unmodelled,
+        },
+    )
+}
+
+impl Denotation {
+    fn release(self, memory: &mut Memory<'_>) -> Result<(), StorageError> {
+        match self {
+            Self::Composite(value) => value.release_with_memory(memory),
+            Self::Xsd(value) => release_xsd_with_memory(value, memory),
+            Self::LanguageTagged | Self::IllTyped | Self::Unmodelled => Ok(()),
+        }
     }
+}
+
+/// Numeric scratch is admitted from the native operation certificate before the
+/// original kernel runs; it dies inside the kernel before this scope releases it.
+fn xsd_relation(
+    a: &XsdValue,
+    b: &XsdValue,
+    equal: bool,
+    memory: &mut Memory<'_>,
+) -> Result<Option<bool>, StorageError> {
+    memory.scope(|memory| {
+        let baseline = memory.admitted_bytes();
+        let mut original_failure = None;
+        let mut admit = |layout: purrdf_xsd::exact::cost::NumericOperationLayout| {
+            let next = baseline
+                .checked_add(layout.required_bytes())
+                .ok_or(purrdf_xsd::bigint::LimbScratchError::SizeOverflow)?;
+            let required = next.saturating_sub(memory.admitted_bytes());
+            if let Err(error) = memory.add_bytes(required) {
+                original_failure.get_or_insert(error);
+                return Err(purrdf_xsd::bigint::LimbScratchError::AllocationFailed);
+            }
+            Ok(())
+        };
+        let answer = if equal {
+            purrdf_xsd::ops::value_equal_admitted(a, b, &mut admit)
+        } else {
+            purrdf_xsd::ops::value_cmp_admitted(a, b, &mut admit)
+                .map(|order| order.map(|order| order == Ordering::Less))
+        };
+        // Native scratch has already died. Select its original failure before any
+        // refund callback; the common scope preserves it if that callback refuses.
+        if let Some(error) = original_failure {
+            return Err(error);
+        }
+        let answer = answer.map_err(|error| match error {
+            purrdf_xsd::bigint::LimbScratchError::SizeOverflow => StorageError::SizeOverflow,
+            purrdf_xsd::bigint::LimbScratchError::AllocationFailed
+            | purrdf_xsd::bigint::LimbScratchError::Capacity { .. }
+            | purrdf_xsd::bigint::LimbScratchError::Exhausted { .. }
+            | purrdf_xsd::bigint::LimbScratchError::Retained { .. } => {
+                StorageError::AllocationFailed
+            }
+        })?;
+        let scratch = memory
+            .admitted_bytes()
+            .checked_sub(baseline)
+            .ok_or(StorageError::SizeOverflow)?;
+        memory.release_bytes(scratch)?;
+        Ok(answer)
+    })
 }
 
 /// The error an ill-typed operand raises, whichever relation asked.
@@ -379,17 +485,25 @@ enum Reach {
 /// composite, and the leaf rules then raise
 /// [`CdtTypeErrorKind::IllTyped`](crate::CdtTypeErrorKind::IllTyped) for it rather than
 /// reporting an inequality.
-fn composite_reach(term: &CdtTerm) -> Option<Reach> {
+fn composite_reach(term: &CdtTerm, memory: &mut Memory<'_>) -> Result<Option<Reach>, StorageError> {
     match term {
-        CdtTerm::Composite(_) => Some(Reach::Syntactic),
-        CdtTerm::Literal(literal) => match denotation(literal) {
-            Denotation::Composite(value) => Some(Reach::Parsed(value)),
-            Denotation::Xsd(_)
-            | Denotation::LanguageTagged
-            | Denotation::IllTyped
-            | Denotation::Unmodelled => None,
+        CdtTerm::Composite(_) => Ok(Some(Reach::Syntactic)),
+        CdtTerm::Literal(literal) => match denotation(literal, memory)? {
+            Denotation::Composite(value) => Ok(Some(Reach::Parsed(value))),
+            other => {
+                other.release(memory)?;
+                Ok(None)
+            }
         },
-        CdtTerm::Iri(_) | CdtTerm::Blank(_) | CdtTerm::TripleTerm(_) | CdtTerm::Null => None,
+        _ => Ok(None),
+    }
+}
+impl Reach {
+    fn release(self, memory: &mut Memory<'_>) -> Result<(), StorageError> {
+        match self {
+            Self::Syntactic => Ok(()),
+            Self::Parsed(value) => value.release_with_memory(memory),
+        }
     }
 }
 
@@ -428,32 +542,55 @@ enum LeafEq {
 ///   `list-functions/contains-03.rq` requires a list holding `'b'@en` to answer
 ///   `false`, not an error, when asked for the plain string `'b'`.
 /// * two XSD values — `purrdf_xsd::value_eq`, which is definite in both directions.
-fn literal_equal(a: &CdtLiteral, b: &CdtLiteral) -> LeafEq {
+fn literal_equal(
+    a: &CdtLiteral,
+    b: &CdtLiteral,
+    memory: &mut Memory<'_>,
+) -> Result<LeafEq, StorageError> {
     if a == b {
-        return LeafEq::Answer(Ok(true));
+        return Ok(LeafEq::Answer(Ok(true)));
     }
-    LeafEq::Answer(match (denotation(a), denotation(b)) {
-        (Denotation::IllTyped, _) | (_, Denotation::IllTyped) => Err(ill_typed()),
-        (Denotation::Composite(left), Denotation::Composite(right)) => {
-            return LeafEq::Composites(Some(left), Some(right));
+    let left = denotation(a, memory)?;
+    let right = denotation(b, memory)?;
+    if matches!(
+        (&left, &right),
+        (Denotation::Composite(_), Denotation::Composite(_))
+    ) {
+        if let (Denotation::Composite(left), Denotation::Composite(right)) = (left, right) {
+            return Ok(LeafEq::Composites(Some(left), Some(right)));
         }
+        unreachable!("composite denotations established");
+    }
+    let answer = match (&left, &right) {
+        (Denotation::IllTyped, _) | (_, Denotation::IllTyped) => Err(ill_typed()),
         (Denotation::Unmodelled, _) | (_, Denotation::Unmodelled) => Err(unmodelled()),
         (Denotation::Composite(_), _) | (_, Denotation::Composite(_)) => Ok(false),
         (Denotation::LanguageTagged, _) | (_, Denotation::LanguageTagged) => Ok(false),
-        (Denotation::Xsd(x), Denotation::Xsd(y)) => Ok(purrdf_xsd::value_eq(&x, &y)),
-    })
+        (Denotation::Xsd(x), Denotation::Xsd(y)) => {
+            Ok(xsd_relation(x, y, true, memory)?.unwrap_or(false))
+        }
+    };
+    left.release(memory)?;
+    right.release(memory)?;
+    Ok(LeafEq::Answer(answer))
 }
 
 /// A nested composite against a literal: the pair is two composites when the literal
 /// denotes one, and otherwise has the leaf answer for a composite against a
 /// non-composite.
-fn composite_against_literal(literal: &CdtLiteral) -> Result<Option<CdtValue>, CdtTypeError> {
-    match denotation(literal) {
-        Denotation::Composite(value) => Ok(Some(value)),
+fn composite_against_literal(
+    literal: &CdtLiteral,
+    memory: &mut Memory<'_>,
+) -> Result<Result<Option<CdtValue>, CdtTypeError>, StorageError> {
+    let denotation = denotation(literal, memory)?;
+    let answer = match denotation {
+        Denotation::Composite(value) => return Ok(Ok(Some(value))),
         Denotation::IllTyped => Err(ill_typed()),
         Denotation::Unmodelled => Err(unmodelled()),
-        Denotation::Xsd(_) | Denotation::LanguageTagged => Ok(None),
-    }
+        _ => Ok(None),
+    };
+    denotation.release(memory)?;
+    Ok(answer)
 }
 
 /// SPARQL `=` over two elements that are not both composites and not both triple
@@ -472,8 +609,8 @@ fn composite_against_literal(literal: &CdtLiteral) -> Result<Option<CdtValue>, C
 /// terms that are not both literals, and the corpus is the reason for the narrowing.
 ///
 /// [`membership_equal`] is where the distinction stops applying — see there.
-fn leaf_equal(a: &CdtTerm, b: &CdtTerm) -> LeafEq {
-    LeafEq::Answer(match (a, b) {
+fn leaf_equal(a: &CdtTerm, b: &CdtTerm, memory: &mut Memory<'_>) -> Result<LeafEq, StorageError> {
+    Ok(LeafEq::Answer(match (a, b) {
         (CdtTerm::Iri(p), CdtTerm::Iri(q)) => Ok(p == q),
         (CdtTerm::Blank(p), CdtTerm::Blank(q)) => {
             if p == q {
@@ -485,17 +622,19 @@ fn leaf_equal(a: &CdtTerm, b: &CdtTerm) -> LeafEq {
                 ))
             }
         }
-        (CdtTerm::Literal(p), CdtTerm::Literal(q)) => return literal_equal(p, q),
+        (CdtTerm::Literal(p), CdtTerm::Literal(q)) => return literal_equal(p, q, memory),
         (CdtTerm::Null, CdtTerm::Null) => Ok(true),
         // A nested composite and a composite-typed literal are two spellings of one
         // value; see `composite_reach`. The parsed value takes the literal's side.
-        (CdtTerm::Composite(_), CdtTerm::Literal(q)) => match composite_against_literal(q) {
-            Ok(Some(value)) => return LeafEq::Composites(None, Some(value)),
+        (CdtTerm::Composite(_), CdtTerm::Literal(q)) => match composite_against_literal(q, memory)?
+        {
+            Ok(Some(value)) => return Ok(LeafEq::Composites(None, Some(value))),
             Ok(None) => Ok(false),
             Err(error) => Err(error),
         },
-        (CdtTerm::Literal(p), CdtTerm::Composite(_)) => match composite_against_literal(p) {
-            Ok(Some(value)) => return LeafEq::Composites(Some(value), None),
+        (CdtTerm::Literal(p), CdtTerm::Composite(_)) => match composite_against_literal(p, memory)?
+        {
+            Ok(Some(value)) => return Ok(LeafEq::Composites(Some(value), None)),
             Ok(None) => Ok(false),
             Err(error) => Err(error),
         },
@@ -503,7 +642,7 @@ fn leaf_equal(a: &CdtTerm, b: &CdtTerm) -> LeafEq {
         // everything else; different term categories are simply not equal, which is
         // `false` and not a type error.
         _ => Ok(false),
-    })
+    }))
 }
 
 /// SPARQL `<` over two elements that are not both composites.
@@ -518,21 +657,29 @@ fn leaf_equal(a: &CdtTerm, b: &CdtTerm) -> LeafEq {
 /// `map-functions/map-less-than-error-01.rq` pins the IRI case and
 /// `map-less-than-null-01.rq` the `null` case: both require the whole comparison to be
 /// unbound.
-fn leaf_less_than(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
+fn leaf_less_than(
+    a: &CdtTerm,
+    b: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<Result<bool, CdtTypeError>, StorageError> {
     let unordered =
         || CdtTypeError::undefined("SPARQL `<` is not defined for this pair of elements");
     let (CdtTerm::Literal(p), CdtTerm::Literal(q)) = (a, b) else {
-        return Err(unordered());
+        return Ok(Err(unordered()));
     };
-    match (denotation(p), denotation(q)) {
+    let left = denotation(p, memory)?;
+    let right = denotation(q, memory)?;
+    let answer = match (&left, &right) {
         (Denotation::IllTyped, _) | (_, Denotation::IllTyped) => Err(ill_typed()),
         (Denotation::Unmodelled, _) | (_, Denotation::Unmodelled) => Err(unmodelled()),
-        (Denotation::Xsd(x), Denotation::Xsd(y)) => match purrdf_xsd::value_cmp(&x, &y) {
-            Some(ordering) => Ok(ordering == Ordering::Less),
-            None => Err(unordered()),
-        },
+        (Denotation::Xsd(x), Denotation::Xsd(y)) => {
+            xsd_relation(x, y, false, memory)?.ok_or_else(unordered)
+        }
         _ => Err(unordered()),
-    }
+    };
+    left.release(memory)?;
+    right.release(memory)?;
+    Ok(answer)
 }
 
 // ── Equality ────────────────────────────────────────────────────────────────────
@@ -554,48 +701,67 @@ impl<'a> Side<'a> {
 
     /// This side with the composite its literal denotes standing in for the literal,
     /// or this side as it is when it was a composite already.
-    fn resolved(self, parsed: Option<CdtValue>) -> Self {
+    fn resolved(
+        self,
+        parsed: Option<CdtValue>,
+        memory: &mut Memory<'_>,
+    ) -> Result<Self, StorageError> {
         match parsed {
-            Some(value) => Self::Owned(CdtTerm::Composite(Box::new(value))),
-            None => self,
+            Some(value) => {
+                self.release(memory)?;
+                Ok(Self::Owned(CdtTerm::Composite(memory.boxed_value(value)?)))
+            }
+            None => Ok(self),
+        }
+    }
+    fn release(self, memory: &mut Memory<'_>) -> Result<(), StorageError> {
+        match self {
+            Self::Borrowed(_) => Ok(()),
+            Self::Owned(term) => term.release_with_memory(memory),
         }
     }
 
     /// The three components of this side, which the caller has established is a
     /// triple term, each as a side of its own.
-    fn components(self) -> [Self; 3] {
-        match self {
+    fn components(self, memory: &mut Memory<'_>) -> Result<[Self; 3], StorageError> {
+        Ok(match self {
             Self::Borrowed(CdtTerm::TripleTerm(triple)) => [
                 Self::Borrowed(&triple.subject),
                 Self::Borrowed(&triple.predicate),
                 Self::Borrowed(&triple.object),
             ],
-            Self::Owned(CdtTerm::TripleTerm(mut triple)) => [
-                Self::Owned(mem::replace(&mut triple.subject, CdtTerm::Null)),
-                Self::Owned(mem::replace(&mut triple.predicate, CdtTerm::Null)),
-                Self::Owned(mem::replace(&mut triple.object, CdtTerm::Null)),
-            ],
-            Self::Borrowed(_) | Self::Owned(_) => {
-                unreachable!("components are taken of a triple term")
+            Self::Owned(CdtTerm::TripleTerm(mut triple)) => {
+                let result = [
+                    Self::Owned(mem::replace(&mut triple.subject, CdtTerm::Null)),
+                    Self::Owned(mem::replace(&mut triple.predicate, CdtTerm::Null)),
+                    Self::Owned(mem::replace(&mut triple.object, CdtTerm::Null)),
+                ];
+                drop(triple);
+                memory.release_bytes(Layout::new::<crate::CdtTripleTerm>().size())?;
+                result
             }
-        }
+            _ => unreachable!("components are taken of a triple term"),
+        })
     }
 
     /// The contents of this side, which the caller has established is a composite.
-    fn children(self) -> Kids<'a> {
-        match self {
+    fn children(self, memory: &mut Memory<'_>) -> Result<Kids<'a>, StorageError> {
+        Ok(match self {
             Self::Borrowed(CdtTerm::Composite(value)) => match value.contents() {
                 CdtContents::List(items) => Kids::BorrowedList(items),
                 CdtContents::Map(entries) => Kids::BorrowedMap(entries),
             },
-            Self::Owned(CdtTerm::Composite(value)) => match (*value).into_parts() {
-                CdtParts::List(items) => Kids::OwnedList(items),
-                CdtParts::Map(entries) => Kids::OwnedMap(entries),
-            },
-            Self::Borrowed(_) | Self::Owned(_) => {
-                unreachable!("children are taken of a composite")
+            Self::Owned(CdtTerm::Composite(mut value)) => {
+                let inner = mem::replace(&mut *value, CdtValue::empty_list());
+                drop(value);
+                memory.release_bytes(Layout::new::<CdtValue>().size())?;
+                match inner.into_parts() {
+                    CdtParts::List(items) => Kids::OwnedList(items),
+                    CdtParts::Map(entries) => Kids::OwnedMap(entries),
+                }
             }
-        }
+            _ => unreachable!("children are taken of a composite"),
+        })
     }
 }
 
@@ -632,33 +798,34 @@ impl<'a> Kids<'a> {
     }
 
     /// The elements — list items, or map values — in order, each as a side.
-    fn into_sides(self) -> KidSides<'a> {
+    fn take(&mut self, index: usize) -> Side<'a> {
         match self {
-            Self::BorrowedList(items) => KidSides::BorrowedList(items.iter()),
-            Self::BorrowedMap(entries) => KidSides::BorrowedMap(entries.iter()),
-            Self::OwnedList(items) => KidSides::OwnedList(items.into_iter()),
-            Self::OwnedMap(entries) => KidSides::OwnedMap(entries.into_iter()),
+            Self::BorrowedList(items) => Side::Borrowed(&items[index]),
+            Self::BorrowedMap(entries) => Side::Borrowed(&entries[index].value),
+            Self::OwnedList(items) => Side::Owned(mem::replace(&mut items[index], CdtTerm::Null)),
+            Self::OwnedMap(entries) => {
+                Side::Owned(mem::replace(&mut entries[index].value, CdtTerm::Null))
+            }
         }
     }
-}
-
-/// [`Kids::into_sides`]'s iterator.
-enum KidSides<'a> {
-    BorrowedList(core::slice::Iter<'a, CdtTerm>),
-    BorrowedMap(core::slice::Iter<'a, CdtEntry>),
-    OwnedList(alloc::vec::IntoIter<CdtTerm>),
-    OwnedMap(alloc::vec::IntoIter<CdtEntry>),
-}
-
-impl<'a> Iterator for KidSides<'a> {
-    type Item = Side<'a>;
-
-    fn next(&mut self) -> Option<Side<'a>> {
+    fn release(self, memory: &mut Memory<'_>) -> Result<(), StorageError> {
         match self {
-            Self::BorrowedList(items) => items.next().map(Side::Borrowed),
-            Self::BorrowedMap(entries) => entries.next().map(|entry| Side::Borrowed(&entry.value)),
-            Self::OwnedList(items) => items.next().map(Side::Owned),
-            Self::OwnedMap(entries) => entries.next().map(|entry| Side::Owned(entry.value)),
+            Self::BorrowedList(_) | Self::BorrowedMap(_) => Ok(()),
+            Self::OwnedList(mut items) => {
+                for item in &mut items {
+                    mem::replace(item, CdtTerm::Null).release_with_memory(memory)?;
+                }
+                memory.release_vec(items)
+            }
+            Self::OwnedMap(mut entries) => {
+                for entry in &mut entries {
+                    mem::replace(&mut entry.value, CdtTerm::Null).release_with_memory(memory)?;
+                    // Move the original key into its destruction-only release home.
+                    mem::replace(&mut entry.key, CdtKey::Iri(alloc::string::String::new()))
+                        .release_with_memory(memory)?;
+                }
+                memory.release_vec(entries)
+            }
         }
     }
 }
@@ -702,7 +869,34 @@ fn shape(x: &CdtTerm, y: &CdtTerm) -> Shape {
 /// );
 /// ```
 pub fn term_equal(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
-    equal_worklist(alloc::vec![(Side::Borrowed(a), Side::Borrowed(b))])
+    try_term_equal(a, b, &mut Resident).expect("resident composite equality storage")
+}
+/// The same SEP equality with original native storage admission.
+/// # Errors
+/// Physical refusal is separate from a semantic type error.
+pub fn try_term_equal(
+    a: &CdtTerm,
+    b: &CdtTerm,
+    storage: &mut impl Storage,
+) -> Result<Result<bool, CdtTypeError>, StorageError> {
+    let mut memory = Memory::new(storage);
+    term_equal_with_memory(a, b, &mut memory)
+}
+fn term_equal_with_memory(
+    a: &CdtTerm,
+    b: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<Result<bool, CdtTypeError>, StorageError> {
+    memory.scope(|memory| term_equal_kernel(a, b, memory))
+}
+fn term_equal_kernel(
+    a: &CdtTerm,
+    b: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<Result<bool, CdtTypeError>, StorageError> {
+    let mut work = Vec::new();
+    memory.push(&mut work, (Side::Borrowed(a), Side::Borrowed(b)))?;
+    equal_worklist(work, memory)
 }
 
 /// `cdt:contains`'s membership test: [`term_equal`], except that two blank nodes are
@@ -719,11 +913,15 @@ pub fn term_equal(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
 /// The distinction applies to the top-level pair only. A blank node buried inside two
 /// nested composites is compared by [`term_equal`]'s rule, because at that depth the
 /// question is again one of value equality; no corpus test reaches that case.
-pub(crate) fn membership_equal(item: &CdtTerm, term: &CdtTerm) -> Result<bool, CdtTypeError> {
+pub(crate) fn membership_equal_with_memory(
+    item: &CdtTerm,
+    term: &CdtTerm,
+    memory: &mut Memory<'_>,
+) -> Result<Result<bool, CdtTypeError>, StorageError> {
     if let (CdtTerm::Blank(p), CdtTerm::Blank(q)) = (item, term) {
-        return Ok(p == q);
+        return Ok(Ok(p == q));
     }
-    term_equal(item, term)
+    term_equal_with_memory(item, term, memory)
 }
 
 /// Drive an equality worklist to a verdict. Every pair on the list must be equal for
@@ -733,50 +931,76 @@ pub(crate) fn membership_equal(item: &CdtTerm, term: &CdtTerm) -> Result<bool, C
 /// the composites are borrowed from the input or were parsed out of literals during
 /// the walk: an owned composite hands its elements over to the pairs, so ownership
 /// travels down the list and no walk ever re-enters this function.
-fn equal_worklist(mut work: Vec<(Side<'_>, Side<'_>)>) -> Result<bool, CdtTypeError> {
-    let mut withheld: Option<CdtTypeError> = None;
-    while let Some((x, y)) = work.pop() {
-        match shape(x.term(), y.term()) {
-            Shape::Triples => {
-                let [left_subject, left_predicate, left_object] = x.components();
-                let [right_subject, right_predicate, right_object] = y.components();
-                work.push((left_object, right_object));
-                work.push((left_predicate, right_predicate));
-                work.push((left_subject, right_subject));
-            }
-            Shape::Composites => {
-                let (left, right) = (x.children(), y.children());
-                // A list is never equal to a map.
-                if left.is_map() != right.is_map() || left.len() != right.len() {
-                    return Ok(false);
+fn equal_worklist(
+    mut work: Vec<(Side<'_>, Side<'_>)>,
+    memory: &mut Memory<'_>,
+) -> Result<Result<bool, CdtTypeError>, StorageError> {
+    let result = (|| {
+        let mut withheld = None;
+        while let Some((x, y)) = work.pop() {
+            match shape(x.term(), y.term()) {
+                Shape::Triples => {
+                    let [ls, lp, lo] = x.components(memory)?;
+                    let [rs, rp, ro] = y.components(memory)?;
+                    memory.push(&mut work, (lo, ro))?;
+                    memory.push(&mut work, (lp, rp))?;
+                    memory.push(&mut work, (ls, rs))?;
                 }
-                // Map equality needs identical KEY SETS. Both entry sequences are in
-                // key order, so the sets agree exactly when the sequences of keys agree
-                // position by position.
-                if left.is_map() && (0..left.len()).any(|index| left.key(index) != right.key(index))
-                {
-                    return Ok(false);
-                }
-                work.extend(left.into_sides().zip(right.into_sides()));
-            }
-            Shape::Leaves => match leaf_equal(x.term(), y.term()) {
-                LeafEq::Answer(Ok(true)) => {}
-                LeafEq::Answer(Ok(false)) => return Ok(false),
-                LeafEq::Answer(Err(error)) => {
-                    if withheld.is_none() {
-                        withheld = Some(error);
+                Shape::Composites => {
+                    let (mut left, mut right) = (x.children(memory)?, y.children(memory)?);
+                    let unequal = left.is_map() != right.is_map()
+                        || left.len() != right.len()
+                        || (left.is_map()
+                            && (0..left.len()).any(|index| left.key(index) != right.key(index)));
+                    if !unequal {
+                        for index in 0..left.len() {
+                            memory.push(&mut work, (left.take(index), right.take(index)))?;
+                        }
+                    }
+                    left.release(memory)?;
+                    right.release(memory)?;
+                    if unequal {
+                        return Ok(Ok(false));
                     }
                 }
-                LeafEq::Composites(left, right) => {
-                    work.push((x.resolved(left), y.resolved(right)));
+                Shape::Leaves => {
+                    let verdict = leaf_equal(x.term(), y.term(), memory)?;
+                    match verdict {
+                        LeafEq::Composites(left, right) => {
+                            let left = x.resolved(left, memory)?;
+                            let right = y.resolved(right, memory)?;
+                            memory.push(&mut work, (left, right))?;
+                        }
+                        LeafEq::Answer(answer) => {
+                            x.release(memory)?;
+                            y.release(memory)?;
+                            match answer {
+                                Ok(true) => {}
+                                Ok(false) => return Ok(Ok(false)),
+                                Err(error) => {
+                                    if withheld.is_none() {
+                                        withheld = Some(error);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-            },
+            }
+        }
+        Ok(match withheld {
+            Some(error) => Err(error),
+            None => Ok(true),
+        })
+    })();
+    // An early semantic verdict still destroys every originally owned sibling.
+    if result.is_ok() {
+        while let Some((left, right)) = work.pop() {
+            left.release(memory)?;
+            right.release(memory)?;
         }
     }
-    match withheld {
-        Some(error) => Err(error),
-        None => Ok(true),
-    }
+    memory.release_vec_after(work, result)
 }
 
 /// SEP-0009 `cdt:list-equal` over two lists' elements.
@@ -792,15 +1016,23 @@ fn equal_worklist(mut work: Vec<(Side<'_>, Side<'_>)>) -> Result<bool, CdtTypeEr
 /// assert_eq!(list_equal(&[CdtTerm::Null], &[]), Ok(false));
 /// ```
 pub fn list_equal(a: &[CdtTerm], b: &[CdtTerm]) -> Result<bool, CdtTypeError> {
+    let mut storage = Resident;
+    let mut memory = Memory::new(&mut storage);
+    list_equal_with_memory(a, b, &mut memory).expect("resident list equality storage")
+}
+fn list_equal_with_memory(
+    a: &[CdtTerm],
+    b: &[CdtTerm],
+    memory: &mut Memory<'_>,
+) -> Result<Result<bool, CdtTypeError>, StorageError> {
     if a.len() != b.len() {
-        return Ok(false);
+        return Ok(Ok(false));
     }
-    equal_worklist(
-        a.iter()
-            .zip(b.iter())
-            .map(|(p, q)| (Side::Borrowed(p), Side::Borrowed(q)))
-            .collect(),
-    )
+    let mut work = Vec::new();
+    for (p, q) in a.iter().zip(b) {
+        memory.push(&mut work, (Side::Borrowed(p), Side::Borrowed(q)))?;
+    }
+    equal_worklist(work, memory)
 }
 
 /// SEP-0009 `cdt:map-equal` over two maps' entries.
@@ -810,15 +1042,26 @@ pub fn list_equal(a: &[CdtTerm], b: &[CdtTerm]) -> Result<bool, CdtTypeError> {
 /// maps are equal when their key sets are identical and every shared key's values
 /// are equal.
 pub fn map_equal(a: &[CdtEntry], b: &[CdtEntry]) -> Result<bool, CdtTypeError> {
-    if a.len() != b.len() || a.iter().zip(b.iter()).any(|(p, q)| p.key != q.key) {
-        return Ok(false);
+    let mut storage = Resident;
+    let mut memory = Memory::new(&mut storage);
+    map_equal_with_memory(a, b, &mut memory).expect("resident map equality storage")
+}
+fn map_equal_with_memory(
+    a: &[CdtEntry],
+    b: &[CdtEntry],
+    memory: &mut Memory<'_>,
+) -> Result<Result<bool, CdtTypeError>, StorageError> {
+    if a.len() != b.len() || a.iter().zip(b).any(|(p, q)| p.key != q.key) {
+        return Ok(Ok(false));
     }
-    equal_worklist(
-        a.iter()
-            .zip(b.iter())
-            .map(|(p, q)| (Side::Borrowed(&p.value), Side::Borrowed(&q.value)))
-            .collect(),
-    )
+    let mut work = Vec::new();
+    for (p, q) in a.iter().zip(b) {
+        memory.push(
+            &mut work,
+            (Side::Borrowed(&p.value), Side::Borrowed(&q.value)),
+        )?;
+    }
+    equal_worklist(work, memory)
 }
 
 /// SEP-0009 `=` over two composite values, dispatching on their datatypes. A list is
@@ -840,10 +1083,23 @@ pub fn value_equal(a: &CdtValue, b: &CdtValue) -> Result<bool, CdtTypeError> {
 /// descends exactly as it does at any position of a list, and a leaf pair is decided
 /// by the leaf rules.
 pub fn term_less_than(a: &CdtTerm, b: &CdtTerm) -> Result<bool, CdtTypeError> {
-    Ok(sequence_less_than(
+    try_term_less_than(a, b, &mut Resident).expect("resident composite order storage")
+}
+/// The same SEP partial order with original native storage admission.
+/// # Errors
+/// Physical refusal is separate from a semantic type error.
+pub fn try_term_less_than(
+    a: &CdtTerm,
+    b: &CdtTerm,
+    storage: &mut impl Storage,
+) -> Result<Result<bool, CdtTypeError>, StorageError> {
+    let mut memory = Memory::new(storage);
+    sequence_less_than(
         Owner::Borrowed(Seq::List(core::slice::from_ref(a))),
         Owner::Borrowed(Seq::List(core::slice::from_ref(b))),
-    )? == Verdict::Less)
+        &mut memory,
+    )
+    .map(|answer| answer.map(|verdict| verdict == Verdict::Less))
 }
 
 /// The three outcomes one position of a lexicographic walk can produce.
@@ -915,6 +1171,14 @@ impl Owner<'_> {
         }
     }
 
+    fn release(self, memory: &mut Memory<'_>) -> Result<(), StorageError> {
+        match self {
+            Self::Borrowed(_) => Ok(()),
+            Self::List(items) => Kids::OwnedList(items).release(memory),
+            Self::Map(entries) => Kids::OwnedMap(entries).release(memory),
+        }
+    }
+
     fn len(&self) -> usize {
         match self {
             Self::Borrowed(seq) => seq.len(),
@@ -952,27 +1216,37 @@ impl Owner<'_> {
     /// of this side. Position `index` is settled once the walk descends into it — the
     /// walk either returns from inside it or moves on to `index + 1` — so nothing
     /// reads the null left behind.
-    fn descend(&mut self, index: usize) -> Self {
+    fn descend(&mut self, index: usize, memory: &mut Memory<'_>) -> Result<Self, StorageError> {
         let taken = match self {
             Self::Borrowed(seq) => match seq.value(index) {
-                CdtTerm::Composite(inner) => return Self::Borrowed(Seq::of(inner)),
+                CdtTerm::Composite(inner) => return Ok(Self::Borrowed(Seq::of(inner))),
                 _ => unreachable!("the walk descends into a composite"),
             },
             Self::List(items) => mem::replace(&mut items[index], CdtTerm::Null),
             Self::Map(entries) => mem::replace(&mut entries[index].value, CdtTerm::Null),
         };
         match taken {
-            CdtTerm::Composite(value) => Self::parsed(*value),
+            CdtTerm::Composite(mut value) => {
+                let inner = mem::replace(&mut *value, CdtValue::empty_list());
+                drop(value);
+                memory.release_bytes(Layout::new::<CdtValue>().size())?;
+                Ok(Self::parsed(inner))
+            }
             _ => unreachable!("the walk descends into a composite"),
         }
     }
 
     /// The composite at `index` as the walk reaches it: the syntactic one this side
     /// holds, or the one parsed out of the literal at that position.
-    fn reached(&mut self, index: usize, reach: Reach) -> Self {
+    fn reached(
+        &mut self,
+        index: usize,
+        reach: Reach,
+        memory: &mut Memory<'_>,
+    ) -> Result<Self, StorageError> {
         match reach {
-            Reach::Syntactic => self.descend(index),
-            Reach::Parsed(value) => Self::parsed(value),
+            Reach::Syntactic => self.descend(index, memory),
+            Reach::Parsed(value) => Ok(Self::parsed(value)),
         }
     }
 }
@@ -1038,73 +1312,112 @@ struct Frame<'a> {
 /// `list-equals-07.rq` requires the same two operands to be `=`-equal, so SPARQL's
 /// `||`, under which `error || true` is `true`, would give the wrong answer.
 /// `list-greater-equal-28.rq` says the same for `>=`.
-fn sequence_less_than(left: Owner<'_>, right: Owner<'_>) -> Result<Verdict, CdtTypeError> {
-    let mut stack: Vec<Frame<'_>> = alloc::vec![Frame {
-        left,
-        right,
-        index: 0,
-    }];
-    loop {
-        let Some(top) = stack.last_mut() else {
-            return Ok(Verdict::Equal);
-        };
-        let index = top.index;
-        let shortest = top.left.len().min(top.right.len());
-        if index == shortest {
-            match top.left.len().cmp(&top.right.len()) {
-                Ordering::Less => return Ok(Verdict::Less),
-                Ordering::Greater => return Ok(Verdict::NotLess),
-                Ordering::Equal => {}
+fn sequence_less_than(
+    left: Owner<'_>,
+    right: Owner<'_>,
+    memory: &mut Memory<'_>,
+) -> Result<Result<Verdict, CdtTypeError>, StorageError> {
+    memory.scope(|memory| sequence_less_than_kernel(left, right, memory))
+}
+fn sequence_less_than_kernel(
+    left: Owner<'_>,
+    right: Owner<'_>,
+    memory: &mut Memory<'_>,
+) -> Result<Result<Verdict, CdtTypeError>, StorageError> {
+    let mut stack = Vec::new();
+    memory.push(
+        &mut stack,
+        Frame {
+            left,
+            right,
+            index: 0,
+        },
+    )?;
+    let result = (|| {
+        loop {
+            let Some(top) = stack.last_mut() else {
+                return Ok(Ok(Verdict::Equal));
+            };
+            let index = top.index;
+            let shortest = top.left.len().min(top.right.len());
+            if index == shortest {
+                match top.left.len().cmp(&top.right.len()) {
+                    Ordering::Less => return Ok(Ok(Verdict::Less)),
+                    Ordering::Greater => return Ok(Ok(Verdict::NotLess)),
+                    Ordering::Equal => {}
+                }
+                let frame = stack.pop().expect("original active frame");
+                frame.left.release(memory)?;
+                frame.right.release(memory)?;
+                match stack.last_mut() {
+                    None => return Ok(Ok(Verdict::Equal)),
+                    Some(parent) => {
+                        parent.index += 1;
+                        continue;
+                    }
+                }
             }
-            stack.pop();
-            match stack.last_mut() {
-                None => return Ok(Verdict::Equal),
-                Some(parent) => {
-                    parent.index += 1;
-                    continue;
+            if let (Some(left), Some(right)) = (top.left.key(index), top.right.key(index)) {
+                match total_key_cmp(left, right) {
+                    Ordering::Less => return Ok(Ok(Verdict::Less)),
+                    Ordering::Greater => return Ok(Ok(Verdict::NotLess)),
+                    Ordering::Equal => {}
+                }
+            }
+            let (x, y) = (top.left.value(index), top.right.value(index));
+            if matches!(x, CdtTerm::Blank(_)) || matches!(y, CdtTerm::Blank(_)) {
+                return Ok(Err(CdtTypeError::undefined(
+                    "SPARQL `<` has no answer where a blank node stands, not even against the very same blank node",
+                )));
+            }
+            let reaches = (composite_reach(x, memory)?, composite_reach(y, memory)?);
+            match reaches {
+                (Some(left), Some(right)) => {
+                    let left = top.left.reached(index, left, memory)?;
+                    let right = top.right.reached(index, right, memory)?;
+                    if left.is_map() != right.is_map() {
+                        left.release(memory)?;
+                        right.release(memory)?;
+                        return Ok(Err(list_against_map()));
+                    }
+                    memory.push(
+                        &mut stack,
+                        Frame {
+                            left,
+                            right,
+                            index: 0,
+                        },
+                    )?;
+                }
+                (left, right) => {
+                    if let Some(reach) = left {
+                        reach.release(memory)?;
+                    }
+                    if let Some(reach) = right {
+                        reach.release(memory)?;
+                    }
+                    match term_equal_with_memory(x, y, memory)? {
+                        Err(error) => return Ok(Err(error)),
+                        Ok(true) => {
+                            top.index += 1;
+                        }
+                        Ok(false) => match leaf_less_than(x, y, memory)? {
+                            Err(error) => return Ok(Err(error)),
+                            Ok(true) => return Ok(Ok(Verdict::Less)),
+                            Ok(false) => return Ok(Ok(Verdict::NotLess)),
+                        },
+                    }
                 }
             }
         }
-
-        if let (Some(left_key), Some(right_key)) = (top.left.key(index), top.right.key(index)) {
-            match total_key_cmp(left_key, right_key) {
-                Ordering::Less => return Ok(Verdict::Less),
-                Ordering::Greater => return Ok(Verdict::NotLess),
-                Ordering::Equal => {}
-            }
-        }
-
-        let (x, y) = (top.left.value(index), top.right.value(index));
-        if matches!(x, CdtTerm::Blank(_)) || matches!(y, CdtTerm::Blank(_)) {
-            return Err(CdtTypeError::undefined(
-                "SPARQL `<` has no answer where a blank node stands, not even against the very \
-                 same blank node",
-            ));
-        }
-        match (composite_reach(x), composite_reach(y)) {
-            (Some(reach_left), Some(reach_right)) => {
-                let inner_left = top.left.reached(index, reach_left);
-                let inner_right = top.right.reached(index, reach_right);
-                if inner_left.is_map() != inner_right.is_map() {
-                    return Err(list_against_map());
-                }
-                stack.push(Frame {
-                    left: inner_left,
-                    right: inner_right,
-                    index: 0,
-                });
-            }
-            (Some(_) | None, None) | (None, Some(_)) => {
-                if term_equal(x, y)? {
-                    top.index += 1;
-                } else if leaf_less_than(x, y)? {
-                    return Ok(Verdict::Less);
-                } else {
-                    return Ok(Verdict::NotLess);
-                }
-            }
+    })();
+    if result.is_ok() {
+        while let Some(frame) = stack.pop() {
+            frame.left.release(memory)?;
+            frame.right.release(memory)?;
         }
     }
+    memory.release_vec_after(stack, result)
 }
 
 /// SEP-0009 `cdt:list-less-than` over two lists' elements.
@@ -1131,18 +1444,24 @@ fn sequence_less_than(left: Owner<'_>, right: Owner<'_>) -> Result<Verdict, CdtT
 /// # let _ = CdtDatatype::List;
 /// ```
 pub fn list_less_than(a: &[CdtTerm], b: &[CdtTerm]) -> Result<bool, CdtTypeError> {
-    Ok(
-        sequence_less_than(Owner::Borrowed(Seq::List(a)), Owner::Borrowed(Seq::List(b)))?
-            == Verdict::Less,
+    sequence_less_than(
+        Owner::Borrowed(Seq::List(a)),
+        Owner::Borrowed(Seq::List(b)),
+        &mut Memory::new(&mut Resident),
     )
+    .expect("resident list order storage")
+    .map(|verdict| verdict == Verdict::Less)
 }
 
 /// SEP-0009 `cdt:map-less-than` over two maps' entries, walking in key order.
 pub fn map_less_than(a: &[CdtEntry], b: &[CdtEntry]) -> Result<bool, CdtTypeError> {
-    Ok(
-        sequence_less_than(Owner::Borrowed(Seq::Map(a)), Owner::Borrowed(Seq::Map(b)))?
-            == Verdict::Less,
+    sequence_less_than(
+        Owner::Borrowed(Seq::Map(a)),
+        Owner::Borrowed(Seq::Map(b)),
+        &mut Memory::new(&mut Resident),
     )
+    .expect("resident map order storage")
+    .map(|verdict| verdict == Verdict::Less)
 }
 
 /// SEP-0009 `<` over two composite values, dispatching on their datatypes.
@@ -1161,5 +1480,11 @@ pub fn value_less_than(a: &CdtValue, b: &CdtValue) -> Result<bool, CdtTypeError>
     if left.is_map() != right.is_map() {
         return Err(list_against_map());
     }
-    Ok(sequence_less_than(Owner::Borrowed(left), Owner::Borrowed(right))? == Verdict::Less)
+    sequence_less_than(
+        Owner::Borrowed(left),
+        Owner::Borrowed(right),
+        &mut Memory::new(&mut Resident),
+    )
+    .expect("resident value order storage")
+    .map(|verdict| verdict == Verdict::Less)
 }

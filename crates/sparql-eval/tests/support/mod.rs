@@ -20,8 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult,
-    StopCause, TermValue,
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, StopCause, TermValue,
 };
 use purrdf_sparql_algebra::{GraphPattern, Query, QueryDataset};
 use purrdf_sparql_eval::{ExtensionEnv, NativeSparqlEngine, QueryOptions, StopSignal};
@@ -176,16 +175,17 @@ pub fn skewed_star(spec: &[(&str, usize)]) -> Arc<RdfDataset> {
 
 /// Evaluate `prefix` followed by `query_body` against `ds`, panicking with the query text
 /// on an error.
-pub fn run_prefixed(ds: &Arc<RdfDataset>, prefix: &str, query_body: &str) -> SparqlResult {
+pub fn run_prefixed(ds: &RdfDataset, prefix: &str, query_body: &str) -> SparqlResult {
     let text = format!("{prefix}{query_body}");
     NativeSparqlEngine::new()
-        .query(
+        .query_with_options_view(
             ds,
             SparqlRequest {
                 query: &text,
                 base_iri: None,
                 substitutions: &[],
             },
+            QueryOptions::EMPTY,
         )
         .unwrap_or_else(|e| panic!("query failed: {e:?}\nquery: {text}"))
 }
@@ -201,38 +201,88 @@ pub fn unrelated_quad() -> Arc<RdfDataset> {
     )
 }
 
+/// Borrowed variables and rows of a SELECT result.
+pub type SolutionsView<'a> = (&'a [String], &'a [Vec<Option<TermValue>>]);
+
 /// The shape name of a result, for a failure message that names the wrong shape
 /// without formatting the result's contents.
-fn shape(result: &SparqlResult) -> &'static str {
-    match result {
-        SparqlResult::Solutions { .. } => "SELECT solutions",
-        SparqlResult::Graph(_) => "a graph",
-        SparqlResult::Boolean(_) => "a boolean",
+pub trait ResultView: std::fmt::Debug {
+    fn solutions_view(&self) -> Option<SolutionsView<'_>>;
+    fn graph_view(&self) -> Option<&RdfDataset>;
+    fn boolean_view(&self) -> Option<bool>;
+    fn output_size(&self) -> usize;
+}
+
+impl ResultView for SparqlResult {
+    fn solutions_view(&self) -> Option<SolutionsView<'_>> {
+        self.solutions()
+    }
+    fn graph_view(&self) -> Option<&RdfDataset> {
+        if let Self::Graph(graph) = self {
+            Some(graph)
+        } else {
+            None
+        }
+    }
+    fn boolean_view(&self) -> Option<bool> {
+        if let Self::Boolean(value) = self {
+            Some(*value)
+        } else {
+            None
+        }
+    }
+    fn output_size(&self) -> usize {
+        match self {
+            Self::Solutions { rows, .. } => rows.len(),
+            Self::Graph(graph) => graph.quad_count(),
+            Self::Boolean(value) => usize::from(*value),
+        }
+    }
+}
+
+impl ResultView for purrdf_sparql_eval::RetainedSparqlResult {
+    fn solutions_view(&self) -> Option<SolutionsView<'_>> {
+        self.solutions()
+    }
+    fn graph_view(&self) -> Option<&RdfDataset> {
+        self.graph()
+    }
+    fn boolean_view(&self) -> Option<bool> {
+        self.boolean()
+    }
+    fn output_size(&self) -> usize {
+        self.solutions().map_or_else(
+            || {
+                self.graph().map_or_else(
+                    || usize::from(self.boolean().expect("ASK shape")),
+                    RdfDataset::quad_count,
+                )
+            },
+            |(_, rows)| rows.len(),
+        )
     }
 }
 
 /// The variables and rows of a SELECT result, panicking on any other shape.
-pub fn solutions(result: SparqlResult) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
-    result
-        .into_solutions()
-        .unwrap_or_else(|other| panic!("expected solutions, got {}", shape(&other)))
+pub fn solutions(result: impl ResultView) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
+    let (variables, rows) = result.solutions_view().expect("expected SELECT solutions");
+    let copied = (variables.to_vec(), rows.to_vec());
+    drop(result);
+    copied
 }
 
 /// The row count of a `SELECT` result.
-pub fn row_count(result: &SparqlResult) -> usize {
-    match result {
-        SparqlResult::Solutions { rows, .. } => rows.len(),
-        other => panic!("expected SELECT solutions, got {}", shape(other)),
-    }
+pub fn row_count(result: &impl ResultView) -> usize {
+    result
+        .solutions_view()
+        .expect("expected SELECT solutions")
+        .1
+        .len()
 }
 
 /// The size of any result: its rows, its graph's quads, or `1` for a `true` `ASK`.
-pub fn result_size(result: &SparqlResult) -> usize {
-    match result {
-        SparqlResult::Solutions { rows, .. } => rows.len(),
-        SparqlResult::Graph(graph) => graph.quad_count(),
-        SparqlResult::Boolean(value) => usize::from(*value),
-    }
+pub fn result_size(result: &impl ResultView) -> usize {
+    result.output_size()
 }
 
 /// One result cell, rendered for comparison: `<iri>`, a literal's bare lexical form,
@@ -253,13 +303,8 @@ pub type Row = BTreeMap<String, String>;
 
 /// A `SELECT` result's rows as variable-name-keyed maps with each cell rendered by
 /// `render`, SORTED — the rows compare as a set, never by column or row position.
-pub fn sorted_rows(result: &SparqlResult, render: fn(Option<&TermValue>) -> String) -> Vec<Row> {
-    let SparqlResult::Solutions {
-        variables, rows, ..
-    } = result
-    else {
-        panic!("expected a SELECT result, got {result:?}");
-    };
+pub fn sorted_rows(result: &impl ResultView, render: fn(Option<&TermValue>) -> String) -> Vec<Row> {
+    let (variables, rows) = result.solutions_view().expect("expected SELECT solutions");
     let mut out: Vec<Row> = rows
         .iter()
         .map(|row| {

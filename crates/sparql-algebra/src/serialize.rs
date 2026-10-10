@@ -62,15 +62,134 @@ use crate::algebra::{
 };
 use crate::ast::{GroundTerm, Literal, NamedNodePattern, TermPattern, TriplePattern, Variable};
 use crate::parser::ParserOptions;
-use crate::walk::{Flow, NodeRef, Visit, walk_pre_post};
+use crate::parser::table::ScopeTable;
+use crate::walk::{Flow, NodeRef, Visit};
 use crate::worklist::WorkList;
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 use purrdf_lex::literal_escape::{self, Carrier};
 use purrdf_lex::term_syntax::{
     TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
 };
 
-/// The rendering's work list: a shallow tree's stays inline.
-type Items<'a> = WorkList<Item<'a>, 32>;
+/// The carrier's one borrowed native account. A failed emitter discards later
+/// fragments but retains the first physical failure for the outer loop.
+struct RenderStorage<'m, 'a, S: Admission + ?Sized> {
+    memory: core::cell::RefCell<&'m mut Memory<'a, S>>,
+    failure: core::cell::Cell<Option<StorageError>>,
+}
+impl<'m, 'a, S: Admission + ?Sized> RenderStorage<'m, 'a, S> {
+    fn new(memory: &'m mut Memory<'a, S>) -> Self {
+        Self {
+            memory: core::cell::RefCell::new(memory),
+            failure: core::cell::Cell::new(None),
+        }
+    }
+    fn run<T>(
+        &self,
+        body: impl FnOnce(&mut Memory<'a, S>) -> Result<T, StorageError>,
+    ) -> Option<T> {
+        if self.failure.get().is_some() {
+            return None;
+        }
+        match body(&mut self.memory.borrow_mut()) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.failure.set(Some(error));
+                None
+            }
+        }
+    }
+    fn cleanup(&self, body: impl FnOnce(&mut Memory<'a, S>) -> Result<(), StorageError>) {
+        if let Err(error) = body(&mut self.memory.borrow_mut())
+            && self.failure.get().is_none()
+        {
+            self.failure.set(Some(error));
+        }
+    }
+    fn check(&self) -> Result<(), StorageError> {
+        self.failure.get().map_or(Ok(()), Err)
+    }
+}
+
+/// TextOut retains its original failure while the shared native emitters run.
+struct Surface<'c, 'm, 'a, S: Admission + ?Sized> {
+    text: &'c mut String,
+    storage: &'c RenderStorage<'m, 'a, S>,
+}
+impl<S: Admission + ?Sized> core::fmt::Write for Surface<'_, '_, '_, S> {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        self.storage
+            .run(|memory| memory.push_str(self.text, text))
+            .ok_or(core::fmt::Error)
+    }
+}
+impl<S: Admission + ?Sized> purrdf_lex::text_out::TextOut for Surface<'_, '_, '_, S> {
+    fn push_str(&mut self, text: &str) {
+        let _ = self.write_str(text);
+    }
+    fn push(&mut self, ch: char) {
+        let mut utf8 = [0; 4];
+        let _ = self.write_str(ch.encode_utf8(&mut utf8));
+    }
+    fn failed(&self) -> bool {
+        self.storage.failure.get().is_some()
+    }
+}
+impl<S: Admission + ?Sized> Surface<'_, '_, '_, S> {
+    fn push_str(&mut self, text: &str) {
+        purrdf_lex::text_out::TextOut::push_str(self, text);
+    }
+    fn push(&mut self, ch: char) {
+        purrdf_lex::text_out::TextOut::push(self, ch);
+    }
+}
+
+/// The existing item work list, with admission at its actual spill boundary.
+struct Items<'i, 'c, 'm, 'a, S: Admission + ?Sized> {
+    work: Option<WorkList<Item<'i>, 32>>,
+    storage: &'c RenderStorage<'m, 'a, S>,
+}
+impl<'i, 'c, 'm, 'a, S: Admission + ?Sized> Items<'i, 'c, 'm, 'a, S> {
+    fn with(first: Item<'i>, storage: &'c RenderStorage<'m, 'a, S>) -> Self {
+        Self {
+            work: Some(WorkList::with(first)),
+            storage,
+        }
+    }
+    fn push(&mut self, value: Item<'i>) {
+        let work = self.work.as_mut().expect("live carrier work list");
+        let _ = self
+            .storage
+            .run(|memory| work.try_push_admitted(value, memory));
+    }
+    fn extend(&mut self, values: impl IntoIterator<Item = Item<'i>>) {
+        for value in values {
+            if self.storage.failure.get().is_some() {
+                break;
+            }
+            self.push(value);
+        }
+    }
+    fn pop(&mut self) -> Option<Item<'i>> {
+        self.work.as_mut().expect("live carrier work list").pop()
+    }
+    fn len(&self) -> usize {
+        self.work.as_ref().expect("live carrier work list").len()
+    }
+    fn reverse_top(&mut self, count: usize) {
+        self.work
+            .as_mut()
+            .expect("live carrier work list")
+            .reverse_top(count);
+    }
+}
+impl<S: Admission + ?Sized> Drop for Items<'_, '_, '_, '_, S> {
+    fn drop(&mut self) {
+        if let Some(work) = self.work.take() {
+            self.storage.cleanup(|memory| work.release_admitted(memory));
+        }
+    }
+}
 
 /// A `GROUP BY` key + its `(output var, aggregate)` pairs, borrowed from a
 /// [`GraphPattern::Group`] node during sub-`SELECT` reconstruction.
@@ -151,8 +270,7 @@ pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
 /// Returns the source identity-contract error or refuses concrete blank VALUES
 /// bindings, which have no SPARQL DataBlockValue representation.
 pub fn try_pattern_to_select_query(inner: &GraphPattern) -> crate::Result<String> {
-    validate_carrier_pattern(inner)?;
-    Ok(select_query(inner, PredicateRendering::Independent))
+    resident_carrier(inner, PredicateRendering::Independent)
 }
 
 /// Render `inner` as a complete `SELECT` query under the supplied parser options.
@@ -187,8 +305,7 @@ pub fn try_pattern_to_select_query_with_options(
     inner: &GraphPattern,
     options: &ParserOptions,
 ) -> crate::Result<String> {
-    validate_carrier_pattern(inner)?;
-    Ok(select_query(inner, PredicateRendering::Configured(options)))
+    resident_carrier(inner, PredicateRendering::Configured(options))
 }
 
 /// How BGP data predicates stay distinct from relation calls on re-parse.
@@ -213,30 +330,91 @@ impl PredicateRendering<'_> {
 /// Concrete dataset blanks are valid injection-only algebra values, but a blank
 /// label in a VALUES cell would be neither legal DataBlockValue syntax nor a
 /// portable reference to the same dataset node.
+/// Semantic or physical carrier refusal, preserving original lexical errors.
+#[derive(Debug)]
+pub enum CarrierError {
+    /// Original carrier identity/surface-language refusal.
+    Parse(crate::ParseError),
+    /// Original before-allocation storage refusal.
+    Storage(StorageError),
+}
+purrdf_lex::variant_from!(CarrierError { Storage(StorageError) });
+impl core::fmt::Display for CarrierError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Parse(error) => error.fmt(f),
+            Self::Storage(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for CarrierError {}
+fn resident_carrier(
+    pattern: &GraphPattern,
+    predicates: PredicateRendering<'_>,
+) -> crate::Result<String> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    match validate_carrier_pattern_with_memory(pattern, &mut memory)
+        .and_then(|()| select_query_with_memory(pattern, predicates, &mut memory))
+    {
+        Ok(text) => Ok(text),
+        Err(CarrierError::Parse(error)) => Err(error),
+        Err(CarrierError::Storage(error)) => panic!("resident carrier allocation: {error}"),
+    }
+}
+/// Render the same complete carrier under the original native allocation owner.
+/// # Errors
+/// Returns original carrier refusal or physical storage failure before growth.
+pub fn try_pattern_to_select_query_with_memory<S: Admission + ?Sized>(
+    pattern: &GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> Result<String, CarrierError> {
+    validate_carrier_pattern_with_memory(pattern, memory)?;
+    select_query_with_memory(pattern, PredicateRendering::Independent, memory)
+}
 pub(crate) fn validate_carrier_pattern(pattern: &GraphPattern) -> crate::Result<()> {
-    pattern.validate_hidden_variables()?;
+    match validate_carrier_pattern_with_memory(pattern, &mut Memory::new(&mut Resident)) {
+        Ok(()) => Ok(()),
+        Err(CarrierError::Parse(error)) => Err(error),
+        Err(CarrierError::Storage(error)) => panic!("resident carrier validation storage: {error}"),
+    }
+}
+fn validate_carrier_pattern_with_memory<S: Admission + ?Sized>(
+    pattern: &GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), CarrierError> {
+    match crate::scope::validate_pattern_with_memory(pattern, memory) {
+        Ok(()) => {}
+        Err(crate::scope::ScopeValidationError::Scope(error)) => {
+            return Err(CarrierError::Parse(crate::ParseError::Syntax {
+                reason: memory.format(&error)?,
+                at: 0,
+            }));
+        }
+        Err(crate::scope::ScopeValidationError::Storage(error)) => return Err(error.into()),
+    }
     let mut error = None;
-    walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
-        if visit == Visit::Enter && matches!(node, NodeRef::Pattern(GraphPattern::Apply { .. })) {
-            error = Some(crate::ParseError::Unsupported(
-                "explicit contextual application has no SPARQL query-text representation"
-                    .to_owned(),
-            ));
-            return Flow::Stop;
-        }
-        if visit == Visit::Enter
-            && let NodeRef::Ground(GroundTerm::BlankNode(blank)) = node
-        {
-            error = Some(crate::ParseError::Unsupported(format!(
-                "concrete blank {:?} in VALUES has no SPARQL DataBlockValue representation; \
-                     execute the injected algebra locally or remove its concrete blank binding before forwarding",
-                blank.as_str()
-            )));
-            return Flow::Stop;
-        }
-        Flow::Descend
-    });
-    error.map_or(Ok(()), Err)
+    crate::walk::walk_pre_post_with_memory(
+        NodeRef::Pattern(pattern),
+        |visit, node, memory| {
+            if visit == Visit::Enter && matches!(node, NodeRef::Pattern(GraphPattern::Apply { .. }))
+            {
+                error = Some(crate::ParseError::Unsupported(memory.string(
+                    "explicit contextual application has no SPARQL query-text representation",
+                )?));
+                return Ok::<_, StorageError>(Flow::Stop);
+            }
+            if visit == Visit::Enter
+                && let NodeRef::Ground(GroundTerm::BlankNode(blank)) = node
+            {
+                error = Some(crate::ParseError::Unsupported(memory.format(&format_args!("concrete blank {:?} in VALUES has no SPARQL DataBlockValue representation; execute the injected algebra locally or remove its concrete blank binding before forwarding", blank.as_str()))?));
+                return Ok(Flow::Stop);
+            }
+            Ok(Flow::Descend)
+        },
+        memory,
+    )?;
+    error.map_or(Ok(()), |error| Err(CarrierError::Parse(error)))
 }
 
 /// An ordinary blank can retain blank syntax, or cross a rendering boundary as
@@ -250,7 +428,7 @@ enum BlankName {
 #[derive(Default)]
 struct RawBlankGroup {
     terms: Vec<*const TermPattern>,
-    surfaces: std::collections::BTreeSet<usize>,
+    surfaces: ScopeTable<usize, ()>,
 }
 
 #[derive(Clone, Copy)]
@@ -260,93 +438,379 @@ struct PatternFrame<'a> {
     surface: usize,
 }
 
-/// The shared evaluator ownership law determines which raw blanks can join.
-/// Rendering braces can split such an owner, requiring a variable carrier.
 struct RawBlankScopes<'a> {
     owners: Vec<&'a GraphPattern>,
-    groups: std::collections::BTreeMap<(usize, &'a str), RawBlankGroup>,
+    groups: ScopeTable<(usize, &'a str), RawBlankGroup>,
 }
-
 impl<'a> RawBlankScopes<'a> {
-    fn collect(pattern: &'a GraphPattern) -> Self {
+    fn collect<S: Admission + ?Sized>(
+        pattern: &'a GraphPattern,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
         let mut result = Self {
             owners: Vec::new(),
-            groups: std::collections::BTreeMap::new(),
+            groups: ScopeTable::default(),
         };
         let mut frames = WorkList::<PatternFrame<'_>, 16>::new();
-        let mut next_surface = 0;
-        walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
-            match (visit, node) {
-                (Visit::Enter, NodeRef::Pattern(pattern)) => {
-                    let parent = frames.top_mut().copied();
-                    let owner = parent.filter(|p| crate::scope::joins_blank_scope(p.pattern));
-                    let (owner, surface) = if let Some(parent) = owner {
-                        let surface = if spine_child_needs_bracing(parent.pattern, pattern) {
-                            next_surface += 1;
-                            next_surface
+        let mut next_surface = 0usize;
+        crate::walk::walk_pre_post_with_memory(
+            NodeRef::Pattern(pattern),
+            |visit, node, memory| {
+                match (visit, node) {
+                    (Visit::Enter, NodeRef::Pattern(pattern)) => {
+                        let parent = frames.top_mut().copied();
+                        let owner = parent.filter(|p| crate::scope::joins_blank_scope(p.pattern));
+                        let (owner, surface) = if let Some(parent) = owner {
+                            let surface = if spine_child_needs_bracing_with_memory(
+                                parent.pattern,
+                                pattern,
+                                memory,
+                            )? {
+                                next_surface = next_surface
+                                    .checked_add(1)
+                                    .ok_or(StorageError::SizeOverflow)?;
+                                next_surface
+                            } else {
+                                parent.surface
+                            };
+                            (parent.owner, surface)
                         } else {
-                            parent.surface
+                            let owner = result.owners.len();
+                            memory.push(&mut result.owners, pattern)?;
+                            next_surface = next_surface
+                                .checked_add(1)
+                                .ok_or(StorageError::SizeOverflow)?;
+                            (owner, next_surface)
                         };
-                        (parent.owner, surface)
-                    } else {
-                        let owner = result.owners.len();
-                        result.owners.push(pattern);
-                        next_surface += 1;
-                        (owner, next_surface)
-                    };
-                    frames.push(PatternFrame {
-                        pattern,
-                        owner,
-                        surface,
+                        frames.try_push_admitted(
+                            PatternFrame {
+                                pattern,
+                                owner,
+                                surface,
+                            },
+                            memory,
+                        )?;
+                    }
+                    (Visit::Exit, NodeRef::Pattern(_)) => {
+                        frames.pop();
+                    }
+                    (Visit::Enter, NodeRef::Term(term @ TermPattern::BlankNode(blank))) => {
+                        let frame = frames.top_mut().expect("a pattern owns each match term");
+                        let key = (frame.owner, blank.as_str());
+                        if result.groups.get(&key).is_none() {
+                            result
+                                .groups
+                                .insert(key, RawBlankGroup::default(), memory)?;
+                        }
+                        let group = result
+                            .groups
+                            .get_mut(&key)
+                            .expect("original blank group inserted");
+                        memory.push(&mut group.terms, core::ptr::from_ref(term))?;
+                        group.surfaces.insert(frame.surface, (), memory)?;
+                    }
+                    _ => {}
+                }
+                Ok::<_, StorageError>(Flow::Descend)
+            },
+            memory,
+        )?;
+        frames.release_admitted(memory)?;
+        Ok(result)
+    }
+    fn carried_labels<S: Admission + ?Sized>(
+        &self,
+        owner: usize,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<ScopeTable<&'a str, ()>, StorageError> {
+        let mut labels = ScopeTable::default();
+        crate::scope::visit_spine_leaves_with_memory(
+            self.owners[owner],
+            &mut |leaf, memory| {
+                crate::scope::visit_leaf_labels_with_memory(
+                    leaf,
+                    crate::scope::LabelSource::Carried,
+                    &mut |label, memory| {
+                        labels.insert(label, (), memory)?;
+                        Ok::<_, StorageError>(false)
+                    },
+                    memory,
+                )
+            },
+            memory,
+        )?;
+        Ok(labels)
+    }
+    fn release<S: Admission + ?Sized>(
+        self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        // The original arena's nested vector/table bytes were admitted before
+        // construction and remain live until the complete scopes payload dies.
+        let mut nested = 0usize;
+        for (_, group) in self.groups.iter() {
+            nested = nested
+                .checked_add(
+                    core::alloc::Layout::array::<*const TermPattern>(group.terms.capacity())
+                        .map_err(|_| StorageError::SizeOverflow)?
+                        .size(),
+                )
+                .ok_or(StorageError::SizeOverflow)?;
+            nested = nested
+                .checked_add(group.surfaces.storage_bytes()?)
+                .ok_or(StorageError::SizeOverflow)?;
+        }
+        self.groups.release(memory)?;
+        memory.release_bytes(nested)?;
+        memory.release_vec(self.owners)
+    }
+}
+
+#[derive(Default)]
+struct VariableNames {
+    variables: ScopeTable<Variable, String>,
+    blanks: ScopeTable<*const TermPattern, usize>,
+    blank_aliases: Vec<BlankName>,
+    unit: Option<String>,
+}
+impl VariableNames {
+    fn for_pattern<S: Admission + ?Sized>(
+        pattern: &GraphPattern,
+        reserve: impl FnOnce(&mut dyn FnMut(&Variable)),
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Self, StorageError> {
+        let needs_names = !crate::walk::walk_pre_post_with_memory(
+            NodeRef::Pattern(pattern),
+            |visit, node, _| {
+                if visit == Visit::Enter {
+                    let mut found = matches!(node, NodeRef::Term(TermPattern::BlankNode(_)));
+                    node.for_each_variable(|variable| found |= variable.is_hidden());
+                    if found {
+                        return Ok::<_, StorageError>(Flow::Stop);
+                    }
+                }
+                Ok(Flow::Descend)
+            },
+            memory,
+        )?;
+        if !needs_names {
+            return Ok(Self::default());
+        }
+        let mut ordinary: ScopeTable<String, ()> = ScopeTable::default();
+        let mut hidden: ScopeTable<Variable, ()> = ScopeTable::default();
+        let mut has_raw = false;
+        crate::walk::walk_pre_post_with_memory(
+            NodeRef::Pattern(pattern),
+            |visit, node, memory| {
+                let mut failure = None;
+                if visit == Visit::Enter {
+                    has_raw |= matches!(node, NodeRef::Term(TermPattern::BlankNode(_)));
+                    node.for_each_variable(|variable| {
+                        if failure.is_some() {
+                            return;
+                        }
+                        let answer = if variable.is_hidden() {
+                            hidden.insert(variable.clone(), (), memory).map(|_| ())
+                        } else {
+                            reserve_name(&mut ordinary, variable.as_str(), memory)
+                        };
+                        if let Err(error) = answer {
+                            failure = Some(error);
+                        }
                     });
                 }
-                (Visit::Exit, NodeRef::Pattern(_)) => {
-                    frames.pop();
-                }
-                (Visit::Enter, NodeRef::Term(term @ TermPattern::BlankNode(blank))) => {
-                    let frame = frames.top_mut().expect("a pattern owns each match term");
-                    let group = result
-                        .groups
-                        .entry((frame.owner, blank.as_str()))
-                        .or_default();
-                    group.terms.push(core::ptr::from_ref(term));
-                    group.surfaces.insert(frame.surface);
-                }
-                _ => {}
+                failure.map_or(Ok(Flow::Descend), Err)
+            },
+            memory,
+        )?;
+        let mut failure = None;
+        reserve(&mut |variable| {
+            if failure.is_none() {
+                failure = reserve_name(&mut ordinary, variable.as_str(), memory).err();
             }
-            Flow::Descend
         });
-        result
-    }
-
-    /// The canonical identities a positive owner exposes, including marked
-    /// translation endpoints through UNION but excluding local raw arm blanks.
-    fn carried_labels(&self, owner: usize) -> std::collections::BTreeSet<&'a str> {
-        let mut leaves = Vec::new();
-        crate::scope::spine_leaves(self.owners[owner], &mut leaves);
-        let mut labels = std::collections::BTreeSet::new();
-        for leaf in leaves {
-            crate::scope::visit_leaf_labels(
-                leaf,
-                crate::scope::LabelSource::Carried,
-                &mut |label| {
-                    labels.insert(label);
-                    false
-                },
-            );
+        if let Some(error) = failure {
+            return Err(error);
         }
-        labels
+        let prefix = fresh_prefix_with_memory(
+            "__purrdf_hidden_",
+            &ordinary.iter().map(|(name, ())| name.as_str()),
+            memory,
+        )?;
+        let mut names = Self::default();
+        let mut ordered = memory.collect(hidden.iter().map(|(variable, ())| variable.clone()))?;
+        ordered.sort_unstable();
+        for (index, variable) in ordered.iter().enumerate() {
+            let text = memory.format(&format_args!("{prefix}{index}"))?;
+            names.variables.insert(variable.clone(), text, memory)?;
+        }
+        memory.release_vec(ordered)?;
+        hidden.release(memory)?;
+        if !names.variables.is_empty() {
+            names.unit = Some(memory.format(&format_args!("{prefix}0unit"))?);
+        }
+        if has_raw {
+            let scopes = RawBlankScopes::collect(pattern, memory)?;
+            names.alias_raw_blanks(&scopes, &prefix, memory)?;
+            scopes.release(memory)?;
+        }
+        memory.release_string(prefix)?;
+        let string_bytes = ordinary.iter().try_fold(0usize, |total, (name, ())| {
+            total
+                .checked_add(name.capacity())
+                .ok_or(StorageError::SizeOverflow)
+        })?;
+        ordinary.release(memory)?;
+        memory.release_bytes(string_bytes)?;
+        Ok(names)
     }
+    fn alias_raw_blanks<S: Admission + ?Sized>(
+        &mut self,
+        scopes: &RawBlankScopes<'_>,
+        variable_prefix: &str,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), StorageError> {
+        let mut owners_per_label: ScopeTable<&str, usize> = ScopeTable::default();
+        for ((_, label), _) in scopes.groups.iter() {
+            if let Some(count) = owners_per_label.get_mut(label) {
+                *count = count.checked_add(1).ok_or(StorageError::SizeOverflow)?;
+            } else {
+                owners_per_label.insert(*label, 1, memory)?;
+            }
+        }
+        let blank_prefix = fresh_prefix_with_memory(
+            "__purrdf_scoped_blank_",
+            &owners_per_label.iter().map(|(label, _)| *label),
+            memory,
+        )?;
+        let mut canonical_names: ScopeTable<&str, &str> = ScopeTable::default();
+        for (variable, name) in self.variables.iter() {
+            if let Some(label) = variable.source_blank_label() {
+                canonical_names.insert(label, name.as_str(), memory)?;
+            }
+        }
+        let mut groups = memory.collect(scopes.groups.iter())?;
+        groups.sort_unstable_by_key(|(key, _)| *key);
+        let mut next_variable = self.variables.iter().count();
+        let mut next_blank = 0usize;
+        let mut last_owner = None;
+        let mut carried = ScopeTable::default();
+        for &(&(owner, label), group) in &groups {
+            if last_owner != Some(owner) {
+                carried.release(memory)?;
+                carried = scopes.carried_labels(owner, memory)?;
+                last_owner = Some(owner);
+            }
+            let canonical = carried
+                .get(&label)
+                .and_then(|()| canonical_names.get(&label));
+            let alias = if let Some(name) = canonical {
+                Some(BlankName::Witness(memory.string(name)?))
+            } else if group.surfaces.iter().count() > 1 {
+                let name = memory.format(&format_args!("{variable_prefix}{next_variable}"))?;
+                if self.unit.is_none() {
+                    self.unit = Some(memory.format(&format_args!("{name}unit"))?);
+                }
+                next_variable = next_variable
+                    .checked_add(1)
+                    .ok_or(StorageError::SizeOverflow)?;
+                Some(BlankName::Witness(name))
+            } else if owners_per_label.get(&label).copied().unwrap_or(0) > 1
+                || !purrdf_lex::terminals::is_valid_blank_node_label(label)
+            {
+                let name = memory.format(&format_args!("{blank_prefix}{next_blank}"))?;
+                next_blank = next_blank
+                    .checked_add(1)
+                    .ok_or(StorageError::SizeOverflow)?;
+                Some(BlankName::Label(name))
+            } else {
+                None
+            };
+            if let Some(alias) = alias {
+                let index = self.blank_aliases.len();
+                memory.push(&mut self.blank_aliases, alias)?;
+                for &term in &group.terms {
+                    self.blanks.insert(term, index, memory)?;
+                }
+            }
+        }
+        memory.release_vec(groups)?;
+        canonical_names.release(memory)?;
+        carried.release(memory)?;
+        owners_per_label.release(memory)?;
+        memory.release_string(blank_prefix)
+    }
+    fn has_witnesses(&self) -> bool {
+        self.unit.is_some()
+    }
+    fn name<'a>(&'a self, variable: &'a Variable) -> &'a str {
+        self.variables
+            .get(variable)
+            .map_or_else(|| variable.as_str(), String::as_str)
+    }
+    fn unit_name(&self) -> &str {
+        self.unit
+            .as_deref()
+            .expect("a witness identity has an alias")
+    }
+    fn projection<S: Admission + ?Sized>(
+        &self,
+        s: &mut Surface<'_, '_, '_, S>,
+        pattern: &GraphPattern,
+    ) {
+        let variables = s
+            .storage
+            .run(|memory| crate::parser::visible_variables_with_memory(pattern, memory))
+            .unwrap_or_default();
+        for variable in &variables {
+            let _ = write!(s, "?{} ", self.name(variable));
+        }
+        if variables.is_empty() && s.storage.failure.get().is_none() {
+            let _ = write!(s, "(1 AS ?{}) ", self.unit_name());
+        }
+        s.storage.cleanup(|memory| memory.release_vec(variables));
+    }
+}
+fn reserve_name<S: Admission + ?Sized>(
+    names: &mut ScopeTable<String, ()>,
+    name: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    if names.get_by(|stored| name.cmp(stored.as_str())).is_none() {
+        let owned = memory.string(name)?;
+        names.insert(owned, (), memory)?;
+    }
+    Ok(())
+}
+fn fresh_prefix_with_memory<'a, S: Admission + ?Sized>(
+    initial: &str,
+    names: &(impl Iterator<Item = &'a str> + Clone),
+    memory: &mut Memory<'_, S>,
+) -> Result<String, StorageError> {
+    let mut prefix = memory.string(initial)?;
+    while (*names).clone().any(|name| name.starts_with(&prefix)) {
+        let required = prefix
+            .len()
+            .checked_add(1)
+            .ok_or(StorageError::SizeOverflow)?;
+        memory.reserve_string(&mut prefix, required)?;
+        prefix.insert(0, '_');
+    }
+    Ok(prefix)
 }
 
 /// The brace decisions shared with the renderer for a positive spine's child.
-fn spine_child_needs_bracing(parent: &GraphPattern, child: &GraphPattern) -> bool {
-    match parent {
+fn spine_child_needs_bracing_with_memory<S: Admission + ?Sized>(
+    parent: &GraphPattern,
+    child: &GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, StorageError> {
+    Ok(match parent {
         GraphPattern::Join { left, .. } => {
             if core::ptr::eq(core::ptr::from_ref(&**left), core::ptr::from_ref(child)) {
                 left_operand_needs_bracing(child)
             } else {
-                join_right_needs_bracing(child)
+                join_right_needs_bracing_with_memory(child, memory)?
             }
         }
         GraphPattern::Lateral { left, right } => {
@@ -357,158 +821,26 @@ fn spine_child_needs_bracing(parent: &GraphPattern, child: &GraphPattern) -> boo
             }
         }
         _ => false,
-    }
+    })
 }
-
-/// Fresh legal names preserve source blank ownership and omit witnesses from
-/// observable projections. Ordinary variables retain their exact names.
-#[derive(Default)]
-struct VariableNames {
-    variables: std::collections::BTreeMap<Variable, String>,
-    blanks: std::collections::BTreeMap<*const TermPattern, usize>,
-    blank_aliases: Vec<BlankName>,
-    unit: Option<String>,
-}
-
-impl VariableNames {
-    fn for_pattern(
-        pattern: &GraphPattern,
-        reserve: impl FnOnce(&mut dyn FnMut(&Variable)),
-    ) -> Self {
-        let needs_names = !walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
-            if visit == Visit::Enter {
-                let mut found = matches!(node, NodeRef::Term(TermPattern::BlankNode(_)));
-                node.for_each_variable(|variable| found |= variable.is_hidden());
-                if found {
-                    return Flow::Stop;
-                }
-            }
-            Flow::Descend
-        });
-        if !needs_names {
-            return Self::default();
-        }
-        let mut ordinary = std::collections::BTreeSet::new();
-        let mut hidden = std::collections::BTreeSet::new();
-        let mut has_raw = false;
-        walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
-            if visit == Visit::Enter {
-                has_raw |= matches!(node, NodeRef::Term(TermPattern::BlankNode(_)));
-                node.for_each_variable(|variable| {
-                    if variable.is_hidden() {
-                        hidden.insert(variable.clone());
-                    } else {
-                        ordinary.insert(variable.as_str().to_owned());
-                    }
-                });
-            }
-            Flow::Descend
-        });
-        reserve(&mut |variable| {
-            ordinary.insert(variable.as_str().to_owned());
-        });
-        let prefix = fresh_prefix("__purrdf_hidden_", &ordinary.iter().map(String::as_str));
-        let mut names = Self::default();
-        for (index, variable) in hidden.into_iter().enumerate() {
-            names.variables.insert(variable, format!("{prefix}{index}"));
-        }
-        if !names.variables.is_empty() {
-            names.unit = Some(format!("{prefix}0unit"));
-        }
-        if has_raw {
-            names.alias_raw_blanks(&RawBlankScopes::collect(pattern), &prefix);
-        }
-        names
-    }
-
-    fn alias_raw_blanks(&mut self, scopes: &RawBlankScopes<'_>, variable_prefix: &str) {
-        let mut owners_per_label = std::collections::BTreeMap::<_, usize>::new();
-        for (_, label) in scopes.groups.keys() {
-            *owners_per_label.entry(*label).or_default() += 1;
-        }
-        let blank_prefix =
-            fresh_prefix("__purrdf_scoped_blank_", &owners_per_label.keys().copied());
-        let mut next_variable = self.variables.len();
-        let mut next_blank = 0;
-        let mut last_owner = None;
-        let mut carried = std::collections::BTreeSet::new();
-        for (&(owner, label), group) in &scopes.groups {
-            if last_owner != Some(owner) {
-                carried = scopes.carried_labels(owner);
-                last_owner = Some(owner);
-            }
-            let canonical = carried
-                .contains(label)
-                .then(|| self.variables.get(&Variable::hidden_blank(label)))
-                .flatten();
-            let alias = if let Some(name) = canonical {
-                Some(BlankName::Witness(name.clone()))
-            } else if group.surfaces.len() > 1 {
-                let name = format!("{variable_prefix}{next_variable}");
-                if self.unit.is_none() {
-                    self.unit = Some(format!("{name}unit"));
-                }
-                next_variable += 1;
-                Some(BlankName::Witness(name))
-            } else if owners_per_label[label] > 1
-                || !purrdf_lex::terminals::is_valid_blank_node_label(label)
-            {
-                let name = format!("{blank_prefix}{next_blank}");
-                next_blank += 1;
-                Some(BlankName::Label(name))
-            } else {
-                None
-            };
-            if let Some(alias) = alias {
-                let index = self.blank_aliases.len();
-                self.blank_aliases.push(alias);
-                for &term in &group.terms {
-                    self.blanks.insert(term, index);
-                }
-            }
-        }
-    }
-
-    fn has_witnesses(&self) -> bool {
-        self.unit.is_some()
-    }
-
-    fn name<'a>(&'a self, variable: &'a Variable) -> &'a str {
-        self.variables
-            .get(variable)
-            .map_or_else(|| variable.as_str(), String::as_str)
-    }
-
-    fn unit_name(&self) -> &str {
-        self.unit
-            .as_deref()
-            .expect("a witness identity has an alias")
-    }
-
-    fn projection(&self, s: &mut String, pattern: &GraphPattern) {
-        let variables = crate::parser::visible_variables(pattern);
-        for variable in &variables {
-            let _ = write!(s, "?{} ", self.name(variable));
-        }
-        if variables.is_empty() {
-            let _ = write!(s, "(1 AS ?{}) ", self.unit_name());
-        }
-    }
-}
-
-/// Reserve a deterministic prefix against all caller-authored names.
-fn fresh_prefix<'a>(initial: &str, names: &(impl Iterator<Item = &'a str> + Clone)) -> String {
-    let mut prefix = initial.to_owned();
-    while (*names).clone().any(|name| name.starts_with(&prefix)) {
-        prefix.insert(0, '_');
-    }
-    prefix
-}
-
 /// The shared complete-query renderer; the predicate mode affects BGPs alone.
-fn select_query(inner: &GraphPattern, predicates: PredicateRendering<'_>) -> String {
-    let names = VariableNames::for_pattern(inner, |_| {});
-    let mut s = String::new();
+fn select_query_with_memory<S: Admission + ?Sized>(
+    inner: &GraphPattern,
+    predicates: PredicateRendering<'_>,
+    memory: &mut Memory<'_, S>,
+) -> Result<String, CarrierError> {
+    let before_names = memory.admitted_bytes();
+    let names = VariableNames::for_pattern(inner, |_| {}, memory)?;
+    let names_bytes = memory
+        .admitted_bytes()
+        .checked_sub(before_names)
+        .ok_or(StorageError::SizeOverflow)?;
+    let storage = RenderStorage::new(memory);
+    let mut text = String::new();
+    let mut s = Surface {
+        text: &mut text,
+        storage: &storage,
+    };
     if matches!(inner, GraphPattern::Project { .. }) || needs_subselect_reconstruction(inner) {
         // A root Project carries its own explicit SELECT. Otherwise `inner` is a
         // bare modifier chain (no Project above it) —
@@ -526,7 +858,7 @@ fn select_query(inner: &GraphPattern, predicates: PredicateRendering<'_>) -> Str
         // `SELECT *` over an aggregate query, which SPARQL does not admit, and let
         // an aggregate call vanish behind a dangling reference to its synthetic
         // output variable.
-        emit(&mut s, Item::Subselect(inner), predicates, &names);
+        emit(&mut s, Item::Subselect(inner), predicates, &names)?;
     } else {
         if !names.has_witnesses() {
             s.push_str("SELECT * WHERE ");
@@ -535,44 +867,67 @@ fn select_query(inner: &GraphPattern, predicates: PredicateRendering<'_>) -> Str
             names.projection(&mut s, inner);
             s.push_str("WHERE ");
         }
-        emit(&mut s, Item::BracedGroup(inner), predicates, &names);
+        emit(&mut s, Item::BracedGroup(inner), predicates, &names)?;
     }
-    s
+    storage.check()?;
+    drop(names);
+    storage.cleanup(|memory| memory.release_bytes(names_bytes));
+    storage.check()?;
+    Ok(text)
 }
 
-/// Render `p` as the body of a `{ … }` group.
-///
-/// `pub(crate)`: this is also the WHERE-clause renderer `Display for
-/// GraphUpdateOperation` (`algebra.rs`) reuses for `INSERT`/`DELETE … WHERE { … }`
-/// — the exact same shape [`crate::parser`]'s `parse_group_graph_pattern` produces
-/// for an UPDATE's WHERE clause (never the "bare aggregate chain" shape
-/// [`needs_subselect_reconstruction`] exists to catch, which only arises once an
-/// outer `Project` has been peeled from a top-level `SELECT`/subselect — an UPDATE
-/// WHERE clause never carries one).
+/// Render an UPDATE group through the same native surface engine.
 pub(crate) fn fmt_group_body(
     s: &mut String,
     p: &GraphPattern,
     reserve: impl FnOnce(&mut dyn FnMut(&Variable)),
 ) -> core::fmt::Result {
-    validate_carrier_pattern(p).map_err(|_| core::fmt::Error)?;
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    validate_carrier_pattern_with_memory(p, &mut memory).map_err(|_| core::fmt::Error)?;
+    let before = memory.admitted_bytes();
+    let names =
+        VariableNames::for_pattern(p, reserve, &mut memory).map_err(|_| core::fmt::Error)?;
+    let bytes = memory
+        .admitted_bytes()
+        .checked_sub(before)
+        .ok_or(core::fmt::Error)?;
+    memory
+        .add_bytes(s.capacity())
+        .expect("resident caller-owned buffer layout");
+    let storage = RenderStorage::new(&mut memory);
     emit(
-        s,
+        &mut Surface {
+            text: s,
+            storage: &storage,
+        },
         Item::GroupBody(p),
         PredicateRendering::Independent,
-        &VariableNames::for_pattern(p, reserve),
-    );
-    Ok(())
+        &names,
+    )
+    .map_err(|_| core::fmt::Error)?;
+    drop(names);
+    storage.cleanup(|memory| memory.release_bytes(bytes));
+    storage.check().map_err(|_| core::fmt::Error)
 }
-
-/// Render a property path in its SPARQL surface syntax — the text of
-/// [`PropertyPathExpression`]'s `Display`.
+/// Render a path through the same native item engine.
 pub(crate) fn fmt_path(s: &mut String, path: &PropertyPathExpression) {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    memory
+        .add_bytes(s.capacity())
+        .expect("resident caller-owned buffer layout");
+    let storage = RenderStorage::new(&mut memory);
     emit(
-        s,
+        &mut Surface {
+            text: s,
+            storage: &storage,
+        },
         Item::Path(path),
         PredicateRendering::Independent,
         &VariableNames::default(),
-    );
+    )
+    .expect("resident path rendering storage");
 }
 
 /// Whether `p`, with no `Project` above it, is a bare modifier-chain shape the
@@ -647,18 +1002,27 @@ fn extend_chain_reaches_group(mut p: &GraphPattern) -> bool {
 /// Does this pattern contain a [`GraphPattern::PropertyFunction`] anywhere in the
 /// group structure it renders inline (it does not descend into `Expression`s,
 /// which are always emitted inside their own braces)?
-fn contains_property_function(p: &GraphPattern) -> bool {
+fn contains_property_function_with_memory<S: Admission + ?Sized>(
+    p: &GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, StorageError> {
     let mut found = false;
-    walk_pre_post(NodeRef::Pattern(p), |visit, node| match (visit, node) {
-        (Visit::Exit, _) => Flow::Descend,
-        (Visit::Enter, NodeRef::Pattern(GraphPattern::PropertyFunction(_))) => {
-            found = true;
-            Flow::Stop
-        }
-        (Visit::Enter, NodeRef::Pattern(_)) => Flow::Descend,
-        (Visit::Enter, _) => Flow::Skip,
-    });
-    found
+    crate::walk::walk_pre_post_with_memory(
+        NodeRef::Pattern(p),
+        |visit, node, _| {
+            Ok::<_, StorageError>(match (visit, node) {
+                (Visit::Exit, _) => Flow::Descend,
+                (Visit::Enter, NodeRef::Pattern(GraphPattern::PropertyFunction(_))) => {
+                    found = true;
+                    Flow::Stop
+                }
+                (Visit::Enter, NodeRef::Pattern(_)) => Flow::Descend,
+                (Visit::Enter, _) => Flow::Skip,
+            })
+        },
+        memory,
+    )?;
+    Ok(found)
 }
 
 /// Does a [`GraphPattern::Lateral`] node render as a surface form the parser's
@@ -801,10 +1165,13 @@ fn rendering_starts_with_a_reabsorbable_left(p: &GraphPattern) -> bool {
 /// `A OPTIONAL { B } BIND(e AS ?v) MINUS { C }` run reproduces its own
 /// left-deep chain. A `Filter` nested inside one of those is braced by that
 /// node's own rendering.
-fn join_right_needs_bracing(pattern: &GraphPattern) -> bool {
-    !is_subselect_node(pattern)
-        && (contains_property_function(pattern)
-            || rendering_starts_with_a_reabsorbable_left(pattern))
+fn join_right_needs_bracing_with_memory<S: Admission + ?Sized>(
+    pattern: &GraphPattern,
+    memory: &mut Memory<'_, S>,
+) -> Result<bool, StorageError> {
+    Ok(!is_subselect_node(pattern)
+        && (contains_property_function_with_memory(pattern, memory)?
+            || rendering_starts_with_a_reabsorbable_left(pattern)))
 }
 
 const fn left_operand_needs_bracing(p: &GraphPattern) -> bool {
@@ -999,18 +1366,21 @@ enum Item<'a> {
 }
 
 /// Render `first` onto `s`, and everything it pushes, until the work list is empty.
-fn emit(
-    s: &mut String,
+fn emit<S: Admission + ?Sized>(
+    s: &mut Surface<'_, '_, '_, S>,
     first: Item<'_>,
     predicates: PredicateRendering<'_>,
     names: &VariableNames,
-) {
-    let mut stack = Items::with(first);
+) -> Result<(), StorageError> {
+    let mut stack = Items::with(first, s.storage);
     while let Some(item) = stack.pop() {
         let queued = stack.len();
         render(s, item, &mut stack, predicates, names);
+        s.storage.check()?;
         stack.reverse_top(stack.len() - queued);
     }
+    drop(stack);
+    s.storage.check()
 }
 
 /// Write what `item` leads with onto `s`, and queue what follows on `next`, in order;
@@ -1019,10 +1389,10 @@ fn emit(
     clippy::too_many_lines,
     reason = "one arm per work-list entry, each a transcription of its grammar"
 )]
-fn render<'a>(
-    s: &mut String,
+fn render<'a, S: Admission + ?Sized>(
+    s: &mut Surface<'_, '_, '_, S>,
     item: Item<'a>,
-    next: &mut Items<'a>,
+    next: &mut Items<'a, '_, '_, '_, S>,
     predicates: PredicateRendering<'_>,
     names: &VariableNames,
 ) {
@@ -1074,7 +1444,10 @@ fn render<'a>(
             }
         }
         Item::JoinRight(p) => {
-            if join_right_needs_bracing(p) {
+            if s.storage
+                .run(|memory| join_right_needs_bracing_with_memory(p, memory))
+                .unwrap_or(false)
+            {
                 next.extend([Item::Str("{ "), Item::GroupBody(p), Item::Str(" }")]);
             } else {
                 next.push(Item::GroupBody(p));
@@ -1169,7 +1542,11 @@ fn render<'a>(
 
 /// Queue `s p o`, with a data predicate for a BGP or a plain predicate inside a
 /// quoted triple term (between `<<( ` and ` )>>`).
-fn triple_items<'a>(t: &'a TriplePattern, next: &mut Items<'a>, predicate: Item<'a>) {
+fn triple_items<'a, S: Admission + ?Sized>(
+    t: &'a TriplePattern,
+    next: &mut Items<'a, '_, '_, '_, S>,
+    predicate: Item<'a>,
+) {
     next.extend([
         Item::Term(&t.subject),
         Item::Char(' '),
@@ -1180,10 +1557,10 @@ fn triple_items<'a>(t: &'a TriplePattern, next: &mut Items<'a>, predicate: Item<
 }
 
 /// Render a pattern as the body of a group (see [`Item::GroupBody`]).
-fn group_body<'a>(
-    s: &mut String,
+fn group_body<'a, S: Admission + ?Sized>(
+    s: &mut Surface<'_, '_, '_, S>,
     p: &'a GraphPattern,
-    next: &mut Items<'a>,
+    next: &mut Items<'a, '_, '_, '_, S>,
     names: &VariableNames,
 ) {
     if is_subselect_node(p) {
@@ -1373,7 +1750,10 @@ fn group_body<'a>(
 /// multi-element vector renders as collection syntax `( … )`, which the parser
 /// reads back as an argument list — never as an `rdf:first`/`rdf:rest` chain —
 /// because the predicate names a property function.
-fn property_function<'a>(call: &'a PropertyFunctionCall, next: &mut Items<'a>) {
+fn property_function<'a, S: Admission + ?Sized>(
+    call: &'a PropertyFunctionCall,
+    next: &mut Items<'a, '_, '_, '_, S>,
+) {
     property_function_args(&call.subject_args, next);
     next.extend([Item::Char(' '), Item::Iri(&call.iri), Item::Char(' ')]);
     property_function_args(&call.object_args, next);
@@ -1381,7 +1761,10 @@ fn property_function<'a>(call: &'a PropertyFunctionCall, next: &mut Items<'a>) {
 }
 
 /// One side of a property-function call (see [`property_function`]).
-fn property_function_args<'a>(args: &'a [TermPattern], next: &mut Items<'a>) {
+fn property_function_args<'a, S: Admission + ?Sized>(
+    args: &'a [TermPattern],
+    next: &mut Items<'a, '_, '_, '_, S>,
+) {
     if let [single] = args {
         next.push(Item::Term(single));
         return;
@@ -1398,11 +1781,11 @@ fn property_function_args<'a>(args: &'a [TermPattern], next: &mut Items<'a>) {
 }
 
 /// A `VALUES (?v …) { (term …) … }` block (always the parenthesized form).
-fn values<'a>(
-    s: &mut String,
+fn values<'a, S: Admission + ?Sized>(
+    s: &mut Surface<'_, '_, '_, S>,
     variables: &'a [Variable],
     bindings: &'a [Vec<Option<GroundTerm>>],
-    next: &mut Items<'a>,
+    next: &mut Items<'a, '_, '_, '_, S>,
     names: &VariableNames,
 ) {
     s.push_str("VALUES (");
@@ -1433,7 +1816,12 @@ fn values<'a>(
 /// Peel the solution-modifier chain (outermost → innermost) and render
 /// `SELECT [DISTINCT|REDUCED] <vars|*> WHERE { <body> } [GROUP BY] [HAVING]
 /// [ORDER BY] [LIMIT] [OFFSET]`.
-fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>, names: &VariableNames) {
+fn subselect<'a, S: Admission + ?Sized>(
+    s: &mut Surface<'_, '_, '_, S>,
+    p: &'a GraphPattern,
+    next: &mut Items<'a, '_, '_, '_, S>,
+    names: &VariableNames,
+) {
     // Peel outer modifiers, recording each, until we reach the WHERE body.
     let mut cur = p;
     let mut distinct = false;
@@ -1483,7 +1871,9 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>, name
                 // greedily treat Extends encountered during the peel as SELECT
                 // expressions; a BIND inside the WHERE body is reached only after
                 // we stop peeling (it stays part of the body).
-                select_exprs.push((variable, expression));
+                let _ = s
+                    .storage
+                    .run(|memory| memory.push(&mut select_exprs, (variable, expression)));
                 cur = inner;
             }
             GraphPattern::Filter { expr, inner } if extend_chain_reaches_group(inner) => {
@@ -1499,7 +1889,7 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>, name
                 // entirely. An ordinary WHERE-body `FILTER` (no `Group`
                 // anywhere below it) fails this guard and correctly falls
                 // through to `_ => break`, staying part of the body.
-                having.push(expr);
+                let _ = s.storage.run(|memory| memory.push(&mut having, expr));
                 cur = inner;
             }
             GraphPattern::Group {
@@ -1559,10 +1949,16 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>, name
     //   parser's own "filters float to the group's end" rule then
     //   re-associates differently than the original tree.
     let no_project_vars: Option<Vec<Variable>> = match &group {
-        Some((vars, _)) if !vars.is_empty() => Some(vars.to_vec()),
+        Some((vars, _)) if !vars.is_empty() => {
+            s.storage.run(|memory| memory.collect(vars.iter().cloned()))
+        }
         Some(_) => None,
-        None if !select_exprs.is_empty() => Some(crate::parser::visible_variables(cur)),
-        None if names.has_witnesses() => Some(crate::parser::visible_variables(cur)),
+        None if !select_exprs.is_empty() => s
+            .storage
+            .run(|memory| crate::parser::visible_variables_with_memory(cur, memory)),
+        None if names.has_witnesses() => s
+            .storage
+            .run(|memory| crate::parser::visible_variables_with_memory(cur, memory)),
         None => None,
     };
     // Skip any var whose binding will be emitted via `(expr AS ?v)`; emitting
@@ -1570,12 +1966,16 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>, name
     // every branch below that has a real variable LIST to filter (a
     // reconstructed `no_project_vars` list, or a genuine `Project`'s own
     // `variables`) — `*` needs no filtering, it names nothing to duplicate.
-    let as_targets: std::collections::HashSet<&Variable, purrdf_hash::fixed::FixedState> =
-        select_exprs.iter().map(|(v, _)| *v).collect();
-    let emit_filtered_vars = |s: &mut String, vars: &[Variable]| -> bool {
+    let mut as_targets = ScopeTable::default();
+    for (variable, _) in &select_exprs {
+        let _ = s
+            .storage
+            .run(|memory| as_targets.insert(*variable, (), memory));
+    }
+    let emit_filtered_vars = |s: &mut Surface<'_, '_, '_, S>, vars: &[Variable]| -> bool {
         let mut emitted = false;
         for v in vars {
-            if as_targets.contains(v) {
+            if as_targets.get(&v).is_some() {
                 continue;
             }
             if emitted {
@@ -1658,7 +2058,7 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>, name
     }
     if !having.is_empty() {
         next.push(Item::Str(" HAVING"));
-        for expr in having {
+        for &expr in &having {
             next.extend([
                 Item::Char('('),
                 Item::Expr(expr, Level::Or, group),
@@ -1678,10 +2078,20 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>, name
             next.push(Item::Count(" OFFSET ", start));
         }
     }
+    s.storage.cleanup(|memory| memory.release_vec(select_exprs));
+    s.storage.cleanup(|memory| memory.release_vec(having));
+    s.storage.cleanup(|memory| as_targets.release(memory));
+    if let Some(variables) = no_project_vars {
+        s.storage.cleanup(|memory| memory.release_vec(variables));
+    }
 }
 
 /// Queue `ORDER BY` keys, each in its explicit `ASC(…)`/`DESC(…)` form.
-fn order_keys<'a>(keys: &'a [OrderExpression], group: Option<GroupSpec<'a>>, next: &mut Items<'a>) {
+fn order_keys<'a, S: Admission + ?Sized>(
+    keys: &'a [OrderExpression],
+    group: Option<GroupSpec<'a>>,
+    next: &mut Items<'a, '_, '_, '_, S>,
+) {
     for key in keys {
         let (keyword, e) = match key {
             OrderExpression::Asc(e) => (" ASC(", e),
@@ -1718,11 +2128,11 @@ fn order_keys<'a>(keys: &'a [OrderExpression], group: Option<GroupSpec<'a>>, nex
 /// in the modifier chain — never by a `FILTER`/`BIND` inside the body, and never by
 /// a nested `EXISTS` pattern (a fresh, self-contained WHERE scope, which is why the
 /// `Exists` arm below does not thread `group` through).
-fn expr_bare<'a>(
-    s: &mut String,
+fn expr_bare<'a, S: Admission + ?Sized>(
+    s: &mut Surface<'_, '_, '_, S>,
     e: &'a Expression,
     group: Option<GroupSpec<'a>>,
-    next: &mut Items<'a>,
+    next: &mut Items<'a, '_, '_, '_, S>,
     names: &VariableNames,
 ) {
     if let Expression::Variable(v) = e
@@ -1867,12 +2277,12 @@ fn expr_bare<'a>(
 
 /// Queue `a OP b` for a relational operator: both operands are
 /// `NumericExpression`s, so each must reach [`Level::Additive`].
-fn relational<'a>(
+fn relational<'a, S: Admission + ?Sized>(
     a: &'a Expression,
     op: &'static str,
     b: &'a Expression,
     group: Option<GroupSpec<'a>>,
-    next: &mut Items<'a>,
+    next: &mut Items<'a, '_, '_, '_, S>,
 ) {
     next.extend([
         Item::Expr(a, Level::Additive, group),
@@ -1886,12 +2296,12 @@ fn relational<'a>(
 /// Queue `a IN (list)` / `a NOT IN (list)` (`keyword` carries the spaces and the
 /// opening bracket): the tested operand is a `NumericExpression`, each list entry
 /// any expression.
-fn in_list<'a>(
+fn in_list<'a, S: Admission + ?Sized>(
     a: &'a Expression,
     keyword: &'static str,
     list: &'a [Expression],
     group: Option<GroupSpec<'a>>,
-    next: &mut Items<'a>,
+    next: &mut Items<'a, '_, '_, '_, S>,
 ) {
     next.extend([Item::Expr(a, Level::Additive, group), Item::Str(keyword)]);
     expr_list(list, group, next);
@@ -1899,7 +2309,11 @@ fn in_list<'a>(
 }
 
 /// Queue a comma-separated expression list.
-fn expr_list<'a>(list: &'a [Expression], group: Option<GroupSpec<'a>>, next: &mut Items<'a>) {
+fn expr_list<'a, S: Admission + ?Sized>(
+    list: &'a [Expression],
+    group: Option<GroupSpec<'a>>,
+    next: &mut Items<'a, '_, '_, '_, S>,
+) {
     for (i, e) in list.iter().enumerate() {
         if i > 0 {
             next.push(Item::Str(", "));
@@ -1917,7 +2331,11 @@ fn expr_list<'a>(list: &'a [Expression], group: Option<GroupSpec<'a>>, next: &mu
 /// SERVICE-federation path this module exists for. An aggregate's own `args` are
 /// plain WHERE-body expressions (nested aggregates are not legal SPARQL), so they
 /// render with no `Group` in scope.
-fn aggregate<'a>(s: &mut String, agg: &'a AggregateExpression, next: &mut Items<'a>) {
+fn aggregate<'a, S: Admission + ?Sized>(
+    s: &mut Surface<'_, '_, '_, S>,
+    agg: &'a AggregateExpression,
+    next: &mut Items<'a, '_, '_, '_, S>,
+) {
     let AggregateExpression {
         function,
         args,
@@ -1999,7 +2417,11 @@ fn aggregate<'a>(s: &mut String, agg: &'a AggregateExpression, next: &mut Items<
 /// The standard operators round-trip with the parser; the two PurRDF extensions
 /// render as `path{min,max}` (bounded repetition — round-trips) and `<any>` /
 /// `<any:ns>` (predicate wildcard — emit-only).
-fn path_items<'a>(s: &mut String, path: &'a PropertyPathExpression, next: &mut Items<'a>) {
+fn path_items<'a, S: Admission + ?Sized>(
+    s: &mut Surface<'_, '_, '_, S>,
+    path: &'a PropertyPathExpression,
+    next: &mut Items<'a, '_, '_, '_, S>,
+) {
     use PropertyPathExpression as P;
     match path {
         P::NamedNode(n) => {
@@ -2058,10 +2480,10 @@ fn path_items<'a>(s: &mut String, path: &'a PropertyPathExpression, next: &mut I
 /// Queue a [`PropertyPathExpression::Sequence`] or `Alternative` chain as its
 /// elements joined by `op`, bracketing the element at index `i` when
 /// `parens(i, element)` says the bare text would re-parse differently.
-fn path_chain<'a>(
+fn path_chain<'a, S: Admission + ?Sized>(
     elements: &'a [PropertyPathExpression],
     op: char,
-    next: &mut Items<'a>,
+    next: &mut Items<'a, '_, '_, '_, S>,
     parens: impl Fn(usize, &PropertyPathExpression) -> bool,
 ) {
     for (i, element) in elements.iter().enumerate() {
@@ -2077,7 +2499,11 @@ fn path_chain<'a>(
 }
 
 /// Emit a leaf query-pattern term (any but a quoted triple term).
-fn fmt_leaf_term(s: &mut String, t: &TermPattern, names: &VariableNames) {
+fn fmt_leaf_term<S: Admission + ?Sized>(
+    s: &mut Surface<'_, '_, '_, S>,
+    t: &TermPattern,
+    names: &VariableNames,
+) {
     match t {
         TermPattern::NamedNode(n) => {
             write_iri(n.as_str(), s);
@@ -2104,7 +2530,11 @@ fn fmt_leaf_term(s: &mut String, t: &TermPattern, names: &VariableNames) {
 }
 
 /// Emit an IRI-or-variable (predicate / `GRAPH`/`SERVICE` name position).
-fn fmt_named_node_pattern(s: &mut String, n: &NamedNodePattern, names: &VariableNames) {
+fn fmt_named_node_pattern<S: Admission + ?Sized>(
+    s: &mut Surface<'_, '_, '_, S>,
+    n: &NamedNodePattern,
+    names: &VariableNames,
+) {
     match n {
         NamedNodePattern::NamedNode(node) => {
             write_iri(node.as_str(), s);
@@ -2119,7 +2549,7 @@ fn fmt_named_node_pattern(s: &mut String, n: &NamedNodePattern, names: &Variable
 /// Emit a literal in the RDF 1.2 canonical term form
 /// ([`term_syntax::write_literal`](purrdf_lex::term_syntax::write_literal)),
 /// which the SPARQL string and literal productions read back unchanged.
-fn fmt_literal(s: &mut String, l: &Literal) {
+fn fmt_literal<S: Admission + ?Sized>(s: &mut Surface<'_, '_, '_, S>, l: &Literal) {
     write_literal(
         l.value(),
         l.datatype().as_str(),
@@ -2130,7 +2560,7 @@ fn fmt_literal(s: &mut String, l: &Literal) {
 }
 
 /// Emit a SPARQL built-in or custom function name.
-fn fmt_function_name(s: &mut String, f: &Function) {
+fn fmt_function_name<S: Admission + ?Sized>(s: &mut Surface<'_, '_, '_, S>, f: &Function) {
     match function_keyword(f) {
         Some(name) => s.push_str(name),
         // A PurRDF extension call, a SEP-0009 composite-datatype call and a host
@@ -2242,12 +2672,19 @@ mod tests {
 
     /// Render one aggregate call on its own.
     fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let storage = RenderStorage::new(&mut memory);
         emit(
-            s,
+            &mut Surface {
+                text: s,
+                storage: &storage,
+            },
             Item::Aggregate(agg),
             PredicateRendering::Independent,
             &VariableNames::default(),
-        );
+        )
+        .expect("resident aggregate carrier allocation");
     }
     use crate::algebra::AggregateExpressionError;
     use crate::parser::{ParserOptions, SparqlParser};

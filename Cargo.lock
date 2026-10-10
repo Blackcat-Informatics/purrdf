@@ -418,6 +418,7 @@ dependencies = [
  "purrdf-json",
  "purrdf-lex",
  "purrdf-markdown",
+ "purrdf-mime",
  "purrdf-rdf",
  "purrdf-retrieval",
  "purrdf-shapes",
@@ -469,6 +470,7 @@ dependencies = [
 name = "purrdf-cdt"
 version = "3.0.1"
 dependencies = [
+ "purrdf-alloc-probe",
  "purrdf-events",
  "purrdf-hash",
  "purrdf-iri",
@@ -672,6 +674,7 @@ dependencies = [
 name = "purrdf-hnsw"
 version = "3.0.1"
 dependencies = [
+ "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
  "purrdf-lex",
@@ -733,6 +736,20 @@ dependencies = [
  "purrdf-hash",
  "purrdf-rdf",
  "purrdf-testkit",
+]
+
+[[package]]
+name = "purrdf-mime"
+version = "3.0.1"
+dependencies = [
+ "purrdf-core",
+ "purrdf-hash",
+ "purrdf-lex",
+ "purrdf-rdf",
+ "purrdf-sparql-algebra",
+ "purrdf-sparql-eval",
+ "purrdf-testkit",
+ "purrdf-xsd",
 ]
 
 [[package]]
@@ -906,7 +923,6 @@ dependencies = [
  "purrdf-testkit",
  "purrdf-xsd",
  "rayon",
- "regex",
  "sha2",
  "wasm-bindgen",
 ]

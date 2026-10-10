@@ -311,6 +311,10 @@ fn deeply_joined_construct_is_depth_admitted_before_survey_or_substitution() {
         .expect("spawn");
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "The publication refusal remains inline because reporting a refused allocation cannot allocate another error box."
+)]
 fn deeply_joined_construct_on_a_large_stack() {
     use purrdf_sparql_algebra::{GraphPattern, Query};
     let engine = NativeSparqlEngine::new();
@@ -360,13 +364,14 @@ fn deeply_joined_construct_on_a_large_stack() {
         )
     })
     .expect("the publishing stack runs the construction");
-    let Err(GraphBuildError::Query(diagnostic)) = result else {
-        panic!("a plan too tall for the publishing stack must be refused")
+    let code = match &result {
+        Err(GraphBuildError::Query(diagnostic)) => diagnostic.code.as_str(),
+        Err(GraphBuildError::Evaluation(error)) => error
+            .code()
+            .expect("native stack admission preserves its diagnostic code"),
+        other => panic!("a plan too tall for the publishing stack must be refused: {other:?}"),
     };
-    assert_eq!(
-        diagnostic.code,
-        purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE
-    );
+    assert_eq!(code, purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE);
     assert_eq!(state.evidence(), before, "admission precedes governor work");
     let output = target.freeze().expect("untouched destination");
     assert_eq!(output.term_count(), 2);

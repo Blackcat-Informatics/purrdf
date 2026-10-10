@@ -47,28 +47,351 @@
 //!   extension) scan any-predicate edges, filtering by the excluded set or the
 //!   namespace prefix respectively.
 //!
-//! Determinism: every intermediate is a `BTreeSet<TermId>`, so the materialised
+//! Determinism: endpoint sets stay ordered by `TermId`, so the materialised
 //! solution order is the dataset's `TermId` order over the frozen dataset — the
 //! same canonical discipline the rest of the evaluator follows.
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::collections::BTreeSet;
+use std::cell::{Cell, RefCell};
+#[cfg(test)]
+use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
 use std::rc::Rc;
+#[cfg(test)]
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, TermId, TermRef, TermValue, ViewTermId};
+#[cfg(test)]
+use purrdf_core::TermValue;
+use purrdf_core::{DatasetView, TermId, TermRef, ViewTermId};
 use purrdf_sparql_algebra::{
     NamedNode, NegatedPathElement, PropertyPathExpression, TermPattern, Variable,
 };
 
-use crate::convert::{ground_term_pattern_to_value, named_node_to_value};
+#[cfg(test)]
+use crate::convert::named_node_to_value;
+use crate::convert::{ground_term_pattern_to_workspace_value, named_node_to_workspace_value};
 use crate::dataset_spec::GraphScope;
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::scratch::SolutionTerm;
-use crate::solution::{Solution, SolutionSeq, VarSchema};
+use crate::solution::{SolutionSeq, VarSchema};
+#[cfg(test)]
 use crate::{DetHashMap, DetHashSet};
+
+/// The path machine's local stop channel. Native containers delegate physical
+/// growth to the common admitted homes and move the first failure here. A stopped
+/// callback cannot allocate; the machine checks this channel before publication.
+struct PathStorage {
+    workspace: crate::WorkspaceCapability,
+    error: RefCell<Option<EvalError>>,
+    failed: Cell<bool>,
+    _control: crate::WorkspaceAllocation,
+}
+
+type PathStorageOwner = purrdf_core::small::Shared<PathStorage>;
+
+impl PathStorage {
+    fn new(workspace: &crate::WorkspaceCapability) -> Result<PathStorageOwner, EvalError> {
+        let control = workspace.charge(crate::workspace::shared_layout::<Self>()?)?;
+        purrdf_core::small::Shared::try_new(Self {
+            workspace: workspace.clone(),
+            error: RefCell::new(None),
+            failed: Cell::new(false),
+            _control: control,
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "property-path owner",
+        })
+    }
+
+    fn fail(&self, error: EvalError) {
+        if !self.failed.replace(true) {
+            *self.error.borrow_mut() = Some(error);
+        }
+    }
+
+    fn check(&self) -> Result<(), EvalError> {
+        if let Some(error) = self.error.borrow_mut().take() {
+            return Err(error);
+        }
+        if self.failed.get() {
+            return Err(EvalError::WorkspaceStopped);
+        }
+        Ok(())
+    }
+}
+
+struct PathVec<T> {
+    values: crate::AdmittedVec<T>,
+    storage: PathStorageOwner,
+}
+
+impl<T> PathVec<T> {
+    fn new(storage: &PathStorageOwner) -> Self {
+        Self {
+            values: crate::AdmittedVec::new(&storage.workspace),
+            storage: storage.clone(),
+        }
+    }
+    fn from_iter(values: impl IntoIterator<Item = T>, storage: &PathStorageOwner) -> Self {
+        let mut result = Self::new(storage);
+        result.extend(values);
+        result
+    }
+    fn push(&mut self, value: T) {
+        if self.storage.failed.get() {
+            return;
+        }
+        if let Err(error) = self.values.push(value) {
+            self.storage.fail(error);
+        }
+    }
+    fn extend(&mut self, values: impl IntoIterator<Item = T>) {
+        for value in values {
+            self.push(value);
+            if self.storage.failed.get() {
+                break;
+            }
+        }
+    }
+    fn pop(&mut self) -> Option<T> {
+        self.values.pop()
+    }
+    fn take(&mut self) -> Self {
+        let storage = self.storage.clone();
+        std::mem::replace(self, Self::new(&storage))
+    }
+    fn into_admitted(self) -> crate::AdmittedVec<T> {
+        self.values
+    }
+}
+impl<T> std::ops::Deref for PathVec<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        &self.values
+    }
+}
+impl<T> std::ops::DerefMut for PathVec<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        self.values.as_mut_slice()
+    }
+}
+impl<T> IntoIterator for PathVec<T> {
+    type Item = T;
+    type IntoIter = crate::workspace::AdmittedVecIntoIter<T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.into_iter()
+    }
+}
+
+/// Canonically ordered endpoint ownership. Binary search does not allocate;
+/// insertion grows the common admitted vector before moving any existing cell.
+/// Set insertion removes duplicates; the separate vector preserves bag order.
+struct PathSet<I: ViewTermId> {
+    values: PathVec<I>,
+}
+impl<I: ViewTermId> PathSet<I> {
+    fn new(storage: &PathStorageOwner) -> Self {
+        Self {
+            values: PathVec::new(storage),
+        }
+    }
+    fn from_iter(values: impl IntoIterator<Item = I>, storage: &PathStorageOwner) -> Self {
+        let mut set = Self::new(storage);
+        set.extend(values);
+        set
+    }
+    fn insert(&mut self, value: I) -> bool {
+        if self.values.storage.failed.get() {
+            return false;
+        }
+        let Err(index) = self.values.binary_search(&value) else {
+            return false;
+        };
+        self.values.push(value);
+        if self.values.storage.failed.get() {
+            return false;
+        }
+        self.values[index..].rotate_right(1);
+        true
+    }
+    fn extend(&mut self, values: impl IntoIterator<Item = I>) {
+        for value in values {
+            self.insert(value);
+            if self.values.storage.failed.get() {
+                break;
+            }
+        }
+    }
+    fn contains(&self, value: &I) -> bool {
+        self.values.binary_search(value).is_ok()
+    }
+    fn take(&mut self) -> Self {
+        Self {
+            values: self.values.take(),
+        }
+    }
+    fn into_vec(self) -> PathVec<I> {
+        self.values
+    }
+}
+impl<I: ViewTermId> Clone for PathSet<I> {
+    fn clone(&self) -> Self {
+        Self::from_iter(self.iter().copied(), &self.values.storage)
+    }
+}
+impl<I: ViewTermId> std::ops::Deref for PathSet<I> {
+    type Target = [I];
+    fn deref(&self) -> &[I] {
+        &self.values
+    }
+}
+impl<I: ViewTermId> IntoIterator for PathSet<I> {
+    type Item = I;
+    type IntoIter = crate::workspace::AdmittedVecIntoIter<I>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.values.into_iter()
+    }
+}
+
+struct SetPayload<I: ViewTermId> {
+    set: PathSet<I>,
+    _control: crate::WorkspaceAllocation,
+}
+enum SetRef<I: ViewTermId> {
+    Shared(purrdf_core::small::Shared<SetPayload<I>>),
+    Empty(PathSet<I>),
+}
+impl<I: ViewTermId> SetRef<I> {
+    fn new(set: PathSet<I>) -> Self {
+        let storage = set.values.storage.clone();
+        if storage.failed.get() {
+            return Self::Empty(PathSet::new(&storage));
+        }
+        let control = match crate::workspace::shared_layout::<SetPayload<I>>()
+            .and_then(|bytes| storage.workspace.charge(bytes))
+        {
+            Ok(control) => control,
+            Err(error) => {
+                storage.fail(error);
+                return Self::Empty(PathSet::new(&storage));
+            }
+        };
+        match purrdf_core::small::Shared::try_new(SetPayload {
+            set,
+            _control: control,
+        }) {
+            Ok(owner) => Self::Shared(owner),
+            Err(_) => {
+                storage.fail(EvalError::AllocationFailed {
+                    construct: "path reach-set owner",
+                });
+                Self::Empty(PathSet::new(&storage))
+            }
+        }
+    }
+    fn as_ref(&self) -> &PathSet<I> {
+        self
+    }
+}
+impl<I: ViewTermId> Clone for SetRef<I> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Shared(owner) => Self::Shared(owner.clone()),
+            Self::Empty(set) => Self::Empty(set.clone()),
+        }
+    }
+}
+impl<I: ViewTermId> std::ops::Deref for SetRef<I> {
+    type Target = PathSet<I>;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Shared(owner) => &owner.set,
+            Self::Empty(set) => set,
+        }
+    }
+}
+
+struct PathMap<K, V> {
+    entries: crate::AdmittedMap<K, V>,
+    storage: PathStorageOwner,
+}
+impl<K: Eq + std::hash::Hash, V> PathMap<K, V> {
+    fn new(storage: &PathStorageOwner) -> Self {
+        Self {
+            entries: crate::AdmittedMap::default(),
+            storage: storage.clone(),
+        }
+    }
+    fn get(&self, key: &K) -> Option<&V> {
+        self.entries.get(key)
+    }
+    fn insert(&mut self, key: K, value: V) {
+        if self.storage.failed.get() {
+            return;
+        }
+        if let Err(error) = self
+            .entries
+            .insert_admitted(key, value, &self.storage.workspace)
+        {
+            self.storage.fail(error);
+        }
+    }
+}
+
+struct Visited<I: ViewTermId>(PathMap<I, ()>);
+impl<I: ViewTermId> Visited<I> {
+    fn new(storage: &PathStorageOwner) -> Self {
+        Self(PathMap::new(storage))
+    }
+    fn contains(&self, node: &I) -> bool {
+        self.0.get(node).is_some()
+    }
+    fn insert(&mut self, node: I) -> bool {
+        if self.0.storage.failed.get() || self.contains(&node) {
+            return false;
+        }
+        self.0.insert(node, ());
+        !self.0.storage.failed.get()
+    }
+}
+
+struct PowerMemo<I: ViewTermId> {
+    entries: RefCell<PathMap<(u32, I), SetRef<I>>>,
+    _control: crate::WorkspaceAllocation,
+}
+type PowerMemoOwner<I> = purrdf_core::small::Shared<PowerMemo<I>>;
+impl<I: ViewTermId> std::ops::Deref for PowerMemo<I> {
+    type Target = RefCell<PathMap<(u32, I), SetRef<I>>>;
+    fn deref(&self) -> &Self::Target {
+        &self.entries
+    }
+}
+fn power_memo<I: ViewTermId>(storage: &PathStorageOwner) -> Option<PowerMemoOwner<I>> {
+    if storage.failed.get() {
+        return None;
+    }
+    let control = match crate::workspace::shared_layout::<PowerMemo<I>>()
+        .and_then(|bytes| storage.workspace.charge(bytes))
+    {
+        Ok(control) => control,
+        Err(error) => {
+            storage.fail(error);
+            return None;
+        }
+    };
+    match purrdf_core::small::Shared::try_new(PowerMemo {
+        entries: RefCell::new(PathMap::new(storage)),
+        _control: control,
+    }) {
+        Ok(owner) => Some(owner),
+        Err(_) => {
+            storage.fail(EvalError::AllocationFailed {
+                construct: "path power memo",
+            });
+            None
+        }
+    }
+}
 
 /// The pre-resolved exclusion sets for one `NegatedPropertySet`, split by
 /// element direction (SPARQL 1.1 §18.2/§18.3): `!(p1|^p2|...)` decomposes into
@@ -83,10 +406,10 @@ use crate::{DetHashMap, DetHashSet};
 struct NegatedSets<I: ViewTermId = TermId> {
     /// Predicates excluded from a **forward** hop (the plain, non-`^` elements),
     /// or `None` if the set has no plain elements.
-    forward: Option<BTreeSet<I>>,
+    forward: Option<crate::AdmittedVec<I>>,
     /// Predicates excluded from a **reverse** hop (the `^`-prefixed elements),
     /// or `None` if the set has no inverted elements.
-    inverse: Option<BTreeSet<I>>,
+    inverse: Option<crate::AdmittedVec<I>>,
 }
 
 /// `elements`' excluded predicates resolved to dataset ids, each element looked up in
@@ -94,20 +417,26 @@ struct NegatedSets<I: ViewTermId = TermId> {
 fn resolve_negated<D: DatasetView + Sync>(
     elements: &[NegatedPathElement],
     dataset: &D,
-) -> NegatedSets<D::Id> {
+    workspace: &crate::WorkspaceCapability,
+    source_error: impl Fn(D::ReadError) -> EvalError,
+) -> Result<NegatedSets<D::Id>, EvalError> {
     let mut forward = None;
     let mut inverse = None;
     for element in elements {
         let target = if element.inverse {
-            inverse.get_or_insert_with(BTreeSet::new)
+            inverse.get_or_insert_with(|| crate::AdmittedVec::new(workspace))
         } else {
-            forward.get_or_insert_with(BTreeSet::new)
+            forward.get_or_insert_with(|| crate::AdmittedVec::new(workspace))
         };
-        if let Some(id) = dataset.term_id_if_ready(&named_node_to_value(&element.predicate)) {
-            target.insert(id);
+        let term = named_node_to_workspace_value(&element.predicate, workspace)?;
+        if let Some(id) = dataset.term_id_by_value(&term).map_err(&source_error)?
+            && let Err(index) = target.binary_search(&id)
+        {
+            target.push(id)?;
+            target.as_mut_slice()[index..].rotate_right(1);
         }
     }
-    NegatedSets { forward, inverse }
+    Ok(NegatedSets { forward, inverse })
 }
 
 /// One node of a compiled path expression ([`PathProgram`]): the operator, with its
@@ -120,9 +449,9 @@ enum PathOp<'p, I: ViewTermId = TermId> {
     /// `^inner`: the inner relation with its direction flipped.
     Reverse(usize),
     /// `e1 / e2 / …`, the elements in source order.
-    Sequence(Vec<usize>),
+    Sequence(crate::AdmittedVec<usize>),
     /// `e1 | e2 | …`, the elements in source order.
-    Alternative(Vec<usize>),
+    Alternative(crate::AdmittedVec<usize>),
     /// `inner?`.
     ZeroOrOne(usize),
     /// `inner*`.
@@ -149,14 +478,14 @@ const ROOT_OP: usize = 0;
 /// whether it admits the zero-length identity and whether a repetition operator occurs
 /// in it — folded up beside it.
 struct PathProgram<'p, I: ViewTermId = TermId> {
-    ops: Vec<PathOp<'p, I>>,
+    ops: crate::AdmittedVec<PathOp<'p, I>>,
     /// Per op, whether `reach(op, n, …)` contains `n` for every `n` regardless of the
     /// graph: `*` and `?` unconditionally, `{min,…}` when `min == 0`, `^inner` as its
     /// inner, a sequence when every element is, an alternative when any element is.
-    reflexive: Vec<bool>,
+    reflexive: crate::AdmittedVec<bool>,
     /// Per op, whether `*`, `+`, `?` or `{n,m}` occurs at or under it — the SPARQL 1.1
     /// §18.3 dividing line between bag and set evaluation.
-    repetition: Vec<bool>,
+    repetition: crate::AdmittedVec<bool>,
 }
 
 impl<'p, I: ViewTermId> PathProgram<'p, I> {
@@ -166,54 +495,81 @@ impl<'p, I: ViewTermId> PathProgram<'p, I> {
     /// The walk keeps its own stack of steps: entering a node numbers it and resolves
     /// a leaf's payload; exiting it, after its children, links the children's indices
     /// and folds their static properties.
+    #[cfg(test)]
     fn compile<D: DatasetView<Id = I> + Sync>(
         path: &'p PropertyPathExpression,
         dataset: &D,
     ) -> Self {
+        Self::compile_admitted(
+            path,
+            dataset,
+            &crate::WorkspaceCapability::default(),
+            EvalError::source_read,
+        )
+        .expect("resident path program allocation")
+    }
+
+    /// Compile the same program while each buffer retains its actual capacity
+    /// admission. Lookup failures remain typed at the query's source checkpoint.
+    fn compile_admitted<D: DatasetView<Id = I> + Sync>(
+        path: &'p PropertyPathExpression,
+        dataset: &D,
+        workspace: &crate::WorkspaceCapability,
+        source_error: impl Fn(D::ReadError) -> EvalError,
+    ) -> Result<Self, EvalError> {
         enum Build<'p> {
             Enter(&'p PropertyPathExpression),
             Exit(usize, &'p PropertyPathExpression),
         }
         use PropertyPathExpression as P;
-        let mut ops: Vec<Option<PathOp<'p, I>>> = Vec::new();
-        let mut reflexive: Vec<bool> = Vec::new();
-        let mut repetition: Vec<bool> = Vec::new();
+        let mut ops = crate::AdmittedVec::new(workspace);
+        let mut reflexive = crate::AdmittedVec::new(workspace);
+        let mut repetition = crate::AdmittedVec::new(workspace);
         // The indices of the nodes whose exit step has run, the latest on top: a
         // parent's exit pops its children's, last child first.
-        let mut built: Vec<usize> = Vec::new();
-        let mut pending = vec![Build::Enter(path)];
+        let mut built = crate::AdmittedVec::new(workspace);
+        let mut pending = crate::AdmittedVec::new(workspace);
+        pending.push(Build::Enter(path))?;
         while let Some(step) = pending.pop() {
             match step {
                 Build::Enter(node) => {
                     let index = ops.len();
                     ops.push(match node {
-                        P::NamedNode(predicate) => Some(PathOp::Predicate(
-                            dataset.term_id_if_ready(&named_node_to_value(predicate)),
-                        )),
-                        P::NegatedPropertySet(elements) => {
-                            Some(PathOp::Negated(resolve_negated(elements, dataset)))
+                        P::NamedNode(predicate) => {
+                            let term = named_node_to_workspace_value(predicate, workspace)?;
+                            PathOp::Predicate(
+                                dataset.term_id_by_value(&term).map_err(&source_error)?,
+                            )
                         }
-                        P::Wildcard { namespace } => Some(PathOp::Wildcard(namespace.as_ref())),
+                        P::NegatedPropertySet(elements) => PathOp::Negated(resolve_negated(
+                            elements,
+                            dataset,
+                            workspace,
+                            &source_error,
+                        )?),
+                        P::Wildcard { namespace } => PathOp::Wildcard(namespace.as_ref()),
                         P::Reverse(_)
                         | P::Sequence(_)
                         | P::Alternative(_)
                         | P::ZeroOrMore(_)
                         | P::OneOrMore(_)
                         | P::ZeroOrOne(_)
-                        | P::Range { .. } => None,
-                    });
-                    reflexive.push(false);
-                    repetition.push(false);
-                    pending.push(Build::Exit(index, node));
+                        | P::Range { .. } => PathOp::Predicate(None),
+                    })?;
+                    reflexive.push(false)?;
+                    repetition.push(false)?;
+                    pending.push(Build::Exit(index, node))?;
                     // Children are pushed last first, so they are entered in source order.
                     match node {
                         P::Reverse(inner)
                         | P::ZeroOrMore(inner)
                         | P::OneOrMore(inner)
                         | P::ZeroOrOne(inner)
-                        | P::Range { inner, .. } => pending.push(Build::Enter(inner)),
+                        | P::Range { inner, .. } => pending.push(Build::Enter(inner))?,
                         P::Sequence(elements) | P::Alternative(elements) => {
-                            pending.extend(elements.iter().rev().map(Build::Enter));
+                            for element in elements.iter().rev() {
+                                pending.push(Build::Enter(element))?;
+                            }
                         }
                         P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => {}
                     }
@@ -223,62 +579,65 @@ impl<'p, I: ViewTermId> PathProgram<'p, I> {
                         P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => {}
                         P::Reverse(_) => {
                             let inner = pop_child(&mut built);
-                            reflexive[index] = reflexive[inner];
-                            repetition[index] = repetition[inner];
-                            ops[index] = Some(PathOp::Reverse(inner));
+                            let child_reflexive = reflexive[inner];
+                            let child_repetition = repetition[inner];
+                            reflexive.as_mut_slice()[index] = child_reflexive;
+                            repetition.as_mut_slice()[index] = child_repetition;
+                            ops.as_mut_slice()[index] = PathOp::Reverse(inner);
                         }
                         P::ZeroOrOne(_) => {
                             let inner = pop_child(&mut built);
-                            reflexive[index] = true;
-                            repetition[index] = true;
-                            ops[index] = Some(PathOp::ZeroOrOne(inner));
+                            reflexive.as_mut_slice()[index] = true;
+                            repetition.as_mut_slice()[index] = true;
+                            ops.as_mut_slice()[index] = PathOp::ZeroOrOne(inner);
                         }
                         P::ZeroOrMore(_) => {
                             let inner = pop_child(&mut built);
-                            reflexive[index] = true;
-                            repetition[index] = true;
-                            ops[index] = Some(PathOp::ZeroOrMore(inner));
+                            reflexive.as_mut_slice()[index] = true;
+                            repetition.as_mut_slice()[index] = true;
+                            ops.as_mut_slice()[index] = PathOp::ZeroOrMore(inner);
                         }
                         P::OneOrMore(_) => {
                             let inner = pop_child(&mut built);
-                            repetition[index] = true;
-                            ops[index] = Some(PathOp::OneOrMore(inner));
+                            repetition.as_mut_slice()[index] = true;
+                            ops.as_mut_slice()[index] = PathOp::OneOrMore(inner);
                         }
                         P::Range { min, max, .. } => {
                             let inner = pop_child(&mut built);
-                            reflexive[index] = *min == 0;
-                            repetition[index] = true;
-                            ops[index] = Some(PathOp::Range {
+                            reflexive.as_mut_slice()[index] = *min == 0;
+                            repetition.as_mut_slice()[index] = true;
+                            ops.as_mut_slice()[index] = PathOp::Range {
                                 inner,
                                 min: *min,
                                 max: *max,
-                            });
+                            };
                         }
                         P::Sequence(elements) => {
-                            let children = pop_children(&mut built, elements.len());
-                            reflexive[index] = children.iter().all(|&child| reflexive[child]);
-                            repetition[index] = children.iter().any(|&child| repetition[child]);
-                            ops[index] = Some(PathOp::Sequence(children));
+                            let children = pop_children(&mut built, elements.len(), workspace)?;
+                            let child_reflexive = children.iter().all(|&child| reflexive[child]);
+                            let child_repetition = children.iter().any(|&child| repetition[child]);
+                            reflexive.as_mut_slice()[index] = child_reflexive;
+                            repetition.as_mut_slice()[index] = child_repetition;
+                            ops.as_mut_slice()[index] = PathOp::Sequence(children);
                         }
                         P::Alternative(elements) => {
-                            let children = pop_children(&mut built, elements.len());
-                            reflexive[index] = children.iter().any(|&child| reflexive[child]);
-                            repetition[index] = children.iter().any(|&child| repetition[child]);
-                            ops[index] = Some(PathOp::Alternative(children));
+                            let children = pop_children(&mut built, elements.len(), workspace)?;
+                            let child_reflexive = children.iter().any(|&child| reflexive[child]);
+                            let child_repetition = children.iter().any(|&child| repetition[child]);
+                            reflexive.as_mut_slice()[index] = child_reflexive;
+                            repetition.as_mut_slice()[index] = child_repetition;
+                            ops.as_mut_slice()[index] = PathOp::Alternative(children);
                         }
                     }
-                    built.push(index);
+                    built.push(index)?;
                 }
             }
         }
-        Self {
-            ops: ops
-                .into_iter()
-                .map(|op| op.expect("every op is written by its enter step or its exit step"))
-                .collect(),
+        Ok(Self {
+            ops,
             reflexive,
             repetition,
-        }
+        })
     }
 
     /// Whether the whole path admits the zero-length identity, i.e. `reach(root, n, …)`
@@ -305,22 +664,32 @@ impl<'p, I: ViewTermId> PathProgram<'p, I> {
 }
 
 /// The index of the child whose exit step ran last.
-fn pop_child(built: &mut Vec<usize>) -> usize {
+fn pop_child(built: &mut crate::AdmittedVec<usize>) -> usize {
     built
         .pop()
         .expect("a child's exit step runs before its parent's")
 }
 
 /// The indices of the last `count` children built, in source order.
-fn pop_children(built: &mut Vec<usize>, count: usize) -> Vec<usize> {
-    let mut children: Vec<usize> = (0..count).map(|_| pop_child(built)).collect();
-    children.reverse();
-    children
+fn pop_children(
+    built: &mut crate::AdmittedVec<usize>,
+    count: usize,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::AdmittedVec<usize>, EvalError> {
+    let mut children = crate::AdmittedVec::with_capacity(count, workspace)?;
+    for _ in 0..count {
+        children.push(pop_child(built))?;
+    }
+    children.as_mut_slice().reverse();
+    Ok(children)
 }
 
 /// A reach memo key: the op, the start node, and the direction.
 type ReachKey<I = TermId> = (usize, I, bool);
-type ReachCache<I = TermId> = RefCell<DetHashMap<ReachKey<I>, Rc<BTreeSet<I>>>>;
+type ReachCache<I = TermId> = RefCell<PathMap<ReachKey<I>, SetRef<I>>>;
+#[cfg(test)]
+type ReferenceReachCache<I = TermId> = RefCell<DetHashMap<ReachKey<I>, Rc<BTreeSet<I>>>>;
+#[cfg(test)]
 type PowerReachCache<I = TermId> = BTreeMap<(u32, I), Rc<BTreeSet<I>>>;
 
 /// The immutable, traversal-wide context every frame of the reach machine reads: the
@@ -331,18 +700,20 @@ struct PathCtx<'a, D: DatasetView + Sync> {
     dataset: &'a D,
     scope: GraphScope<D::Id>,
     program: PathProgram<'a, D::Id>,
+    growth: crate::WorkspaceCapability,
+    storage: PathStorageOwner,
     reach_cache: ReachCache<D::Id>,
     /// The live governor accounting of the execution this traversal belongs to, shared
     /// by [`Arc`] with the evaluation context rather than copied — a traversal that
     /// spent its own copy of the budget would let a query with `N` property paths spend
     /// `N` budgets.
-    governors: Option<Arc<crate::governor::GovernorState>>,
+    governors: Option<crate::workspace::SharedWorkspace<crate::governor::GovernorState>>,
     /// The per-node charge ledger and the ordinal of the path node being evaluated, when
     /// one is installed. A traversal's fuel is spent well below the operator boundary, so
     /// without this the single most graph-dependent cost in the evaluator would be the one
     /// cost an EXPLAIN could not attribute.
     ledger: Option<(
-        Arc<crate::governor::ledger::ChargeLedger>,
+        crate::workspace::SharedWorkspace<crate::governor::ledger::ChargeLedger>,
         crate::plan::NodeId,
     )>,
 }
@@ -359,6 +730,9 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
     /// already proven reachable, which is a sound lower bound.
     #[inline]
     fn charge_candidate(&self) -> bool {
+        if self.storage.failed.get() {
+            return false;
+        }
         let Some(state) = self.governors.as_ref() else {
             return true;
         };
@@ -380,9 +754,34 @@ impl<D: DatasetView + Sync> PathCtx<'_, D> {
     /// ask for a budget — and one write-once cell read on a governed one.
     #[inline]
     fn stopped(&self) -> bool {
-        self.governors
-            .as_ref()
-            .is_some_and(|state| state.tripped().is_some() || state.poll_stop().is_some())
+        self.storage.failed.get()
+            || self
+                .governors
+                .as_ref()
+                .is_some_and(|state| state.tripped().is_some() || state.poll_stop().is_some())
+    }
+}
+
+#[cfg(test)]
+impl<'a, D: DatasetView + Sync> PathCtx<'a, D> {
+    fn resident(
+        dataset: &'a D,
+        scope: GraphScope<D::Id>,
+        program: PathProgram<'a, D::Id>,
+        governors: Option<crate::workspace::SharedWorkspace<crate::GovernorState>>,
+    ) -> Self {
+        let growth = crate::WorkspaceCapability::default();
+        let storage = PathStorage::new(&growth).expect("resident path control");
+        Self {
+            dataset,
+            scope,
+            program,
+            growth,
+            reach_cache: RefCell::new(PathMap::new(&storage)),
+            storage,
+            governors,
+            ledger: None,
+        }
     }
 }
 
@@ -420,25 +819,34 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
     // The output schema is fixed by which endpoints are *visible* variables, and is
     // independent of whether a ground endpoint happens to be absent — so an empty
     // result still carries the right columns for downstream joins.
-    let schema = path_schema(subject, object);
+    let schema = path_schema(subject, object, &ctx.growth)?;
     let width = schema.len();
     let s_col = visible_var(subject).and_then(|v| schema.index_of(&v));
     let o_col = visible_var(object).and_then(|v| schema.index_of(&v));
 
-    let s_end = resolve_end(subject, dataset)?;
-    let o_end = resolve_end(object, dataset)?;
+    let s_end = resolve_end(subject, dataset, &ctx.growth, |error| {
+        ctx.workspace.source_error(error)
+    })?;
+    let o_end = resolve_end(object, dataset, &ctx.growth, |error| {
+        ctx.workspace.source_error(error)
+    })?;
 
     // The path compiled once for this evaluation: every predicate IRI and every
     // negated set resolved to ids, so no traversal step repeats a lookup.
+    let storage = PathStorage::new(&ctx.growth)?;
     let pctx = PathCtx {
         dataset,
         scope,
-        program: PathProgram::compile(path, dataset),
-        reach_cache: RefCell::new(DetHashMap::default()),
-        governors: ctx.governor_state().map(Arc::clone),
+        program: PathProgram::compile_admitted(path, dataset, &ctx.growth, |error| {
+            ctx.workspace.source_error(error)
+        })?,
+        growth: ctx.growth.clone(),
+        reach_cache: RefCell::new(PathMap::new(&storage)),
+        storage,
+        governors: ctx.governor_state().cloned(),
         ledger: ctx
             .charge_ledger()
-            .map(|ledger| (Arc::clone(ledger), ctx.ledger_node)),
+            .map(|ledger| (ledger.clone(), ctx.ledger_node)),
     };
 
     // SPARQL 1.1 §18.3: a path with NO repetition operator (`*`/`+`/`?`/`{n,m}`)
@@ -452,14 +860,16 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
     // behind `node_reach`, which returns a `Vec` either way (with genuine
     // duplicates in the bag case, and none in the set case).
     let bag = !pctx.program.has_repetition();
-    let node_reach = |node: D::Id, forward: bool| -> Vec<D::Id> {
+    let node_reach = |node: D::Id, forward: bool| -> Result<crate::AdmittedVec<D::Id>, EvalError> {
         if bag {
             bag_reach(ROOT_OP, node, forward, &pctx)
         } else {
-            reach(ROOT_OP, node, forward, &pctx)
-                .iter()
-                .copied()
-                .collect()
+            let reached = reach(ROOT_OP, node, forward, &pctx)?;
+            let mut nodes = crate::AdmittedVec::with_capacity(reached.len(), &pctx.growth)?;
+            for &node in reached.iter() {
+                nodes.push(node)?;
+            }
+            Ok(nodes)
         }
     };
 
@@ -471,32 +881,34 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
     let semantic_ceiling = ctx.row_ceiling();
     let cell_ceiling = ctx.cell_row_ceiling(width);
 
-    let mut rows: Vec<Solution<D::Id>> = Vec::new();
+    let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
     let push_pair = |ctx: &EvalCtx<'_, D>,
-                     rows: &mut Vec<Solution<D::Id>>,
+                     rows: &mut crate::solution::RowsBuilder<D::Id>,
                      s_id: Option<SolutionTerm<D::Id>>,
                      o_id: Option<SolutionTerm<D::Id>>|
-     -> bool {
+     -> Result<bool, EvalError> {
         // LIMIT / answer-cap pushdown proves rows at and beyond this point irrelevant to
         // the query and may stop exactly at its bound. A cell ceiling is inclusive and
         // therefore stops only when a further qualifying row exists; record that attempted
         // row before constructing its `SmallVec`, then decline the allocation.
         if semantic_ceiling.is_some_and(|cap| rows.len() >= cap) {
-            return false;
+            return Ok(false);
         }
         if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
             let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
-            return false;
+            return Ok(false);
         }
-        let mut row = purrdf_core::smallvec![None; width];
-        if let (Some(c), Some(id)) = (s_col, s_id) {
-            row[c] = Some(id);
-        }
-        if let (Some(c), Some(id)) = (o_col, o_id) {
-            row[c] = Some(id);
-        }
-        rows.push(row);
-        true
+        let row = crate::solution::RetainedRow::try_build(width, &ctx.growth, |row| {
+            if let (Some(c), Some(id)) = (s_col, s_id) {
+                row[c] = Some(id);
+            }
+            if let (Some(c), Some(id)) = (o_col, o_id) {
+                row[c] = Some(id);
+            }
+            Ok(())
+        })?;
+        rows.push_row(row)?;
+        Ok(true)
     };
 
     match (s_end, o_end) {
@@ -509,12 +921,12 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
             // set — no O(n) collect-into-`Vec` + filter pass. The BAG case keeps its
             // multiset walk, where duplicates ARE the answer.
             let count = if bag {
-                node_reach(sid, true).iter().filter(|&&y| y == oid).count()
+                node_reach(sid, true)?.iter().filter(|&&y| y == oid).count()
             } else {
-                usize::from(reach(ROOT_OP, sid, true, &pctx).contains(&oid))
+                usize::from(reach(ROOT_OP, sid, true, &pctx)?.contains(&oid))
             };
             for _ in 0..count {
-                if !push_pair(ctx, &mut rows, None, None) {
+                if !push_pair(ctx, &mut rows, None, None)? {
                     break;
                 }
             }
@@ -523,8 +935,8 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // ever connect is the reflexive zero-length identity, when they are the
         // SAME term (an absent node has no edges to traverse for anything else).
         (Endpoint::BoundAbsent(sval), Endpoint::BoundAbsent(oval)) => {
-            if sval == oval && pctx.program.is_reflexive() {
-                let _ = push_pair(ctx, &mut rows, None, None);
+            if ctx.growth.terms_equal(&sval, &oval)? && pctx.program.is_reflexive() {
+                let _ = push_pair(ctx, &mut rows, None, None)?;
             }
         }
         // One side present in the dataset, the other absent: they cannot be the
@@ -534,13 +946,13 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         | (Endpoint::BoundAbsent(_), Endpoint::Bound(_)) => {}
         // Subject ground, object variable: walk forward from the subject.
         (Endpoint::Bound(sid), Endpoint::Free { .. }) => {
-            for y in node_reach(sid, true) {
+            for y in node_reach(sid, true)? {
                 if !push_pair(
                     ctx,
                     &mut rows,
                     Some(SolutionTerm::Existing(sid)),
                     Some(SolutionTerm::Existing(y)),
-                ) {
+                )? {
                     break;
                 }
             }
@@ -558,22 +970,19 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // query text by the SPARQL parser, a hand-built `Query` by
                 // `purrdf_sparql_algebra`'s algebra validator on this same
                 // profile. See `ScratchInterner::intern`.
-                let term = ctx
-                    .scratch
-                    .try_intern(dataset, sval)
-                    .map_err(EvalError::source_read)?;
-                let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
+                let term = ctx.intern_workspace_term(sval)?;
+                let _ = push_pair(ctx, &mut rows, term, term)?;
             }
         }
         // Object ground, subject variable: walk backward from the object.
         (Endpoint::Free { .. }, Endpoint::Bound(oid)) => {
-            for x in node_reach(oid, false) {
+            for x in node_reach(oid, false)? {
                 if !push_pair(
                     ctx,
                     &mut rows,
                     Some(SolutionTerm::Existing(x)),
                     Some(SolutionTerm::Existing(oid)),
-                ) {
+                )? {
                     break;
                 }
             }
@@ -582,11 +991,8 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // to the subject-absent case above.
         (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
             if pctx.program.is_reflexive() {
-                let term = ctx
-                    .scratch
-                    .try_intern(dataset, oval)
-                    .map_err(EvalError::source_read)?;
-                let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
+                let term = ctx.intern_workspace_term(oval)?;
+                let _ = push_pair(ctx, &mut rows, term, term)?;
             }
         }
         // Both variable: enumerate the node universe (so zero-length `*`/`?`/`{0,…}`
@@ -603,25 +1009,25 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // require an actual traversal to discover whether x cycles back to
                 // itself — and for a bag path, count EACH derivation as its own row.
                 let reflexive = pctx.program.is_reflexive();
-                'nodes: for x in node_universe(&pctx) {
+                'nodes: for x in node_universe(&pctx)? {
                     if reflexive {
                         if !push_pair(
                             ctx,
                             &mut rows,
                             Some(SolutionTerm::Existing(x)),
                             Some(SolutionTerm::Existing(x)),
-                        ) {
+                        )? {
                             break;
                         }
                     } else {
-                        let count = node_reach(x, true).into_iter().filter(|&y| y == x).count();
+                        let count = node_reach(x, true)?.into_iter().filter(|&y| y == x).count();
                         for _ in 0..count {
                             if !push_pair(
                                 ctx,
                                 &mut rows,
                                 Some(SolutionTerm::Existing(x)),
                                 Some(SolutionTerm::Existing(x)),
-                            ) {
+                            )? {
                                 break 'nodes;
                             }
                         }
@@ -630,14 +1036,14 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
             } else {
                 // PINNED: spec-mandated distinct-var enumeration — enumerate every node
                 // in the universe and materialise all forward reachability. DO NOT alter.
-                'nodes: for x in node_universe(&pctx) {
-                    for y in node_reach(x, true) {
+                'nodes: for x in node_universe(&pctx)? {
+                    for y in node_reach(x, true)? {
                         if !push_pair(
                             ctx,
                             &mut rows,
                             Some(SolutionTerm::Existing(x)),
                             Some(SolutionTerm::Existing(y)),
-                        ) {
+                        )? {
                             break 'nodes;
                         }
                     }
@@ -646,9 +1052,10 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         }
     }
 
+    pctx.storage.check()?;
     Ok(SolutionSeq {
-        schema: Arc::new(schema),
-        rows,
+        schema: schema.shared_admitted(&ctx.growth)?,
+        rows: rows.finish()?,
     })
 }
 
@@ -660,7 +1067,7 @@ enum Endpoint<I: ViewTermId = TermId> {
     /// A ground constant that is not the subject or object of any quad in the
     /// dataset. Still a valid RDF term for the zero-length reflexive identity
     /// (see [`eval_path`]'s doc comment) — just not reachable by any real hop.
-    BoundAbsent(TermValue),
+    BoundAbsent(crate::WorkspaceTerm),
     /// A free position — a real variable, or a blank node treated as an anonymous
     /// (projected-away) variable. The variable identity is carried so two free
     /// endpoints sharing a name evaluate the reflexive `?x p ?x` case.
@@ -671,6 +1078,8 @@ enum Endpoint<I: ViewTermId = TermId> {
 fn resolve_end<D: DatasetView + Sync>(
     term: &TermPattern,
     dataset: &D,
+    workspace: &crate::WorkspaceCapability,
+    source_error: impl Fn(D::ReadError) -> EvalError,
 ) -> Result<Endpoint<D::Id>, EvalError> {
     match term {
         TermPattern::Variable(v) => Ok(Endpoint::Free { var: v.clone() }),
@@ -679,7 +1088,7 @@ fn resolve_end<D: DatasetView + Sync>(
         // so two distinct blank labels are distinct vars and a repeated label
         // co-refers, exactly as in a BGP.
         TermPattern::BlankNode(b) => Ok(Endpoint::Free {
-            var: crate::bgp::blank_var(b.as_str()),
+            var: crate::bgp::blank_var_admitted(b.as_str(), workspace)?,
         }),
         // `crate::bgp` supports a variable *inside* a quoted-triple-term BGP
         // position (`Pos::Triple`'s structural match), so a reader could expect
@@ -697,12 +1106,13 @@ fn resolve_end<D: DatasetView + Sync>(
         // inaccurate message used to hide — genuinely new evaluation semantics,
         // not a wiring gap this conversion helper's `site` parameter can close.
         other => {
-            let value = ground_term_pattern_to_value(other, "a property-path endpoint")?;
+            let value = ground_term_pattern_to_workspace_value(
+                other,
+                "a property-path endpoint",
+                workspace,
+            )?;
             Ok(
-                match dataset
-                    .term_id_by_value(&value)
-                    .map_err(EvalError::source_read)?
-                {
+                match dataset.term_id_by_value(&value).map_err(source_error)? {
                     Some(id) => Endpoint::Bound(id),
                     None => Endpoint::BoundAbsent(value),
                 },
@@ -713,15 +1123,17 @@ fn resolve_end<D: DatasetView + Sync>(
 
 /// The output schema: the visible variable endpoints in subject-then-object order,
 /// deduplicated (a repeated variable is one column).
-fn path_schema(subject: &TermPattern, object: &TermPattern) -> VarSchema {
-    let mut schema = VarSchema::default();
-    if let Some(v) = visible_var(subject) {
-        schema.push(v);
-    }
-    if let Some(v) = visible_var(object) {
-        schema.push(v);
-    }
-    schema
+fn path_schema(
+    subject: &TermPattern,
+    object: &TermPattern,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    VarSchema::from_vars_admitted(
+        [visible_var(subject), visible_var(object)]
+            .into_iter()
+            .flatten(),
+        workspace,
+    )
 }
 
 /// The projectable variable an endpoint exposes, if any. Blank nodes (anonymous
@@ -736,8 +1148,8 @@ fn visible_var(term: &TermPattern) -> Option<Variable> {
 /// All terms that appear as a subject or object of a quad in the active-dataset scope
 /// — the node universe for a both-endpoints-variable path (SPARQL §18.1.7). The
 /// `BTreeSet` de-dupes endpoints, so a `FROM`-merged scope needs no extra triple dedup.
-fn node_universe<D: DatasetView + Sync>(ctx: &PathCtx<'_, D>) -> BTreeSet<D::Id> {
-    let mut out = BTreeSet::new();
+fn node_universe<D: DatasetView + Sync>(ctx: &PathCtx<'_, D>) -> Result<PathSet<D::Id>, EvalError> {
+    let mut out = PathSet::new(&ctx.storage);
     // The node universe is a full scan of the active scope, and it seeds every
     // both-endpoints-variable path — so it is charged per candidate endpoint examined,
     // exactly like a frontier expansion. Stopping early yields a smaller universe, hence
@@ -754,7 +1166,8 @@ fn node_universe<D: DatasetView + Sync>(ctx: &PathCtx<'_, D>) -> BTreeSet<D::Id>
         out.insert(q.s);
         out.insert(q.o);
     });
-    out
+    ctx.storage.check()?;
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -772,19 +1185,26 @@ fn reach<D: DatasetView + Sync>(
     node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> Rc<BTreeSet<D::Id>> {
-    let mut frames: Vec<Frame<D::Id>> = vec![Frame::Reach(ReachFrame::new(op, node, forward))];
+) -> Result<SetRef<D::Id>, EvalError> {
+    let mut frames = PathVec::from_iter(
+        [Frame::Reach(ReachFrame::new(op, node, forward))],
+        &ctx.storage,
+    );
     let mut returned: Option<Value<D::Id>> = None;
     loop {
+        ctx.storage.check()?;
         let top = frames
             .last_mut()
             .expect("the root frame's return ends the loop before the list empties");
-        match top.step(returned.take(), ctx) {
+        let step = top.step(returned.take(), ctx);
+        ctx.storage.check()?;
+        match step {
             Step::Call(frame) => frames.push(frame),
             Step::Return(value) => {
-                frames.pop();
+                let _ = frames.pop();
                 if frames.is_empty() {
-                    return value.into_reach();
+                    ctx.storage.check()?;
+                    return Ok(value.into_reach());
                 }
                 returned = Some(value);
             }
@@ -795,16 +1215,16 @@ fn reach<D: DatasetView + Sync>(
 /// What one frame of the reach machine hands back to the frame beneath it.
 enum Value<I: ViewTermId> {
     /// A reach set, shared with the memo entry it may also be.
-    Reach(Rc<BTreeSet<I>>),
+    Reach(SetRef<I>),
     /// A set an operator frame built.
-    Built(BTreeSet<I>),
+    Built(PathSet<I>),
     /// One frontier level, or `None` when a governor stopped the walk inside it.
-    Level(Option<BTreeSet<I>>),
+    Level(Option<PathSet<I>>),
 }
 
 impl<I: ViewTermId> Value<I> {
     /// The answer to a reach request.
-    fn into_reach(self) -> Rc<BTreeSet<I>> {
+    fn into_reach(self) -> SetRef<I> {
         match self {
             Self::Reach(set) => set,
             Self::Built(_) | Self::Level(_) => {
@@ -813,9 +1233,9 @@ impl<I: ViewTermId> Value<I> {
         }
     }
 
-    /// The answer to an operator's body: a reach set copied out of its `Rc`, or a set
+    /// The answer to an operator's body: a reach set copied from its shared owner, or a set
     /// the operator built.
-    fn into_set(self) -> BTreeSet<I> {
+    fn into_set(self) -> PathSet<I> {
         match self {
             Self::Reach(set) => set.as_ref().clone(),
             Self::Built(set) => set,
@@ -824,7 +1244,7 @@ impl<I: ViewTermId> Value<I> {
     }
 
     /// The answer to a level request.
-    fn into_level(self) -> Option<BTreeSet<I>> {
+    fn into_level(self) -> Option<PathSet<I>> {
         match self {
             Self::Level(level) => level,
             Self::Reach(_) | Self::Built(_) => {
@@ -835,6 +1255,10 @@ impl<I: ViewTermId> Value<I> {
 }
 
 /// What a frame asks of the machine after one step.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the next path-machine step stays inline; boxing a frame would add a separate allocation beyond the original admitted frame array"
+)]
 enum Step<I: ViewTermId> {
     /// Run `frame` to completion, then resume this frame with its value.
     Call(Frame<I>),
@@ -943,17 +1367,17 @@ impl<I: ViewTermId> ReachFrame<I> {
         // Nothing computed from here on is a finished view of the graph: an empty set
         // stands in, and is not memoized.
         if ctx.stopped() {
-            return Step::Return(Value::Reach(Rc::new(BTreeSet::new())));
+            return Step::Return(Value::Reach(SetRef::new(PathSet::new(&ctx.storage))));
         }
         // `^inner` only flips the direction flag: its reach set IS `inner`'s set for the
-        // opposite direction, so that memoized `Rc` is shared instead of deep-cloning the
-        // `BTreeSet` into a second memo entry under the `Reverse` op's own key.
+        // opposite direction, so that memoized owner is shared instead of deep-cloning
+        // endpoint storage into a second entry under the `Reverse` op's own key.
         while let PathOp::Reverse(inner) = &ctx.program.ops[self.op] {
             self.op = *inner;
             self.forward = !self.forward;
         }
         if let Some(cached) = ctx.reach_cache.borrow().get(&self.key()) {
-            return Step::Return(Value::Reach(Rc::clone(cached)));
+            return Step::Return(Value::Reach(Clone::clone(cached)));
         }
         match &ctx.program.ops[self.op] {
             PathOp::Predicate(predicate) => self.finish(
@@ -970,11 +1394,13 @@ impl<I: ViewTermId> ReachFrame<I> {
                 self.op,
                 self.node,
                 self.forward,
+                &ctx.storage,
             ))),
             PathOp::Alternative(_) => Step::Call(Frame::Alternative(AlternativeFrame::new(
                 self.op,
                 self.node,
                 self.forward,
+                &ctx.storage,
             ))),
             PathOp::ZeroOrOne(inner) => {
                 self.adds_node = true;
@@ -984,13 +1410,13 @@ impl<I: ViewTermId> ReachFrame<I> {
                 self.adds_node = true;
                 Step::Call(Frame::Closure(ClosureFrame::new(
                     *inner,
-                    vec![self.node],
+                    PathVec::from_iter([self.node], &ctx.storage),
                     self.forward,
                 )))
             }
             PathOp::OneOrMore(inner) => Step::Call(Frame::Closure(ClosureFrame::new(
                 *inner,
-                vec![self.node],
+                PathVec::from_iter([self.node], &ctx.storage),
                 self.forward,
             ))),
             PathOp::Range { inner, min, max } => Step::Call(Frame::Range(RangeFrame::new(
@@ -999,6 +1425,7 @@ impl<I: ViewTermId> ReachFrame<I> {
                 self.forward,
                 *min,
                 *max,
+                &ctx.storage,
             ))),
             PathOp::Reverse(_) => {
                 unreachable!("every reverse at this op was resolved into the direction flag")
@@ -1009,14 +1436,14 @@ impl<I: ViewTermId> ReachFrame<I> {
     /// Return `set`, memoized under this request's key unless the budget cut it short.
     fn finish<D: DatasetView<Id = I> + Sync>(
         &self,
-        set: BTreeSet<I>,
+        set: PathSet<I>,
         ctx: &PathCtx<'_, D>,
     ) -> Step<I> {
-        let result = Rc::new(set);
+        let result = SetRef::new(set);
         if !ctx.stopped() {
             ctx.reach_cache
                 .borrow_mut()
-                .insert(self.key(), Rc::clone(&result));
+                .insert(self.key(), Clone::clone(&result));
         }
         Step::Return(Value::Reach(result))
     }
@@ -1043,22 +1470,22 @@ struct SequenceFrame<I: ViewTermId> {
     /// How many elements the frontier has been stepped through.
     k: usize,
     /// The frontier after `k` elements, in ascending order.
-    frontier: Vec<I>,
+    frontier: PathVec<I>,
     /// How many frontier nodes have been stepped through the current element.
     pos: usize,
     /// What the frontier has reached so far through the current element.
-    next: BTreeSet<I>,
+    next: PathSet<I>,
 }
 
 impl<I: ViewTermId> SequenceFrame<I> {
-    fn new(op: usize, node: I, forward: bool) -> Self {
+    fn new(op: usize, node: I, forward: bool, storage: &PathStorageOwner) -> Self {
         Self {
             op,
             forward,
             k: 0,
-            frontier: vec![node],
+            frontier: PathVec::from_iter([node], storage),
             pos: 0,
-            next: BTreeSet::new(),
+            next: PathSet::new(storage),
         }
     }
 
@@ -1074,11 +1501,14 @@ impl<I: ViewTermId> SequenceFrame<I> {
         let elements = elements_of(&ctx.program, self.op);
         loop {
             if self.k == elements.len() {
-                return Step::Return(Value::Built(self.frontier.iter().copied().collect()));
+                return Step::Return(Value::Built(PathSet::from_iter(
+                    self.frontier.iter().copied(),
+                    &ctx.storage,
+                )));
             }
             // A frontier that died stays dead: no later element can reach anything from it.
             if self.frontier.is_empty() {
-                return Step::Return(Value::Built(BTreeSet::new()));
+                return Step::Return(Value::Built(PathSet::new(&ctx.storage)));
             }
             if let Some(&mid) = self.frontier.get(self.pos) {
                 let element = elements[if self.forward {
@@ -1088,7 +1518,7 @@ impl<I: ViewTermId> SequenceFrame<I> {
                 }];
                 return Step::Call(Frame::Reach(ReachFrame::new(element, mid, self.forward)));
             }
-            self.frontier = std::mem::take(&mut self.next).into_iter().collect();
+            self.frontier = self.next.take().into_vec();
             self.pos = 0;
             self.k += 1;
         }
@@ -1103,17 +1533,17 @@ struct AlternativeFrame<I: ViewTermId> {
     forward: bool,
     /// How many elements have been asked.
     i: usize,
-    out: BTreeSet<I>,
+    out: PathSet<I>,
 }
 
 impl<I: ViewTermId> AlternativeFrame<I> {
-    const fn new(op: usize, node: I, forward: bool) -> Self {
+    fn new(op: usize, node: I, forward: bool, storage: &PathStorageOwner) -> Self {
         Self {
             op,
             node,
             forward,
             i: 0,
-            out: BTreeSet::new(),
+            out: PathSet::new(storage),
         }
     }
 
@@ -1132,7 +1562,7 @@ impl<I: ViewTermId> AlternativeFrame<I> {
                 self.node,
                 self.forward,
             ))),
-            None => Step::Return(Value::Built(std::mem::take(&mut self.out))),
+            None => Step::Return(Value::Built(self.out.take())),
         }
     }
 }
@@ -1144,34 +1574,35 @@ impl<I: ViewTermId> AlternativeFrame<I> {
 /// behaviour). Over several seeds this equals the union of each seed's closure, and
 /// visits each node at most once (O(V+E), not O(|seeds|·(V+E))).
 ///
-/// `result` stays an ordered `BTreeSet` — it is the returned set, and its iteration
+/// `result` stays ordered — it is the returned set, and its iteration
 /// order determines solution-row order — while `visited` is a membership-only guard,
-/// never iterated into output, so it is an O(1) `DetHashSet`.
+/// never iterated into output, so it uses the fixed-key admitted table.
 struct ClosureFrame<I: ViewTermId> {
     inner: usize,
     forward: bool,
     /// The seeds whose one-step reaches make the initial frontier, in ascending order.
-    seeds: Vec<I>,
+    seeds: PathVec<I>,
     /// How many seeds have been expanded into the frontier.
     seeded: usize,
     /// Whether every seed is expanded and the walk over the frontier has begun.
     walking: bool,
-    frontier: Vec<I>,
-    visited: DetHashSet<I>,
-    result: BTreeSet<I>,
+    frontier: PathVec<I>,
+    visited: Visited<I>,
+    result: PathSet<I>,
 }
 
 impl<I: ViewTermId> ClosureFrame<I> {
-    fn new(inner: usize, seeds: Vec<I>, forward: bool) -> Self {
+    fn new(inner: usize, seeds: PathVec<I>, forward: bool) -> Self {
+        let storage = seeds.storage.clone();
         Self {
             inner,
             forward,
             seeds,
             seeded: 0,
             walking: false,
-            frontier: Vec::new(),
-            visited: DetHashSet::default(),
-            result: BTreeSet::new(),
+            frontier: PathVec::new(&storage),
+            visited: Visited::new(&storage),
+            result: PathSet::new(&storage),
         }
     }
 
@@ -1213,7 +1644,7 @@ impl<I: ViewTermId> ClosureFrame<I> {
             self.result.insert(n);
             return Step::Call(Frame::Reach(ReachFrame::new(self.inner, n, self.forward)));
         }
-        Step::Return(Value::Built(std::mem::take(&mut self.result)))
+        Step::Return(Value::Built(self.result.take()))
     }
 }
 
@@ -1257,8 +1688,8 @@ struct RangeFrame<I: ViewTermId> {
     min: u32,
     max: Option<u32>,
     /// The frontier at the level the walk stands at.
-    current: BTreeSet<I>,
-    out: BTreeSet<I>,
+    current: PathSet<I>,
+    out: PathSet<I>,
     /// Levels left to walk in the linear prefix.
     left: u32,
     /// The part of `min` the binary prefix has not applied yet, and the power its lowest
@@ -1268,7 +1699,7 @@ struct RangeFrame<I: ViewTermId> {
     /// The level `current` stands at during accumulation.
     level: u32,
     /// The binary prefix's power memo, shared with the frames that fill it.
-    powers: Option<Rc<RefCell<PowerReachCache<I>>>>,
+    powers: Option<PowerMemoOwner<I>>,
     phase: RangePhase,
 }
 
@@ -1277,15 +1708,22 @@ struct RangeFrame<I: ViewTermId> {
 const LINEAR_RANGE_PREFIX: u32 = 64;
 
 impl<I: ViewTermId> RangeFrame<I> {
-    const fn new(inner: usize, node: I, forward: bool, min: u32, max: Option<u32>) -> Self {
+    fn new(
+        inner: usize,
+        node: I,
+        forward: bool,
+        min: u32,
+        max: Option<u32>,
+        storage: &PathStorageOwner,
+    ) -> Self {
         Self {
             inner,
             node,
             forward,
             min,
             max,
-            current: BTreeSet::new(),
-            out: BTreeSet::new(),
+            current: PathSet::new(storage),
+            out: PathSet::new(storage),
             left: 0,
             remaining: 0,
             bit: 0,
@@ -1297,20 +1735,20 @@ impl<I: ViewTermId> RangeFrame<I> {
 
     /// Return what has been accumulated.
     fn finished(&mut self) -> Step<I> {
-        Step::Return(Value::Built(std::mem::take(&mut self.out)))
+        Step::Return(Value::Built(self.out.take()))
     }
 
     /// The prefix died or was stopped: no level at or above `min` is reachable, and the
     /// whole range is empty.
-    fn died() -> Step<I> {
-        Step::Return(Value::Built(BTreeSet::new()))
+    fn died(&self) -> Step<I> {
+        Step::Return(Value::Built(PathSet::new(&self.out.values.storage)))
     }
 
     /// One frontier advance from `current`.
     fn advance(&mut self) -> Step<I> {
         Step::Call(Frame::StepLevel(StepLevelFrame::new(
             self.inner,
-            std::mem::take(&mut self.current),
+            self.current.take(),
             self.forward,
         )))
     }
@@ -1325,7 +1763,7 @@ impl<I: ViewTermId> RangeFrame<I> {
             None => {
                 // An empty repetition window (`max < min`) admits no `k` at all.
                 if self.max.is_some_and(|m| m < self.min) {
-                    return Self::died();
+                    return self.died();
                 }
                 self.current.insert(self.node);
                 if self.min <= LINEAR_RANGE_PREFIX {
@@ -1349,14 +1787,14 @@ impl<I: ViewTermId> RangeFrame<I> {
             // above `min` is reachable either.
             RangePhase::Linear => {
                 let Some(next) = value.into_level().filter(|next| !next.is_empty()) else {
-                    return Some(Self::died());
+                    return Some(self.died());
                 };
                 self.current = next;
                 self.left -= 1;
             }
             RangePhase::Binary => {
                 let Some(next) = value.into_level().filter(|next| !next.is_empty()) else {
-                    return Some(Self::died());
+                    return Some(self.died());
                 };
                 self.current = next;
                 self.remaining >>= 1;
@@ -1398,15 +1836,18 @@ impl<I: ViewTermId> RangeFrame<I> {
                         self.level = self.min;
                         self.phase = RangePhase::Accumulate;
                     } else if self.remaining & 1 == 1 {
-                        let powers = self
-                            .powers
-                            .get_or_insert_with(|| Rc::new(RefCell::new(PowerReachCache::new())));
+                        if self.powers.is_none() {
+                            self.powers = power_memo(&self.out.values.storage);
+                        }
+                        let Some(powers) = self.powers.as_ref() else {
+                            return self.died();
+                        };
                         return Step::Call(Frame::ApplyPower(ApplyPowerFrame::new(
                             self.inner,
-                            std::mem::take(&mut self.current),
+                            self.current.take(),
                             self.forward,
                             self.bit,
-                            Rc::clone(powers),
+                            Clone::clone(powers),
                         )));
                     } else {
                         self.remaining >>= 1;
@@ -1428,7 +1869,7 @@ impl<I: ViewTermId> RangeFrame<I> {
                             self.phase = RangePhase::Tail;
                             return Step::Call(Frame::Closure(ClosureFrame::new(
                                 self.inner,
-                                std::mem::take(&mut self.current).into_iter().collect(),
+                                self.current.take().into_vec(),
                                 self.forward,
                             )));
                         }
@@ -1456,20 +1897,21 @@ struct StepLevelFrame<I: ViewTermId> {
     inner: usize,
     forward: bool,
     /// The frontier being advanced, in ascending order.
-    current: Vec<I>,
+    current: PathVec<I>,
     /// How many of its nodes have been expanded.
     pos: usize,
-    next: BTreeSet<I>,
+    next: PathSet<I>,
 }
 
 impl<I: ViewTermId> StepLevelFrame<I> {
-    fn new(inner: usize, current: BTreeSet<I>, forward: bool) -> Self {
+    fn new(inner: usize, current: PathSet<I>, forward: bool) -> Self {
+        let storage = current.values.storage.clone();
         Self {
             inner,
             forward,
-            current: current.into_iter().collect(),
+            current: current.into_vec(),
             pos: 0,
-            next: BTreeSet::new(),
+            next: PathSet::new(&storage),
         }
     }
 
@@ -1499,7 +1941,7 @@ impl<I: ViewTermId> StepLevelFrame<I> {
         }
         match self.current.get(self.pos) {
             Some(&n) => Step::Call(Frame::Reach(ReachFrame::new(self.inner, n, self.forward))),
-            None => Step::Return(Value::Level(Some(std::mem::take(&mut self.next)))),
+            None => Step::Return(Value::Level(Some(self.next.take()))),
         }
     }
 }
@@ -1511,28 +1953,29 @@ struct ApplyPowerFrame<I: ViewTermId> {
     forward: bool,
     bit: u32,
     /// The sources, in ascending order.
-    current: Vec<I>,
+    current: PathVec<I>,
     /// How many of them have been applied.
     pos: usize,
-    out: BTreeSet<I>,
-    powers: Rc<RefCell<PowerReachCache<I>>>,
+    out: PathSet<I>,
+    powers: PowerMemoOwner<I>,
 }
 
 impl<I: ViewTermId> ApplyPowerFrame<I> {
     fn new(
         inner: usize,
-        current: BTreeSet<I>,
+        current: PathSet<I>,
         forward: bool,
         bit: u32,
-        powers: Rc<RefCell<PowerReachCache<I>>>,
+        powers: PowerMemoOwner<I>,
     ) -> Self {
+        let storage = current.values.storage.clone();
         Self {
             inner,
             forward,
             bit,
-            current: current.into_iter().collect(),
+            current: current.into_vec(),
             pos: 0,
-            out: BTreeSet::new(),
+            out: PathSet::new(&storage),
             powers,
         }
     }
@@ -1561,9 +2004,9 @@ impl<I: ViewTermId> ApplyPowerFrame<I> {
                 source,
                 self.forward,
                 self.bit,
-                Rc::clone(&self.powers),
+                Clone::clone(&self.powers),
             ))),
-            None => Step::Return(Value::Level(Some(std::mem::take(&mut self.out)))),
+            None => Step::Return(Value::Level(Some(self.out.take()))),
         }
     }
 }
@@ -1579,9 +2022,9 @@ enum PowerPhase<I: ViewTermId> {
     /// Composing the second half from each node of the first: `mids` are those nodes,
     /// `pos` how many have been composed, `out` what they reach.
     Mids {
-        mids: Vec<I>,
+        mids: PathVec<I>,
         pos: usize,
-        out: BTreeSet<I>,
+        out: PathSet<I>,
     },
 }
 
@@ -1594,7 +2037,7 @@ struct PowerReachFrame<I: ViewTermId> {
     node: I,
     forward: bool,
     bit: u32,
-    powers: Rc<RefCell<PowerReachCache<I>>>,
+    powers: PowerMemoOwner<I>,
     phase: PowerPhase<I>,
 }
 
@@ -1604,7 +2047,7 @@ impl<I: ViewTermId> PowerReachFrame<I> {
         node: I,
         forward: bool,
         bit: u32,
-        powers: Rc<RefCell<PowerReachCache<I>>>,
+        powers: PowerMemoOwner<I>,
     ) -> Self {
         Self {
             inner,
@@ -1623,20 +2066,20 @@ impl<I: ViewTermId> PowerReachFrame<I> {
             node,
             self.forward,
             self.bit - 1,
-            Rc::clone(&self.powers),
+            Clone::clone(&self.powers),
         )))
     }
 
     /// Return `reached`, memoized unless the budget cut it short.
     fn finish<D: DatasetView<Id = I> + Sync>(
         &self,
-        reached: Rc<BTreeSet<I>>,
+        reached: SetRef<I>,
         ctx: &PathCtx<'_, D>,
     ) -> Step<I> {
         if !ctx.stopped() {
             self.powers
                 .borrow_mut()
-                .insert((self.bit, self.node), Rc::clone(&reached));
+                .insert((self.bit, self.node), Clone::clone(&reached));
         }
         Step::Return(Value::Reach(reached))
     }
@@ -1645,7 +2088,7 @@ impl<I: ViewTermId> PowerReachFrame<I> {
     /// first half.
     fn start(&mut self) -> Step<I> {
         if let Some(cached) = self.powers.borrow().get(&(self.bit, self.node)) {
-            return Step::Return(Value::Reach(Rc::clone(cached)));
+            return Step::Return(Value::Reach(Clone::clone(cached)));
         }
         note_power_expansion();
         if self.bit == 0 {
@@ -1673,21 +2116,21 @@ impl<I: ViewTermId> PowerReachFrame<I> {
             PowerPhase::Base => return self.finish(reached, ctx),
             PowerPhase::First => {
                 if ctx.stopped() {
-                    return Step::Return(Value::Reach(Rc::new(BTreeSet::new())));
+                    return Step::Return(Value::Reach(SetRef::new(PathSet::new(&ctx.storage))));
                 }
                 self.phase = PowerPhase::Mids {
-                    mids: reached.iter().copied().collect(),
+                    mids: PathVec::from_iter(reached.iter().copied(), &ctx.storage),
                     pos: 0,
-                    out: BTreeSet::new(),
+                    out: PathSet::new(&ctx.storage),
                 };
             }
             PowerPhase::Mids { pos, out, .. } => {
                 if ctx.stopped() {
-                    return Step::Return(Value::Reach(Rc::new(std::mem::take(out))));
+                    return Step::Return(Value::Reach(SetRef::new(out.take())));
                 }
                 for target in reached.iter().copied() {
                     if !ctx.charge_candidate() {
-                        return Step::Return(Value::Reach(Rc::new(std::mem::take(out))));
+                        return Step::Return(Value::Reach(SetRef::new(out.take())));
                     }
                     out.insert(target);
                 }
@@ -1701,7 +2144,7 @@ impl<I: ViewTermId> PowerReachFrame<I> {
         match mids.get(*pos) {
             Some(&mid) => self.half(mid),
             None => {
-                let reached = Rc::new(std::mem::take(out));
+                let reached = SetRef::new(out.take());
                 self.finish(reached, ctx)
             }
         }
@@ -1727,20 +2170,25 @@ fn bag_reach<D: DatasetView + Sync>(
     node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> Vec<D::Id> {
-    let mut frames: Vec<BagFrame<D::Id>> = vec![BagFrame::Reach { op, node, forward }];
-    let mut returned: Option<Vec<D::Id>> = None;
+) -> Result<crate::AdmittedVec<D::Id>, EvalError> {
+    let mut frames = crate::AdmittedVec::new(&ctx.growth);
+    frames.push(BagFrame::Reach { op, node, forward })?;
+    let mut returned = None;
     loop {
+        ctx.storage.check()?;
         let top = frames
+            .as_mut_slice()
             .last_mut()
             .expect("the root frame's return ends the loop before the list empties");
-        match top.step(returned.take(), ctx) {
-            BagStep::Call(frame) => frames.push(frame),
+        let step = top.step(returned.take(), ctx)?;
+        ctx.storage.check()?;
+        match step {
+            BagStep::Call(frame) => frames.push(frame)?,
             BagStep::Replace(frame) => *top = frame,
             BagStep::Return(bag) => {
-                frames.pop();
+                let _ = frames.pop();
                 if frames.is_empty() {
-                    return bag;
+                    return Ok(bag);
                 }
                 returned = Some(bag);
             }
@@ -1755,7 +2203,7 @@ enum BagStep<I: ViewTermId> {
     /// This request becomes `frame`, which answers in its place.
     Replace(BagFrame<I>),
     /// This frame is finished with this bag.
-    Return(Vec<I>),
+    Return(crate::AdmittedVec<I>),
 }
 
 /// One suspended operator of the bag machine.
@@ -1772,9 +2220,9 @@ enum BagFrame<I: ViewTermId> {
         op: usize,
         forward: bool,
         k: usize,
-        frontier: Vec<I>,
+        frontier: crate::AdmittedVec<I>,
         pos: usize,
-        next: Vec<I>,
+        next: crate::AdmittedVec<I>,
     },
     /// Each element's derivations in turn, in source order: the left-nested chain's bag
     /// union, `(a ⊎ b) ⊎ c`, concatenated the same way.
@@ -1783,18 +2231,18 @@ enum BagFrame<I: ViewTermId> {
         node: I,
         forward: bool,
         i: usize,
-        out: Vec<I>,
+        out: crate::AdmittedVec<I>,
     },
 }
 
 impl<I: ViewTermId> BagFrame<I> {
     fn step<D: DatasetView<Id = I> + Sync>(
         &mut self,
-        returned: Option<Vec<I>>,
+        returned: Option<crate::AdmittedVec<I>>,
         ctx: &PathCtx<'_, D>,
-    ) -> BagStep<I> {
-        match self {
-            Self::Reach { op, node, forward } => Self::request(op, *node, forward, ctx),
+    ) -> Result<BagStep<I>, EvalError> {
+        Ok(match self {
+            Self::Reach { op, node, forward } => Self::request(op, *node, forward, ctx)?,
             Self::Sequence {
                 op,
                 forward,
@@ -1804,16 +2252,21 @@ impl<I: ViewTermId> BagFrame<I> {
                 next,
             } => {
                 if let Some(bag) = returned {
-                    next.extend(bag);
+                    for node in bag {
+                        next.push(node)?;
+                    }
                     *pos += 1;
                 }
                 let elements = elements_of(&ctx.program, *op);
                 loop {
                     if *k == elements.len() {
-                        return BagStep::Return(std::mem::take(frontier));
+                        return Ok(BagStep::Return(std::mem::replace(
+                            frontier,
+                            crate::AdmittedVec::new(&ctx.growth),
+                        )));
                     }
                     if frontier.is_empty() {
-                        return BagStep::Return(Vec::new());
+                        return Ok(BagStep::Return(crate::AdmittedVec::new(&ctx.growth)));
                     }
                     if let Some(&mid) = frontier.get(*pos) {
                         let element = elements[if *forward {
@@ -1821,13 +2274,13 @@ impl<I: ViewTermId> BagFrame<I> {
                         } else {
                             elements.len() - 1 - *k
                         }];
-                        return BagStep::Call(Self::Reach {
+                        return Ok(BagStep::Call(Self::Reach {
                             op: element,
                             node: mid,
                             forward: *forward,
-                        });
+                        }));
                     }
-                    *frontier = std::mem::take(next);
+                    *frontier = std::mem::replace(next, crate::AdmittedVec::new(&ctx.growth));
                     *pos = 0;
                     *k += 1;
                 }
@@ -1840,7 +2293,9 @@ impl<I: ViewTermId> BagFrame<I> {
                 out,
             } => {
                 if let Some(bag) = returned {
-                    out.extend(bag);
+                    for node in bag {
+                        out.push(node)?;
+                    }
                     *i += 1;
                 }
                 match elements_of(&ctx.program, *op).get(*i) {
@@ -1849,10 +2304,13 @@ impl<I: ViewTermId> BagFrame<I> {
                         node: *node,
                         forward: *forward,
                     }),
-                    None => BagStep::Return(std::mem::take(out)),
+                    None => BagStep::Return(std::mem::replace(
+                        out,
+                        crate::AdmittedVec::new(&ctx.growth),
+                    )),
                 }
             }
-        }
+        })
     }
 
     /// Answer a request: a leaf is stepped here; a sequence or alternative becomes its
@@ -1862,41 +2320,40 @@ impl<I: ViewTermId> BagFrame<I> {
         node: I,
         forward: &mut bool,
         ctx: &PathCtx<'_, D>,
-    ) -> BagStep<I> {
+    ) -> Result<BagStep<I>, EvalError> {
         while let PathOp::Reverse(inner) = &ctx.program.ops[*op] {
             *op = *inner;
             *forward = !*forward;
         }
-        match &ctx.program.ops[*op] {
-            PathOp::Predicate(predicate) => BagStep::Return(
-                step_predicate(*predicate, node, *forward, ctx)
-                    .into_iter()
-                    .collect(),
-            ),
-            PathOp::Negated(sets) => BagStep::Return(
-                step_negated(sets, node, *forward, ctx)
-                    .into_iter()
-                    .collect(),
-            ),
-            PathOp::Wildcard(namespace) => BagStep::Return(
-                step_wildcard(*namespace, node, *forward, ctx)
-                    .into_iter()
-                    .collect(),
-            ),
+        let leaf = match &ctx.program.ops[*op] {
+            PathOp::Predicate(predicate) => Some(step_predicate(*predicate, node, *forward, ctx)),
+            PathOp::Negated(sets) => Some(step_negated(sets, node, *forward, ctx)),
+            PathOp::Wildcard(namespace) => Some(step_wildcard(*namespace, node, *forward, ctx)),
+            _ => None,
+        };
+        if let Some(leaf) = leaf {
+            ctx.storage.check()?;
+            return Ok(BagStep::Return(leaf.into_vec().into_admitted()));
+        }
+        Ok(match &ctx.program.ops[*op] {
             PathOp::Sequence(_) => BagStep::Replace(Self::Sequence {
                 op: *op,
                 forward: *forward,
                 k: 0,
-                frontier: vec![node],
+                frontier: {
+                    let mut frontier = crate::AdmittedVec::with_capacity(1, &ctx.growth)?;
+                    frontier.push(node)?;
+                    frontier
+                },
                 pos: 0,
-                next: Vec::new(),
+                next: crate::AdmittedVec::new(&ctx.growth),
             }),
             PathOp::Alternative(_) => BagStep::Replace(Self::Alternative {
                 op: *op,
                 node,
                 forward: *forward,
                 i: 0,
-                out: Vec::new(),
+                out: crate::AdmittedVec::new(&ctx.growth),
             }),
             PathOp::ZeroOrMore(_)
             | PathOp::OneOrMore(_)
@@ -1908,7 +2365,10 @@ impl<I: ViewTermId> BagFrame<I> {
             PathOp::Reverse(_) => {
                 unreachable!("every reverse at this op was resolved into the direction flag")
             }
-        }
+            PathOp::Predicate(_) | PathOp::Negated(_) | PathOp::Wildcard(_) => {
+                unreachable!("leaf paths returned above")
+            }
+        })
     }
 }
 
@@ -1923,11 +2383,11 @@ fn step_predicate<D: DatasetView + Sync>(
     node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<D::Id> {
+) -> PathSet<D::Id> {
     let Some(pid) = predicate else {
-        return BTreeSet::new();
+        return PathSet::new(&ctx.storage);
     };
-    let mut out = BTreeSet::new();
+    let mut out = PathSet::new(&ctx.storage);
     let mut stopped = false;
     if forward {
         ctx.scope
@@ -1968,8 +2428,8 @@ fn step_negated<D: DatasetView + Sync>(
     node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<D::Id> {
-    let mut out = BTreeSet::new();
+) -> PathSet<D::Id> {
+    let mut out = PathSet::new(&ctx.storage);
     if let Some(excluded) = &sets.forward {
         out.extend(step_excluding(excluded, node, forward, ctx));
     }
@@ -1983,12 +2443,12 @@ fn step_negated<D: DatasetView + Sync>(
 /// the direction-parameterised primitive `step_negated` composes twice (once
 /// per element kind) to get the full negated-set relation.
 fn step_excluding<D: DatasetView + Sync>(
-    excluded: &BTreeSet<D::Id>,
+    excluded: &[D::Id],
     node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<D::Id> {
-    let mut out = BTreeSet::new();
+) -> PathSet<D::Id> {
+    let mut out = PathSet::new(&ctx.storage);
     let mut stopped = false;
     if forward {
         ctx.scope
@@ -2029,7 +2489,7 @@ fn step_wildcard<D: DatasetView + Sync>(
     node: D::Id,
     forward: bool,
     ctx: &PathCtx<'_, D>,
-) -> BTreeSet<D::Id> {
+) -> PathSet<D::Id> {
     let prefix = namespace.map(NamedNode::as_str);
     let pred_ok = |pid: D::Id| -> bool {
         match prefix {
@@ -2043,7 +2503,7 @@ fn step_wildcard<D: DatasetView + Sync>(
                 .unwrap_or(false),
         }
     };
-    let mut out = BTreeSet::new();
+    let mut out = PathSet::new(&ctx.storage);
     let mut stopped = false;
     if forward {
         ctx.scope
@@ -2081,9 +2541,9 @@ fn step_wildcard<D: DatasetView + Sync>(
 thread_local! {
     /// Test-only instrumentation: the number of range-path frontier advances performed on
     /// this thread since [`counting_level_advances`] last reset it.
-    static LEVEL_ADVANCES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static LEVEL_ADVANCES: Cell<u64> = const { Cell::new(0) };
     /// Test-only count of distinct `(power bit, source node)` relation entries computed.
-    static POWER_EXPANSIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static POWER_EXPANSIONS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Record one range-path frontier advance.
@@ -2111,7 +2571,7 @@ fn note_power_expansion() {
 fn counting_level_advances<T>(body: impl FnOnce() -> T) -> (T, u64) {
     LEVEL_ADVANCES.with(|advances| advances.set(0));
     let value = body();
-    (value, LEVEL_ADVANCES.with(std::cell::Cell::get))
+    (value, LEVEL_ADVANCES.with(Cell::get))
 }
 
 /// Run `body`, returning its value with the number of distinct binary relation entries it
@@ -2120,7 +2580,7 @@ fn counting_level_advances<T>(body: impl FnOnce() -> T) -> (T, u64) {
 fn counting_power_expansions<T>(body: impl FnOnce() -> T) -> (T, u64) {
     POWER_EXPANSIONS.with(|expansions| expansions.set(0));
     let value = body();
-    (value, POWER_EXPANSIONS.with(std::cell::Cell::get))
+    (value, POWER_EXPANSIONS.with(Cell::get))
 }
 
 #[cfg(test)]
@@ -2240,15 +2700,14 @@ mod tests {
         let sid = ds
             .term_id_by_value(&named_node_to_value(&nn(start)))
             .expect("start present");
-        let pctx = PathCtx {
-            dataset: ds,
-            scope: GraphScope::One(purrdf_core::GraphMatch::Default),
-            program: PathProgram::compile(path, ds),
-            reach_cache: RefCell::new(DetHashMap::default()),
-            governors: None,
-            ledger: None,
-        };
+        let pctx = PathCtx::resident(
+            ds,
+            GraphScope::One(purrdf_core::GraphMatch::Default),
+            PathProgram::compile(path, ds),
+            None,
+        );
         let mut v: Vec<String> = reach(ROOT_OP, sid, forward, &pctx)
+            .expect("resident path reach allocation")
             .iter()
             .copied()
             .map(|id| local_of(ds, id))
@@ -2297,16 +2756,14 @@ mod tests {
             .term_id_by_value(&named_node_to_value(&nn("a")))
             .expect("start present");
         let state = Arc::new(GovernorState::new(&QueryGovernors::UNBOUNDED.with_fuel(3)));
-        let pctx = PathCtx {
-            dataset: &*ds,
-            scope: GraphScope::One(purrdf_core::GraphMatch::Default),
-            program: PathProgram::compile(&path, &*ds),
-            reach_cache: RefCell::new(DetHashMap::default()),
-            governors: Some(Arc::clone(&state)),
-            ledger: None,
-        };
+        let pctx = PathCtx::resident(
+            &*ds,
+            GraphScope::One(purrdf_core::GraphMatch::Default),
+            PathProgram::compile(&path, &*ds),
+            Some(Arc::clone(&state).into()),
+        );
 
-        let reached = reach(ROOT_OP, sid, true, &pctx);
+        let reached = reach(ROOT_OP, sid, true, &pctx).expect("resident path reach allocation");
         assert_eq!(reached.len(), 3, "only three candidate edges fit");
         assert_eq!(
             state.tripped(),
@@ -3201,7 +3658,7 @@ mod recursion_free_tests {
     struct ReferenceCtx<'a, D: DatasetView + Sync> {
         base: &'a PathCtx<'a, D>,
         negated: BTreeMap<usize, NegatedSets<D::Id>>,
-        reach_cache: ReachCache<D::Id>,
+        reach_cache: ReferenceReachCache<D::Id>,
     }
 
     fn reference_build_negated_cache<D: DatasetView + Sync>(
@@ -3227,15 +3684,23 @@ mod recursion_free_tests {
                     let mut inverse = None;
                     for e in elems {
                         let target = if e.inverse {
-                            inverse.get_or_insert_with(BTreeSet::new)
+                            inverse.get_or_insert_with(|| {
+                                crate::AdmittedVec::new(&crate::WorkspaceCapability::default())
+                            })
                         } else {
-                            forward.get_or_insert_with(BTreeSet::new)
+                            forward.get_or_insert_with(|| {
+                                crate::AdmittedVec::new(&crate::WorkspaceCapability::default())
+                            })
                         };
                         if let Some(id) = dataset
                             .term_id_by_value(&named_node_to_value(&e.predicate))
                             .unwrap()
+                            && let Err(index) = target.binary_search(&id)
                         {
-                            target.insert(id);
+                            target
+                                .push(id)
+                                .expect("resident reference exclusion allocation");
+                            target.as_mut_slice()[index..].rotate_right(1);
                         }
                     }
                     NegatedSets { forward, inverse }
@@ -3319,7 +3784,9 @@ mod recursion_free_tests {
                 reference_range_reach(inner, node, forward, *min, *max, ctx)
             }
             P::NegatedPropertySet(elems) => reference_step_negated(elems, node, forward, ctx),
-            P::Wildcard { namespace } => step_wildcard(namespace.as_ref(), node, forward, ctx.base),
+            P::Wildcard { namespace } => step_wildcard(namespace.as_ref(), node, forward, ctx.base)
+                .into_iter()
+                .collect(),
         }
     }
 
@@ -3432,6 +3899,8 @@ mod recursion_free_tests {
             .term_id_by_value(&named_node_to_value(p))
             .unwrap();
         step_predicate(pid, node, forward, ctx.base)
+            .into_iter()
+            .collect()
     }
 
     fn reference_step_negated<D: DatasetView + Sync>(
@@ -3789,14 +4258,13 @@ mod recursion_free_tests {
                 let dataset = generate_dataset(&mut state);
                 let mut budget = 1 + state.below(5) as u32;
                 let path = generate_path(&mut state, &mut budget);
-                let universe: Vec<TermId> = node_universe(&PathCtx {
-                    dataset: &*dataset,
-                    scope: GraphScope::One(GraphMatch::Default),
-                    program: PathProgram::compile(&path, &*dataset),
-                    reach_cache: RefCell::new(DetHashMap::default()),
-                    governors: None,
-                    ledger: None,
-                })
+                let universe: Vec<TermId> = node_universe(&PathCtx::resident(
+                    &*dataset,
+                    GraphScope::One(GraphMatch::Default),
+                    PathProgram::compile(&path, &*dataset),
+                    None,
+                ))
+                .expect("resident node universe allocation")
                 .into_iter()
                 .collect();
                 let start = universe[state.below(universe.len() as u64) as usize];
@@ -3820,14 +4288,12 @@ mod recursion_free_tests {
 
     /// A fresh machine context over `case` under `governors`.
     fn machine_ctx(case: &Case, governors: Option<Arc<GovernorState>>) -> PathCtx<'_, RdfDataset> {
-        PathCtx {
-            dataset: &*case.dataset,
-            scope: GraphScope::One(GraphMatch::Default),
-            program: PathProgram::compile(&case.path, &*case.dataset),
-            reach_cache: RefCell::new(DetHashMap::default()),
-            governors,
-            ledger: None,
-        }
+        PathCtx::resident(
+            &*case.dataset,
+            GraphScope::One(GraphMatch::Default),
+            PathProgram::compile(&case.path, &*case.dataset),
+            governors.map(Into::into),
+        )
     }
 
     /// A fresh reference context over `base`.
@@ -3852,7 +4318,8 @@ mod recursion_free_tests {
     fn assert_same_set(case: &Case, fuel: Option<u64>) {
         let machine_state = fuel.map(governor);
         let machine = machine_ctx(case, machine_state.clone());
-        let reached = reach(ROOT_OP, case.start, case.forward, &machine);
+        let reached = reach(ROOT_OP, case.start, case.forward, &machine)
+            .expect("resident path reach allocation");
 
         let reference_state = fuel.map(governor);
         let base = machine_ctx(case, reference_state.clone());
@@ -3860,9 +4327,12 @@ mod recursion_free_tests {
         let expected = reference_reach_cached(&case.path, case.start, case.forward, &reference);
 
         assert_eq!(
-            *reached, *expected,
+            reached.iter().copied().collect::<Vec<_>>(),
+            expected.iter().copied().collect::<Vec<_>>(),
             "set reach of {:?} from {:?} forward={} under fuel {fuel:?}",
-            case.path, case.start, case.forward
+            case.path,
+            case.start,
+            case.forward
         );
         assert_eq!(
             verdict(machine_state.as_ref()),
@@ -3877,7 +4347,8 @@ mod recursion_free_tests {
     fn assert_same_bag(case: &Case, fuel: Option<u64>) {
         let machine_state = fuel.map(governor);
         let machine = machine_ctx(case, machine_state.clone());
-        let reached = bag_reach(ROOT_OP, case.start, case.forward, &machine);
+        let reached = bag_reach(ROOT_OP, case.start, case.forward, &machine)
+            .expect("resident bag path allocation");
 
         let reference_state = fuel.map(governor);
         let base = machine_ctx(case, reference_state.clone());
@@ -3886,9 +4357,12 @@ mod recursion_free_tests {
             reference_simple_reach_multiset(&case.path, case.start, case.forward, &reference);
 
         assert_eq!(
-            reached, expected,
+            &*reached,
+            expected.as_slice(),
             "bag reach of {:?} from {:?} forward={} under fuel {fuel:?}",
-            case.path, case.start, case.forward
+            case.path,
+            case.start,
+            case.forward
         );
         assert_eq!(
             verdict(machine_state.as_ref()),

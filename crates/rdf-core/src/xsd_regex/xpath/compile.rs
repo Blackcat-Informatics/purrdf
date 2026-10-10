@@ -12,7 +12,10 @@
 use std::cmp::Ordering;
 use std::ops::Range;
 
-use super::{Budget, Error, Limits, Profile, Resource, dated_blocks, dated_names, unicode_tables};
+use super::{
+    Budget, Error, Law, Limits, Profile, Resource, compatibility_tables, dated_blocks, dated_names,
+    unicode_tables,
+};
 use crate::xsd_regex::scan::{Scanner, Token};
 
 #[derive(Debug, Clone, Copy)]
@@ -27,7 +30,7 @@ pub(super) struct Modes {
 }
 
 impl Modes {
-    fn parse(profile: Profile, flags: &str, budget: &mut Budget) -> Result<Self, Error> {
+    fn parse(law: Law, flags: &str, budget: &mut Budget<'_>) -> Result<Self, Error> {
         let mut result = Self {
             insensitive: false,
             dot_all: false,
@@ -42,12 +45,15 @@ impl Modes {
                 's' => result.dot_all = true,
                 'm' => result.multiline = true,
                 'x' => result.whitespace = true,
-                'q' if profile == Profile::Xpath31 => result.quoted = true,
+                'q' if law != Law::Dated(Profile::Xpath20) => result.quoted = true,
                 _ => {
-                    return Err(Error::Flags {
-                        offset,
-                        flag,
-                        profile,
+                    return Err(match law {
+                        Law::Dated(profile) => Error::Flags {
+                            offset,
+                            flag,
+                            profile,
+                        },
+                        Law::Compatibility => Error::CompatibilityFlags { offset, flag },
                     });
                 }
             }
@@ -145,8 +151,20 @@ pub(super) enum Node {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum Set {
-    Range { lo: char, hi: char, folded: bool },
-    Table(&'static [(u32, u32)]),
+    Range {
+        lo: char,
+        hi: char,
+        folded: bool,
+    },
+    Table {
+        ranges: &'static [(u32, u32)],
+        folded: bool,
+    },
+    Block {
+        lo: u32,
+        hi: u32,
+        folded: bool,
+    },
     Space,
     Word,
     Dot,
@@ -226,6 +244,16 @@ pub(super) fn case_variants(ch: char) -> &'static [u32] {
         .map_or(&[], |index| unicode_tables::CASE_VARIANTS[index].1)
 }
 
+pub(super) fn case_variants_for(law: Law, ch: char) -> &'static [u32] {
+    if law.is_compatibility() {
+        compatibility_tables::CASE_VARIANTS
+            .binary_search_by_key(&(ch as u32), |&(point, _)| point)
+            .map_or(&[], |index| compatibility_tables::CASE_VARIANTS[index].1)
+    } else {
+        case_variants(ch)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum LeadStep {
     Visit(usize),
@@ -245,7 +273,7 @@ struct Admission {
 /// successful compilation under earlier, larger bounds is not current admission.
 #[derive(Debug)]
 pub struct CompiledPattern {
-    pub(super) profile: Profile,
+    pub(super) law: Law,
     pub(super) source: String,
     pub(super) flags: String,
     pub(super) modes: Modes,
@@ -269,13 +297,16 @@ impl CompiledPattern {
     /// Whether this program belongs to the exact requested grammar and text.
     #[must_use]
     pub fn matches_source(&self, profile: Profile, pattern: &str, flags: &str) -> bool {
-        self.profile == profile && self.source == pattern && self.flags == flags
+        self.law == Law::Dated(profile) && self.source == pattern && self.flags == flags
     }
 
-    /// The dated Recommendation used for recognition and execution.
+    /// The dated Recommendation, or `None` for the unselected compatibility law.
     #[must_use]
-    pub const fn profile(&self) -> Profile {
-        self.profile
+    pub const fn profile(&self) -> Option<Profile> {
+        match self.law {
+            Law::Dated(profile) => Some(profile),
+            Law::Compatibility => None,
+        }
     }
 
     /// The original UTF-8 source, before any x-flag removal.
@@ -362,6 +393,74 @@ impl CompiledPattern {
     }
 }
 
+/// A compiled native program retaining its original physical admission.
+pub type OwnedCompiledPattern<S> = super::OwnedPatternValue<CompiledPattern, S>;
+
+/// Compile the unchanged dated grammar with an owned physical admission.
+///
+/// The same parser, program arenas, leading sets and parent-table analysis run
+/// for resident and admitted construction. This API covers compiler storage only;
+/// matching and replacement require their own physical admission.
+///
+/// # Errors
+///
+/// Preserves the original caller account alongside every grammar, work,
+/// layout, allocator or physical-admission failure.
+pub fn compile_with_storage<S: purrdf_lex::allocation::Admission>(
+    profile: Profile,
+    pattern: &str,
+    flags: &str,
+    limits: Limits,
+    storage: S,
+) -> Result<OwnedCompiledPattern<S>, super::OwnedPatternError<S>> {
+    compile_owned_law(
+        Law::Dated(profile),
+        pattern,
+        flags,
+        limits,
+        storage,
+        |pattern| pattern,
+    )
+}
+
+pub(super) fn compile_owned_law<T, S: purrdf_lex::allocation::Admission>(
+    law: Law,
+    pattern: &str,
+    flags: &str,
+    limits: Limits,
+    mut storage: S,
+    wrap: impl FnOnce(CompiledPattern) -> T,
+) -> Result<super::OwnedPatternValue<T, S>, super::OwnedPatternError<S>> {
+    let verdict = compile_budget(
+        law,
+        pattern,
+        flags,
+        Budget::with_storage(limits, &mut storage),
+    );
+    match verdict {
+        Ok(pattern) => Ok(super::OwnedPatternValue::new(wrap(pattern), storage)),
+        Err(error @ Error::Storage(_)) => Err(super::OwnedPatternValue::new(error, storage)),
+        Err(error) => {
+            // All compiler scratch has died. Retain only the actual grammar
+            // diagnostic buffer, never a guessed input-size allowance.
+            let bytes = match &error {
+                Error::Syntax { message, .. } => message.capacity(),
+                _ => 0,
+            };
+            match storage.resize(bytes) {
+                Ok(()) => Err(super::OwnedPatternValue::new(error, storage)),
+                Err(refusal) => {
+                    drop(error);
+                    Err(super::OwnedPatternValue::new(
+                        Error::Storage(refusal),
+                        storage,
+                    ))
+                }
+            }
+        }
+    }
+}
+
 /// Recognize the complete grammar of the selected dated Recommendation.
 ///
 /// XPath 2.0 already defines backreferences and reluctant quantifiers. XPath
@@ -378,9 +477,23 @@ pub fn compile(
     flags: &str,
     limits: Limits,
 ) -> Result<CompiledPattern, Error> {
-    limits.admit_pattern(pattern)?;
-    let mut budget = Budget::new(limits);
-    let modes = Modes::parse(profile, flags, &mut budget)?;
+    compile_budget(Law::Dated(profile), pattern, flags, Budget::new(limits))
+}
+
+fn compile_budget(
+    law: Law,
+    pattern: &str,
+    flags: &str,
+    mut budget: Budget<'_>,
+) -> Result<CompiledPattern, Error> {
+    budget.limits().admit_pattern(pattern)?;
+    if law.is_compatibility() && pattern.len() > crate::xsd_regex::MAX_SOURCE_BYTES {
+        return Err(Error::CompatibilitySource {
+            bytes: pattern.len(),
+            limit: crate::xsd_regex::MAX_SOURCE_BYTES,
+        });
+    }
+    let modes = Modes::parse(law, flags, &mut budget)?;
     let source = owned(pattern, &mut budget)?;
     let flag_source = owned(flags, &mut budget)?;
     let normalized = if modes.whitespace && !modes.quoted {
@@ -401,12 +514,13 @@ pub fn compile(
     let mut parser = Parser {
         scanner,
         budget,
-        profile,
+        law,
         modes,
         text,
         offsets,
         pending: None,
         nodes: Vec::new(),
+        properties: Vec::new(),
         sets: Vec::new(),
         frames: Vec::new(),
         captures: 0,
@@ -427,17 +541,29 @@ pub fn compile(
         sets,
         captures,
         windows,
+        frames,
+        properties,
         ..
     } = parser;
-    drop(scanner);
+    let construction_slots = frames.capacity() as u64 * 6 + properties.capacity() as u64;
+    budget.release_vec(frames)?;
+    budget.release_vec(properties)?;
+    budget.release_compile_slots(construction_slots);
+    scanner.release(&mut budget)?;
     budget.release_compile_slots(scanner_slots);
+    if let Some((text, offsets)) = normalized {
+        budget.release_string(text)?;
+        budget.release_vec(offsets)?;
+        // These construction-only owners were charged together by strip_bounded.
+        budget.release_compile_slots(pattern.len() as u64 * 2 + 1);
+    }
     let links = super::pike::analyze(&nodes, root, &mut budget)?;
     let admission = Admission {
         nodes: budget.used(Resource::ProgramNodes),
         slots: budget.peak_compile_slots,
     };
     Ok(CompiledPattern {
-        profile,
+        law,
         source,
         flags: flag_source,
         modes,
@@ -482,29 +608,18 @@ fn block(profile: Profile, name: &str) -> Option<&'static [(u32, u32)]> {
     }
 }
 
-pub(super) fn syntax(offset: usize, message: &str) -> Error {
-    Error::Syntax {
-        offset,
-        message: message.to_owned(),
-    }
-}
-
-pub(super) fn owned(text: &str, budget: &mut Budget) -> Result<String, Error> {
+pub(super) fn owned(text: &str, budget: &mut Budget<'_>) -> Result<String, Error> {
     budget.charge_wide(Resource::CompileSlots, text.len() as u128)?;
     budget.charge_wide(Resource::CompileSteps, text.len() as u128)?;
     let mut out = String::new();
-    out.try_reserve_exact(text.len())
-        .map_err(|_| Error::Allocation {
-            resource: Resource::CompileSlots,
-            units: text.len() as u64,
-        })?;
+    budget.reserve_string(&mut out, text.len())?;
     out.push_str(text);
     Ok(out)
 }
 
 /// Arena capacity remains retained after a frame is popped. Admit deterministic
 /// capacity growth, including copying the existing elements, before allocation.
-fn grow<T>(budget: &mut Budget, arena: &mut Vec<T>, cells: u64) -> Result<(), Error> {
+fn grow<T>(budget: &mut Budget<'_>, arena: &mut Vec<T>, cells: u64) -> Result<(), Error> {
     if arena.len() < arena.capacity() {
         return Ok(());
     }
@@ -526,9 +641,7 @@ fn grow<T>(budget: &mut Budget, arena: &mut Vec<T>, cells: u64) -> Result<(), Er
     if bytes > isize::MAX as usize {
         return Err(allocation());
     }
-    arena
-        .try_reserve_exact(capacity - arena.len())
-        .map_err(|_| allocation())
+    budget.reserve(arena, capacity)
 }
 
 #[derive(Clone)]
@@ -566,15 +679,16 @@ struct ClassFrame {
     difference: Option<usize>,
 }
 
-struct Parser<'a> {
+struct Parser<'a, 'storage> {
     scanner: Scanner<'a>,
-    budget: Budget,
-    profile: Profile,
+    budget: Budget<'storage>,
+    law: Law,
     modes: Modes,
     text: &'a str,
     offsets: Option<&'a [usize]>,
     pending: Option<Spanned<'a>>,
     nodes: Vec<Node>,
+    properties: Vec<(bool, bool)>,
     sets: Vec<Set>,
     frames: Vec<Frame>,
     captures: usize,
@@ -583,7 +697,14 @@ struct Parser<'a> {
     windows: Vec<(usize, u64)>,
 }
 
-impl<'a> Parser<'a> {
+impl<'a> Parser<'a, '_> {
+    fn syntax(&mut self, offset: usize, message: &(impl core::fmt::Display + ?Sized)) -> Error {
+        match self.budget.format(message) {
+            Ok(message) => Error::Syntax { offset, message },
+            Err(error) => error,
+        }
+    }
+
     fn offset(&self, offset: usize) -> usize {
         self.offsets.map_or(offset, |map| map[offset])
     }
@@ -593,8 +714,27 @@ impl<'a> Parser<'a> {
             && let Some(token) = self.scanner.next_bounded(&mut self.budget)?
         {
             let span = self.scanner.source_span();
-            let token =
-                token.map_err(|error| syntax(self.offset(span.start), &error.to_string()))?;
+            let token = match token {
+                Ok(token) => token,
+                Err(super::super::XsdRegexError::Storage(error)) => {
+                    return Err(Error::Storage(error));
+                }
+                Err(error) => {
+                    let verdict = self.syntax(self.offset(span.start), &error);
+                    // The scanner spelling remains admitted while Display reads
+                    // it, and dies before its original physical grant shrinks.
+                    match error {
+                        super::super::XsdRegexError::UnsupportedGroupConstruct { found } => {
+                            self.budget.release_string(found)?;
+                        }
+                        super::super::XsdRegexError::BadBackreference { reference, .. } => {
+                            self.budget.release_string(reference)?;
+                        }
+                        _ => {}
+                    }
+                    return Err(verdict);
+                }
+            };
             self.pending = Some(Spanned { token, span });
         }
         Ok(self.pending.clone())
@@ -610,8 +750,11 @@ impl<'a> Parser<'a> {
         self.budget.charge(Resource::CompileSteps, 1)?;
         self.budget.charge(Resource::ProgramNodes, 1)?;
         grow(&mut self.budget, &mut self.nodes, 6)?;
+        let properties = super::pike::node_properties(&node, |child| self.properties[child]);
+        grow(&mut self.budget, &mut self.properties, 1)?;
         let id = self.nodes.len();
         self.nodes.push(node);
+        self.properties.push(properties);
         Ok(id)
     }
 
@@ -749,7 +892,8 @@ impl<'a> Parser<'a> {
         }
         let first = values.pop().expect("the root lead completed");
         let released = (work.capacity() + values.capacity()) as u64;
-        drop((work, values));
+        self.budget.release_vec(work)?;
+        self.budget.release_vec(values)?;
         self.budget.release_compile_slots(released);
         let mut node = root;
         let run = loop {
@@ -803,12 +947,7 @@ impl<'a> Parser<'a> {
                         .charge_wide(Resource::CompileSlots, missing as u128 * 2)?;
                     self.budget
                         .charge_wide(Resource::CompileSteps, missing as u128)?;
-                    flat.spans
-                        .try_reserve_exact(missing)
-                        .map_err(|_| Error::Allocation {
-                            resource: Resource::CompileSlots,
-                            units: missing as u64 * 2,
-                        })?;
+                    self.budget.reserve(&mut flat.spans, missing)?;
                     flat.spans.resize(missing, None);
                 }
                 let start = flat.ranges.len();
@@ -819,7 +958,7 @@ impl<'a> Parser<'a> {
                 let span = |at: usize| u32::try_from(at).expect("admitted ranges fit u32");
                 flat.spans[set] = Some((span(start), span(flat.ranges.len())));
             }
-            drop(ranges);
+            self.budget.release_vec(ranges)?;
             self.budget.release_compile_slots(held);
         }
         Ok(flat)
@@ -850,7 +989,7 @@ impl<'a> Parser<'a> {
                         }
                         for point in lo as u32..=hi as u32 {
                             let ch = char::from_u32(point).expect("a range holds scalar values");
-                            let variants = case_variants(ch);
+                            let variants = case_variants_for(self.law, ch);
                             self.budget
                                 .charge_wide(Resource::CompileSteps, variants.len() as u128 + 1)?;
                             for &variant in variants {
@@ -869,11 +1008,11 @@ impl<'a> Parser<'a> {
             }
         }
         let released = work.capacity() as u64;
-        drop(work);
+        self.budget.release_vec(work)?;
         self.budget.release_compile_slots(released);
         if !flat {
             let released = ranges.capacity() as u64 * 2;
-            drop(ranges);
+            self.budget.release_vec(ranges)?;
             self.budget.release_compile_slots(released);
             return Ok(Vec::new());
         }
@@ -914,8 +1053,8 @@ impl<'a> Parser<'a> {
             let offset = self.offset(spanned.span.start);
             match spanned.token {
                 Token::GroupOpen { capturing } => {
-                    if !capturing && self.profile == Profile::Xpath20 {
-                        return Err(syntax(offset, "non-capturing groups require XPath 3.1"));
+                    if !capturing && self.law == Law::Dated(Profile::Xpath20) {
+                        return Err(self.syntax(offset, "non-capturing groups require XPath 3.1"));
                     }
                     let capture = if capturing {
                         self.captures += 1;
@@ -927,7 +1066,7 @@ impl<'a> Parser<'a> {
                 }
                 Token::GroupClose => {
                     if self.frames.len() == 1 {
-                        return Err(syntax(offset, "unmatched closing parenthesis"));
+                        return Err(self.syntax(offset, "unmatched closing parenthesis"));
                     }
                     let body = self.branch()?;
                     let frame = self.frames.pop().expect("non-root group present");
@@ -946,7 +1085,7 @@ impl<'a> Parser<'a> {
                     self.quantifier(quantifier, offset)?;
                 }
                 Token::Literal('}') => {
-                    return Err(syntax(offset, "a closing brace must end a quantity"));
+                    return Err(self.syntax(offset, "a closing brace must end a quantity"));
                 }
                 Token::Literal('^') => {
                     let node = self.node(Node::Start)?;
@@ -957,6 +1096,12 @@ impl<'a> Parser<'a> {
                     self.append(node)?;
                 }
                 Token::Backreference(number) => {
+                    if self.law.is_compatibility() {
+                        return Err(self.syntax(
+                            offset,
+                            "backreferences are not supported by the compatibility law",
+                        ));
+                    }
                     let node = self.node(Node::Backreference(number))?;
                     self.append(node)?;
                 }
@@ -966,7 +1111,7 @@ impl<'a> Parser<'a> {
                     self.append(node)?;
                 }
                 Token::ClassClose | Token::Subtract | Token::ClassMember(_) => {
-                    return Err(syntax(offset, "character-class syntax outside a class"));
+                    return Err(self.syntax(offset, "character-class syntax outside a class"));
                 }
                 token => {
                     let set = self.member(token, offset)?;
@@ -976,7 +1121,7 @@ impl<'a> Parser<'a> {
             }
         }
         if self.frames.len() != 1 {
-            return Err(syntax(
+            return Err(self.syntax(
                 self.frames.last().expect("open group").opening,
                 "unclosed group",
             ));
@@ -990,10 +1135,10 @@ impl<'a> Parser<'a> {
             .last_mut()
             .expect("an expression frame is present");
         if frame.quantified {
-            return Err(syntax(offset, "an atom has only one quantifier"));
+            return Err(self.syntax(offset, "an atom has only one quantifier"));
         }
         let Some(body) = frame.atom.take() else {
-            return Err(syntax(offset, "quantifier has no preceding atom"));
+            return Err(self.syntax(offset, "quantifier has no preceding atom"));
         };
         let (min, max, span) = match quantifier {
             '?' => (Count::Finite(0), Some(Count::Finite(1)), 1),
@@ -1010,6 +1155,25 @@ impl<'a> Parser<'a> {
             false
         } else {
             true
+        };
+        let (body, min, max) = if self.law.is_compatibility()
+            && min == Count::Finite(0)
+            && max.is_none()
+            && self.properties[body].1
+        {
+            // Only a nullable body needs the optional-plus lowering. Giving a
+            // nonnullable star two split points changes nested reluctant capture
+            // priority even though it accepts the same whole-match strings.
+            let plus = self.node(Node::Repeat {
+                body,
+                min: Count::Finite(1),
+                max: None,
+                greedy,
+                follow: None,
+            })?;
+            (plus, Count::Finite(0), Some(Count::Finite(1)))
+        } else {
+            (body, min, max)
         };
         let node = self.node(Node::Repeat {
             body,
@@ -1042,10 +1206,7 @@ impl<'a> Parser<'a> {
             self.take()?;
         }
         if start == end {
-            return Err(syntax(
-                offset,
-                "a quantity requires one or more ASCII digits",
-            ));
+            return Err(self.syntax(offset, "a quantity requires one or more ASCII digits"));
         }
         let text = self.text[start..end].trim_start_matches('0');
         Ok(if text.is_empty() { "0" } else { text })
@@ -1054,7 +1215,7 @@ impl<'a> Parser<'a> {
     fn quantity(&mut self, offset: usize) -> Result<(Count, Option<Count>, u64), Error> {
         let min = self.decimal(offset)?;
         let Some(next) = self.take()? else {
-            return Err(syntax(offset, "unclosed quantity"));
+            return Err(self.syntax(offset, "unclosed quantity"));
         };
         match next.token {
             Token::Literal('}') => {
@@ -1074,13 +1235,13 @@ impl<'a> Parser<'a> {
                     min.len() as u128 + max.len() as u128,
                 )?;
                 if min.len().cmp(&max.len()).then_with(|| min.cmp(max)) == Ordering::Greater {
-                    return Err(syntax(offset, "quantity minimum exceeds its maximum"));
+                    return Err(self.syntax(offset, "quantity minimum exceeds its maximum"));
                 }
                 if !self
                     .take()?
                     .is_some_and(|spanned| spanned.token == Token::Literal('}'))
                 {
-                    return Err(syntax(offset, "a quantity must end with its closing brace"));
+                    return Err(self.syntax(offset, "a quantity must end with its closing brace"));
                 }
                 Ok((
                     Count::from_decimal(min),
@@ -1088,7 +1249,7 @@ impl<'a> Parser<'a> {
                     span(min, max),
                 ))
             }
-            _ => Err(syntax(offset, "quantity must be n, n, or n,m")),
+            _ => Err(self.syntax(offset, "quantity must be n, n, or n,m")),
         }
     }
 
@@ -1103,21 +1264,45 @@ impl<'a> Parser<'a> {
     fn property(&mut self, name: &str, offset: usize) -> Result<usize, Error> {
         self.budget
             .charge_wide(Resource::CompileSteps, (name.len() as u128) * 10)?;
+        let folded = self.law.is_compatibility() && self.modes.insensitive;
+        if self.law.is_compatibility() && name.starts_with("Is") {
+            let Some((lo, hi)) = crate::xsd_regex::blocks::lookup(name) else {
+                return Err(self.syntax(offset, "unknown Unicode category or Is-prefixed block"));
+            };
+            return self.set(Set::Block { lo, hi, folded });
+        }
         let found = if name.starts_with("Is") {
-            block(self.profile, name)
+            let Law::Dated(profile) = self.law else {
+                unreachable!("compatibility blocks returned above");
+            };
+            block(profile, name)
         } else {
-            unicode_tables::CATEGORIES
-                .binary_search_by_key(&name, |&(name, _)| name)
-                .ok()
-                .map(|index| unicode_tables::CATEGORIES[index].1)
+            let categories = if self.law.is_compatibility() {
+                compatibility_tables::CATEGORIES
+            } else {
+                unicode_tables::CATEGORIES
+            };
+            table(categories, name)
         };
         let Some(ranges) = found else {
-            return Err(syntax(
-                offset,
-                "unknown Unicode category or Is-prefixed block",
-            ));
+            return Err(self.syntax(offset, "unknown Unicode category or Is-prefixed block"));
         };
-        self.set(Set::Table(ranges))
+        self.set(Set::Table { ranges, folded })
+    }
+
+    fn word(&mut self, offset: usize) -> Result<usize, Error> {
+        if !self.law.is_compatibility() {
+            return self.set(Set::Word);
+        }
+        // Folding applies to P/Z/C before negation, exactly as in the original
+        // translated [^\p{P}\p{Z}\p{C}] class. Difference/negation are never
+        // folded after construction.
+        let punctuation = self.property("P", offset)?;
+        let separators = self.property("Z", offset)?;
+        let controls = self.property("C", offset)?;
+        let first = self.set(Set::Union(punctuation, separators))?;
+        let excluded = self.set(Set::Union(first, controls))?;
+        self.set(Set::Complement(excluded))
     }
 
     fn member(&mut self, token: Token<'_>, offset: usize) -> Result<usize, Error> {
@@ -1127,23 +1312,30 @@ impl<'a> Parser<'a> {
             Token::Escape('r') => return self.range('\r', '\r'),
             Token::Escape('t') => return self.range('\t', '\t'),
             Token::Escape('d' | 'D') => (self.property("Nd", offset)?, token == Token::Escape('D')),
-            Token::Escape('&' | '~') => {
-                return Err(syntax(offset, "escape is outside XPath SingleCharEsc"));
+            Token::Escape('&' | '~') if !self.law.is_compatibility() => {
+                return Err(self.syntax(offset, "escape is outside XPath SingleCharEsc"));
             }
             Token::Escape(ch) => return self.range(ch, ch),
             Token::NameEscape { negated, chars } => {
-                let ranges = if chars {
-                    dated_names::NAME
-                } else {
-                    dated_names::NAME_START
+                let ranges = match (self.law.is_compatibility(), chars) {
+                    (true, true) => purrdf_iri::terminals::xml_name_char_ranges(),
+                    (true, false) => purrdf_iri::terminals::xml_name_start_char_ranges(),
+                    (false, true) => dated_names::NAME,
+                    (false, false) => dated_names::NAME_START,
                 };
-                (self.set(Set::Table(ranges))?, negated)
+                (
+                    self.set(Set::Table {
+                        ranges,
+                        folded: self.law.is_compatibility() && self.modes.insensitive,
+                    })?,
+                    negated,
+                )
             }
             Token::SpaceEscape { negated } => (self.set(Set::Space)?, negated),
-            Token::WordEscape { negated } => (self.set(Set::Word)?, negated),
+            Token::WordEscape { negated } => (self.word(offset)?, negated),
             Token::UnicodeProperty { negated, name } => (self.property(name, offset)?, negated),
             Token::Dot => return self.set(Set::Dot),
-            _ => return Err(syntax(offset, "construct is not a character-class member")),
+            _ => return Err(self.syntax(offset, "construct is not a character-class member")),
         };
         if negated {
             self.set(Set::Complement(set))
@@ -1152,13 +1344,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn scalar(token: &Token<'_>) -> Option<char> {
+    fn scalar(&self, token: &Token<'_>) -> Option<char> {
         match token {
             Token::Literal(ch) | Token::ClassMember(ch) => Some(*ch),
             Token::Escape('n') => Some('\n'),
             Token::Escape('r') => Some('\r'),
             Token::Escape('t') => Some('\t'),
-            Token::Escape('d' | 'D' | '&' | '~') => None,
+            Token::Escape('d' | 'D') => None,
+            Token::Escape('&' | '~') if !self.law.is_compatibility() => None,
             Token::Escape(ch) => Some(*ch),
             _ => None,
         }
@@ -1178,10 +1371,7 @@ impl<'a> Parser<'a> {
         self.class_frame(&mut frames, negated)?;
         loop {
             let Some(spanned) = self.take()? else {
-                return Err(syntax(
-                    self.offset(self.text.len()),
-                    "unclosed character class",
-                ));
+                return Err(self.syntax(self.offset(self.text.len()), "unclosed character class"));
             };
             let offset = self.offset(spanned.span.start);
             match spanned.token {
@@ -1198,17 +1388,16 @@ impl<'a> Parser<'a> {
                         parent.negated = false;
                     } else {
                         let slots = frames.capacity() as u64 * 3;
-                        drop(frames);
+                        self.budget.release_vec(frames)?;
                         self.budget.release_compile_slots(slots);
                         return Ok(set);
                     }
                 }
                 Token::Subtract => {
                     let frame = frames.last_mut().expect("a class frame is present");
-                    let base = frame
-                        .union
-                        .take()
-                        .ok_or_else(|| syntax(offset, "subtraction has no left character group"))?;
+                    let base = frame.union.take().ok_or_else(|| {
+                        self.syntax(offset, "subtraction has no left character group")
+                    })?;
                     frame.difference = Some(if frame.negated {
                         self.set(Set::Complement(base))?
                     } else {
@@ -1222,7 +1411,7 @@ impl<'a> Parser<'a> {
                             matches!(next.token, Token::ClassClose | Token::Subtract)
                         });
                         if frame.union.is_some() && !at_end {
-                            return Err(syntax(
+                            return Err(self.syntax(
                                 offset,
                                 "an unescaped hyphen is only a group endpoint or range operator",
                             ));
@@ -1247,10 +1436,10 @@ impl<'a> Parser<'a> {
 
     fn finish_class(&mut self, frame: ClassFrame, offset: usize) -> Result<usize, Error> {
         let Some(set) = frame.union else {
-            return Err(syntax(offset, "character group is empty"));
+            return Err(self.syntax(offset, "character group is empty"));
         };
         if frame.difference.is_some() {
-            return Err(syntax(offset, "subtraction operand is missing"));
+            return Err(self.syntax(offset, "subtraction operand is missing"));
         }
         if frame.negated {
             self.set(Set::Complement(set))
@@ -1260,7 +1449,7 @@ impl<'a> Parser<'a> {
     }
 
     fn class_member(&mut self, token: Token<'_>, offset: usize) -> Result<usize, Error> {
-        if let Some(lo) = Self::scalar(&token)
+        if let Some(lo) = self.scalar(&token)
             && token != Token::Literal('-')
             && self
                 .peek()?
@@ -1268,24 +1457,25 @@ impl<'a> Parser<'a> {
         {
             self.take()?;
             let Some(next) = self.peek()? else {
-                return Err(syntax(offset, "unclosed character range"));
+                return Err(self.syntax(offset, "unclosed character range"));
             };
             if matches!(next.token, Token::ClassClose | Token::Subtract) {
                 let lo = self.range(lo, lo)?;
                 let dash = self.range('-', '-')?;
                 return self.set(Set::Union(lo, dash));
             }
-            let hi = Self::scalar(&next.token)
+            let hi = self
+                .scalar(&next.token)
                 .filter(|_| next.token != Token::Literal('-'))
                 .ok_or_else(|| {
-                    syntax(
+                    self.syntax(
                         self.offset(next.span.start),
                         "range endpoint must be one character",
                     )
                 })?;
             self.take()?;
             if lo > hi {
-                return Err(syntax(offset, "character range is reversed"));
+                return Err(self.syntax(offset, "character range is reversed"));
             }
             return self.range(lo, hi);
         }
@@ -1451,7 +1641,7 @@ mod tests {
         let program = accepted(Profile::Xpath31, r"[^A-Z-[IO]]", "i");
         assert!(matches!(program.sets.last(), Some(Set::Difference(..))));
         let program = accepted(Profile::Xpath31, r"\p{Lu}", "i");
-        assert!(matches!(program.sets.as_slice(), [Set::Table(_)]));
+        assert!(matches!(program.sets.as_slice(), [Set::Table { .. }]));
     }
 
     #[test]

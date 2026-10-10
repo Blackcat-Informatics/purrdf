@@ -185,6 +185,8 @@ pub enum XsdDatatype {
     Time,
     /// `xsd:dateTime`.
     DateTime,
+    /// `xsd:dateTimeStamp` — `dateTime` with an explicit timezone.
+    DateTimeStamp,
     /// `xsd:duration`.
     Duration,
     /// `xsd:dayTimeDuration`.
@@ -264,6 +266,7 @@ impl XsdDatatype {
             "date" => Self::Date,
             "time" => Self::Time,
             "dateTime" => Self::DateTime,
+            "dateTimeStamp" => Self::DateTimeStamp,
             "duration" => Self::Duration,
             "dayTimeDuration" => Self::DayTimeDuration,
             "yearMonthDuration" => Self::YearMonthDuration,
@@ -303,6 +306,7 @@ impl XsdDatatype {
             Self::Date => XSD_DATE,
             Self::Time => XSD_TIME,
             Self::DateTime => XSD_DATE_TIME,
+            Self::DateTimeStamp => XSD_DATE_TIME_STAMP,
             Self::Duration => XSD_DURATION,
             Self::DayTimeDuration => XSD_DAY_TIME_DURATION,
             Self::YearMonthDuration => XSD_YEAR_MONTH_DURATION,
@@ -339,6 +343,7 @@ impl XsdDatatype {
         matches!(
             self,
             Self::DateTime
+                | Self::DateTimeStamp
                 | Self::Date
                 | Self::Time
                 | Self::GYearMonth
@@ -437,6 +442,7 @@ mod tests {
             XsdDatatype::Date,
             XsdDatatype::Time,
             XsdDatatype::DateTime,
+            XsdDatatype::DateTimeStamp,
             XsdDatatype::Duration,
             XsdDatatype::DayTimeDuration,
             XsdDatatype::YearMonthDuration,

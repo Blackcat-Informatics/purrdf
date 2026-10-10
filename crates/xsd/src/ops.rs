@@ -9,8 +9,7 @@
 use std::cmp::Ordering;
 
 use crate::numeric::{
-    self, Decimal, numeric_add, numeric_cmp, numeric_mul, numeric_sub, numeric_total_cmp,
-    numeric_unary_minus,
+    self, Decimal, numeric_add, numeric_mul, numeric_sub, numeric_total_cmp, numeric_unary_minus,
 };
 use crate::temporal::{self, duration_equal};
 use crate::value::{XsdError, XsdValue};
@@ -48,8 +47,22 @@ use crate::value::{XsdError, XsdValue};
 /// ```
 #[must_use]
 pub fn value_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
+    value_cmp_admitted(a, b, &mut |_| Ok(())).expect("resident value comparison allocation")
+}
+
+/// The same partial value order with admission before native numeric destinations.
+///
+/// # Errors
+/// Returns physical refusal separately from incomparable values.
+pub fn value_cmp_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
     use XsdValue::{Binary, Boolean, Double, Float, Gregorian, Integer, String as Str};
-    match (a, b) {
+    Ok(match (a, b) {
         // Numeric tower (with promotion); covers every numeric/numeric pair,
         // including all integer-family subtypes (they share the Integer variant).
         (
@@ -65,7 +78,7 @@ pub fn value_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
             | Double(_)
             | XsdValue::BigInteger { .. }
             | XsdValue::BigDecimal(_),
-        ) => numeric_cmp(a, b),
+        ) => numeric::numeric_cmp_admitted(a, b, admit)?,
         // `false` < `true`.
         (Boolean(x), Boolean(y)) => Some(x.cmp(y)),
         // Codepoint (Unicode scalar) order — SPARQL string ordering.
@@ -106,7 +119,7 @@ pub fn value_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
         }
         // Different value-space families are incomparable.
         _ => None,
-    }
+    })
 }
 
 /// The value-space comparison a **sort** must use: [`value_cmp`] everywhere except
@@ -197,9 +210,23 @@ pub fn value_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
 /// ```
 #[must_use]
 pub fn value_equal(a: &XsdValue, b: &XsdValue) -> Option<bool> {
+    value_equal_admitted(a, b, &mut |_| Ok(())).expect("resident value equality allocation")
+}
+
+/// Value equality with the original duration law and admitted numeric comparison.
+///
+/// # Errors
+/// Returns physical refusal independently of the equality answer.
+pub fn value_equal_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<bool>, crate::bigint::LimbScratchError> {
     match (a, b) {
-        (XsdValue::Duration(x), XsdValue::Duration(y)) => Some(duration_equal(x, y)),
-        _ => value_cmp(a, b).map(|o| o == Ordering::Equal),
+        (XsdValue::Duration(x), XsdValue::Duration(y)) => Ok(Some(duration_equal(x, y))),
+        _ => value_cmp_admitted(a, b, admit).map(|order| order.map(|o| o == Ordering::Equal)),
     }
 }
 
@@ -618,6 +645,34 @@ pub fn value_div_with_policy(
             })
         }
     }
+}
+
+/// The complete existing value-space operator law with admitted numeric kernels.
+/// Nonnumeric/temporal pairs use this module's existing dispatch, including
+/// commuted duration multiplication and datatype-specific division errors.
+/// # Errors
+/// Value-space refusals remain distinct from native storage/admission failures.
+pub fn value_binary_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    op: numeric::NumericBinaryOperator,
+    policy: crate::exact::DivisionPolicy,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<XsdValue, numeric::NumericOperationError> {
+    if a.is_numeric()
+        && !(op == numeric::NumericBinaryOperator::Multiply && matches!(b, XsdValue::Duration(_)))
+    {
+        return numeric::numeric_binary_admitted(a, b, op, policy, admit);
+    }
+    match op {
+        numeric::NumericBinaryOperator::Add => value_add(a, b),
+        numeric::NumericBinaryOperator::Subtract => value_sub(a, b),
+        numeric::NumericBinaryOperator::Multiply => value_mul(a, b),
+        numeric::NumericBinaryOperator::Divide => value_div_with_policy(a, b, policy),
+    }
+    .map_err(numeric::NumericOperationError::Value)
 }
 
 /// SPARQL value-space unary minus (`-x`, `op:numeric-unary-minus` extended to

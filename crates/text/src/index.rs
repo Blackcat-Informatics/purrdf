@@ -70,8 +70,10 @@
 //! their labels. The crate's test suite pins this with an adversarial test
 //! rather than leaving it implied.
 
+use crate::query_workspace::{data_error, query_error};
 use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
+use purrdf_sparql_eval::NativeDiagnosticKind;
 use std::cmp::Ordering;
 
 use crate::SurfaceIndex;
@@ -81,7 +83,7 @@ use purrdf_core::{DatasetView, FastMap, RdfTextDirection, TermValue};
 use crate::analysis::{Analyzer, UnicodeVersions, unicode_versions};
 use crate::error::TextError;
 use crate::fixed::Fixed;
-use crate::ranking::{FIELD_LENGTH_MAX, FieldInput, MAX_FIELDS, PreparedCorpus, RankingProfile};
+use crate::ranking::{FieldInputs, PreparedCorpus, RankingProfile};
 use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
 
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
@@ -679,6 +681,20 @@ impl TextIndex {
         }
     }
 
+    pub(crate) fn query_terms_owned(
+        &self,
+        input: &str,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<purrdf_sparql_eval::AdmittedVec<crate::query_workspace::QueryString>, TextError>
+    {
+        match self.config.projection {
+            IndexProjection::Lexical => self.analyzer().terms_owned(input, workspace),
+            IndexProjection::Han => {
+                crate::character::query_terms_owned(self.analyzer(), input, workspace)
+            }
+        }
+    }
+
     /// The exact analyzer every query relation uses.
     pub const fn analyzer(&self) -> &Analyzer {
         self.config.analyzer()
@@ -725,6 +741,33 @@ impl TextIndex {
         }
     }
 
+    pub(crate) fn prepared_corpus_owned(
+        &self,
+        partition: &PartitionKey,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<PreparedCorpus<'_>, TextError> {
+        let partition =
+            crate::query_workspace::admitted(self.partition_key_owned(partition, workspace))?
+                .ok_or_else(|| {
+                    query_error(
+                        workspace,
+                        NativeDiagnosticKind::Data,
+                        "ranking partition is absent",
+                    )
+                    .unwrap_or_else(|failure| failure)
+                })?;
+        let at = self
+            .local_partition_ordinal(partition)
+            .expect("resolved index-owned partition");
+        PreparedCorpus::from_index_owned(
+            &self.ranking,
+            self.partitions[at].1.document_count,
+            &self.field_totals[at],
+            &self.field_populations[at],
+            workspace,
+        )
+    }
+
     /// A document's field lengths, in ranking field order.
     pub fn field_lengths(&self, document: u32) -> Option<&[u64]> {
         self.field_lengths.get(document as usize).map(Vec::as_slice)
@@ -738,12 +781,8 @@ impl TextIndex {
             .map(|doc| doc.predicate_lengths.as_slice())
     }
 
-    /// Fill a stack-allocated field input buffer for one document and term.
-    pub(crate) fn field_inputs(
-        &self,
-        document: u32,
-        term: &str,
-    ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
+    /// Fill an inline field buffer, spilling for the profile's actual field count.
+    pub(crate) fn field_inputs(&self, document: u32, term: &str) -> Result<FieldInputs, TextError> {
         if self.document(document).is_none() {
             return Err(TextError::data("field input names an absent document"));
         }
@@ -774,17 +813,48 @@ impl TextIndex {
         &self,
         document: u32,
         frequencies: &[(u32, u64)],
-    ) -> Result<[FieldInput; MAX_FIELDS], TextError> {
+    ) -> Result<FieldInputs, TextError> {
+        self.field_inputs_from_counts_with(document, frequencies, None)
+    }
+
+    pub(crate) fn field_inputs_from_counts_owned(
+        &self,
+        document: u32,
+        frequencies: &[(u32, u64)],
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<FieldInputs, TextError> {
+        self.field_inputs_from_counts_with(
+            document,
+            frequencies,
+            workspace.is_bounded().then_some(workspace),
+        )
+    }
+
+    pub(crate) fn field_inputs_from_counts_with(
+        &self,
+        document: u32,
+        frequencies: &[(u32, u64)],
+        workspace: Option<&purrdf_sparql_eval::WorkspaceCapability>,
+    ) -> Result<FieldInputs, TextError> {
         let lengths = self
             .field_lengths
             .get(document as usize)
-            .ok_or_else(|| TextError::data("field input names an absent document"))?;
-        let mut fields = [FieldInput::default(); MAX_FIELDS];
+            .ok_or_else(|| data_error("field input names an absent document", workspace))?;
+        let resident = purrdf_sparql_eval::WorkspaceCapability::default();
+        let mut fields = FieldInputs::new(lengths.len(), workspace.unwrap_or(&resident))?;
         for (input, &length) in fields.iter_mut().zip(lengths) {
             input.length = length;
         }
         for &(predicate, frequency) in frequencies {
-            fields[self.predicate_fields[predicate as usize]].term_frequency += frequency;
+            let input = &mut fields[self.predicate_fields[predicate as usize]];
+            input.term_frequency =
+                input.term_frequency.checked_add(frequency).ok_or_else(|| {
+                    crate::query_workspace::arithmetic_error(
+                        false,
+                        "merged field term frequency exceeds u64",
+                        workspace,
+                    )
+                })?;
         }
         Ok(fields)
     }
@@ -823,9 +893,6 @@ impl TextIndex {
                 lengths[field] = lengths[field]
                     .checked_add(length)
                     .ok_or_else(|| TextError::overflow("merged field length exceeds u64"))?;
-                if lengths[field] > FIELD_LENGTH_MAX {
-                    return Err(TextError::data("merged field length exceeds 2^24"));
-                }
             }
             for ((total, population), &length) in self.field_totals[document.partition as usize]
                 .iter_mut()
@@ -929,6 +996,61 @@ impl TextIndex {
             .expect("partition_point yields in-range, ordered offsets")
     }
 
+    /// The existing two subject-side binary searches with admitted native term
+    /// ordering. After a comparator failure the partition result is discarded;
+    /// the first typed failure is returned before any caller can use the slice.
+    pub(crate) fn documents_with_subject_owned(
+        &self,
+        subject: &TermValue,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<&[u32], purrdf_sparql_eval::EvalError> {
+        fn partition(
+            index: &TextIndex,
+            subject: &TermValue,
+            workspace: &purrdf_sparql_eval::WorkspaceCapability,
+            upper: bool,
+        ) -> Result<usize, purrdf_sparql_eval::EvalError> {
+            let mut failure = None;
+            let result = index.subject_order.partition_point(|id| {
+                if failure.is_some() {
+                    return false;
+                }
+                match workspace.terms_cmp(&index.documents[*id as usize].subject, subject) {
+                    Ok(order) => {
+                        if upper {
+                            order != Ordering::Greater
+                        } else {
+                            order == Ordering::Less
+                        }
+                    }
+                    Err(error) => {
+                        failure = Some(error);
+                        false
+                    }
+                }
+            });
+            match failure {
+                Some(error) => Err(error),
+                None => Ok(result),
+            }
+        }
+        let start = partition(self, subject, workspace, false)?;
+        let end = partition(self, subject, workspace, true)?;
+        Ok(&self.subject_order[start..end])
+    }
+
+    /// Borrow one immutable positional posting without copying the caller's index.
+    pub(crate) fn posting_at(
+        &self,
+        partition: usize,
+        term: &str,
+        ordinal: usize,
+    ) -> Option<(u32, &[u32])> {
+        let key = &self.partitions.get(partition)?.0;
+        let posting = self.partition_postings(key, term).get(ordinal)?;
+        Some((posting.document, &posting.positions))
+    }
+
     /// The partitions holding a document whose subject is `subject`, ascending
     /// and distinct.
     ///
@@ -966,6 +1088,63 @@ impl TextIndex {
         self.partitions
             .get(document.partition as usize)
             .map(|(key, _)| key)
+    }
+
+    /// The stored partition ordinal of one document, without comparing terms.
+    pub(crate) fn partition_ordinal_of(&self, document: u32) -> Option<usize> {
+        self.documents
+            .get(document as usize)
+            .map(|document| document.partition as usize)
+    }
+
+    /// Resolve an actual index-owned key borrow to its stable ordinal.
+    pub(crate) fn local_partition_ordinal(&self, partition: &PartitionKey) -> Option<usize> {
+        let first = &self.partitions.first()?.0;
+        let stride = size_of::<(PartitionKey, PartitionStats)>();
+        let distance = core::ptr::from_ref(partition)
+            .addr()
+            .checked_sub(core::ptr::from_ref(first).addr())?;
+        if distance.checked_rem(stride)? != 0 {
+            return None;
+        }
+        let ordinal = distance.checked_div(stride)?;
+        let candidate = &self.partitions.get(ordinal)?.0;
+        core::ptr::eq(candidate, partition).then_some(ordinal)
+    }
+
+    /// Resolve an external key through fallible native graph-term comparison.
+    /// A failed comparator's search result is discarded before publication.
+    pub(crate) fn partition_key_owned(
+        &self,
+        partition: &PartitionKey,
+        workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    ) -> Result<Option<&PartitionKey>, purrdf_sparql_eval::EvalError> {
+        if let Some(ordinal) = self.local_partition_ordinal(partition) {
+            return Ok(Some(&self.partitions[ordinal].0));
+        }
+        let mut failure = None;
+        let result = self.partitions.binary_search_by(|(key, _)| {
+            if failure.is_some() {
+                return Ordering::Equal;
+            }
+            let graph = match (key.graph(), partition.graph()) {
+                (None, None) => Ok(Ordering::Equal),
+                (None, Some(_)) => Ok(Ordering::Less),
+                (Some(_), None) => Ok(Ordering::Greater),
+                (Some(left), Some(right)) => workspace.terms_cmp(left, right),
+            };
+            match graph {
+                Ok(graph) => graph.then_with(|| key.language().cmp(&partition.language())),
+                Err(error) => {
+                    failure = Some(error);
+                    Ordering::Equal
+                }
+            }
+        });
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(result.ok().map(|ordinal| &self.partitions[ordinal].0)),
+        }
     }
 
     /// How many analyzed tokens the document `id` names holds, or `None` if
@@ -1079,6 +1258,9 @@ impl TextIndex {
 
     /// The index of `partition` in [`Self::partitions`], if the index holds it.
     fn partition_index(&self, partition: &PartitionKey) -> Option<u32> {
+        if let Some(ordinal) = self.local_partition_ordinal(partition) {
+            return u32::try_from(ordinal).ok();
+        }
         self.partitions
             .binary_search_by(|(key, _)| key.cmp(partition))
             .ok()
@@ -1625,7 +1807,7 @@ fn analyze_rows(
                 .predicates
                 .binary_search(&row.predicate)
                 .expect("walk selected configured predicates") as u32;
-            let analysis = analyzer.projections(&row.lexical_form)?;
+            let mut analysis = analyzer.projections(&row.lexical_form)?;
             let character;
             let projections = match config.projection {
                 IndexProjection::Lexical => &analysis.lexical,
@@ -1647,25 +1829,23 @@ fn analyze_rows(
                     }
                 };
                 tokens.push((ordinal, position, predicate));
-                let length = match predicate_lengths.last_mut() {
+                match predicate_lengths.last_mut() {
                     Some((prior, length)) if *prior == predicate => {
                         *length += 1;
-                        *length
                     }
                     _ => {
                         predicate_lengths.push((predicate, 1));
-                        1
                     }
-                };
-                if length > FIELD_LENGTH_MAX {
-                    return Err(TextError::data(
-                        "a predicate holds more than 2^24 analyzed tokens in one document",
-                    ));
                 }
                 position = position.checked_add(1).ok_or_else(|| {
                     TextError::data("document exceeds the u32 token position space")
                 })?;
             }
+            // The native token walk has consumed the lexical view. Han replay
+            // reads normalized text, while SurfaceIndex consumes surface/spans
+            // and their original source alignment. Release this actual scratch
+            // buffer, including capacity, before retaining the remaining views.
+            drop(core::mem::take(&mut analysis.lexical));
             analyses.push((digest_rows(std::slice::from_ref(row)), analysis));
         }
         // Retain auxiliary-only documents without admitting them into the
@@ -1746,11 +1926,8 @@ fn build_partitions(documents: &[AnalyzedDocument]) -> Result<Partitioning, Text
 
 /// `total / count`, exactly, in fixed point.
 fn exact_average(total: u64, count: u64) -> Result<Fixed, TextError> {
-    let widen = |value: u64| {
-        i64::try_from(value)
-            .map_err(|_| TextError::overflow(format!("{value} does not fit a fixed-point integer")))
-    };
-    Fixed::from_integer(widen(total)?)?.checked_div(Fixed::from_integer(widen(count)?)?)
+    Fixed::from_raw(i128::from(total) * crate::fixed::SCALE)
+        .checked_div(Fixed::from_raw(i128::from(count) * crate::fixed::SCALE))
 }
 
 /// Sort the dictionary, remap the token ordinals onto it, and build the postings.

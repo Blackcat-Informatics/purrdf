@@ -72,6 +72,12 @@ const TEST_ONLY: &str = "Declared under `#[cfg(test)]`, so it is not compiled in
 
 /// Every `thread_local!` static under `crates/`, with its reason.
 pub const LEDGER: &[ThreadLocal] = &[
+    ThreadLocal {
+        file: "crates/sparql-eval/tests/expr_vm_owned_strings.rs",
+        name: "TEXT_WINDOW",
+        safety: Safety::NotCompiledIn,
+        reason: "The evaluator integration-test executable's counting window is not compiled into the WASM package or its asynchronous job runtime.",
+    },
     // ── purrdf-stack: the stack context ─────────────────────────────────────────────
     ThreadLocal {
         file: "crates/stack/src/lib.rs",

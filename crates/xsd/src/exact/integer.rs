@@ -6,7 +6,6 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::ops::{Add, Mul, Neg, Sub};
-use std::str::FromStr;
 
 use super::binary::decompose_f64;
 use super::cost::{self, Cost};
@@ -55,6 +54,173 @@ impl Integer {
             .map_or(Self(Repr::Big(value)), |small| Self(Repr::Small(small)))
     }
 
+    /// Borrow a spilled magnitude; machine coefficients construct only inline limbs.
+    pub(crate) fn with_bigint<T>(&self, use_value: impl FnOnce(&BigInt) -> T) -> T {
+        match &self.0 {
+            Repr::Small(value) => use_value(&BigInt::from_i128(*value)),
+            Repr::Big(value) => use_value(value),
+        }
+    }
+
+    /// Copy an integer using fallible native destinations.
+    /// # Errors
+    /// Returns an actual allocation refusal for a spilled coefficient.
+    pub fn try_copy(&self) -> Result<Self, crate::bigint::LimbScratchError> {
+        self.copy_using(&crate::bigint::scratch::Fallible)
+    }
+
+    /// Absolute value using fallible native destinations.
+    /// # Errors
+    /// Returns an actual allocation refusal for a spilled coefficient.
+    pub fn try_abs(&self) -> Result<Self, crate::bigint::LimbScratchError> {
+        self.abs_using(&crate::bigint::scratch::Fallible)
+    }
+
+    pub(crate) fn copy_using(
+        &self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        match &self.0 {
+            Repr::Small(value) => Ok(Self::from_i128(*value)),
+            Repr::Big(value) => value.copy_using(storage).map(Self::from_bigint),
+        }
+    }
+
+    /// Negate a fresh owned coefficient without a limb copy.
+    pub(crate) fn negated_owned(self) -> Self {
+        match self.0 {
+            Repr::Small(value) => value.checked_neg().map_or_else(
+                || Self::from_bigint(BigInt::from_i128(value).with_sign(value >= 0)),
+                Self::from_i128,
+            ),
+            Repr::Big(value) => {
+                let negative = !value.is_negative();
+                Self::from_bigint(value.with_sign(negative))
+            }
+        }
+    }
+
+    pub(crate) fn abs_using(
+        &self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        if self.is_negative() {
+            self.neg_using(storage)
+        } else {
+            self.copy_using(storage)
+        }
+    }
+
+    pub(crate) fn neg_using(
+        &self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        if let Some(value) = self.as_i128()
+            && let Some(value) = value.checked_neg()
+        {
+            return Ok(Self::from_i128(value));
+        }
+        self.with_bigint(|value| value.neg_using(storage))
+            .map(Self::from_bigint)
+    }
+
+    pub(crate) fn add_using(
+        &self,
+        rhs: &Self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        if let (Some(a), Some(b)) = (self.as_i128(), rhs.as_i128())
+            && let Some(value) = a.checked_add(b)
+        {
+            return Ok(Self::from_i128(value));
+        }
+        self.with_bigint(|a| rhs.with_bigint(|b| a.add_using(b, storage)))
+            .map(Self::from_bigint)
+    }
+
+    pub(crate) fn sub_using(
+        &self,
+        rhs: &Self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        if let (Some(a), Some(b)) = (self.as_i128(), rhs.as_i128())
+            && let Some(value) = a.checked_sub(b)
+        {
+            return Ok(Self::from_i128(value));
+        }
+        self.with_bigint(|a| rhs.with_bigint(|b| a.sub_using(b, storage)))
+            .map(Self::from_bigint)
+    }
+
+    pub(crate) fn mul_using(
+        &self,
+        rhs: &Self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, crate::bigint::LimbScratchError> {
+        if let (Some(a), Some(b)) = (self.as_i128(), rhs.as_i128())
+            && let Some(value) = a.checked_mul(b)
+        {
+            return Ok(Self::from_i128(value));
+        }
+        self.with_bigint(|a| rhs.with_bigint(|b| a.mul_fast_using(b, storage)))
+            .map(Self::from_bigint)
+    }
+
+    /// Add using fallible destinations in the existing native kernel.
+    /// # Errors
+    /// Returns physical destination refusal separately from numerical errors.
+    pub fn try_add(&self, rhs: &Self) -> Result<Self, crate::bigint::LimbScratchError> {
+        self.add_using(rhs, &crate::bigint::scratch::Fallible)
+    }
+
+    /// Subtract using fallible destinations in the existing native kernel.
+    /// # Errors
+    /// Returns physical destination refusal without infallible fallback.
+    pub fn try_sub(&self, rhs: &Self) -> Result<Self, crate::bigint::LimbScratchError> {
+        self.sub_using(rhs, &crate::bigint::scratch::Fallible)
+    }
+
+    /// Multiply through the same schoolbook/Karatsuba implementation.
+    /// # Errors
+    /// Returns physical destination refusal without infallible fallback.
+    pub fn try_mul(&self, rhs: &Self) -> Result<Self, crate::bigint::LimbScratchError> {
+        self.mul_using(rhs, &crate::bigint::scratch::Fallible)
+    }
+
+    /// Negate into a fallible fresh native destination.
+    /// # Errors
+    /// Returns physical destination refusal without cloning owned limbs.
+    pub fn try_neg(&self) -> Result<Self, crate::bigint::LimbScratchError> {
+        self.neg_using(&crate::bigint::scratch::Fallible)
+    }
+
+    /// Actual checked native destination bound; governor fuel stays separate.
+    /// # Errors
+    /// Refuses physical address-space arithmetic overflow before allocation.
+    pub fn operation_layout(
+        &self,
+        rhs: &Self,
+        op: cost::IntegerOperation,
+    ) -> Result<cost::NumericOperationLayout, crate::bigint::LimbScratchError> {
+        if let (Some(a), Some(b)) = (self.as_i128(), rhs.as_i128()) {
+            let inline = match op {
+                cost::IntegerOperation::Add => a.checked_add(b),
+                cost::IntegerOperation::Subtract => a.checked_sub(b),
+                cost::IntegerOperation::Multiply => a.checked_mul(b),
+            };
+            if inline.is_some() {
+                return Ok(cost::NumericOperationLayout::INLINE);
+            }
+        }
+        cost::integer_operation_layout(
+            self.limb_len(),
+            rhs.limb_len(),
+            self.is_negative(),
+            rhs.is_negative(),
+            op,
+        )
+    }
+
     /// The value as a [`BigInt`]; inline values convert without allocating.
     #[must_use]
     pub fn to_bigint(&self) -> BigInt {
@@ -71,6 +237,25 @@ impl Integer {
             Repr::Small(value) => Some(value),
             Repr::Big(_) => None,
         }
+    }
+
+    /// Prepare the one native decimal renderer without a magnitude clone.
+    /// # Errors
+    /// Returns native physical destination refusal before lexical allocation.
+    pub fn prepare_decimal_digits(
+        &self,
+    ) -> Result<crate::bigint::PreparedDecimalDigits, crate::bigint::LimbScratchError> {
+        self.with_bigint(BigInt::prepare_decimal_digits)
+    }
+
+    /// Checked render layout including sign, point and fractional padding.
+    /// # Errors
+    /// Returns physical address-space overflow without allocation.
+    pub fn render_layout(
+        &self,
+        scale: u32,
+    ) -> Result<cost::NumericRenderLayout, crate::bigint::LimbScratchError> {
+        self.with_bigint(|value| value.decimal_render_layout(scale))
     }
 
     /// The XSD 1.1 canonical `xsd:integer` lexical form: an optional `-`, then
@@ -131,19 +316,34 @@ impl Integer {
     ///
     /// [`ExactError::DivisionByZero`] (`err:FOAR0001`) for a zero divisor.
     pub fn div_rem(&self, divisor: &Self) -> Result<(Self, Self), ExactError> {
+        self.div_rem_using(divisor, &crate::bigint::scratch::Unbounded)
+            .map_err(|error| error.into_value_error().expect("unbounded integer storage"))
+    }
+
+    /// Truncating quotient/remainder through fallible native destinations.
+    /// # Errors
+    /// Preserves division-by-zero separately from physical allocation refusal.
+    pub fn try_div_rem(&self, divisor: &Self) -> Result<(Self, Self), super::ExactOperationError> {
+        self.div_rem_using(divisor, &crate::bigint::scratch::Fallible)
+    }
+
+    pub(crate) fn div_rem_using(
+        &self,
+        divisor: &Self,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<(Self, Self), super::ExactOperationError> {
         if divisor.is_zero() {
-            return Err(ExactError::DivisionByZero);
+            return Err(ExactError::DivisionByZero.into());
         }
-        if let (Repr::Small(a), Repr::Small(b)) = (&self.0, &divisor.0)
-            && let (Some(quotient), Some(remainder)) = (a.checked_div(*b), a.checked_rem(*b))
+        if let (Some(a), Some(b)) = (self.as_i128(), divisor.as_i128())
+            && let (Some(q), Some(r)) = (a.checked_div(b), a.checked_rem(b))
         {
-            return Ok((Self::from_i128(quotient), Self::from_i128(remainder)));
+            return Ok((Self::from_i128(q), Self::from_i128(r)));
         }
-        let (quotient, remainder) = self
-            .to_bigint()
-            .div_rem(&divisor.to_bigint())
+        let (q, r) = self
+            .with_bigint(|a| divisor.with_bigint(|b| a.div_rem_using(b, storage)))?
             .ok_or(ExactError::DivisionByZero)?;
-        Ok((Self::from_bigint(quotient), Self::from_bigint(remainder)))
+        Ok((Self::from_bigint(q), Self::from_bigint(r)))
     }
 
     /// `self^exp`, exactly (`0^0 = 1`). The result has up to
@@ -224,17 +424,79 @@ impl Integer {
     ///
     /// [`ExactError::NotFinite`] (`err:FOCA0002`) for `NaN` and the infinities.
     pub fn from_f64_truncated(value: f64) -> Result<Self, ExactError> {
+        Self::from_f64_truncated_using(value, &crate::bigint::scratch::Unbounded)
+            .map_err(|error| error.into_value_error().expect("unbounded integer storage"))
+    }
+
+    /// Exact IEEE truncation through the same native shift implementation.
+    /// # Errors
+    /// Preserves non-finite F&O error separately from physical destination refusal.
+    pub fn try_from_f64_truncated(value: f64) -> Result<Self, super::ExactOperationError> {
+        Self::from_f64_truncated_using(value, &crate::bigint::scratch::Fallible)
+    }
+
+    fn from_f64_truncated_using(
+        value: f64,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, super::ExactOperationError> {
         let (negative, significand, exponent) =
             decompose_f64(value).ok_or(ExactError::NotFinite)?;
         let magnitude = if exponent >= 0 {
-            BigInt::from_u128(u128::from(significand)).mul_pow2(exponent.unsigned_abs())
+            BigInt::from_u128(u128::from(significand))
+                .shl_using(exponent.unsigned_abs(), storage)?
         } else if exponent <= -64 {
             BigInt::zero()
         } else {
             BigInt::from_u128(u128::from(significand >> exponent.unsigned_abs()))
         };
-        let value = Self::from_bigint(magnitude);
-        Ok(if negative { -value } else { value })
+        Ok(Self::from_bigint(magnitude.with_sign(negative)))
+    }
+
+    /// Round to binary64 through the same native kernel with admitted storage.
+    /// # Errors
+    /// Returns admission/allocation refusal before any native destination.
+    pub fn try_to_f64_admitted(
+        &self,
+        admit: &mut impl FnMut(
+            cost::NumericOperationLayout,
+        ) -> Result<(), crate::bigint::LimbScratchError>,
+    ) -> Result<f64, crate::bigint::LimbScratchError> {
+        match &self.0 {
+            Repr::Small(value) => Ok(*value as f64),
+            Repr::Big(value) => value.try_to_f64_admitted(admit),
+        }
+    }
+
+    /// Round directly to binary32 through the existing native kernel.
+    /// # Errors
+    /// Returns admission/allocation refusal without a binary64 intermediate.
+    pub fn try_to_f32_admitted(
+        &self,
+        admit: &mut impl FnMut(
+            cost::NumericOperationLayout,
+        ) -> Result<(), crate::bigint::LimbScratchError>,
+    ) -> Result<f32, crate::bigint::LimbScratchError> {
+        match &self.0 {
+            Repr::Small(value) => Ok(*value as f32),
+            Repr::Big(value) => value.try_to_f32_admitted(admit),
+        }
+    }
+
+    /// Truncate an IEEE value with checked admission before the native shift.
+    /// # Errors
+    /// Keeps non-finite F&O failure separate from admission/allocation refusal.
+    pub fn try_from_f64_truncated_admitted(
+        value: f64,
+        admit: &mut impl FnMut(
+            cost::NumericOperationLayout,
+        ) -> Result<(), crate::bigint::LimbScratchError>,
+    ) -> Result<Self, super::ExactOperationError> {
+        let (_, significand, exponent) = decompose_f64(value).ok_or(ExactError::NotFinite)?;
+        if significand != 0 && exponent >= 0 {
+            let bits = u64::from(significand.ilog2()) + 1;
+            admit(cost::binary_shift_layout(bits, exponent.unsigned_abs(), 0)?)?;
+        }
+        Self::from_f64_truncated_using(value, &crate::bigint::scratch::Fallible)
     }
 
     // ----- resource governance ---------------------------------------------
@@ -361,6 +623,25 @@ impl Integer {
         super::decimal::cmp_scaled_f64(self, 0, value)
     }
 
+    /// Compare exactly against IEEE while borrowing the admitted coefficient.
+    /// # Errors
+    /// Returns physical admission/allocation refusal, distinct from NaN.
+    pub fn try_cmp_f64_admitted(
+        &self,
+        value: f64,
+        admit: &mut impl FnMut(
+            cost::NumericOperationLayout,
+        ) -> Result<(), crate::bigint::LimbScratchError>,
+    ) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
+        super::decimal::cmp_scaled_f64_admitted_using(
+            self,
+            0,
+            value,
+            &crate::bigint::scratch::Fallible,
+            admit,
+        )
+    }
+
     /// The cost of [`Self::div_rem`].
     #[must_use]
     pub fn div_rem_cost(&self, divisor: &Self) -> Cost {
@@ -391,11 +672,6 @@ impl Integer {
     #[must_use]
     pub fn gcd_cost(&self, other: &Self) -> Cost {
         cost::gcd(self.limb_len(), other.limb_len())
-    }
-
-    /// Both operands as [`BigInt`]s, for the slow path.
-    fn big_pair(&self, other: &Self) -> (BigInt, BigInt) {
-        (self.to_bigint(), other.to_bigint())
     }
 }
 
@@ -444,8 +720,43 @@ impl TryFrom<&Integer> for i64 {
     }
 }
 
-impl FromStr for Integer {
-    type Err = ExactError;
+impl Integer {
+    fn parse_with_storage(
+        lexical: &str,
+        storage: &impl crate::bigint::scratch::Allocate,
+    ) -> Result<Self, super::ExactParseError> {
+        if !crate::numeric::is_integer_lexical(lexical) {
+            return Err(super::ExactParseError::InvalidLexical {
+                kind: ExactKind::Integer,
+                reason: "expected an optional sign then digits",
+            });
+        }
+        let digits = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
+        if digits.len() <= 38
+            && let Ok(value) = lexical.parse::<i128>()
+        {
+            return Ok(Self::from_i128(value));
+        }
+        let value =
+            BigInt::from_decimal_bytes_using(digits.bytes(), lexical.starts_with('-'), storage)
+                .map_err(super::ExactParseError::Storage)?
+                .ok_or(super::ExactParseError::InvalidLexical {
+                    kind: ExactKind::Integer,
+                    reason: "expected an optional sign then digits",
+                })?;
+        Ok(Self::from_bigint(value))
+    }
+}
+
+super::error::lexical_entry! {
+    Integer;
+    try_from_lexical {
+    /// Read an exact integer with fallible native limb destinations.
+    ///
+    /// # Errors
+    /// Distinguishes borrowed lexical classification from physical refusal.
+    }
+    from_str {
     /// Parse the `xsd:integer` lexical space (XSD 1.1 Part 2 §3.4.13.1): an
     /// optional `+` or `-`, then one or more ASCII digits, of any length. No
     /// whitespace is trimmed (a caller applying the `collapse` facet trims first),
@@ -456,31 +767,6 @@ impl FromStr for Integer {
     /// # Errors
     ///
     /// [`ExactError::InvalidLexical`] for text outside the lexical space.
-    fn from_str(lexical: &str) -> Result<Self, ExactError> {
-        if !crate::numeric::is_integer_lexical(lexical) {
-            return Err(ExactError::invalid(
-                lexical,
-                ExactKind::Integer,
-                "expected an optional sign then digits",
-            ));
-        }
-        // Up to 38 digits always fits i128; the machine parse is the fast path.
-        let body = lexical
-            .strip_prefix(['+', '-'])
-            .map_or(lexical.len(), str::len);
-        if body <= 38
-            && let Ok(value) = lexical.parse::<i128>()
-        {
-            return Ok(Self::from_i128(value));
-        }
-        let value = BigInt::from_digits(lexical).ok_or_else(|| {
-            ExactError::invalid(
-                lexical,
-                ExactKind::Integer,
-                "expected an optional sign then digits",
-            )
-        })?;
-        Ok(Self::from_bigint(value))
     }
 }
 
@@ -533,26 +819,16 @@ impl PartialOrd for Integer {
 impl Add<&Integer> for &Integer {
     type Output = Integer;
     fn add(self, rhs: &Integer) -> Integer {
-        if let (Repr::Small(a), Repr::Small(b)) = (&self.0, &rhs.0)
-            && let Some(sum) = a.checked_add(*b)
-        {
-            return Integer::from_i128(sum);
-        }
-        let (a, b) = self.big_pair(rhs);
-        Integer::from_bigint(&a + &b)
+        self.add_using(rhs, &crate::bigint::scratch::Unbounded)
+            .expect("unbounded integer storage")
     }
 }
 
 impl Sub<&Integer> for &Integer {
     type Output = Integer;
     fn sub(self, rhs: &Integer) -> Integer {
-        if let (Repr::Small(a), Repr::Small(b)) = (&self.0, &rhs.0)
-            && let Some(difference) = a.checked_sub(*b)
-        {
-            return Integer::from_i128(difference);
-        }
-        let (a, b) = self.big_pair(rhs);
-        Integer::from_bigint(&a - &b)
+        self.sub_using(rhs, &crate::bigint::scratch::Unbounded)
+            .expect("unbounded integer storage")
     }
 }
 
@@ -562,33 +838,16 @@ impl Mul<&Integer> for &Integer {
     // the existing binary engine without imposing its temporary frame here.
     #[inline]
     fn mul(self, rhs: &Integer) -> Integer {
-        if let (Repr::Small(a), Repr::Small(b)) = (&self.0, &rhs.0)
-            && let Some(product) = a.checked_mul(*b)
-        {
-            return Integer::from_i128(product);
-        }
-        self.mul_big(rhs)
-    }
-}
-
-impl Integer {
-    #[cold]
-    fn mul_big(&self, rhs: &Self) -> Self {
-        let (a, b) = self.big_pair(rhs);
-        Self::from_bigint(&a * &b)
+        self.mul_using(rhs, &crate::bigint::scratch::Unbounded)
+            .expect("unbounded integer storage")
     }
 }
 
 impl Neg for &Integer {
     type Output = Integer;
     fn neg(self) -> Integer {
-        match &self.0 {
-            Repr::Small(value) => value.checked_neg().map_or_else(
-                || Integer::from_bigint(BigInt::from_i128(*value).negated()),
-                Integer::from_i128,
-            ),
-            Repr::Big(value) => Integer::from_bigint(value.negated()),
-        }
+        self.neg_using(&crate::bigint::scratch::Unbounded)
+            .expect("unbounded integer storage")
     }
 }
 
