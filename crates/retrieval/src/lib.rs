@@ -62,7 +62,7 @@
 //! ranks, ending, read cost, fidelity and index evidence. Its canonical subject
 //! order encodes a set and adds no relevance order.
 //!
-//! //! Every number in the answer those stages assemble is a function of what the
+//! Every number in the answer those stages assemble is a function of what the
 //! producers said about themselves, so what a producer owes this layer is
 //! written down in one place: [`producer_contract`]. Sixteen obligations, each
 //! with the failure it prevents and with whether this layer *checks* it — a

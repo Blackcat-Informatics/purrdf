@@ -938,6 +938,7 @@ fn cost_based_order_from<D: DatasetView>(
 struct PatternCost {
     rows: f64,
     work: f64,
+    cardinality_only: bool,
 }
 
 fn cost_base<D: DatasetView>(
@@ -981,6 +982,7 @@ fn cost_base<D: DatasetView>(
             }
             PatternCost {
                 rows: rows as f64,
+                cardinality_only,
                 work: if cardinality_only {
                     rows as f64
                 } else {
@@ -1003,7 +1005,7 @@ fn step_cost(
     t: f64,
 ) -> (f64, f64) {
     let rows = step_size(ops, running, base.rows, joins, t);
-    let work = if base.work.to_bits() == base.rows.to_bits() {
+    let work = if base.cardinality_only {
         rows
     } else {
         step_size(ops, running, base.work, joins, t)
@@ -1014,7 +1016,11 @@ fn step_cost(
 #[cfg(test)]
 fn cardinality_cost_base(base: &[f64]) -> Vec<PatternCost> {
     base.iter()
-        .map(|&rows| PatternCost { rows, work: rows })
+        .map(|&rows| PatternCost {
+            rows,
+            work: rows,
+            cardinality_only: true,
+        })
         .collect()
 }
 
