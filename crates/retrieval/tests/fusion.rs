@@ -5055,9 +5055,7 @@ fn attests(generation: &str) -> PfAttestation {
 fn attests_short(generation: &str, reason: &str) -> PfAttestation {
     PfAttestation {
         generation: IndexGeneration::declared(generation),
-        service: ServiceLevel::Incomplete {
-            reason: reason.to_owned(),
-        },
+        service: ServiceLevel::incomplete(reason),
     }
 }
 
@@ -5249,9 +5247,9 @@ fn a_bounded_stop_and_an_incomplete_index_both_survive_in_one_trailer() {
             .attestations
             .get(&stratum("text"))
             .map(|attestation| &attestation.service),
-        Some(&ServiceLevel::Incomplete {
-            reason: "replica is 2 segments behind".to_owned()
-        }),
+        Some(&ServiceLevel::incomplete_static(
+            "replica is 2 segments behind"
+        )),
         "and the short index it served from survives the stop that overwrote nothing \
          else about it"
     );
@@ -5334,9 +5332,7 @@ fn an_incomplete_stratum_makes_the_scores_estimates_without_refusing_the_rows() 
             .attestations
             .get(&stratum("vector"))
             .map(|attestation| &attestation.service),
-        Some(&ServiceLevel::Incomplete {
-            reason: "segment rebuilding".to_owned()
-        })
+        Some(&ServiceLevel::incomplete_static("segment rebuilding"))
     );
 }
 

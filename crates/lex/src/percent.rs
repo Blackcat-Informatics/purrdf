@@ -188,12 +188,42 @@ pub fn push_triplet(out: &mut String, byte: u8) {
 /// ```
 #[must_use]
 pub fn encode(text: &str, set: EncodeSet) -> Cow<'_, str> {
+    encode_with_memory(
+        text,
+        set,
+        &mut crate::allocation::Memory::new(&mut crate::allocation::Resident),
+    )
+    .expect("resident percent encoding allocation")
+}
+
+/// Encode under the destination's original physical admission.
+///
+/// # Errors
+/// Returns a checked layout, admission, or allocation refusal before growth.
+pub fn encode_with_memory<'a, S: crate::allocation::Admission + ?Sized>(
+    text: &'a str,
+    set: EncodeSet,
+    memory: &mut crate::allocation::Memory<'_, S>,
+) -> Result<Cow<'a, str>, crate::allocation::StorageError> {
     let Some(first) = set(text.as_bytes()) else {
-        return Cow::Borrowed(text);
+        return Ok(Cow::Borrowed(text));
     };
-    let mut out = String::with_capacity(text.len() + 8);
-    push_encoded_from(&mut out, text, set, first);
-    Cow::Owned(out)
+    let mut required = text.len();
+    let mut position = first;
+    loop {
+        required = required
+            .checked_add(2)
+            .ok_or(crate::allocation::StorageError::SizeOverflow)?;
+        let after = position + 1;
+        match set(&text.as_bytes()[after..]) {
+            Some(offset) => position = after + offset,
+            None => break,
+        }
+    }
+    let mut output = String::new();
+    memory.reserve_string(&mut output, required)?;
+    push_encoded_from(&mut output, text, set, first);
+    Ok(Cow::Owned(output))
 }
 
 /// Append `text` to `out` with every byte `set` encodes written as a

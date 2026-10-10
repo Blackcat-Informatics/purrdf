@@ -1696,7 +1696,7 @@ summary = "`parse::validate_component`, the component validator with its eight-b
 
 [[site]]
 id = "lex.terminals-in-ranges"
-summary = "the class predicates, now a load from a `const [u8; 256]` class table below U+0100; they inline into every caller, measured in `parse::scan`, which inlines `is_ipvfuture_address_char`"
+summary = "the class predicates, now a load from a `const [u8; 256]` class table below U+0100; they inline into every caller, measured in the shared resident/native `parse::scan_with`, which inlines `is_ipvfuture_address_char`"
 
   # A class-table load is a scalar load by nature: the entry records what the caller
   # compiles to and fails if the symbol goes away. Measured v0 on every configuration:
@@ -1706,7 +1706,7 @@ summary = "the class predicates, now a load from a `const [u8; 256]` class table
   label = "table"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_iri"
-  symbol = "purrdf_iri::parse::scan"
+  symbol = "purrdf_iri::parse::scan_with"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -1788,7 +1788,7 @@ summary = "`simple::normalize_whitespace_replace` / `normalize_whitespace_collap
   label = "collapse sse2"
   configs = ["x86_64"]
   crate = "purrdf_xsd"
-  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  symbol = "purrdf_xsd::simple::is_collapsed"
   min_vector_ops = 3
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -1799,7 +1799,7 @@ summary = "`simple::normalize_whitespace_replace` / `normalize_whitespace_collap
   label = "collapse avx2"
   configs = ["x86_64-v3"]
   crate = "purrdf_xsd"
-  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  symbol = "purrdf_xsd::simple::is_collapsed"
   min_vector_ops = 9
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -1811,7 +1811,7 @@ summary = "`simple::normalize_whitespace_replace` / `normalize_whitespace_collap
   label = "collapse avx512 masks"
   configs = ["x86_64-v4"]
   crate = "purrdf_xsd"
-  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  symbol = "purrdf_xsd::simple::is_collapsed"
   min_vector_ops = 7
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -1823,7 +1823,7 @@ summary = "`simple::normalize_whitespace_replace` / `normalize_whitespace_collap
   label = "collapse neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
   crate = "purrdf_xsd"
-  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  symbol = "purrdf_xsd::simple::is_collapsed"
   min_vector_ops = 4
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -1835,7 +1835,7 @@ summary = "`simple::normalize_whitespace_replace` / `normalize_whitespace_collap
   label = "collapse scalar"
   configs = ["wasm32"]
   crate = "purrdf_xsd"
-  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  symbol = "purrdf_xsd::simple::is_collapsed"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -1845,7 +1845,7 @@ summary = "`simple::normalize_whitespace_replace` / `normalize_whitespace_collap
   label = "collapse simd128"
   configs = ["wasm32-simd128"]
   crate = "purrdf_xsd"
-  symbol = "purrdf_xsd::simple::normalize_whitespace_collapse"
+  symbol = "purrdf_xsd::simple::is_collapsed"
   min_vector_ops = 2
   require_mnemonics = ["i8x16.eq", "v128.any_true"]
   max_fma = 0
@@ -1990,12 +1990,12 @@ summary = "`Reader::skip_whitespace`, inlined with the event step into each even
 
 [[site]]
 id = "core.intern"
-summary = "`Interner::intern`, the fixed-key ahash term interner"
+summary = "`Interner::intern_with_memory`, the shared resident/native fixed-key term interner"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_core"
-  symbol = "<purrdf_core::ir::builder::Interner>::intern"
+  symbol = "<purrdf_core::ir::builder::Interner>::intern_with_memory"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2863,9 +2863,9 @@ summary = "`bgp::eval_compiled_bgp`, the shared index-nested-loop join probe loo
 
 [[site]]
 id = "eval.aggregate-fold"
-summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_xsd` per row (the `BigInt` integer tier, the `numeric_add` decimal/float/double tier) and `NumericFold::combine_owned` per provably exact chunk-partial merge"
+summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_parsed` per row (the `BigInt` integer tier, the `numeric_add` decimal/float/double tier) and `NumericFold::combine_admitted` per provably exact chunk-partial merge"
 
-  # `NumericFold::step_xsd` is the one per-row fold step: the sequential chain, each
+  # `NumericFold::step_parsed` is the one per-row fold step: the sequential chain, each
   # chunk's exact prefix (`NumericSummary::push`) and the in-order replay of every row
   # from the first float/double operand on all reach it out of line. The
   # integer-to-float/double promotion it inlines is `BigInt::to_f64`/`to_f32`, a
@@ -2877,7 +2877,7 @@ summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_xsd` per row (the `B
   label = "step"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_sparql_eval"
-  symbol = "<purrdf_sparql_eval::modifier::NumericFold>::step_xsd"
+  symbol = "<purrdf_sparql_eval::modifier::NumericFold>::step_parsed"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2890,7 +2890,7 @@ summary = "the `SUM`/`AVG` numeric fold: `NumericFold::step_xsd` per row (the `B
   label = "combine"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_sparql_eval"
-  symbol = "<purrdf_sparql_eval::modifier::NumericFold>::combine_owned"
+  symbol = "<purrdf_sparql_eval::modifier::NumericFold>::combine_admitted"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5425,7 +5425,7 @@ summary = "`Resolved::<Exact>::norm`, the normative PURREMB L2 norm, measured in
 
 [[site]]
 id = "hnsw.search-build"
-summary = "HNSW `search::search_layer` and `builder::build_graph`, the distance-bound graph walk and build, each compiled in `purrdf_hnsw` once per arithmetic"
+summary = "HNSW `search::search_layer_admitted` and `builder::build_graph`, the distance-bound graph walk and build, each compiled in `purrdf_hnsw` once per arithmetic"
 
   # The exact index. The distance work is the `distance.exact.*` kernels these call; the
   # counts here are the walk's own, integer lane work in the build's level assignment.
@@ -5435,7 +5435,7 @@ summary = "HNSW `search::search_layer` and `builder::build_graph`, the distance-
   label = "search"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_hnsw"
-  symbol = "purrdf_hnsw::search::search_layer::<purrdf_core::distance::Exact>"
+  symbol = "purrdf_hnsw::search::search_layer_admitted::<purrdf_core::distance::Exact>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5458,7 +5458,7 @@ summary = "HNSW `search::search_layer` and `builder::build_graph`, the distance-
   label = "search reassociated"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_hnsw"
-  symbol = "purrdf_hnsw::search::search_layer::<purrdf_core::distance::Reassociated>"
+  symbol = "purrdf_hnsw::search::search_layer_admitted::<purrdf_core::distance::Reassociated>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5474,12 +5474,12 @@ summary = "HNSW `search::search_layer` and `builder::build_graph`, the distance-
 
 [[site]]
 id = "hnsw.distance-cache"
-summary = "`search::DistanceCache`, the per-round `BTreeMap` distance memo, inlined into `search_layer`"
+summary = "`search::DistanceCache`, the query-owned admitted fixed-key distance memo, inlined into `search_layer_admitted`"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_hnsw"
-  symbol = "purrdf_hnsw::search::search_layer::<purrdf_core::distance::Exact>"
+  symbol = "purrdf_hnsw::search::search_layer_admitted::<purrdf_core::distance::Exact>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5536,7 +5536,7 @@ summary = "`FusionStream::next`'s frontier, filed by signature in `SelectionInde
 
 [[site]]
 id = "facade.multimodal-read"
-summary = "the umbrella's multimodal on-demand read: `retrieval::search` over the real text and HNSW producers, and the text side of the per-candidate exclusion lookup, `TextSearchRelation::holdings`"
+summary = "the umbrella's multimodal on-demand read: `retrieval::search` over the real text and HNSW producers, and the text side of the per-candidate exclusion lookup, `TextSearchRelation::holdings_owned`"
 
   # The umbrella compiles none of this path (the bench reaches it through re-exports); the
   # lookup it times on the text side is out of line in `purrdf_text`. Binary searches of the
@@ -5547,7 +5547,7 @@ summary = "the umbrella's multimodal on-demand read: `retrieval::search` over th
   label = "text lookup"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_text"
-  symbol = "<purrdf_text::relation::TextSearchRelation>::holdings"
+  symbol = "<purrdf_text::relation::TextSearchRelation>::holdings_owned"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

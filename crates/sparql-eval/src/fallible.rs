@@ -26,7 +26,8 @@
 //! where both objections lift at once: the rows are materialized out of the arena first,
 //! and the engine chose to stop work it could have done, so what they bound is derivable.
 
-use purrdf_core::{RdfDiagnostic, SparqlResult, TrippedGovernor};
+use crate::{RetainedEvidence, RetainedSparqlResult};
+use purrdf_core::{RdfDiagnostic, TrippedGovernor};
 
 use crate::governed::PartialAnswers;
 
@@ -49,28 +50,82 @@ pub type FallibleScopedResult<R, OperationalError, Evidence> =
 #[derive(Debug, Clone)]
 pub struct CompleteSparqlResult<Evidence> {
     /// The complete dataset-independent SPARQL result.
-    pub result: SparqlResult,
+    pub result: RetainedSparqlResult,
     /// Deterministic operational evidence captured after result materialization.
-    pub evidence: Evidence,
+    pub evidence: RetainedEvidence<Evidence>,
 }
 
 impl<Evidence> CompleteSparqlResult<Evidence> {
     /// Decompose the completeness certificate into result and evidence.
     #[must_use]
-    pub fn into_parts(self) -> (SparqlResult, Evidence) {
+    pub fn into_parts(self) -> (RetainedSparqlResult, RetainedEvidence<Evidence>) {
         (self.result, self.evidence)
     }
 }
+
+/// An allocation-free engine control refusal, including before the first
+/// workspace account exists. This preserves the exact static cause without
+/// constructing diagnostic text under a refused allocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum QueryControlFailure {
+    /// The required allocation owner was not supplied.
+    Unpriced(&'static str),
+    /// A concrete live layout cannot be represented.
+    LayoutOverflow,
+    /// The native diagnostic formatter violated its contract.
+    DiagnosticFormatting,
+    /// The shared account stopped after retaining its original source cause.
+    WorkspaceStopped,
+}
+
+impl QueryControlFailure {
+    pub(crate) fn from_eval_error(error: &crate::EvalError) -> Option<Self> {
+        match error {
+            crate::EvalError::WorkspaceUnpriced(value) => Some(Self::Unpriced(value)),
+            crate::EvalError::WorkspaceBoundOverflow => Some(Self::LayoutOverflow),
+            crate::EvalError::UnstableNativeDiagnostic => Some(Self::DiagnosticFormatting),
+            crate::EvalError::WorkspaceStopped => Some(Self::WorkspaceStopped),
+            _ => None,
+        }
+    }
+
+    fn as_eval_error(self) -> crate::EvalError {
+        match self {
+            Self::Unpriced(value) => crate::EvalError::WorkspaceUnpriced(value),
+            Self::LayoutOverflow => crate::EvalError::WorkspaceBoundOverflow,
+            Self::DiagnosticFormatting => crate::EvalError::UnstableNativeDiagnostic,
+            Self::WorkspaceStopped => crate::EvalError::WorkspaceStopped,
+        }
+    }
+
+    /// Stable machine-readable identity without a rendered allocation.
+    #[must_use]
+    pub fn diagnostic_code(self) -> &'static str {
+        self.as_eval_error()
+            .diagnostic_code()
+            .expect("every static control failure has a diagnostic code")
+    }
+}
+
+impl std::fmt::Display for QueryControlFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.as_eval_error(), f)
+    }
+}
+
+impl std::error::Error for QueryControlFailure {}
 
 /// A query over a [`FallibleDatasetView`](purrdf_core::FallibleDatasetView) that did not
 /// reach a complete result.
 ///
 /// # Why this type carries no `PartialEq`/`Eq`
 ///
-/// [`Self::BudgetExhausted`] carries a materialized [`SparqlResult`], which is
-/// deliberately not comparable — it holds an `Arc<RdfDataset>`, whose equality is a
-/// dataset isomorphism question rather than a derive. Comparing two of these values was
-/// never the right test anyway: a test asserts the *discriminant* and the evidence, both
+/// [`Self::BudgetExhausted`] carries a materialized [`RetainedSparqlResult`],
+/// which is deliberately not comparable: its graph variant retains a dataset owner,
+/// whose equality is a dataset isomorphism question rather than a derive. Comparing
+/// two of these values was never the right test anyway: a test asserts the
+/// *discriminant* and the evidence, both
 /// of which are still comparable on their own.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -78,7 +133,7 @@ pub enum FallibleSparqlError<OperationalError, Evidence> {
     /// Parsing or evaluation failed while the view itself remained operational.
     Query {
         /// The ordinary parse/evaluation diagnostic.
-        diagnostic: RdfDiagnostic,
+        diagnostic: crate::RetainedDiagnostic,
         /// Deterministic evidence captured at the final ready checkpoint.
         evidence: Evidence,
     },
@@ -88,6 +143,21 @@ pub enum FallibleSparqlError<OperationalError, Evidence> {
         /// The typed refusal or read error; an existing sticky root takes precedence.
         error: OperationalError,
         /// Deterministic evidence at the failure boundary.
+        evidence: Evidence,
+    },
+    /// A real engine allocator refused construction. This static outcome needs
+    /// no fresh diagnostic allocation, including at the first account boundary.
+    AllocationFailed {
+        /// The engine allocation that could not be constructed.
+        construct: &'static str,
+        /// Backend-owned or previously admitted evidence at the checkpoint.
+        evidence: Evidence,
+    },
+    /// An engine control invariant refused the operation without allocating text.
+    ControlFailure {
+        /// Exact typed, allocation-free engine cause.
+        failure: QueryControlFailure,
+        /// Backend-owned or previously admitted evidence.
         evidence: Evidence,
     },
     /// A caller-set execution governor stopped the query before it finished, over a view
@@ -104,7 +174,7 @@ pub enum FallibleSparqlError<OperationalError, Evidence> {
         /// The governor that stopped the execution.
         tripped: TrippedGovernor,
         /// What the rows the execution reached bound, materialized.
-        partial: PartialAnswers,
+        partial: PartialAnswers<crate::RetainedPartialSparqlResult>,
         /// Deterministic evidence at the final ready checkpoint. On the governed lane
         /// this is a
         /// [`GovernedEvidence`](crate::GovernedEvidence), so the governor accounting
@@ -131,6 +201,17 @@ impl<OperationalError, Evidence> FallibleSparqlError<OperationalError, Evidence>
                 error,
                 evidence: map(evidence),
             },
+            Self::AllocationFailed {
+                construct,
+                evidence,
+            } => FallibleSparqlError::AllocationFailed {
+                construct,
+                evidence: map(evidence),
+            },
+            Self::ControlFailure { failure, evidence } => FallibleSparqlError::ControlFailure {
+                failure,
+                evidence: map(evidence),
+            },
             Self::BudgetExhausted {
                 tripped,
                 partial,
@@ -149,6 +230,8 @@ impl<OperationalError, Evidence> FallibleSparqlError<OperationalError, Evidence>
         match self {
             Self::Query { evidence, .. }
             | Self::Operational { evidence, .. }
+            | Self::AllocationFailed { evidence, .. }
+            | Self::ControlFailure { evidence, .. }
             | Self::BudgetExhausted { evidence, .. } => evidence,
         }
     }
@@ -157,7 +240,10 @@ impl<OperationalError, Evidence> FallibleSparqlError<OperationalError, Evidence>
     #[must_use]
     pub const fn operational_error(&self) -> Option<&OperationalError> {
         match self {
-            Self::Query { .. } | Self::BudgetExhausted { .. } => None,
+            Self::Query { .. }
+            | Self::AllocationFailed { .. }
+            | Self::ControlFailure { .. }
+            | Self::BudgetExhausted { .. } => None,
             Self::Operational { error, .. } => Some(error),
         }
     }
@@ -165,10 +251,13 @@ impl<OperationalError, Evidence> FallibleSparqlError<OperationalError, Evidence>
     /// Borrow the ordinary query diagnostic, when parsing/evaluation failed while
     /// the view remained ready.
     #[must_use]
-    pub const fn diagnostic(&self) -> Option<&RdfDiagnostic> {
+    pub fn diagnostic(&self) -> Option<&RdfDiagnostic> {
         match self {
-            Self::Query { diagnostic, .. } => Some(diagnostic),
-            Self::Operational { .. } | Self::BudgetExhausted { .. } => None,
+            Self::Query { diagnostic, .. } => Some(diagnostic.diagnostic()),
+            Self::Operational { .. }
+            | Self::AllocationFailed { .. }
+            | Self::ControlFailure { .. }
+            | Self::BudgetExhausted { .. } => None,
         }
     }
 
@@ -176,16 +265,24 @@ impl<OperationalError, Evidence> FallibleSparqlError<OperationalError, Evidence>
     #[must_use]
     pub const fn tripped(&self) -> Option<TrippedGovernor> {
         match self {
-            Self::Query { .. } | Self::Operational { .. } => None,
+            Self::Query { .. }
+            | Self::Operational { .. }
+            | Self::AllocationFailed { .. }
+            | Self::ControlFailure { .. } => None,
             Self::BudgetExhausted { tripped, .. } => Some(*tripped),
         }
     }
 
     /// Borrow the certified partial answers, when a governor stopped the execution.
     #[must_use]
-    pub const fn partial_answers(&self) -> Option<&PartialAnswers> {
+    pub const fn partial_answers(
+        &self,
+    ) -> Option<&PartialAnswers<crate::RetainedPartialSparqlResult>> {
         match self {
-            Self::Query { .. } | Self::Operational { .. } => None,
+            Self::Query { .. }
+            | Self::Operational { .. }
+            | Self::AllocationFailed { .. }
+            | Self::ControlFailure { .. } => None,
             Self::BudgetExhausted { partial, .. } => Some(partial),
         }
     }
@@ -198,6 +295,10 @@ impl<OperationalError: std::fmt::Display, Evidence> std::fmt::Display
         match self {
             Self::Query { diagnostic, .. } => diagnostic.fmt(f),
             Self::Operational { error, .. } => write!(f, "operational query failure: {error}"),
+            Self::AllocationFailed { construct, .. } => {
+                write!(f, "engine allocation failed: {construct}")
+            }
+            Self::ControlFailure { failure, .. } => failure.fmt(f),
             Self::BudgetExhausted { tripped, .. } => {
                 write!(f, "query budget exhausted: {tripped}")
             }
@@ -215,10 +316,11 @@ where
         match self {
             Self::Query { diagnostic, .. } => Some(diagnostic),
             Self::Operational { error, .. } => Some(error),
+            Self::ControlFailure { failure, .. } => Some(failure),
             // A tripped governor is a typed outcome, not an error with a cause: there is
             // no underlying failure to point at, and inventing one would report a
             // bounded query as a broken one.
-            Self::BudgetExhausted { .. } => None,
+            Self::BudgetExhausted { .. } | Self::AllocationFailed { .. } => None,
         }
     }
 }

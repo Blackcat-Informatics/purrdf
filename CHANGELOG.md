@@ -24,6 +24,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Breaking Changes
 
+- **Unrestricted exact BM25F ranking:** the ranking identity is now
+  `purrdf-bm25f-fixed-v2`, revision 2. Query terms, ranking fields, corpus
+  populations, field lengths/frequencies and nonnegative weights no longer have
+  selected admission ceilings. Overflowing intermediates use the existing exact
+  Integer/BigInt at the original rounding boundaries; previously admitted score
+  lexicals remain byte-identical. Profile/index fingerprints change because the
+  admission and bound laws changed. The fixed maximum/width exports are removed;
+  `PreparedQuery::score` now returns `BoundedScore { value, bound }`, native
+  `Scored` carries `score_bound`, and matched-term counts use usize. The bound is
+  derived from the actual prepared query/corpus, with no reserved host tie bits.
+
+
 - **Developer-schema output for ontologies without anonymous expressions:**
   correctness fixes change what an IRI-only ontology emits. Each change:
   - Every schema cache key (`SchemaCompilation.key`) changes, for every input,

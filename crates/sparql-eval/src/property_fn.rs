@@ -54,7 +54,6 @@
 //! engine filters on that the relation cannot see makes the engine withhold the ceiling
 //! instead (see [`PropertyFunction`]'s ceiling contract).
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
@@ -365,8 +364,38 @@ pub enum ServiceLevel {
         /// The relation's own description of what was missing — a shard name, a
         /// rebuild phase, a replica lag. Recorded verbatim and never parsed, for the
         /// same reason [`IndexGeneration::Declared`]'s string is.
-        reason: String,
+        reason: purrdf_lex::allocation::SharedText,
     },
+}
+
+impl ServiceLevel {
+    /// Register caller-owned service metadata before opening a cursor.
+    #[must_use]
+    pub fn incomplete(reason: impl AsRef<str>) -> Self {
+        Self::incomplete_admitted(reason.as_ref(), &crate::WorkspaceCapability::resident())
+            .expect("resident service metadata allocation failed")
+    }
+
+    /// Immutable pre-existing metadata needs no new allocation per invocation.
+    #[must_use]
+    pub const fn incomplete_static(reason: &'static str) -> Self {
+        Self::Incomplete {
+            reason: purrdf_lex::allocation::SharedText::from_static(reason),
+        }
+    }
+
+    /// Author a newly discovered service reason under the invocation's original grant.
+    /// Clones of this attestation retain the exact original text owner.
+    /// # Errors
+    /// Returns original admission, layout or allocator refusal before publication.
+    pub fn incomplete_admitted(
+        reason: &str,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Ok(Self::Incomplete {
+            reason: workspace.authored_text(reason)?,
+        })
+    }
 }
 
 /// The pair of facts one invocation attests about the index behind it: which version
@@ -426,6 +455,16 @@ pub trait PfCursor {
     /// the query rather than silently truncating the row stream — a short stream
     /// offered as complete is exactly the wrong answer the doctrine forbids.
     fn next(&mut self) -> Result<Option<PfRow>, EvalError>;
+
+    /// Produce a row whose allocations were admitted before construction.
+    ///
+    /// # Errors
+    /// The default refuses a cursor with no physical allocation contract.
+    fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
+        Err(EvalError::WorkspaceUnpriced(
+            "a property-function cursor without allocation admission",
+        ))
+    }
 
     /// The **internal work** this cursor has performed since this method last returned,
     /// *taken* — the count resets to zero, so consecutive calls partition the work rather
@@ -526,6 +565,18 @@ pub trait PfCursor {
     fn service_level(&self) -> ServiceLevel {
         ServiceLevel::Undeclared
     }
+
+    /// Read immutable metadata by sharing its original owner. A provider that
+    /// discovers and authors a new reason during this call overrides this method
+    /// and uses `ServiceLevel::incomplete_admitted` before creating its text.
+    /// # Errors
+    /// Returns the provider's original typed failure or native storage refusal.
+    fn service_level_with_workspace(
+        &self,
+        _workspace: &crate::WorkspaceCapability,
+    ) -> Result<ServiceLevel, EvalError> {
+        Ok(self.service_level())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -599,11 +650,12 @@ impl TermPattern {
     }
 
     /// Append this pattern's canonical, injective description to `out`.
-    fn push_canonical(&self, out: &mut String) {
-        push_canonical_field(out, self.kind.as_str());
-        push_canonical_option(out, self.datatype.as_deref());
-        push_canonical_option(out, self.language.as_deref());
-        push_canonical_option(out, self.predicate.as_deref());
+    fn write_canonical(&self, out: &mut impl core::fmt::Write) -> core::fmt::Result {
+        write_canonical_field(out, self.kind.as_str())?;
+        write_canonical_option(out, self.datatype.as_deref())?;
+        write_canonical_option(out, self.language.as_deref())?;
+        write_canonical_option(out, self.predicate.as_deref())?;
+        Ok(())
     }
 }
 
@@ -945,27 +997,28 @@ impl RankFidelity {
     /// explicit present/absent evidence byte, so an absent evidence and an empty
     /// one stay distinguishable — the framing discipline the rest of this
     /// module's canonical encoding uses, with no escaping anywhere.
-    fn push_canonical(&self, out: &mut String) {
+    fn write_canonical(&self, out: &mut impl core::fmt::Write) -> core::fmt::Result {
         match &self.completeness {
             Completeness::Complete => {
-                push_canonical_field(out, "complete");
-                push_canonical_option(out, None);
+                write_canonical_field(out, "complete")?;
+                write_canonical_option(out, None)?;
             }
             Completeness::Lossy { evidence } => {
-                push_canonical_field(out, "lossy");
-                push_canonical_option(out, Some(evidence));
+                write_canonical_field(out, "lossy")?;
+                write_canonical_option(out, Some(evidence))?;
             }
         }
         match &self.order {
             OrderFidelity::Faithful => {
-                push_canonical_field(out, "faithful");
-                push_canonical_option(out, None);
+                write_canonical_field(out, "faithful")?;
+                write_canonical_option(out, None)?;
             }
             OrderFidelity::Perturbed { evidence } => {
-                push_canonical_field(out, "perturbed");
-                push_canonical_option(out, Some(evidence));
+                write_canonical_field(out, "perturbed")?;
+                write_canonical_option(out, Some(evidence))?;
             }
         }
+        Ok(())
     }
 }
 
@@ -1313,19 +1366,20 @@ impl CandidateDomains {
     /// a set of two tags unreadable as a set of one followed by whatever came
     /// next, and the `BTreeSet`'s own order is what makes the bytes a function
     /// of the value rather than of the host's insertion order.
-    fn push_canonical(&self, out: &mut String) {
+    fn write_canonical(&self, out: &mut impl core::fmt::Write) -> core::fmt::Result {
         match self {
-            Self::Unrestricted => out.push('0'),
+            Self::Unrestricted => out.write_char('0')?,
             Self::Within(tags) => {
-                out.push('1');
-                out.push_str(&tags.len().to_string());
-                out.push(':');
+                out.write_char('1')?;
+                write!(out, "{}", tags.len())?;
+                out.write_char(':')?;
                 for tag in tags {
-                    push_canonical_field(out, tag.as_str());
+                    write_canonical_field(out, tag.as_str())?;
                 }
             }
         }
-        out.push(';');
+        out.write_char(';')?;
+        Ok(())
     }
 }
 
@@ -1593,85 +1647,66 @@ impl RankedDeclaration {
     /// knows exactly how many elements to consume.
     #[must_use]
     pub fn canonical_description(&self) -> String {
-        let mut out = String::new();
-        out.push('r');
-        push_canonical_field(&mut out, self.stratum.as_str());
-        push_canonical_field(&mut out, self.duplicates.as_str());
-        // Beside the duplicate policy, because the three are the same kind of
-        // fact: a promise the producer makes about its own rows that a consumer
-        // holds it to. All must reach the registry's content fingerprint, or
-        // two registries that fuse differently could share a digest and a plan
-        // admitted against one would run against the other. Fidelity in
-        // particular: a plan whose producers approximate is a different plan
-        // from one whose producers do not, and the answers differ in what they
-        // may be read to claim.
-        self.fidelity.push_canonical(&mut out);
-        self.domains.push_canonical(&mut out);
-        // Beside the fidelity and the domains, because it is the same kind of
-        // fact and it changes the same thing: a registry whose producers answer
-        // exclusion lookups fuses a different read from one whose producers do
-        // not, and two registries that fuse differently must not share a digest.
-        // An always-present field rather than a present/absent discriminant,
-        // because `Unavailable` is a declaration ("I answer none") rather than
-        // a gap in one.
-        push_canonical_field(&mut out, self.exclusion.as_str());
-        push_canonical_field(&mut out, &self.candidate_position.to_string());
-        // Beside the domains for the same reason they are beside the duplicate
-        // policy: this position decides whether a consumer can hold the
-        // restriction to the rows it pulls, so two registries that verify
-        // differently must not share a digest. An explicit present/absent
-        // discriminant rather than an omitted field, because "no block column"
-        // is a declaration and not a gap in one.
-        push_canonical_option(
-            &mut out,
-            self.block_position
-                .map(|position| position.to_string())
-                .as_deref(),
-        );
-        out.push(if self.mandatory { '1' } else { '0' });
-        out.push(';');
+        self.canonical_display().to_string()
+    }
+
+    /// Borrowed canonical formatter used by native registry admission.
+    pub(crate) fn canonical_display(&self) -> impl core::fmt::Display + '_ {
+        struct Canonical<'a>(&'a RankedDeclaration);
+        impl core::fmt::Display for Canonical<'_> {
+            fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                self.0.write_canonical(out)
+            }
+        }
+        Canonical(self)
+    }
+
+    fn write_canonical(&self, out: &mut impl core::fmt::Write) -> core::fmt::Result {
+        out.write_char('r')?;
+        write_canonical_field(out, self.stratum.as_str())?;
+        write_canonical_field(out, self.duplicates.as_str())?;
+        self.fidelity.write_canonical(out)?;
+        self.domains.write_canonical(out)?;
+        write_canonical_field(out, self.exclusion.as_str())?;
+        write_canonical_number(out, self.candidate_position)?;
+        match self.block_position {
+            None => out.write_char('0')?,
+            Some(position) => {
+                out.write_char('1')?;
+                write_canonical_number(out, position)?;
+            }
+        }
+        out.write_char(';')?;
+        out.write_char(if self.mandatory { '1' } else { '0' })?;
+        out.write_char(';')?;
         match self.depth_placement.as_ref() {
-            None => out.push('0'),
+            None => out.write_char('0')?,
             Some(depth) => {
-                out.push('1');
-                push_canonical_field(&mut out, &depth.position.to_string());
-                push_canonical_field(&mut out, &depth.datatype);
+                out.write_char('1')?;
+                write_canonical_number(out, depth.position)?;
+                write_canonical_field(out, &depth.datatype)?;
             }
         }
-        out.push(';');
-        out.push_str(&self.accepted_terms.len().to_string());
-        out.push(':');
+        write!(out, ";{}:", self.accepted_terms.len())?;
         for term in &self.accepted_terms {
-            out.push('\u{1}');
-            term.pattern.push_canonical(&mut out);
-            out.push_str(&term.placements.len().to_string());
-            out.push(':');
+            out.write_char('\u{1}')?;
+            term.pattern.write_canonical(out)?;
+            write!(out, "{}:", term.placements.len())?;
             for placement in &term.placements {
-                out.push('\u{6}');
-                push_canonical_field(&mut out, placement.facet.as_str());
-                push_canonical_field(&mut out, &placement.position.to_string());
-                push_canonical_option(&mut out, placement.datatype.as_deref());
+                out.write_char('\u{6}')?;
+                write_canonical_field(out, placement.facet.as_str())?;
+                write_canonical_number(out, placement.position)?;
+                write_canonical_option(out, placement.datatype.as_deref())?;
             }
         }
-        // The arithmetic closes the description. A float-distance producer
-        // appends `;a` and its framed law; a float-free one appends nothing.
-        // Everything before this point is self-delimiting — the accepted-term
-        // list is count-prefixed and each of its parts is framed — so a reader
-        // knows exactly where that list ends, and a description that stops there
-        // is distinguishable from one that goes on to `;a`: the encoding stays
-        // injective with two states and no discriminant byte for the float-free
-        // one. Written this way so a float-free producer describes itself in
-        // exactly the bytes it did before arithmetic was a declared fact, while
-        // every float-distance producer names its law.
         match self.arithmetic {
             RankArithmetic::FloatFree => {}
             RankArithmetic::FloatDistance(law) => {
-                out.push(';');
-                out.push('a');
-                push_canonical_field(&mut out, law.id());
+                out.write_str(";a")?;
+                write_canonical_field(out, law.id())?;
             }
         }
-        out
+        Ok(())
     }
 
     /// The access pattern an exclusion lookup of this producer is invoked in,
@@ -1728,28 +1763,30 @@ impl RankedDeclaration {
     }
 }
 
-/// Append a length-framed canonical field to `out`.
-///
-/// `pub(crate)` rather than private because [`crate::witness`] encodes its own
-/// canonical record with the identical framing: one length-framed-field discipline for
-/// the whole crate means two encodings written years apart cannot come to disagree
-/// about what "framed" means.
-pub(crate) fn push_canonical_field(out: &mut String, value: &str) {
-    out.push_str(&value.len().to_string());
-    out.push(':');
-    out.push_str(value);
+fn write_canonical_field(out: &mut impl core::fmt::Write, value: &str) -> core::fmt::Result {
+    write!(out, "{}:{value}", value.len())
+}
+
+/// Numeric positions use the same decimal Display both when measuring their
+/// length prefix and when writing their borrowed value. Neither allocates.
+fn write_canonical_number(out: &mut impl core::fmt::Write, value: usize) -> core::fmt::Result {
+    let length = crate::workspace::display_len(&value).map_err(|_| core::fmt::Error)?;
+    write!(out, "{length}:{value}")
 }
 
 /// Append a present/absent discriminant and, when present, a framed value.
-fn push_canonical_option(out: &mut String, value: Option<&str>) {
+fn write_canonical_option(
+    out: &mut impl core::fmt::Write,
+    value: Option<&str>,
+) -> core::fmt::Result {
     match value {
-        None => out.push('0'),
+        None => out.write_char('0')?,
         Some(value) => {
-            out.push('1');
-            push_canonical_field(out, value);
+            out.write_char('1')?;
+            write_canonical_field(out, value)?;
         }
     }
-    out.push(';');
+    out.write_char(';')
 }
 
 // ---------------------------------------------------------------------------
@@ -1801,6 +1838,48 @@ fn push_canonical_option(out: &mut String, value: Option<&str>) {
 /// the engine's side: it withholds the ceiling entirely for such a call rather than ask
 /// a relation to account for something it was never told.
 pub trait PropertyFunction: Send + Sync {
+    /// Allocation-free declaration for an opaque producer's complete open/pull
+    /// working set and each returned row. The producer must respect both bounds.
+    /// Native producers can instead implement `open_admitted` with local owners.
+    fn workspace_certificate(
+        &self,
+        _args: &PfArgs<'_>,
+        _ceiling: Option<u64>,
+    ) -> Option<ProducerWorkspaceCertificate> {
+        None
+    }
+
+    /// Open under the shared execution allocation account.
+    ///
+    /// # Errors
+    /// Refuses a missing certificate before entering opaque producer code, or
+    /// propagates allocation, admission and producer failures unchanged.
+    fn open_admitted(
+        &self,
+        args: &PfArgs<'_>,
+        ceiling: Option<u64>,
+        workspace: crate::WorkspaceCapability,
+    ) -> Result<Box<dyn PfCursor>, EvalError> {
+        let certificate =
+            self.workspace_certificate(args, ceiling)
+                .ok_or(EvalError::WorkspaceUnpriced(
+                    "an opaque property function without a physical workspace certificate",
+                ))?;
+        let wrapper = u64::try_from(size_of::<CertifiedCursor>())
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        let bytes = certificate
+            .working_bytes
+            .checked_add(wrapper)
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let admission = workspace.charge(bytes)?;
+        let cursor = self.open(args, ceiling)?;
+        Ok(Box::new(CertifiedCursor {
+            cursor,
+            workspace,
+            row_bytes: certificate.row_bytes,
+            _admission: admission,
+        }))
+    }
     /// The relation's determinism class. Read by the fork-join parallel gate exactly
     /// as [`crate::user_fn::NativeFunction`]'s is: only
     /// [`Volatility::Stable`] may run across workers, and a
@@ -1858,6 +1937,138 @@ pub trait PropertyFunction: Send + Sync {
     }
 }
 
+/// Honest physical upper bounds supplied before invoking opaque native code.
+#[derive(Debug, Clone, Copy)]
+pub struct ProducerWorkspaceCertificate {
+    /// Complete simultaneous producer scratch and cursor allocations, including
+    /// its concrete boxes and any old/new buffer overlap during growth.
+    pub working_bytes: u64,
+    /// A returned row's cells, owned term trees and producer clone temporaries.
+    pub row_bytes: u64,
+}
+
+/// A producer row and its inseparable allocation admission.
+#[derive(Debug)]
+pub struct AdmittedPfRow {
+    row: PfRow,
+    term_admissions: crate::workspace::AdmittedVec<crate::WorkspaceAllocation>,
+    admission: crate::WorkspaceAllocation,
+}
+
+impl AdmittedPfRow {
+    /// Move raw resident cells only when none of this row's actual grants owns
+    /// operational admission. A bounded row returns its unchanged envelope.
+    ///
+    /// # Errors
+    /// Returns this row if any original allocation still requires admission.
+    pub fn try_into_resident(self) -> Result<PfRow, Self> {
+        if self.admission.is_bounded()
+            || self
+                .term_admissions
+                .iter()
+                .any(crate::WorkspaceAllocation::is_bounded)
+        {
+            Err(self)
+        } else {
+            Ok(self.row)
+        }
+    }
+    /// Transfer a row and its already-acquired allocation owner into ingestion.
+    #[must_use]
+    pub fn new(row: PfRow, admission: crate::WorkspaceAllocation) -> Self {
+        Self {
+            row,
+            term_admissions: crate::workspace::AdmittedVec::new(
+                &crate::WorkspaceCapability::default(),
+            ),
+            admission,
+        }
+    }
+
+    /// Move immutable admitted term carriers into a native row. No term payload
+    /// is copied, and every original admission survives ingestion of that row.
+    ///
+    /// # Errors
+    /// Returns layout overflow, admission refusal or fallible metadata allocation.
+    pub fn from_terms(
+        terms: impl ExactSizeIterator<Item = crate::WorkspaceTerm>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let width = terms.len();
+        let layout = std::alloc::Layout::array::<TermValue>(width)
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+        let admission = workspace
+            .charge(u64::try_from(layout.size()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let mut row = crate::workspace::vector(width, "native producer row cells")?;
+        let mut grants = crate::workspace::AdmittedVec::with_capacity(width, workspace)?;
+        for term in terms {
+            let (term, grant) = term.into_parts();
+            row.push(term);
+            grants.push(grant)?;
+        }
+        Ok(Self {
+            row,
+            term_admissions: grants,
+            admission,
+        })
+    }
+
+    /// Borrow immutable cells while their owner remains admitted.
+    #[must_use]
+    pub fn cells(&self) -> &[TermValue] {
+        &self.row
+    }
+}
+
+struct CertifiedCursor {
+    cursor: Box<dyn PfCursor>,
+    workspace: crate::WorkspaceCapability,
+    row_bytes: u64,
+    _admission: crate::WorkspaceAllocation,
+}
+
+impl PfCursor for CertifiedCursor {
+    fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+        self.cursor.next()
+    }
+    fn next_admitted(&mut self) -> Result<Option<AdmittedPfRow>, EvalError> {
+        let admission = self.workspace.charge(self.row_bytes)?;
+        self.cursor
+            .next()
+            .map(|row| row.map(|row| AdmittedPfRow::new(row, admission)))
+    }
+    fn take_work(&mut self) -> u64 {
+        self.cursor.take_work()
+    }
+    fn generation(&self) -> IndexGeneration {
+        self.cursor.generation()
+    }
+    fn service_level(&self) -> ServiceLevel {
+        self.cursor.service_level()
+    }
+    fn service_level_with_workspace(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<ServiceLevel, EvalError> {
+        self.cursor.service_level_with_workspace(workspace)
+    }
+}
+
+pub(crate) enum PfRowOwner {
+    Resident(PfRow),
+    Admitted(AdmittedPfRow),
+}
+
+impl std::ops::Deref for PfRowOwner {
+    type Target = [TermValue];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Resident(row) => row,
+            Self::Admitted(row) => row.cells(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Panic containment
 // ---------------------------------------------------------------------------
@@ -1888,19 +2099,79 @@ pub fn open_contained(
     args: &PfArgs<'_>,
     ceiling: Option<u64>,
 ) -> Result<Box<dyn PfCursor>, EvalError> {
-    let declared = declaration_contained(iri, "arity", || relation.arity())?;
+    open_with_workspace_contained(
+        relation,
+        iri,
+        args,
+        ceiling,
+        &crate::WorkspaceCapability::default(),
+    )
+    .map_err(|error| match error {
+        // This public resident boundary retains its documented legacy variants.
+        // Bounded execution calls the admitted checker directly and keeps its lease.
+        EvalError::NativeDiagnostic(message)
+            if message.kind() == crate::NativeDiagnosticKind::Function =>
+        {
+            EvalError::function(message.message())
+        }
+        EvalError::NativeDiagnostic(message)
+            if message.kind() == crate::NativeDiagnosticKind::FunctionOperational =>
+        {
+            EvalError::function_operational(message.message())
+        }
+        other => other,
+    })
+}
+
+pub(crate) fn open_with_workspace_contained(
+    relation: &dyn PropertyFunction,
+    iri: &str,
+    args: &PfArgs<'_>,
+    ceiling: Option<u64>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Box<dyn PfCursor>, EvalError> {
+    let declared = declaration_contained_admitted(iri, "arity", || relation.arity(), workspace)?;
     let supplied = args.arity();
     if declared != supplied {
-        return Err(EvalError::function(format!(
-            "property function <{iri}> expects {declared} argument(s), got {supplied}"
-        )));
+        return Err(crate::error::NativeDiagnostic::error(
+            crate::error::NativeDiagnosticKind::Function,
+            format_args!(
+                "property function <{iri}> expects {declared} argument(s), got {supplied}"
+            ),
+            workspace,
+        ));
     }
-    match catch_unwind(AssertUnwindSafe(|| relation.open(args, ceiling))) {
-        Ok(opened) => opened.map_err(EvalError::preserve_function_failure),
-        Err(_) => Err(EvalError::function_operational(format!(
-            "property function <{iri}> panicked while opening an invocation"
-        ))),
+    crate::contain::call_contained_admitted(
+        "property function",
+        iri,
+        "opening an invocation",
+        || {
+            if workspace.is_bounded() {
+                relation.open_admitted(args, ceiling, workspace.clone())
+            } else {
+                relation.open(args, ceiling)
+            }
+        },
+        workspace,
+    )
+}
+
+pub(crate) fn next_with_workspace_contained(
+    cursor: &mut dyn PfCursor,
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<PfRowOwner>, EvalError> {
+    if !workspace.is_bounded() {
+        return next_contained(cursor, iri).map(|row| row.map(PfRowOwner::Resident));
     }
+    crate::contain::call_contained_admitted(
+        "property function",
+        iri,
+        "producing a row",
+        || cursor.next_admitted(),
+        workspace,
+    )
+    .map(|row| row.map(PfRowOwner::Admitted))
 }
 
 /// Pull one row from `cursor` with the host call contained.
@@ -1913,12 +2184,9 @@ pub fn open_contained(
 /// [`EvalError::FunctionOperational`] on a caught panic or opaque caller-returned
 /// failure. More specific typed causes propagate unchanged.
 pub fn next_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<Option<PfRow>, EvalError> {
-    match catch_unwind(AssertUnwindSafe(|| cursor.next())) {
-        Ok(row) => row.map_err(EvalError::preserve_function_failure),
-        Err(_) => Err(EvalError::function_operational(format!(
-            "property function <{iri}> panicked while producing a row"
-        ))),
-    }
+    crate::contain::call_contained("property function", iri, "producing a row", || {
+        cursor.next()
+    })
 }
 
 /// Take `cursor`'s reported work with the host call contained.
@@ -1933,12 +2201,14 @@ pub fn next_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<Option<PfR
 ///
 /// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of the reported count.
 pub fn take_work_contained(cursor: &mut dyn PfCursor, iri: &str) -> Result<u64, EvalError> {
-    match catch_unwind(AssertUnwindSafe(|| cursor.take_work())) {
-        Ok(units) => Ok(units),
-        Err(_) => Err(EvalError::function_operational(format!(
-            "property function <{iri}> panicked while reporting its work"
-        ))),
-    }
+    take_work_contained_admitted(cursor, iri, &crate::WorkspaceCapability::resident())
+}
+pub(crate) fn take_work_contained_admitted(
+    cursor: &mut dyn PfCursor,
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<u64, EvalError> {
+    declaration_contained_admitted(iri, "work", || cursor.take_work(), workspace)
 }
 
 /// Read `cursor`'s [`PfCursor::generation`] with the host call contained.
@@ -1961,6 +2231,14 @@ pub fn generation_contained(
     declaration_contained(iri, "index generation", || cursor.generation())
 }
 
+pub(crate) fn generation_contained_admitted(
+    cursor: &dyn PfCursor,
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<IndexGeneration, EvalError> {
+    declaration_contained_admitted(iri, "index generation", || cursor.generation(), workspace)
+}
+
 /// Read `cursor`'s [`PfCursor::service_level`] with the host call contained.
 ///
 /// The [`generation_contained`] twin, for the other attested fact and the other instant
@@ -1977,6 +2255,19 @@ pub fn service_level_contained(
     iri: &str,
 ) -> Result<ServiceLevel, EvalError> {
     declaration_contained(iri, "service level", || cursor.service_level())
+}
+
+pub(crate) fn service_level_contained_admitted(
+    cursor: &dyn PfCursor,
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<ServiceLevel, EvalError> {
+    declaration_contained_admitted(
+        iri,
+        "service level",
+        || cursor.service_level_with_workspace(workspace),
+        workspace,
+    )?
 }
 
 /// Read one of a relation's DECLARATIONS — `arity`, `modes`, `volatility`, or
@@ -2000,14 +2291,15 @@ pub fn declaration_contained<T>(
     what: &str,
     read: impl FnOnce() -> T,
 ) -> Result<T, EvalError> {
-    // Delegates to the shared containment helper every extension seam uses
-    // (`crate::contain`) — see that module's docs for why the panic payload is
-    // never interpolated. Kept as a thin `kind = "property function"` wrapper
-    // here rather than inlined at call sites, so this function's public
-    // signature and its message shape (`property function <iri> panicked while
-    // reporting its {what}`) stay exactly what every existing caller and test
-    // already depends on.
-    crate::contain::declaration_contained("property function", iri, what, read)
+    declaration_contained_admitted(iri, what, read, &crate::WorkspaceCapability::resident())
+}
+pub(crate) fn declaration_contained_admitted<T>(
+    iri: &str,
+    what: &str,
+    read: impl FnOnce() -> T,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<T, EvalError> {
+    crate::contain::declaration_contained_admitted("property function", iri, what, read, workspace)
 }
 
 // ---------------------------------------------------------------------------
@@ -2049,7 +2341,7 @@ pub struct PfDescriptor {
     /// relation was registered without one — which is what "does not
     /// participate in ranked retrieval" looks like when the declaration lives
     /// beside the registry rather than on the relation trait.
-    pub ranked: Option<RankedDeclaration>,
+    pub ranked: Option<Arc<RankedDeclaration>>,
 }
 
 /// A caller-injected table of property functions, keyed by predicate IRI.
@@ -2097,7 +2389,7 @@ pub struct PropertyFunctionRegistry {
     /// Never iterated: every ordered surface reads it **by key** while
     /// iterating the already-sorted `relations`, so a fixed-key hash map's
     /// iteration order can never reach an output.
-    ranked: DetHashMap<String, RankedDeclaration>,
+    ranked: DetHashMap<String, Arc<RankedDeclaration>>,
 }
 
 impl core::fmt::Debug for PropertyFunctionRegistry {
@@ -2244,7 +2536,7 @@ impl PropertyFunctionRegistry {
         if let Some(decl) = decl {
             validate_declaration(&iri, &decl, relation.as_ref());
             assert_stratum_unclaimed(&iri, &decl, &self.ranked);
-            self.ranked.insert(iri.clone(), decl);
+            self.ranked.insert(iri.clone(), Arc::new(decl));
         }
         self.relations.insert(iri, relation);
     }
@@ -2256,7 +2548,7 @@ impl PropertyFunctionRegistry {
     /// nothing, and nothing is what a consumer reads back.
     #[must_use]
     pub fn ranked_declaration(&self, iri: &str) -> Option<&RankedDeclaration> {
-        self.ranked.get(iri)
+        self.ranked.get(iri).map(Arc::as_ref)
     }
 
     /// Resolve a predicate IRI to its registered relation, if any.
@@ -2371,34 +2663,88 @@ impl PropertyFunctionRegistry {
     ///
     /// [`EvalError::FunctionOperational`] if any registered relation's declaration methods panic.
     pub fn describe(&self) -> Result<Vec<PfDescriptor>, EvalError> {
-        let mut out: Vec<PfDescriptor> = Vec::with_capacity(self.relations.len());
+        self.describe_admitted(&crate::WorkspaceCapability::resident())?
+            .try_into_resident()
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)
+    }
+
+    /// The bounded description path shares the registered immutable ranked
+    /// declaration. Only concrete descriptor arrays and mode/IRI text allocate.
+    pub(crate) fn describe_admitted(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<crate::workspace::AdmittedRecords<PfDescriptor>, EvalError> {
+        let mut out =
+            crate::workspace::AdmittedRecords::with_capacity(self.relations.len(), workspace)?;
         for (iri, relation) in &self.relations {
-            let arity = declaration_contained(iri, "arity", || relation.arity())?;
-            let volatility =
-                declaration_contained(iri, "determinism class", || relation.volatility())?;
-            let modes = declaration_contained(iri, "declared modes", || relation.modes().to_vec())?;
-            let mut described_modes = Vec::with_capacity(modes.len());
-            for mode in modes {
-                let rows_per_invocation =
-                    declaration_contained(iri, "row bound", || relation.rows_per_invocation(mode))?;
+            let arity = crate::contain::declaration_contained_admitted(
+                "property function",
+                iri,
+                "arity",
+                || relation.arity(),
+                workspace,
+            )?;
+            let volatility = crate::contain::declaration_contained_admitted(
+                "property function",
+                iri,
+                "determinism class",
+                || relation.volatility(),
+                workspace,
+            )?;
+            let modes = crate::contain::declaration_contained_admitted(
+                "property function",
+                iri,
+                "declared modes",
+                || relation.modes(),
+                workspace,
+            )?;
+            let bytes = std::alloc::Layout::array::<PfMode>(modes.len())
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)?
+                .size()
+                .checked_add(iri.len())
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let bytes = modes.iter().try_fold(bytes, |bytes, mode| {
+                bytes
+                    .checked_add(mode.arity())
+                    .ok_or(EvalError::WorkspaceBoundOverflow)
+            })?;
+            let allocation = workspace
+                .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+            let mut described_modes =
+                crate::workspace::vector::<PfMode>(modes.len(), "EXPLAIN declared modes")?;
+            for &mode in modes {
+                let rows_per_invocation = crate::contain::declaration_contained_admitted(
+                    "property function",
+                    iri,
+                    "row bound",
+                    || relation.rows_per_invocation(mode),
+                    workspace,
+                )?;
                 described_modes.push(PfMode {
-                    code: mode.code(),
+                    code: crate::workspace::format_exact(
+                        &mode,
+                        mode.arity(),
+                        "EXPLAIN mode spelling",
+                    )?,
                     rows_per_invocation,
                 });
             }
-            out.push(PfDescriptor {
-                iri: iri.clone(),
-                subject_arity: arity.subject,
-                object_arity: arity.object,
-                volatility,
-                modes: described_modes,
-                // Read BY KEY out of the side table while iterating `relations`,
-                // never by iterating `ranked`: the fixed-key map's order stays
-                // unobservable, and the output is sorted by IRI below.
-                ranked: self.ranked.get(iri).cloned(),
-            });
+            out.push(
+                PfDescriptor {
+                    iri: crate::workspace::string(iri, "EXPLAIN relation IRI")?,
+                    subject_arity: arity.subject,
+                    object_arity: arity.object,
+                    volatility,
+                    modes: described_modes,
+                    ranked: self.ranked.get(iri).cloned(),
+                },
+                allocation,
+            )?;
         }
-        out.sort_by(|a, b| a.iri.cmp(&b.iri));
+        // Registered IRIs are unique, so unstable sorting preserves the same
+        // canonical order while requiring no auxiliary allocation.
+        out.as_mut_slice()
+            .sort_unstable_by(|a, b| a.iri.cmp(&b.iri));
         Ok(out)
     }
 }
@@ -2490,7 +2836,7 @@ impl PropertyFunctionRegistry {
 fn assert_stratum_unclaimed(
     iri: &str,
     decl: &RankedDeclaration,
-    ranked: &DetHashMap<String, RankedDeclaration>,
+    ranked: &DetHashMap<String, Arc<RankedDeclaration>>,
 ) {
     let claimed = ranked
         .iter()

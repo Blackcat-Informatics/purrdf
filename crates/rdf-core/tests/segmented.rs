@@ -184,6 +184,53 @@ fn exact_evidence_and_workspace_refuse_before_unbounded_growth() {
     assert!(read.evidence().peak_bytes() <= read.storage_live_budget().unwrap());
 }
 
+fn cache_eviction_preserves_exact_non_cache_owner_conservation() {
+    let (image, ids) = build(
+        &[
+            TermValue::iri("http://example.org/p"),
+            TermValue::iri("http://example.org/o"),
+        ],
+        0,
+    );
+    let read = session(&image, 2);
+    let opening = read.evidence();
+    let owners = opening.live_bytes() - opening.unpinned_cache_bytes();
+    assert!(opening.unpinned_cache_bytes() > 0);
+    let mut reservation = read.reserve_workspace(3000).unwrap();
+    let held = read.evidence();
+    assert_eq!(
+        held.live_bytes() - held.unpinned_cache_bytes(),
+        owners + 3000
+    );
+    reservation.resize(4000).unwrap();
+    assert!(matches!(
+        reservation.resize(3_000_000),
+        Err(SegmentedError::Residency { .. })
+    ));
+    let refused = read.evidence();
+    assert_eq!(
+        refused.live_bytes() - refused.unpinned_cache_bytes(),
+        owners + 4000
+    );
+    drop(reservation);
+    let released = read.evidence();
+    assert!(released.evictions() > opening.evictions());
+    assert_eq!(
+        released.live_bytes() - released.unpinned_cache_bytes(),
+        owners
+    );
+    let pin = read.resolve(ids[0]).unwrap();
+    let pinned = read.evidence();
+    assert!(pinned.live_bytes() - pinned.unpinned_cache_bytes() > owners);
+    drop(pin);
+    let unpinned = read.evidence();
+    assert_eq!(
+        unpinned.live_bytes() - unpinned.unpinned_cache_bytes(),
+        owners
+    );
+    assert!(read.read_error().is_none());
+}
+
 fn corruption_cannot_turn_an_omitted_fact_into_success() {
     let values: Vec<_> = (0..21)
         .map(|n| TermValue::iri(format!("http://example.org/{n:02}")))
@@ -557,6 +604,7 @@ purrdf_testkit::harness_main!(
     indexed_reopen_preserves_high_ids_and_bidirectional_batches,
     live_pins_are_charged_and_cannot_be_evicted,
     exact_evidence_and_workspace_refuse_before_unbounded_growth,
+    cache_eviction_preserves_exact_non_cache_owner_conservation,
     corruption_cannot_turn_an_omitted_fact_into_success,
     rdf12_references_empty_graphs_and_streamed_lines_survive,
     retained_v1_pack_reader_migrates_into_the_versioned_representation,

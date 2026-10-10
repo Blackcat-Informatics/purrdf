@@ -15,10 +15,12 @@
 //! analysis perform no filesystem or network access.
 
 use crate::TextError;
+use crate::query_workspace::{admitted, overflow};
 use crate::unicode::{self, SegmentationScript};
 use purrdf_hash::Domain;
 use purrdf_hash::blake3::RecordHasher;
 use purrdf_hash::frame::frame_le_into;
+use purrdf_sparql_eval::{WorkspaceAllocation, WorkspaceCapability};
 
 mod artifact;
 /// Content identities only; no baseline word data is embedded.
@@ -311,6 +313,7 @@ pub struct SegmentationScratch {
     fallbacks: Vec<Fallback>,
     barriers: Vec<usize>,
     paths: Vec<Path>,
+    owners: SegmentationOwners,
 }
 #[derive(Clone, Copy, Debug, Default)]
 struct Fallback {
@@ -344,7 +347,48 @@ impl Path {
         )
     }
 }
+#[derive(Debug, Default)]
+struct SegmentationOwners {
+    boundaries: Option<WorkspaceAllocation>,
+    clean_offsets: Option<WorkspaceAllocation>,
+    clean: Option<WorkspaceAllocation>,
+    fallbacks: Option<WorkspaceAllocation>,
+    barriers: Option<WorkspaceAllocation>,
+    paths: Option<WorkspaceAllocation>,
+}
+
 impl SegmentationScratch {
+    /// Reserve a complete analyzer-call lattice before the unchanged dictionary
+    /// body fills any chunk. Each chunk has at most this many input scalars;
+    /// `chars().count()` is a certified bound on graphemes, not a guessed factor.
+    pub(crate) fn reserve_for_query(
+        &mut self,
+        input: &str,
+        workspace: &WorkspaceCapability,
+    ) -> Result<(), TextError> {
+        let units = input.chars().count();
+        let endpoints = units.checked_add(1).ok_or_else(overflow)?;
+        let clean_bytes = input
+            .chars()
+            .filter(|&c| !unicode::is_word_internal_control(c))
+            .try_fold(0usize, |bytes, c| bytes.checked_add(c.len_utf8()))
+            .ok_or_else(overflow)?;
+        admitted(workspace.reserve_vec(
+            &mut self.boundaries,
+            &mut self.owners.boundaries,
+            endpoints,
+        ))?;
+        admitted(workspace.reserve_vec(
+            &mut self.clean_offsets,
+            &mut self.owners.clean_offsets,
+            endpoints,
+        ))?;
+        admitted(workspace.reserve_string(&mut self.clean, &mut self.owners.clean, clean_bytes))?;
+        admitted(workspace.reserve_vec(&mut self.fallbacks, &mut self.owners.fallbacks, units))?;
+        admitted(workspace.reserve_vec(&mut self.barriers, &mut self.owners.barriers, units))?;
+        admitted(workspace.reserve_vec(&mut self.paths, &mut self.owners.paths, endpoints))?;
+        Ok(())
+    }
     fn prepare(&mut self, chunk: &str, tailor: bool) {
         self.boundaries.clear();
         self.clean_offsets.clear();

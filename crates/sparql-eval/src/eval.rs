@@ -24,14 +24,14 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetView, GraphMatch, RdfDataset, TermFactory, TermId, TermValue, TrippedGovernor,
-    ViewTermId,
+    DatasetView, GraphMatch, RdfDataset, TermId, TermValue, TrippedGovernor, ViewTermId,
 };
 use purrdf_sparql_algebra::{
     GraphPattern, NamedNodePattern, Query, SparqlVersion, TermPattern, TriplePattern, Update,
     Variable,
 };
 
+use crate::DetHashMap;
 use crate::dataset_spec::ActiveDataset;
 use crate::error::EvalError;
 use crate::governor::GovernorState;
@@ -42,7 +42,6 @@ use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::{SolutionSeq, VarSchema};
 use crate::witness::RelationWitness;
 use crate::xpath_regex::Selection;
-use crate::{DetHashMap, DetHashSet};
 
 /// Tunable evaluation behavior. Every flag defaults to the production-optimal
 /// value; the benches and differential tests flip individual flags to
@@ -170,6 +169,95 @@ impl LossVocabulary {
     }
 }
 
+/// One dataset-local identity and the admitted immutable value that keys it.
+struct TermLookupEntry<I: ViewTermId> {
+    value: crate::WorkspaceTerm,
+    id: Option<I>,
+}
+
+type TermLookupEntries<I> = crate::AdmittedMap<u64, crate::AdmittedVec<TermLookupEntry<I>>>;
+type SharedTermLookup<I> =
+    crate::workspace::SharedWorkspace<std::sync::Mutex<TermLookupEntries<I>>>;
+
+/// A query-local reverse-lookup memo for this context's immutable read view.
+/// The control is born lazily under the actual query grant; worker and function
+/// contexts retain the same owner. Exact RDF equality disambiguates hash collisions.
+struct TermLookup<I: ViewTermId> {
+    shared: std::sync::Mutex<Option<SharedTermLookup<I>>>,
+}
+
+impl<I: ViewTermId> Default for TermLookup<I> {
+    fn default() -> Self {
+        Self {
+            shared: std::sync::Mutex::new(None),
+        }
+    }
+}
+
+impl<I: ViewTermId> TermLookup<I> {
+    fn shared(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<SharedTermLookup<I>, EvalError> {
+        let mut shared = self
+            .shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if shared.is_none() {
+            *shared = Some(crate::workspace::SharedWorkspace::new_admitted(
+                std::sync::Mutex::new(crate::AdmittedMap::default()),
+                workspace,
+            )?);
+        }
+        Ok(shared
+            .as_ref()
+            .expect("native lookup control was published above")
+            .clone())
+    }
+
+    fn fork_admitted(&self, workspace: &crate::WorkspaceCapability) -> Result<Self, EvalError> {
+        Ok(Self {
+            shared: std::sync::Mutex::new(Some(self.shared(workspace)?)),
+        })
+    }
+
+    fn lookup(
+        &self,
+        value: &TermValue,
+        workspace: &crate::WorkspaceCapability,
+        read: impl FnOnce(&TermValue) -> Result<Option<I>, EvalError>,
+    ) -> Result<Option<I>, EvalError> {
+        let hash = workspace.term_hash(value)?;
+        let shared = self.shared(workspace)?;
+        let mut entries = shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(bucket) = entries.get(&hash) {
+            for entry in bucket {
+                if workspace.terms_equal(&entry.value, value)? {
+                    return Ok(entry.id);
+                }
+            }
+        }
+        // A failed source read remains its original typed failure, never a cached
+        // absence. Every surviving key, table and bucket is admitted before birth.
+        let id = read(value)?;
+        let entry = TermLookupEntry {
+            value: workspace.clone_term(value)?,
+            id,
+        };
+        if let Some(bucket) = entries.get_mut(&hash) {
+            bucket.push(entry)?;
+        } else {
+            let mut bucket = crate::AdmittedVec::new(workspace);
+            bucket.push(entry)?;
+            entries.insert_admitted(hash, bucket, workspace)?;
+        }
+        drop(entries);
+        Ok(id)
+    }
+}
+
 /// A hashable key for an `EXISTS` inner-cache entry: the inner pattern's address
 /// (stable for the immutable AST during a query), a compact encoding of the active
 /// graph, and a fingerprint of the **outer schema**. The schema fingerprint is part
@@ -186,7 +274,7 @@ pub(crate) type ExistsCacheKey<I> = (usize, (u8, Option<I>), u64);
 /// `crate::expr::definition_restriction_key`. Two outer rows with the SAME restriction
 /// (every OTHER outer column may differ freely) share one evaluation.
 pub(crate) type ExistsDefinitionMemoKey<I> =
-    (usize, (u8, Option<I>), u64, Vec<Option<SolutionTerm<I>>>);
+    (usize, (u8, Option<I>), u64, crate::solution::RetainedRow<I>);
 
 /// A memoized `EXISTS`/`NOT EXISTS` inner pattern together with the probe index built
 /// over it. The inner pattern is evaluated unconstrained **once** per [`ExistsCacheKey`];
@@ -195,14 +283,14 @@ pub(crate) type ExistsDefinitionMemoKey<I> =
 /// EXISTS` anti-join from N per-row index rebuilds into N O(1)/scan probes.
 pub(crate) struct ExistsInner<I: ViewTermId = TermId> {
     /// The inner pattern's unconstrained result (outer-row-independent).
-    pub inner: Arc<SolutionSeq<I>>,
+    pub inner: crate::workspace::SharedWorkspace<SolutionSeq<I>>,
     /// Shared columns between the outer schema and `inner.schema`, as
     /// `(outer_ordinal, inner_ordinal)` pairs (the probe's join key).
-    pub shared: Vec<(usize, usize)>,
+    pub shared: crate::AdmittedVec<(usize, usize)>,
     /// Inner rows fully bound on the shared columns, grouped by their key.
-    pub keyed: DetHashMap<crate::binop::JoinKey<I>, Vec<usize>>,
+    pub keyed: crate::binop::JoinIndex<I>,
     /// Inner rows with an unbound shared column (compatible with any probe value).
-    pub wild: Vec<usize>,
+    pub wild: crate::AdmittedVec<usize>,
 }
 
 /// One `EXISTS`/`NOT EXISTS` AST node's prepare-time analysis (Parts A–C of the `EXISTS`
@@ -222,7 +310,7 @@ pub(crate) enum PreparedExists {
         /// The ENF-normalized inner. What both evaluation strategies test for
         /// non-emptiness — the memoized probe directly, the definition path via
         /// [`Self::witness_wrapped`].
-        normalized: Arc<GraphPattern>,
+        normalized: crate::expr::PreparedPattern,
         /// `normalized` wrapped in `Slice { start: 0, length: Some(1) }` — the ENF
         /// law 4a proof sketch read in reverse (`crate::enf`'s module doc,
         /// "truncated-at-one-witness is complete for emptiness"): emptiness-preserving,
@@ -230,15 +318,15 @@ pub(crate) enum PreparedExists {
         /// first witness without changing the boolean answer. Precomputed once here
         /// (not per outer row) so the per-row substitution walk never allocates the
         /// wrapper itself.
-        witness_wrapped: Arc<GraphPattern>,
+        witness_wrapped: crate::expr::PreparedPattern,
         /// The fourth structural analysis over `normalized` (Part B/C): free
         /// variables, certainly-bound variables, stateful-builtin presence, and what
         /// [`crate::governor::soundness::probe_admissible`] needs, per node.
-        analysis: Arc<crate::governor::soundness::NodeAnalysisTable>,
+        analysis: crate::workspace::SharedWorkspace<crate::governor::soundness::NodeAnalysisTable>,
         /// `normalized`'s own root free-variable set — `analysis`'s entry for
         /// `normalized` itself, copied out so the per-row correlation test
         /// (`crate::expr::exists`) need not re-look-up the table on every row.
-        free_vars: Arc<DetHashSet<Variable>>,
+        free_vars: VarSchema,
         /// `normalized`'s own root [`crate::governor::soundness::NodeAnalysis::has_stateful_builtin`]
         /// — copied out for the same reason as [`Self::Pattern::free_vars`]: a
         /// stateful builtin reachable anywhere in `normalized` (directly or through
@@ -261,14 +349,18 @@ pub(crate) enum PreparedExists {
         /// `ledger_source_map` declined to track this site's top-level shape (see its doc)
         /// — tracking then simply does not engage, exactly the behavior before this field
         /// existed.
-        ledger_source: Arc<crate::expr::SubstitutionSourceMap>,
+        ledger_source: crate::workspace::SharedWorkspace<crate::expr::SubstitutionSourceMap>,
         /// The sites of the `EXISTS` bodies nested in [`Self::Pattern::witness_wrapped`],
         /// prepared by its first per-row substitution and kept here, with the tree they
         /// are read from, for every later one (see [`crate::deferred_exists`]).
-        witness_sites: std::sync::OnceLock<Arc<crate::deferred_exists::NestedSites>>,
+        witness_sites: std::sync::OnceLock<
+            crate::workspace::SharedWorkspace<crate::deferred_exists::NestedSites>,
+        >,
         /// The same for [`Self::Pattern::normalized`], which is substituted when the
         /// first-witness wrap is suppressed or the probe is forced (both test-only seams).
-        normalized_sites: std::sync::OnceLock<Arc<crate::deferred_exists::NestedSites>>,
+        normalized_sites: std::sync::OnceLock<
+            crate::workspace::SharedWorkspace<crate::deferred_exists::NestedSites>,
+        >,
     },
 }
 
@@ -308,79 +400,10 @@ impl PreparedExists {
     /// walks its whole inner pattern — normalization, the source map, the structural
     /// analysis and the copies — over work lists, so a site reached deep in the
     /// evaluation, over a body of any depth, is prepared on the stack it has.
+    #[cfg(test)]
     pub(crate) fn build(pattern: &GraphPattern) -> Self {
-        #[cfg(test)]
-        PREPARED_EXISTS_BUILD_COUNT.with(|count| count.set(count.get() + 1));
-        match crate::enf::normalize(pattern) {
-            crate::enf::Enf::FoldedEmpty => Self::FoldedFalse,
-            crate::enf::Enf::Pattern(normalized) => {
-                // `normalized` is moved into its permanent `Arc` allocation FIRST, and
-                // `analyze_pattern` walks it THROUGH that `Arc` (never the pre-move local):
-                // `Arc::new` copies its argument into a fresh heap slot, so a table built
-                // against the pre-move address would key every entry to memory `exists`'s
-                // later lookups (which always dereference the `Arc`) can never match —
-                // silently missing the whole table and falling back to
-                // `node_analysis`'s maximally-conservative-for-safety default, EXCEPT for
-                // `free_vars`, where "conservative" is EMPTY (no known escape hatch — see
-                // that function's doc) and empty free variables is the UNSOUND direction
-                // for `probe_admissible`'s correlation test: it would treat every variable
-                // as "not a current-row variable" and admit a probe that should have been
-                // refused.
-                let normalized = Arc::new(normalized);
-                // `ledger_source_map` is called against EACH tree's OWN permanent address
-                // (never a pre-move stack local — see that function's doc and
-                // `crate::expr::boxed_and_mapped`'s "permanent address" discipline, the
-                // same rule this mirrors): `normalized` is already at its final `Arc`
-                // location, and `witness_inner` is boxed BEFORE its address is taken, so
-                // both walks key every entry by the address the node actually ends up at.
-                let mut ledger_source = crate::enf::ledger_source_map(pattern, &normalized);
-                #[cfg(test)]
-                crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(
-                    normalized.as_ref(),
-                ));
-                let witness_inner = Box::new(GraphPattern::clone(&normalized));
-                let witness_inner_map = crate::enf::ledger_source_map(pattern, &witness_inner);
-                let root_source = ledger_source
-                    .get(&(std::ptr::from_ref(normalized.as_ref()) as usize))
-                    .map(|entry| entry.source);
-                ledger_source.extend(witness_inner_map);
-                let witness_wrapped = Arc::new(GraphPattern::Slice {
-                    inner: witness_inner.into(),
-                    start: 0,
-                    length: Some(1),
-                });
-                // The witness `Slice` wrapper itself is pure prepare-time scaffolding — no
-                // original counterpart of its own, exactly like the synthetic `Join`/`Values`
-                // wrapper `crate::expr::substitute_pattern_tracked` mints for `LATERAL`'s Values
-                // Insertion — so it is mapped to the SAME real address its child resolves to,
-                // `counts_rows: false`: its own (very small) fuel still lands on the right
-                // ledger line, but its trivially-one-row output must not double-count the real
-                // node's rows. `None` only when `ledger_source_map` declined to track this
-                // site's top-level shape at all (see that function's doc) — the wrapper then
-                // stays unmapped too, consistently.
-                if let Some(source) = root_source {
-                    ledger_source.insert(
-                        std::ptr::from_ref(witness_wrapped.as_ref()) as usize,
-                        crate::expr::SubstitutionSource {
-                            source,
-                            counts_rows: false,
-                        },
-                    );
-                }
-                let mut analysis = crate::governor::soundness::NodeAnalysisTable::default();
-                let root = crate::governor::soundness::analyze_pattern(&normalized, &mut analysis);
-                Self::Pattern {
-                    normalized,
-                    witness_wrapped,
-                    analysis: Arc::new(analysis),
-                    free_vars: Arc::new(root.free_vars),
-                    stateful: root.has_stateful_builtin,
-                    ledger_source: Arc::new(ledger_source),
-                    witness_sites: std::sync::OnceLock::new(),
-                    normalized_sites: std::sync::OnceLock::new(),
-                }
-            }
-        }
+        Self::build_admitted(pattern, &crate::WorkspaceCapability::resident())
+            .expect("resident EXISTS preparation failed")
     }
 }
 
@@ -412,10 +435,18 @@ pub(crate) fn schema_fingerprint(schema: &VarSchema) -> u64 {
 /// [`EvalCtx::try_mint_blank_label`] checks the complete default-scope identity
 /// and advances the counter past occupied candidates before returning a label.
 pub(crate) fn minted_label(prefix: Option<&str>, stem: &str, n: u64) -> String {
-    match prefix {
-        Some(prefix) => format!("{prefix}{stem}{n}"),
-        None => format!("{stem}{n}"),
-    }
+    minted_text(prefix, stem, n, &crate::WorkspaceCapability::resident())
+        .expect("resident blank label storage")
+        .as_str()
+        .to_owned()
+}
+pub(crate) fn minted_text(
+    prefix: Option<&str>,
+    stem: &str,
+    n: u64,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<purrdf_lex::allocation::SharedText, EvalError> {
+    workspace.authored_text(&format_args!("{}{stem}{n}", prefix.unwrap_or("")))
 }
 
 /// The shared, dataset-aware BGP join-order cache: maps `(dataset stats fingerprint,
@@ -426,6 +457,35 @@ pub(crate) fn minted_label(prefix: Option<&str>, stem: &str, n: u64) -> String {
 /// suboptimal order (the reorder is a permutation of a commutative join), never an
 /// incorrect result, so the fingerprint can be cheap.
 pub type BgpOrderCache = std::sync::RwLock<DetHashMap<(u64, u64), Arc<[usize]>>>;
+
+#[derive(Debug)]
+pub(crate) struct EffectiveBase {
+    pub(crate) value: String,
+    _admission: crate::WorkspaceAllocation,
+}
+
+impl EffectiveBase {
+    pub(crate) fn copy(
+        value: &str,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<purrdf_core::small::Shared<Self>, EvalError> {
+        let layout = purrdf_core::small::Shared::<Self>::allocation_layout();
+        let bytes = layout
+            .size()
+            .checked_add(value.len())
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let admission = workspace
+            .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let value = crate::workspace::string(value, "effective query base")?;
+        purrdf_core::small::Shared::try_new(Self {
+            value,
+            _admission: admission,
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "effective query base",
+        })
+    }
+}
 
 /// Whether the engine retains an operational workspace reservation for this drain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -448,9 +508,18 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     pub dataset: &'d D,
     /// The engine retains a certified workspace reservation through its drain.
     pub(crate) bounded_workspace: WorkspaceAdmission,
+    /// Shared live-capacity account; nested execution retains the same owner.
+    pub(crate) workspace: crate::workspace::QueryWorkspace<D::ReadError>,
+    /// Erased grant shared with native producers and differently typed child views.
+    pub(crate) growth: crate::WorkspaceCapability,
+    /// Original query-owned reverse identities, shared only over this same view.
+    term_lookup: TermLookup<D::Id>,
     /// The per-query interner for terms computed during evaluation (BIND, VALUES,
     /// aggregate output, arithmetic/string-function results).
     pub scratch: ScratchInterner,
+    /// Dynamic computed owners survive with the arena values they admitted.
+    computed_admission: Vec<crate::WorkspaceAllocation>,
+    computed_admission_storage: Option<crate::WorkspaceAllocation>,
     /// The graph currently in scope (set by `GRAPH`; the default graph at the root).
     /// At the root this is `GraphMatch::Default`, which `active_dataset` resolves to
     /// either the store default graph or a `FROM`/`USING`-merged default graph.
@@ -470,7 +539,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// prefix can change which counter values are skipped. Prefix selection uses
     /// no time, RNG or iteration-order input. The SHACL rules engine supplies its
     /// encoded per-focus-node identity tags (see [`Self::with_bnode_mint_prefix`]).
-    pub bnode_mint_prefix: Option<Arc<str>>,
+    pub bnode_mint_prefix: Option<purrdf_lex::allocation::SharedText>,
     /// The row ordinal of the solution currently being extended, set by
     /// [`crate::expr::eval_extend`] right before it evaluates that row's
     /// expression. `BNODE(strExpr)` (SPARQL 1.1 §17.4.2.9) uses this to
@@ -486,7 +555,8 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// form bypasses this entirely and always mints fresh. Query-scoped like the
     /// other caches on this context — never cleared mid-query, since a later row
     /// never revisits an earlier row's ordinal within the same `Extend` chain.
-    pub(crate) bnode_memo: DetHashMap<(u64, String), SolutionTerm<D::Id>>,
+    pub(crate) bnode_memo:
+        crate::AdmittedMap<(u64, purrdf_lex::allocation::SharedText), SolutionTerm<D::Id>>,
     /// The evaluation-time value of NOW() — an xsd:dateTime, captured once at
     /// context construction from the host platform's real wall clock so all NOW()
     /// calls in a query return the same instant (SPARQL 1.1 §17.4.5.1).
@@ -508,18 +578,21 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// `heldIn` then hard-errors and `CONSTRUCT` cannot attribute a dropped
     /// annotation to a standpoint scope — deliberately, since these are domain
     /// predicates from the caller's ontology, never engine defaults.
-    pub standpoint_predicates: Option<StandpointPredicates>,
+    pub standpoint_predicates: Option<Arc<StandpointPredicates>>,
     /// The caller-supplied loss-declaration vocabulary (see [`LossVocabulary`])
     /// used by loss-aware `CONSTRUCT`. `None` (the default) means loss
     /// declarations are inactive: a dropped reifier is projected silently, like
     /// a plain `CONSTRUCT`.
-    pub loss_vocabulary: Option<LossVocabulary>,
+    pub loss_vocabulary: Option<Arc<LossVocabulary>>,
     /// Memoized `EXISTS`/`NOT EXISTS` inner patterns **and their probe index**
     /// ([`ExistsInner`]), keyed by [`ExistsCacheKey`]. The inner eval and the index
     /// over it are outer-row-independent, so this turns `expr::exists`'s per-row
     /// re-evaluation *and* per-row index rebuild into a single build per site.
     /// Naturally per-query: a fresh [`EvalCtx`] is built for each `query()` call.
-    pub(crate) exists_inner_cache: DetHashMap<ExistsCacheKey<D::Id>, Arc<ExistsInner<D::Id>>>,
+    pub(crate) exists_inner_cache: crate::AdmittedMap<
+        ExistsCacheKey<D::Id>,
+        crate::workspace::SharedWorkspace<ExistsInner<D::Id>>,
+    >,
     /// Per-query cache of [`PreparedExists`] (ENF normal form, the first-witness-wrapped
     /// form, and the fourth structural analysis table) for the `EXISTS`/`NOT EXISTS`
     /// bodies that are NOT nodes of the evaluation's tree ([`Self::plan`]) — a body inside
@@ -531,7 +604,8 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// window. A nested `EXISTS` inside a per-row copy does not need it: the copy holds a
     /// placeholder whose body was prepared once, from the written body, and kept by the
     /// preparation (or plan node) the body was read from (see [`crate::deferred_exists`]).
-    pub(crate) exists_prepared_cache: DetHashMap<usize, Arc<PreparedExists>>,
+    pub(crate) exists_prepared_cache:
+        crate::AdmittedMap<usize, crate::workspace::SharedWorkspace<PreparedExists>>,
     /// The `EXISTS` definition path's μ-restriction memo: `key = μ` restricted to the
     /// inner's own correlated-variable set (from [`PreparedExists::free_vars`]), `value =
     /// the boolean answer`. So `k` distinct restrictions across `N` outer rows evaluate the
@@ -540,25 +614,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`Self::exists_inner_cache`]'s lifecycle: never cleared mid-query, and bypassed
     /// (read and write both) while [`Self::in_substituted_exists`] is set, for the same ABA
     /// reason.
-    pub(crate) exists_definition_memo: DetHashMap<ExistsDefinitionMemoKey<D::Id>, bool>,
-    /// Per-query cache for SPARQL `REGEX`/`REPLACE` pattern+flag compilations,
-    /// keyed pattern-then-flags so a hit probes with **borrowed** strings (no
-    /// per-row key allocation). The compiled pattern is behind an `Arc`, so a hit
-    /// hands out a cheap pointer clone that **shares** the regex's lazy-DFA cache
-    /// pool instead of minting a fresh one per row. Dynamic pattern expressions
-    /// still compile per distinct value, but a filter over many rows no longer
-    /// rebuilds the same automata (or their DFA caches) for every row.
-    ///
-    /// The value is a [`purrdf_core::xsd_regex::CompiledPattern`] rather than a
-    /// bare [`regex::Regex`] because `REPLACE()` needs one more bit than the
-    /// automaton carries: whether the pattern was compiled under the XPath `q`
-    /// (literal) flag, which decides whether `$`/`\` in the *replacement* string
-    /// keep their special meaning (XPath F&O 3.1 §5.6.2). Caching the regex
-    /// alone would strand that bit at the compile site.
-    pub(crate) regex_cache: DetHashMap<
-        String,
-        DetHashMap<String, Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
-    >,
+    pub(crate) exists_definition_memo: crate::AdmittedMap<ExistsDefinitionMemoKey<D::Id>, bool>,
     /// Explicit native law and current finite bounds; absent means compatibility.
     pub(crate) xpath_regex: Option<Selection>,
     /// Successful native programs only, with bounded retained payload and entries.
@@ -579,7 +635,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// value" outcome) collapses per-row re-parsing to one parse per distinct id.
     /// Naturally per-query. Only dataset (`Existing`) ids are cached; computed
     /// scratch values are ephemeral and stay on the borrowed-view path.
-    pub(crate) xsd_parse_cache: DetHashMap<D::Id, Option<purrdf_xsd::XsdValue>>,
+    pub(crate) xsd_parse_cache: crate::parsed_value::ParsedCache<D::Id>,
     /// The `SERVICE` federation source, if one is injected. `None` in
     /// the default engine path: a non-silent `SERVICE` then hard-fails. Tests and
     /// the conformance harness inject an in-memory source via [`EvalCtx::with_remote`].
@@ -600,7 +656,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`crate::construct::eval_construct`] folds the reachable set into the CONSTRUCT
     /// output, and the native `query` egress into `SparqlResult::Solutions::aux`. Empty
     /// whenever no constructing builtin ran.
-    pub(crate) constructed: Vec<(TermValue, TermValue, TermValue)>,
+    pub(crate) constructed: crate::workspace::ConstructedCells,
     /// `true` while evaluating a per-outer-row correlated-`EXISTS` substituted
     /// temporary pattern (see `expr::exists`'s correlated branch). That
     /// temporary's `Expression`/`GraphPattern` nodes are heap-allocated fresh for
@@ -638,25 +694,27 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// with this stack's runtime chase now mostly a same-answer fallback. A stack, not a
     /// single slot merged in place, because both the outer and the inner window's map are
     /// simultaneously live for the whole time the inner one is being evaluated.
-    pub(crate) correlated_node_maps: Vec<Arc<crate::expr::SubstitutionSourceMap>>,
+    pub(crate) correlated_node_maps: crate::expr::CorrelatedMaps,
     /// The placeholders of the per-row substituted copy being evaluated — each a nested
     /// `EXISTS` body the substitution walk left for its own evaluation to substitute (see
     /// [`crate::deferred_exists`]) — keyed by the placeholder's address. `None` outside a
     /// substituted window, and inside one whose copy holds no `EXISTS`. Set and restored
     /// by [`Self::enter_substituted_exists`], so it always names the innermost window: a
     /// copy's placeholders are reachable only while that copy is the one being evaluated.
-    pub(crate) deferred_exists: Option<Arc<crate::deferred_exists::DeferredMap>>,
+    pub(crate) deferred_exists:
+        Option<crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>>,
     /// The sites of the nested `EXISTS` bodies of every plan node a `LATERAL` substitutes
     /// (a preparation keeps its own), so each is prepared once per evaluation however many
     /// left rows substitute the node. SHARED with every forked worker (see
     /// [`crate::deferred_exists::PlanSites`]). Created by the first `LATERAL` that needs it,
     /// so an evaluation without one allocates nothing for it.
-    pub(crate) plan_exists_sites: Option<Arc<crate::deferred_exists::PlanSites>>,
+    pub(crate) plan_exists_sites:
+        Option<crate::workspace::SharedWorkspace<crate::deferred_exists::PlanSites>>,
     /// The endpoints enclosing group joins, `OPTIONAL`s and `MINUS`es list for the
     /// variable-endpoint `SERVICE` clauses in their right operands, innermost last — see
     /// [`crate::service_endpoints`]. Empty outside such an operand, which is always, for
     /// a query without a variable endpoint.
-    pub(crate) endpoint_frames: Vec<crate::service_endpoints::EndpointFrame<D::Id>>,
+    pub(crate) endpoint_frames: crate::service_endpoints::EndpointFrames<D::Id>,
     /// The numbered tree of the pattern being evaluated: its shape (the variable-endpoint
     /// `SERVICE` analysis, the `EXISTS` sites) and the key its node ids are read against.
     /// Installed with the tree by every evaluation entry ([`prepare_query_context`],
@@ -676,7 +734,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// string argument against this (SPARQL 1.1 §17.4.2.6); `None` means no base was
     /// ever supplied (an explicit `BASE` decl nor a caller document base), so a
     /// relative argument cannot be resolved and the call is a type error.
-    pub(crate) base_iri: Option<String>,
+    pub(crate) base_iri: Option<purrdf_core::small::Shared<EffectiveBase>>,
     /// The caller-injected SHACL-AF function table (`sh:SPARQLFunction`).
     /// [`crate::user_fn::UserFunctionRegistry::EMPTY`] (the default) means no user
     /// functions are declared: a call-position IRI unknown to the closed `PurrdfFn`
@@ -745,13 +803,13 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// fire, so [`Self::stop_check`] short-circuits on one null test and evaluation does
     /// exactly the work it did before governors existed.
     ///
-    /// Held behind an [`Arc`] rather than by value so a forked worker shares the ONE
+    /// Held behind an immutable shared owner rather than by value so a forked worker shares the ONE
     /// live accounting state instead of a copy: a per-worker copy would multiply the
     /// budget by the thread count, invisibly.
-    pub(crate) governors: Option<Arc<GovernorState>>,
+    pub(crate) governors: Option<crate::workspace::SharedWorkspace<GovernorState>>,
     /// The one-shot cell through which a governor trip inside an expression-embedded
     /// `EXISTS` reaches the operator that owns the expression (see
-    /// [`ExpressionBarrier`]). Shared by [`Arc`] with every forked worker context, so a
+    /// [`ExpressionBarrier`]). Shared with every forked worker context, so a
     /// worker's observation is not lost when the worker's context is dropped.
     pub(crate) expression_barrier: ExpressionBarrier,
     /// The answer-cap / `LIMIT` pushdown for the plan being evaluated: the row ceiling
@@ -763,7 +821,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// when their subtree returns. Either form is shared by [`Arc`] with every forked
     /// worker, because a worker evaluating part of a node's rows is under the same ceiling
     /// the node is.
-    pub(crate) cap_pushdown: Option<Arc<CapPushdown>>,
+    pub(crate) cap_pushdown: Option<crate::workspace::SharedWorkspace<CapPushdown>>,
     /// The algebra node currently being evaluated, as the installed
     /// [`Self::cap_pushdown`] numbers it — `None` when no pushdown is installed or it
     /// numbers no such node. Set by [`Self::enter_node`] and restored on the way out.
@@ -773,7 +831,7 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     pub(crate) cap_at: Option<(crate::plan::TreeKey, crate::plan::NodeId)>,
     /// The per-node charge ledger, when one is installed. `None` on every ordinary query;
     /// the EXPLAIN path installs one.
-    pub(crate) ledger: Option<Arc<ChargeLedger>>,
+    pub(crate) ledger: Option<crate::workspace::SharedWorkspace<ChargeLedger>>,
     /// The ledger ordinal of the nearest enclosing **plan** node.
     ///
     /// A plain `Copy` value so that a fork copies it: a worker charges the node its parent
@@ -904,7 +962,7 @@ enum ScopeRestore {
     Substitution {
         prev: bool,
         pushed_map: bool,
-        deferred: Option<Arc<crate::deferred_exists::DeferredMap>>,
+        deferred: Option<crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>>,
     },
     PositiveShape(Option<crate::plan::PlanHandle>),
 }
@@ -944,13 +1002,131 @@ impl<D: DatasetView + Sync> Drop for EvalScopeGuard<'_, '_, D> {
 }
 
 impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
+    /// Admit constructed values before their producer allocates. Arena values
+    /// remain live for the context, so their owners do too.
+    pub(crate) fn admit_computed(
+        &mut self,
+        bytes: u64,
+    ) -> Result<crate::WorkspaceAllocation, EvalError> {
+        self.reserve_computed_owner()?;
+        self.growth.charge(bytes)
+    }
+
+    fn reserve_computed_owner(&mut self) -> Result<(), EvalError> {
+        if !self.growth.is_bounded() {
+            return Ok(());
+        }
+        let grow = self.computed_admission.len() == self.computed_admission.capacity();
+        let capacity = if grow {
+            self.computed_admission
+                .capacity()
+                .checked_mul(2)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?
+                .max(1)
+        } else {
+            self.computed_admission.capacity()
+        };
+        let storage = if grow {
+            capacity
+                .checked_mul(size_of::<crate::WorkspaceAllocation>())
+                .ok_or(EvalError::WorkspaceBoundOverflow)?
+        } else {
+            0
+        };
+        if grow {
+            let admission = self
+                .growth
+                .charge(u64::try_from(storage).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+            self.computed_admission
+                .try_reserve_exact(capacity - self.computed_admission.len())
+                .map_err(|_| EvalError::AllocationFailed {
+                    construct: "computed allocation owners",
+                })?;
+            self.computed_admission_storage = Some(admission);
+        }
+        Ok(())
+    }
+
+    /// Transfer a newly interned value's owner into the arena lifetime. Producers
+    /// drop their temporary grant when interning deduplicates or rejects a value.
+    pub(crate) fn keep_computed(&mut self, admission: crate::WorkspaceAllocation) {
+        if self.growth.is_bounded() {
+            self.computed_admission.push(admission);
+        }
+    }
+
+    /// Resolve an exact value once within the same immutable source view. Keys
+    /// and native ids retain their original account across correlated copies.
+    pub(crate) fn term_id_by_value(&self, value: &TermValue) -> Result<Option<D::Id>, EvalError> {
+        if !self.growth.is_bounded() {
+            return self
+                .dataset
+                .term_id_by_value(value)
+                .map_err(|error| self.workspace.source_error(error));
+        }
+        self.term_lookup.lookup(value, &self.growth, |value| {
+            self.dataset
+                .term_id_by_value(value)
+                .map_err(|error| self.workspace.source_error(error))
+        })
+    }
+
+    /// A forward resolution already proves this dataset-local identity. Retain
+    /// that proof before Values Insertion turns it into a lexical constant again.
+    pub(crate) fn remember_existing_term(
+        &self,
+        value: &TermValue,
+        id: D::Id,
+    ) -> Result<(), EvalError> {
+        if self.growth.is_bounded() {
+            self.term_lookup
+                .lookup(value, &self.growth, |_| Ok(Some(id)))?;
+        }
+        Ok(())
+    }
+
+    /// Transfer an admitted producer value only when interning adds its payload.
+    pub(crate) fn intern_workspace_term(
+        &mut self,
+        value: crate::WorkspaceTerm,
+    ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+        self.reserve_computed_owner()?;
+        let before = self.scratch.owned_value_count();
+        let (value, admission) = value.into_parts();
+        let workspace = self.workspace.clone();
+        let lookup = &self.term_lookup;
+        let dataset = self.dataset;
+        let growth = &self.growth;
+        let term =
+            self.scratch
+                .try_intern_checked_with_admission(dataset, value, growth, |value| {
+                    let read = |value: &TermValue| {
+                        dataset
+                            .term_id_by_value(value)
+                            .map_err(|error| workspace.source_error(error))
+                    };
+                    if growth.is_bounded() {
+                        lookup.lookup(value, growth, read)
+                    } else {
+                        read(value)
+                    }
+                })?;
+        if self.scratch.owned_value_count() > before {
+            self.keep_computed(admission);
+        }
+        Ok(term)
+    }
     /// Register concrete source inputs only when evaluation can allocate a fresh
     /// blank, including registry-defined stateful functions. Shared by query,
     /// raw-pattern and UPDATE entry points before they evaluate either sibling.
-    pub(crate) fn reserve_concrete_blank_inputs(&mut self, pattern: &GraphPattern) {
+    pub(crate) fn reserve_concrete_blank_inputs(
+        &mut self,
+        pattern: &GraphPattern,
+    ) -> Result<(), EvalError> {
         if self.expression_barrier.observed().is_none() && !self.pattern_is_parallel_safe(pattern) {
-            register_concrete_blank_inputs(pattern, self);
+            register_concrete_blank_inputs(pattern, self)?;
         }
+        Ok(())
     }
 
     /// Allocate one deterministic default-scope identity, skipping existing
@@ -958,37 +1134,69 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// reverse-lookup failures remain ordinary source-read failures. `None`
     /// records a scratch-budget trip on the existing expression barrier, never
     /// on the disjoint hard-error channel.
+    #[cfg(test)]
     pub(crate) fn try_mint_blank_label(&mut self, stem: &str) -> Result<Option<String>, EvalError> {
+        self.try_mint_blank_text(stem)?
+            .map(|label| {
+                if self.growth.is_bounded() {
+                    return Err(EvalError::WorkspaceBoundOverflow);
+                }
+                crate::workspace::string(label.as_str(), "blank label")
+            })
+            .transpose()
+    }
+
+    /// Mint through the same collision law while keeping the original lexical owner.
+    pub(crate) fn try_mint_blank_text(
+        &mut self,
+        stem: &str,
+    ) -> Result<Option<purrdf_lex::allocation::SharedText>, EvalError> {
         if self.expression_barrier.observed().is_some() {
             return Ok(None);
         }
-        // A graph template over certified partial WHERE rows is the existing
-        // free lift. It does not spend a budget that already stopped the WHERE.
         let lifting = self
             .governor_state()
             .is_some_and(|state| state.tripped().is_some());
         loop {
-            self.bnode_counter += 1;
-            let label = minted_label(self.bnode_mint_prefix.as_deref(), stem, self.bnode_counter);
-            if self.scratch.blank_label_is_reserved(&label) {
+            self.bnode_counter = self
+                .bnode_counter
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let label = minted_text(
+                self.bnode_mint_prefix.as_deref(),
+                stem,
+                self.bnode_counter,
+                &self.growth,
+            )?;
+            if self
+                .scratch
+                .blank_label_is_reserved_admitted(label.as_str(), &self.growth)?
+            {
                 continue;
             }
-            let candidate = TermValue::Blank {
-                label,
-                scope: purrdf_core::BlankScope::DEFAULT,
-            };
+            let allocation = self.growth.charge(
+                u64::try_from(label.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+            )?;
+            let candidate = crate::WorkspaceTerm::new(
+                TermValue::Blank {
+                    label: crate::workspace::string(label.as_str(), "blank label")?,
+                    scope: purrdf_core::BlankScope::DEFAULT,
+                },
+                allocation,
+            );
             if self
                 .dataset
                 .term_id_by_value(&candidate)
-                .map_err(EvalError::source_read)?
+                .map_err(|error| self.workspace.source_error(error))?
                 .is_some()
             {
                 continue;
             }
-            let TermValue::Blank { label, scope } = candidate else {
-                unreachable!("a minted candidate is a blank identity");
-            };
-            self.scratch.reserve_blank_identity(&label, scope);
+            self.scratch.reserve_blank_identity_admitted(
+                label.as_str(),
+                purrdf_core::BlankScope::DEFAULT,
+                &self.growth,
+            )?;
             if !lifting && let Err(tripped) = self.charge_scratch_growth() {
                 self.record_barrier(tripped);
                 return Ok(None);
@@ -1014,6 +1222,30 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// the materialised lane does. [`Self::new`] is this with the wall clock and a
     /// fresh seed.
     pub(crate) fn at(dataset: &'d D, now_val: purrdf_xsd::XsdValue, rng_seed: u64) -> Self {
+        Self::at_with_barrier(dataset, now_val, rng_seed, ExpressionBarrier::default())
+    }
+
+    /// Bounded constructors admit their one-shot expression control before
+    /// constructing any context. The ordinary constructor uses the same body.
+    pub(crate) fn new_admitted(
+        dataset: &'d D,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let barrier = ExpressionBarrier::admitted(workspace)?;
+        Ok(Self::at_with_barrier(
+            dataset,
+            purrdf_xsd::XsdValue::DateTime(crate::clock::wall_clock_now()),
+            crate::clock::entropy_seed(),
+            barrier,
+        ))
+    }
+
+    fn at_with_barrier(
+        dataset: &'d D,
+        now_val: purrdf_xsd::XsdValue,
+        rng_seed: u64,
+        expression_barrier: ExpressionBarrier,
+    ) -> Self {
         // `static`, not a bare `&Registry::EMPTY` temporary: the returned `Self` must
         // outlive this function body, and a `HashMap`-backed registry's drop glue
         // blocks Rust's rvalue static promotion for a reference that has to live that
@@ -1029,35 +1261,39 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         Self {
             dataset,
             bounded_workspace: WorkspaceAdmission::Unpriced,
+            workspace: crate::workspace::QueryWorkspace::resident(),
+            growth: crate::WorkspaceCapability::default(),
+            term_lookup: TermLookup::default(),
             scratch: ScratchInterner::default(),
+            computed_admission: Vec::new(),
+            computed_admission_storage: None,
             active_graph: GraphMatch::Default,
             active_dataset: ActiveDataset::store_default(),
             bnode_counter: 0,
             bnode_mint_prefix: None,
             current_row: 0,
-            bnode_memo: DetHashMap::default(),
+            bnode_memo: crate::AdmittedMap::default(),
             now: now_val,
             rng_state: rng_seed,
             options: EvalOptions::default(),
             language_strings: LanguageStringEquality::Core,
             standpoint_predicates: None,
             loss_vocabulary: None,
-            exists_inner_cache: DetHashMap::default(),
-            exists_prepared_cache: DetHashMap::default(),
-            exists_definition_memo: DetHashMap::default(),
-            regex_cache: DetHashMap::default(),
+            exists_inner_cache: crate::AdmittedMap::default(),
+            exists_prepared_cache: crate::AdmittedMap::default(),
+            exists_definition_memo: crate::AdmittedMap::default(),
             xpath_regex: None,
             xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
-            xsd_parse_cache: DetHashMap::default(),
+            xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
             remote: None,
             bgp_order_cache: None,
-            constructed: Vec::new(),
+            constructed: crate::workspace::ConstructedCells::default(),
             in_substituted_exists: false,
-            correlated_node_maps: Vec::new(),
+            correlated_node_maps: crate::expr::CorrelatedMaps::default(),
             deferred_exists: None,
             plan_exists_sites: None,
-            endpoint_frames: Vec::new(),
+            endpoint_frames: crate::service_endpoints::EndpointFrames::default(),
             // The tree is installed when a pattern is prepared for evaluation
             // (`prepare_query_context`, `eval`, an UPDATE's `WHERE`).
             plan: None,
@@ -1074,7 +1310,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exact_deferral: None,
             focus_graph: None,
             governors: None,
-            expression_barrier: ExpressionBarrier::default(),
+            expression_barrier,
             cap_pushdown: None,
             cap_at: None,
             ledger: None,
@@ -1112,23 +1348,25 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub(crate) fn enter_substituted_exists(
         &mut self,
         ledger_map: Option<crate::expr::SubstitutionSourceMap>,
-        deferred: Option<Arc<crate::deferred_exists::DeferredMap>>,
-    ) -> EvalScopeGuard<'_, 'd, D> {
-        let prev = self.in_substituted_exists;
-        self.in_substituted_exists = true;
-        let prev_deferred = std::mem::replace(&mut self.deferred_exists, deferred);
+        deferred: Option<crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>>,
+    ) -> Result<EvalScopeGuard<'_, 'd, D>, EvalError> {
+        // All fallible growth precedes installation of this substitution window.
         let pushed_map = ledger_map.is_some();
         if let Some(map) = ledger_map {
-            self.correlated_node_maps.push(Arc::new(map));
+            let map = crate::workspace::SharedWorkspace::new_admitted(map, &self.growth)?;
+            self.correlated_node_maps.push(map, &self.growth)?;
         }
-        EvalScopeGuard {
+        let prev = self.in_substituted_exists;
+        self.in_substituted_exists = true;
+        let previous = std::mem::replace(&mut self.deferred_exists, deferred);
+        Ok(EvalScopeGuard {
             ctx: self,
             restore: ScopeRestore::Substitution {
                 prev,
                 pushed_map,
-                deferred: prev_deferred,
+                deferred: previous,
             },
-        }
+        })
     }
 
     /// Scope eligibility numbering without changing source numbering or any
@@ -1186,15 +1424,19 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///
     /// # Errors
     ///
-    /// Returns [`EvalError::Config`] if `prefix` is not a legal
+    /// Returns a configuration diagnostic if `prefix` is not a legal
     /// `BLANK_NODE_LABEL` prefix.
     pub fn with_bnode_mint_prefix(mut self, prefix: &str) -> Result<Self, EvalError> {
         if !purrdf_core::blank_label::is_valid_blank_node_label_prefix(prefix) {
-            return Err(EvalError::config(format!(
-                "blank-node mint prefix {prefix:?} is not a legal BLANK_NODE_LABEL prefix"
-            )));
+            return Err(crate::error::NativeDiagnostic::error(
+                crate::error::NativeDiagnosticKind::Config,
+                format_args!(
+                    "blank-node mint prefix {prefix:?} is not a legal BLANK_NODE_LABEL prefix"
+                ),
+                &self.growth,
+            ));
         }
-        self.bnode_mint_prefix = Some(Arc::from(prefix));
+        self.bnode_mint_prefix = Some(self.growth.authored_text(&format_args!("{prefix}"))?);
         Ok(self)
     }
 
@@ -1202,7 +1444,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// [`StandpointPredicates`]) for `heldIn` and loss-aware `CONSTRUCT`.
     /// Without it, `heldIn` is a hard evaluation error.
     #[must_use]
-    pub fn with_standpoint_predicates(mut self, predicates: StandpointPredicates) -> Self {
+    pub fn with_standpoint_predicates(self, predicates: StandpointPredicates) -> Self {
+        self.with_shared_standpoint_predicates(Arc::new(predicates))
+    }
+
+    /// Share the caller's immutable registration without new execution storage.
+    pub(crate) fn with_shared_standpoint_predicates(
+        mut self,
+        predicates: Arc<StandpointPredicates>,
+    ) -> Self {
         self.standpoint_predicates = Some(predicates);
         self
     }
@@ -1212,7 +1462,12 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// when a reifier is dropped by the template. Without it, loss declarations
     /// stay inactive.
     #[must_use]
-    pub fn with_loss_vocabulary(mut self, vocab: LossVocabulary) -> Self {
+    pub fn with_loss_vocabulary(self, vocab: LossVocabulary) -> Self {
+        self.with_shared_loss_vocabulary(Arc::new(vocab))
+    }
+
+    /// Share the existing vocabulary registration through worker/context copies.
+    pub(crate) fn with_shared_loss_vocabulary(mut self, vocab: Arc<LossVocabulary>) -> Self {
         self.loss_vocabulary = Some(vocab);
         self
     }
@@ -1221,88 +1476,80 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// [`Self::reachable_constructed`]) into a standalone dataset — the auxiliary graph
     /// surfaced alongside a SELECT/ASK result. The common empty-buffer case yields an
     /// empty (but valid) dataset.
-    pub(crate) fn constructed_dataset(&self, rows: &[Vec<Option<TermValue>>]) -> Arc<RdfDataset> {
-        freeze_constructed(&self.reachable_constructed(rows))
+    pub(crate) fn constructed_dataset(
+        &self,
+        rows: &[Vec<Option<TermValue>>],
+    ) -> Result<purrdf_core::DatasetHandle, EvalError> {
+        let selected = self.reachable_constructed(rows)?;
+        freeze_constructed(&self.constructed, &selected, &self.growth)
     }
 
-    /// [`Self::constructed_dataset`], seeded from an interned solution bag rather
-    /// than from materialized rows — the same auxiliary graph, for the egress that
-    /// never builds the owned rows.
-    ///
-    /// The two are the same graph by construction, not by coincidence: the walk is
-    /// seeded with the terms bound in the surviving rows either way, the interned
-    /// bag's rows ARE the rows [`materialize_solutions`] would copy, and they are
-    /// visited in the same row-major order, so the forest walk pops in the same
-    /// order and emits the same cells. Only the copy is skipped.
-    ///
-    /// The constructed buffer is consulted FIRST. A query that invented no cells —
-    /// which is every query with no list constructor in it, the SHACL egress
-    /// included — resolves not one cell out of the id space and yields the empty
-    /// dataset, so the borrowed door is never charged a row walk for a graph that
-    /// has no quads in it.
+    /// Build the same auxiliary graph directly from the retained interned bag.
     pub(crate) fn constructed_dataset_of(
         &self,
         seq: &SolutionSeq<D::Id>,
-    ) -> Result<Arc<RdfDataset>, EvalError> {
+    ) -> Result<purrdf_core::DatasetHandle, EvalError> {
         if self.constructed.is_empty() {
-            return Ok(freeze_constructed(&[]));
+            return freeze_constructed(&self.constructed, &[], &self.growth);
         }
-        let seed = seq
-            .rows
-            .iter()
-            .flat_map(|row| row.iter().copied().flatten())
-            .map(|term| {
-                self.scratch
-                    .try_value_of(self.dataset, term)
-                    .map_err(EvalError::source_read)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(freeze_constructed(&self.reachable_from(seed.into_iter())))
+        let mut seeds = crate::workspace::AdmittedVec::new(&self.growth);
+        for row in &seq.rows {
+            for term in row.iter().copied().flatten() {
+                seeds.push(self.scratch.try_owned_value_of(
+                    self.dataset,
+                    term,
+                    &self.growth,
+                    |error| self.workspace.source_error(error),
+                )?)?;
+            }
+        }
+        let selected = self.reachable_from(seeds.iter().map(|value| &**value))?;
+        freeze_constructed(&self.constructed, &selected, &self.growth)
     }
 
-    /// The constructed cells (see [`Self::constructed`]) reachable, via
-    /// `rdf:first`/`rdf:rest`, from a term bound in a surviving result `row` — so a
-    /// list minted on a row later removed by `FILTER`/`HAVING`/`DISTINCT`/`LIMIT` (or a
-    /// failed join) contributes no orphaned cells to the egress.
-    ///
-    /// `TermValue` is not `Hash`, so the forest walk uses linear scans; the buffer
-    /// holds only THIS query's freshly-minted cells, so it is small, and the common
-    /// empty case is a fast no-op.
+    /// Select original constructed cells reachable from surviving bindings.
+    /// Work and visited queues borrow payloads; no term copy precedes admission.
     pub(crate) fn reachable_constructed(
         &self,
         rows: &[Vec<Option<TermValue>>],
-    ) -> Vec<(TermValue, TermValue, TermValue)> {
-        if self.constructed.is_empty() {
-            return Vec::new();
-        }
-        // Seed the walk with every term bound in a surviving row.
-        self.reachable_from(rows.iter().flatten().filter_map(Clone::clone))
+    ) -> Result<crate::workspace::AdmittedVec<usize>, EvalError> {
+        self.reachable_from(rows.iter().flatten().filter_map(Option::as_ref))
     }
 
-    /// [`Self::reachable_constructed`]'s forest walk, over an explicit seed
-    /// sequence — the shared body of the owned and interned auxiliary-graph doors,
-    /// which differ only in how a surviving row's bound terms are spelled.
-    fn reachable_from(
-        &self,
-        seed: impl Iterator<Item = TermValue>,
-    ) -> Vec<(TermValue, TermValue, TermValue)> {
-        let mut worklist: Vec<TermValue> = seed.collect();
-        let mut visited: Vec<TermValue> = Vec::new();
-        let mut out: Vec<(TermValue, TermValue, TermValue)> = Vec::new();
+    pub(crate) fn reachable_from<'a>(
+        &'a self,
+        seed: impl Iterator<Item = &'a TermValue>,
+    ) -> Result<crate::workspace::AdmittedVec<usize>, EvalError> {
+        let mut worklist = crate::workspace::AdmittedVec::new(&self.growth);
+        let mut visited: crate::workspace::AdmittedVec<&TermValue> =
+            crate::workspace::AdmittedVec::new(&self.growth);
+        let mut out = crate::workspace::AdmittedVec::new(&self.growth);
+        if self.constructed.is_empty() {
+            return Ok(out);
+        }
+        for value in seed {
+            worklist.push(value)?;
+        }
         while let Some(node) = worklist.pop() {
-            if visited.contains(&node) {
+            let mut already_seen = false;
+            for previous in &visited {
+                if self.growth.terms_equal(previous, node)? {
+                    already_seen = true;
+                    break;
+                }
+            }
+            if already_seen {
                 continue;
             }
-            visited.push(node.clone());
-            for (s, p, o) in &self.constructed {
-                if *s == node {
-                    out.push((s.clone(), p.clone(), o.clone()));
-                    // Follow the rest chain and any nested-list member head.
-                    worklist.push(o.clone());
+            visited.push(node)?;
+            for (index, (subject, _, object)) in self.constructed.iter().enumerate() {
+                if self.growth.terms_equal(subject, node)? {
+                    out.push(index)?;
+                    worklist.push(object)?;
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// Attach a `SERVICE` federation source for this evaluation. The borrow shares
@@ -1348,11 +1595,18 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// which is where a trip is an outcome carrying the certified partial answers rather
     /// than a refusal.
     #[must_use]
-    pub fn with_governors(mut self, governors: Arc<GovernorState>) -> Self {
+    pub fn with_governors(self, governors: Arc<GovernorState>) -> Self {
+        self.with_governor_owner(governors.into())
+    }
+
+    pub(crate) fn with_governor_owner(
+        mut self,
+        governors: crate::workspace::SharedWorkspace<GovernorState>,
+    ) -> Self {
         if self
             .governors
             .as_ref()
-            .is_none_or(|previous| !Arc::ptr_eq(previous, &governors))
+            .is_none_or(|previous| !std::ptr::eq(&raw const **previous, &raw const *governors))
         {
             self.scratch.reset_charged_growth();
         }
@@ -1363,8 +1617,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// Install the per-node charge ledger for this evaluation, and start its cursor at the
     /// plan root.
     #[must_use]
-    pub(crate) fn with_charge_ledger(mut self, ledger: Arc<ChargeLedger>) -> Self {
-        self.ledger = Some(ledger);
+    pub(crate) fn with_charge_ledger(
+        mut self,
+        ledger: impl Into<crate::workspace::SharedWorkspace<ChargeLedger>>,
+    ) -> Self {
+        self.ledger = Some(ledger.into());
         self.ledger_node = crate::plan::NodeId::ROOT;
         self.ledger_counts_rows = true;
         self
@@ -1501,7 +1758,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         let mut address = address;
         let mut counts_rows = true;
         let mut counts_rows_set = false;
-        for map in self.correlated_node_maps.iter().rev() {
+        for map in self.correlated_node_maps.iter() {
             let Some(entry) = map.get(&address) else {
                 // This map does not carry `address` — it may belong to a DIFFERENT
                 // substitution window than the one that produced `address`, or (for the
@@ -1570,7 +1827,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///
     /// Handed to seams that charge below the operator boundary and therefore cannot use
     /// [`Self::note_fuel`] — the property-path traversal is the one that exists today.
-    pub(crate) const fn charge_ledger(&self) -> Option<&Arc<ChargeLedger>> {
+    pub(crate) const fn charge_ledger(
+        &self,
+    ) -> Option<&crate::workspace::SharedWorkspace<ChargeLedger>> {
         self.ledger.as_ref()
     }
 
@@ -1633,10 +1892,14 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// Record an invocation a `SILENT` clause absorbed, on the evidence of a governed
     /// execution. An ungoverned execution returns a bare result with nowhere to carry the
     /// record, so there it is not kept.
-    pub(crate) fn record_silenced(&self, invocation: purrdf_core::SilencedInvocation) {
+    pub(crate) fn record_silenced(
+        &self,
+        invocation: purrdf_core::SilencedInvocation,
+    ) -> Result<(), EvalError> {
         if let Some(state) = self.governors.as_ref() {
-            state.record_silenced(invocation);
+            state.record_silenced_admitted(invocation, &self.growth)?;
         }
+        Ok(())
     }
 
     /// The caller-injected tables the fork-join safety walk consults — the one place
@@ -1796,7 +2059,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// also the order the certificate's branch rule already assumes. An ungoverned
     /// `UNION` — which has no counter to race — keeps the fork untouched.
     pub(crate) fn may_fork_sibling_patterns(&self) -> bool {
-        !self.governors_are_engaged()
+        !self.growth.is_bounded() && !self.governors_are_engaged()
     }
 
     /// Whether every fork site of this evaluation runs its sequential implementation:
@@ -1814,7 +2077,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if crate::parallel::forced_parallel_for_test() == Some(false) {
             return true;
         }
-        self.options.force_sequential
+        self.growth.is_bounded() || self.options.force_sequential
     }
 
     /// The live governor accounting state, if this execution is governed at all.
@@ -1823,7 +2086,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// charge helper below short-circuits on this one null test, so an ungoverned query
     /// performs no atomic operation, no allocation, and no counter update anywhere on
     /// the hot path.
-    pub(crate) const fn governor_state(&self) -> Option<&Arc<GovernorState>> {
+    pub(crate) const fn governor_state(
+        &self,
+    ) -> Option<&crate::workspace::SharedWorkspace<GovernorState>> {
         self.governors.as_ref()
     }
 
@@ -2274,10 +2539,11 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub(crate) fn absorb_worker_witnesses(
         &mut self,
         witnesses: impl IntoIterator<Item = RelationWitness>,
-    ) {
+    ) -> Result<(), EvalError> {
         for witness in witnesses {
-            self.witness.merge(witness);
+            self.witness.try_merge(&witness, &self.growth)?;
         }
+        Ok(())
     }
 
     /// Replace the evaluation options for this context. Used by the engine to thread
@@ -2359,7 +2625,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///   id is valid in the parent's space (a raw child `ScratchId` is never
     ///   reused in the parent — only the id space, not individual ids, is
     ///   shared by the clone).
-    /// - **Fresh** (`regex_cache`, `cached_bool_terms`, `xsd_parse_cache`,
+    /// - **Fresh** (`xpath_regex_cache`, `cached_bool_terms`, `xsd_parse_cache`,
     ///   `constructed`): per-worker mutable state that must
     ///   NOT be shared, so each worker mints its own constructed-quad buffer
     ///   without contending on a lock. The caller
@@ -2380,8 +2646,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///
     /// Called by `expr::eval_filter` and `binop::left_outer_join_filtered` to give
     /// each FILTER-predicate worker its own child context.
-    #[must_use]
-    pub(crate) fn fork_for_worker(&self) -> Self {
+    pub(crate) fn fork_for_worker(&self) -> Result<Self, EvalError> {
         self.fork_with_scratch(self.scratch.clone())
     }
 
@@ -2389,7 +2654,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// context's, instead of copying it: what a governed forked loop's worker takes for
     /// each block of the loop's items ([`crate::parallel::par_blocks_try_map_init`]), so
     /// the loop copies the evaluation's arena once rather than once per block.
-    pub(crate) fn fork_for_worker_over(&self, snapshot: &Arc<ScratchInterner>) -> Self {
+    pub(crate) fn fork_for_worker_over(
+        &self,
+        snapshot: &Arc<ScratchInterner>,
+    ) -> Result<Self, EvalError> {
         self.fork_with_scratch(ScratchInterner::over(snapshot))
     }
 
@@ -2400,14 +2668,18 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub(crate) fn loop_snapshot(&self, items: usize) -> Option<Arc<ScratchInterner>> {
         // A loop that runs on one chunk copies the arena once anyway; only a loop that
         // really forks is worth the snapshot.
-        (self.governors.is_some()
+        (!self.growth.is_bounded()
+            && self.governors.is_some()
             && crate::parallel::should_parallelize(self.sequential_operation_required(), items))
         .then(|| Arc::new(self.scratch.clone()))
     }
 
     /// A worker of a forked loop: over `snapshot` ([`Self::loop_snapshot`]) when there is
     /// one, a copy of this context's arena otherwise.
-    pub(crate) fn fork_for_loop_worker(&self, snapshot: Option<&Arc<ScratchInterner>>) -> Self {
+    pub(crate) fn fork_for_loop_worker(
+        &self,
+        snapshot: Option<&Arc<ScratchInterner>>,
+    ) -> Result<Self, EvalError> {
         snapshot.map_or_else(
             || self.fork_for_worker(),
             |snapshot| self.fork_for_worker_over(snapshot),
@@ -2415,17 +2687,26 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 
     /// A worker of this context whose arena is `scratch`.
-    fn fork_with_scratch(&self, scratch: ScratchInterner) -> Self {
-        Self {
+    fn fork_with_scratch(&self, scratch: ScratchInterner) -> Result<Self, EvalError> {
+        Ok(Self {
             dataset: self.dataset,
             bounded_workspace: self.bounded_workspace,
+            workspace: self.workspace.clone(),
+            growth: self.growth.clone(),
+            term_lookup: if self.growth.is_bounded() {
+                self.term_lookup.fork_admitted(&self.growth)?
+            } else {
+                TermLookup::default()
+            },
             scratch,
+            computed_admission: Vec::new(),
+            computed_admission_storage: None,
             active_graph: self.active_graph,
             active_dataset: self.active_dataset.clone(),
             bnode_counter: self.bnode_counter,
             // Carried exactly like `bnode_counter`: the prefix is part of the mint
             // state, so a worker that (hypothetically) minted would spell the same
-            // labels the parent would. A cheap `Arc` pointer clone.
+            // labels the parent would. A shallow clone of the original immutable lexical owner.
             bnode_mint_prefix: self.bnode_mint_prefix.clone(),
             // Per-row `BNODE(strExpr)` memo state. Like `bnode_counter`, only ever
             // observed by `Function::BNode`, which `is_parallel_safe` classifies
@@ -2434,24 +2715,35 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // are harmless rather than load-bearing (mirrors the `bnode_counter`
             // note above).
             current_row: self.current_row,
-            bnode_memo: DetHashMap::default(),
+            bnode_memo: crate::AdmittedMap::default(),
             now: self.now.clone(),
             rng_state: self.rng_state,
             options: self.options,
             language_strings: self.language_strings,
             standpoint_predicates: self.standpoint_predicates.clone(),
             loss_vocabulary: self.loss_vocabulary.clone(),
-            exists_inner_cache: self.exists_inner_cache.clone(),
-            exists_prepared_cache: self.exists_prepared_cache.clone(),
-            exists_definition_memo: self.exists_definition_memo.clone(),
-            regex_cache: DetHashMap::default(),
+            exists_inner_cache: self
+                .exists_inner_cache
+                .clone_entries_admitted(&self.growth, |key, value| Ok((*key, value.clone())))?,
+            exists_prepared_cache: self
+                .exists_prepared_cache
+                .clone_entries_admitted(&self.growth, |key, value| Ok((*key, value.clone())))?,
+            exists_definition_memo: self.exists_definition_memo.clone_entries_admitted(
+                &self.growth,
+                |key, value| {
+                    Ok((
+                        (key.0, key.1, key.2, key.3.clone_admitted(&self.growth)?),
+                        *value,
+                    ))
+                },
+            )?,
             xpath_regex: self.xpath_regex,
             xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
-            xsd_parse_cache: DetHashMap::default(),
+            xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
-            constructed: Vec::new(),
+            constructed: crate::workspace::ConstructedCells::default(),
             // COPIED (a `bool`, not a shared/locked structure — copying it needs no
             // more synchronization than resetting it would), and NOT reset to
             // `false`: a `FILTER`/`BIND` worker forked from INSIDE a per-row
@@ -2483,7 +2775,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // `UNION` arm) must answer a variable-endpoint `SERVICE` over the same
             // endpoints its parent would. The terms are the parent's, and a worker's
             // scratch is a clone of the parent's, so they read back the same.
-            endpoint_frames: self.endpoint_frames.clone(),
+            endpoint_frames: self.endpoint_frames.clone_admitted(&self.growth)?,
             // SHARED: the worker evaluates part of the same tree.
             plan: self.plan.clone(),
             // Scoped workers finish while the numbered temporary AST is alive.
@@ -2546,7 +2838,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // itself would refuse an incomplete relation the parent was entitled to
             // report, purely because the row it was handed landed on a worker.
             witnessing: self.witnessing,
-        }
+        })
     }
 
     /// Attach a caller-injected SHACL-AF function registry (`sh:SPARQLFunction`) for
@@ -2749,12 +3041,21 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         }
         Ok(Some(Self {
             dataset: self.dataset,
-            bounded_workspace: WorkspaceAdmission::Unpriced,
+            bounded_workspace: self.bounded_workspace,
+            workspace: self.workspace.clone(),
+            growth: self.growth.clone(),
+            term_lookup: if self.growth.is_bounded() {
+                self.term_lookup.fork_admitted(&self.growth)?
+            } else {
+                TermLookup::default()
+            },
             // Fresh: the body is an independent query that mints its own computed
             // terms; its parameter inputs ride in as ground substitutions, not
             // scratch ids. The invocation carries parent blank reservations
             // only when the body's effects can reach fresh allocation.
             scratch: ScratchInterner::default(),
+            computed_admission: Vec::new(),
+            computed_admission_storage: None,
             // The body evaluates as a root query; `evaluate_query` re-installs the
             // body's own FROM/base, so seed the default graph here.
             active_graph: GraphMatch::Default,
@@ -2766,24 +3067,23 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // evaluation must spell labels in the same (possibly prefixed) space.
             bnode_mint_prefix: self.bnode_mint_prefix.clone(),
             current_row: 0,
-            bnode_memo: DetHashMap::default(),
+            bnode_memo: crate::AdmittedMap::default(),
             now: self.now.clone(),
             rng_state: self.rng_state,
             options: self.options,
             language_strings: self.language_strings,
             standpoint_predicates: self.standpoint_predicates.clone(),
             loss_vocabulary: self.loss_vocabulary.clone(),
-            exists_inner_cache: DetHashMap::default(),
-            exists_prepared_cache: DetHashMap::default(),
-            exists_definition_memo: DetHashMap::default(),
-            regex_cache: DetHashMap::default(),
+            exists_inner_cache: crate::AdmittedMap::default(),
+            exists_prepared_cache: crate::AdmittedMap::default(),
+            exists_definition_memo: crate::AdmittedMap::default(),
             xpath_regex: self.xpath_regex,
             xpath_regex_cache: crate::xpath_regex::Cache::default(),
             cached_bool_terms: [None, None],
-            xsd_parse_cache: DetHashMap::default(),
+            xsd_parse_cache: crate::parsed_value::ParsedCache::default(),
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
-            constructed: Vec::new(),
+            constructed: crate::workspace::ConstructedCells::default(),
             in_substituted_exists: false,
             // SHARED, like `ledger`: the body's own nodes never resolve through it (their
             // addresses are in neither the plan nor any live substitution window, so
@@ -2798,7 +3098,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             plan_exists_sites: None,
             // A function body is its own query: no join of the caller's encloses its
             // clauses, so no endpoint list of the caller's applies to them.
-            endpoint_frames: Vec::new(),
+            endpoint_frames: crate::service_endpoints::EndpointFrames::default(),
             // The body's own tree is installed when it is prepared for evaluation
             // (`prepare_query_context`); nothing of the caller's applies to it.
             plan: None,
@@ -2883,26 +3183,40 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// window is a body the window evaluates as it is written, or one substituted in full
     /// (a `SERVICE` body, or layers that disagree) — the second of which is exactly the
     /// case a cached preparation would answer with an earlier row's substitution.
-    pub(crate) fn prepared_exists(&mut self, pattern: &GraphPattern) -> Arc<PreparedExists> {
+    pub(crate) fn prepared_exists(
+        &mut self,
+        pattern: &GraphPattern,
+    ) -> Result<crate::workspace::SharedWorkspace<PreparedExists>, EvalError> {
         if self.in_substituted_exists {
-            return Arc::new(PreparedExists::build(pattern));
+            return crate::workspace::SharedWorkspace::new_admitted(
+                PreparedExists::build_admitted(pattern, &self.growth)?,
+                &self.growth,
+            );
         }
-        if let Some(plan) = self.plan.as_ref()
+        // A freshly bounded execution must not mutate a caller-owned plan's
+        // persistent site cache with its query account. Its per-run memo still
+        // preserves one preparation per body, and dies on every failed run.
+        if !self.growth.is_bounded()
+            && let Some(plan) = self.plan.as_ref()
             && let Some(site) = plan
                 .node_of(pattern)
                 .and_then(|body| plan.shape().site_of(body))
         {
-            return plan
-                .shape()
-                .prepared_exists(site, || PreparedExists::build(pattern));
+            return plan.shape().prepared_exists(site, &self.growth, || {
+                PreparedExists::build_admitted(pattern, &self.growth)
+            });
         }
         let key = std::ptr::from_ref(pattern) as usize;
         if let Some(existing) = self.exists_prepared_cache.get(&key) {
-            return existing.clone();
+            return Ok(existing.clone());
         }
-        let built = Arc::new(PreparedExists::build(pattern));
-        self.exists_prepared_cache.insert(key, built.clone());
-        built
+        let built = crate::workspace::SharedWorkspace::new_admitted(
+            PreparedExists::build_admitted(pattern, &self.growth)?,
+            &self.growth,
+        )?;
+        self.exists_prepared_cache
+            .insert_admitted(key, built.clone(), &self.growth)?;
+        Ok(built)
     }
 }
 
@@ -2934,7 +3248,7 @@ pub(crate) fn eval_evaluated<D: DatasetView + Sync>(
             {
                 ctx.temporary_positive_numberings += 1;
             }
-            let tree = crate::plan::Tree::build(pattern);
+            let tree = crate::plan::Tree::build_admitted(pattern, &ctx.growth)?;
             let mut guard = ctx.enter_positive_shape(tree.handle());
             eval_node(pattern, &mut guard)
         } else {
@@ -2977,7 +3291,7 @@ impl<I: ViewTermId> PositiveInput<'_, I> {
         self.storage.into_owned()
     }
 
-    pub(crate) fn into_rows(self) -> Vec<crate::solution::Solution<I>> {
+    pub(crate) fn into_rows(self) -> crate::solution::RowBag<I> {
         self.into_sequence().rows
     }
 }
@@ -3064,7 +3378,7 @@ pub(crate) fn eval_evaluated_with<D: DatasetView + Sync>(
     // A semantic LIMIT is local to its Slice. Install its producer ceiling only while
     // that subtree is active, so a LIMIT-free ordinary query does not walk the plan at
     // all and two independent subquery slices do not overwrite one another.
-    let local_cap = install_local_slice_pushdown(pattern, ctx);
+    let local_cap = install_local_slice_pushdown(pattern, ctx)?;
     if let Some(error) = ctx.dataset.read_error() {
         return Err(EvalError::source_read(error));
     }
@@ -3126,7 +3440,7 @@ fn eval_evaluated_inner_with<D: DatasetView + Sync>(
     // theirs as the lift carries this upwards.
     if let Some(tripped) = ctx.stop_check() {
         return Ok(Evaluated::Truncated(Truncation::origin(
-            SolutionSeq::empty(syntactic_schema(pattern)),
+            SolutionSeq::empty(syntactic_schema_admitted(pattern, &ctx.growth)?),
             tripped,
         )));
     }
@@ -3142,7 +3456,7 @@ fn eval_evaluated_inner_with<D: DatasetView + Sync>(
     if let Err(tripped) = ctx.charge(crate::governor::ChargePoint::AlgebraNodeEntry) {
         ctx.leave_node(restore);
         return Ok(Evaluated::Truncated(Truncation::origin(
-            SolutionSeq::empty(syntactic_schema(pattern)),
+            SolutionSeq::empty(syntactic_schema_admitted(pattern, &ctx.growth)?),
             tripped,
         )));
     }
@@ -3195,35 +3509,39 @@ fn eval_evaluated_inner_with<D: DatasetView + Sync>(
 fn install_local_slice_pushdown<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) -> bool {
+) -> Result<bool, EvalError> {
     if ctx.cap_pushdown.is_some() {
-        return false;
+        return Ok(false);
     }
     let GraphPattern::Slice { start, length, .. } = pattern else {
-        return false;
+        return Ok(false);
     };
     if *start == 0 && length.is_none() {
-        return false;
+        return Ok(false);
     }
 
     // A slice of the evaluation's own tree is planned in that tree's ids; any other
     // (a substituted temporary, a prepared `EXISTS` body) is numbered on its own.
     let pushdown = match ctx.plan.as_ref() {
         Some(plan) if plan.node_of(pattern).is_some() => {
-            CapPushdown::over_plan(plan, pattern, u64::MAX)
+            CapPushdown::over_plan_admitted(plan, pattern, u64::MAX, &ctx.growth)?
         }
-        _ => Some(crate::governor::soundness::plan_cap_pushdown(
+        _ => Some(crate::governor::soundness::plan_cap_pushdown_admitted(
             pattern,
             Some(u64::MAX),
-        ))
+            &ctx.growth,
+        )?)
         .filter(|pushdown| !pushdown.is_empty()),
     };
     match pushdown {
         Some(pushdown) => {
-            ctx.cap_pushdown = Some(Arc::new(pushdown));
-            true
+            ctx.cap_pushdown = Some(crate::workspace::SharedWorkspace::new_admitted(
+                pushdown,
+                &ctx.growth,
+            )?);
+            Ok(true)
         }
-        None => false,
+        None => Ok(false),
     }
 }
 
@@ -3486,7 +3804,7 @@ pub(crate) fn yield_transform<D: DatasetView + Sync, M: RowDelivery<D>>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut blocks = purrdf_core::SmallVec::<[SolutionSeq<D::Id>; 2]>::new();
-    let mut lift = crate::governor::lift::Lift::at(node);
+    let mut lift = crate::governor::lift::Lift::at_admitted(node, &ctx.growth)?;
     let mut consume = |rows: &SolutionSeq<D::Id>, ctx: &mut EvalCtx<'_, D>| {
         let restore = ctx.enter_node(node);
         let transformed = transform(rows.clone(), ctx);
@@ -3511,10 +3829,10 @@ pub(crate) fn yield_transform<D: DatasetView + Sync, M: RowDelivery<D>>(
         return Ok(Evaluated::Truncated(Truncation::barred_at(
             node,
             tripped,
-            syntactic_schema(node),
+            syntactic_schema_admitted(node, &ctx.growth)?,
         )));
     }
-    Ok(lift.finish(crate::binop::concat_union(blocks, ctx)))
+    Ok(lift.finish(crate::binop::concat_union(blocks, ctx)?))
 }
 
 // Specialize the one match into the native boundary with its original default
@@ -3691,10 +4009,12 @@ pub(crate) fn deliver_evaluated<D: DatasetView + Sync, M: RowDelivery<D>>(
         if delivery.stopped() {
             break;
         }
+        let mut output = crate::solution::RowsBuilder::new(&ctx.growth);
+        output.push_row(row.clone_admitted(&ctx.growth)?)?;
         delivery.deliver(
             &SolutionSeq {
-                schema: Arc::clone(&seq.schema),
-                rows: vec![row.clone()],
+                schema: seq.schema.clone(),
+                rows: output.finish()?,
             },
             ctx,
         )?;
@@ -3720,7 +4040,16 @@ pub(crate) fn deliver_evaluated<D: DatasetView + Sync, M: RowDelivery<D>>(
 /// next operand's, a node's own targets after its inner's columns. The term positions
 /// of a triple pattern are read the same way, subject then predicate then object,
 /// through a quoted triple's positions at any depth.
-pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
+pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> crate::solution::SharedSchema {
+    syntactic_schema_admitted(pattern, &crate::WorkspaceCapability::default())
+        .expect("resident syntactic schema allocation")
+}
+
+pub(crate) fn syntactic_schema_admitted(
+    pattern: &GraphPattern,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::solution::SharedSchema, EvalError> {
+    use crate::solution::SchemaBuilder;
     /// One term position still to read for its variables.
     enum Position<'a> {
         Term(&'a TermPattern),
@@ -3729,41 +4058,52 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
 
     /// Push the variables of the positions on `pending` onto `schema`, in the order the
     /// positions pop: a quoted triple's subject, then its predicate, then its object.
-    fn push_positions(pending: &mut Vec<Position<'_>>, schema: &mut VarSchema) {
+    fn push_positions(
+        pending: &mut crate::AdmittedVec<Position<'_>>,
+        schema: &mut SchemaBuilder,
+    ) -> Result<(), EvalError> {
         while let Some(position) = pending.pop() {
             match position {
                 Position::Term(TermPattern::Variable(variable)) => {
-                    schema.push(variable.clone());
+                    schema.push(variable.clone())?;
                 }
                 Position::Term(TermPattern::Triple(triple)) => {
-                    pending.push(Position::Term(&triple.object));
-                    pending.push(Position::Predicate(&triple.predicate));
-                    pending.push(Position::Term(&triple.subject));
+                    pending.push(Position::Term(&triple.object))?;
+                    pending.push(Position::Predicate(&triple.predicate))?;
+                    pending.push(Position::Term(&triple.subject))?;
                 }
                 Position::Term(
                     TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_),
                 ) => {}
                 Position::Predicate(NamedNodePattern::Variable(variable)) => {
-                    schema.push(variable.clone());
+                    schema.push(variable.clone())?;
                 }
                 Position::Predicate(NamedNodePattern::NamedNode(_)) => {}
             }
         }
+        Ok(())
     }
 
-    fn push_term(term: &TermPattern, schema: &mut VarSchema) {
-        push_positions(&mut vec![Position::Term(term)], schema);
+    fn push_term(
+        term: &TermPattern,
+        schema: &mut SchemaBuilder,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        let mut pending = crate::AdmittedVec::new(workspace);
+        pending.push(Position::Term(term))?;
+        push_positions(&mut pending, schema)
     }
 
-    fn push_triple(triple: &TriplePattern, schema: &mut VarSchema) {
-        push_positions(
-            &mut vec![
-                Position::Term(&triple.object),
-                Position::Predicate(&triple.predicate),
-                Position::Term(&triple.subject),
-            ],
-            schema,
-        );
+    fn push_triple(
+        triple: &TriplePattern,
+        schema: &mut SchemaBuilder,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        let mut pending = crate::AdmittedVec::with_capacity(3, workspace)?;
+        pending.push(Position::Term(&triple.object))?;
+        pending.push(Position::Predicate(&triple.predicate))?;
+        pending.push(Position::Term(&triple.subject))?;
+        push_positions(&mut pending, schema)
     }
 
     /// What a row-shaping operator appends to its inner pattern's columns.
@@ -3791,27 +4131,28 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
         UnionArms(usize),
     }
 
-    let mut steps = vec![Step::Derive(pattern)];
-    let mut schemas: Vec<VarSchema> = Vec::new();
+    let mut steps = crate::AdmittedVec::new(workspace);
+    steps.push(Step::Derive(pattern))?;
+    let mut schemas = crate::AdmittedVec::<SchemaBuilder>::new(workspace);
     while let Some(step) = steps.pop() {
         match step {
             Step::Derive(pattern) => match pattern {
                 GraphPattern::Bgp { patterns } => {
-                    let mut schema = VarSchema::default();
+                    let mut schema = SchemaBuilder::new(workspace);
                     for pattern in patterns {
-                        push_triple(pattern, &mut schema);
+                        push_triple(pattern, &mut schema, workspace)?;
                     }
-                    schemas.push(schema);
+                    schemas.push(schema)?;
                 }
                 GraphPattern::Path {
                     subject,
                     path: _,
                     object,
                 } => {
-                    let mut schema = VarSchema::default();
-                    push_term(subject, &mut schema);
-                    push_term(object, &mut schema);
-                    schemas.push(schema);
+                    let mut schema = SchemaBuilder::new(workspace);
+                    push_term(subject, &mut schema, workspace)?;
+                    push_term(object, &mut schema, workspace)?;
+                    schemas.push(schema)?;
                 }
                 GraphPattern::Join { left, right }
                 | GraphPattern::LeftJoin {
@@ -3821,15 +4162,17 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                 }
                 | GraphPattern::Lateral { left, right }
                 | GraphPattern::Apply { left, right, .. } => {
-                    steps.push(Step::Union);
-                    steps.push(Step::Derive(right));
-                    steps.push(Step::Derive(left));
+                    steps.push(Step::Union)?;
+                    steps.push(Step::Derive(right))?;
+                    steps.push(Step::Derive(left))?;
                 }
                 GraphPattern::Union { arms } => {
-                    steps.push(Step::UnionArms(arms.len()));
-                    steps.extend(arms.iter().rev().map(Step::Derive));
+                    steps.push(Step::UnionArms(arms.len()))?;
+                    for arm in arms.iter().rev() {
+                        steps.push(Step::Derive(arm))?;
+                    }
                 }
-                GraphPattern::Minus { left, right: _ } => steps.push(Step::Derive(left)),
+                GraphPattern::Minus { left, right: _ } => steps.push(Step::Derive(left))?,
                 GraphPattern::Filter { expr: _, inner }
                 | GraphPattern::OrderBy {
                     inner,
@@ -3846,18 +4189,18 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                     name: _,
                     inner,
                     silent: _,
-                } => steps.push(Step::Derive(inner)),
+                } => steps.push(Step::Derive(inner))?,
                 GraphPattern::Graph { name, inner } => {
-                    steps.push(Step::Shape(Append::GraphName(name)));
-                    steps.push(Step::Derive(inner));
+                    steps.push(Step::Shape(Append::GraphName(name)))?;
+                    steps.push(Step::Derive(inner))?;
                 }
                 GraphPattern::Extend {
                     inner,
                     variable,
                     expression: _,
                 } => {
-                    steps.push(Step::Shape(Append::Variable(variable)));
-                    steps.push(Step::Derive(inner));
+                    steps.push(Step::Shape(Append::Variable(variable)))?;
+                    steps.push(Step::Derive(inner))?;
                 }
                 // `UNFOLD`'s columns are its inner pattern's plus its own one or two
                 // targets, in declaration order — the same rule `Extend` follows for
@@ -3868,8 +4211,8 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                     element,
                     companion,
                 } => {
-                    steps.push(Step::Shape(Append::Unfold(element, companion.as_ref())));
-                    steps.push(Step::Derive(inner));
+                    steps.push(Step::Shape(Append::Unfold(element, companion.as_ref())))?;
+                    steps.push(Step::Derive(inner))?;
                 }
                 GraphPattern::Values {
                     variables,
@@ -3878,17 +4221,26 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                 | GraphPattern::Project {
                     inner: _,
                     variables,
-                } => schemas.push(VarSchema::from_vars(variables.iter().cloned())),
+                } => {
+                    let mut schema = SchemaBuilder::new(workspace);
+                    for variable in variables {
+                        schema.push(variable.clone())?;
+                    }
+                    schemas.push(schema)?;
+                }
                 GraphPattern::Group {
                     inner: _,
                     variables,
                     aggregates,
                 } => {
-                    let mut schema = VarSchema::from_vars(variables.iter().cloned());
-                    for (variable, _) in aggregates {
-                        schema.push(variable.clone());
+                    let mut schema = SchemaBuilder::new(workspace);
+                    for variable in variables {
+                        schema.push(variable.clone())?;
                     }
-                    schemas.push(schema);
+                    for (variable, _) in aggregates {
+                        schema.push(variable.clone())?;
+                    }
+                    schemas.push(schema)?;
                 }
                 // Every argument variable of a property function is in scope in the
                 // enclosing group (the arguments are simultaneously the call's inputs and
@@ -3896,30 +4248,31 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
                 // flattened first-seen order, subject side then object side, which is the
                 // order the dispatch fills them in.
                 GraphPattern::PropertyFunction(call) => {
-                    let mut schema = VarSchema::default();
+                    let mut schema = SchemaBuilder::new(workspace);
                     for term in call.subject_args.iter().chain(&call.object_args) {
-                        push_term(term, &mut schema);
+                        push_term(term, &mut schema, workspace)?;
                     }
-                    schemas.push(schema);
+                    schemas.push(schema)?;
                 }
             },
             Step::Shape(append) => {
                 let schema = schemas
+                    .as_mut_slice()
                     .last_mut()
                     .expect("the inner pattern's schema is derived before its operator's");
                 match append {
                     Append::GraphName(name) => {
                         if let NamedNodePattern::Variable(variable) = name {
-                            schema.push(variable.clone());
+                            schema.push(variable.clone())?;
                         }
                     }
                     Append::Variable(variable) => {
-                        schema.push(variable.clone());
+                        schema.push(variable.clone())?;
                     }
                     Append::Unfold(element, companion) => {
-                        schema.push(element.clone());
+                        schema.push(element.clone())?;
                         if let Some(companion) = companion {
-                            schema.push(companion.clone());
+                            schema.push(companion.clone())?;
                         }
                     }
                 }
@@ -3927,27 +4280,29 @@ pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
             Step::Union => {
                 let right = schemas.pop().expect("the right operand's schema");
                 let mut left = schemas.pop().expect("the left operand's schema");
-                left.append(&right);
-                schemas.push(left);
+                for variable in right.vars() {
+                    left.push(variable.clone())?;
+                }
+                schemas.push(left)?;
             }
             Step::UnionArms(count) => {
                 let first = schemas.len() - count;
-                let union = schemas
-                    .drain(first..)
-                    .fold(VarSchema::default(), |mut schema, arm| {
-                        schema.append(&arm);
-                        schema
-                    });
-                schemas.push(union);
+                let mut union = SchemaBuilder::new(workspace);
+                for arm in schemas.drain_from(first) {
+                    for variable in arm.vars() {
+                        union.push(variable.clone())?;
+                    }
+                }
+                schemas.push(union)?;
             }
         }
     }
 
-    Arc::new(
-        schemas
-            .pop()
-            .expect("the root's schema is the last one derived"),
-    )
+    schemas
+        .pop()
+        .expect("the root's schema is the last one derived")
+        .finish()?
+        .shared_admitted(workspace)
 }
 
 /// Evaluate a graph pattern to a multiset of solutions, requiring completion.
@@ -3984,7 +4339,7 @@ pub fn eval<D: DatasetView + Sync>(
         ));
     }
     crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
-    ctx.reserve_concrete_blank_inputs(pattern);
+    ctx.reserve_concrete_blank_inputs(pattern)?;
     let source_pattern = pattern;
     // Raw algebra has not passed admission, which is where a blank node label shared
     // by two pieces of one basic graph pattern is made the one variable it is — so
@@ -3996,18 +4351,12 @@ pub fn eval<D: DatasetView + Sync>(
     let pattern = normalized.as_ref().unwrap_or(pattern);
     let source_schema =
         (joined.is_some() || normalized.is_some()).then(|| syntactic_schema(source_pattern));
-    let tree = crate::plan::Tree::build(pattern);
+    let tree = crate::plan::Tree::build_admitted(pattern, &ctx.growth)?;
     let previous_plan = ctx.plan.take();
     ctx.install_plan(&tree);
     let result = (|| {
-        eval_evaluated(pattern, ctx)?
+        let rows = eval_evaluated(pattern, ctx)?
             .into_complete()
-            .map(|rows| {
-                crate::blank_scope::without_joined_blanks(match source_schema.as_ref() {
-                    Some(schema) => rows.reorder_like(schema),
-                    None => rows,
-                })
-            })
             .map_err(|truncation| {
                 EvalError::internal(format!(
                     "a governor tripped on an evaluation entry point that can only return a \
@@ -4016,7 +4365,12 @@ pub fn eval<D: DatasetView + Sync>(
                  answers: {}",
                     truncation.describe()
                 ))
-            })
+            })?;
+        let rows = match source_schema.as_ref() {
+            Some(schema) => rows.reorder_like_admitted(schema, &ctx.growth)?,
+            None => rows,
+        };
+        crate::blank_scope::without_joined_blanks_admitted(rows, &ctx.growth)
     })();
     ctx.plan = previous_plan;
     result
@@ -4029,7 +4383,7 @@ pub enum Outcome<I: ViewTermId = TermId> {
     /// `SELECT` solutions (a multiset over the projected schema).
     Solutions(SolutionSeq<I>),
     /// `CONSTRUCT`/`DESCRIBE` graph result.
-    Graph(Arc<RdfDataset>),
+    Graph(purrdf_core::DatasetHandle),
     /// `ASK` boolean.
     Boolean(bool),
 }
@@ -4106,7 +4460,7 @@ fn install_answer_cap_pushdown<D: DatasetView + Sync>(
     query: &Query,
     plan: &crate::plan::PlanHandle,
     ctx: &mut EvalCtx<'_, D>,
-) {
+) -> Result<(), EvalError> {
     ctx.cap_pushdown = None;
     let cap = match (query, ctx.governors.as_ref()) {
         (Query::Select { .. }, Some(state))
@@ -4118,10 +4472,13 @@ fn install_answer_cap_pushdown<D: DatasetView + Sync>(
                 .saturating_add(1)
         }
         // No root cap: semantic slices install their local pushdown only if reached.
-        _ => return,
+        _ => return Ok(()),
     };
-    let pushdown = CapPushdown::over_plan(plan, query_pattern(query), cap);
-    ctx.cap_pushdown = pushdown.map(Arc::new);
+    let pushdown = CapPushdown::over_plan_admitted(plan, query_pattern(query), cap, &ctx.growth)?;
+    ctx.cap_pushdown = pushdown
+        .map(|value| crate::workspace::SharedWorkspace::new_admitted(value, &ctx.growth))
+        .transpose()?;
+    Ok(())
 }
 
 /// What is being admitted at the `VERSION` boundary: a full query or an update
@@ -4251,49 +4608,86 @@ pub(crate) fn prepare_query_context_over<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<(), EvalError> {
     admit_version(AdmittedRequest::Query(query))?;
-    crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
+    {
+        let mut frame = crate::workspace::LexicalFrame::new(&ctx.growth);
+        crate::governor::soundness::validate_graph_pattern_depth_with_memory(
+            query_pattern(query),
+            &mut purrdf_lex::allocation::Memory::new(&mut frame),
+        )?;
+    }
     // Concrete ground inputs can occur after a stateful expression in written
     // order. Reserve their identities before any allocator can capture them;
     // ordinary pure queries retain their existing scratch allocation path.
-    ctx.reserve_concrete_blank_inputs(query_pattern(query));
+    ctx.reserve_concrete_blank_inputs(query_pattern(query))?;
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
-    ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
+    ctx.active_dataset = ActiveDataset::from_query_dataset_admitted(
+        query.dataset(),
+        ctx.dataset,
+        &ctx.growth,
+        |error| ctx.workspace.source_error(error),
+    )?;
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
     // string argument against it (SPARQL 1.1 §17.4.2.6).
-    ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
+    ctx.base_iri = query
+        .base_iri()
+        .map(|node| EffectiveBase::copy(node.as_str(), &ctx.growth))
+        .transpose()?;
     // The tree every node of this evaluation is numbered in, with its variable-endpoint
     // analysis and `EXISTS` sites: the kept one, or one built here.
     let plan = match kept {
-        Some(cache) => cache.handle(query_pattern(query)),
-        None => crate::plan::Tree::build(query_pattern(query)).handle(),
+        Some(cache) => cache.handle_admitted(query_pattern(query), &ctx.growth)?,
+        None => crate::plan::Tree::build_admitted(query_pattern(query), &ctx.growth)?.handle(),
     };
     ctx.install_plan_handle(plan.clone());
-    install_answer_cap_pushdown(query, &plan, ctx);
+    install_answer_cap_pushdown(query, &plan, ctx)?;
     Ok(())
 }
 
 fn register_concrete_blank_inputs<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
-) {
-    use purrdf_sparql_algebra::{Flow, GroundTerm, NodeRef, Visit, walk_pre_post};
-    walk_pre_post(NodeRef::Pattern(pattern), |visit, node| {
-        if visit == Visit::Enter
-            && let NodeRef::Ground(GroundTerm::BlankNode(blank)) = node
-        {
-            let (label, scope) = purrdf_core::BlankScope::unqualify_label(blank.as_str());
-            if scope == purrdf_core::BlankScope::DEFAULT {
-                ctx.scratch.reserve_blank_identity(&label, scope);
-                if let Err(tripped) = ctx.charge_scratch_growth() {
-                    ctx.record_barrier(tripped);
-                    return Flow::Stop;
+) -> Result<(), EvalError> {
+    use purrdf_sparql_algebra::{Flow, GroundTerm, NodeRef, Visit, walk_pre_post_with_memory};
+    let workspace = ctx.growth.clone();
+    let mut frame = crate::workspace::LexicalFrame::new(&workspace);
+    let mut failure = None;
+    let walked = walk_pre_post_with_memory(
+        NodeRef::Pattern(pattern),
+        |visit, node, memory| {
+            if visit == Visit::Enter
+                && let NodeRef::Ground(GroundTerm::BlankNode(blank)) = node
+            {
+                let (label, scope) = purrdf_core::blank_label::decode_blank_label_with_memory(
+                    blank.as_str(),
+                    purrdf_core::blank_label::LabelAlphabet::Unconstrained,
+                    memory,
+                )?;
+                if scope == purrdf_core::BlankScope::DEFAULT {
+                    if let Err(error) = ctx
+                        .scratch
+                        .reserve_blank_identity_admitted(&label, scope, &workspace)
+                    {
+                        failure = Some(error);
+                    } else if let Err(tripped) = ctx.charge_scratch_growth() {
+                        ctx.record_barrier(tripped);
+                    }
+                }
+                if let std::borrow::Cow::Owned(label) = label {
+                    memory.release_string(label)?;
+                }
+                if failure.is_some() || ctx.expression_barrier.observed().is_some() {
+                    return Ok(Flow::Stop);
                 }
             }
-        }
-        // An algebra literal's embedded labels are bound by literal_to_value
-        // into QUERY_BLANK_SCOPE, so they cannot capture a DEFAULT allocation.
-        Flow::Descend
-    });
+            Ok::<_, purrdf_lex::allocation::StorageError>(Flow::Descend)
+        },
+        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+    );
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    walked.map_err(|error| frame.storage_error(error, "concrete blank inputs"))?;
+    Ok(())
 }
 
 /// Evaluate a top-level [`Query`] form over `ctx`'s dataset, trip-aware.
@@ -4347,12 +4741,15 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
         Query::Select { pattern, .. } => {
             match commit_answer_rows(eval_evaluated(pattern, ctx)?, ctx) {
                 Evaluated::Complete(seq) => Ok(EvaluatedOutcome::Complete(Outcome::Solutions(
-                    crate::blank_scope::without_joined_blanks(seq),
+                    crate::blank_scope::without_joined_blanks_admitted(seq, &ctx.growth)?,
                 ))),
                 Evaluated::Truncated(certificate) => Ok(EvaluatedOutcome::Truncated {
-                    outcome: Outcome::Solutions(crate::blank_scope::without_joined_blanks(
-                        certificate.rows().clone(),
-                    )),
+                    outcome: Outcome::Solutions(
+                        crate::blank_scope::without_joined_blanks_admitted(
+                            certificate.rows().clone(),
+                            &ctx.growth,
+                        )?,
+                    ),
                     certificate,
                 }),
             }
@@ -4422,26 +4819,29 @@ pub fn evaluate_query<D: DatasetView + Sync>(
     let query = normalized.as_ref().unwrap_or(query);
     let source_schema = if joined.is_some() || normalized.is_some() {
         match source_query {
-            Query::Select { pattern, .. } => Some(Arc::new(VarSchema::from_vars(
-                syntactic_schema(pattern)
-                    .vars()
-                    .iter()
-                    .filter(|variable| !crate::blank_scope::is_joined_blank(variable))
-                    .cloned(),
-            ))),
+            Query::Select { pattern, .. } => {
+                Some(VarSchema::shared_resident(VarSchema::from_vars(
+                    syntactic_schema(pattern)
+                        .vars()
+                        .iter()
+                        .filter(|variable| !crate::blank_scope::is_joined_blank(variable))
+                        .cloned(),
+                )))
+            }
             _ => None,
         }
     } else {
         None
     };
     let previous_plan = ctx.plan.take();
-    let result =
-        evaluate_query_over(query, None, ctx).map(|outcome| match (outcome, source_schema) {
+    let result = evaluate_query_over(query, None, ctx).and_then(|outcome| {
+        Ok(match (outcome, source_schema) {
             (Outcome::Solutions(rows), Some(schema)) => {
-                Outcome::Solutions(rows.reorder_like(&schema))
+                Outcome::Solutions(rows.reorder_like_admitted(&schema, &ctx.growth)?)
             }
             (outcome, _) => outcome,
-        });
+        })
+    });
     ctx.plan = previous_plan;
     result
 }
@@ -4490,17 +4890,38 @@ pub(crate) fn evaluate_query_over<D: DatasetView + Sync>(
 /// cannot differ in how they spell it. An empty slice — the common case, and the
 /// only case for a query with no list constructor in it — yields an empty but
 /// positionally valid dataset rather than an error or an absent graph.
-fn freeze_constructed(cells: &[(TermValue, TermValue, TermValue)]) -> Arc<RdfDataset> {
-    let mut builder = purrdf_core::RdfDatasetBuilder::new();
-    for (s, p, o) in cells {
-        let s = builder.intern_value(s);
-        let p = builder.intern_value(p);
-        let o = builder.intern_value(o);
-        builder.push_quad(s, p, o, None);
-    }
-    builder
-        .freeze()
-        .expect("constructed list cells are positionally valid by construction")
+pub(crate) fn freeze_constructed(
+    cells: &[(TermValue, TermValue, TermValue)],
+    selected: &[usize],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<purrdf_core::DatasetHandle, EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let native = (|| {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        for &index in selected {
+            let (subject, predicate, object) = &cells[index];
+            let s = builder.intern_value_with_memory(subject, &mut memory)?;
+            let p = builder.intern_value_with_memory(predicate, &mut memory)?;
+            let o = builder.intern_value_with_memory(object, &mut memory)?;
+            builder.push_quad_with_memory(s, p, o, None, &mut memory)?;
+        }
+        let mut dataset = builder.freeze_with_memory(&mut memory)?;
+        dataset.warm_query_indexes_with_memory(&mut memory)?;
+        Ok::<_, purrdf_core::NativeBuildError>(dataset)
+    })();
+    let mut dataset = Some(match native {
+        Ok(dataset) => dataset,
+        Err(purrdf_core::NativeBuildError::Storage(error)) => {
+            return Err(frame.storage_error(error, "constructed auxiliary graph"));
+        }
+        Err(purrdf_core::NativeBuildError::Diagnostic(error)) => {
+            return Err(EvalError::RetainedDiagnostic(
+                frame.finish_diagnostic(&mut Some(error))?,
+            ));
+        }
+    });
+    frame.finish_dataset(&mut dataset)
 }
 
 type MaterializedSolutions = (Vec<String>, Vec<Vec<Option<TermValue>>>);
@@ -4516,27 +4937,55 @@ pub(crate) fn materialize_solutions<D: DatasetView + Sync>(
     seq: &SolutionSeq<D::Id>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<MaterializedSolutions, EvalError> {
-    let variables = seq
-        .schema
-        .vars()
-        .iter()
-        .map(|v| v.as_str().to_owned())
-        .collect();
-    let mut rows = Vec::with_capacity(seq.rows.len());
+    let names = seq.schema.vars();
+    let names_bytes = names
+        .len()
+        .checked_mul(size_of::<String>())
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    ctx.growth
+        .retain(u64::try_from(names_bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    let mut variables = crate::workspace::vector(names.len(), "materialized solution names")?;
+    for name in names {
+        ctx.growth.retain(
+            u64::try_from(name.as_str().len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        variables.push(crate::workspace::string(
+            name.as_str(),
+            "materialized solution name",
+        )?);
+    }
+    let rows_bytes = seq
+        .rows
+        .len()
+        .checked_mul(size_of::<Vec<Option<TermValue>>>())
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    ctx.growth
+        .retain(u64::try_from(rows_bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    let mut rows = crate::workspace::vector(seq.rows.len(), "materialized solution bag")?;
     for row in &seq.rows {
-        let mut out = Vec::with_capacity(row.len());
+        let row_bytes = row
+            .len()
+            .checked_mul(size_of::<Option<TermValue>>())
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        ctx.growth
+            .retain(u64::try_from(row_bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let mut out = crate::workspace::vector(row.len(), "materialized solution row")?;
         for cell in row {
             out.push(
-                cell.map(|t| ctx.scratch.try_value_of(ctx.dataset, t))
-                    .transpose()
-                    .map_err(EvalError::source_read)?,
+                cell.map(|t| {
+                    ctx.scratch
+                        .try_value_of_admitted(ctx.dataset, t, &ctx.growth, |error| {
+                            ctx.workspace.source_error(error)
+                        })
+                })
+                .transpose()?,
             );
         }
         rows.push(out);
     }
     ctx.dataset
         .checked_read(|_| (variables, rows))
-        .map_err(EvalError::source_read)
+        .map_err(|error| ctx.workspace.source_error(error))
 }
 
 #[cfg(test)]
@@ -4544,6 +4993,115 @@ mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
     use purrdf_sparql_algebra::{Child, NamedNode};
+
+    #[test]
+    fn native_term_lookup_retains_known_ids_absence_and_shared_fork_state() {
+        let workspace = crate::WorkspaceCapability::resident();
+        let lookup = TermLookup::default();
+        let mut builder = RdfDatasetBuilder::new();
+        let id = builder.intern_iri("https://example.org/known");
+        let known = TermValue::Iri("https://example.org/known".to_owned());
+        let missing = TermValue::Iri("https://example.org/missing".to_owned());
+        assert_eq!(
+            lookup.lookup(&known, &workspace, |_| Ok(Some(id))).unwrap(),
+            Some(id)
+        );
+        let worker = lookup.fork_admitted(&workspace).unwrap();
+        assert_eq!(
+            worker
+                .lookup(&known, &workspace, |_| panic!("known identity was reread"))
+                .unwrap(),
+            Some(id)
+        );
+        let reads = std::cell::Cell::new(0);
+        for _ in 0..3 {
+            assert_eq!(
+                worker
+                    .lookup(&missing, &workspace, |_| {
+                        reads.set(reads.get() + 1);
+                        Ok(None)
+                    })
+                    .unwrap(),
+                None
+            );
+        }
+        assert_eq!(reads.get(), 1);
+        assert_eq!(
+            lookup
+                .lookup(&missing, &workspace, |_| panic!(
+                    "shared absence was reread"
+                ))
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn native_term_lookup_disambiguates_collision_bucket_with_original_rdf_equality() {
+        let workspace = crate::WorkspaceCapability::resident();
+        let lookup = TermLookup::<TermId>::default();
+        let first = TermValue::Iri("https://example.org/first".to_owned());
+        let second = TermValue::Iri("https://example.org/second".to_owned());
+        let mut builder = RdfDatasetBuilder::new();
+        let first_id = builder.intern_iri("https://example.org/first");
+        let second_id = builder.intern_iri("https://example.org/second");
+        let shared = lookup.shared(&workspace).unwrap();
+        let mut bucket = crate::AdmittedVec::new(&workspace);
+        // Put a distinct real value in the bucket selected by the second hash.
+        // This tests actual equality rather than assuming the hash is identity.
+        bucket
+            .push(TermLookupEntry {
+                value: workspace.clone_term(&first).unwrap(),
+                id: Some(first_id),
+            })
+            .unwrap();
+        shared
+            .lock()
+            .unwrap()
+            .insert_admitted(workspace.term_hash(&second).unwrap(), bucket, &workspace)
+            .unwrap();
+        assert_eq!(
+            lookup
+                .lookup(&second, &workspace, |_| Ok(Some(second_id)))
+                .unwrap(),
+            Some(second_id)
+        );
+        assert_eq!(
+            lookup
+                .lookup(&second, &workspace, |_| panic!(
+                    "exact collision entry was reread"
+                ))
+                .unwrap(),
+            Some(second_id)
+        );
+    }
+
+    #[test]
+    fn native_term_lookup_keeps_a_failed_read_distinct_from_absence() {
+        let workspace = crate::WorkspaceCapability::resident();
+        let lookup = TermLookup::<TermId>::default();
+        let value = TermValue::Iri("https://example.org/value".to_owned());
+        assert!(matches!(
+            lookup.lookup(&value, &workspace, |_| Err(
+                EvalError::WorkspaceBoundOverflow
+            )),
+            Err(EvalError::WorkspaceBoundOverflow)
+        ));
+        let called = std::cell::Cell::new(false);
+        assert_eq!(
+            lookup
+                .lookup(&value, &workspace, |_| {
+                    called.set(true);
+                    Ok(None)
+                })
+                .unwrap(),
+            None
+        );
+        assert!(
+            called.get(),
+            "a failure must not have been retained as absence"
+        );
+    }
 
     #[test]
     fn cell_row_ceiling_checks_inclusive_layout_without_disengaging_observations() {
@@ -4861,7 +5419,8 @@ mod tests {
                 .with_bnode_mint_prefix(illegal)
                 .expect_err(&format!("{illegal:?} must be rejected"));
             assert!(
-                matches!(err, EvalError::Config(_)),
+                matches!(&err, EvalError::NativeDiagnostic(diagnostic)
+                    if diagnostic.kind() == crate::error::NativeDiagnosticKind::Config),
                 "{illegal:?} -> {err:?}"
             );
             assert!(

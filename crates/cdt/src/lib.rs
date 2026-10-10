@@ -141,6 +141,7 @@ pub mod error;
 pub mod functions;
 pub mod limits;
 pub mod literal;
+pub mod memory;
 pub mod ops;
 pub mod parse;
 pub mod render;

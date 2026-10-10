@@ -315,6 +315,10 @@ pub(crate) fn diagnostic_to_js(diagnostic: RdfDiagnostic) -> JsValue {
 // ---------------------------------------------------------------------------
 
 /// What a finished operation left for its caller to take.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The stopped-update payload moves inline so outcome transfer does not allocate after workspace refusal."
+)]
 pub(crate) enum JobOutcome {
     Query(SparqlResult),
     Raw(String),

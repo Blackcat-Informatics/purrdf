@@ -65,18 +65,17 @@ fn main() {
                 QueryOptions::EMPTY,
             )
             .expect("complete layered query");
-        let (variables, rows) = complete.result.into_solutions().expect("SELECT shape");
+        let solutions = complete.result.into_solutions().expect("SELECT shape");
+        let (variables, rows) = solutions.as_parts();
         assert_eq!(variables, vec!["name"]);
         assert_eq!(rows, vec![vec![Some(TermValue::simple_literal(wanted))]]);
         let repeated = engine
             .query_prepared_fallible_view(&view, &prepared, &[], QueryOptions::EMPTY)
             .expect("same cached reader through prepared API");
+        let repeated_solutions = repeated.result.into_solutions().expect("SELECT shape");
+        assert_eq!(repeated_solutions.as_parts().1, rows);
         assert_eq!(
-            repeated.result.into_solutions().expect("SELECT shape").1,
-            rows
-        );
-        assert_eq!(
-            repeated.evidence, complete.evidence,
+            *repeated.evidence, *complete.evidence,
             "no repeated admission charge"
         );
         println!(

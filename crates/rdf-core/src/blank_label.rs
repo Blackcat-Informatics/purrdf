@@ -151,6 +151,8 @@
 
 use std::borrow::Cow;
 
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+
 use crate::BlankScope;
 
 /// Which label grammar [`is_valid_label`] should check against.
@@ -242,38 +244,65 @@ pub fn is_valid_label(label: &str, alphabet: LabelAlphabet) -> bool {
 /// the one case where a default-scope legal label does not pass through.
 #[must_use]
 pub fn encode_blank_label(label: &str, scope: BlankScope, alphabet: LabelAlphabet) -> Cow<'_, str> {
+    encode_blank_label_with_memory(label, scope, alphabet, &mut Memory::new(&mut Resident))
+        .expect("resident blank-label allocation failed")
+}
+
+/// Encode through the original caller's physical admission.
+///
+/// Borrowed spellings need no allocation. An owned spelling remains included in
+/// `memory` until the caller destroys it or transfers its original grant.
+///
+/// # Errors
+/// Returns physical layout, admission, formatting or allocator refusal.
+pub fn encode_blank_label_with_memory<'a, S: Admission + ?Sized>(
+    label: &'a str,
+    scope: BlankScope,
+    alphabet: LabelAlphabet,
+    memory: &mut Memory<'_, S>,
+) -> Result<Cow<'a, str>, StorageError> {
     if scope == BlankScope::DEFAULT
         && is_valid_label(label, alphabet)
         && !label.starts_with(ESCAPE_MARKER)
     {
-        return Cow::Borrowed(label);
+        return Ok(Cow::Borrowed(label));
     }
-    let mut encoded = String::with_capacity(ESCAPE_MARKER.len() + label.len() + 16);
-    encoded.push_str(ESCAPE_MARKER);
-    if scope != BlankScope::DEFAULT {
-        use std::fmt::Write as _;
-        // Canonical decimal, never zero-padded: the decode below accepts only
-        // this spelling, so the encoding stays injective over scopes.
-        let _ = write!(encoded, "{}", scope.ordinal());
-    }
-    encoded.push('_');
-    for ch in label.chars() {
-        if ch.is_ascii_alphanumeric() {
-            encoded.push(ch);
-        } else {
-            encoded.push('_');
-            push_hex6(ch as u32, &mut encoded);
-        }
-    }
+    let encoded = memory.format(&EnvelopeSpelling { label, scope })?;
     debug_assert!(
         is_valid_label(&encoded, alphabet),
         "encode_blank_label must always produce a token legal under the target alphabet"
     );
-    debug_assert!(
-        decode_envelope(&encoded).is_some_and(|(l, s)| l == label && s == scope),
-        "every envelope must decode back to the pair it encodes"
-    );
-    Cow::Owned(encoded)
+    Ok(Cow::Owned(encoded))
+}
+
+/// Allocation-free rendering of the single canonical envelope spelling.
+struct EnvelopeSpelling<'a> {
+    label: &'a str,
+    scope: BlankScope,
+}
+
+impl std::fmt::Display for EnvelopeSpelling<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(ESCAPE_MARKER)?;
+        if self.scope != BlankScope::DEFAULT {
+            write!(f, "{}", self.scope.ordinal())?;
+        }
+        f.write_str("_")?;
+        for ch in self.label.chars() {
+            if ch.is_ascii_alphanumeric() {
+                write!(f, "{ch}")?;
+            } else {
+                let [_, high, middle, low] = (ch as u32).to_be_bytes();
+                let mut digits = [0u8; 6];
+                f.write_str("_")?;
+                f.write_str(
+                    purrdf_hash::hex::encode_upper_to_slice(&[high, middle, low], &mut digits)
+                        .expect("three bytes render in six digits"),
+                )?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Encode `label` at [`BlankScope::DEFAULT`] into `alphabet` — the unscoped
@@ -310,19 +339,38 @@ pub fn escape_label(label: &str, alphabet: LabelAlphabet) -> Cow<'_, str> {
 /// asserted in debug builds on every accepted envelope.
 #[must_use]
 pub fn decode_blank_label(token: &str, alphabet: LabelAlphabet) -> (Cow<'_, str>, BlankScope) {
-    // The hot path for real data: one prefix compare, no allocation, no scan.
+    decode_blank_label_with_memory(token, alphabet, &mut Memory::new(&mut Resident))
+        .expect("resident blank-label allocation failed")
+}
+
+/// Decode the same envelope and byte-exact image law under physical admission.
+///
+/// The decoded label retains its original admission; image-test scratch is
+/// destroyed and released before returning. Malformed envelopes remain borrowed.
+///
+/// # Errors
+/// Returns physical refusal instead of treating it as a malformed envelope.
+pub fn decode_blank_label_with_memory<'a, S: Admission + ?Sized>(
+    token: &'a str,
+    alphabet: LabelAlphabet,
+    memory: &mut Memory<'_, S>,
+) -> Result<(Cow<'a, str>, BlankScope), StorageError> {
     if !token.starts_with(ESCAPE_MARKER) {
-        return (Cow::Borrowed(token), BlankScope::DEFAULT);
+        return Ok((Cow::Borrowed(token), BlankScope::DEFAULT));
     }
-    let Some((label, scope)) = decode_envelope(token) else {
-        return (Cow::Borrowed(token), BlankScope::DEFAULT);
+    let Some((label, scope)) = decode_envelope(token, memory)? else {
+        return Ok((Cow::Borrowed(token), BlankScope::DEFAULT));
     };
-    if encode_blank_label(&label, scope, alphabet).as_ref() != token {
-        // Not in the encoder's image under this alphabet, so no serializer
-        // could have written it: it denotes itself.
-        return (Cow::Borrowed(token), BlankScope::DEFAULT);
+    let encoded = encode_blank_label_with_memory(&label, scope, alphabet, memory)?;
+    let identical = encoded.as_ref() == token;
+    if let Cow::Owned(encoded) = encoded {
+        memory.release_string(encoded)?;
     }
-    (Cow::Owned(label), scope)
+    if !identical {
+        memory.release_string(label)?;
+        return Ok((Cow::Borrowed(token), BlankScope::DEFAULT));
+    }
+    Ok((Cow::Owned(label), scope))
 }
 
 /// Re-target an OWNED-model blank label — the
@@ -362,68 +410,81 @@ pub fn retarget_owned_label(owned: &str, alphabet: LabelAlphabet) -> Cow<'_, str
 /// This is the syntactic half of the decode; [`decode_blank_label`] adds the
 /// image test that rejects a well-formed envelope the encoder would not have
 /// written.
-fn decode_envelope(token: &str) -> Option<(String, BlankScope)> {
-    let rest = token.strip_prefix(ESCAPE_MARKER)?;
-    // The scope digits are the maximal digit run, always terminated by the `_`
-    // that opens the body — so the split is unambiguous even when the body
-    // itself starts with digits.
-    let digits_len = rest.bytes().take_while(u8::is_ascii_digit).count();
-    let (digits, body) = rest.split_at(digits_len);
-    let body = body.strip_prefix('_')?;
-    let scope = if digits.is_empty() {
-        BlankScope::DEFAULT
-    } else {
-        // `encode_blank_label` writes a canonical, non-zero decimal, so a
-        // zero-padded or zero ordinal is outside its image and must not decode
-        // (the image test below would reject it anyway; refusing here keeps the
-        // grammar's statement exact).
-        if digits.starts_with('0') {
-            return None;
-        }
-        let ordinal = digits.parse::<u32>().ok()?;
-        if ordinal == 0 {
-            return None;
-        }
-        BlankScope(ordinal)
+fn decode_envelope<S: Admission + ?Sized>(
+    token: &str,
+    memory: &mut Memory<'_, S>,
+) -> Result<Option<(String, BlankScope)>, StorageError> {
+    // Parse the envelope grammar first without storage, then render the same
+    // decoded scalars into the admitted destination.
+    fn parts(token: &str) -> Option<(&str, BlankScope)> {
+        let rest = token.strip_prefix(ESCAPE_MARKER)?;
+        // The scope digits are the maximal digit run, always terminated by the `_`
+        // that opens the body — so the split is unambiguous even when the body
+        // itself starts with digits.
+        let digits_len = rest.bytes().take_while(u8::is_ascii_digit).count();
+        let (digits, body) = rest.split_at(digits_len);
+        let body = body.strip_prefix('_')?;
+        let scope = if digits.is_empty() {
+            BlankScope::DEFAULT
+        } else {
+            // `encode_blank_label` writes a canonical, non-zero decimal, so a
+            // zero-padded or zero ordinal is outside its image and must not decode
+            // (the image test below would reject it anyway; refusing here keeps the
+            // grammar's statement exact).
+            if digits.starts_with('0') {
+                return None;
+            }
+            let ordinal = digits.parse::<u32>().ok()?;
+            if ordinal == 0 {
+                return None;
+            }
+            BlankScope(ordinal)
+        };
+        Some((body, scope))
+    }
+    let Some((body, scope)) = parts(token) else {
+        return Ok(None);
     };
-    let mut decoded = String::with_capacity(body.len());
+    let mut decoded = String::new();
+    memory.reserve_string(&mut decoded, body.len())?;
     let mut chars = body.chars();
     while let Some(ch) = chars.next() {
         if ch.is_ascii_alphanumeric() {
-            decoded.push(ch);
+            memory.push_char(&mut decoded, ch)?;
             continue;
         }
-        if ch != '_' {
-            return None;
+        let mut scalar = None;
+        if ch == '_' {
+            let mut cp: u32 = 0;
+            let mut valid = true;
+            for _ in 0..6 {
+                match chars.next().and_then(hex6_digit) {
+                    Some(digit) => cp = cp * 16 + digit,
+                    None => {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+            if valid {
+                scalar = char::from_u32(cp);
+            }
         }
-        let mut cp: u32 = 0;
-        for _ in 0..6 {
-            cp = cp * 16 + chars.next().and_then(hex6_digit)?;
-        }
-        decoded.push(char::from_u32(cp)?);
+        let Some(scalar) = scalar else {
+            memory.release_string(decoded)?;
+            return Ok(None);
+        };
+        memory.push_char(&mut decoded, scalar)?;
     }
-    Some((decoded, scope))
+    Ok(Some((decoded, scope)))
 }
 
 /// One digit of a fixed-width escape group: `0-9` or UPPERCASE `A-F`, matching
-/// exactly what [`push_hex6`] writes. Lowercase is deliberately refused so the
+/// exactly what the canonical envelope renderer writes. Lowercase is deliberately refused so the
 /// decode accepts only the escape's own image.
 fn hex6_digit(c: char) -> Option<u32> {
     let byte = u8::try_from(c).ok().filter(|b| !b.is_ascii_lowercase())?;
     purrdf_hash::hex::nibble(byte).map(u32::from)
-}
-
-/// Append `cp` as exactly six uppercase hex digits (24 bits covers the whole
-/// `0..=0x10FFFF` scalar range), the fixed-width escape body [`escape_label`]
-/// writes after each `_`: the low three bytes of `cp`, big-endian, in
-/// uppercase base16.
-fn push_hex6(cp: u32, out: &mut String) {
-    let [_, high, middle, low] = cp.to_be_bytes();
-    let mut digits = [0u8; 6];
-    out.push_str(
-        purrdf_hash::hex::encode_upper_to_slice(&[high, middle, low], &mut digits)
-            .expect("three bytes render in six digits"),
-    );
 }
 
 // Keep the dataset-codec API while the exact shared lexical grammar lives below

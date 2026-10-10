@@ -392,43 +392,18 @@ impl Decimal {
     /// zeros trimmed (`2.50` → `"2.5"`, `-0.250` → `"-0.25"`).
     #[must_use]
     pub fn canonical_lexical(&self) -> String {
-        // Two allocations (the digit string and the exact-fit output) where the
-        // split/pad/format form built three to four intermediate `String`s; the
-        // integer and fraction parts are slices of `digits`, and the zero padding
-        // is pushed directly. Byte-identical to the reference form in the tests.
-        let neg = self.mantissa < 0;
-        let digits = self.mantissa.unsigned_abs().to_string();
-        let scale = usize::from(self.scale);
-        let mut out = String::with_capacity(digits.len() + scale + 3);
-        if neg {
-            out.push('-');
-        }
-        if scale == 0 {
-            out.push_str(&digits);
-            return out;
-        }
+        self.to_string()
+    }
+}
 
-        let (int_part, frac_digits, pad) = if digits.len() > scale {
-            let split = digits.len() - scale;
-            (&digits[..split], &digits[split..], 0)
-        } else {
-            // value magnitude < 1: pad leading zeros in the fractional part.
-            ("0", digits.as_str(), scale - digits.len())
-        };
-
-        // XSD 1.1 §E.1 `decimalCanonicalMap`: an integer-valued decimal (an empty
-        // fractional part after trimming trailing zeros) has NO decimal point at all. The pad is
-        // all zeros, so the padded fraction trims to empty iff `frac_digits` does.
-        let frac_trimmed = frac_digits.trim_end_matches('0');
-        out.push_str(int_part);
-        if !frac_trimmed.is_empty() {
-            out.push('.');
-            for _ in 0..pad {
-                out.push('0');
-            }
-            out.push_str(frac_trimmed);
-        }
-        out
+impl core::fmt::Display for Decimal {
+    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // A bounded coefficient has at most two binary limbs and three base-ten
+        // groups: the native Mag inline capacity covers every preparation buffer.
+        crate::exact::Decimal::from_bounded(self)
+            .prepare_text()
+            .map_err(|_| core::fmt::Error)?
+            .write_fmt(out)
     }
 }
 
@@ -481,32 +456,27 @@ pub fn parse_integer(s: &str) -> Result<i128, XsdError> {
 /// This is the unified entry point for all integer-family datatypes; `parse` in
 /// `value.rs` routes every integer-family IRI through here.
 pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128, XsdError> {
-    // First, parse as an unconstrained integer (which may itself fail with
-    // InvalidLexical for malformed input, or OutOfRange for beyond-i128).
-    // We call parse_integer but report the error under `datatype` for non-Integer
-    // subtypes, so callers see the correct IRI in the error.
+    read_integer_typed(lexical, datatype).map_err(|error| error.owned(datatype, lexical))
+}
+
+pub(crate) fn read_integer_typed(
+    lexical: &str,
+    datatype: XsdDatatype,
+) -> Result<i128, NumericReadError> {
     if !is_integer_lexical(lexical) {
-        return Err(XsdError::invalid(
-            datatype,
-            lexical,
+        return Err(NumericReadError::Invalid(
             "expected an optional sign then digits",
         ));
     }
-    let value = lexical.parse::<i128>().map_err(|_| XsdError::OutOfRange {
-        datatype,
-        lexical: lexical.to_string(),
-        reason: crate::value::reason::INTEGER_TOO_LARGE,
-    })?;
-
-    // Now range-check against the datatype's inclusive bounds.
+    let value = lexical
+        .parse::<i128>()
+        .map_err(|_| NumericReadError::OutOfRange(crate::value::reason::INTEGER_TOO_LARGE))?;
     if let Some((min, max)) = datatype.integer_range()
         && (value < min || value > max)
     {
-        return Err(XsdError::OutOfRange {
-            datatype,
-            lexical: lexical.to_string(),
-            reason: crate::value::reason::OUTSIDE_DATATYPE,
-        });
+        return Err(NumericReadError::OutOfRange(
+            crate::value::reason::OUTSIDE_DATATYPE,
+        ));
     }
     Ok(value)
 }
@@ -514,56 +484,66 @@ pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128,
 /// `xsd:decimal`: optional sign, digits with an optional single `.` (at least one
 /// digit overall; `.5`, `1.`, `1.5`, `12` all valid).
 pub fn parse_decimal(s: &str) -> Result<Decimal, XsdError> {
-    let dt = XsdDatatype::Decimal;
+    read_decimal(s).map_err(|error| error.owned(XsdDatatype::Decimal, s))
+}
+
+/// A borrowed classification of the bounded numeric readers. Exact fallback
+/// and physical sizing inspect it without first allocating an owned diagnostic.
+pub(crate) enum NumericReadError {
+    Invalid(&'static str),
+    OutOfRange(&'static str),
+}
+
+impl NumericReadError {
+    pub(crate) fn owned(self, datatype: XsdDatatype, lexical: &str) -> XsdError {
+        match self {
+            Self::Invalid(reason) => XsdError::invalid(datatype, lexical, reason),
+            Self::OutOfRange(reason) => XsdError::OutOfRange {
+                datatype,
+                lexical: lexical.to_owned(),
+                reason,
+            },
+        }
+    }
+}
+
+pub(crate) fn read_decimal(s: &str) -> Result<Decimal, NumericReadError> {
     let neg = s.starts_with('-');
     let body = s.strip_prefix(['+', '-']).unwrap_or(s);
-
-    let (int_str, frac_str) = match body.split_once('.') {
-        Some((i, f)) => (i, f),
-        None => (body, ""),
-    };
-    // A second '.' can only live after the first one, i.e. inside `frac_str`:
-    // one scan of the tail replaces the `contains` + `matches().count()` pair.
+    let (int_str, frac_str) = body.split_once('.').unwrap_or((body, ""));
     if frac_str.contains('.') {
-        return Err(XsdError::invalid(dt, s, "more than one decimal point"));
+        return Err(NumericReadError::Invalid("more than one decimal point"));
     }
     if int_str.is_empty() && frac_str.is_empty() {
-        return Err(XsdError::invalid(dt, s, "no digits"));
+        return Err(NumericReadError::Invalid("no digits"));
     }
-    if !int_str.bytes().all(|b| b.is_ascii_digit()) || !frac_str.bytes().all(|b| b.is_ascii_digit())
+    if !int_str.bytes().all(|byte| byte.is_ascii_digit())
+        || !frac_str.bytes().all(|byte| byte.is_ascii_digit())
     {
-        return Err(XsdError::invalid(dt, s, "non-digit character"));
+        return Err(NumericReadError::Invalid("non-digit character"));
     }
     if frac_str.len() > usize::from(MAX_DECIMAL_SCALE) {
-        return Err(XsdError::OutOfRange {
-            datatype: dt,
-            lexical: s.to_string(),
-            reason: crate::value::reason::DECIMAL_TOO_PRECISE,
-        });
+        return Err(NumericReadError::OutOfRange(
+            crate::value::reason::DECIMAL_TOO_PRECISE,
+        ));
     }
-
-    let digits = format!("{int_str}{frac_str}");
-    let digits_trimmed = digits.trim_start_matches('0');
-    let out_of_range = || XsdError::OutOfRange {
-        datatype: dt,
-        lexical: s.to_string(),
-        reason: crate::value::reason::INTEGER_TOO_LARGE,
-    };
-    // The magnitude is read unsigned so that `i128::MIN`, whose magnitude is one past
-    // `i128::MAX`, is a mantissa like any other (it is the value `xsd:decimal` of the
-    // integer `i128::MIN` holds, and its canonical lexical must read back).
-    let magnitude = if digits_trimmed.is_empty() {
-        0u128
-    } else {
-        digits_trimmed.parse::<u128>().map_err(|_| out_of_range())?
-    };
+    let magnitude = int_str
+        .bytes()
+        .chain(frac_str.bytes())
+        .try_fold(0u128, |acc, digit| {
+            acc.checked_mul(10)?.checked_add(u128::from(digit - b'0'))
+        })
+        .ok_or(NumericReadError::OutOfRange(
+            crate::value::reason::INTEGER_TOO_LARGE,
+        ))?;
     let mantissa = if neg {
         0i128.checked_sub_unsigned(magnitude)
     } else {
         i128::try_from(magnitude).ok()
     }
-    .ok_or_else(out_of_range)?;
-    // `frac_str.len() <= MAX_DECIMAL_SCALE <= u8::MAX`, so the cast cannot truncate.
+    .ok_or(NumericReadError::OutOfRange(
+        crate::value::reason::INTEGER_TOO_LARGE,
+    ))?;
     Ok(Decimal::from_parts(mantissa, frac_str.len() as u8))
 }
 
@@ -643,25 +623,298 @@ fn reject_non_xsd_numeric(s: &str, dt: XsdDatatype) -> Result<(), XsdError> {
     Ok(())
 }
 
-/// XSD canonical `double`: `m.dddEsexp`, mantissa in shortest round-trippable form,
-/// `INF`/`-INF`/`NaN` for the specials.
-#[must_use]
-pub fn canonical_double(d: f64) -> String {
-    canonical_ieee(d, d.is_nan(), d.is_infinite(), d.is_sign_negative(), || {
-        format!("{d:e}")
-    })
+/// Refusal while writing into a caller-owned numeric lexical destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericRenderError {
+    /// The caller has not admitted enough available destination capacity.
+    DestinationTooSmall {
+        /// Complete bytes the writer will append.
+        required_bytes: usize,
+        /// Bytes available without growing the caller's destination.
+        available_bytes: usize,
+    },
 }
 
-/// XSD canonical `float`.
+/// Inline shortest IEEE text, already normalized to its XSD canonical spelling.
+///
+/// The longest binary64 scientific spelling has 17 significant digits, a sign,
+/// point, exponent marker/sign and three exponent digits (24 bytes). The
+/// `.0` normalization affects only a one-digit mantissa. This array also
+/// covers XPath's plain spelling in its stated [10^-6, 10^6) interval.
+#[derive(Clone, Copy, Debug)]
+pub struct CanonicalFloatText {
+    bytes: [u8; 32],
+    length: usize,
+}
+
+impl CanonicalFloatText {
+    const fn empty() -> Self {
+        Self {
+            bytes: [0; 32],
+            length: 0,
+        }
+    }
+
+    /// Actual final lexical length, known without allocating.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.length
+    }
+
+    /// Numeric text is never empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+
+    /// Borrow the inline ASCII lexical bytes.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.length])
+            .expect("the native IEEE formatter writes ASCII only")
+    }
+
+    /// Append without allocating or growing the caller's String.
+    /// The full destination check happens before the first write.
+    ///
+    /// # Errors
+    /// Refuses insufficient admitted capacity without modifying the destination.
+    pub fn write_to(&self, output: &mut String) -> Result<(), NumericRenderError> {
+        let available = output.capacity() - output.len();
+        if self.length > available {
+            return Err(NumericRenderError::DestinationTooSmall {
+                required_bytes: self.length,
+                available_bytes: available,
+            });
+        }
+        output.push_str(self.as_str());
+        Ok(())
+    }
+}
+
+impl std::fmt::Write for CanonicalFloatText {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        let end = self.length.checked_add(text.len()).ok_or(std::fmt::Error)?;
+        let destination = self
+            .bytes
+            .get_mut(self.length..end)
+            .ok_or(std::fmt::Error)?;
+        destination.copy_from_slice(text.as_bytes());
+        self.length = end;
+        Ok(())
+    }
+}
+
+/// Native canonical text prepared without a coefficient String or magnitude clone.
+/// Its surviving group capacity must stay admitted until the final write.
+#[derive(Debug)]
+pub enum PreparedNumericText {
+    /// Exact signed base-ten integer groups.
+    Integer(crate::bigint::PreparedDecimalDigits),
+    /// Exact decimal groups, point and fractional padding.
+    Decimal(crate::exact::PreparedDecimalText),
+    /// Inline IEEE text with its original precision.
+    Ieee(CanonicalFloatText),
+}
+
+impl PreparedNumericText {
+    /// Exact destination length after preparation and before output allocation.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Integer(value) => value.len(),
+            Self::Decimal(value) => value.len(),
+            Self::Ieee(value) => value.len(),
+        }
+    }
+    /// Canonical numeric text is never empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+    /// Actual remaining native temporary capacity.
+    #[must_use]
+    pub fn temporary_bytes(&self) -> usize {
+        match self {
+            Self::Integer(value) => value.heap_bytes(),
+            Self::Decimal(value) => value.temporary_bytes(),
+            Self::Ieee(_) => 0,
+        }
+    }
+    /// Write into a preallocated final destination without hidden growth.
+    /// # Errors
+    /// Refuses insufficient capacity before writing any bytes.
+    pub fn write_to(&self, output: &mut String) -> Result<(), NumericRenderError> {
+        match self {
+            Self::Integer(value) => value.write_to(output),
+            Self::Decimal(value) => value.write_to(output),
+            Self::Ieee(value) => value.write_to(output),
+        }
+    }
+}
+
+/// Prepare the existing native numeric renderer under checked physical admission.
+/// A nonnumeric value belongs to its separate native renderer.
+/// # Errors
+/// Returns checked layout/admission or allocator refusal before lexical allocation.
+pub fn prepare_numeric_text(
+    value: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<PreparedNumericText>, crate::bigint::LimbScratchError> {
+    use crate::exact::cost::NumericOperationLayout;
+    let integer = |value: &crate::exact::Integer,
+                   admit: &mut dyn FnMut(
+        NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>| {
+        let layout = value.render_layout(0)?;
+        admit(NumericOperationLayout::bytes(layout.temporary_bytes(), 0)?)?;
+        value
+            .prepare_decimal_digits()
+            .map(PreparedNumericText::Integer)
+            .map(Some)
+    };
+    let decimal = |value: &crate::exact::Decimal,
+                   admit: &mut dyn FnMut(
+        NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>| {
+        let layout = value.render_layout()?;
+        admit(NumericOperationLayout::bytes(layout.temporary_bytes(), 0)?)?;
+        value
+            .prepare_text()
+            .map(PreparedNumericText::Decimal)
+            .map(Some)
+    };
+    match value {
+        XsdValue::Integer { value, .. } => {
+            integer(&crate::exact::Integer::from_i128(*value), admit)
+        }
+        XsdValue::BigInteger { value, .. } => integer(value, admit),
+        XsdValue::Decimal(value) => decimal(&crate::exact::Decimal::from_bounded(value), admit),
+        XsdValue::BigDecimal(value) => decimal(value, admit),
+        XsdValue::Float(value) => Ok(Some(PreparedNumericText::Ieee(canonical_float_text(
+            *value,
+        )))),
+        XsdValue::Double(value) => Ok(Some(PreparedNumericText::Ieee(canonical_double_text(
+            *value,
+        )))),
+        _ => Ok(None),
+    }
+}
+
+/// XSD canonical double in inline caller-borrowable storage. No allocation.
 #[must_use]
-pub fn canonical_float(f: f32) -> String {
+pub fn canonical_double_text(value: f64) -> CanonicalFloatText {
     canonical_ieee(
-        f64::from(f),
-        f.is_nan(),
-        f.is_infinite(),
-        f.is_sign_negative(),
-        || format!("{f:e}"),
+        value,
+        value.is_nan(),
+        value.is_infinite(),
+        value.is_sign_negative(),
+        |output| std::fmt::write(output, format_args!("{value:e}")),
     )
+}
+
+/// XSD canonical float at its original single precision. No allocation.
+#[must_use]
+pub fn canonical_float_text(value: f32) -> CanonicalFloatText {
+    canonical_ieee(
+        f64::from(value),
+        value.is_nan(),
+        value.is_infinite(),
+        value.is_sign_negative(),
+        |output| std::fmt::write(output, format_args!("{value:e}")),
+    )
+}
+
+fn xpath_ieee_text(
+    value: f64,
+    plain: impl FnOnce(&mut CanonicalFloatText) -> std::fmt::Result,
+    canonical: impl FnOnce() -> CanonicalFloatText,
+) -> CanonicalFloatText {
+    use std::fmt::Write;
+    let special = if value.is_nan() {
+        Some("NaN")
+    } else if value.is_infinite() {
+        Some(if value > 0.0 { "INF" } else { "-INF" })
+    } else if value == 0.0 {
+        Some(if value.is_sign_negative() { "-0" } else { "0" })
+    } else {
+        None
+    };
+    if let Some(text) = special {
+        let mut output = CanonicalFloatText::empty();
+        output
+            .write_str(text)
+            .expect("XPath IEEE special fits inline");
+        return output;
+    }
+    let magnitude = value.abs();
+    // The double written 1e-6 lies just below one millionth: retain the
+    // existing F&O test rather than changing the lower-bound rounding law.
+    if magnitude > 1e-6 && magnitude < 1e6 {
+        let mut output = CanonicalFloatText::empty();
+        plain(&mut output).expect("XPath plain IEEE text fits inline");
+        output
+    } else {
+        canonical()
+    }
+}
+
+/// XPath's double-to-string text, distinct from canonical RDF literal text.
+#[must_use]
+pub fn xpath_double_text(value: f64) -> CanonicalFloatText {
+    xpath_ieee_text(
+        value,
+        |output| std::fmt::write(output, format_args!("{value}")),
+        || canonical_double_text(value),
+    )
+}
+
+/// XPath's float-to-string text at the original single precision.
+#[must_use]
+pub fn xpath_float_text(value: f32) -> CanonicalFloatText {
+    xpath_ieee_text(
+        f64::from(value),
+        |output| std::fmt::write(output, format_args!("{value}")),
+        || canonical_float_text(value),
+    )
+}
+
+/// Prepare the numeric/boolean XPath cast-to-string law under the same native
+/// exact renderer admission. Boolean and IEEE text stay inline.
+/// # Errors
+/// Returns physical native render/admission refusal before final allocation.
+pub fn prepare_xpath_text(
+    value: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<PreparedNumericText>, crate::bigint::LimbScratchError> {
+    match value {
+        XsdValue::Boolean(value) => {
+            use std::fmt::Write;
+            let mut text = CanonicalFloatText::empty();
+            text.write_str(if *value { "true" } else { "false" })
+                .expect("Boolean lexical fits inline");
+            Ok(Some(PreparedNumericText::Ieee(text)))
+        }
+        XsdValue::Float(value) => Ok(Some(PreparedNumericText::Ieee(xpath_float_text(*value)))),
+        XsdValue::Double(value) => Ok(Some(PreparedNumericText::Ieee(xpath_double_text(*value)))),
+        other => prepare_numeric_text(other, admit),
+    }
+}
+
+/// XSD canonical double as a resident owned String.
+#[must_use]
+pub fn canonical_double(value: f64) -> String {
+    canonical_double_text(value).as_str().to_owned()
+}
+
+/// XSD canonical float as a resident owned String.
+#[must_use]
+pub fn canonical_float(value: f32) -> String {
+    canonical_float_text(value).as_str().to_owned()
 }
 
 fn canonical_ieee(
@@ -669,31 +922,44 @@ fn canonical_ieee(
     is_nan: bool,
     is_inf: bool,
     is_neg: bool,
-    sci: impl Fn() -> String,
-) -> String {
-    if is_nan {
-        return "NaN".to_string();
+    scientific: impl FnOnce(&mut CanonicalFloatText) -> std::fmt::Result,
+) -> CanonicalFloatText {
+    use std::fmt::Write;
+    let mut output = CanonicalFloatText::empty();
+    let special = if is_nan {
+        Some("NaN")
+    } else if is_inf {
+        Some(if is_neg { "-INF" } else { "INF" })
+    } else if value == 0.0 {
+        Some(if is_neg { "-0.0E0" } else { "0.0E0" })
+    } else {
+        None
+    };
+    if let Some(special) = special {
+        output
+            .write_str(special)
+            .expect("special IEEE lexical fits inline");
+        return output;
     }
-    if is_inf {
-        return if is_neg { "-INF" } else { "INF" }.to_string();
-    }
-    if value == 0.0 {
-        return if is_neg { "-0.0E0" } else { "0.0E0" }.to_string();
-    }
-    // Rust's `{:e}` is the shortest round-trippable scientific form (e.g. `1e2`,
-    // `1.5e0`, `5e-3`). Normalize to the XSD canonical `mantissa.frac E exp`.
-    let raw = sci();
-    let (mantissa, exp) = raw.split_once('e').unwrap_or((raw.as_str(), "0"));
-    // One exact-fit buffer instead of two `format!` intermediates; the mantissa
-    // and exponent digits come from `sci()` untouched.
-    let mut out = String::with_capacity(mantissa.len() + exp.len() + 3);
-    out.push_str(mantissa);
+    // One semantic formatter; the Rust scientific temporary is now inline.
+    let mut raw = CanonicalFloatText::empty();
+    scientific(&mut raw).expect("shortest IEEE scientific lexical fits inline");
+    let (mantissa, exponent) = raw.as_str().split_once('e').unwrap_or((raw.as_str(), "0"));
+    output
+        .write_str(mantissa)
+        .expect("IEEE mantissa fits inline");
     if !mantissa.contains('.') {
-        out.push_str(".0");
+        output
+            .write_str(".0")
+            .expect("normalized IEEE mantissa fits inline");
     }
-    out.push('E');
-    out.push_str(exp);
-    out
+    output
+        .write_str("E")
+        .expect("IEEE exponent marker fits inline");
+    output
+        .write_str(exponent)
+        .expect("IEEE exponent fits inline");
+    output
 }
 
 /// SPARQL numeric promotion comparison. Promotes both operands to the least type
@@ -705,8 +971,22 @@ fn canonical_ieee(
 /// SPARQL promotion rules, `xsd:int 5 = xsd:long 5`.
 #[must_use]
 pub fn numeric_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
+    numeric_cmp_admitted(a, b, &mut |_| Ok(())).expect("resident numeric comparison allocation")
+}
+
+/// Promotion comparison with physical admission for exact alignment and IEEE conversion.
+///
+/// # Errors
+/// Returns native admission or allocation failure independently of incomparability.
+pub fn numeric_cmp_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
-    match (a, b) {
+    Ok(match (a, b) {
         // Same exact integer / decimal cases keep full precision.
         // Integer-vs-integer: compare by value, ignore subtype (xsd:int 5 == xsd:long 5).
         (Integer { value: x, .. }, Integer { value: y, .. }) => Some(x.cmp(y)),
@@ -714,14 +994,32 @@ pub fn numeric_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
         (Integer { value: x, .. }, Dec(y)) => Some(Decimal::from_parts(*x, 0).cmp_exact(y)),
         (Dec(x), Integer { value: y, .. }) => Some(x.cmp_exact(&Decimal::from_parts(*y, 0))),
         // Any `double` operand → compare as f64.
-        (Double(_), _) | (_, Double(_)) => num_f64(a)?.partial_cmp(&num_f64(b)?),
+        (Double(_), _) | (_, Double(_)) => {
+            match (
+                numeric_to_f64_admitted(a, admit)?,
+                numeric_to_f64_admitted(b, admit)?,
+            ) {
+                (Some(a), Some(b)) => a.partial_cmp(&b),
+                _ => None,
+            }
+        }
         // Else any `float` operand → compare as f32.
-        (Float(_), _) | (_, Float(_)) => num_f32(a)?.partial_cmp(&num_f32(b)?),
+        (Float(_), _) | (_, Float(_)) => {
+            match (
+                numeric_to_f32_admitted(a, admit)?,
+                numeric_to_f32_admitted(b, admit)?,
+            ) {
+                (Some(a), Some(b)) => a.partial_cmp(&b),
+                _ => None,
+            }
+        }
         // An integer or decimal past the bounded variants, against another.
-        _ if a.is_exact_numeric() && b.is_exact_numeric() => Some(exact_path::cmp(a, b)),
+        _ if a.is_exact_numeric() && b.is_exact_numeric() => {
+            Some(exact_path::cmp_admitted(a, b, admit)?)
+        }
         // At least one operand is non-numeric.
         _ => None,
-    }
+    })
 }
 
 /// SPARQL numeric value equality (`=`) via the promotion comparison.
@@ -799,8 +1097,33 @@ pub fn numeric_eq(a: &XsdValue, b: &XsdValue) -> bool {
 /// ```
 #[must_use]
 pub fn numeric_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
+    numeric_total_cmp_using(a, b, &crate::bigint::scratch::Unbounded, &mut |_| Ok(()))
+        .expect("unbounded integer storage")
+}
+
+/// Exact numeric total order with physical admission before every native destination.
+/// # Errors
+/// Returns admission/allocation refusal separately from NaN incomparability.
+pub fn numeric_total_cmp_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
+    numeric_total_cmp_using(a, b, &crate::bigint::scratch::Fallible, admit)
+}
+
+fn numeric_total_cmp_using(
+    a: &XsdValue,
+    b: &XsdValue,
+    storage: &impl crate::bigint::scratch::Allocate,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
     use XsdValue::{Decimal as Dec, Double, Float, Integer};
-    match (a, b) {
+    Ok(match (a, b) {
         // ── Pairs the promotion lattice already decides exactly ──────────────
         // Integer-vs-integer ignores the subtype, exactly as `numeric_cmp` does.
         (Integer { value: x, .. }, Integer { value: y, .. }) => Some(x.cmp(y)),
@@ -814,33 +1137,52 @@ pub fn numeric_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
         (Float(x), Double(y)) => f64::from(*x).partial_cmp(y),
         (Double(x), Float(y)) => x.partial_cmp(&f64::from(*y)),
         // ── The exact-vs-IEEE pairs, the only lossy ones ─────────────────────
-        (Integer { value, .. }, Float(y)) => {
-            exact_vs_ieee(&Decimal::from_parts(*value, 0), f64::from(*y))
+        (Integer { value, .. }, Float(y)) => exact_vs_ieee_using(
+            &Decimal::from_parts(*value, 0),
+            f64::from(*y),
+            storage,
+            admit,
+        )?,
+        (Integer { value, .. }, Double(y)) => {
+            exact_vs_ieee_using(&Decimal::from_parts(*value, 0), *y, storage, admit)?
         }
-        (Integer { value, .. }, Double(y)) => exact_vs_ieee(&Decimal::from_parts(*value, 0), *y),
-        (Dec(x), Float(y)) => exact_vs_ieee(x, f64::from(*y)),
-        (Dec(x), Double(y)) => exact_vs_ieee(x, *y),
-        (Float(x), Integer { value, .. }) => {
-            exact_vs_ieee(&Decimal::from_parts(*value, 0), f64::from(*x)).map(Ordering::reverse)
-        }
+        (Dec(x), Float(y)) => exact_vs_ieee_using(x, f64::from(*y), storage, admit)?,
+        (Dec(x), Double(y)) => exact_vs_ieee_using(x, *y, storage, admit)?,
+        (Float(x), Integer { value, .. }) => exact_vs_ieee_using(
+            &Decimal::from_parts(*value, 0),
+            f64::from(*x),
+            storage,
+            admit,
+        )?
+        .map(Ordering::reverse),
         (Double(x), Integer { value, .. }) => {
-            exact_vs_ieee(&Decimal::from_parts(*value, 0), *x).map(Ordering::reverse)
+            exact_vs_ieee_using(&Decimal::from_parts(*value, 0), *x, storage, admit)?
+                .map(Ordering::reverse)
         }
-        (Float(x), Dec(y)) => exact_vs_ieee(y, f64::from(*x)).map(Ordering::reverse),
-        (Double(x), Dec(y)) => exact_vs_ieee(y, *x).map(Ordering::reverse),
+        (Float(x), Dec(y)) => {
+            exact_vs_ieee_using(y, f64::from(*x), storage, admit)?.map(Ordering::reverse)
+        }
+        (Double(x), Dec(y)) => exact_vs_ieee_using(y, *x, storage, admit)?.map(Ordering::reverse),
         // ── An integer or decimal past the bounded variants ──────────────────
-        _ if a.is_exact_numeric() && b.is_exact_numeric() => Some(exact_path::cmp(a, b)),
-        (_, Float(y)) if a.is_exact_numeric() => exact_path::cmp_ieee(a, f64::from(*y)),
-        (_, Double(y)) if a.is_exact_numeric() => exact_path::cmp_ieee(a, *y),
+        _ if a.is_exact_numeric() && b.is_exact_numeric() => {
+            Some(exact_path::cmp_admitted(a, b, admit)?)
+        }
+        (_, Float(y)) if a.is_exact_numeric() => {
+            exact_path::cmp_ieee_admitted_using(a, f64::from(*y), storage, admit)?
+        }
+        (_, Double(y)) if a.is_exact_numeric() => {
+            exact_path::cmp_ieee_admitted_using(a, *y, storage, admit)?
+        }
         (Float(x), _) if b.is_exact_numeric() => {
-            exact_path::cmp_ieee(b, f64::from(*x)).map(Ordering::reverse)
+            exact_path::cmp_ieee_admitted_using(b, f64::from(*x), storage, admit)?
+                .map(Ordering::reverse)
         }
         (Double(x), _) if b.is_exact_numeric() => {
-            exact_path::cmp_ieee(b, *x).map(Ordering::reverse)
+            exact_path::cmp_ieee_admitted_using(b, *x, storage, admit)?.map(Ordering::reverse)
         }
         // At least one operand is non-numeric.
         _ => None,
-    }
+    })
 }
 
 /// `|value| = significand × 2^exponent` with an ODD `significand` — the exact dyadic
@@ -849,7 +1191,7 @@ pub fn numeric_total_cmp(a: &XsdValue, b: &XsdValue) -> Option<Ordering> {
 ///
 /// Normalizing matters for more than tidiness: it is what keeps the exponent small
 /// for the values that actually have short binary expansions, which is what keeps
-/// [`exact_vs_ieee`]'s `u128` fast path reachable instead of pushed onto
+/// [`exact_vs_ieee_using`]'s `u128` fast path reachable instead of pushed onto
 /// [`crate::BigInt`] by 52 trailing zero bits nobody needs.
 fn dyadic_magnitude(value: f64) -> (u64, i32) {
     const SIGNIFICAND_BITS: u32 = 52;
@@ -880,22 +1222,25 @@ fn dyadic_magnitude(value: f64) -> (u64, i32) {
 /// The `f64` carries the IEEE side for BOTH `xsd:float` and `xsd:double`, because
 /// widening `f32 → f64` is lossless; the integer branch of the tower arrives as a
 /// scale-0 [`Decimal`]. `None` only for `NaN`.
-fn exact_vs_ieee(exact: &Decimal, ieee: f64) -> Option<Ordering> {
+fn exact_vs_ieee_using(
+    exact: &Decimal,
+    ieee: f64,
+    storage: &impl crate::bigint::scratch::Allocate,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<Ordering>, crate::bigint::LimbScratchError> {
     if ieee.is_nan() {
-        return None;
+        return Ok(None);
     }
     if ieee.is_infinite() {
-        // Every exact value is finite, so it is strictly inside the infinities.
-        return Some(if ieee.is_sign_positive() {
+        return Ok(Some(if ieee.is_sign_positive() {
             Ordering::Less
         } else {
             Ordering::Greater
-        });
+        }));
     }
     let exact_sign = exact.mantissa().signum();
-    // `-0.0 == 0.0` in IEEE and in the XSD value space, so both zeros take sign 0
-    // and compare equal to an exact zero — which is what keeps the order transitive
-    // across the two spellings.
     let ieee_sign = if ieee == 0.0 {
         0
     } else if ieee < 0.0 {
@@ -904,17 +1249,23 @@ fn exact_vs_ieee(exact: &Decimal, ieee: f64) -> Option<Ordering> {
         1
     };
     if exact_sign != ieee_sign {
-        return Some(exact_sign.cmp(&ieee_sign));
+        return Ok(Some(exact_sign.cmp(&ieee_sign)));
     }
     if exact_sign == 0 {
-        return Some(Ordering::Equal);
+        return Ok(Some(Ordering::Equal));
     }
-    let magnitude = magnitude_cmp(exact.mantissa().unsigned_abs(), exact.scale(), ieee);
-    Some(if exact_sign > 0 {
+    let magnitude = magnitude_cmp_using(
+        exact.mantissa().unsigned_abs(),
+        exact.scale(),
+        ieee,
+        storage,
+        admit,
+    )?;
+    Ok(Some(if exact_sign > 0 {
         magnitude
     } else {
         magnitude.reverse()
-    })
+    }))
 }
 
 /// Compare the strictly-positive magnitudes `mantissa / 10^scale` and `|ieee|`.
@@ -939,18 +1290,26 @@ fn exact_vs_ieee(exact: &Decimal, ieee: f64) -> Option<Ordering> {
 /// 3. **[`crate::BigInt`], only then.** The fallback is reached only when a product
 ///    genuinely exceeds 128 bits, which needs the two magnitudes to differ by
 ///    enough that step 1 nearly caught them.
-fn magnitude_cmp(mantissa: u128, scale: u8, ieee: f64) -> Ordering {
+fn magnitude_cmp_using(
+    mantissa: u128,
+    scale: u8,
+    ieee: f64,
+    storage: &impl crate::bigint::scratch::Allocate,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Ordering, crate::bigint::LimbScratchError> {
     let (significand, exponent) = dyadic_magnitude(ieee);
     // `2^(high - 1) <= |ieee| < 2^high`.
     let high = exponent + bit_length(significand);
     if high >= 129 {
         // `|ieee| >= 2^128 > 2^127 >= mantissa >= mantissa / 10^scale`.
-        return Ordering::Less;
+        return Ok(Ordering::Less);
     }
     if high <= -60 {
         // `|ieee| < 2^-60 < 10^-18 <= mantissa / 10^scale`, the smallest magnitude
         // a non-zero decimal at this crate's maximum scale can denote.
-        return Ordering::Greater;
+        return Ok(Ordering::Greater);
     }
     // Inside the window: `exponent` is in [-112, 127] and the shifts below are small.
     let ten_pow = 10u128.checked_pow(u32::from(scale));
@@ -970,7 +1329,11 @@ fn magnitude_cmp(mantissa: u128, scale: u8, ieee: f64) -> Ordering {
             left.cmp(&(significand * pow))
         })
     };
-    decided.unwrap_or_else(|| big_magnitude_cmp(mantissa, scale, significand, exponent))
+    if let Some(decided) = decided {
+        Ok(decided)
+    } else {
+        big_magnitude_cmp_using(mantissa, scale, significand, exponent, storage, admit)
+    }
 }
 
 /// `value << shift`, or `None` when that would discard a high bit.
@@ -983,17 +1346,46 @@ fn shl_exact(value: u128, shift: u32) -> Option<u128> {
 }
 
 /// The exact cross-multiplication once a product has outgrown `u128`.
-fn big_magnitude_cmp(mantissa: u128, scale: u8, significand: u128, exponent: i32) -> Ordering {
-    use crate::bigint::BigInt;
-
-    let left = BigInt::from_u128(mantissa);
-    let right = BigInt::from_u128(significand);
-    let shift = exponent.unsigned_abs();
-    if exponent >= 0 {
-        left.cmp(&right.mul_pow2(shift).mul_pow10(u32::from(scale)))
+fn big_magnitude_cmp_using(
+    mantissa: u128,
+    scale: u8,
+    significand: u128,
+    exponent: i32,
+    storage: &impl crate::bigint::scratch::Allocate,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Ordering, crate::bigint::LimbScratchError> {
+    use crate::exact::{Integer, cost};
+    let left = Integer::from(mantissa);
+    let right = Integer::from(significand);
+    let shifted_left = if exponent < 0 {
+        let bits = u64::from(mantissa.ilog2()) + 1;
+        admit(cost::binary_shift_layout(bits, exponent.unsigned_abs(), 0)?)?;
+        Some(Integer::from_bigint(left.with_bigint(|big| {
+            big.shl_using(exponent.unsigned_abs(), storage)
+        })?))
     } else {
-        left.mul_pow2(shift).cmp(&right.mul_pow10(u32::from(scale)))
-    }
+        None
+    };
+    let left_live = shifted_left
+        .as_ref()
+        .map_or(Ok(0), |value| cost::live_integer_bytes(&[value]))?;
+    let shifted_right = if exponent >= 0 {
+        let bits = u64::from(significand.ilog2()) + 1;
+        admit(cost::binary_shift_layout(bits, exponent.unsigned_abs(), 0)?.with_live(left_live)?)?;
+        Integer::from_bigint(
+            right.with_bigint(|big| big.shl_using(exponent.unsigned_abs(), storage))?,
+        )
+    } else {
+        right
+    };
+    let live = left_live
+        .checked_add(cost::live_integer_bytes(&[&shifted_right])?)
+        .ok_or(crate::bigint::LimbScratchError::SizeOverflow)?;
+    admit(cost::scale_up_layout(&shifted_right, u32::from(scale))?.with_live(live)?)?;
+    let scaled = crate::exact::decimal::scale_up_using(&shifted_right, u32::from(scale), storage)?;
+    Ok(shifted_left.as_ref().unwrap_or(&left).cmp(&scaled))
 }
 
 /// The number of bits in `value`'s binary representation (`0` for zero).
@@ -1034,6 +1426,367 @@ fn num_f32(v: &XsdValue) -> Option<f32> {
         XsdValue::Double(d) => *d as f32,
         XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => exact_path::to_f32(v),
         _ => return None,
+    })
+}
+
+/// Arithmetic selected by the caller without allocating an operator closure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericBinaryOperator {
+    /// Numeric/value-space addition.
+    Add,
+    /// Numeric/value-space subtraction.
+    Subtract,
+    /// Numeric/value-space multiplication.
+    Multiply,
+    /// Numeric/value-space division.
+    Divide,
+}
+
+/// A numerical refusal is distinct from a native destination refusal.
+#[derive(Debug)]
+pub enum NumericOperationError {
+    /// Existing value-space and F&O classification.
+    Value(XsdError),
+    /// Checked physical layout or allocator refusal.
+    Storage(crate::bigint::LimbScratchError),
+}
+
+purrdf_lex::variant_from!(NumericOperationError { Value(XsdError) });
+purrdf_lex::variant_from!(NumericOperationError { Storage(crate::bigint::LimbScratchError) });
+
+/// Promote to binary64 through the existing correctly rounded native kernels.
+/// # Errors
+/// Returns physical admission/refusal separately from a nonnumeric operand.
+pub fn numeric_to_f64_admitted(
+    value: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<f64>, crate::bigint::LimbScratchError> {
+    match value {
+        XsdValue::BigInteger { value, .. } => value.try_to_f64_admitted(admit).map(Some),
+        XsdValue::BigDecimal(value) => value.try_to_f64_admitted(admit).map(Some),
+        other => Ok(num_f64(other)),
+    }
+}
+
+/// Promote directly to binary32, preserving the single-rounding law.
+/// # Errors
+/// Returns physical admission/refusal separately from a nonnumeric operand.
+pub fn numeric_to_f32_admitted(
+    value: &XsdValue,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<f32>, crate::bigint::LimbScratchError> {
+    match value {
+        XsdValue::BigInteger { value, .. } => value.try_to_f32_admitted(admit).map(Some),
+        XsdValue::BigDecimal(value) => value.try_to_f32_admitted(admit).map(Some),
+        other => Ok(num_f32(other)),
+    }
+}
+
+/// Numeric arithmetic with checked phase admission and fallible native destinations.
+/// Parsed inputs are borrowed; the caller retains the returned native payload
+/// under its admitted frame before rendering or sharing it.
+/// # Errors
+/// Preserves all existing F&O/precision failures separately from storage refusal.
+pub fn numeric_binary_admitted(
+    a: &XsdValue,
+    b: &XsdValue,
+    op: NumericBinaryOperator,
+    policy: DivisionPolicy,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<XsdValue, NumericOperationError> {
+    if matches!(a, XsdValue::Double(_)) || matches!(b, XsdValue::Double(_)) {
+        let x = numeric_to_f64_admitted(a, admit)?.ok_or(XsdError::TypeMismatch {
+            reason: "non-numeric arithmetic operand",
+        })?;
+        let y = numeric_to_f64_admitted(b, admit)?.ok_or(XsdError::TypeMismatch {
+            reason: "non-numeric arithmetic operand",
+        })?;
+        return Ok(XsdValue::Double(match op {
+            NumericBinaryOperator::Add => ieee::f64_add(x, y),
+            NumericBinaryOperator::Subtract => ieee::f64_sub(x, y),
+            NumericBinaryOperator::Multiply => ieee::f64_mul(x, y),
+            NumericBinaryOperator::Divide => ieee::f64_div(x, y),
+        }));
+    }
+    if matches!(a, XsdValue::Float(_)) || matches!(b, XsdValue::Float(_)) {
+        let x = numeric_to_f32_admitted(a, admit)?.ok_or(XsdError::TypeMismatch {
+            reason: "non-numeric arithmetic operand",
+        })?;
+        let y = numeric_to_f32_admitted(b, admit)?.ok_or(XsdError::TypeMismatch {
+            reason: "non-numeric arithmetic operand",
+        })?;
+        return Ok(XsdValue::Float(match op {
+            NumericBinaryOperator::Add => ieee::f32_add(x, y),
+            NumericBinaryOperator::Subtract => ieee::f32_sub(x, y),
+            NumericBinaryOperator::Multiply => ieee::f32_mul(x, y),
+            NumericBinaryOperator::Divide => ieee::f32_div(x, y),
+        }));
+    }
+    let exact_pair = a.is_exact_numeric() && b.is_exact_numeric();
+    if exact_pair {
+        // The old bounded int_binop renders its overflow before the exact
+        // fallback. Classify it in machine words without that doomed allocation.
+        if let (XsdValue::Integer { value: x, .. }, XsdValue::Integer { value: y, .. }) = (a, b)
+            && op != NumericBinaryOperator::Divide
+        {
+            let value = match op {
+                NumericBinaryOperator::Add => x.checked_add(*y),
+                NumericBinaryOperator::Subtract => x.checked_sub(*y),
+                NumericBinaryOperator::Multiply => x.checked_mul(*y),
+                NumericBinaryOperator::Divide => unreachable!("division excluded"),
+            };
+            return if let Some(value) = value {
+                Ok(integer_result(value))
+            } else {
+                exact_path::binary_admitted(a, b, op, policy, admit)
+            };
+        }
+        if op == NumericBinaryOperator::Divide
+            && (policy != DivisionPolicy::xsd_default() || exact_path::involves_big(a, b))
+        {
+            return exact_path::binary_admitted(a, b, op, policy, admit);
+        }
+    }
+    let bounded = match op {
+        NumericBinaryOperator::Add => numeric_add_bounded(a, b),
+        NumericBinaryOperator::Subtract => numeric_sub_bounded(a, b),
+        NumericBinaryOperator::Multiply => numeric_mul_bounded(a, b),
+        NumericBinaryOperator::Divide => numeric_div_bounded(a, b),
+    };
+    match bounded {
+        Ok(XsdValue::Decimal(quotient))
+            if exact_pair
+                && op == NumericBinaryOperator::Divide
+                && quotient.scale() != MAX_DECIMAL_SCALE =>
+        {
+            exact_path::binary_admitted(a, b, op, policy, admit)
+        }
+        Err(XsdError::OutOfRange { .. } | XsdError::TypeMismatch { .. }) if exact_pair => {
+            exact_path::binary_admitted(a, b, op, policy, admit)
+        }
+        other => other.map_err(NumericOperationError::Value),
+    }
+}
+
+/// The fixed unary operations whose native destinations must be admitted first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericUnaryOperator {
+    /// Numeric identity; evaluator carriers can share their existing payload.
+    Plus,
+    /// Negation, including the value-space duration extension.
+    Minus,
+    /// Absolute value.
+    Abs,
+    /// Ceiling, keeping the numeric family.
+    Ceil,
+    /// Floor, keeping the numeric family.
+    Floor,
+    /// XPath round with ties toward positive infinity.
+    Round,
+}
+
+/// Unary arithmetic using existing kernels with physical admission before copies.
+/// # Errors
+/// Numerical/type failures are distinct from native destination refusal.
+pub fn numeric_unary_admitted(
+    value: &XsdValue,
+    op: NumericUnaryOperator,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<XsdValue, NumericOperationError> {
+    use crate::exact::{Integer, Rounding, cost::NumericOperationLayout};
+    let copied = |bytes: u64| -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
+        let bytes =
+            usize::try_from(bytes).map_err(|_| crate::bigint::LimbScratchError::SizeOverflow)?;
+        NumericOperationLayout::bytes(bytes, bytes)
+    };
+    match value {
+        XsdValue::BigInteger { value, datatype } => {
+            admit(copied(value.heap_bytes())?)?;
+            let result = match op {
+                NumericUnaryOperator::Minus => value.try_neg()?,
+                NumericUnaryOperator::Abs => value.try_abs()?,
+                _ => value.try_copy()?,
+            };
+            Ok(XsdValue::from_exact_integer(
+                result,
+                if op == NumericUnaryOperator::Plus {
+                    *datatype
+                } else {
+                    XsdDatatype::Integer
+                },
+            ))
+        }
+        XsdValue::BigDecimal(value) => {
+            let result = match op {
+                NumericUnaryOperator::Ceil => {
+                    value.try_round_admitted(0, Rounding::Ceiling, admit)?
+                }
+                NumericUnaryOperator::Floor => {
+                    value.try_round_admitted(0, Rounding::Floor, admit)?
+                }
+                NumericUnaryOperator::Round => {
+                    value.try_round_admitted(0, Rounding::HalfCeiling, admit)?
+                }
+                _ => {
+                    admit(copied(value.unscaled().heap_bytes())?)?;
+                    match op {
+                        NumericUnaryOperator::Minus => value.try_neg()?,
+                        NumericUnaryOperator::Abs => value.try_abs()?,
+                        _ => value.try_copy()?,
+                    }
+                }
+            };
+            Ok(XsdValue::from_exact_decimal(result))
+        }
+        XsdValue::Integer { value, .. }
+            if *value == i128::MIN
+                && matches!(op, NumericUnaryOperator::Minus | NumericUnaryOperator::Abs) =>
+        {
+            let value = Integer::from_i128(*value);
+            admit(copied(value.heap_bytes())?)?;
+            let result = if op == NumericUnaryOperator::Minus {
+                value.try_neg()?
+            } else {
+                value.try_abs()?
+            };
+            Ok(XsdValue::from_exact_integer(result, XsdDatatype::Integer))
+        }
+        XsdValue::Decimal(value)
+            if value.mantissa() == i128::MIN
+                && matches!(op, NumericUnaryOperator::Minus | NumericUnaryOperator::Abs) =>
+        {
+            let value = crate::exact::Decimal::from_bounded(value);
+            admit(copied(value.unscaled().heap_bytes())?)?;
+            let result = if op == NumericUnaryOperator::Minus {
+                value.try_neg()?
+            } else {
+                value.try_abs()?
+            };
+            Ok(XsdValue::from_exact_decimal(result))
+        }
+        _ => match op {
+            NumericUnaryOperator::Plus => numeric_unary_plus(value),
+            NumericUnaryOperator::Minus => crate::ops::value_unary_minus(value),
+            NumericUnaryOperator::Abs => numeric_abs_bounded(value),
+            NumericUnaryOperator::Ceil => numeric_ceil_bounded(value),
+            NumericUnaryOperator::Floor => numeric_floor_bounded(value),
+            NumericUnaryOperator::Round => numeric_round_bounded(value),
+        }
+        .map_err(NumericOperationError::Value),
+    }
+}
+
+/// The numeric/boolean cast law using the existing exact native conversion bodies.
+/// # Errors
+/// Physical admission/refusal is separate from an out-of-domain cast (None).
+pub fn numeric_cast_admitted(
+    source: &XsdValue,
+    target: XsdDatatype,
+    admit: &mut impl FnMut(
+        crate::exact::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<Option<XsdValue>, crate::bigint::LimbScratchError> {
+    use crate::exact::{
+        Decimal as ExactDecimal, ExactOperationError, Integer, cost::NumericOperationLayout,
+    };
+    let copy_integer = |value: &Integer,
+                        admit: &mut dyn FnMut(
+        NumericOperationLayout,
+    )
+        -> Result<(), crate::bigint::LimbScratchError>| {
+        let bytes = usize::try_from(value.heap_bytes())
+            .map_err(|_| crate::bigint::LimbScratchError::SizeOverflow)?;
+        admit(NumericOperationLayout::bytes(bytes, bytes)?)?;
+        value.try_copy()
+    };
+    let exact_binary = |value: f64,
+                        admit: &mut dyn FnMut(
+        NumericOperationLayout,
+    )
+        -> Result<(), crate::bigint::LimbScratchError>|
+     -> Result<Option<XsdValue>, crate::bigint::LimbScratchError> {
+        if target == XsdDatatype::Decimal {
+            return match ExactDecimal::try_from_f64_admitted(value, &mut |layout| admit(layout)) {
+                Ok(value) => Ok(Some(XsdValue::from_exact_decimal(value))),
+                Err(ExactOperationError::Value(_)) => Ok(None),
+                Err(ExactOperationError::Storage(error)) => Err(error),
+            };
+        }
+        match Integer::try_from_f64_truncated_admitted(value, &mut |layout| admit(layout)) {
+            Ok(value) => Ok(target
+                .admits_integer(&value)
+                .then(|| XsdValue::from_exact_integer(value, target))),
+            Err(ExactOperationError::Value(_)) => Ok(None),
+            Err(ExactOperationError::Storage(error)) => Err(error),
+        }
+    };
+    Ok(match target {
+        XsdDatatype::Double => {
+            let number = match source {
+                XsdValue::Boolean(value) => Some(f64::from(u8::from(*value))),
+                other => numeric_to_f64_admitted(other, admit)?,
+            };
+            number.map(XsdValue::Double)
+        }
+        XsdDatatype::Float => {
+            let number = match source {
+                XsdValue::Boolean(value) => Some(f32::from(u8::from(*value))),
+                other => numeric_to_f32_admitted(other, admit)?,
+            };
+            number.map(XsdValue::Float)
+        }
+        XsdDatatype::Boolean => match source {
+            XsdValue::Boolean(value) => Some(XsdValue::Boolean(*value)),
+            other if other.is_numeric() => {
+                crate::effective_boolean_value(other).map(XsdValue::Boolean)
+            }
+            _ => None,
+        },
+        XsdDatatype::Decimal => match source {
+            XsdValue::Integer { value, .. } => {
+                Some(XsdValue::Decimal(Decimal::from_integer(*value)))
+            }
+            XsdValue::Decimal(value) => Some(XsdValue::Decimal(*value)),
+            XsdValue::Boolean(value) => {
+                Some(XsdValue::Decimal(Decimal::from_integer(i128::from(*value))))
+            }
+            XsdValue::BigInteger { value, .. } => Some(XsdValue::from_exact_decimal(
+                ExactDecimal::from_integer(copy_integer(value, admit)?),
+            )),
+            XsdValue::BigDecimal(value) => {
+                let bytes = usize::try_from(value.unscaled().heap_bytes())
+                    .map_err(|_| crate::bigint::LimbScratchError::SizeOverflow)?;
+                admit(NumericOperationLayout::bytes(bytes, bytes)?)?;
+                Some(XsdValue::from_exact_decimal(value.try_copy()?))
+            }
+            XsdValue::Float(value) => return exact_binary(f64::from(*value), admit),
+            XsdValue::Double(value) => return exact_binary(*value, admit),
+            _ => None,
+        },
+        target if target.is_integer_family() => {
+            let value = match source {
+                XsdValue::Integer { value, .. } => Integer::from_i128(*value),
+                XsdValue::Decimal(value) => Integer::from_i128(value.whole_part()),
+                XsdValue::Boolean(value) => Integer::from_i128(i128::from(*value)),
+                XsdValue::BigInteger { value, .. } => copy_integer(value, admit)?,
+                XsdValue::BigDecimal(value) => value.try_to_integer_truncated_admitted(admit)?,
+                XsdValue::Float(value) => return exact_binary(f64::from(*value), admit),
+                XsdValue::Double(value) => return exact_binary(*value, admit),
+                _ => return Ok(None),
+            };
+            target
+                .admits_integer(&value)
+                .then(|| XsdValue::from_exact_integer(value, target))
+        }
+        _ => None,
     })
 }
 

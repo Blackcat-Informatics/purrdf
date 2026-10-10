@@ -15,6 +15,8 @@ use std::fmt;
 /// source string, or its `flags` string.
 #[derive(Debug, Clone, PartialEq)]
 pub enum XsdRegexError {
+    /// A bounded native scanner's concrete allocation or admission failure.
+    Storage(purrdf_lex::allocation::StorageError),
     /// A character in the `flags` argument is not one of `i s m x q`.
     UnsupportedFlag(char),
     /// A construct the XSD/XPath `regExp` grammar does not define at all
@@ -163,6 +165,7 @@ pub enum XsdRegexError {
 impl fmt::Display for XsdRegexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Storage(error) => error.fmt(f),
             Self::UnsupportedFlag(c) => write!(
                 f,
                 "unsupported regex flag character {c:?} (supported: i, s, m, x, q)"
@@ -285,6 +288,7 @@ impl std::error::Error for XsdRegexError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Compile(err) => Some(err),
+            Self::Storage(error) => Some(error),
             Self::UnsupportedFlag(_)
             | Self::UnsupportedConstruct(_)
             | Self::Backreference(_)

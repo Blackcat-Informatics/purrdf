@@ -29,6 +29,8 @@ use purrdf_lex::diagnostic::{DiagnosticParameter, DiagnosticPresentation, Diagno
 #[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ParseError {
+    /// Physical storage refusal, distinct from the query language.
+    Storage(purrdf_lex::allocation::StorageError),
     /// Tokenization failed. Carries a human reason and the byte offset at which
     /// the lexer gave up.
     Lex {
@@ -124,45 +126,170 @@ impl ParseError {
         }
     }
 
+    /// Preserve exact typed parse and IRI conditions using original native storage.
+    ///
+    /// # Errors
+    /// Returns physical refusal; a storage parse failure remains operational.
+    pub fn try_presentation_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> core::result::Result<DiagnosticPresentation, purrdf_lex::allocation::StorageError> {
+        if let Self::Storage(error) = self {
+            return Err(*error);
+        }
+        let presentation = self.own_presentation_with_memory(memory)?;
+        let Self::Iri { lexical, reason } = self else {
+            return Ok(presentation);
+        };
+        for mode in 0..3 {
+            let cause = match mode {
+                0 => match purrdf_iri::parse_with_memory(lexical, memory) {
+                    Ok(value) => {
+                        memory.release_string(value.into_text())?;
+                        None
+                    }
+                    Err(purrdf_iri::IriReadError::Lexical(error)) => Some(error),
+                    Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+                },
+                1 => match purrdf_iri::BaseIri::parse_with_memory(lexical, memory) {
+                    Ok(value) => {
+                        memory.release_string(value.into_iri().into_text())?;
+                        None
+                    }
+                    Err(purrdf_iri::IriReadError::Lexical(error)) => Some(error),
+                    Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+                },
+                _ => match purrdf_iri::BaseScope::empty().resolve_with_memory(lexical, memory) {
+                    Ok(value) => {
+                        memory.release_string(value.into_text())?;
+                        None
+                    }
+                    Err(purrdf_iri::IriReadError::Lexical(error)) => Some(error),
+                    Err(purrdf_iri::IriReadError::Storage(error)) => return Err(error),
+                },
+            };
+            if let Some(cause) = cause {
+                let rendered = memory.format(&cause)?;
+                let matches = reason == &rendered
+                    || reason
+                        .strip_prefix(cause.diagnostic_code())
+                        .and_then(|rest| rest.strip_prefix(": "))
+                        .is_some_and(|rest| rest == rendered);
+                memory.release_string(rendered)?;
+                let bytes = cause.owned_text_bytes();
+                let detail = if matches {
+                    Some(cause.try_presentation_with_memory(memory)?)
+                } else {
+                    None
+                };
+                drop(cause);
+                memory.release_bytes(bytes)?;
+                if let Some(detail) = detail {
+                    return presentation
+                        .try_with_detail_with_memory(detail, memory)
+                        .map_err(|error| error.fixed_template_storage());
+                }
+            }
+        }
+        Ok(presentation)
+    }
+
     /// The parse condition's own presentation, without secondary detail: what
     /// `Display` renders.
+    fn own_presentation(&self) -> DiagnosticPresentation {
+        let mut resident = purrdf_lex::allocation::Resident;
+        self.own_presentation_with_memory(&mut purrdf_lex::allocation::Memory::new(&mut resident))
+            .expect("resident parse presentation allocation")
+    }
+
     #[expect(
         clippy::literal_string_with_formatting_args,
         reason = "these templates are validated and rendered by DiagnosticPresentation"
     )]
-    fn own_presentation(&self) -> DiagnosticPresentation {
+    fn own_presentation_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
+        &self,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+    ) -> core::result::Result<DiagnosticPresentation, purrdf_lex::allocation::StorageError> {
         use DiagnosticValue::{Text, Unsigned};
-        let parameter = |name, value| DiagnosticParameter::new(name, value);
+
         let (identity, template, parameters) = match self {
+            Self::Storage(error) => ("sparql-parse-storage", "SPARQL storage error: {reason}", {
+                let native_values = [DiagnosticParameter::try_new_with_memory(
+                    "reason",
+                    Text(memory.format(error)?),
+                    memory,
+                )?];
+                memory.collect(native_values)
+            }?),
             Self::Lex { reason, at } => (
                 "sparql-parse-lex",
                 "SPARQL lex error at byte {at}: {reason}",
-                vec![
-                    parameter("at", Unsigned(*at as u64)),
-                    parameter("reason", Text(reason.clone())),
-                ],
+                {
+                    let native_values = [
+                        DiagnosticParameter::try_new_with_memory(
+                            "at",
+                            Unsigned(*at as u64),
+                            memory,
+                        )?,
+                        DiagnosticParameter::try_new_with_memory(
+                            "reason",
+                            Text(memory.string(reason)?),
+                            memory,
+                        )?,
+                    ];
+                    memory.collect(native_values)
+                }?,
             ),
             Self::Syntax { reason, at } => (
                 "sparql-parse-syntax",
                 "SPARQL syntax error at byte {at}: {reason}",
-                vec![
-                    parameter("at", Unsigned(*at as u64)),
-                    parameter("reason", Text(reason.clone())),
-                ],
+                {
+                    let native_values = [
+                        DiagnosticParameter::try_new_with_memory(
+                            "at",
+                            Unsigned(*at as u64),
+                            memory,
+                        )?,
+                        DiagnosticParameter::try_new_with_memory(
+                            "reason",
+                            Text(memory.string(reason)?),
+                            memory,
+                        )?,
+                    ];
+                    memory.collect(native_values)
+                }?,
             ),
             Self::Unsupported(feature) => (
                 "sparql-parse-unsupported",
                 "unsupported SPARQL construct: {feature} is outside the SPARQL 1.2 \
                  query language this processor implements",
-                vec![parameter("feature", Text(feature.clone()))],
+                {
+                    let native_values = [DiagnosticParameter::try_new_with_memory(
+                        "feature",
+                        Text(memory.string(feature)?),
+                        memory,
+                    )?];
+                    memory.collect(native_values)
+                }?,
             ),
             Self::Iri { lexical, reason } => (
                 "sparql-parse-iri",
                 "invalid IRI {lexical:?} in term position: {reason}",
-                vec![
-                    parameter("lexical", Text(lexical.clone())),
-                    parameter("reason", Text(reason.clone())),
-                ],
+                {
+                    let native_values = [
+                        DiagnosticParameter::try_new_with_memory(
+                            "lexical",
+                            Text(memory.string(lexical)?),
+                            memory,
+                        )?,
+                        DiagnosticParameter::try_new_with_memory(
+                            "reason",
+                            Text(memory.string(reason)?),
+                            memory,
+                        )?,
+                    ];
+                    memory.collect(native_values)
+                }?,
             ),
             Self::CdtArity {
                 iri,
@@ -172,12 +299,31 @@ impl ParseError {
             } => (
                 "sparql-parse-cdt-arity",
                 "SPARQL syntax error at byte {at}: <{iri}> takes {expected}, not {found}",
-                vec![
-                    parameter("at", Unsigned(*at as u64)),
-                    parameter("iri", Text(iri.clone())),
-                    parameter("expected", Text(expected.clone())),
-                    parameter("found", Unsigned(*found as u64)),
-                ],
+                {
+                    let native_values = [
+                        DiagnosticParameter::try_new_with_memory(
+                            "at",
+                            Unsigned(*at as u64),
+                            memory,
+                        )?,
+                        DiagnosticParameter::try_new_with_memory(
+                            "iri",
+                            Text(memory.string(iri)?),
+                            memory,
+                        )?,
+                        DiagnosticParameter::try_new_with_memory(
+                            "expected",
+                            Text(memory.string(expected)?),
+                            memory,
+                        )?,
+                        DiagnosticParameter::try_new_with_memory(
+                            "found",
+                            Unsigned(*found as u64),
+                            memory,
+                        )?,
+                    ];
+                    memory.collect(native_values)
+                }?,
             ),
         };
         // Unreachable refusal: `DiagnosticPresentation::new` judges only the identity,
@@ -187,8 +333,22 @@ impl ParseError {
         // `presentation_preserves_variant_identity_fields_and_english` constructs every
         // arm, and `presentation_is_independent_of_field_values` feeds each one
         // template-like text, so a drifted arm fails the test suite, not a caller.
-        DiagnosticPresentation::new(identity, template, parameters)
-            .expect("parse error templates and their typed argument sets agree")
+        DiagnosticPresentation::try_new_with_memory(identity, template, parameters, memory)
+            .map_err(|error| error.fixed_template_storage())
+    }
+
+    /// Capacity of the original raw error text; intrinsic leaf owners are separate.
+    /// Used only after parser scratch has been destroyed to release its original grant.
+    #[must_use]
+    pub fn owned_text_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Storage(_) => Some(0),
+            Self::Lex { reason, .. } | Self::Syntax { reason, .. } | Self::Unsupported(reason) => {
+                Some(reason.capacity())
+            }
+            Self::Iri { lexical, reason } => lexical.capacity().checked_add(reason.capacity()),
+            Self::CdtArity { iri, expected, .. } => iri.capacity().checked_add(expected.capacity()),
+        }
     }
 
     /// The byte offset the failure was reported at, for the position-bearing
@@ -199,7 +359,7 @@ impl ParseError {
     pub fn byte_offset(&self) -> Option<usize> {
         match self {
             Self::Lex { at, .. } | Self::Syntax { at, .. } | Self::CdtArity { at, .. } => Some(*at),
-            Self::Unsupported(_) | Self::Iri { .. } => None,
+            Self::Unsupported(_) | Self::Iri { .. } | Self::Storage(_) => None,
         }
     }
 
@@ -249,11 +409,68 @@ fn iri_cause(lexical: &str, reason: &str) -> Option<purrdf_iri::IriError> {
     .find(renders)
 }
 
-impl fmt::Display for ParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.own_presentation().english())
+/// Borrowed term-position IRI diagnostic fields, without lexical or reason copies.
+/// The caller retains any native reason's original owner while this view renders.
+#[derive(Clone, Copy)]
+pub struct IriTermDisplay<'a> {
+    lexical: &'a str,
+    reason: &'a dyn fmt::Display,
+}
+
+impl<'a> IriTermDisplay<'a> {
+    /// Borrow the original lexical spelling and its precise refusal reason.
+    #[must_use]
+    pub fn new(lexical: &'a str, reason: &'a dyn fmt::Display) -> Self {
+        Self { lexical, reason }
     }
 }
+
+impl fmt::Debug for IriTermDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IriTermDisplay")
+            .field("lexical", &self.lexical)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Display for IriTermDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid IRI {lexical:?} in term position: {reason}",
+            lexical = self.lexical,
+            reason = self.reason
+        )
+    }
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Storage(error) => write!(f, "SPARQL storage error: {error}"),
+            Self::Lex { reason, at } => write!(f, "SPARQL lex error at byte {at}: {reason}"),
+            Self::Syntax { reason, at } => write!(f, "SPARQL syntax error at byte {at}: {reason}"),
+            Self::Unsupported(feature) => write!(
+                f,
+                "unsupported SPARQL construct: {feature} is outside the SPARQL 1.2 query language this processor implements"
+            ),
+            Self::Iri { lexical, reason } => {
+                fmt::Display::fmt(&IriTermDisplay::new(lexical, reason), f)
+            }
+            Self::CdtArity {
+                iri,
+                expected,
+                found,
+                at,
+            } => write!(
+                f,
+                "SPARQL syntax error at byte {at}: <{iri}> takes {expected}, not {found}"
+            ),
+        }
+    }
+}
+
+purrdf_lex::variant_from!(ParseError { Storage(purrdf_lex::allocation::StorageError) });
 
 // `Debug` mirrors `Display` so test failures print the human-readable reason
 // rather than a struct dump (matches the `purrdf-iri`/`purrdf-xsd` convention).

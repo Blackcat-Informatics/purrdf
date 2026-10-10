@@ -133,6 +133,8 @@ pub enum SegmentedError {
     SnapshotMismatch,
     /// A logical address, ID, or local buffer size overflowed its checked width.
     AddressExhausted,
+    /// An admitted local buffer was refused by the host allocator.
+    AllocationFailed(&'static str),
     /// The requested live residency exceeds the caller's ceiling.
     Residency {
         /// Proposed live/cumulative charge at the admission boundary.
@@ -173,6 +175,9 @@ impl std::fmt::Display for SegmentedError {
             Self::Corrupt(message) => write!(f, "invalid segmented snapshot: {message}"),
             Self::SnapshotMismatch => f.write_str("segmented snapshot identity mismatch"),
             Self::AddressExhausted => f.write_str("segmented logical address exhausted"),
+            Self::AllocationFailed(construct) => {
+                write!(f, "segmented allocation failed for {construct}")
+            }
             Self::Residency { requested, limit } => {
                 write!(f, "segmented live residency {requested} exceeds {limit}")
             }

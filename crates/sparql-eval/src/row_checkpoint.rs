@@ -1721,7 +1721,7 @@ mod tests {
                             false,
                             &items,
                             || {
-                                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
+                                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref()).expect("resident worker owner admission");
                                 let mut local = checkpoint.clone();
                                 local.defer(&mut child);
                                 (child, local)
@@ -1885,7 +1885,9 @@ mod tests {
                         false,
                         &items,
                         || {
-                            let mut child = ctx.fork_for_worker();
+                            let mut child = ctx
+                                .fork_for_worker()
+                                .expect("resident worker owner admission");
                             let mut local = checkpoint.clone();
                             local.defer(&mut child);
                             (child, local)

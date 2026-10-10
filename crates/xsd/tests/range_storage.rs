@@ -142,6 +142,45 @@ fn exact_boolean_decimal_binary_and_string_set_laws_survive_the_native_owner() {
 }
 
 #[test]
+fn unequal_scale_decimal_comparison_admits_the_actual_digit_scratch() {
+    // Equal leading positions with different scales enter exact comparison,
+    // including the original heap-backed decimal-digit division kernel. The
+    // lower endpoint .25 is strictly above the upper endpoint .125 regardless
+    // of the shared 513-digit integer part.
+    let whole = format!("1{}", "0".repeat(512));
+    let range = DataRange::Restriction {
+        base: XsdDatatype::Decimal,
+        facets: vec![
+            Facet::MinInclusive(
+                purrdf_xsd::parse(&format!("{whole}.25"), XsdDatatype::Decimal).unwrap(),
+            ),
+            Facet::MaxInclusive(
+                purrdf_xsd::parse(&format!("{whole}.125"), XsdDatatype::Decimal).unwrap(),
+            ),
+        ],
+    };
+    let mut owner = Owner::default();
+    let window = CurrentThreadWindow::open();
+    assert_eq!(
+        range::try_cardinality(&range, &mut owner).unwrap(),
+        Cardinality::Exactly(0)
+    );
+    let measured = window.close();
+    assert!(owner.allocations > 0);
+    assert_eq!(
+        measured.allocations, owner.allocations,
+        "every native digit group and quotient destination has original admission"
+    );
+    assert!(
+        measured.peak_working_bytes <= i64::try_from(owner.peak).unwrap(),
+        "actual digit scratch {measured:?} exceeds original admission {}",
+        owner.peak
+    );
+    assert_eq!(measured.retained_bytes, 0);
+    assert_eq!(owner.live, 0);
+}
+
+#[test]
 fn refusing_work_never_becomes_an_empty_or_complete_containment_answer() {
     let range = DataRange::And(vec![
         DataRange::Datatype(XsdDatatype::Integer),

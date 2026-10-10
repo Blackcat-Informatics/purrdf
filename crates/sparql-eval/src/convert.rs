@@ -10,10 +10,9 @@
 //! requires at the lookup boundary: a language tag is lowercased so a query literal
 //! matches the dataset's interned (already-lowercased) form.
 
-use purrdf_core::TermBox;
 use purrdf_core::TermValue;
 use purrdf_sparql_algebra::{
-    Child, GroundTerm, Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
+    GroundTerm, Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
 };
 
 use crate::error::EvalError;
@@ -21,7 +20,18 @@ use crate::error::EvalError;
 /// An IRI term value.
 #[inline]
 pub fn named_node_to_value(node: &NamedNode) -> TermValue {
-    TermValue::Iri(node.as_str().to_owned())
+    named_node_to_workspace_value(node, &crate::WorkspaceCapability::default())
+        .expect("resident IRI lookup allocation")
+        .into_parts()
+        .0
+}
+
+/// Copy the lexical key through the same conversion while preserving its grant.
+pub(crate) fn named_node_to_workspace_value(
+    node: &NamedNode,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::WorkspaceTerm, EvalError> {
+    workspace.iri(node.as_str())
 }
 
 /// The blank-node scope every `BLANK_NODE_LABEL` written inside a `cdt:List` /
@@ -71,24 +81,10 @@ pub const QUERY_BLANK_SCOPE: purrdf_core::BlankScope = purrdf_core::BlankScope(u
 /// diagnosed by the evaluator's own CDT parse, which reports it against the query
 /// rather than refusing a document.
 pub fn literal_to_value(lit: &Literal) -> TermValue {
-    let datatype = lit.datatype().as_str();
-    // C0.1: a language tag determines a string datatype, so the literal is never
-    // composite — so the binding is only ever reached for an untagged literal.
-    let lexical_form = match lit.language() {
-        None => purrdf_core::cdt_blank::bind_cdt_blank_labels_unchecked(
-            lit.value(),
-            datatype,
-            purrdf_core::cdt_blank::BlankBinding::Ambient(QUERY_BLANK_SCOPE),
-        )
-        .into_owned(),
-        Some(_) => lit.value().to_owned(),
-    };
-    TermValue::Literal {
-        lexical_form,
-        datatype: datatype.to_owned(),
-        language: lit.language().map(purrdf_iri::langtag::identity_fold),
-        direction: lit.direction(),
-    }
+    literal_to_workspace_value(lit, &crate::WorkspaceCapability::resident())
+        .expect("resident literal conversion")
+        .into_parts()
+        .0
 }
 
 /// Convert a **ground** quoted-triple pattern to a [`TermValue::Triple`].
@@ -106,7 +102,12 @@ pub fn ground_triple_pattern_to_value(
     pattern: &TriplePattern,
     site: &str,
 ) -> Result<TermValue, EvalError> {
-    ground_term_pattern_to_value(&TermPattern::Triple(Child::new(pattern.clone())), site)
+    convert_ground(
+        GroundSource::Triple(pattern),
+        site,
+        &crate::WorkspaceCapability::resident(),
+    )
+    .map(|value| value.into_parts().0)
 }
 
 /// Convert a **ground** term pattern (no variables) to a [`TermValue`].
@@ -130,64 +131,8 @@ pub fn ground_term_pattern_to_value(
     pattern: &TermPattern,
     site: &str,
 ) -> Result<TermValue, EvalError> {
-    /// One pending step: convert a term, or assemble the triple whose three
-    /// components were converted last.
-    enum Step<'a> {
-        Term(&'a TermPattern),
-        Predicate(&'a NamedNodePattern),
-        Assemble,
-    }
-    let variable = |what: &str| {
-        EvalError::unsupported_deferred(
-            crate::error::UnsupportedKind::QuotedTripleTermVariable,
-            format!("{what} in {site}"),
-        )
-    };
-    // Inline until a term nests deeper than a quoted triple of quoted triples, so a
-    // plain term costs only its own value.
-    let mut steps: purrdf_core::SmallVec<[Step<'_>; 8]> =
-        purrdf_core::smallvec![Step::Term(pattern)];
-    let mut values: purrdf_core::SmallVec<[TermValue; 3]> = purrdf_core::SmallVec::new();
-    while let Some(step) = steps.pop() {
-        match step {
-            Step::Term(TermPattern::NamedNode(n)) => values.push(named_node_to_value(n)),
-            Step::Term(TermPattern::BlankNode(b)) => values.push(TermValue::Blank {
-                label: b.as_str().to_owned(),
-                scope: purrdf_core::BlankScope::DEFAULT,
-            }),
-            Step::Term(TermPattern::Literal(l)) => values.push(literal_to_value(l)),
-            Step::Term(TermPattern::Triple(t)) => steps.extend([
-                Step::Assemble,
-                Step::Term(&t.object),
-                Step::Predicate(&t.predicate),
-                Step::Term(&t.subject),
-            ]),
-            Step::Term(TermPattern::Variable(_)) => {
-                return Err(variable("variable inside a quoted triple term"));
-            }
-            Step::Predicate(NamedNodePattern::NamedNode(n)) => values.push(named_node_to_value(n)),
-            Step::Predicate(NamedNodePattern::Variable(_)) => {
-                return Err(variable("variable predicate inside a quoted triple term"));
-            }
-            Step::Assemble => {
-                let o = values.pop().expect("a quoted triple's object is converted");
-                let p = values
-                    .pop()
-                    .expect("a quoted triple's predicate is converted");
-                let s = values
-                    .pop()
-                    .expect("a quoted triple's subject is converted");
-                values.push(TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                });
-            }
-        }
-    }
-    Ok(values
-        .pop()
-        .expect("the root's value is the last one assembled"))
+    ground_term_pattern_to_workspace_value(pattern, site, &crate::WorkspaceCapability::resident())
+        .map(|value| value.into_parts().0)
 }
 
 /// Convert a [`GroundTerm`] (a `VALUES` cell or quoted-triple component) to a
@@ -197,67 +142,233 @@ pub fn ground_term_pattern_to_value(
 /// object each converted fully in that order — so a term nested to any depth costs no
 /// machine stack.
 pub fn ground_term_to_value(term: &GroundTerm) -> TermValue {
-    /// One pending step: convert a term, or assemble the triple whose three
-    /// components were converted last.
+    ground_term_to_workspace_value(term, &crate::WorkspaceCapability::resident())
+        .expect("resident ground term conversion")
+        .into_parts()
+        .0
+}
+
+/// Query-authored literal facets retain the original binding/copy admission.
+pub(crate) fn literal_to_workspace_value(
+    lit: &Literal,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::WorkspaceTerm, EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let value = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        let lexical_form = if lit.language().is_none() {
+            match purrdf_core::cdt_blank::bind_cdt_blank_labels_unchecked_with_memory(
+                lit.value(),
+                lit.datatype().as_str(),
+                purrdf_core::cdt_blank::BlankBinding::Ambient(QUERY_BLANK_SCOPE),
+                &mut memory,
+            ) {
+                Ok(std::borrow::Cow::Owned(value)) => Ok(value),
+                Ok(std::borrow::Cow::Borrowed(value)) => memory.string(value),
+                Err(error) => Err(error),
+            }
+        } else {
+            memory.string(lit.value())
+        }
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "query literal lexical")
+        })?;
+        let datatype = memory.string(lit.datatype().as_str()).map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "query literal datatype")
+        })?;
+        let language = lit
+            .language()
+            .map(|tag| {
+                let mut value = memory.string(tag)?;
+                value.make_ascii_lowercase();
+                Ok::<_, purrdf_lex::allocation::StorageError>(value)
+            })
+            .transpose()
+            .map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "query literal language")
+            })?;
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction: lit.direction(),
+        }
+    };
+    frame.finish_term(|| value)
+}
+
+/// Convert a ground pattern under its original before-allocation owner.
+pub(crate) fn ground_term_pattern_to_workspace_value(
+    term: &TermPattern,
+    site: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::WorkspaceTerm, EvalError> {
+    convert_ground(GroundSource::Pattern(term), site, workspace)
+}
+
+/// Convert a VALUES cell, retaining the original lexical and nested-box owner.
+pub(crate) fn ground_term_to_workspace_value(
+    term: &GroundTerm,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::WorkspaceTerm, EvalError> {
+    convert_ground(GroundSource::Ground(term), "a ground term", workspace)
+}
+
+#[derive(Clone, Copy)]
+enum GroundSource<'a> {
+    Pattern(&'a TermPattern),
+    Ground(&'a GroundTerm),
+    Triple(&'a TriplePattern),
+}
+
+fn convert_ground(
+    term: GroundSource<'_>,
+    site: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::WorkspaceTerm, EvalError> {
     enum Step<'a> {
-        Term(&'a GroundTerm),
+        Term(GroundSource<'a>),
         Predicate(&'a NamedNode),
+        PatternPredicate(&'a NamedNodePattern),
         Assemble,
     }
-    // Inline until a term nests deeper than a quoted triple of quoted triples, so a
-    // plain term costs only its own value.
-    let mut steps: purrdf_core::SmallVec<[Step<'_>; 8]> = purrdf_core::smallvec![Step::Term(term)];
-    let mut values: purrdf_core::SmallVec<[TermValue; 3]> = purrdf_core::SmallVec::new();
+    let variable = |what: &str| {
+        let kind = crate::error::UnsupportedKind::QuotedTripleTermVariable;
+        if workspace.is_bounded() {
+            crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Unsupported(kind),
+                format_args!("{what} in {site}"),
+                workspace,
+            )
+        } else {
+            EvalError::unsupported_deferred(kind, format!("{what} in {site}"))
+        }
+    };
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut steps = purrdf_lex::walk::WorkList::<Step<'_>, 8>::with(Step::Term(term));
+    let mut values = purrdf_lex::walk::WorkList::<crate::WorkspaceTerm, 3>::new();
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    macro_rules! push {
+        ($stack:expr, $value:expr) => {
+            $stack
+                .try_push_admitted($value, &mut memory)
+                .map_err(|error| {
+                    memory
+                        .admission_mut()
+                        .storage_error(error, "ground term conversion stack")
+                })?
+        };
+    }
     while let Some(step) = steps.pop() {
         match step {
-            Step::Term(GroundTerm::NamedNode(n)) | Step::Predicate(n) => {
-                values.push(named_node_to_value(n));
+            Step::Predicate(n)
+            | Step::Term(
+                GroundSource::Pattern(TermPattern::NamedNode(n))
+                | GroundSource::Ground(GroundTerm::NamedNode(n)),
+            ) => {
+                push!(values, named_node_to_workspace_value(n, workspace)?);
             }
-            Step::Term(GroundTerm::Literal(l)) => values.push(literal_to_value(l)),
-            Step::Term(GroundTerm::Triple(t)) => steps.extend([
-                Step::Assemble,
-                Step::Term(&t.object),
-                Step::Predicate(&t.predicate),
-                Step::Term(&t.subject),
-            ]),
-            // Injection-only: a substituted blank-node focus node. The label carries
-            // the scope-qualified rendering the injector wrote into the algebra's
-            // single string slot, so decoding it is the exact inverse and restores
-            // the `(label, scope)` pair `term_id_by_value` resolves against. A label
-            // that was never qualified decodes to itself at the default scope.
-            //
-            // This is the documented contract on `GroundTerm::BlankNode` and
-            // `Query::substitute_variable`: the string in this slot is read as a
-            // scope-qualified spelling. A default-scope label is its own spelling
-            // and passes through byte for byte (the literal label `a.s1` is spelled
-            // `a.s1`); only a scoped pair has a distinct spelling — its envelope,
-            // `("a", scope 1)` being `purrdfesc1_a`.
-            Step::Term(GroundTerm::BlankNode(b)) => {
-                let (label, scope) = purrdf_core::BlankScope::unqualify_label(b.as_str());
-                values.push(TermValue::Blank {
-                    label: label.into_owned(),
-                    scope,
-                });
+            Step::Term(
+                GroundSource::Pattern(TermPattern::Literal(l))
+                | GroundSource::Ground(GroundTerm::Literal(l)),
+            ) => {
+                push!(values, literal_to_workspace_value(l, workspace)?);
+            }
+            Step::Term(GroundSource::Pattern(TermPattern::BlankNode(b))) => {
+                let bytes = u64::try_from(b.as_str().len())
+                    .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+                let grant = workspace.charge(bytes)?;
+                let label = crate::workspace::string(b.as_str(), "query blank label")?;
+                push!(
+                    values,
+                    crate::WorkspaceTerm::with_layout(
+                        TermValue::Blank {
+                            label,
+                            scope: purrdf_core::BlankScope::DEFAULT,
+                        },
+                        grant,
+                        crate::retained::TermLayout { bytes, nodes: 1 }
+                    )
+                );
+            }
+            Step::Term(GroundSource::Ground(GroundTerm::BlankNode(b))) => {
+                let mut owner = crate::workspace::LexicalFrame::new(workspace);
+                let value = {
+                    let mut blank_memory = purrdf_lex::allocation::Memory::new(&mut owner);
+                    let (label, scope) = purrdf_core::blank_label::decode_blank_label_with_memory(
+                        b.as_str(),
+                        purrdf_core::blank_label::LabelAlphabet::Unconstrained,
+                        &mut blank_memory,
+                    )
+                    .map_err(|error| {
+                        blank_memory
+                            .admission_mut()
+                            .storage_error(error, "ground blank decoding")
+                    })?;
+                    let label = match label {
+                        std::borrow::Cow::Owned(value) => value,
+                        std::borrow::Cow::Borrowed(value) => {
+                            blank_memory.string(value).map_err(|error| {
+                                blank_memory
+                                    .admission_mut()
+                                    .storage_error(error, "ground blank label")
+                            })?
+                        }
+                    };
+                    TermValue::Blank { label, scope }
+                };
+                push!(values, owner.finish_term(|| value)?);
+            }
+            Step::Term(GroundSource::Pattern(TermPattern::Triple(t))) => {
+                push!(steps, Step::Term(GroundSource::Triple(t)));
+            }
+            Step::Term(GroundSource::Triple(t)) => {
+                push!(steps, Step::Assemble);
+                push!(steps, Step::Term(GroundSource::Pattern(&t.object)));
+                push!(steps, Step::PatternPredicate(&t.predicate));
+                push!(steps, Step::Term(GroundSource::Pattern(&t.subject)));
+            }
+            Step::Term(GroundSource::Ground(GroundTerm::Triple(t))) => {
+                push!(steps, Step::Assemble);
+                push!(steps, Step::Term(GroundSource::Ground(&t.object)));
+                push!(steps, Step::Predicate(&t.predicate));
+                push!(steps, Step::Term(GroundSource::Ground(&t.subject)));
+            }
+            Step::Term(GroundSource::Pattern(TermPattern::Variable(_))) => {
+                return Err(variable("variable inside a quoted triple term"));
+            }
+            Step::PatternPredicate(NamedNodePattern::NamedNode(n)) => {
+                push!(values, named_node_to_workspace_value(n, workspace)?);
+            }
+            Step::PatternPredicate(NamedNodePattern::Variable(_)) => {
+                return Err(variable("variable predicate inside a quoted triple term"));
             }
             Step::Assemble => {
-                let o = values.pop().expect("a quoted triple's object is converted");
-                let p = values
-                    .pop()
-                    .expect("a quoted triple's predicate is converted");
-                let s = values
-                    .pop()
-                    .expect("a quoted triple's subject is converted");
-                values.push(TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                });
+                let o = values.pop().expect("converted object");
+                let p = values.pop().expect("converted predicate");
+                let s = values.pop().expect("converted subject");
+                push!(values, crate::WorkspaceTerm::triple(s, p, o, workspace)?);
             }
         }
     }
-    values
-        .pop()
-        .expect("the root's value is the last one assembled")
+    let value = values.pop().expect("converted root");
+    values.release_admitted(&mut memory).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "ground value stack release")
+    })?;
+    steps.release_admitted(&mut memory).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "ground work stack release")
+    })?;
+    Ok(value)
 }
 
 #[cfg(test)]

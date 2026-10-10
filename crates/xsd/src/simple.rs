@@ -12,16 +12,46 @@ use crate::datatype::XsdDatatype;
 use crate::value::XsdError;
 
 /// `xsd:boolean`: lexical space is `true | false | 1 | 0`; canonical is `true|false`.
-pub fn parse_boolean(s: &str) -> Result<bool, XsdError> {
+/// Read the Boolean lexical space without copying a refused lexical.
+pub fn read_boolean(s: &str) -> Result<bool, &'static str> {
     match s {
         "true" | "1" => Ok(true),
         "false" | "0" => Ok(false),
-        _ => Err(XsdError::invalid(
-            XsdDatatype::Boolean,
-            s,
-            "expected one of: true, false, 1, 0",
-        )),
+        _ => Err("expected one of: true, false, 1, 0"),
     }
+}
+
+/// Parse a Boolean, preserving the original lexical in a resident diagnostic.
+pub fn parse_boolean(s: &str) -> Result<bool, XsdError> {
+    read_boolean(s).map_err(|reason| XsdError::invalid(XsdDatatype::Boolean, s, reason))
+}
+
+/// The exact destination layout of an unchanged xsd:string lexical copy.
+pub fn string_output_layout(s: &str) -> Result<std::alloc::Layout, std::alloc::LayoutError> {
+    std::alloc::Layout::array::<u8>(s.len())
+}
+
+/// A supplied String cannot hold the literal without allocating more capacity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StringOutputTooShort {
+    /// Required bytes of UTF-8 destination capacity.
+    pub needed: usize,
+    /// Capacity provided by the caller.
+    pub available: usize,
+}
+
+/// Copy unchanged lexical UTF-8 into an already allocated destination. This
+/// never reserves/grows, and refuses insufficient storage before mutation.
+pub fn read_string_into(s: &str, output: &mut String) -> Result<(), StringOutputTooShort> {
+    if output.capacity() < s.len() {
+        return Err(StringOutputTooShort {
+            needed: s.len(),
+            available: output.capacity(),
+        });
+    }
+    output.clear();
+    output.push_str(s);
+    Ok(())
 }
 
 /// Apply the XSD `whiteSpace = replace` facet (the value space of `xsd:normalizedString`).
@@ -68,37 +98,51 @@ pub fn normalize_whitespace_replace(s: &str) -> String {
 /// verbatim (it is not part of the XSD `whiteSpace` facet).
 #[must_use]
 pub fn normalize_whitespace_collapse(s: &str) -> String {
-    // Chunked precheck: a value with no tab, line feed or carriage return, no
-    // leading or trailing space and no two adjacent spaces is already collapsed,
-    // and is returned unchanged — the common case, and one copy with no per-byte
-    // loop.
     if is_collapsed(s.as_bytes()) {
         return s.to_owned();
     }
-    // Byte scan copying each non-whitespace run with one `push_str`: the four
-    // XSD whitespace bytes are ASCII (never inside a multi-byte sequence), so run
-    // boundaries are char boundaries and the output matches the per-char loop.
-    let mut out = String::with_capacity(s.len());
+    let mut output = String::with_capacity(s.len());
+    write_collapsed(s, &mut output).expect("resident String formatting");
+    output
+}
+
+fn write_collapsed(s: &str, out: &mut impl core::fmt::Write) -> core::fmt::Result {
+    if is_collapsed(s.as_bytes()) {
+        return out.write_str(s);
+    }
     let mut pending_space = false;
     let mut run_start: Option<usize> = None;
+    let mut written = false;
     for (i, b) in s.bytes().enumerate() {
         if matches!(b, b' ' | b'\t' | b'\n' | b'\r') {
             if let Some(start) = run_start.take() {
-                out.push_str(&s[start..i]);
+                out.write_str(&s[start..i])?;
+                written = true;
             }
-            pending_space = !out.is_empty();
+            pending_space = written;
         } else if run_start.is_none() {
             if pending_space {
-                out.push(' ');
+                out.write_str(" ")?;
                 pending_space = false;
             }
             run_start = Some(i);
         }
     }
     if let Some(start) = run_start {
-        out.push_str(&s[start..]);
+        out.write_str(&s[start..])?;
     }
-    out
+    Ok(())
+}
+
+/// Borrowed whiteSpace=collapse formatting through the same native normalizer.
+/// It supports measuring an exact destination before any owned copy.
+#[derive(Debug, Clone, Copy)]
+pub struct CollapsedWhitespace<'a>(pub &'a str);
+
+impl core::fmt::Display for CollapsedWhitespace<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write_collapsed(self.0, formatter)
+    }
 }
 
 /// Bytes per precheck chunk: one 128-bit vector of bytes.

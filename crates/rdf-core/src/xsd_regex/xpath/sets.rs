@@ -395,7 +395,7 @@ impl Sets {
     /// Whether a match starts at or after `start`.
     pub(super) fn is_match(&mut self, ctx: &mut Ctx<'_>, start: usize) -> Result<bool, Error> {
         let found = self.forward(ctx, start);
-        self.release(ctx);
+        self.release(ctx)?;
         found
     }
 
@@ -516,7 +516,7 @@ impl Sets {
 
     /// Release every scan buffer and the cache; the kept reverse states
     /// remain.
-    fn release(&mut self, ctx: &mut Ctx<'_>) {
+    fn release(&mut self, ctx: &mut Ctx<'_>) -> Result<(), Error> {
         let cells = self.keys.capacity() as u128
             + self.intervals.capacity() as u128 * INTERVAL_CELLS
             + self.work.capacity() as u128 * ITEM_CELLS
@@ -529,8 +529,22 @@ impl Sets {
             + self.cache.cells() as u128;
         ctx.live_slots -= cells;
         let (marks, spacing) = (std::mem::take(&mut self.marks), self.spacing);
-        *self = Self::new();
+        let old = std::mem::replace(self, Self::new());
+        ctx.budget.release_vec(old.keys)?;
+        ctx.budget.release_vec(old.intervals)?;
+        ctx.budget.release_vec(old.work)?;
+        ctx.budget.release_vec(old.entries)?;
+        ctx.budget.release_vec(old.table)?;
+        ctx.budget.release_vec(old.parked)?;
+        ctx.budget.release_vec(old.state)?;
+        ctx.budget.release_vec(old.next)?;
+        ctx.budget.release_vec(old.order)?;
+        ctx.budget.release_vec(old.cache.contents)?;
+        ctx.budget.release_vec(old.cache.spans)?;
+        ctx.budget.release_vec(old.cache.index)?;
+        ctx.budget.release_vec(old.cache.moves)?;
         (self.marks, self.spacing) = (marks, spacing);
+        Ok(())
     }
 
     /// Scan forwards from `start` until a match ends or no start remains.
@@ -699,13 +713,8 @@ impl Sets {
         if length > old {
             let required = ctx.live_slots - old.div_ceil(2) as u128 + length.div_ceil(2) as u128;
             ctx.budget.limits().admit(Resource::MatchSlots, required)?;
-            marks
-                .ids
-                .try_reserve_exact(length)
-                .map_err(|_| Error::Allocation {
-                    resource: Resource::MatchSlots,
-                    units: length as u64,
-                })?;
+            ctx.budget
+                .reserve_match(&mut marks.ids, length, length as u64)?;
             ctx.live_slots =
                 ctx.live_slots - old.div_ceil(2) as u128 + marks.ids.capacity().div_ceil(2) as u128;
         }
@@ -718,13 +727,7 @@ impl Sets {
         marks.spans.clear();
         marks.by_cache.clear();
         if marks.index.is_empty() {
-            marks
-                .index
-                .try_reserve_exact(16)
-                .map_err(|_| Error::Allocation {
-                    resource: Resource::MatchSlots,
-                    units: 8,
-                })?;
+            ctx.budget.reserve_match(&mut marks.index, 16, 8)?;
             ctx.live_slots += marks.index.capacity().div_ceil(2) as u128;
             marks.index.resize(16, u32::MAX);
         } else {
@@ -1446,12 +1449,7 @@ impl Sets {
             (size + self.entries.len() * 2) as u128,
         )?;
         let mut table = Vec::new();
-        table
-            .try_reserve_exact(size)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: size as u64,
-            })?;
+        ctx.budget.reserve_match(&mut table, size, size as u64)?;
         table.resize(size, (0, 0));
         let mask = size - 1;
         for (index, entry) in self.entries.iter().enumerate() {
@@ -1474,7 +1472,8 @@ impl Sets {
         }
         ctx.live_slots =
             ctx.live_slots - old as u128 * SLOT_CELLS + table.capacity() as u128 * SLOT_CELLS;
-        self.table = table;
+        ctx.budget
+            .release_vec(std::mem::replace(&mut self.table, table))?;
         Ok(())
     }
 
@@ -1743,7 +1742,7 @@ impl Sets {
             + self.cache.index.len()
             + self.cache.moves.len() * 2;
         if used + len + 2 > CACHE_CELLS {
-            self.clear_cache(ctx);
+            self.clear_cache(ctx)?;
         }
         let id = self.cache.spans.len();
         let start = self.cache.contents.len();
@@ -1765,10 +1764,15 @@ impl Sets {
     }
 
     /// Empty the cache.
-    fn clear_cache(&mut self, ctx: &mut Ctx<'_>) {
+    fn clear_cache(&mut self, ctx: &mut Ctx<'_>) -> Result<(), Error> {
         ctx.live_slots -= self.cache.cells() as u128;
-        self.cache = Cache::default();
+        let old = std::mem::take(&mut self.cache);
+        ctx.budget.release_vec(old.contents)?;
+        ctx.budget.release_vec(old.spans)?;
+        ctx.budget.release_vec(old.index)?;
+        ctx.budget.release_vec(old.moves)?;
         self.epoch += 1;
+        Ok(())
     }
 
     /// Rebuild the state index at twice the size, with every interned state.
@@ -1783,12 +1787,7 @@ impl Sets {
             (size + self.cache.contents.len()) as u128,
         )?;
         let mut index = Vec::new();
-        index
-            .try_reserve_exact(size)
-            .map_err(|_| Error::Allocation {
-                resource: Resource::MatchSlots,
-                units: size as u64,
-            })?;
+        ctx.budget.reserve_match(&mut index, size, size as u64)?;
         index.resize(size, u32::MAX);
         let mask = size - 1;
         for id in 0..self.cache.spans.len() {
@@ -1800,7 +1799,8 @@ impl Sets {
             index[slot] = id as u32;
         }
         ctx.live_slots = ctx.live_slots - old as u128 + index.capacity() as u128;
-        self.cache.index = index;
+        ctx.budget
+            .release_vec(std::mem::replace(&mut self.cache.index, index))?;
         Ok(())
     }
 
@@ -1817,12 +1817,8 @@ impl Sets {
                 (size + self.cache.moves.len()) as u128,
             )?;
             let mut moves = Vec::new();
-            moves
-                .try_reserve_exact(size)
-                .map_err(|_| Error::Allocation {
-                    resource: Resource::MatchSlots,
-                    units: size as u64 * 2,
-                })?;
+            ctx.budget
+                .reserve_match(&mut moves, size, size as u64 * 2)?;
             moves.resize(size, (NO_MOVE, 0));
             let mask = size - 1;
             for &(stored, target) in &self.cache.moves {
@@ -1836,7 +1832,8 @@ impl Sets {
                 moves[slot] = (stored, target);
             }
             ctx.live_slots = ctx.live_slots - old as u128 * 2 + moves.capacity() as u128 * 2;
-            self.cache.moves = moves;
+            ctx.budget
+                .release_vec(std::mem::replace(&mut self.cache.moves, moves))?;
         }
         let mask = self.cache.moves.len() - 1;
         let mut slot = purrdf_hash::fixed::hash_one(&key) as usize & mask;
@@ -1860,12 +1857,7 @@ fn grow_states(ctx: &mut Ctx<'_>, marks: &mut Marks) -> Result<(), Error> {
     ctx.budget
         .charge_wide(Resource::MatchSteps, (size + marks.states.len()) as u128)?;
     let mut index = Vec::new();
-    index
-        .try_reserve_exact(size)
-        .map_err(|_| Error::Allocation {
-            resource: Resource::MatchSlots,
-            units: size as u64,
-        })?;
+    ctx.budget.reserve_match(&mut index, size, size as u64)?;
     index.resize(size, u32::MAX);
     let mask = size - 1;
     for (id, &(at, len)) in marks.spans.iter().enumerate() {
@@ -1877,7 +1869,8 @@ fn grow_states(ctx: &mut Ctx<'_>, marks: &mut Marks) -> Result<(), Error> {
     }
     ctx.live_slots =
         ctx.live_slots - old.div_ceil(2) as u128 + index.capacity().div_ceil(2) as u128;
-    marks.index = index;
+    ctx.budget
+        .release_vec(std::mem::replace(&mut marks.index, index))?;
     Ok(())
 }
 

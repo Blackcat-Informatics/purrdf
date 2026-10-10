@@ -30,9 +30,11 @@
 //! `heldIn` called without a caller-supplied standpoint-predicate configuration
 //! (`UnsupportedKind::HeldInUnconfigured`).
 
+#[cfg(test)]
 use purrdf_core::TermBox;
-use purrdf_sparql_algebra::{Chain, Child};
+use purrdf_sparql_algebra::{Chain, Child, NonEmpty};
 use std::cmp::Ordering;
+#[cfg(test)]
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -47,10 +49,9 @@ use purrdf_xsd::{
     numeric::{
         CostOp, numeric_cost, numeric_render_cost, numeric_to_float_cost, numeric_unary_cost,
     },
-    numeric_abs, numeric_ceil, numeric_floor, numeric_round,
-    ops::value_div_with_policy,
-    parse_by_iri, parse_xsd10, value_add, value_cmp, value_equal, value_mul, value_sub,
 };
+#[cfg(test)]
+use purrdf_xsd::{parse_by_iri, value_cmp};
 use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trait
 
 use crate::DetHashSet;
@@ -58,7 +59,7 @@ use crate::error::EvalError;
 use crate::eval::{EvalCtx, LanguageStringEquality, eval_evaluated};
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
-use crate::solution::{Solution, SolutionSeq, VarSchema};
+use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
 
 use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
 use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
@@ -122,7 +123,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
     inner: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         return Ok(lift.withheld());
     };
@@ -144,7 +145,9 @@ pub(crate) fn eval_filter_with<D: DatasetView + Sync, M: crate::eval::RowDeliver
             node,
             inner,
             delivery,
-            |seq, ctx| eval_filter_sequence(node, expr, seq, Lift::at(node), ctx),
+            |seq, ctx| {
+                eval_filter_sequence(node, expr, seq, Lift::at_admitted(node, &ctx.growth)?, ctx)
+            },
             ctx,
         )
     } else {
@@ -177,11 +180,12 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
     // commits them in source order after the join, so both paths charge the same
     // sequence and trip at the same row.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
-    let forked = ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
+    let forked =
+        !ctx.growth.is_bounded() && ctx.may_fork_row_loop(expr) && ctx.may_fork_governed_loop();
     let mut checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
-    let program = crate::vm::program_at(ctx, node, expr);
-    let mut linked = crate::vm::Linked::link(program, expr, &schema, ctx);
+    let program = crate::vm::program_at(ctx, node, expr)?;
+    let mut linked = crate::vm::Linked::link_admitted(program, expr, &schema, ctx)?;
     let rows = if forked {
         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
         // Harvesting, not plain: a predicate can reach a property function through an
@@ -189,15 +193,15 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
         // context. Dropping it would make a governed receipt depend on whether the row
         // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
         let snapshot = ctx.loop_snapshot(admissible.len());
-        let (rows, harvests) = crate::parallel::par_loop_try_map_init(
+        let (rows, harvests) = crate::parallel::par_loop_try_map_init_fallible(
             ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             admissible,
             || {
-                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
+                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref())?;
                 let mut checkpoint = checkpoint.clone();
                 checkpoint.defer(&mut child);
-                (child, checkpoint, linked.fresh())
+                Ok((child, checkpoint, linked.fresh()))
             },
             |worker, acc, row| {
                 let (child, checkpoint, linked) = worker;
@@ -207,7 +211,7 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
                     return Ok(());
                 }
                 if linked.ebv(row, &schema, child)? == Some(true) {
-                    acc.push(Solution::from_slice(row));
+                    acc.push(row.clone_admitted(&child.growth)?);
                     checkpoint.keep();
                 }
                 checkpoint.settle(child);
@@ -224,7 +228,7 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
         let (witnesses, chunks): (purrdf_core::SmallVec<[_; 1]>, purrdf_core::SmallVec<[_; 1]>) =
             harvests.into_iter().unzip();
         let (mut rows, resume) = checkpoint.commit_rows(ctx, rows, chunks)?;
-        ctx.absorb_worker_witnesses(witnesses);
+        ctx.absorb_worker_witnesses(witnesses)?;
         // A worker stopped on what its rows spent, short of what the commit charged for
         // them: the rest of the loop runs here, in order, as the sequential loop does.
         if let Some(resume) = resume {
@@ -236,22 +240,28 @@ fn eval_filter_sequence<D: DatasetView + Sync>(
                     break;
                 }
                 if linked.ebv(row, &schema, ctx)? == Some(true) {
-                    rows.push(row.clone());
+                    rows.push(row.clone_admitted(&ctx.growth)?);
                 }
             }
         }
-        rows
+        // This arm is resident-only; preserve the scheduler's actual metadata
+        // buffer without copying its retained row cells or losing their owners.
+        RowsBuilder::from_storage(
+            crate::AdmittedVec::from_parts(rows, None, &ctx.growth),
+            &ctx.growth,
+        )
+        .finish()?
     } else {
-        let mut rows = Vec::new();
+        let mut rows = RowsBuilder::new(&ctx.growth);
         for row in seq.rows {
             if checkpoint.pass(ctx).is_err() {
                 break;
             }
             if linked.ebv(&row, &schema, ctx)? == Some(true) {
-                rows.push(row);
+                rows.push_row(row)?;
             }
         }
-        rows
+        rows.finish()?
     };
     if let Some(tripped) = ctx.expression_barrier.observed() {
         return Ok(Evaluated::Truncated(Truncation::barred_at(
@@ -282,14 +292,14 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     expr: &Expression,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let mut lift = Lift::at(node);
+    let mut lift = Lift::at_admitted(node, &ctx.growth)?;
     let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         let mut schema = lift.absorbed_schema().map_or_else(
             || (*crate::eval::syntactic_schema(inner)).clone(),
             |s| (*s).clone(),
         );
-        schema.push(var.clone());
-        return Ok(lift.finish(SolutionSeq::empty(Arc::new(schema))));
+        schema.push_admitted(var.clone(), &ctx.growth)?;
+        return Ok(lift.finish(SolutionSeq::empty(schema.shared_admitted(&ctx.growth)?)));
     };
     eval_extend_sequence(node, var, expr, seq, lift, ctx)
 }
@@ -310,7 +320,16 @@ pub(crate) fn eval_extend_with<D: DatasetView + Sync, M: crate::eval::RowDeliver
             node,
             inner,
             delivery,
-            |seq, ctx| eval_extend_sequence(node, var, expr, seq, Lift::at(node), ctx),
+            |seq, ctx| {
+                eval_extend_sequence(
+                    node,
+                    var,
+                    expr,
+                    seq,
+                    Lift::at_admitted(node, &ctx.growth)?,
+                    ctx,
+                )
+            },
             ctx,
         )
     } else {
@@ -334,17 +353,19 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
     // expression runs rather than after, and how a forked loop's admissions are
     // committed.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
-    let forked = ctx.may_fork_row_loop(expr)
+    let growth = ctx.growth.clone();
+    let forked = !growth.is_bounded()
+        && ctx.may_fork_row_loop(expr)
         && ctx.may_fork_governed_loop()
         && crate::parallel::should_parallelize(ctx.sequential_operation_required(), seq.rows.len());
     let mut checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let mut schema = (*seq.schema).clone();
-    let col = schema.push(var.clone());
+    let col = schema.push_admitted(var.clone(), &growth)?;
     let width = schema.len();
-    let schema = Arc::new(schema);
-    let program = crate::vm::program_at(ctx, node, expr);
-    let mut linked = crate::vm::Linked::link(program, expr, &schema, ctx);
+    let schema = schema.shared_admitted(&growth)?;
+    let program = crate::vm::program_at(ctx, node, expr)?;
+    let mut linked = crate::vm::Linked::link_admitted(program, expr, &schema, ctx)?;
 
     let rows = if forked {
         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
@@ -356,15 +377,15 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
         // property function through an embedded `EXISTS`, and the worker's attestation
         // must reach the parent's receipt.
         let snapshot = ctx.loop_snapshot(admissible.len());
-        let (minted, harvests) = crate::parallel::par_loop_try_map_init(
+        let (minted, harvests) = crate::parallel::par_loop_try_map_init_fallible(
             ctx.needs_bounded_loop_blocks(),
             ctx.sequential_operation_required(),
             admissible,
             || {
-                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref());
+                let mut child = ctx.fork_for_loop_worker(snapshot.as_ref())?;
                 let mut checkpoint = checkpoint.clone();
                 checkpoint.defer(&mut child);
-                (child, checkpoint, linked.fresh())
+                Ok((child, checkpoint, linked.fresh()))
             },
             |worker, acc, in_row| {
                 let (child, checkpoint, linked) = worker;
@@ -373,7 +394,11 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                 {
                     return Ok(());
                 }
-                let mut row = Solution::with_capacity(width);
+                let mut row = Solution::new();
+                row.try_reserve_exact(width)
+                    .map_err(|_| EvalError::AllocationFailed {
+                        construct: "BIND worker row cells",
+                    })?;
                 row.extend_from_slice(in_row);
                 row.resize(width, None);
                 let value = linked.term(&row, &schema, child)?;
@@ -397,6 +422,7 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
         // order, charging the growth at its row.
         let admit_row = |ctx: &mut EvalCtx<'_, D>, row| {
             crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row)
+                .map(RetainedRow::from_resident)
         };
         let (mut rows, resume) = if ctx.governor_state().is_none() {
             // Workers have finished reading the input. Plain BIND preserves one
@@ -405,13 +431,17 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                 ctx,
                 minted,
                 chunks,
-                core::mem::take(&mut seq.rows),
+                core::mem::take(&mut seq.rows)
+                    .into_resident_rows()
+                    .map_err(|_| {
+                        EvalError::WorkspaceUnpriced("resident BIND input metadata extraction")
+                    })?,
                 admit_row,
             )?
         } else {
             checkpoint.commit(ctx, minted, chunks, admit_row)?
         };
-        ctx.absorb_worker_witnesses(witnesses);
+        ctx.absorb_worker_witnesses(witnesses)?;
         // A worker stopped on what its rows minted, short of what the commit charged for
         // them: the rest of the loop runs here, in order, as the sequential loop does.
         if let Some(resume) = resume {
@@ -422,32 +452,35 @@ fn eval_extend_sequence<D: DatasetView + Sync>(
                 if checkpoint.pass(ctx).is_err() {
                     break;
                 }
-                let mut row = Solution::with_capacity(width);
-                row.extend_from_slice(in_row);
-                row.resize(width, None);
-                let value = linked.term(&row, &schema, ctx)?;
-                row[col] = value;
+                let row = RetainedRow::try_build(width, &growth, |row| {
+                    row[..in_row.len()].copy_from_slice(in_row);
+                    row[col] = linked.term(row, &schema, ctx)?;
+                    Ok(())
+                })?;
                 rows.push(row);
             }
         }
-        rows
+        RowsBuilder::from_storage(crate::AdmittedVec::from_parts(rows, None, &growth), &growth)
+            .finish()?
     } else {
-        let mut rows = Vec::with_capacity(seq.rows.len());
-        for (idx, mut row) in seq.rows.into_iter().enumerate() {
+        let mut rows = RowsBuilder::new(&growth);
+        for (idx, in_row) in seq.rows.into_iter().enumerate() {
             if checkpoint.pass(ctx).is_err() {
                 break;
             }
-            row.resize(width, None);
             // §17.4.2.9: BNODE(strExpr) memoizes per solution — see `ctx.current_row`'s
             // doc. This Extend maps `seq`'s rows 1:1 in order, so the row's position
             // here matches its position in every other Extend of the same chain. A
             // BNODE-bearing `expr` is exactly what forces this sequential branch.
             ctx.current_row = idx as u64;
-            let value = linked.term(&row, &schema, ctx)?;
-            row[col] = value;
-            rows.push(row);
+            let row = RetainedRow::try_build(width, &growth, |row| {
+                row[..in_row.len()].copy_from_slice(&in_row);
+                row[col] = linked.term(row, &schema, ctx)?;
+                Ok(())
+            })?;
+            rows.push_row(row)?;
         }
-        rows
+        rows.finish()?
     };
     // An `EXISTS` inside the bound expression is an opaque edge; see `eval_filter`.
     if let Some(tripped) = ctx.expression_barrier.observed() {
@@ -483,30 +516,69 @@ pub(crate) fn intern<D: DatasetView + Sync>(
     value: TermValue,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     ctx.scratch
-        .try_intern_checked(ctx.dataset, value)
-        .map_err(EvalError::source_read)
+        .try_intern_checked_admitted(ctx.dataset, value, &ctx.growth)
 }
 
 /// Intern a value that is no triple term — a constant atom the query wrote, a literal a
 /// string function built — so there is no depth to admit (see [`intern`]).
+#[cfg(test)]
 pub(crate) fn intern_leaf<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     debug_assert!(!matches!(value, TermValue::Triple { .. }));
     ctx.scratch
-        .try_intern_checked(ctx.dataset, value)
-        .map_err(EvalError::source_read)
+        .try_intern_checked_admitted(ctx.dataset, value, &ctx.growth)
 }
 
 /// Intern an IRI, propagating operational reverse-lookup failures.
 fn iri_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
-    iri: String,
+    iri: &str,
 ) -> Result<SolutionTerm<D::Id>, EvalError> {
-    ctx.scratch
-        .try_intern_iri(ctx.dataset, iri)
-        .map_err(EvalError::source_read)
+    let value = ctx.growth.iri(iri)?;
+    Ok(ctx.intern_workspace_term(value)?.expect("IRI term shape"))
+}
+
+/// Render a native lexical producer once under its original grant.
+fn displayed_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: &(impl core::fmt::Display + ?Sized),
+    datatype: Option<&str>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(&ctx.growth);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    let lexical = memory.format(value).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "scalar lexical result")
+    })?;
+    let mut value = Some(match datatype {
+        Some(datatype) => TermValue::Literal {
+            lexical_form: lexical,
+            datatype: memory.string(datatype).map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "scalar result datatype")
+            })?,
+            language: None,
+            direction: None,
+        },
+        None => TermValue::Iri(lexical),
+    });
+    ctx.intern_workspace_term(
+        frame.finish_term(|| value.take().expect("scalar producer owns its value"))?,
+    )
+}
+
+fn digest_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    bytes: &[u8],
+) -> Result<SolutionTerm<D::Id>, EvalError> {
+    let mut output = [0_u8; 128];
+    let lexical = purrdf_hash::hex::encode_to_slice(bytes, &mut output)
+        .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+    string_term(ctx, lexical)
 }
 
 /// Intern a typed (no-language) literal. [`typed`] builds the value
@@ -516,19 +588,39 @@ fn typed_term<D: DatasetView + Sync>(
     lexical: &str,
     datatype: &str,
 ) -> Result<SolutionTerm<D::Id>, EvalError> {
-    ctx.scratch
-        .try_intern_datatyped(ctx.dataset, lexical.to_owned(), datatype.to_owned())
-        .map_err(EvalError::source_read)
+    let bytes = lexical
+        .len()
+        .checked_add(datatype.len())
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    let admission =
+        ctx.admit_computed(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    let value = TermValue::Literal {
+        lexical_form: crate::workspace::string(lexical, "typed literal lexical form")?,
+        datatype: crate::workspace::string(datatype, "typed literal datatype")?,
+        language: None,
+        direction: None,
+    };
+    Ok(ctx
+        .intern_workspace_term(crate::WorkspaceTerm::new(value, admission))?
+        .expect("a typed literal without a language tag is well formed"))
 }
 
-/// Materialize a solution term to an owned value.
+/// Resident test interpreter adapter; production retains the owned carrier.
+#[cfg(test)]
 pub(crate) fn value_of<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
 ) -> Result<TermValue, EvalError> {
     ctx.scratch
         .try_value_of(ctx.dataset, term)
-        .map_err(EvalError::source_read)
+        .map_err(|error| match error {
+            purrdf_core::TermLookupError::Read(error) => ctx.workspace.source_error(error),
+            purrdf_core::TermLookupError::ForeignId => crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Internal,
+                "foreign dataset term id",
+                &ctx.growth,
+            ),
+        })
 }
 
 /// Intern an `xsd:boolean` literal.
@@ -546,10 +638,12 @@ pub(crate) fn intern_boolean<D: DatasetView + Sync>(
     if let Some(term) = ctx.cached_bool_terms[slot] {
         return Ok(term);
     }
+    let value = ctx
+        .growth
+        .literal(if b { "true" } else { "false" }, XSD_BOOLEAN)?;
     let term = ctx
-        .scratch
-        .try_intern(ctx.dataset, TermValue::boolean(b))
-        .map_err(EvalError::source_read)?;
+        .intern_workspace_term(value)?
+        .expect("a boolean without a language tag is well formed");
     ctx.cached_bool_terms[slot] = Some(term);
     Ok(term)
 }
@@ -567,12 +661,12 @@ pub(crate) fn intern_integer<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: impl Into<i128>,
 ) -> Result<SolutionTerm<D::Id>, EvalError> {
-    ctx.scratch
-        .try_intern(ctx.dataset, TermValue::integer(value))
-        .map_err(EvalError::source_read)
+    displayed_term(ctx, &value.into(), Some(purrdf_xsd::datatype::XSD_INTEGER))?
+        .ok_or(EvalError::WorkspaceBoundOverflow)
 }
 
-/// Build a typed (no-language) literal value.
+/// Build a test's typed (no-language) literal value.
+#[cfg(test)]
 fn typed(lexical: &str, datatype: &str) -> TermValue {
     TermValue::Literal {
         lexical_form: lexical.to_owned(),
@@ -584,6 +678,7 @@ fn typed(lexical: &str, datatype: &str) -> TermValue {
 
 /// The XSD value of a term, if it is an XSD-typed literal; `None` otherwise
 /// (non-literal, unknown datatype, or malformed lexical form).
+#[cfg(test)]
 pub(crate) fn xsd_of(value: &TermValue) -> Option<XsdValue> {
     if let TermValue::Literal {
         lexical_form,
@@ -601,13 +696,26 @@ pub(crate) fn xsd_of(value: &TermValue) -> Option<XsdValue> {
 /// — [`ebv_term`]'s answer for it, reached without a dataset, for the prepare-time
 /// planner (`crate::property_fn_plan`'s `requires`). A language-tagged string has
 /// none; every other literal has its XSD value's.
+#[cfg(test)]
 pub(crate) fn constant_ebv(literal: &purrdf_sparql_algebra::Literal) -> Option<bool> {
+    constant_ebv_admitted(literal, &crate::WorkspaceCapability::default())
+        .expect("resident constant EBV allocation")
+}
+
+/// The same constant law over borrowed authored spelling and admitted parsed owners.
+pub(crate) fn constant_ebv_admitted(
+    literal: &purrdf_sparql_algebra::Literal,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<bool>, EvalError> {
     if literal.language().is_some() {
-        return None;
+        return Ok(None);
     }
-    xsd_of(&crate::convert::literal_to_value(literal))
-        .as_ref()
-        .and_then(effective_boolean_value)
+    let Some(datatype) = XsdDatatype::from_iri(literal.datatype().as_str()) else {
+        return Ok(None);
+    };
+    let parsed =
+        crate::parsed_value::ParsedValue::parse(literal.value(), datatype, false, workspace)?;
+    Ok(parsed.as_deref().and_then(effective_boolean_value))
 }
 
 /// The effective boolean value of a concrete term (`None` = type error).
@@ -627,7 +735,7 @@ pub(crate) fn ebv_term<D: DatasetView + Sync>(
                     }
                 )
             })
-            .map_err(EvalError::source_read)?,
+            .map_err(|error| ctx.workspace.source_error(error))?,
         SolutionTerm::Computed(sid) => matches!(
             ctx.scratch.computed_value(sid),
             TermValue::Literal {
@@ -640,7 +748,7 @@ pub(crate) fn ebv_term<D: DatasetView + Sync>(
         return Ok(None);
     }
     Ok(xsd_of_term(ctx, term)?
-        .as_ref()
+        .as_deref()
         .and_then(effective_boolean_value))
 }
 
@@ -657,11 +765,11 @@ pub(crate) fn ebv_term<D: DatasetView + Sync>(
 fn xsd_of_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
-) -> Result<Option<XsdValue>, EvalError> {
+) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
     match term {
         SolutionTerm::Existing(id) => {
-            if let Some(cached) = ctx.xsd_parse_cache.get(&id) {
-                return Ok(cached.clone());
+            if let Some(cached) = ctx.xsd_parse_cache.get(id) {
+                return Ok(cached.into_value());
             }
             let parsed = ctx
                 .dataset
@@ -669,17 +777,57 @@ fn xsd_of_term<D: DatasetView + Sync>(
                     TermRef::Literal {
                         lexical, datatype, ..
                     } => ctx.dataset.with_term(datatype, |term| match term {
-                        TermRef::Iri(iri) => parse_by_iri(lexical, iri).ok().flatten(),
-                        _ => None,
+                        TermRef::Iri(iri) => parse_owned_xsd(lexical, iri, &ctx.growth),
+                        _ => Ok(None),
                     }),
-                    _ => Ok(None),
+                    _ => Ok(Ok(None)),
                 })
-                .map_err(EvalError::source_read)?
-                .map_err(EvalError::source_read)?;
-            ctx.xsd_parse_cache.insert(id, parsed.clone());
+                .map_err(|error| ctx.workspace.source_error(error))?
+                .map_err(|error| ctx.workspace.source_error(error))??;
+            ctx.xsd_parse_cache
+                .insert_admitted(id, parsed.clone(), &ctx.growth)?;
             Ok(parsed)
         }
-        SolutionTerm::Computed(sid) => Ok(xsd_of(ctx.scratch.computed_value(sid))),
+        SolutionTerm::Computed(sid) => match ctx.scratch.computed_value(sid) {
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                ..
+            } => parse_owned_xsd(lexical_form, datatype, &ctx.growth),
+            _ => Ok(None),
+        },
+    }
+}
+
+fn xsd_integer_of_admitted(
+    value: Option<&TermValue>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<i128>, EvalError> {
+    let Some(TermValue::Literal {
+        lexical_form,
+        datatype,
+        ..
+    }) = value
+    else {
+        return Ok(None);
+    };
+    let parsed = parse_owned_xsd(lexical_form, datatype, workspace)?;
+    Ok(match parsed.as_deref() {
+        Some(XsdValue::Integer { value, .. }) => Some(*value),
+        _ => None,
+    })
+}
+
+fn parse_owned_xsd(
+    lexical: &str,
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::parsed_value::ParsedValue>, EvalError> {
+    match XsdDatatype::from_iri(iri) {
+        Some(datatype) => {
+            crate::parsed_value::ParsedValue::parse(lexical, datatype, false, workspace)
+        }
+        None => Ok(None),
     }
 }
 
@@ -693,7 +841,7 @@ fn term_is_literal<D: DatasetView + Sync>(
         SolutionTerm::Existing(id) => ctx
             .dataset
             .with_term(id, |term| matches!(term, TermRef::Literal { .. }))
-            .map_err(EvalError::source_read)?,
+            .map_err(|error| ctx.workspace.source_error(error))?,
         SolutionTerm::Computed(sid) => {
             matches!(ctx.scratch.computed_value(sid), TermValue::Literal { .. })
         }
@@ -721,8 +869,8 @@ fn term_has_language_value<D: DatasetView + Sync>(
                 }),
                 _ => Ok(false),
             })
-            .map_err(EvalError::source_read)?
-            .map_err(EvalError::source_read),
+            .map_err(|error| ctx.workspace.source_error(error))?
+            .map_err(|error| ctx.workspace.source_error(error)),
         SolutionTerm::Computed(sid) => Ok(has_language_value(ctx.scratch.computed_value(sid))),
     }
 }
@@ -743,7 +891,7 @@ fn term_is_triple<D: DatasetView + Sync>(
         SolutionTerm::Existing(id) => ctx
             .dataset
             .with_term(id, |term| matches!(term, TermRef::Triple { .. }))
-            .map_err(EvalError::source_read)?,
+            .map_err(|error| ctx.workspace.source_error(error))?,
         SolutionTerm::Computed(sid) => {
             matches!(ctx.scratch.computed_value(sid), TermValue::Triple { .. })
         }
@@ -774,8 +922,8 @@ fn term_is_composite<D: DatasetView + Sync>(
                 }),
                 _ => Ok(false),
             })
-            .map_err(EvalError::source_read)?
-            .map_err(EvalError::source_read),
+            .map_err(|error| ctx.workspace.source_error(error))?
+            .map_err(|error| ctx.workspace.source_error(error)),
         SolutionTerm::Computed(sid) => Ok(crate::cdt_fn::is_composite_typed(
             ctx.scratch.computed_value(sid),
         )),
@@ -802,9 +950,9 @@ fn cdt_compare<D: DatasetView + Sync>(
     ta: SolutionTerm<D::Id>,
     tb: SolutionTerm<D::Id>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let av = value_of(ctx, ta)?;
-    let bv = value_of(ctx, tb)?;
-    crate::cdt_fn::compare(relation, &av, &bv)
+    let av = owned_value_of(ctx, ta)?;
+    let bv = owned_value_of(ctx, tb)?;
+    crate::cdt_fn::compare_admitted(relation, &av, &bv, &ctx.growth)?
         .map(|answer| intern_boolean(ctx, answer))
         .transpose()
 }
@@ -860,7 +1008,10 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
             if !numeric_step_admitted(ctx, numeric_cost(&ax, &bx, CostOp::Compare)) {
                 return Ok(None);
             }
-            value_cmp(&ax, &bx)
+            let mut frame = crate::native_numeric::NumericFrame::new(&ctx.growth);
+            let compared =
+                purrdf_xsd::ops::value_cmp_admitted(&ax, &bx, &mut |layout| frame.admit(layout));
+            frame.finish_scalar(compared)?
         }
         _ => None,
     };
@@ -920,9 +1071,9 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     // both sides to recurse componentwise (RDF 1.2 `op-2`: triple terms compare
     // structurally under `=`, not sameTerm-or-unequal).
     if term_is_triple(ctx, ta)? && term_is_triple(ctx, tb)? {
-        let av = value_of(ctx, ta)?;
-        let bv = value_of(ctx, tb)?;
-        return rdf_equal_in(&av, &bv, ctx.language_strings)
+        let av = owned_value_of(ctx, ta)?;
+        let bv = owned_value_of(ctx, tb)?;
+        return rdf_equal_in_admitted(&av, &bv, ctx.language_strings, &ctx.growth)?
             .map(|eq| intern_boolean(ctx, eq))
             .transpose();
     }
@@ -933,7 +1084,7 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
             if !numeric_step_admitted(ctx, numeric_cost(ax, bx, CostOp::Compare)) {
                 return Ok(None);
             }
-            sparql_value_eq(ax, bx)
+            sparql_value_eq_admitted(ax, bx, &ctx.growth)?
         }
         _ => {
             if term_is_literal(ctx, ta)? && term_is_literal(ctx, tb)? {
@@ -970,9 +1121,9 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
     // An identical candidate is equal — unless it is NaN, or a triple term holding
     // one, which `=` never equals.
     if target == candidate {
-        return Ok(Some(!value_holds_nan(target_value)));
+        return Ok(Some(!value_holds_nan_admitted(target_value, &ctx.growth)?));
     }
-    let cv = value_of(ctx, candidate)?;
+    let cv = owned_value_of(ctx, candidate)?;
     // Two numbers past the bounded variants align their coefficients to compare:
     // priced from the lexical forms, which the comparison then reads.
     if !(machine_word_lexical(target_value) && machine_word_lexical(&cv))
@@ -982,7 +1133,7 @@ pub(crate) fn in_candidate<D: DatasetView + Sync>(
     {
         return Ok(None);
     }
-    Ok(rdf_equal_in(target_value, &cv, ctx.language_strings))
+    rdf_equal_in_admitted(target_value, &cv, ctx.language_strings, &ctx.growth)
 }
 
 /// Whether `value` is anything but a literal, or a literal whose lexical form is
@@ -1033,12 +1184,38 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
 
 /// [`rdf_equal`], with `language_strings` choosing whether the operator
 /// extension [`crate::QueryOptions::disjoint_language_strings`] describes applies.
+#[cfg(test)]
 fn rdf_equal_in(
     a: &TermValue,
     b: &TermValue,
     language_strings: LanguageStringEquality,
 ) -> Option<bool> {
-    let mut pending: Vec<(&TermValue, &TermValue)> = vec![(a, b)];
+    rdf_equal_in_admitted(
+        a,
+        b,
+        language_strings,
+        &crate::WorkspaceCapability::resident(),
+    )
+    .expect("resident term equality allocation")
+}
+
+fn rdf_equal_in_admitted(
+    a: &TermValue,
+    b: &TermValue,
+    language_strings: LanguageStringEquality,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<bool>, EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    let mut pending: purrdf_lex::walk::WorkList<(&TermValue, &TermValue), 8> =
+        purrdf_lex::walk::WorkList::new();
+    pending
+        .try_push_admitted((a, b), &mut memory)
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "term equality walk")
+        })?;
     let mut errored = false;
     while let Some((a, b)) = pending.pop() {
         // A triple-term pair is compared by its components, before the XSD/literal
@@ -1059,37 +1236,54 @@ fn rdf_equal_in(
             },
         ) = (a, b)
         {
-            pending.extend([(&**o1, &**o2), (&**p1, &**p2), (&**s1, &**s2)]);
+            for pair in [(&**o1, &**o2), (&**p1, &**p2), (&**s1, &**s2)] {
+                pending
+                    .try_push_admitted(pair, &mut memory)
+                    .map_err(|error| {
+                        memory
+                            .admission_mut()
+                            .storage_error(error, "term equality walk")
+                    })?;
+            }
             continue;
         }
-        match leaf_equal(a, b, language_strings) {
-            Some(false) => return Some(false),
+        match leaf_equal_admitted(a, b, language_strings, workspace)? {
+            Some(false) => return Ok(Some(false)),
             None => errored = true,
             Some(true) => {}
         }
     }
-    if errored { None } else { Some(true) }
+    Ok(if errored { None } else { Some(true) })
 }
 
 /// [`rdf_equal_in`] for a pair of which at most one is a triple term.
-fn leaf_equal(
+fn leaf_equal_admitted(
     a: &TermValue,
     b: &TermValue,
     language_strings: LanguageStringEquality,
-) -> Option<bool> {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<bool>, EvalError> {
     // SEP-0009 composite equality, for the value-space paths that reach this
     // function rather than [`equal_terms`]: `IN` (§17.4.1.9) and the componentwise
     // triple-term comparison. The same diversion, on the same rule, so a
     // `cdt:List` inside a triple term compares the way it does outside one.
     if crate::cdt_fn::is_composite_typed(a) || crate::cdt_fn::is_composite_typed(b) {
-        return crate::cdt_fn::compare(crate::cdt_fn::CdtRelation::Equal, a, b);
+        return crate::cdt_fn::compare_admitted(crate::cdt_fn::CdtRelation::Equal, a, b, workspace);
     }
-    let ax = xsd_of(a);
-    let bx = xsd_of(b);
-    match (ax.as_ref(), bx.as_ref()) {
-        (Some(ax), Some(bx)) => sparql_value_eq(ax, bx),
+    let parsed = |value: &TermValue| match value {
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            ..
+        } => parse_owned_xsd(lexical_form, datatype, workspace),
+        _ => Ok(None),
+    };
+    let ax = parsed(a)?;
+    let bx = parsed(b)?;
+    Ok(match (ax.as_deref(), bx.as_deref()) {
+        (Some(ax), Some(bx)) => sparql_value_eq_admitted(ax, bx, workspace)?,
         _ => {
-            if a == b {
+            if workspace.terms_equal(a, b)? {
                 Some(true)
             } else if is_literal(a) && is_literal(b) {
                 let a_language = has_language_value(a);
@@ -1103,7 +1297,7 @@ fn leaf_equal(
                 Some(false)
             }
         }
-    }
+    })
 }
 
 /// Whether `x` is the `xsd:double`/`xsd:float` NaN value.
@@ -1122,7 +1316,7 @@ fn term_is_nan<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
 ) -> Result<bool, EvalError> {
-    Ok(xsd_of_term(ctx, term)?.as_ref().is_some_and(is_xsd_nan))
+    Ok(xsd_of_term(ctx, term)?.as_deref().is_some_and(is_xsd_nan))
 }
 
 /// Whether `term` is a NaN, or a triple term with a NaN component at any depth: the
@@ -1137,26 +1331,52 @@ fn term_holds_nan<D: DatasetView + Sync>(
     term: SolutionTerm<D::Id>,
 ) -> Result<bool, EvalError> {
     if term_is_triple(ctx, term)? {
-        return Ok(value_holds_nan(&value_of(ctx, term)?));
+        let value = owned_value_of(ctx, term)?;
+        return value_holds_nan_admitted(&value, &ctx.growth);
     }
     term_is_nan(ctx, term)
 }
 
 /// [`term_holds_nan`] over a materialized value, walking nested triple terms over a
 /// work list so a deep term costs no machine stack.
-fn value_holds_nan(value: &TermValue) -> bool {
-    let mut pending = vec![value];
+fn value_holds_nan_admitted(
+    value: &TermValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    let mut pending: purrdf_lex::walk::WorkList<&TermValue, 8> = purrdf_lex::walk::WorkList::new();
+    pending
+        .try_push_admitted(value, &mut memory)
+        .map_err(|error| memory.admission_mut().storage_error(error, "NaN term walk"))?;
     while let Some(value) = pending.pop() {
         match value {
-            TermValue::Triple { s, p, o } => pending.extend([&**s, &**p, &**o]),
-            leaf => {
-                if xsd_of(leaf).as_ref().is_some_and(is_xsd_nan) {
-                    return true;
+            TermValue::Triple { s, p, o } => {
+                for part in [&**s, &**p, &**o] {
+                    pending
+                        .try_push_admitted(part, &mut memory)
+                        .map_err(|error| {
+                            memory.admission_mut().storage_error(error, "NaN term walk")
+                        })?;
                 }
             }
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                ..
+            } if matches!(
+                XsdDatatype::from_iri(datatype),
+                Some(XsdDatatype::Float | XsdDatatype::Double)
+            ) && parse_owned_xsd(lexical_form, datatype, workspace)?
+                .as_deref()
+                .is_some_and(is_xsd_nan) =>
+            {
+                return Ok(true);
+            }
+            _ => {}
         }
     }
-    false
+    Ok(false)
 }
 
 /// Whether `ax`/`bx` is a numeric pair with at least one NaN operand: the pair every
@@ -1178,9 +1398,19 @@ fn is_numeric_nan_pair(ax: &XsdValue, bx: &XsdValue) -> bool {
 /// comparing arguments involving NaN. However, sameTerm(...NaN, ...NaN) is true.").
 /// The pair is unordered, but the answer is a definite `false` (so `!=`, its
 /// `fn:not`, is `true`), never the type error an unordered comparison would read as.
+#[cfg(test)]
 pub(crate) fn sparql_value_eq(ax: &XsdValue, bx: &XsdValue) -> Option<bool> {
+    sparql_value_eq_admitted(ax, bx, &crate::WorkspaceCapability::resident())
+        .expect("resident value equality allocation")
+}
+
+fn sparql_value_eq_admitted(
+    ax: &XsdValue,
+    bx: &XsdValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<bool>, EvalError> {
     if is_numeric_nan_pair(ax, bx) {
-        return Some(false);
+        return Ok(Some(false));
     }
     // XSD 1.1 §2.2.2: these primitive value spaces are disjoint. Their
     // partial ordering is undefined, but sameValue knows they are unequal.
@@ -1188,9 +1418,11 @@ pub(crate) fn sparql_value_eq(ax: &XsdValue, bx: &XsdValue) -> Option<bool> {
         (ax, bx),
         (XsdValue::DateTime(_), XsdValue::Date(_)) | (XsdValue::Date(_), XsdValue::DateTime(_))
     ) {
-        return Some(false);
+        return Ok(Some(false));
     }
-    value_equal(ax, bx)
+    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+    let compared = purrdf_xsd::ops::value_equal_admitted(ax, bx, &mut |layout| frame.admit(layout));
+    frame.finish_scalar(compared)
 }
 
 fn is_literal(v: &TermValue) -> bool {
@@ -1212,7 +1444,7 @@ fn is_literal(v: &TermValue) -> bool {
 ///
 /// # Relationship to `analyze_pattern`'s `free_vars` — deliberately asymmetric, not "never diverge"
 ///
-/// [`crate::governor::soundness::analyze_pattern`]'s `free_vars` output computes a
+/// [`crate::governor::soundness::analyze_pattern_admitted`]'s `free_vars` output computes a
 /// SEPARATE "every variable reachable anywhere" set, independently, for the
 /// [`exists`] decision site's own correlation test. The two walks are NOT required
 /// to agree and in fact do not: [`pattern_all_vars`]'s doc identifies the one point
@@ -1246,11 +1478,14 @@ fn is_literal(v: &TermValue) -> bool {
 /// between. Do not "optimize away" the widened `Exists` arm on the mistaken
 /// assumption it still drives the correlation decision, and do not double-trust it
 /// against `analyze_pattern`'s output — the two are allowed to differ.
+#[cfg(test)]
 pub(crate) fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
-    collect_vars(vec![VarNode::Expression(expr)], out);
+    let vars = expr_vars_admitted(expr, &crate::WorkspaceCapability::resident())
+        .expect("resident expression-variable collection failed");
+    out.extend(vars.vars().iter().cloned());
 }
 
-/// One node [`collect_vars`] has still to read: a pattern, beside the endpoint variable
+/// One node [`collect_vars_admitted`] has still to read: a pattern, beside the endpoint variable
 /// whose `SERVICE` clauses contribute nothing to the walk it is part of, or an
 /// expression, whose `EXISTS` bodies are walked whole.
 enum VarNode<'a> {
@@ -1259,32 +1494,41 @@ enum VarNode<'a> {
 }
 
 /// Add every variable the nodes in `pending`, and everything beneath them, mention to
-/// `out` — the one walk beneath [`expr_vars`] and [`pattern_vars_outside`].
+/// `out` — the one walk beneath [`expr_vars_admitted`] and [`pattern_vars_outside_admitted`].
 ///
 /// The list holds the nodes still to be read, so a query of any depth is read without a
 /// machine-stack frame per level. `out` is a set, so the order the nodes come off the
 /// list in leaves no trace in it. A pattern node counts one `VarWalked` operation in a
 /// test build, whether or not it contributes anything.
-fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
+fn collect_vars_admitted<'a>(
+    roots: impl IntoIterator<Item = VarNode<'a>>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    let mut pending = crate::AdmittedVec::new(workspace);
+    pending.try_extend(roots)?;
+    let mut out = crate::solution::SchemaBuilder::new(workspace);
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+
     use purrdf_sparql_algebra::NamedNodePattern;
 
     while let Some(node) = pending.pop() {
         match node {
             VarNode::Expression(expr) => match expr {
                 Expression::Variable(v) | Expression::Bound(v) => {
-                    out.insert(v.clone());
+                    out.push(v.clone())?;
                 }
                 Expression::NamedNode(_) | Expression::Literal(_) => {}
                 Expression::Or(operands) | Expression::And(operands) => {
-                    pending.extend(operands.iter().map(VarNode::Expression));
+                    pending.try_extend(operands.iter().map(VarNode::Expression))?;
                 }
                 Expression::Arithmetic(first, steps) => {
-                    pending.push(VarNode::Expression(first));
-                    pending.extend(
+                    pending.push(VarNode::Expression(first))?;
+                    pending.try_extend(
                         steps
                             .iter()
                             .map(|(_, operand)| VarNode::Expression(operand)),
-                    );
+                    )?;
                 }
                 Expression::Equal(a, b)
                 | Expression::SameTerm(a, b)
@@ -1292,26 +1536,26 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                 | Expression::GreaterOrEqual(a, b)
                 | Expression::Less(a, b)
                 | Expression::LessOrEqual(a, b) => {
-                    pending.push(VarNode::Expression(a));
-                    pending.push(VarNode::Expression(b));
+                    pending.push(VarNode::Expression(a))?;
+                    pending.push(VarNode::Expression(b))?;
                 }
                 Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-                    pending.push(VarNode::Expression(a));
+                    pending.push(VarNode::Expression(a))?;
                 }
                 Expression::If(c, t, e) => {
-                    pending.push(VarNode::Expression(c));
-                    pending.push(VarNode::Expression(t));
-                    pending.push(VarNode::Expression(e));
+                    pending.push(VarNode::Expression(c))?;
+                    pending.push(VarNode::Expression(t))?;
+                    pending.push(VarNode::Expression(e))?;
                 }
                 Expression::In(needle, haystack) => {
-                    pending.push(VarNode::Expression(needle));
-                    pending.extend(haystack.iter().map(VarNode::Expression));
+                    pending.push(VarNode::Expression(needle))?;
+                    pending.try_extend(haystack.iter().map(VarNode::Expression))?;
                 }
                 Expression::Coalesce(items) => {
-                    pending.extend(items.iter().map(VarNode::Expression));
+                    pending.try_extend(items.iter().map(VarNode::Expression))?;
                 }
                 Expression::FunctionCall(_, args) => {
-                    pending.extend(args.iter().map(VarNode::Expression));
+                    pending.try_extend(args.iter().map(VarNode::Expression))?;
                 }
                 // Nested EXISTS: widened to `pattern_all_vars` (see [`expr_vars`]'s doc,
                 // "Relationship to `analyze_pattern`'s `free_vars`" section). VESTIGIAL
@@ -1325,7 +1569,7 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                 // silently dropped from the substituted subtree. The body is walked with
                 // no endpoint excluded, whatever the walk it is reached from excludes.
                 Expression::Exists(inner_pat) => {
-                    pending.push(VarNode::Pattern(inner_pat, None));
+                    pending.push(VarNode::Pattern(inner_pat, None))?;
                 }
             },
             VarNode::Pattern(pattern, endpoint) => {
@@ -1335,32 +1579,32 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                 match pattern {
                     GraphPattern::Bgp { patterns } => {
                         for tp in patterns {
-                            tp.subject.collect_variables(out);
+                            collect_term_vars_admitted(&tp.subject, &mut out, &mut memory)?;
                             if let NamedNodePattern::Variable(v) = &tp.predicate {
-                                out.insert(v.clone());
+                                out.push(v.clone())?;
                             }
-                            tp.object.collect_variables(out);
+                            collect_term_vars_admitted(&tp.object, &mut out, &mut memory)?;
                         }
                     }
                     GraphPattern::Path {
                         subject, object, ..
                     } => {
-                        subject.collect_variables(out);
-                        object.collect_variables(out);
+                        collect_term_vars_admitted(subject, &mut out, &mut memory)?;
+                        collect_term_vars_admitted(object, &mut out, &mut memory)?;
                     }
                     GraphPattern::Values { variables, .. } => {
-                        out.extend(variables.iter().cloned());
+                        out.try_extend(variables.iter().cloned())?;
                     }
                     GraphPattern::PropertyFunction(call) => {
                         for term in call.subject_args.iter().chain(&call.object_args) {
-                            term.collect_variables(out);
+                            collect_term_vars_admitted(term, &mut out, &mut memory)?;
                         }
                     }
                     GraphPattern::Graph { name, inner } => {
                         if let NamedNodePattern::Variable(v) = name {
-                            out.insert(v.clone());
+                            out.push(v.clone())?;
                         }
-                        pending.push(VarNode::Pattern(inner, endpoint));
+                        pending.push(VarNode::Pattern(inner, endpoint))?;
                     }
                     // A `SERVICE` clause on the excluded endpoint contributes nothing:
                     // neither its name nor its body is read.
@@ -1369,35 +1613,36 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                             matches!(name, NamedNodePattern::Variable(v) if endpoint == Some(v));
                         if !excluded {
                             if let NamedNodePattern::Variable(v) = name {
-                                out.insert(v.clone());
+                                out.push(v.clone())?;
                             }
-                            pending.push(VarNode::Pattern(inner, endpoint));
+                            pending.push(VarNode::Pattern(inner, endpoint))?;
                         }
                     }
                     GraphPattern::Join { left, right }
                     | GraphPattern::Minus { left, right }
                     | GraphPattern::Lateral { left, right } => {
-                        pending.push(VarNode::Pattern(left, endpoint));
-                        pending.push(VarNode::Pattern(right, endpoint));
+                        pending.push(VarNode::Pattern(left, endpoint))?;
+                        pending.push(VarNode::Pattern(right, endpoint))?;
                     }
                     GraphPattern::Apply {
                         left,
                         right,
                         policy,
                     } => {
-                        pending.push(VarNode::Pattern(left, endpoint));
-                        pending.push(VarNode::Pattern(right, endpoint));
+                        pending.push(VarNode::Pattern(left, endpoint))?;
+                        pending.push(VarNode::Pattern(right, endpoint))?;
                         for (input, driver) in &policy.inputs {
-                            out.extend([input.clone(), driver.clone()]);
+                            out.try_extend([input.clone(), driver.clone()])?;
                         }
                         if let Some(optional) = &policy.optional {
                             for (input, driver) in &optional.retry_inputs {
-                                out.extend([input.clone(), driver.clone()]);
+                                out.try_extend([input.clone(), driver.clone()])?;
                             }
                         }
                     }
                     GraphPattern::Union { arms } => {
-                        pending.extend(arms.iter().map(|arm| VarNode::Pattern(arm, endpoint)));
+                        pending
+                            .try_extend(arms.iter().map(|arm| VarNode::Pattern(arm, endpoint)))?;
                     }
                     GraphPattern::LeftJoin {
                         left,
@@ -1405,23 +1650,23 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                         expression,
                     } => {
                         if let Some(e) = expression {
-                            pending.push(VarNode::Expression(e));
+                            pending.push(VarNode::Expression(e))?;
                         }
-                        pending.push(VarNode::Pattern(left, endpoint));
-                        pending.push(VarNode::Pattern(right, endpoint));
+                        pending.push(VarNode::Pattern(left, endpoint))?;
+                        pending.push(VarNode::Pattern(right, endpoint))?;
                     }
                     GraphPattern::Filter { expr, inner } => {
-                        pending.push(VarNode::Expression(expr));
-                        pending.push(VarNode::Pattern(inner, endpoint));
+                        pending.push(VarNode::Expression(expr))?;
+                        pending.push(VarNode::Pattern(inner, endpoint))?;
                     }
                     GraphPattern::Extend {
                         inner,
                         variable,
                         expression,
                     } => {
-                        out.insert(variable.clone());
-                        pending.push(VarNode::Expression(expression));
-                        pending.push(VarNode::Pattern(inner, endpoint));
+                        out.push(variable.clone())?;
+                        pending.push(VarNode::Expression(expression))?;
+                        pending.push(VarNode::Pattern(inner, endpoint))?;
                     }
                     GraphPattern::Unfold {
                         inner,
@@ -1429,55 +1674,99 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
                         element,
                         companion,
                     } => {
-                        out.insert(element.clone());
+                        out.push(element.clone())?;
                         if let Some(companion) = companion {
-                            out.insert(companion.clone());
+                            out.push(companion.clone())?;
                         }
-                        pending.push(VarNode::Expression(expression));
-                        pending.push(VarNode::Pattern(inner, endpoint));
+                        pending.push(VarNode::Expression(expression))?;
+                        pending.push(VarNode::Pattern(inner, endpoint))?;
                     }
                     GraphPattern::OrderBy { inner, expression } => {
                         for oe in expression {
                             match oe {
                                 purrdf_sparql_algebra::OrderExpression::Asc(e)
                                 | purrdf_sparql_algebra::OrderExpression::Desc(e) => {
-                                    pending.push(VarNode::Expression(e));
+                                    pending.push(VarNode::Expression(e))?;
                                 }
                             }
                         }
-                        pending.push(VarNode::Pattern(inner, endpoint));
+                        pending.push(VarNode::Pattern(inner, endpoint))?;
                     }
                     GraphPattern::Group {
                         inner,
                         variables,
                         aggregates,
                     } => {
-                        out.extend(variables.iter().cloned());
+                        out.try_extend(variables.iter().cloned())?;
                         for (v, agg) in aggregates {
-                            out.insert(v.clone());
+                            out.push(v.clone())?;
                             for arg in agg.args().iter().chain(
                                 agg.order_by()
                                     .iter()
                                     .map(purrdf_sparql_algebra::OrderExpression::expression),
                             ) {
-                                pending.push(VarNode::Expression(arg));
+                                pending.push(VarNode::Expression(arg))?;
                             }
                         }
-                        pending.push(VarNode::Pattern(inner, endpoint));
+                        pending.push(VarNode::Pattern(inner, endpoint))?;
                     }
                     GraphPattern::Distinct { inner }
                     | GraphPattern::Reduced { inner }
                     | GraphPattern::Slice { inner, .. } => {
-                        pending.push(VarNode::Pattern(inner, endpoint));
+                        pending.push(VarNode::Pattern(inner, endpoint))?;
                     }
                     GraphPattern::Project { inner, variables } => {
-                        out.extend(variables.iter().cloned());
-                        pending.push(VarNode::Pattern(inner, endpoint));
+                        out.try_extend(variables.iter().cloned())?;
+                        pending.push(VarNode::Pattern(inner, endpoint))?;
                     }
                 }
             }
         }
     }
+
+    out.finish()
+}
+
+pub(crate) fn collect_term_vars_admitted(
+    term: &purrdf_sparql_algebra::TermPattern,
+    out: &mut crate::solution::SchemaBuilder,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<(), EvalError> {
+    use purrdf_sparql_algebra::walk::MutationError;
+    match term.for_each_variable_with_memory(memory, |variable, _| {
+        let _ = out.push(variable.clone())?;
+        Ok::<(), EvalError>(())
+    }) {
+        Ok(()) => Ok(()),
+        Err(MutationError::Visitor(error)) => Err(error),
+        Err(MutationError::Storage(error)) => Err(memory
+            .admission_mut()
+            .storage_error(error, "mentioned term variables")),
+    }
+}
+
+/// Preserve widened EXISTS and nonnarrowing Project membership under actual
+/// native work-list, schema-column, hash-array and immutable-control admission.
+pub(crate) fn pattern_all_vars_admitted(
+    pattern: &GraphPattern,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    pattern_vars_outside_admitted(pattern, None, workspace)
+}
+
+pub(crate) fn pattern_vars_outside_admitted(
+    pattern: &GraphPattern,
+    endpoint: Option<&Variable>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    collect_vars_admitted([VarNode::Pattern(pattern, endpoint)], workspace)
+}
+
+pub(crate) fn expr_vars_admitted(
+    expression: &Expression,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<VarSchema, EvalError> {
+    collect_vars_admitted([VarNode::Expression(expression)], workspace)
 }
 
 /// Collect EVERY variable `pattern` mentions anywhere — triple/path terms,
@@ -1488,7 +1777,7 @@ fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
 /// reaches its inner's LEAF positions too, not just its own expression
 /// positions — see that arm's doc and [`expr_vars`]'s own "Relationship to
 /// `analyze_pattern`'s `free_vars`" section for how this walk's output relates to
-/// the SEPARATE, independent walk [`crate::governor::soundness::analyze_pattern`]
+/// the SEPARATE, independent walk [`crate::governor::soundness::analyze_pattern_admitted`]
 /// runs — via [`crate::eval::PreparedExists::build`] — for the [`exists`] decision
 /// site's own correlation test; this function's output never feeds that decision).
 ///
@@ -1523,7 +1812,10 @@ pub(crate) fn pattern_vars_outside(
     endpoint: Option<&Variable>,
     out: &mut DetHashSet<Variable>,
 ) {
-    collect_vars(vec![VarNode::Pattern(pattern, endpoint)], out);
+    let vars =
+        pattern_vars_outside_admitted(pattern, endpoint, &crate::WorkspaceCapability::resident())
+            .expect("resident pattern-variable collection failed");
+    out.extend(vars.vars().iter().cloned());
 }
 
 /// Which of the two `EXISTS` evaluation strategies [`force_exists_strategy_for_test`]
@@ -1685,13 +1977,21 @@ fn exists_use_probe(
     normalized: &GraphPattern,
     analysis: &crate::governor::soundness::NodeAnalysisTable,
     outer_schema: &VarSchema,
-) -> bool {
+    workspace: &crate::WorkspaceCapability,
+) -> Result<bool, EvalError> {
     #[cfg(test)]
     if let Some(forced) = FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get) {
-        return forced == ForcedExistsStrategy::Probe;
+        return Ok(forced == ForcedExistsStrategy::Probe);
     }
-    (!correlated && !stateful)
-        || crate::governor::soundness::probe_admissible(normalized, analysis, outer_schema)
+    if !correlated && !stateful {
+        return Ok(true);
+    }
+    crate::governor::soundness::probe_admissible_admitted(
+        normalized,
+        analysis,
+        outer_schema,
+        workspace,
+    )
 }
 
 /// Evaluate `EXISTS { pattern }` for the current solution.
@@ -1786,12 +2086,14 @@ pub(crate) fn exists<D: DatasetView + Sync>(
         return exists_deferred(&slot, row, schema, ctx);
     }
     if crate::deferred_exists::is_placeholder(pattern) {
-        return Err(EvalError::internal(
+        return Err(crate::NativeDiagnostic::error(
+            crate::NativeDiagnosticKind::Internal,
             "a nested EXISTS placeholder was evaluated outside the substituted copy that \
              left it",
+            &ctx.growth,
         ));
     }
-    let prepared = ctx.prepared_exists(pattern);
+    let prepared = ctx.prepared_exists(pattern)?;
     let crate::eval::PreparedExists::Pattern { ledger_source, .. } = prepared.as_ref() else {
         return Ok(false);
     };
@@ -1818,7 +2120,7 @@ struct PreparedSite<'s> {
     prepared: &'s crate::eval::PreparedExists,
     /// The preparation's nodes mapped one hop to the plan nodes the ledger indexes (the
     /// preparation's own `ledger_source` for a site of the plan).
-    plan_map: &'s Arc<SubstitutionSourceMap>,
+    plan_map: &'s crate::workspace::SharedWorkspace<SubstitutionSourceMap>,
 }
 
 /// Answer an `EXISTS` for the current row from its preparation: the strategy decision,
@@ -1901,27 +2203,26 @@ fn exists_prepared<D: DatasetView + Sync>(
     if !ctx.in_substituted_exists {
         // The outer-bound variables (a concrete binding in the current row), built
         // only for this check: it is the one consumer that needs the set itself.
-        let outer_bound: DetHashSet<Variable> = schema
-            .vars()
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| {
-                if row[i].is_some() {
-                    Some(v.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let outer_bound = VarSchema::from_vars_admitted(
+            schema
+                .vars()
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| row[*i].is_some())
+                .map(|(_, v)| v.clone()),
+            &ctx.growth,
+        )?;
         // A walk over the whole inner pattern, over a work list, so an `EXISTS` of any
         // depth is read to the end before "no collision" is answered.
-        if let Some((var, intro)) =
-            crate::governor::soundness::exists_row_collision(normalized, &outer_bound)
-        {
-            return Err(EvalError::exists_scope_collision(
-                var.as_str().to_owned(),
-                intro.as_str(),
-            ));
+        if let Some((var, intro)) = crate::governor::soundness::exists_row_collision_admitted(
+            normalized,
+            &outer_bound,
+            &ctx.growth,
+        )? {
+            return Err(EvalError::ExistsScopeCollision {
+                variable: ctx.growth.authored_text(var.as_str())?,
+                intro: intro.as_str(),
+            });
         }
     }
 
@@ -1930,6 +2231,7 @@ fn exists_prepared<D: DatasetView + Sync>(
     // exactly "`v` has a column `i` and `row[i]` is bound" (`VarSchema` dedups, so the
     // column is unique) — instead of cloning every bound variable into a per-row set.
     let correlated = free_vars
+        .vars()
         .iter()
         .any(|v| schema.index_of(v).is_some_and(|i| row[i].is_some()));
 
@@ -1940,7 +2242,7 @@ fn exists_prepared<D: DatasetView + Sync>(
     let native_positive = correlated
         && !stateful
         && !matches!(normalized.as_ref(), GraphPattern::Bgp { patterns } if patterns.len() <= 1)
-        && crate::bgp::PositivePlan::seed_eligible(normalized, schema);
+        && crate::bgp::PositivePlan::seed_eligible_admitted(normalized, schema, &ctx.growth)?;
     #[cfg(test)]
     let native_positive =
         native_positive && FORCE_EXISTS_STRATEGY.with(std::cell::Cell::get).is_none();
@@ -1958,7 +2260,14 @@ fn exists_prepared<D: DatasetView + Sync>(
         return Ok(answer);
     }
 
-    if exists_use_probe(correlated, stateful, normalized, analysis, schema) {
+    if exists_use_probe(
+        correlated,
+        stateful,
+        normalized,
+        analysis,
+        schema,
+        &ctx.growth,
+    )? {
         // ---- Memoized probe path ----
         //
         // Evaluate the (ENF-normalized) inner — and build the probe index over it —
@@ -2002,7 +2311,8 @@ fn exists_prepared<D: DatasetView + Sync>(
                 // not to every outer row the probe later serves.
                 let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
                 if track_ledger {
-                    ctx.correlated_node_maps.push(Arc::clone(ledger_source));
+                    ctx.correlated_node_maps
+                        .push(ledger_source.clone(), &ctx.growth)?;
                 }
                 let evaluated = eval_evaluated(normalized, ctx);
                 if track_ledger {
@@ -2016,36 +2326,44 @@ fn exists_prepared<D: DatasetView + Sync>(
                 if charge_exists_evidence(ctx, crate::governor::ChargePoint::ExistsProbeAnswered) {
                     return Ok(false);
                 }
-                let inner = Arc::new(evaluated.into_complete().unwrap_or_else(|_| {
-                    unreachable!("a non-truncated result is complete by construction")
-                }));
+                let inner = crate::workspace::SharedWorkspace::new_admitted(
+                    evaluated.into_complete().unwrap_or_else(|_| {
+                        unreachable!("a non-truncated result is complete by construction")
+                    }),
+                    &ctx.growth,
+                )?;
                 // `shared` is computed against the FULL outer schema (not just the
                 // row's bound vars), so one index serves every row: an outer var
                 // unbound in a given row is `None` in the probe and matches anything
                 // via `compatible`, exactly as the definition path's substitution would.
-                let shared = schema.shared_columns(&inner.schema);
-                let (keyed, wild) = crate::binop::build_index(&inner, &shared);
-                let entry = Arc::new(crate::eval::ExistsInner {
-                    inner,
-                    shared,
-                    keyed,
-                    wild,
-                });
+                let shared = schema.shared_columns_admitted(&inner.schema, &ctx.growth)?;
+                let (keyed, wild) = crate::binop::build_index(&inner, &shared, &ctx.growth)?;
+                let entry = crate::workspace::SharedWorkspace::new_admitted(
+                    crate::eval::ExistsInner {
+                        inner,
+                        shared,
+                        keyed,
+                        wild,
+                    },
+                    &ctx.growth,
+                )?;
                 if ctx.options.exists_memo && !ctx.in_substituted_exists {
-                    ctx.exists_inner_cache.insert(key, entry.clone());
+                    ctx.exists_inner_cache
+                        .insert_admitted(key, entry.clone(), &ctx.growth)?;
                 }
                 entry
             }
         };
 
         // Existence-only probe of the full outer row against the reused index.
-        Ok(crate::binop::probe_has_match(
+        crate::binop::probe_has_match(
             row,
             &entry.shared,
             &entry.keyed,
             &entry.wild,
             &entry.inner.rows,
-        ))
+            &ctx.growth,
+        )
     } else {
         // ---- Per-row definition path, with the μ-restriction memo ----
         //
@@ -2062,15 +2380,17 @@ fn exists_prepared<D: DatasetView + Sync>(
         // both the read and the write below are skipped, and the per-row
         // definition genuinely runs once per row.
         let use_memo = ctx.options.exists_memo && !ctx.in_substituted_exists && !stateful;
-        let memo_key = use_memo.then(|| {
-            let restriction = definition_restriction_key(row, schema, free_vars);
-            (
+        let memo_key = if use_memo {
+            let restriction = definition_restriction_key(row, schema, free_vars, &ctx.growth)?;
+            Some((
                 site.key,
                 ctx.graph_key(),
                 crate::eval::schema_fingerprint(schema),
                 restriction,
-            )
-        });
+            ))
+        } else {
+            None
+        };
         if let Some(key) = &memo_key
             && let Some(&answer) = ctx.exists_definition_memo.get(key)
         {
@@ -2102,7 +2422,8 @@ fn exists_prepared<D: DatasetView + Sync>(
         // the one line below and its `?` is applied AFTER the pop.
         let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
         if track_ledger {
-            ctx.correlated_node_maps.push(Arc::clone(ledger_source));
+            ctx.correlated_node_maps
+                .push(ledger_source.clone(), &ctx.growth)?;
         }
         let source = crate::deferred_exists::CorrelatedSource {
             sites: crate::deferred_exists::SiteSlot::Prepared(sites),
@@ -2131,7 +2452,8 @@ fn exists_prepared<D: DatasetView + Sync>(
         }
         let answer = !inner.rows().is_empty();
         if let Some(key) = memo_key {
-            ctx.exists_definition_memo.insert(key, answer);
+            ctx.exists_definition_memo
+                .insert_admitted(key, answer, &ctx.growth)?;
         }
         Ok(answer)
     }
@@ -2146,60 +2468,70 @@ fn exists_prepared<D: DatasetView + Sync>(
 fn exists_positive_seeded<D: DatasetView + Sync>(
     site: usize,
     normalized: &GraphPattern,
-    free_vars: &DetHashSet<Variable>,
-    ledger_source: &Arc<SubstitutionSourceMap>,
+    free_vars: &VarSchema,
+    ledger_source: &crate::workspace::SharedWorkspace<SubstitutionSourceMap>,
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<bool>, EvalError> {
-    let memo_key = (ctx.options.exists_memo && !ctx.in_substituted_exists).then(|| {
-        (
+    let memo_key = if ctx.options.exists_memo && !ctx.in_substituted_exists {
+        Some((
             site,
             ctx.graph_key(),
             crate::eval::schema_fingerprint(schema),
-            definition_restriction_key(row, schema, free_vars),
-        )
-    });
+            definition_restriction_key(row, schema, free_vars, &ctx.growth)?,
+        ))
+    } else {
+        None
+    };
     if let Some(key) = &memo_key
         && let Some(&answer) = ctx.exists_definition_memo.get(key)
     {
         return Ok(Some(answer));
     }
-    let mut seed_schema = VarSchema::default();
-    let mut seed_row = Solution::new();
+    let mut seed_schema = crate::solution::SchemaBuilder::new(&ctx.growth);
+    let mut seed_columns = crate::AdmittedVec::new(&ctx.growth);
     for (column, variable) in schema.vars().iter().enumerate() {
         if free_vars.contains(variable) {
-            seed_schema.push(variable.clone());
-            seed_row.push(row[column]);
+            seed_schema.push(variable.clone())?;
+            seed_columns.push(column)?;
         }
     }
+    let seed_schema = seed_schema.finish()?;
+    let mut seed_rows = RowsBuilder::new(&ctx.growth);
+    seed_rows.push_cells(
+        seed_schema.len(),
+        seed_columns.iter().map(|column| row[*column]),
+    )?;
     let input = SolutionSeq {
-        schema: Arc::new(seed_schema),
-        rows: vec![seed_row],
+        schema: seed_schema.shared_admitted(&ctx.growth)?,
+        rows: seed_rows.finish()?,
     };
-    let seed = crate::bgp::SeedEstimate::from_rows(&input);
-    let Some(plan) = crate::bgp::PositivePlan::build_seeded(
+    let seed = crate::bgp::SeedEstimate::from_rows_admitted(&input, &ctx.growth)?;
+    let Some(plan) = crate::bgp::PositivePlan::build_seeded_admitted(
         ctx.dataset,
         &ctx.active_dataset,
         ctx.active_graph,
         normalized,
         &seed,
+        &ctx.workspace,
     )?
     else {
         return Ok(None);
     };
+    let next_pushdown = crate::workspace::SharedWorkspace::new_admitted(
+        crate::governor::soundness::plan_cap_pushdown_admitted(normalized, Some(1), &ctx.growth)?,
+        &ctx.growth,
+    )?;
     let track_ledger = ctx.ledger.is_some() && !ledger_source.is_empty();
     if track_ledger {
-        ctx.correlated_node_maps.push(Arc::clone(ledger_source));
+        ctx.correlated_node_maps
+            .push(ledger_source.clone(), &ctx.growth)?;
     }
     // Emptiness is settled by one witness. Price and execute the restriction
     // against the original immutable body, preserving its source attribution.
-    let previous_pushdown = ctx.cap_pushdown.take();
+    let previous_pushdown = ctx.cap_pushdown.replace(next_pushdown);
     let previous_cursor = ctx.cap_at;
-    ctx.cap_pushdown = Some(Arc::new(crate::governor::soundness::plan_cap_pushdown(
-        normalized,
-        Some(1),
-    )));
     let evaluated = crate::eval::eval_positive_evaluated(
         normalized,
         Some(crate::eval::PositiveInput::owned(input)),
@@ -2229,7 +2561,8 @@ fn exists_positive_seeded<D: DatasetView + Sync>(
     }
     let answer = !evaluated.rows().is_empty();
     if let Some(key) = memo_key {
-        ctx.exists_definition_memo.insert(key, answer);
+        ctx.exists_definition_memo
+            .insert_admitted(key, answer, &ctx.growth)?;
     }
     Ok(Some(answer))
 }
@@ -2301,7 +2634,8 @@ fn exists_deferred<D: DatasetView + Sync>(
         // The probe the eager copy would have run: the body with the carried substitution
         // only, evaluated unconstrained, then probed with the row.
         if track_ledger {
-            ctx.correlated_node_maps.push(Arc::clone(&site.plan_map));
+            ctx.correlated_node_maps
+                .push(site.plan_map.clone(), &ctx.growth)?;
         }
         let evaluated =
             crate::binop::eval_substituted(normalized, env, source(normalized_sites), ctx);
@@ -2319,20 +2653,23 @@ fn exists_deferred<D: DatasetView + Sync>(
         let inner = evaluated
             .into_complete()
             .unwrap_or_else(|_| unreachable!("a non-truncated result is complete by construction"));
-        let shared = schema.shared_columns(&inner.schema);
-        let (keyed, wild) = crate::binop::build_index(&inner, &shared);
-        return Ok(crate::binop::probe_has_match(
+        let shared = schema.shared_columns_admitted(&inner.schema, &ctx.growth)?;
+        let (keyed, wild) = crate::binop::build_index(&inner, &shared, &ctx.growth)?;
+        return crate::binop::probe_has_match(
             row,
             &shared,
             &keyed,
             &wild,
             &inner.rows,
-        ));
+            &ctx.growth,
+        );
     }
 
     // The per-row definition over the carried substitution and this row, as one row.
     let current = outer_bindings_for_substitution(row, schema, ctx)?;
-    let Some(substitution) = crate::deferred_exists::with_row(env, &current, &site.vars) else {
+    let Some(substitution) =
+        crate::deferred_exists::with_row(env, &current, &site.vars, &ctx.growth)?
+    else {
         // This row disagrees with a carried layer: the layers are applied one at a time.
         return exists_layered(slot, row, schema, ctx);
     };
@@ -2342,7 +2679,8 @@ fn exists_deferred<D: DatasetView + Sync>(
         (normalized, normalized_sites)
     };
     if track_ledger {
-        ctx.correlated_node_maps.push(Arc::clone(&site.plan_map));
+        ctx.correlated_node_maps
+            .push(site.plan_map.clone(), &ctx.growth)?;
     }
     let inner_result =
         crate::binop::eval_substituted(to_evaluate, &substitution, source(sites), ctx);
@@ -2382,13 +2720,13 @@ fn exists_layered<D: DatasetView + Sync>(
     else {
         return Ok(false);
     };
-    let mut copy: Option<Box<GraphPattern>> = None;
-    for layer in slot.env.layers() {
+    let mut copy: Option<CorrelatedPattern> = None;
+    for layer in slot.env.layers(&ctx.growth)? {
         let from: &GraphPattern = copy.as_deref().unwrap_or(normalized);
-        copy = Some(substitute_pattern(from, layer)?);
+        copy = Some(substitute_pattern_admitted(from, layer, &ctx.growth)?);
     }
     let body: &GraphPattern = copy.as_deref().unwrap_or(normalized);
-    let prepared = crate::eval::PreparedExists::build(body);
+    let prepared = crate::eval::PreparedExists::build_admitted(body, &ctx.growth)?;
     let crate::eval::PreparedExists::Pattern { ledger_source, .. } = &prepared else {
         return Ok(false);
     };
@@ -2435,18 +2773,125 @@ fn charge_exists_evidence<D: DatasetView + Sync>(
 fn definition_restriction_key<I: ViewTermId>(
     row: &[Option<SolutionTerm<I>>],
     schema: &VarSchema,
-    free_vars: &DetHashSet<Variable>,
-) -> Vec<Option<SolutionTerm<I>>> {
-    let mut key = Vec::with_capacity(free_vars.len());
-    key.extend(
+    free_vars: &VarSchema,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<RetainedRow<I>, EvalError> {
+    let width = schema
+        .vars()
+        .iter()
+        .filter(|v| free_vars.contains(v))
+        .count();
+    RetainedRow::from_cells(
+        width,
         schema
             .vars()
             .iter()
             .enumerate()
-            .filter(|(_, v)| free_vars.contains(*v))
-            .map(|(i, _)| row[i]),
-    );
-    key
+            .filter(|(_, v)| free_vars.contains(v))
+            .map(|(index, _)| row[index]),
+        workspace,
+    )
+}
+
+/// The original lexical account used by correlated AST construction.
+pub(crate) type CorrelatedMemory<'a> =
+    purrdf_lex::allocation::Memory<'a, crate::workspace::LexicalFrame>;
+
+pub(crate) fn correlated_storage_error(
+    memory: &mut CorrelatedMemory<'_>,
+    error: purrdf_lex::allocation::StorageError,
+) -> EvalError {
+    memory
+        .admission_mut()
+        .storage_error(error, "correlated native algebra")
+}
+
+pub(crate) fn correlated_box<T>(
+    value: T,
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<T>, EvalError> {
+    memory
+        .add_bytes(std::alloc::Layout::new::<T>().size())
+        .map_err(|error| correlated_storage_error(memory, error))?;
+    purrdf_lex::allocation::try_boxed(value).map_err(|_| EvalError::AllocationFailed {
+        construct: "correlated native child",
+    })
+}
+
+/// A copied tree and its ORIGINAL native allocation owner, in destruction order.
+/// The root box is permanent before source addresses or analyses are recorded.
+pub(crate) struct CorrelatedPattern {
+    body: Box<GraphPattern>,
+    frame: crate::workspace::LexicalFrame,
+}
+
+impl std::ops::Deref for CorrelatedPattern {
+    type Target = GraphPattern;
+    fn deref(&self) -> &GraphPattern {
+        &self.body
+    }
+}
+impl AsRef<GraphPattern> for CorrelatedPattern {
+    fn as_ref(&self) -> &GraphPattern {
+        &self.body
+    }
+}
+
+impl CorrelatedPattern {
+    pub(crate) fn build(
+        workspace: &crate::WorkspaceCapability,
+        build: impl FnOnce(&mut CorrelatedMemory<'_>) -> Result<Box<GraphPattern>, EvalError>,
+    ) -> Result<Self, EvalError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let body = build(&mut purrdf_lex::allocation::Memory::new(&mut frame))?;
+        Ok(Self { body, frame })
+    }
+
+    pub(crate) fn copy(
+        pattern: &GraphPattern,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Self::build(workspace, |memory| {
+            let copy = pattern
+                .clone_with_memory(memory)
+                .map_err(|error| correlated_storage_error(memory, error))?;
+            correlated_box(copy, memory)
+        })
+    }
+
+    /// Move the existing root beneath one admitted wrapper; no deep copy occurs.
+    pub(crate) fn first(self) -> Result<Self, EvalError> {
+        let Self { body, mut frame } = self;
+        // On any failure the body is destroyed before its original frame.
+        let result = {
+            let live = frame.admitted_bytes();
+            let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, live);
+            correlated_box(
+                GraphPattern::Slice {
+                    inner: body.into(),
+                    start: 0,
+                    length: Some(1),
+                },
+                &mut memory,
+            )
+        };
+        result.map(|body| Self { body, frame })
+    }
+
+    /// Resident-only compatibility door. A bounded lease can never be detached.
+    #[cfg(test)]
+    fn into_resident(self) -> Box<GraphPattern> {
+        assert!(!self.frame.workspace().is_bounded());
+        self.body
+    }
+}
+
+/// The immutable per-row arrays and the original child-box grant.
+/// Lexical leaves have their own intrinsic SharedText ownership.
+pub(crate) struct SubstitutionPayload {
+    pub(crate) expr: Vec<(Variable, Expression)>,
+    pub(crate) term: Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>,
+    _frame: Option<crate::workspace::LexicalFrame>,
 }
 
 /// The per-row μ used by pattern substitution — SEP-0007's `Replace` mechanism,
@@ -2493,35 +2938,164 @@ fn definition_restriction_key<I: ViewTermId>(
 /// leaf/wrapper count times term length.
 #[derive(Clone, Default)]
 pub(crate) struct SubstitutionRow {
-    pub(crate) expr: Vec<(Variable, Expression)>,
-    pub(crate) term: Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>,
+    contents: Option<crate::workspace::SharedWorkspace<SubstitutionPayload>>,
+}
+impl std::ops::Deref for SubstitutionRow {
+    type Target = SubstitutionPayload;
+    fn deref(&self) -> &SubstitutionPayload {
+        static EMPTY: SubstitutionPayload = SubstitutionPayload {
+            expr: Vec::new(),
+            term: Vec::new(),
+            _frame: None,
+        };
+        self.contents.as_deref().unwrap_or(&EMPTY)
+    }
 }
 
 impl SubstitutionRow {
-    /// Restrict μ to exactly `variables`, preserving each side's original
-    /// (schema) order — the walk's response to a `Project` boundary, the ONLY
-    /// scope boundary the surface language has (SEP-0006's rule, restated in
-    /// [`substitute_pattern`]'s doc). The walk already deep-clones the tree
-    /// once per outer row, so the narrowed copy here is noise against that
-    /// cost, not a new per-row allocation class (AGENTS.md's hot-path rule) —
-    /// see [`SubstitutionRow`]'s doc: every element clone here is an `Arc`
-    /// refcount bump, not text allocation.
-    fn narrow_to(&self, variables: &[Variable]) -> Self {
+    pub(crate) fn build(
+        workspace: &crate::WorkspaceCapability,
+        fill: impl FnOnce(
+            &mut Vec<(Variable, Expression)>,
+            &mut Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>,
+            &mut CorrelatedMemory<'_>,
+        ) -> Result<(), EvalError>,
+    ) -> Result<Self, EvalError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let mut expr = Vec::new();
+        let mut term = Vec::new();
+        fill(
+            &mut expr,
+            &mut term,
+            &mut purrdf_lex::allocation::Memory::new(&mut frame),
+        )?;
+        let payload = SubstitutionPayload {
+            expr,
+            term,
+            _frame: Some(frame),
+        };
+        if payload.expr.is_empty() && payload.term.is_empty() {
+            return Ok(Self::default());
+        }
+        Ok(Self {
+            contents: Some(crate::workspace::SharedWorkspace::new_admitted(
+                payload, workspace,
+            )?),
+        })
+    }
+
+    #[cfg(test)]
+    fn resident(
+        expr: Vec<(Variable, Expression)>,
+        term: Vec<(Variable, purrdf_sparql_algebra::GroundTerm)>,
+    ) -> Self {
         Self {
-            expr: self
-                .expr
-                .iter()
-                .filter(|(v, _)| variables.contains(v))
-                .cloned()
-                .collect(),
-            term: self
-                .term
-                .iter()
-                .filter(|(v, _)| variables.contains(v))
-                .cloned()
-                .collect(),
+            contents: Some(
+                crate::workspace::SharedWorkspace::new_admitted(
+                    SubstitutionPayload {
+                        expr,
+                        term,
+                        _frame: None,
+                    },
+                    &crate::WorkspaceCapability::resident(),
+                )
+                .expect("resident substitution row control allocation failed"),
+            ),
         }
     }
+
+    pub(crate) fn filtered(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+        keep: impl Fn(&Variable) -> bool,
+    ) -> Result<Self, EvalError> {
+        Self::build(workspace, |expr, term, memory| {
+            for (variable, value) in self.expr.iter().filter(|(v, _)| keep(v)) {
+                let copy = value
+                    .clone_with_memory(memory)
+                    .map_err(|e| correlated_storage_error(memory, e))?;
+                memory
+                    .push(expr, (variable.clone(), copy))
+                    .map_err(|e| correlated_storage_error(memory, e))?;
+            }
+            for (variable, value) in self.term.iter().filter(|(v, _)| keep(v)) {
+                let copy = value
+                    .clone_with_memory(memory)
+                    .map_err(|e| correlated_storage_error(memory, e))?;
+                memory
+                    .push(term, (variable.clone(), copy))
+                    .map_err(|e| correlated_storage_error(memory, e))?;
+            }
+            Ok(())
+        })
+    }
+
+    fn narrow_to(
+        &self,
+        variables: &[Variable],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        self.filtered(workspace, |v| variables.contains(v))
+    }
+
+    pub(crate) fn application_inputs(
+        &self,
+        inputs: &[(Variable, Variable)],
+        marker: Option<(&Variable, bool)>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Self::build(workspace, |expr, term, memory| {
+            for (input, source) in inputs {
+                if let Some((_, value)) = self.expr.iter().find(|(v, _)| v == source) {
+                    let copy = value
+                        .clone_with_memory(memory)
+                        .map_err(|e| correlated_storage_error(memory, e))?;
+                    memory
+                        .push(expr, (input.clone(), copy))
+                        .map_err(|e| correlated_storage_error(memory, e))?;
+                }
+                if let Some((_, value)) = self.term.iter().find(|(v, _)| v == source) {
+                    let copy = value
+                        .clone_with_memory(memory)
+                        .map_err(|e| correlated_storage_error(memory, e))?;
+                    memory
+                        .push(term, (input.clone(), copy))
+                        .map_err(|e| correlated_storage_error(memory, e))?;
+                }
+            }
+            if let Some((variable, value)) = marker {
+                let literal = correlated_boolean(value, workspace)?;
+                memory
+                    .push(
+                        expr,
+                        (variable.clone(), Expression::Literal(literal.clone())),
+                    )
+                    .map_err(|e| correlated_storage_error(memory, e))?;
+                memory
+                    .push(
+                        term,
+                        (
+                            variable.clone(),
+                            purrdf_sparql_algebra::GroundTerm::Literal(literal),
+                        ),
+                    )
+                    .map_err(|e| correlated_storage_error(memory, e))?;
+            }
+            Ok(())
+        })
+    }
+}
+
+fn correlated_boolean(
+    value: bool,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<purrdf_sparql_algebra::Literal, EvalError> {
+    let lexical = workspace.authored_text(if value { "true" } else { "false" })?;
+    let datatype =
+        purrdf_sparql_algebra::NamedNode::from_admitted(workspace.authored_text(XSD_BOOLEAN)?);
+    Ok(purrdf_sparql_algebra::Literal::from_admitted(
+        lexical, datatype, None, None,
+    ))
 }
 
 /// Substitute outer-bound variables into a graph pattern for a correlated
@@ -2609,47 +3183,22 @@ impl SubstitutionRow {
 ///
 /// # Errors
 ///
-/// [`EvalError::StackExhausted`] when the walk ran out of stack: it runs once per outer
-/// row, from a correlated evaluation that may already be deep, inside a
-/// [`crate::stack::walk`] scope that discards the partial copy.
+/// Returns the original typed native storage or evaluation failure. The iterative
+/// rewrite destroys a refused partial body before releasing its original grant.
+#[cfg(test)]
 pub(crate) fn substitute_pattern(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
 ) -> Result<Box<GraphPattern>, EvalError> {
-    crate::stack::walk(|| {
-        let mut tracking: Option<&mut SubstitutionTracking<'_>> = None;
-        substitute_pattern_impl::<false>(pattern, row, &mut tracking, &mut Deferral::eager())
-    })
-}
-
-/// [`substitute_pattern`], leaving every nested `EXISTS` body outside a `SERVICE` body as a
-/// placeholder recorded on `defer` (see [`Deferral`] and `crate::deferred_exists`).
-///
-/// # Errors
-///
-/// As [`substitute_pattern`].
-#[allow(
-    clippy::unnecessary_box_returns,
-    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
-              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
-              32-bit targets such as wasm32, where the same box is still the field's type"
-)]
-pub(crate) fn substitute_pattern_deferring<const PRESERVE: bool>(
-    pattern: &GraphPattern,
-    row: &SubstitutionRow,
-    defer: &mut Deferral<'_>,
-) -> Result<Box<GraphPattern>, EvalError> {
-    crate::stack::walk(|| {
-        let mut tracking: Option<&mut SubstitutionTracking<'_>> = None;
-        substitute_pattern_impl::<PRESERVE>(pattern, row, &mut tracking, defer)
-    })
+    substitute_pattern_admitted(pattern, row, &crate::WorkspaceCapability::resident())
+        .map(CorrelatedPattern::into_resident)
 }
 
 /// How the substitution walk treats a nested `EXISTS` body — see
 /// `crate::deferred_exists` for why it is not copied.
 ///
 /// A deferring walk leaves each body it meets outside a `SERVICE` body as a
-/// [`crate::deferred_exists::placeholder`], recorded here with the body's site and the
+/// [`crate::deferred_exists::placeholder_with_memory], recorded here with the body's site and the
 /// substitution it is owed; an eager walk (and every walk below a `SERVICE`, whose body is
 /// forwarded as text) substitutes the body in full, as SPARQL's `substitute` reads.
 pub(crate) struct Deferral<'a> {
@@ -2690,8 +3239,17 @@ impl<'a> Deferral<'a> {
     }
 
     /// The placeholders this walk left, for the window that evaluates its copy.
-    pub(crate) fn into_placeholders(self) -> Option<Arc<crate::deferred_exists::DeferredMap>> {
-        (!self.placeholders.is_empty()).then(|| Arc::new(self.placeholders))
+    pub(crate) fn into_placeholders(
+        self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<
+        Option<crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>>,
+        EvalError,
+    > {
+        if self.placeholders.is_empty() {
+            return Ok(None);
+        }
+        crate::workspace::SharedWorkspace::new_admitted(self.placeholders, workspace).map(Some)
     }
 
     /// The site a nested `EXISTS` body stands for, and the substitution it already
@@ -2701,7 +3259,7 @@ impl<'a> Deferral<'a> {
         &self,
         body: &GraphPattern,
     ) -> Option<(
-        &Arc<crate::deferred_exists::ExistsSite>,
+        &crate::workspace::SharedWorkspace<crate::deferred_exists::ExistsSite>,
         Option<&crate::deferred_exists::SubstitutionEnv>,
     )> {
         let sites = self.sites?;
@@ -2721,22 +3279,31 @@ impl<'a> Deferral<'a> {
 
     /// Leave `body` as a placeholder owed `row`, returning the placeholder — or `None` when
     /// this walk substitutes `body` in full.
-    fn defer(&mut self, body: &GraphPattern, row: &SubstitutionRow) -> Option<Box<GraphPattern>> {
-        let (site, carried) = self.deferred_site(body)?;
-        let env = match carried {
-            Some(env) => env.then(row, &site.vars),
-            None => crate::deferred_exists::SubstitutionEnv::default().then(row, &site.vars),
+    fn defer(
+        &mut self,
+        body: &GraphPattern,
+        row: &SubstitutionRow,
+        memory: &mut CorrelatedMemory<'_>,
+    ) -> Result<Option<Box<GraphPattern>>, EvalError> {
+        let Some((site, carried)) = self.deferred_site(body) else {
+            return Ok(None);
         };
+        let workspace = memory.admission_mut().workspace().clone();
+        let env = carried
+            .cloned()
+            .unwrap_or_default()
+            .then(row, &site.vars, &workspace)?;
         let slot = crate::deferred_exists::DeferredExists {
-            site: Arc::clone(site),
+            site: site.clone(),
             env,
         };
-        let placeholder = crate::deferred_exists::placeholder();
-        self.placeholders.insert(
+        let placeholder = crate::deferred_exists::placeholder_with_memory(memory)?;
+        self.placeholders.insert_admitted(
             std::ptr::from_ref(placeholder.as_ref()) as usize,
             crate::deferred_exists::Deferred::Exists(slot),
-        );
-        Some(placeholder)
+            &workspace,
+        )?;
+        Ok(Some(placeholder))
     }
 
     /// Leave `right`, a `LATERAL`'s right operand, as a lateral placeholder owed `row`,
@@ -2748,36 +3315,48 @@ impl<'a> Deferral<'a> {
         &mut self,
         right: &GraphPattern,
         row: &SubstitutionRow,
-    ) -> Option<Box<GraphPattern>> {
-        let sites = self.sites?;
+        memory: &mut CorrelatedMemory<'_>,
+    ) -> Result<Option<Box<GraphPattern>>, EvalError> {
+        let Some(sites) = self.sites else {
+            return Ok(None);
+        };
         let address = std::ptr::from_ref(right) as usize;
+        let workspace = memory.admission_mut().workspace().clone();
         let (site, env) = match self
             .enclosing
             .and_then(|map| map.get(&address))
             .and_then(crate::deferred_exists::Deferred::lateral)
         {
-            Some(slot) => (&slot.site, slot.env.then(row, &slot.site.vars)),
-            None if self.eager_depth > 0 => return None,
+            Some(slot) => (
+                slot.site.clone(),
+                slot.env.then(row, &slot.site.vars, &workspace)?,
+            ),
+            None if self.eager_depth > 0 => return Ok(None),
             None => {
-                let site = sites.lateral.get(&address)?;
+                let Some(site) = sites.lateral.get(&address) else {
+                    return Ok(None);
+                };
                 (
-                    site,
-                    crate::deferred_exists::SubstitutionEnv::default().then(row, &site.vars),
+                    site.clone(),
+                    crate::deferred_exists::SubstitutionEnv::default()
+                        .then(row, &site.vars, &workspace)?,
                 )
             }
         };
-        let placeholder = crate::deferred_exists::lateral_placeholder(&site.schema);
-        self.placeholders.insert(
+        let placeholder =
+            crate::deferred_exists::lateral_placeholder_with_memory(site.schema.vars(), memory)?;
+        self.placeholders.insert_admitted(
             std::ptr::from_ref(placeholder.as_ref()) as usize,
             crate::deferred_exists::Deferred::Lateral(crate::deferred_exists::DeferredLateral {
-                site: Arc::clone(site),
+                site,
                 env,
             }),
-        );
-        Some(placeholder)
+            &workspace,
+        )?;
+        Ok(Some(placeholder))
     }
 
-    /// Add the variables of `expr` to `out`: [`expr_vars`], except that a body this walk
+    /// Add the variables of `expr` to `out`: [`expr_vars_admitted`], except that a body this walk
     /// defers contributes its site's variable set by reference instead of being walked.
     ///
     /// The expression is read over a work list of the nodes still to be read, so one of
@@ -2785,70 +3364,105 @@ impl<'a> Deferral<'a> {
     /// deferred bodies are pushed in the order the bodies stand in the expression, first
     /// to last: a node's parts are pushed reversed, so they come off the list in the
     /// order the shallow visitor yields them.
-    fn expr_vars(&self, expr: &Expression, out: &mut FreeVars) {
+    fn expr_vars(
+        &self,
+        expr: &Expression,
+        out: &mut FreeVars,
+        memory: &mut CorrelatedMemory<'_>,
+    ) -> Result<(), EvalError> {
         use crate::governor::soundness::{ExpressionPart, visit_expression_parts};
-
-        /// One node still to be read: an expression, or an `EXISTS` body.
         enum Node<'a> {
             Expression(&'a Expression),
             Body(&'a GraphPattern),
         }
-
-        let mut pending = vec![Node::Expression(expr)];
+        let workspace = memory.admission_mut().workspace().clone();
+        let mut pending = crate::AdmittedVec::new(&workspace);
+        pending.push(Node::Expression(expr))?;
         while let Some(node) = pending.pop() {
             match node {
-                Node::Body(body) => self.expr_vars_of_body(body, out),
-                Node::Expression(Expression::Exists(body)) => self.expr_vars_of_body(body, out),
+                Node::Body(body) => self.expr_vars_of_body(body, out, &workspace)?,
+                Node::Expression(Expression::Exists(body)) => {
+                    self.expr_vars_of_body(body, out, &workspace)?;
+                }
                 Node::Expression(
                     atom @ (Expression::Variable(_)
                     | Expression::Bound(_)
                     | Expression::NamedNode(_)
                     | Expression::Literal(_)),
-                ) => expr_vars(atom, &mut out.direct),
+                ) => {
+                    let vars = expr_vars_admitted(atom, &workspace)?;
+                    for variable in vars.vars() {
+                        out.direct
+                            .insert_admitted(variable.clone(), (), &workspace)?;
+                    }
+                }
                 Node::Expression(expr) => {
                     let first = pending.len();
+                    let mut failure = None;
                     visit_expression_parts(expr, &mut |part| {
-                        match part {
-                            ExpressionPart::Sub(sub) => pending.push(Node::Expression(sub)),
-                            ExpressionPart::Exists(body) => pending.push(Node::Body(body)),
-                            ExpressionPart::Call(_) => {}
+                        let node = match part {
+                            ExpressionPart::Sub(sub) => Some(Node::Expression(sub)),
+                            ExpressionPart::Exists(body) => Some(Node::Body(body)),
+                            ExpressionPart::Call(_) => None,
+                        };
+                        if let Some(node) = node
+                            && let Err(error) = pending.push(node)
+                        {
+                            failure = Some(error);
+                            return true;
                         }
                         false
                     });
-                    pending[first..].reverse();
+                    if let Some(error) = failure {
+                        return Err(error);
+                    }
+                    pending.as_mut_slice()[first..].reverse();
                 }
             }
         }
+        Ok(())
     }
 
     /// [`Self::expr_vars`] for an `EXISTS` body: the site's variables by reference when
     /// this walk defers the body, and otherwise every variable the body mentions.
-    fn expr_vars_of_body(&self, body: &GraphPattern, out: &mut FreeVars) {
+    fn expr_vars_of_body(
+        &self,
+        body: &GraphPattern,
+        out: &mut FreeVars,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
         match self.deferred_site(body) {
-            Some((site, _)) => out.sites.push(Arc::clone(site)),
-            None => pattern_all_vars(body, &mut out.direct),
+            Some((site, _)) => out.sites.push(site.clone())?,
+            None => {
+                let vars = pattern_all_vars_admitted(body, workspace)?;
+                for variable in vars.vars() {
+                    out.direct
+                        .insert_admitted(variable.clone(), (), workspace)?;
+                }
+            }
         }
+        Ok(())
     }
 }
 
 /// The variables an expression-bearing node's expression mentions, as the substitution
 /// walk needs them: the ones it mentions directly, plus the variable sets of the nested
 /// `EXISTS` bodies the walk defers, held by reference rather than copied in.
-#[derive(Default)]
 struct FreeVars {
-    direct: DetHashSet<Variable>,
-    sites: Vec<Arc<crate::deferred_exists::ExistsSite>>,
+    direct: crate::AdmittedMap<Variable, ()>,
+    sites:
+        crate::AdmittedVec<crate::workspace::SharedWorkspace<crate::deferred_exists::ExistsSite>>,
 }
-
 impl FreeVars {
-    /// Whether the expression mentions `variable`.
-    fn contains(&self, variable: &Variable) -> bool {
-        self.direct.contains(variable) || self.sites.iter().any(|site| site.vars.contains(variable))
+    fn new(workspace: &crate::WorkspaceCapability) -> Self {
+        Self {
+            direct: crate::AdmittedMap::default(),
+            sites: crate::AdmittedVec::new(workspace),
+        }
     }
-
-    /// Whether the expression mentions no variable at all.
-    fn is_empty(&self) -> bool {
-        self.direct.is_empty() && self.sites.iter().all(|site| site.vars.is_empty())
+    fn contains(&self, variable: &Variable) -> bool {
+        self.direct.contains_key(variable)
+            || self.sites.iter().any(|site| site.vars.contains(variable))
     }
 }
 
@@ -2933,15 +3547,15 @@ pub(crate) struct SubstitutionSource {
 }
 
 /// Substituted-node address → [`SubstitutionSource`], one entry per node
-/// [`substitute_pattern_tracked`]'s walk produces from the plan it is substituting.
+/// [`substitute_pattern_tracked_admitted`]'s walk produces from the plan it is substituting.
 ///
 /// Keyed by a per-row heap-temporary address. That address is internal evaluator
 /// bookkeeping only: [`crate::governor::ledger::QueryExplanation::render`] emits ordinals
 /// and labels, never an address, so this map's keys never reach anything the ledger
 /// prints — see that function's determinism note.
-pub(crate) type SubstitutionSourceMap = crate::DetHashMap<usize, SubstitutionSource>;
+pub(crate) type SubstitutionSourceMap = crate::AdmittedMap<usize, SubstitutionSource>;
 
-/// The state [`substitute_pattern_tracked`]'s walk threads through
+/// The state [`substitute_pattern_tracked_admitted`]'s walk threads through
 /// [`substitute_pattern_impl`]'s recursion alongside the map it is building for the CURRENT
 /// window — everything [`boxed_and_mapped_as`] needs to arbitrate `counts_rows` across
 /// nested `LATERAL` windows rather than only within this one. See [`SubstitutionSource`]'s
@@ -2959,49 +3573,43 @@ struct SubstitutionTracking<'a> {
     /// every node this window mints for the same real address — including ones re-copied
     /// from an enclosing window's already-wrapped subtree — only the first keeps its local
     /// `true`.
-    claimed: &'a mut DetHashSet<usize>,
+    claimed: &'a mut crate::AdmittedMap<usize, ()>,
 }
 
-/// [`substitute_pattern`], additionally populating `tracked` (see [`SubstitutionSourceMap`])
-/// — the seam [`crate::binop::eval_correlated`] uses for a `LATERAL` right operand, whose
-/// nodes ARE plan nodes and must keep their own ledger identity across the per-row
-/// substituted copy. A correlated-`EXISTS` inner (also reached through
-/// `eval_correlated`, via [`substitute_pattern`] without a map) has no plan identity to
-/// preserve — see the ledger module doc's "Attribution of work that is not a plan node" —
-/// so it is deliberately never tracked.
-///
-/// `enclosing` is the immediately enclosing window's map — the last entry of
-/// [`EvalCtx::correlated_node_maps`](crate::eval::EvalCtx::correlated_node_maps) at the call
-/// site, BEFORE this call's own map is pushed — or `None` when `pattern` is not itself
-/// inside an already-substituted subtree. See [`SubstitutionSource`]'s doc for why a
-/// nested `LATERAL` needs it.
-///
-/// # Errors
-///
-/// As [`substitute_pattern`]; `tracked` then holds entries for a discarded copy, and the
-/// caller drops it with the error.
-#[allow(
-    clippy::unnecessary_box_returns,
-    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
-              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
-              32-bit targets such as wasm32, where the same box is still the field's type"
-)]
-pub(crate) fn substitute_pattern_tracked<const PRESERVE: bool>(
+pub(crate) fn substitute_pattern_admitted(
+    pattern: &GraphPattern,
+    row: &SubstitutionRow,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<CorrelatedPattern, EvalError> {
+    substitute_pattern_deferring_admitted::<false>(pattern, row, &mut Deferral::eager(), workspace)
+}
+pub(crate) fn substitute_pattern_deferring_admitted<const PRESERVE: bool>(
+    pattern: &GraphPattern,
+    row: &SubstitutionRow,
+    defer: &mut Deferral<'_>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<CorrelatedPattern, EvalError> {
+    CorrelatedPattern::build(workspace, |memory| {
+        let mut tracking = None;
+        substitute_pattern_impl::<PRESERVE>(pattern, row, &mut tracking, defer, memory)
+    })
+}
+pub(crate) fn substitute_pattern_tracked_admitted<const PRESERVE: bool>(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
     tracked: &mut SubstitutionSourceMap,
     enclosing: Option<&SubstitutionSourceMap>,
     defer: &mut Deferral<'_>,
-) -> Result<Box<GraphPattern>, EvalError> {
-    crate::stack::walk(|| {
-        let mut claimed = DetHashSet::default();
+    workspace: &crate::WorkspaceCapability,
+) -> Result<CorrelatedPattern, EvalError> {
+    CorrelatedPattern::build(workspace, |memory| {
+        let mut claimed = crate::AdmittedMap::default();
         let mut tracking = SubstitutionTracking {
             map: tracked,
             enclosing,
             claimed: &mut claimed,
         };
-        let mut tracking = Some(&mut tracking);
-        substitute_pattern_impl::<PRESERVE>(pattern, row, &mut tracking, defer)
+        substitute_pattern_impl::<PRESERVE>(pattern, row, &mut Some(&mut tracking), defer, memory)
     })
 }
 
@@ -3027,53 +3635,20 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
     row: &SubstitutionRow,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
     defer: &mut Deferral<'_>,
-) -> Box<GraphPattern> {
-    // One level of a copy of the whole correlated subtree, made once per outer row: see
-    // `crate::stack::walk`, whose scope discards this placeholder.
-    if crate::stack::walk_is_low("correlated substitution") {
-        return Box::new(GraphPattern::Bgp {
-            patterns: Vec::new(),
-        });
-    }
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    crate::stack::check("correlated substitution")?;
     #[cfg(test)]
     crate::op_count::bump(crate::op_count::Op::Substituted);
-    match pattern {
-        GraphPattern::Bgp { patterns } => {
-            let mut vars = DetHashSet::default();
-            for tp in patterns {
-                tp.subject.collect_variables(&mut vars);
-                if let purrdf_sparql_algebra::NamedNodePattern::Variable(v) = &tp.predicate {
-                    vars.insert(v.clone());
-                }
-                tp.object.collect_variables(&mut vars);
-            }
-            let leaf = boxed_and_mapped(
-                GraphPattern::Bgp {
-                    patterns: patterns.clone(),
-                },
-                pattern,
-                map,
-            );
-            join_leaf_with_values(leaf, &vars, &row.term, pattern, map)
-        }
-        GraphPattern::Path {
-            subject,
-            path,
-            object,
-        } => {
-            let mut vars = DetHashSet::default();
-            subject.collect_variables(&mut vars);
-            object.collect_variables(&mut vars);
-            let leaf = boxed_and_mapped(
-                GraphPattern::Path {
-                    subject: subject.clone(),
-                    path: path.clone(),
-                    object: object.clone(),
-                },
-                pattern,
-                map,
-            );
-            join_leaf_with_values(leaf, &vars, &row.term, pattern, map)
+    Ok(match pattern {
+        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } => {
+            let workspace = memory.admission_mut().workspace().clone();
+            let vars = crate::eval::syntactic_schema_admitted(pattern, &workspace)?;
+            let copy = pattern
+                .clone_with_memory(memory)
+                .map_err(|e| correlated_storage_error(memory, e))?;
+            let leaf = boxed_and_mapped(copy, pattern, map, memory)?;
+            join_leaf_with_values(leaf, &vars, &row.term, pattern, map, memory)?
         }
         // A property function's arguments are invocation INPUTS, not join keys: a
         // `VALUES` row joined beside the call (a `Bgp`/`Path` leaf's Values Insertion)
@@ -3082,7 +3657,9 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
         // one-row `VALUES` on the call's left where it has not — which is
         // `crate::substitute::bind_call_arguments`'s decision; see
         // [`bind_row_into_call`].
-        GraphPattern::PropertyFunction(call) => bind_row_into_call(call, row, pattern, map),
+        GraphPattern::PropertyFunction(call) => {
+            bind_row_into_call(call, row, pattern, map, memory)?
+        }
         // `wrap_with_expr_term_only_values` closes the gap `substitute_expr` alone
         // leaves open: a blank-node/quoted-triple outer binding referenced ONLY by
         // `expr` (no leaf occurrence elsewhere in `inner`) has no `Expression`
@@ -3090,37 +3667,41 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
         // joined against a one-row `VALUES` carrying it — `expr` then evaluates
         // against a row where the variable is bound like any other.
         GraphPattern::Filter { expr, inner } => {
-            let mut free = FreeVars::default();
-            defer.expr_vars(expr, &mut free);
-            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
-            let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
+            let mut free = FreeVars::new(memory.admission_mut().workspace());
+            defer.expr_vars(expr, &mut free, memory)?;
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?;
+            let inner_final =
+                wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map, memory)?;
             boxed_and_mapped(
                 GraphPattern::Filter {
-                    expr: substitute_expr::<PRESERVE>(expr, row, map, defer),
+                    expr: substitute_expr::<PRESERVE>(expr, row, map, defer, memory)?,
                     inner: inner_final.into(),
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         GraphPattern::Extend {
             inner,
             variable,
             expression,
         } => {
-            let mut free = FreeVars::default();
-            defer.expr_vars(expression, &mut free);
-            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
-            let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
+            let mut free = FreeVars::new(memory.admission_mut().workspace());
+            defer.expr_vars(expression, &mut free, memory)?;
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?;
+            let inner_final =
+                wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map, memory)?;
             boxed_and_mapped(
                 GraphPattern::Extend {
                     inner: inner_final.into(),
                     variable: variable.clone(),
-                    expression: substitute_expr::<PRESERVE>(expression, row, map, defer),
+                    expression: substitute_expr::<PRESERVE>(expression, row, map, defer, memory)?,
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         // `Extend`s shape exactly: the operand is an ordinary expression evaluated
         // against the substituted inner, so a term-only outer binding it reads is
@@ -3132,24 +3713,26 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
             element,
             companion,
         } => {
-            let mut free = FreeVars::default();
-            defer.expr_vars(expression, &mut free);
-            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
-            let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
+            let mut free = FreeVars::new(memory.admission_mut().workspace());
+            defer.expr_vars(expression, &mut free, memory)?;
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?;
+            let inner_final =
+                wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map, memory)?;
             boxed_and_mapped(
                 GraphPattern::Unfold {
                     inner: inner_final.into(),
-                    expression: substitute_expr::<PRESERVE>(expression, row, map, defer),
+                    expression: substitute_expr::<PRESERVE>(expression, row, map, defer, memory)?,
                     element: element.clone(),
                     companion: companion.clone(),
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         GraphPattern::Join { left, right } => {
-            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer);
-            let right_sub = substitute_pattern_impl::<PRESERVE>(right, row, map, defer);
+            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer, memory)?;
+            let right_sub = substitute_pattern_impl::<PRESERVE>(right, row, map, defer, memory)?;
             boxed_and_mapped(
                 GraphPattern::Join {
                     left: left_sub.into(),
@@ -3157,25 +3740,32 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         GraphPattern::Union { arms } => {
             // Each arm is built boxed and then moved into the arm vector, which is sized
             // up front so no push reallocates it: an arm's root moves exactly once, and
             // its tracked address moves with it before anything else can allocate at the
             // address it left.
-            let mut arms_sub = Vec::with_capacity(arms.len());
+            let mut arms_sub = Vec::new();
+            memory
+                .reserve(&mut arms_sub, arms.len())
+                .map_err(|e| correlated_storage_error(memory, e))?;
             for arm in arms {
-                let boxed = substitute_pattern_impl::<PRESERVE>(arm, row, map, defer);
+                let boxed = substitute_pattern_impl::<PRESERVE>(arm, row, map, defer, memory)?;
                 let before = std::ptr::from_ref(boxed.as_ref()) as usize;
                 arms_sub.push(*boxed);
                 let after = arms_sub.last().map_or(before, |moved| {
                     std::ptr::from_ref::<GraphPattern>(moved) as usize
                 });
-                remap_moved(map, before, after);
+                remap_moved(map, before, after, memory)?;
+                memory
+                    .release_bytes(std::alloc::Layout::new::<GraphPattern>().size())
+                    .map_err(|e| correlated_storage_error(memory, e))?;
             }
             let arms = Chain::try_from(arms_sub).expect("one substituted arm per arm of a chain");
-            boxed_and_mapped(GraphPattern::Union { arms }, pattern, map)
+            boxed_and_mapped(GraphPattern::Union { arms }, pattern, map, memory)?
         }
         // The optional inline filter evaluates against the (already merged) joined
         // row, so a term-only variable it needs is injected on `left`: an outer
@@ -3187,32 +3777,35 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
             right,
             expression,
         } => {
-            let mut free = FreeVars::default();
+            let mut free = FreeVars::new(memory.admission_mut().workspace());
             if let Some(e) = expression {
-                defer.expr_vars(e, &mut free);
+                defer.expr_vars(e, &mut free, memory)?;
             }
-            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer);
-            let left_final = wrap_with_expr_term_only_values(left_sub, &free, row, left, map);
-            let right_sub = substitute_pattern_impl::<PRESERVE>(right, row, map, defer);
+            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer, memory)?;
+            let left_final =
+                wrap_with_expr_term_only_values(left_sub, &free, row, left, map, memory)?;
+            let right_sub = substitute_pattern_impl::<PRESERVE>(right, row, map, defer, memory)?;
             boxed_and_mapped(
                 GraphPattern::LeftJoin {
                     left: left_final.into(),
                     right: right_sub.into(),
                     expression: expression
                         .as_ref()
-                        .map(|e| substitute_expr::<PRESERVE>(e, row, map, defer)),
+                        .map(|e| substitute_expr::<PRESERVE>(e, row, map, defer, memory))
+                        .transpose()?,
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         // Both sides receive the SAME row (see this function's doc on the MINUS
         // disjoint-domain fix): the right side is NOT excluded from substitution here,
         // only from the PARSER's LATERAL scope check (§18.2.1 governs scope, not
         // evaluation-time injection).
         GraphPattern::Minus { left, right } => {
-            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer);
-            let right_sub = substitute_pattern_impl::<PRESERVE>(right, row, map, defer);
+            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer, memory)?;
+            let right_sub = substitute_pattern_impl::<PRESERVE>(right, row, map, defer, memory)?;
             boxed_and_mapped(
                 GraphPattern::Minus {
                     left: left_sub.into(),
@@ -3220,7 +3813,8 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         // A call that is the `Lateral`'s DIRECT right operand keeps that position: it
         // is the one the evaluator drives per left row, handing it each left row's
@@ -3229,30 +3823,43 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
         // call in place, and the driver of the rest is joined onto the LEFT operand —
         // the same placement `crate::substitute`'s whole-query rewrites use.
         GraphPattern::Lateral { left, right } => {
-            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer);
+            let left_sub = substitute_pattern_impl::<PRESERVE>(left, row, map, defer, memory)?;
             let (left_sub, right_sub) = if let GraphPattern::PropertyFunction(call) = &**right {
-                let mut bound = call.clone();
-                let seed =
-                    crate::substitute::bind_call_arguments(&mut bound, &row.term, Some(&left_sub));
-                let right_sub = boxed_and_mapped(GraphPattern::PropertyFunction(bound), right, map);
+                let mut bound = call
+                    .clone_with_memory(memory)
+                    .map_err(|e| correlated_storage_error(memory, e))?;
+                let seed = crate::substitute::bind_call_arguments_with_memory(
+                    &mut bound,
+                    &row.term,
+                    Some(&left_sub),
+                    memory,
+                )
+                .map_err(crate::substitute::GroundFailure::into_eval_error)?;
+                let right_sub =
+                    boxed_and_mapped(GraphPattern::PropertyFunction(bound), right, map, memory)?;
                 let left_sub = match seed {
-                    Some(seed) => plant_mapped_driver(left_sub, seed, left, map, |seed, left| {
-                        GraphPattern::Join {
+                    Some(seed) => plant_mapped_driver(
+                        left_sub,
+                        seed,
+                        left,
+                        map,
+                        |seed, left| GraphPattern::Join {
                             left: seed.into(),
                             right: left.into(),
-                        }
-                    }),
+                        },
+                        memory,
+                    )?,
                     None => left_sub,
                 };
                 (left_sub, right_sub)
-            } else if let Some(placeholder) = defer.defer_lateral(right, row) {
+            } else if let Some(placeholder) = defer.defer_lateral(right, row, memory)? {
                 // Substituted when the copied `LATERAL` evaluates it, once per left row,
                 // with this row and that one together: see `crate::deferred_exists`.
                 (left_sub, placeholder)
             } else {
                 (
                     left_sub,
-                    substitute_pattern_impl::<PRESERVE>(right, row, map, defer),
+                    substitute_pattern_impl::<PRESERVE>(right, row, map, defer, memory)?,
                 )
             };
             boxed_and_mapped(
@@ -3262,7 +3869,8 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         // `Graph{Variable, ..}` IS a Values-Insertion site: a bound `?g` resolves to
         // the concrete `NamedNode` when the store admits it (RDF 1.2 requires a graph
@@ -3301,7 +3909,7 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
                     .unwrap_or_else(|| name.clone()),
                 purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => name.clone(),
             };
-            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?;
             let graph_node = boxed_and_mapped(
                 GraphPattern::Graph {
                     name: resolved_name,
@@ -3309,11 +3917,12 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
                 },
                 pattern,
                 map,
-            );
+                memory,
+            )?;
             if let purrdf_sparql_algebra::NamedNodePattern::Variable(v) = name {
-                let mut vars = DetHashSet::default();
-                vars.insert(v.clone());
-                join_leaf_with_values(graph_node, &vars, &row.term, pattern, map)
+                let vars =
+                    VarSchema::from_vars_admitted([v.clone()], memory.admission_mut().workspace())?;
+                join_leaf_with_values(graph_node, &vars, &row.term, pattern, map, memory)?
             } else {
                 graph_node
             }
@@ -3343,9 +3952,13 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
             };
             // The body is forwarded as text, so it is substituted in full: a placeholder
             // left in it would be sent to the endpoint in place of the body.
-            defer.eager_depth += 1;
-            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
+            defer.eager_depth = defer
+                .eager_depth
+                .checked_add(1)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let inner_result = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory);
             defer.eager_depth -= 1;
+            let inner_sub = inner_result?;
             let unresolved = match &resolved_name {
                 purrdf_sparql_algebra::NamedNodePattern::Variable(v) => Some(v.clone()),
                 purrdf_sparql_algebra::NamedNodePattern::NamedNode(_) => None,
@@ -3358,161 +3971,111 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
                 },
                 pattern,
                 map,
-            );
+                memory,
+            )?;
             // Bound, but to a term that is not an IRI: it names no endpoint. The clause is
             // joined with a one-row `VALUES` of that term, which lists it as the clause's
             // one endpoint (`crate::service_endpoints`): an invocation that fails, so Ω0
             // with a silenced record under `SILENT` and an error otherwise.
             match unresolved {
                 Some(v) => {
-                    let mut vars = DetHashSet::default();
-                    vars.insert(v);
-                    join_leaf_with_values(service_node, &vars, &row.term, pattern, map)
+                    let vars =
+                        VarSchema::from_vars_admitted([v], memory.admission_mut().workspace())?;
+                    join_leaf_with_values(service_node, &vars, &row.term, pattern, map, memory)?
                 }
                 None => service_node,
             }
         }
         GraphPattern::OrderBy { inner, expression } => {
-            let mut free = FreeVars::default();
+            let mut free = FreeVars::new(memory.admission_mut().workspace());
             for oe in expression {
                 match oe {
                     purrdf_sparql_algebra::OrderExpression::Asc(e)
                     | purrdf_sparql_algebra::OrderExpression::Desc(e) => {
-                        defer.expr_vars(e, &mut free);
+                        defer.expr_vars(e, &mut free, memory)?;
                     }
                 }
             }
-            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
-            let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?;
+            let inner_final =
+                wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map, memory)?;
             boxed_and_mapped(
                 GraphPattern::OrderBy {
                     inner: inner_final.into(),
-                    expression: expression
-                        .iter()
-                        .map(|oe| match oe {
-                            purrdf_sparql_algebra::OrderExpression::Asc(e) => {
-                                purrdf_sparql_algebra::OrderExpression::Asc(substitute_expr::<
-                                    PRESERVE,
-                                >(
-                                    e,
-                                    row,
-                                    &mut *map,
-                                    &mut *defer,
-                                ))
-                            }
-                            purrdf_sparql_algebra::OrderExpression::Desc(e) => {
-                                purrdf_sparql_algebra::OrderExpression::Desc(substitute_expr::<
-                                    PRESERVE,
-                                >(
-                                    e,
-                                    row,
-                                    &mut *map,
-                                    &mut *defer,
-                                ))
-                            }
-                        })
-                        .collect(),
+                    expression: substitute_order_list::<PRESERVE>(
+                        expression, row, map, defer, memory,
+                    )?,
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         GraphPattern::Group {
             inner,
             variables,
             aggregates,
         } => {
-            let mut free = FreeVars::default();
+            let mut free = FreeVars::new(memory.admission_mut().workspace());
             for (_, agg) in aggregates {
                 for arg in agg.args() {
-                    defer.expr_vars(arg, &mut free);
+                    defer.expr_vars(arg, &mut free, memory)?;
                 }
                 // A `FOLD`'s sort keys read the group's rows exactly as its
                 // arguments do, so their variables are free in this node too:
                 // omitting them would leave `FOLD(?v ORDER BY ?k)`'s `?k`
                 // unbound in the substituted pattern.
                 for order in agg.order_by() {
-                    defer.expr_vars(order.expression(), &mut free);
+                    defer.expr_vars(order.expression(), &mut free, memory)?;
                 }
             }
-            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
-            let inner_final = wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?;
+            let inner_final =
+                wrap_with_expr_term_only_values(inner_sub, &free, row, inner, map, memory)?;
             boxed_and_mapped(
                 GraphPattern::Group {
                     inner: inner_final.into(),
-                    variables: variables.clone(),
-                    aggregates: aggregates
-                        .iter()
-                        .map(|(v, agg)| {
-                            let args = agg
-                                .args()
-                                .iter()
-                                .map(|e| {
-                                    substitute_expr::<PRESERVE>(e, row, &mut *map, &mut *defer)
-                                })
-                                .collect();
-                            let order_by = agg
-                                .order_by()
-                                .iter()
-                                .map(|order| {
-                                    crate::modifier::rebuild_order(
-                                        order,
-                                        substitute_expr::<PRESERVE>(
-                                            order.expression(),
-                                            row,
-                                            &mut *map,
-                                            &mut *defer,
-                                        ),
-                                    )
-                                })
-                                .collect();
-                            // `substitute_expr` rewrites each argument in place and never
-                            // changes the argument COUNT, and rewriting a sort key never
-                            // removes one, so this can never turn a valid `agg` into an
-                            // invalid one.
-                            let new_agg = purrdf_sparql_algebra::AggregateExpression::new(
-                                agg.function().clone(),
-                                args,
-                                agg.scalarvals().to_vec(),
-                                order_by,
-                                agg.distinct,
-                            )
-                            .expect("substitution preserves argument count, so arity stays valid");
-                            (v.clone(), new_agg)
-                        })
-                        .collect(),
+                    variables: memory
+                        .collect(variables.iter().cloned())
+                        .map_err(|e| correlated_storage_error(memory, e))?,
+                    aggregates: substitute_aggregates::<PRESERVE>(
+                        aggregates, row, map, defer, memory,
+                    )?,
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         // Leaf patterns that need no substitution.
         GraphPattern::Distinct { inner } => {
-            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?;
             boxed_and_mapped(
                 GraphPattern::Distinct {
                     inner: inner_sub.into(),
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         GraphPattern::Reduced { inner } => {
-            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?;
             boxed_and_mapped(
                 GraphPattern::Reduced {
                     inner: inner_sub.into(),
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         GraphPattern::Slice {
             inner,
             start,
             length,
         } => {
-            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer);
+            let inner_sub = substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?;
             boxed_and_mapped(
                 GraphPattern::Slice {
                     inner: inner_sub.into(),
@@ -3521,62 +4084,64 @@ fn substitute_pattern_impl<const PRESERVE: bool>(
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
         // The Project-boundary narrowing this walk's theorem depends on: only the
         // projected variables survive to the inner pattern's substitution.
         GraphPattern::Project { inner, variables } => {
             let inner_sub = if PRESERVE {
-                substitute_pattern_impl::<PRESERVE>(inner, row, map, defer)
+                substitute_pattern_impl::<PRESERVE>(inner, row, map, defer, memory)?
             } else {
-                let narrowed = row.narrow_to(variables);
-                substitute_pattern_impl::<PRESERVE>(inner, &narrowed, map, defer)
+                let narrowed = row.narrow_to(variables, memory.admission_mut().workspace())?;
+                substitute_pattern_impl::<PRESERVE>(inner, &narrowed, map, defer, memory)?
             };
             boxed_and_mapped(
                 GraphPattern::Project {
                     inner: inner_sub.into(),
-                    variables: variables.clone(),
+                    variables: memory
+                        .collect(variables.iter().cloned())
+                        .map_err(|e| correlated_storage_error(memory, e))?,
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
-        GraphPattern::Values { .. } => boxed_and_mapped(pattern.clone(), pattern, map),
+        GraphPattern::Values { .. } => boxed_and_mapped(
+            pattern
+                .clone_with_memory(memory)
+                .map_err(|e| correlated_storage_error(memory, e))?,
+            pattern,
+            map,
+            memory,
+        )?,
         GraphPattern::Apply {
             left,
             right,
             policy,
         } => {
-            let left = substitute_pattern_impl::<PRESERVE>(left, row, map, defer);
-            let declared: DetHashSet<_> = policy.inputs.iter().map(|(input, _)| input).collect();
-            let mut outer = row.clone();
-            outer.expr.retain(|(name, _)| !declared.contains(name));
-            outer.term.retain(|(name, _)| !declared.contains(name));
-            let right = substitute_pattern_impl::<PRESERVE>(right, &outer, map, defer);
-            let optional = policy.optional.as_ref().map(|optional| {
-                purrdf_sparql_algebra::algebra::OptionalApplication {
-                    retry_inputs: optional.retry_inputs.clone(),
-                    forget_marker: optional.forget_marker.clone(),
-                }
-            });
+            let left = substitute_pattern_impl::<PRESERVE>(left, row, map, defer, memory)?;
+            let workspace = memory.admission_mut().workspace().clone();
+            let outer = row.filtered(&workspace, |name| {
+                !policy.inputs.iter().any(|(input, _)| input == name)
+            })?;
+            let right = substitute_pattern_impl::<PRESERVE>(right, &outer, map, defer, memory)?;
+            let policy = policy
+                .clone_box_with_memory(memory)
+                .map_err(|e| correlated_storage_error(memory, e))?;
             boxed_and_mapped(
                 GraphPattern::Apply {
                     left: left.into(),
                     right: right.into(),
-                    policy: Box::new(purrdf_sparql_algebra::algebra::ApplicationPolicy {
-                        dataset_required: policy.dataset_required,
-                        row_pipeline: policy.row_pipeline,
-                        reduced_adjacent: policy.reduced_adjacent,
-                        group_domain: policy.group_domain.clone(),
-                        inputs: policy.inputs.clone(),
-                        optional,
-                    }),
+                    policy,
                 },
                 pattern,
                 map,
-            )
+                memory,
+            )?
         }
-    }
+    })
 }
 
 /// Box `built` (its final, permanent address — a `Box`'s pointee never moves again) and,
@@ -3590,8 +4155,9 @@ fn boxed_and_mapped(
     built: GraphPattern,
     source: &GraphPattern,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
-) -> Box<GraphPattern> {
-    boxed_and_mapped_as(built, source, map, true)
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    boxed_and_mapped_as(built, source, map, true, memory)
 }
 
 /// [`boxed_and_mapped`], but for Values-Insertion SCAFFOLDING — the one-row `VALUES` table
@@ -3601,8 +4167,9 @@ fn boxed_and_mapped_scaffolding(
     built: GraphPattern,
     source: &GraphPattern,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
-) -> Box<GraphPattern> {
-    boxed_and_mapped_as(built, source, map, false)
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    boxed_and_mapped_as(built, source, map, false, memory)
 }
 
 /// Shared implementation of [`boxed_and_mapped`]/[`boxed_and_mapped_scaffolding`].
@@ -3627,35 +4194,49 @@ fn boxed_and_mapped_as(
     source: &GraphPattern,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
     counts_rows: bool,
-) -> Box<GraphPattern> {
-    let boxed = Box::new(built);
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    let boxed = correlated_box(built, memory)?;
     if let Some(tracking) = map.as_deref_mut() {
         let source_addr = std::ptr::from_ref(source) as usize;
         let real_source = tracking
             .enclosing
             .and_then(|enclosing| enclosing.get(&source_addr))
             .map_or(source_addr, |entry| entry.source);
-        let counts_rows = counts_rows && tracking.claimed.insert(real_source);
-        tracking.map.insert(
+        let counts_rows = counts_rows
+            && tracking
+                .claimed
+                .insert_admitted(real_source, (), memory.admission_mut().workspace())?
+                .is_none();
+        tracking.map.insert_admitted(
             std::ptr::from_ref(boxed.as_ref()) as usize,
             SubstitutionSource {
                 source: real_source,
                 counts_rows,
             },
-        );
+            memory.admission_mut().workspace(),
+        )?;
     }
-    boxed
+    Ok(boxed)
 }
 
 /// Move the tracked entry of a node that moved from address `before` to `after` — an
 /// arm unboxed into a `UNION`'s arm vector — so the entry names the node where the copy
 /// finally holds it. A no-op when `map` is disengaged or the node was never mapped.
-fn remap_moved(map: &mut Option<&mut SubstitutionTracking<'_>>, before: usize, after: usize) {
+fn remap_moved(
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
+    before: usize,
+    after: usize,
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<(), EvalError> {
     if let Some(tracking) = map.as_deref_mut()
         && let Some(entry) = tracking.map.remove(&before)
     {
-        tracking.map.insert(after, entry);
+        tracking
+            .map
+            .insert_admitted(after, entry, memory.admission_mut().workspace())?;
     }
+    Ok(())
 }
 
 /// Demote an already-mapped node (inserted `counts_rows: true` by [`boxed_and_mapped`]) to
@@ -3726,40 +4307,19 @@ fn demote_to_scaffolding(map: &mut Option<&mut SubstitutionTracking<'_>>, addres
 )]
 fn join_leaf_with_values(
     leaf: Box<GraphPattern>,
-    leaf_vars: &DetHashSet<Variable>,
+    leaf_vars: &VarSchema,
     term_row: &[(Variable, purrdf_sparql_algebra::GroundTerm)],
     source: &GraphPattern,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
-) -> Box<GraphPattern> {
-    let restricted: Vec<&(Variable, purrdf_sparql_algebra::GroundTerm)> = term_row
-        .iter()
-        .filter(|(v, _)| leaf_vars.contains(v))
-        .collect();
-    if restricted.is_empty() {
-        return leaf;
-    }
-    let mut variables = Vec::with_capacity(restricted.len());
-    let mut values_row = Vec::with_capacity(restricted.len());
-    for (v, g) in restricted {
-        variables.push(v.clone());
-        values_row.push(Some(g.clone()));
-    }
-    demote_to_scaffolding(map, std::ptr::from_ref(leaf.as_ref()) as usize);
-    let values = boxed_and_mapped_scaffolding(
-        GraphPattern::Values {
-            variables,
-            bindings: vec![values_row],
-        },
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    join_selected_values(
+        leaf,
+        term_row,
+        |v| leaf_vars.contains(v),
         source,
         map,
-    );
-    boxed_and_mapped(
-        GraphPattern::Join {
-            left: leaf.into(),
-            right: values.into(),
-        },
-        source,
-        map,
+        memory,
     )
 }
 
@@ -3809,44 +4369,19 @@ fn join_leaf_with_values(
 )]
 fn wrap_with_expr_term_only_values(
     node: Box<GraphPattern>,
-    expr_free_vars: &FreeVars,
+    free: &FreeVars,
     row: &SubstitutionRow,
     source: &GraphPattern,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
-) -> Box<GraphPattern> {
-    if expr_free_vars.is_empty() {
-        return node;
-    }
-    let needed: Vec<&(Variable, purrdf_sparql_algebra::GroundTerm)> = row
-        .term
-        .iter()
-        .filter(|(v, _)| expr_free_vars.contains(v) && !row.expr.iter().any(|(ev, _)| ev == v))
-        .collect();
-    if needed.is_empty() {
-        return node;
-    }
-    let mut variables = Vec::with_capacity(needed.len());
-    let mut values_row = Vec::with_capacity(needed.len());
-    for (v, g) in needed {
-        variables.push(v.clone());
-        values_row.push(Some(g.clone()));
-    }
-    demote_to_scaffolding(map, std::ptr::from_ref(node.as_ref()) as usize);
-    let values = boxed_and_mapped_scaffolding(
-        GraphPattern::Values {
-            variables,
-            bindings: vec![values_row],
-        },
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    join_selected_values(
+        node,
+        &row.term,
+        |v| free.contains(v) && !row.expr.iter().any(|(ev, _)| ev == v),
         source,
         map,
-    );
-    boxed_and_mapped(
-        GraphPattern::Join {
-            left: node.into(),
-            right: values.into(),
-        },
-        source,
-        map,
+        memory,
     )
 }
 
@@ -3879,18 +4414,28 @@ fn bind_row_into_call(
     row: &SubstitutionRow,
     source: &GraphPattern,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
-) -> Box<GraphPattern> {
-    let mut bound = call.clone();
-    let seed = crate::substitute::bind_call_arguments(&mut bound, &row.term, None);
-    let node = boxed_and_mapped(GraphPattern::PropertyFunction(bound), source, map);
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    let mut bound = call
+        .clone_with_memory(memory)
+        .map_err(|e| correlated_storage_error(memory, e))?;
+    let seed =
+        crate::substitute::bind_call_arguments_with_memory(&mut bound, &row.term, None, memory)
+            .map_err(crate::substitute::GroundFailure::into_eval_error)?;
+    let node = boxed_and_mapped(GraphPattern::PropertyFunction(bound), source, map, memory)?;
     match seed {
-        Some(seed) => plant_mapped_driver(node, seed, source, map, |seed, call| {
-            GraphPattern::Lateral {
+        Some(seed) => plant_mapped_driver(
+            node,
+            seed,
+            source,
+            map,
+            |seed, call| GraphPattern::Lateral {
                 left: seed.into(),
                 right: call.into(),
-            }
-        }),
-        None => node,
+            },
+            memory,
+        ),
+        None => Ok(node),
     }
 }
 
@@ -3911,10 +4456,11 @@ fn plant_mapped_driver(
     source: &GraphPattern,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
     assemble: impl FnOnce(Box<GraphPattern>, Box<GraphPattern>) -> GraphPattern,
-) -> Box<GraphPattern> {
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
     demote_to_scaffolding(map, std::ptr::from_ref(node.as_ref()) as usize);
-    let seed = boxed_and_mapped_scaffolding(seed, source, map);
-    boxed_and_mapped(assemble(seed, node), source, map)
+    let seed = boxed_and_mapped_scaffolding(seed, source, map, memory)?;
+    boxed_and_mapped(assemble(seed, node), source, map, memory)
 }
 
 /// Substitute outer-bound variables in expression positions by replacing
@@ -3940,132 +4486,124 @@ fn substitute_expr<const PRESERVE: bool>(
     row: &SubstitutionRow,
     map: &mut Option<&mut SubstitutionTracking<'_>>,
     defer: &mut Deferral<'_>,
-) -> Expression {
-    // See `substitute_pattern_impl`: the same copy, one expression level at a time.
-    if crate::stack::walk_is_low("correlated substitution") {
-        return Expression::NamedNode(purrdf_sparql_algebra::NamedNode::new_unchecked(XSD_BOOLEAN));
-    }
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Expression, EvalError> {
+    crate::stack::check("correlated substitution")?;
     #[cfg(test)]
     crate::op_count::bump(crate::op_count::Op::Substituted);
-    let bindings = &row.expr;
-    match expr {
+    Ok(match expr {
         Expression::Variable(v) => {
-            for (bv, replacement) in bindings {
-                if bv == v {
-                    return replacement.clone();
-                }
-            }
-            expr.clone()
+            let source = row
+                .expr
+                .iter()
+                .find(|(bv, _)| bv == v)
+                .map_or(expr, |(_, value)| value);
+            source
+                .clone_with_memory(memory)
+                .map_err(|e| correlated_storage_error(memory, e))?
         }
-        Expression::Bound(v) => {
-            // BOUND(?v) where ?v is outer-bound → always true (the variable IS
-            // bound). Checked against `row.term`, not `bindings` (`row.expr`):
-            // `row.term` is total over every outer-bound variable, including a
-            // blank node or a quoted-triple binding `row.expr` has no constant
-            // form for (see `outer_bindings_for_substitution`'s doc) — `BOUND`
-            // only needs to know THAT ?v is bound, never a term to substitute,
-            // so the totality gap that forces `wrap_with_expr_term_only_values`
-            // for `Expression::Variable` does not apply here.
-            if row.term.iter().any(|(bv, _)| bv == v) {
-                return Expression::Literal(purrdf_sparql_algebra::Literal::new_typed(
-                    "true",
-                    purrdf_sparql_algebra::NamedNode::new_unchecked(XSD_BOOLEAN),
+        Expression::Bound(v) if row.term.iter().any(|(bv, _)| bv == v) => Expression::Literal(
+            correlated_boolean(true, memory.admission_mut().workspace())?,
+        ),
+        Expression::Bound(_) | Expression::NamedNode(_) | Expression::Literal(_) => expr
+            .clone_with_memory(memory)
+            .map_err(|e| correlated_storage_error(memory, e))?,
+        Expression::Or(operands) | Expression::And(operands) => {
+            let mut copied = Vec::new();
+            memory
+                .reserve(&mut copied, operands.len())
+                .map_err(|e| correlated_storage_error(memory, e))?;
+            for operand in operands {
+                copied.push(substitute_expr::<PRESERVE>(
+                    operand, row, map, defer, memory,
+                )?);
+            }
+            let copied = Chain::try_from(copied).expect("one operand per original chain operand");
+            if matches!(expr, Expression::Or(_)) {
+                Expression::Or(copied)
+            } else {
+                Expression::And(copied)
+            }
+        }
+        Expression::Arithmetic(first, steps) => {
+            let first = substitute_expr::<PRESERVE>(first, row, map, defer, memory)?;
+            let first = correlated_box(first, memory)?;
+            let mut copied = Vec::new();
+            memory
+                .reserve(&mut copied, steps.len())
+                .map_err(|e| correlated_storage_error(memory, e))?;
+            for (operator, operand) in steps {
+                copied.push((
+                    *operator,
+                    substitute_expr::<PRESERVE>(operand, row, map, defer, memory)?,
                 ));
             }
-            expr.clone()
+            Expression::Arithmetic(
+                first.into(),
+                NonEmpty::try_from(copied).expect("one arithmetic step per source step"),
+            )
         }
-        Expression::NamedNode(_) | Expression::Literal(_) => expr.clone(),
-        Expression::Or(operands) => {
-            Expression::Or(operands.map_ref(|operand| {
-                substitute_expr::<PRESERVE>(operand, row, &mut *map, &mut *defer)
-            }))
+        Expression::Equal(a, b)
+        | Expression::SameTerm(a, b)
+        | Expression::Greater(a, b)
+        | Expression::GreaterOrEqual(a, b)
+        | Expression::Less(a, b)
+        | Expression::LessOrEqual(a, b) => {
+            let a = substitute_expr::<PRESERVE>(a, row, map, defer, memory)?;
+            let a = Child::from(correlated_box(a, memory)?);
+            let b = substitute_expr::<PRESERVE>(b, row, map, defer, memory)?;
+            let b = Child::from(correlated_box(b, memory)?);
+            match expr {
+                Expression::Equal(_, _) => Expression::Equal(a, b),
+                Expression::SameTerm(_, _) => Expression::SameTerm(a, b),
+                Expression::Greater(_, _) => Expression::Greater(a, b),
+                Expression::GreaterOrEqual(_, _) => Expression::GreaterOrEqual(a, b),
+                Expression::Less(_, _) => Expression::Less(a, b),
+                Expression::LessOrEqual(_, _) => Expression::LessOrEqual(a, b),
+                _ => unreachable!("the outer exhaustive match selected a binary comparison"),
+            }
         }
-        Expression::And(operands) => {
-            Expression::And(operands.map_ref(|operand| {
-                substitute_expr::<PRESERVE>(operand, row, &mut *map, &mut *defer)
-            }))
+        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+            let a = substitute_expr::<PRESERVE>(a, row, map, defer, memory)?;
+            let a = Child::from(correlated_box(a, memory)?);
+            match expr {
+                Expression::UnaryPlus(_) => Expression::UnaryPlus(a),
+                Expression::UnaryMinus(_) => Expression::UnaryMinus(a),
+                Expression::Not(_) => Expression::Not(a),
+                _ => unreachable!("the outer exhaustive match selected a unary operator"),
+            }
         }
-        Expression::Arithmetic(first, steps) => Expression::Arithmetic(
-            Child::new(substitute_expr::<PRESERVE>(first, row, map, defer)),
-            steps.map_ref(|(op, operand)| {
-                (
-                    *op,
-                    substitute_expr::<PRESERVE>(operand, row, &mut *map, &mut *defer),
-                )
-            }),
-        ),
-        Expression::Equal(a, b) => Expression::Equal(
-            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
-            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
-        ),
-        Expression::SameTerm(a, b) => Expression::SameTerm(
-            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
-            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
-        ),
-        Expression::Greater(a, b) => Expression::Greater(
-            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
-            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
-        ),
-        Expression::GreaterOrEqual(a, b) => Expression::GreaterOrEqual(
-            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
-            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
-        ),
-        Expression::Less(a, b) => Expression::Less(
-            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
-            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
-        ),
-        Expression::LessOrEqual(a, b) => Expression::LessOrEqual(
-            Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)),
-            Child::new(substitute_expr::<PRESERVE>(b, row, map, defer)),
-        ),
-        Expression::UnaryPlus(a) => {
-            Expression::UnaryPlus(Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)))
+        Expression::If(c, t, e) => {
+            let c = substitute_expr::<PRESERVE>(c, row, map, defer, memory)?;
+            let c = Child::from(correlated_box(c, memory)?);
+            let t = substitute_expr::<PRESERVE>(t, row, map, defer, memory)?;
+            let t = Child::from(correlated_box(t, memory)?);
+            let e = substitute_expr::<PRESERVE>(e, row, map, defer, memory)?;
+            Expression::If(c, t, correlated_box(e, memory)?.into())
         }
-        Expression::UnaryMinus(a) => {
-            Expression::UnaryMinus(Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)))
+        Expression::In(needle, haystack) => {
+            let needle = substitute_expr::<PRESERVE>(needle, row, map, defer, memory)?;
+            let needle = Child::from(correlated_box(needle, memory)?);
+            let items = substitute_expression_list::<PRESERVE>(haystack, row, map, defer, memory)?;
+            Expression::In(needle, items.into())
         }
-        Expression::Not(a) => {
-            Expression::Not(Child::new(substitute_expr::<PRESERVE>(a, row, map, defer)))
-        }
-        Expression::If(c, t, e) => Expression::If(
-            Child::new(substitute_expr::<PRESERVE>(c, row, map, defer)),
-            Child::new(substitute_expr::<PRESERVE>(t, row, map, defer)),
-            Child::new(substitute_expr::<PRESERVE>(e, row, map, defer)),
-        ),
-        Expression::In(needle, haystack) => Expression::In(
-            Child::new(substitute_expr::<PRESERVE>(needle, row, map, defer)),
-            haystack
-                .iter()
-                .map(|h| substitute_expr::<PRESERVE>(h, row, &mut *map, &mut *defer))
-                .collect(),
-        ),
         Expression::Coalesce(items) => Expression::Coalesce(
-            items
-                .iter()
-                .map(|i| substitute_expr::<PRESERVE>(i, row, &mut *map, &mut *defer))
-                .collect(),
+            substitute_expression_list::<PRESERVE>(items, row, map, defer, memory)?.into(),
         ),
-        Expression::FunctionCall(f, args) => Expression::FunctionCall(
-            f.clone(),
-            args.iter()
-                .map(|a| substitute_expr::<PRESERVE>(a, row, &mut *map, &mut *defer))
-                .collect(),
+        Expression::FunctionCall(function, args) => Expression::FunctionCall(
+            function
+                .clone_with_memory(memory)
+                .map_err(|e| correlated_storage_error(memory, e))?,
+            substitute_expression_list::<PRESERVE>(args, row, map, defer, memory)?.into(),
         ),
-        // Outside a `SERVICE` body the nested body is not copied at all: it is left as a
-        // placeholder owed `row`, substituted once when it is evaluated — see
-        // `crate::deferred_exists`. A body the window being substituted from already left
-        // as a placeholder (this walk is copying a copy: a `LATERAL` inside it) is owed
-        // this row after the ones it already carries. Below a `SERVICE` the body is
-        // substituted in full, tracked like every `GraphPattern`-position substitution
-        // (`substitute_pattern_impl`, this arm's sibling call sites), so its nodes keep
-        // their ledger identity through `map`.
-        Expression::Exists(inner_pat) => match defer.defer(inner_pat, row) {
-            Some(placeholder) => Expression::Exists(placeholder.into()),
-            None => Expression::Exists(
-                substitute_pattern_impl::<PRESERVE>(inner_pat, row, map, defer).into(),
-            ),
-        },
-    }
+        Expression::Exists(body) => {
+            let body = match defer.defer(body, row, memory)? {
+                Some(placeholder) => placeholder,
+                None => substitute_pattern_impl::<PRESERVE>(body, row, map, defer, memory)?,
+            };
+            Expression::Exists(body.into())
+        }
+    })
 }
 
 /// Build the [`SubstitutionRow`] μ from the outer row's bound variables,
@@ -4083,45 +4621,53 @@ fn substitute_expr<const PRESERVE: bool>(
 /// text allocation, because `NamedNode`/`Literal` carry their text behind
 /// `Arc<str>`.
 pub(crate) fn outer_bindings_for_substitution<D: DatasetView + Sync>(
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
+    outer_row: &[Option<SolutionTerm<D::Id>>],
+    outer_schema: &VarSchema,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SubstitutionRow, EvalError> {
-    use purrdf_sparql_algebra::GroundTerm;
-
-    let mut expr = Vec::new();
-    let mut term = Vec::new();
-    for (i, var) in schema.vars().iter().enumerate() {
-        if let Some(t) = row[i] {
+    let workspace = ctx.growth.clone();
+    SubstitutionRow::build(&workspace, |expr, term, memory| {
+        for (index, variable) in outer_schema.vars().iter().enumerate() {
+            let Some(cell) = outer_row[index] else {
+                continue;
+            };
             let value = ctx
                 .scratch
-                .try_value_of(ctx.dataset, t)
-                .map_err(EvalError::source_read)?;
-            // `None` means `value` is a quoted triple with a non-IRI predicate — see
-            // `ground_term_from_term_value`'s doc. That term kind has no `GroundTerm`
-            // representation, so the variable is left OUT of both `expr` and `term`:
-            // the same "uninjected" treatment `wrap_with_expr_term_only_values` and
-            // `join_leaf_with_values` already give any variable absent from
-            // `row.term` (they simply don't build a `VALUES` cell for it). The
-            // substituted plan then evaluates with that one variable unbound rather
-            // than panicking on a foreign `DatasetView`'s malformed data.
-            let Some(ground) = ground_term_from_term_value(&value) else {
+                .try_owned_value_of(ctx.dataset, cell, &workspace, |error| {
+                    ctx.workspace.source_error(error)
+                })?;
+            if let SolutionTerm::Existing(id) = cell {
+                ctx.remember_existing_term(&value, id)?;
+            }
+            let Some(ground) = ground_term_from_term_value_with_memory(&value, memory)? else {
                 continue;
             };
             match &ground {
-                GroundTerm::NamedNode(n) => {
-                    expr.push((var.clone(), Expression::NamedNode(n.clone())));
+                purrdf_sparql_algebra::GroundTerm::NamedNode(node) => {
+                    memory
+                        .push(
+                            expr,
+                            (variable.clone(), Expression::NamedNode(node.clone())),
+                        )
+                        .map_err(|e| correlated_storage_error(memory, e))?;
                 }
-                GroundTerm::Literal(l) => expr.push((var.clone(), Expression::Literal(l.clone()))),
-                // Blank nodes and quoted triples have no `Expression` constant
-                // form; the leaf join (`row.term`, populated below regardless)
-                // is what carries them.
-                GroundTerm::BlankNode(_) | GroundTerm::Triple(_) => {}
+                purrdf_sparql_algebra::GroundTerm::Literal(literal) => {
+                    memory
+                        .push(
+                            expr,
+                            (variable.clone(), Expression::Literal(literal.clone())),
+                        )
+                        .map_err(|e| correlated_storage_error(memory, e))?;
+                }
+                purrdf_sparql_algebra::GroundTerm::BlankNode(_)
+                | purrdf_sparql_algebra::GroundTerm::Triple(_) => {}
             }
-            term.push((var.clone(), ground));
+            memory
+                .push(term, (variable.clone(), ground))
+                .map_err(|e| correlated_storage_error(memory, e))?;
         }
-    }
-    Ok(SubstitutionRow { expr, term })
+        Ok(())
+    })
 }
 
 /// Convert an interned term's dataset-independent value to the algebra's
@@ -4137,98 +4683,15 @@ pub(crate) fn outer_bindings_for_substitution<D: DatasetView + Sync>(
 /// already validated when the engine interned it (this function only ever
 /// sees a value read back out of `ctx.scratch`), matching
 /// `outer_bindings_for_substitution`'s sibling `Expression` construction.
+#[cfg(test)]
 fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebra::GroundTerm> {
-    use purrdf_sparql_algebra::{BlankNode, GroundTerm, GroundTriple, Literal, NamedNode};
-
-    /// One step of the build: convert a value, or assemble a quoted triple under its
-    /// predicate IRI from the two ground terms built last — its object, then its
-    /// subject.
-    enum Step<'a> {
-        Convert(&'a TermValue),
-        Assemble(&'a str),
-    }
-
-    // The ground terms built so far, innermost first; a quoted triple's components are
-    // converted before it is assembled, so a value of any depth is built without a
-    // machine-stack frame per level.
-    let mut built: Vec<GroundTerm> = Vec::new();
-    let mut pending = vec![Step::Convert(value)];
-    while let Some(step) = pending.pop() {
-        let term = match step {
-            Step::Convert(TermValue::Iri(iri)) => {
-                GroundTerm::NamedNode(NamedNode::new_unchecked(iri))
-            }
-            Step::Convert(TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            }) => {
-                let lit = if let Some(lang) = language {
-                    // The algebra's `BaseDirection` and the IR's `RdfTextDirection`
-                    // are the one base-direction type, so the direction passes through.
-                    Literal::new_lang(lexical_form, lang, *direction)
-                } else {
-                    Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
-                };
-                GroundTerm::Literal(lit)
-            }
-            // The algebra's blank-node slot carries a scope-qualified spelling (the
-            // same single-slot convention `GroundTerm::BlankNode`'s own doc and
-            // `crate::convert::ground_term_to_value` use), so a blank bound by an
-            // earlier evaluation round-trips to that SAME node through the `VALUES`
-            // join rather than to a fresh, unrelated one.
-            Step::Convert(TermValue::Blank { label, scope }) => {
-                GroundTerm::BlankNode(BlankNode::new(scope.qualify_label(label).into_owned()))
-            }
-            Step::Convert(TermValue::Triple { s, p, o }) => {
-                // A quoted triple's predicate MUST be an IRI (RDF 1.2 C0 positional
-                // constraint). For PurRDF's own data this is enforced once, structurally,
-                // at `RdfDatasetBuilder::freeze` (`crates/rdf-core/src/ir/validate.rs`,
-                // `require_iri_predicate`, reached for every interned triple term via
-                // `validate_triple_terms`) — every `TermId` this evaluator resolves out
-                // of a purrdf-built `RdfDataset` already cleared that gate, so this arm
-                // is unreachable in practice for `RdfDataset`.
-                //
-                // That gate, however, sits on `RdfDatasetBuilder::freeze`, NOT on the
-                // `DatasetView` trait (`crates/rdf-core/src/dataset_view.rs`) this
-                // function is generic over. `DatasetView` is public and UNSEALED: a
-                // third-party implementation can hand back a `TermRef` for a triple's
-                // predicate id that resolves to anything at all, with no freeze-time
-                // validation ever run. `value_of`/`term_id_to_value` (`crate::scratch`)
-                // copy exactly what such a view's `resolve` returns into this
-                // `TermValue`, so a malformed quoted triple from a foreign dataset
-                // reaches here as real, unvalidated input on a LATERAL/EXISTS
-                // substitution path. Because the invariant is NOT enforced at a boundary
-                // every `DatasetView` implementor is forced through, a `debug_assert!`
-                // here would panic on exactly that foreign input in every debug/test
-                // build — the same crash this arm exists to remove. So: a total `None`,
-                // no assertion, not `unreachable!`.
-                let TermValue::Iri(p_iri) = p.as_ref() else {
-                    return None;
-                };
-                pending.push(Step::Assemble(p_iri.as_str()));
-                pending.push(Step::Convert(o));
-                pending.push(Step::Convert(s));
-                continue;
-            }
-            Step::Assemble(p_iri) => {
-                let object = built
-                    .pop()
-                    .expect("a quoted triple's object is built before the triple is assembled");
-                let subject = built
-                    .pop()
-                    .expect("a quoted triple's subject is built before the triple is assembled");
-                GroundTerm::Triple(Child::new(GroundTriple {
-                    subject,
-                    predicate: NamedNode::new_unchecked(p_iri),
-                    object,
-                }))
-            }
-        };
-        built.push(term);
-    }
-    built.pop()
+    let workspace = crate::WorkspaceCapability::resident();
+    let mut frame = crate::workspace::LexicalFrame::new(&workspace);
+    ground_term_from_term_value_with_memory(
+        value,
+        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+    )
+    .expect("resident stored-ground allocation failed")
 }
 
 /// Apply a built-in function to its evaluated arguments' values (`None` for an unbound
@@ -4243,6 +4706,36 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     replace_pattern: Option<&crate::xpath_regex::LinkedPattern>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let temporal = if matches!(
+        function,
+        Function::Year
+            | Function::Month
+            | Function::Day
+            | Function::Hours
+            | Function::Minutes
+            | Function::Seconds
+            | Function::Timezone
+            | Function::Tz
+            | Function::Adjust
+    ) {
+        match arg(vals, 0) {
+            Some(TermValue::Literal {
+                lexical_form,
+                datatype,
+                ..
+            }) if matches!(
+                XsdDatatype::from_iri(datatype),
+                Some(XsdDatatype::DateTime | XsdDatatype::Date | XsdDatatype::Time)
+            ) =>
+            {
+                parse_owned_xsd(lexical_form, datatype, &ctx.growth)?
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let temporal_value = temporal.as_deref();
     match function {
         // ---- type tests (total: never a type error) -----------------------
         Function::IsIri | Function::IsUri => Ok(Some(intern_boolean(
@@ -4258,8 +4751,16 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
             matches!(vals.first(), Some(Some(TermValue::Literal { .. }))),
         )?)),
         Function::IsNumeric => {
-            let numeric =
-                matches!(arg(vals, 0), Some(v) if xsd_of(v).is_some_and(|xv| xv.is_numeric()));
+            let numeric = match arg(vals, 0) {
+                Some(TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    ..
+                }) if XsdDatatype::from_iri(datatype).is_some_and(XsdDatatype::is_numeric) => {
+                    parse_owned_xsd(lexical_form, datatype, &ctx.growth)?.is_some()
+                }
+                _ => false,
+            };
             Ok(Some(intern_boolean(ctx, numeric)?))
         }
         Function::IsTriple => Ok(Some(intern_boolean(
@@ -4308,7 +4809,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
             Some(_) => Ok(Some(intern_boolean(ctx, false)?)),
         },
         Function::Datatype => match arg(vals, 0) {
-            Some(TermValue::Literal { datatype, .. }) => Ok(Some(iri_term(ctx, datatype.clone())?)),
+            Some(TermValue::Literal { datatype, .. }) => Ok(Some(iri_term(ctx, datatype)?)),
             _ => Ok(None),
         },
 
@@ -4317,8 +4818,8 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
             Some((s, _)) => Ok(Some(intern_integer(ctx, s.chars().count() as i64)?)),
             None => Ok(None),
         },
-        Function::UCase => map_string(ctx, vals, str::to_uppercase),
-        Function::LCase => map_string(ctx, vals, str::to_lowercase),
+        Function::UCase => map_string(ctx, vals, true),
+        Function::LCase => map_string(ctx, vals, false),
         // The string predicates read their arguments as string arguments, never as
         // evaluated terms (so they mint no nested `STR`/`LANG` term), and the compiler
         // gives each its own instruction; no call over evaluated values reaches here.
@@ -4337,7 +4838,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- term constructors --------------------------------------------
         Function::Iri | Function::Uri => match arg(vals, 0) {
-            Some(TermValue::Iri(iri)) => Ok(Some(iri_term(ctx, iri.clone())?)),
+            Some(TermValue::Iri(iri)) => Ok(Some(iri_term(ctx, iri)?)),
             // §17.4.2.8: the string form is a simple literal or `xsd:string`; a tagged
             // string or any other literal is an error.
             Some(TermValue::Literal {
@@ -4345,10 +4846,13 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                 datatype,
                 ..
             }) if datatype == XSD_STRING => {
-                match resolve_against_base(ctx.base_iri.as_deref(), lexical_form) {
-                    Some(resolved) => Ok(Some(iri_term(ctx, resolved)?)),
-                    // Relative reference with no base to resolve against — a SPARQL
-                    // expression error (unbound), not a silent identity pass-through.
+                let resolved = resolve_against_base(
+                    ctx.base_iri.as_ref().map(|base| base.value.as_str()),
+                    lexical_form,
+                    &ctx.growth,
+                )?;
+                match resolved {
+                    Some(value) => ctx.intern_workspace_term(value),
                     None => Ok(None),
                 }
             }
@@ -4365,17 +4869,23 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         // doc for the row-identity mechanism and its scope.
         // The label is a simple literal or `xsd:string` (§17.4.2.9).
         Function::BNode => {
-            let Some(s) = plain_string_arg(vals, 0) else {
+            let Some(s) = plain_string_arg_ref(vals, 0) else {
                 return Ok(None);
             };
-            let key = (ctx.current_row, s);
-            if let Some(existing) = ctx.bnode_memo.get(&key) {
+            let hash = purrdf_hash::fixed::hash_one(&(ctx.current_row, s));
+            if let Some(existing) = ctx.bnode_memo.get_with_hash(hash, |(row, text)| {
+                *row == ctx.current_row && text.as_str() == s
+            }) {
                 return Ok(Some(*existing));
             }
             let Some(term) = mint_bnode(ctx)? else {
                 return Ok(None);
             };
-            ctx.bnode_memo.insert(key, term);
+            let key = (
+                ctx.current_row,
+                ctx.growth.authored_text(&format_args!("{s}"))?,
+            );
+            let _ = ctx.bnode_memo.insert_admitted(key, term, &ctx.growth)?;
             Ok(Some(term))
         }
 
@@ -4387,17 +4897,57 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- numeric math functions (ABS/CEIL/FLOOR/ROUND) ----------------
         // All four are strict in one numeric argument; type errors → Ok(None).
-        Function::Abs => unary_numeric_fn(ctx, vals, numeric_abs),
-        Function::Ceil => unary_numeric_fn(ctx, vals, numeric_ceil),
-        Function::Floor => unary_numeric_fn(ctx, vals, numeric_floor),
-        Function::Round => unary_numeric_fn(ctx, vals, numeric_round),
+        Function::Abs => {
+            unary_numeric_fn(ctx, vals, purrdf_xsd::numeric::NumericUnaryOperator::Abs)
+        }
+        Function::Ceil => {
+            unary_numeric_fn(ctx, vals, purrdf_xsd::numeric::NumericUnaryOperator::Ceil)
+        }
+        Function::Floor => {
+            unary_numeric_fn(ctx, vals, purrdf_xsd::numeric::NumericUnaryOperator::Floor)
+        }
+        Function::Round => {
+            unary_numeric_fn(ctx, vals, purrdf_xsd::numeric::NumericUnaryOperator::Round)
+        }
 
         // ---- ENCODE_FOR_URI -----------------------------------------------
         Function::EncodeForUri => match string_arg(vals, 0) {
-            Some((s, _)) => Ok(Some(string_term(
-                ctx,
-                &purrdf_iri::percent::encode(&s, purrdf_iri::percent::UNRESERVED),
-            )?)),
+            Some((text, _)) => {
+                let mut frame = crate::workspace::LexicalFrame::new(&ctx.growth);
+                let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+                let encoded = purrdf_iri::percent::encode_with_memory(
+                    text,
+                    purrdf_iri::percent::UNRESERVED,
+                    &mut memory,
+                )
+                .map_err(|error| {
+                    memory
+                        .admission_mut()
+                        .storage_error(error, "percent-encoded scalar")
+                })?;
+                let lexical_form = match encoded {
+                    std::borrow::Cow::Owned(value) => value,
+                    std::borrow::Cow::Borrowed(value) => memory.string(value).map_err(|error| {
+                        memory
+                            .admission_mut()
+                            .storage_error(error, "percent result lexical")
+                    })?,
+                };
+                let datatype = memory.string(XSD_STRING).map_err(|error| {
+                    memory
+                        .admission_mut()
+                        .storage_error(error, "percent result datatype")
+                })?;
+                let mut value = Some(TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language: None,
+                    direction: None,
+                });
+                ctx.intern_workspace_term(
+                    frame.finish_term(|| value.take().expect("percent producer owns its value"))?,
+                )
+            }
             None => Ok(None),
         },
 
@@ -4405,78 +4955,81 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         Function::Now => Ok(Some(xsd_to_term(ctx, &ctx.now.clone())?)),
 
         // ---- Date/time component extraction --------------------------------
-        Function::Year => match arg(vals, 0).and_then(xsd_of) {
+        Function::Year => match temporal_value {
             Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, dt.year())?)),
             Some(XsdValue::Date(d)) => Ok(Some(intern_integer(ctx, d.year())?)),
             _ => Ok(None),
         },
-        Function::Month => match arg(vals, 0).and_then(xsd_of) {
+        Function::Month => match temporal_value {
             Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.month()))?)),
             Some(XsdValue::Date(d)) => Ok(Some(intern_integer(ctx, i64::from(d.month()))?)),
             _ => Ok(None),
         },
-        Function::Day => match arg(vals, 0).and_then(xsd_of) {
+        Function::Day => match temporal_value {
             Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.day()))?)),
             Some(XsdValue::Date(d)) => Ok(Some(intern_integer(ctx, i64::from(d.day()))?)),
             _ => Ok(None),
         },
-        Function::Hours => match arg(vals, 0).and_then(xsd_of) {
+        Function::Hours => match temporal_value {
             Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.hour()))?)),
             Some(XsdValue::Time(t)) => Ok(Some(intern_integer(ctx, i64::from(t.hour()))?)),
             _ => Ok(None),
         },
-        Function::Minutes => match arg(vals, 0).and_then(xsd_of) {
+        Function::Minutes => match temporal_value {
             Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.minute()))?)),
             Some(XsdValue::Time(t)) => Ok(Some(intern_integer(ctx, i64::from(t.minute()))?)),
             _ => Ok(None),
         },
-        Function::Seconds => match arg(vals, 0).and_then(xsd_of) {
+        Function::Seconds => match temporal_value {
             Some(XsdValue::DateTime(dt)) => {
                 Ok(Some(xsd_to_term(ctx, &XsdValue::Decimal(dt.second()))?))
             }
             Some(XsdValue::Time(t)) => Ok(Some(xsd_to_term(ctx, &XsdValue::Decimal(t.second()))?)),
             _ => Ok(None),
         },
-        Function::Timezone => match arg(vals, 0).and_then(xsd_of) {
+        Function::Timezone => match temporal_value {
             Some(XsdValue::DateTime(dt)) => match dt.timezone_minutes() {
-                Some(off_min) => Ok(Some(typed_term(
+                Some(off_min) => displayed_term(
                     ctx,
-                    &format_daytime_duration(off_min),
-                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
-                )?)),
+                    &TimezoneText::Duration(off_min),
+                    Some(purrdf_xsd::datatype::XSD_DAY_TIME_DURATION),
+                ),
                 None => Ok(None), // SPARQL §17.4.5.7: no timezone → error
             },
             Some(XsdValue::Date(d)) => match d.timezone_minutes() {
-                Some(off_min) => Ok(Some(typed_term(
+                Some(off_min) => displayed_term(
                     ctx,
-                    &format_daytime_duration(off_min),
-                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
-                )?)),
+                    &TimezoneText::Duration(off_min),
+                    Some(purrdf_xsd::datatype::XSD_DAY_TIME_DURATION),
+                ),
                 None => Ok(None),
             },
             Some(XsdValue::Time(t)) => match t.timezone_minutes() {
-                Some(off_min) => Ok(Some(typed_term(
+                Some(off_min) => displayed_term(
                     ctx,
-                    &format_daytime_duration(off_min),
-                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
-                )?)),
+                    &TimezoneText::Duration(off_min),
+                    Some(purrdf_xsd::datatype::XSD_DAY_TIME_DURATION),
+                ),
                 None => Ok(None),
             },
             _ => Ok(None),
         },
-        Function::Tz => match arg(vals, 0).and_then(xsd_of) {
-            Some(XsdValue::DateTime(dt)) => Ok(Some(string_term(
+        Function::Tz => match temporal_value {
+            Some(XsdValue::DateTime(dt)) => displayed_term(
                 ctx,
-                &format_tz_string(dt.timezone_minutes()),
-            )?)),
-            Some(XsdValue::Date(d)) => Ok(Some(string_term(
+                &TimezoneText::Zone(dt.timezone_minutes()),
+                Some(XSD_STRING),
+            ),
+            Some(XsdValue::Date(d)) => displayed_term(
                 ctx,
-                &format_tz_string(d.timezone_minutes()),
-            )?)),
-            Some(XsdValue::Time(t)) => Ok(Some(string_term(
+                &TimezoneText::Zone(d.timezone_minutes()),
+                Some(XSD_STRING),
+            ),
+            Some(XsdValue::Time(t)) => displayed_term(
                 ctx,
-                &format_tz_string(t.timezone_minutes()),
-            )?)),
+                &TimezoneText::Zone(t.timezone_minutes()),
+                Some(XSD_STRING),
+            ),
             _ => Ok(None),
         },
 
@@ -4491,26 +5044,42 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         // ±14:00 timezone) fold into `Ok(None)`, same as every other SPARQL
         // expression error.
         Function::Adjust => {
-            let value = arg(vals, 0).and_then(xsd_of);
-            let timezone = arg(vals, 1)
-                .and_then(xsd_of)
-                .and_then(|v| adjust_timezone_arg(&v))
-                .map(AdjustTimezone::into_seconds);
+            let value = temporal_value;
+            let timezone = match arg(vals, 1) {
+                Some(TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    ..
+                }) if datatype == XSD_STRING && lexical_form.is_empty() => {
+                    Some(AdjustTimezone::Remove)
+                }
+                Some(TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    ..
+                }) if datatype == purrdf_xsd::datatype::XSD_DAY_TIME_DURATION => {
+                    parse_owned_xsd(lexical_form, datatype, &ctx.growth)?
+                        .as_deref()
+                        .and_then(adjust_timezone_arg)
+                }
+                _ => None,
+            }
+            .map(AdjustTimezone::into_seconds);
             match (value, timezone) {
                 (Some(XsdValue::DateTime(dt)), Some(tz)) => {
-                    match purrdf_xsd::temporal::adjust_datetime_to_timezone(&dt, tz) {
+                    match purrdf_xsd::temporal::adjust_datetime_to_timezone(dt, tz) {
                         Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::DateTime(result))?)),
                         Err(_) => Ok(None),
                     }
                 }
                 (Some(XsdValue::Date(d)), Some(tz)) => {
-                    match purrdf_xsd::temporal::adjust_date_to_timezone(&d, tz) {
+                    match purrdf_xsd::temporal::adjust_date_to_timezone(d, tz) {
                         Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::Date(result))?)),
                         Err(_) => Ok(None),
                     }
                 }
                 (Some(XsdValue::Time(t)), Some(tz)) => {
-                    match purrdf_xsd::temporal::adjust_time_to_timezone(&t, tz) {
+                    match purrdf_xsd::temporal::adjust_time_to_timezone(t, tz) {
                         Ok(result) => Ok(Some(xsd_to_term(ctx, &XsdValue::Time(result))?)),
                         Err(_) => Ok(None),
                     }
@@ -4521,45 +5090,40 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- hash functions ------------------------------------------------
         //
-        // Every arm here reads its argument through `plain_string_arg_ref`, NOT
-        // `plain_string_arg`: a hash consumes the lexical form as bytes and never
-        // keeps it, so copying it into a fresh `String` first would be one
-        // wasted heap allocation and one wasted memcpy of the whole literal,
-        // per solution row, on every one of these nine built-ins. The only
-        // allocation a hash call still makes per row is the hex digest it
-        // returns, which is genuinely new text.
+        // Hash input is borrowed; the existing hexadecimal kernel renders
+        // into stack storage before the literal's exact destination is admitted.
         Function::Md5 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
                 let digest = purrdf_hash::md5::Md5::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
+                Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),
         },
         Function::Sha1 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
                 let digest = purrdf_hash::sha1::Sha1::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
+                Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),
         },
         Function::Sha256 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
                 let digest = sha2::Sha256::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
+                Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),
         },
         Function::Sha384 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
                 let digest = sha2::Sha384::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
+                Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),
         },
         Function::Sha512 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
                 let digest = sha2::Sha512::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
+                Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),
         },
@@ -4570,28 +5134,28 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         Function::Sha3_224 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_224::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
+                Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),
         },
         Function::Sha3_256 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_256::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
+                Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),
         },
         Function::Sha3_384 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_384::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
+                Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),
         },
         Function::Sha3_512 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
                 let digest = purrdf_hash::sha3::Sha3_512::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))?))
+                Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),
         },
@@ -4608,12 +5172,11 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         // ---- UUID() / STRUUID() -------------------------------------------
         Function::Uuid => {
             let (uuid_iri, _) = make_uuid(ctx);
-            let iri_val = format!("urn:uuid:{uuid_iri}");
-            Ok(Some(iri_term(ctx, iri_val)?))
+            displayed_term(ctx, &format_args!("urn:uuid:{uuid_iri}"), None)
         }
         Function::StrUuid => {
             let (uuid_str, _) = make_uuid(ctx);
-            Ok(Some(string_term(ctx, &uuid_str)?))
+            displayed_term(ctx, &uuid_str, Some(XSD_STRING))
         }
 
         // ---- extension functions (CLOSED, exhaustive) -----------------------
@@ -4692,9 +5255,10 @@ pub(crate) fn apply_custom_host<D: DatasetView + Sync>(
     // makes that unrepresentable) and before the XSD-cast fallback, so a function IRI
     // never collides with a datatype IRI.
     if let Some(native) = ctx.user_functions.resolve_native(iri) {
-        let result = crate::user_fn::eval_native_function(native, iri, vals)?;
+        let result =
+            crate::user_fn::eval_native_function(native, iri, vals, &ctx.workspace.capability())?;
         return Ok(result
-            .map(|value| intern(ctx, value))
+            .map(|value| ctx.intern_workspace_term(value))
             .transpose()?
             .flatten());
     }
@@ -4708,17 +5272,23 @@ pub(crate) fn apply_custom_host<D: DatasetView + Sync>(
     if let Some(expr_fn) = ctx.user_functions.resolve_expr(iri) {
         let result = crate::user_fn::eval_expr_function(expr_fn, iri, vals, ctx)?;
         return Ok(result
-            .map(|value| intern(ctx, value))
+            .map(|value| ctx.intern_workspace_term(value))
             .transpose()?
             .flatten());
     }
     if let Some(target) = XsdDatatype::from_iri(iri) {
         return eval_xsd_cast(ctx, target, arg(vals, 0));
     }
-    Err(EvalError::unsupported_deferred(
-        crate::error::UnsupportedKind::CustomFunction,
-        format!("custom SPARQL function <{iri}>"),
-    ))
+    let kind = crate::error::UnsupportedKind::CustomFunction;
+    Err(if ctx.growth.is_bounded() {
+        crate::NativeDiagnostic::error(
+            crate::NativeDiagnosticKind::Unsupported(kind),
+            format_args!("custom SPARQL function <{iri}>"),
+            &ctx.growth,
+        )
+    } else {
+        EvalError::unsupported_deferred(kind, format!("custom SPARQL function <{iri}>"))
+    })
 }
 
 /// Evaluate an XSD constructor cast (SPARQL 1.1 §17.5, applying the casting rules of
@@ -4727,8 +5297,8 @@ pub(crate) fn apply_custom_host<D: DatasetView + Sync>(
 ///
 /// A source with a numeric or `xsd:boolean` VALUE (a well-typed literal of a numeric
 /// datatype or of `xsd:boolean`) is cast BY VALUE when the target is numeric,
-/// `xsd:boolean` or `xsd:string` ([`cast_numeric_value`],
-/// [`numeric_or_bool_to_xpath_string`]): `xsd:double("0.1"^^xsd:float)` is the double
+/// `xsd:boolean` or `xsd:string` ([`purrdf_xsd::numeric::numeric_cast_admitted`],
+/// [`purrdf_xsd::numeric::prepare_xpath_text`]): `xsd:double("0.1"^^xsd:float)` is the double
 /// value of the float `0.1`, which is `0.100000001490116119384765625`, NOT the double
 /// nearest the digits `0.1`; `xsd:integer("16777217"^^xsd:float)` is `16777216`; and
 /// `xsd:decimal("5.355e1"^^xsd:double)` is the decimal nearest the double's value,
@@ -4767,16 +5337,19 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
         }
         _ => return Ok(None),
     };
-    if let Some(value) = xsd_of(source).filter(is_numeric_or_boolean) {
+    let parsed_source = match source_datatype {
+        Some(datatype) if datatype.is_numeric() || datatype == XsdDatatype::Boolean => {
+            crate::parsed_value::ParsedValue::parse(lexical, datatype, false, &ctx.growth)?
+        }
+        _ => None,
+    };
+    if let Some(value) = parsed_source.filter(|value| is_numeric_or_boolean(value)) {
         if target == XsdDatatype::String {
             // The string is the value's canonical rendering, priced first.
             if !numeric_step_admitted(ctx, numeric_render_cost(&value)) {
                 return Ok(None);
             }
-            let Some(text) = numeric_or_bool_to_xpath_string(&value) else {
-                return Ok(None);
-            };
-            return Ok(Some(string_term(ctx, &text)?));
+            return xpath_value_to_term(ctx, &value);
         }
         if target.is_numeric() || target == XsdDatatype::Boolean {
             // A conversion to a binary format, or a truncation or copy on the tower,
@@ -4790,7 +5363,12 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
                 return Ok(None);
             }
             // A failed cast is an expression error; failed interning is operational.
-            return match cast_numeric_value(&value, target) {
+            let capability = ctx.growth.clone();
+            let mut frame = crate::native_numeric::NumericFrame::new(&capability);
+            let cast = purrdf_xsd::numeric::numeric_cast_admitted(&value, target, &mut |layout| {
+                frame.admit(layout)
+            });
+            return match frame.finish_cast(cast)? {
                 Some(cast) => governed_xsd_to_term(ctx, &cast),
                 None => {
                     ctx.record_expression_error(Some(cast_error_code(&value)));
@@ -4804,21 +5382,22 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
     if target.is_calendar() {
         match calendar_cast_source(datatype_iri, source_datatype) {
             CalendarSource::Value(source_datatype) => {
-                let Some(value) = parse_xsd10(lexical, source_datatype)
-                    .ok()
-                    .and_then(|value| {
-                        purrdf_xsd::temporal::cast_calendar(&value, target)
-                            .ok()
-                            .flatten()
-                    })
-                else {
+                let Some(value) = crate::parsed_value::ParsedValue::parse(
+                    lexical,
+                    source_datatype,
+                    true,
+                    &ctx.growth,
+                )?
+                .and_then(|value| {
+                    purrdf_xsd::temporal::cast_calendar(&value, target)
+                        .ok()
+                        .flatten()
+                }) else {
                     return Ok(None);
                 };
-                return Ok(Some(typed_term(
-                    ctx,
-                    &value.canonical_lexical(),
-                    target.iri(),
-                )?));
+                let text = purrdf_xsd::value::canonical_non_numeric(&value)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                return borrowed_xsd_text_to_term(ctx, &text, target.iri());
             }
             // A string's spelling is what it casts by: the lexical path below.
             CalendarSource::Lexical => {}
@@ -4827,41 +5406,53 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
             CalendarSource::Refused => return Ok(None),
         }
     }
-    if let ValueCast::Cast(cast) = cast_duration_or_binary(source, target) {
-        return cast.map(|value| xsd_to_term(ctx, &value)).transpose();
+    if let ValueCast::Cast(cast) = cast_duration_or_binary(ctx, source, target)? {
+        return Ok(cast);
     }
     // A string cast to any other type is first normalized by the target's
     // `whiteSpace` facet (XPath F&O 3.1 §19.2): `collapse` for every non-string
     // target here, so `xsd:integer(" 12 ")` is 12. A non-string source's lexical
     // form is its own and is read as written.
-    let collapsed;
-    let lexical = if target != XsdDatatype::String && is_string_row(datatype_iri) {
-        collapsed = collapse_whitespace(lexical);
-        collapsed.as_str()
+    let collapsed = if target != XsdDatatype::String && is_string_row(datatype_iri) {
+        let view = purrdf_xsd::simple::CollapsedWhitespace(lexical);
+        let length = crate::workspace::display_len(&view)?;
+        let allocation = ctx
+            .growth
+            .charge(u64::try_from(length).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let text =
+            crate::workspace::format_exact(&view, length, "XSD cast whitespace destination")?;
+        // Tuple fields destroy the text before releasing its original grant.
+        Some((text, allocation))
     } else {
-        lexical.as_str()
+        None
     };
-    // The operand-mapping rules pin XSD 1.0, excluding +INF for float/double.
-    match parse_xsd10(lexical, target) {
-        Ok(value) if target.is_calendar() => Ok(Some(typed_term(
-            ctx,
-            &value.canonical_lexical(),
-            target.iri(),
-        )?)),
-        Ok(value) => governed_xsd_to_term(ctx, &value),
-        Err(error) => {
-            if target.is_numeric() {
-                ctx.record_expression_error(error.code());
+    let lexical = collapsed
+        .as_ref()
+        .map_or(lexical.as_str(), |(text, _)| text.as_str());
+    // One native parser; malformed lexical and physical refusal stay separate.
+    let result =
+        match crate::parsed_value::ParsedValue::parse_coded(lexical, target, true, &ctx.growth)? {
+            Ok(value) if target.is_calendar() => {
+                let text = purrdf_xsd::value::canonical_non_numeric(&value)
+                    .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                borrowed_xsd_text_to_term(ctx, &text, target.iri())
             }
-            Ok(None)
-        }
-    }
+            Ok(value) => governed_xsd_to_term(ctx, &value),
+            Err(code) => {
+                if target.is_numeric() {
+                    ctx.record_expression_error(code);
+                }
+                Ok(None)
+            }
+        };
+    drop(collapsed);
+    result
 }
 
 /// The XPath F&O error a refused by-value numeric cast of `source` is:
 /// `err:FOCA0002` for `NaN` or an infinity, which has no exact value, and
 /// `err:FORG0001` for a value outside the target's value space (`xsd:byte` of
-/// `300`) — the only two ways [`cast_numeric_value`] refuses a numeric source.
+/// `300`) — the only two ways [`purrdf_xsd::numeric::numeric_cast_admitted`] refuses a numeric source.
 fn cast_error_code(source: &XsdValue) -> purrdf_xsd::ErrorCode {
     let not_finite = match source {
         XsdValue::Float(value) => !value.is_finite(),
@@ -4875,7 +5466,7 @@ fn cast_error_code(source: &XsdValue) -> purrdf_xsd::ErrorCode {
     }
 }
 
-/// Whether `value` lies in the domain [`cast_numeric_value`] casts by value: a number
+/// Whether `value` lies in the domain [`purrdf_xsd::numeric::numeric_cast_admitted`] casts by value: a number
 /// of any numeric datatype, or a boolean.
 const fn is_numeric_or_boolean(value: &XsdValue) -> bool {
     matches!(
@@ -4897,16 +5488,6 @@ fn is_string_row(datatype: &str) -> bool {
         || datatype
             .strip_prefix(purrdf_xsd::datatype::XSD_NS)
             .is_some_and(|local| matches!(xsd_builtin_cast_row(local), Some(CastRow::Str)))
-}
-
-/// XML Schema's `whiteSpace="collapse"`: each run of space, tab, carriage return and
-/// line feed becomes one space, and leading and trailing runs are removed.
-fn collapse_whitespace(lexical: &str) -> String {
-    lexical
-        .split([' ', '\t', '\r', '\n'])
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// How a literal of datatype `datatype` casts to a calendar target (XPath F&O 3.1
@@ -4946,11 +5527,11 @@ fn calendar_cast_source(datatype: &str, modelled: Option<XsdDatatype>) -> Calend
 }
 
 /// What [`cast_duration_or_binary`] decided.
-enum ValueCast {
+enum ValueCast<I> {
     /// The source is not a calendar, duration or binary literal.
     NotApplicable,
     /// The cast's value, or `None` for a cast error.
-    Cast(Option<XsdValue>),
+    Cast(Option<SolutionTerm<I>>),
 }
 
 /// The cast of a calendar, duration or binary literal to a target other than a
@@ -4970,28 +5551,25 @@ enum ValueCast {
 ///   only its own component (months, or seconds).
 /// * `xsd:hexBinary` and `xsd:base64Binary` cast into each other by their bytes.
 /// * A value casts to its own datatype unchanged; every other pair is refused.
-#[inline(never)] // Out of the evaluator's frame; see `term_is_nan`.
-fn cast_duration_or_binary(source: &TermValue, target: XsdDatatype) -> ValueCast {
-    value_cast(source, target).map_or(ValueCast::NotApplicable, ValueCast::Cast)
-}
-
-/// [`cast_duration_or_binary`] with `None` for a source it does not apply to.
-#[allow(
-    clippy::option_option,
-    reason = "the outer layer is \"not this family\", the inner one the cast error; the \
-              public face is `ValueCast`"
-)]
-fn value_cast(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue>> {
+#[inline(never)]
+fn cast_duration_or_binary<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    source: &TermValue,
+    target: XsdDatatype,
+) -> Result<ValueCast<D::Id>, EvalError> {
     use XsdDatatype as T;
     let TermValue::Literal {
+        lexical_form,
         datatype,
         language: None,
         ..
     } = source
     else {
-        return None;
+        return Ok(ValueCast::NotApplicable);
     };
-    let from = XsdDatatype::from_iri(datatype)?;
+    let Some(from) = T::from_iri(datatype) else {
+        return Ok(ValueCast::NotApplicable);
+    };
     let in_family = from.is_calendar()
         || matches!(
             from,
@@ -5002,38 +5580,41 @@ fn value_cast(source: &TermValue, target: XsdDatatype) -> Option<Option<XsdValue
                 | T::Base64Binary
         );
     if !in_family || target == T::String || target.is_calendar() {
-        return None;
+        return Ok(ValueCast::NotApplicable);
     }
-    let Some(value) = xsd_of(source) else {
-        return Some(None);
+    let Some(value) =
+        crate::parsed_value::ParsedValue::parse(lexical_form, from, false, &ctx.growth)?
+    else {
+        return Ok(ValueCast::Cast(None));
     };
     if from == target {
-        return Some(Some(value));
+        return xsd_to_term(ctx, &value).map(|value| ValueCast::Cast(Some(value)));
     }
-    Some(match &value {
-        XsdValue::Duration(dur) => {
-            let zero = || match purrdf_xsd::parse("0", T::Decimal) {
-                Ok(XsdValue::Decimal(zero)) => Some(zero),
-                _ => None,
-            };
+    let result = match &*value {
+        XsdValue::Duration(duration) => {
             let (months, seconds) = match target {
-                T::Duration => (dur.months(), dur.seconds()),
-                T::YearMonthDuration => (dur.months(), zero()?),
-                T::DayTimeDuration => (0, dur.seconds()),
-                _ => return Some(None),
+                T::Duration => (duration.months(), duration.seconds()),
+                T::YearMonthDuration => (duration.months(), purrdf_xsd::Decimal::from_integer(0)),
+                T::DayTimeDuration => (0, duration.seconds()),
+                _ => return Ok(ValueCast::Cast(None)),
             };
-            purrdf_xsd::temporal::Duration::new(months, seconds, target)
-                .ok()
-                .map(XsdValue::Duration)
+            match purrdf_xsd::temporal::Duration::new(months, seconds, target) {
+                Ok(duration) => Some(xsd_to_term(ctx, &XsdValue::Duration(duration))?),
+                Err(_) => None,
+            }
         }
         XsdValue::Binary { bytes, .. } if matches!(target, T::HexBinary | T::Base64Binary) => {
-            Some(XsdValue::Binary {
-                bytes: bytes.clone(),
-                datatype: target,
-            })
+            // Both encoders borrow the immutable original parsed bytes. The cast
+            // allocates only its admitted final lexical/datatype destination.
+            if target == T::Base64Binary {
+                borrowed_xsd_text_to_term(ctx, &purrdf_xsd::binary::Base64(bytes), target.iri())?
+            } else {
+                borrowed_xsd_text_to_term(ctx, &purrdf_hash::hex::Upper(bytes), target.iri())?
+            }
         }
         _ => None,
-    })
+    };
+    Ok(ValueCast::Cast(result))
 }
 
 /// Whether the casting table (SPARQL §17.5, over XPath F&O §19.1 "Casting from
@@ -5163,228 +5744,11 @@ fn xsd_builtin_cast_row(local: &str) -> Option<CastRow> {
 /// on the source's exact value, never a float) over seeded draws and the hard cases —
 /// ties, their neighbours, the subnormal band, the largest finite values and the `i128`
 /// extremes — in `cast_rounding_tests`.
+#[cfg(test)]
 fn cast_numeric_value(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
-    if matches!(
-        source,
-        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_)
-    ) {
-        return cast_big_numeric(source, target);
-    }
-    match target {
-        XsdDatatype::Double => Some(XsdValue::Double(match source {
-            // Rust's integer-to-float conversion rounds to nearest, ties to even.
-            XsdValue::Integer { value, .. } => *value as f64,
-            XsdValue::Decimal(d) => d.to_f64(),
-            XsdValue::Float(f) => f64::from(*f),
-            XsdValue::Double(d) => *d,
-            XsdValue::Boolean(b) => f64::from(u8::from(*b)),
-            _ => return None,
-        })),
-        // An exact source is rounded ONCE, straight to single precision: going
-        // through `f64` first would round twice.
-        XsdDatatype::Float => Some(XsdValue::Float(match source {
-            XsdValue::Integer { value, .. } => *value as f32,
-            XsdValue::Decimal(d) => d.to_f32(),
-            XsdValue::Float(f) => *f,
-            XsdValue::Double(d) => *d as f32,
-            XsdValue::Boolean(b) => f32::from(u8::from(*b)),
-            _ => return None,
-        })),
-        XsdDatatype::Boolean => Some(XsdValue::Boolean(match source {
-            XsdValue::Integer { value, .. } => *value != 0,
-            XsdValue::Decimal(d) => !d.is_zero(),
-            XsdValue::Float(f) => *f != 0.0 && !f.is_nan(),
-            XsdValue::Double(d) => *d != 0.0 && !d.is_nan(),
-            XsdValue::Boolean(b) => *b,
-            _ => return None,
-        })),
-        XsdDatatype::Decimal => Some(XsdValue::Decimal(match source {
-            XsdValue::Integer { value, .. } => purrdf_xsd::Decimal::from_integer(*value),
-            XsdValue::Decimal(d) => *d,
-            XsdValue::Float(f) => return cast_binary_exact(f64::from(*f), target),
-            XsdValue::Double(d) => return cast_binary_exact(*d, target),
-            XsdValue::Boolean(b) => purrdf_xsd::Decimal::from_integer(i128::from(*b)),
-            _ => return None,
-        })),
-        target if target.is_integer_family() => {
-            let value = match source {
-                XsdValue::Integer { value, .. } => *value,
-                // Exact truncation: through `f64` a decimal's integer part would
-                // round past 2^53 (`12345678901234567.5` would become `…568`).
-                XsdValue::Decimal(d) => d.whole_part(),
-                XsdValue::Float(f) => match truncate_to_i128(f64::from(*f)) {
-                    Some(value) => value,
-                    None => return cast_binary_exact(f64::from(*f), target),
-                },
-                XsdValue::Double(d) => match truncate_to_i128(*d) {
-                    Some(value) => value,
-                    None => return cast_binary_exact(*d, target),
-                },
-                XsdValue::Boolean(b) => i128::from(*b),
-                _ => return None,
-            };
-            if let Some((min, max)) = target.integer_range()
-                && !(min..=max).contains(&value)
-            {
-                return None;
-            }
-            Some(XsdValue::Integer {
-                value,
-                datatype: target,
-            })
-        }
-        _ => None,
-    }
-}
-
-/// [`cast_numeric_value`] of an `xsd:integer` or `xsd:decimal` value past the bounded
-/// variants. Out of line and cold: the expression evaluator recurses through
-/// `cast_numeric_value`, and the tower's temporaries must not enlarge its frame.
-#[cold]
-#[inline(never)]
-fn cast_big_numeric(source: &XsdValue, target: XsdDatatype) -> Option<XsdValue> {
-    match target {
-        XsdDatatype::Double => Some(XsdValue::Double(match source {
-            XsdValue::BigInteger { value, .. } => value.to_f64(),
-            XsdValue::BigDecimal(d) => d.to_f64(),
-            _ => return None,
-        })),
-        XsdDatatype::Float => Some(XsdValue::Float(match source {
-            XsdValue::BigInteger { value, .. } => value.to_f32(),
-            XsdValue::BigDecimal(d) => d.to_f32(),
-            _ => return None,
-        })),
-        // A value past the bounded variants is never zero.
-        XsdDatatype::Boolean => Some(XsdValue::Boolean(true)),
-        XsdDatatype::Decimal => source.to_exact_decimal().map(XsdValue::from_exact_decimal),
-        target if target.is_integer_family() => {
-            let value = match source {
-                XsdValue::BigInteger { value, .. } => value.clone(),
-                XsdValue::BigDecimal(d) => d.to_integer_truncated(),
-                _ => return None,
-            };
-            target
-                .admits_integer(&value)
-                .then(|| XsdValue::from_exact_integer(value, target))
-        }
-        _ => None,
-    }
-}
-
-/// [`cast_numeric_value`] of an `xsd:float`/`xsd:double` to `xsd:decimal`, or of one
-/// of magnitude `2^127` or more (always an integer) to an integer type: its exact
-/// value — every finite binary value is a finite decimal, at most 1,074 fractional
-/// digits, so the closest representable decimal F&O 3.1 §19.1.2.3 asks for is the
-/// value itself — and `None` for `NaN`, the infinities (`err:FOCA0002`) and a value
-/// outside the target's value space. Out of line and cold, as [`cast_big_numeric`]
-/// is.
-#[cold]
-#[inline(never)]
-fn cast_binary_exact(value: f64, target: XsdDatatype) -> Option<XsdValue> {
-    if target == XsdDatatype::Decimal {
-        return purrdf_xsd::exact::Decimal::from_f64(value)
-            .ok()
-            .map(XsdValue::from_exact_decimal);
-    }
-    let value = purrdf_xsd::exact::Integer::from_f64_truncated(value).ok()?;
-    target
-        .admits_integer(&value)
-        .then(|| XsdValue::from_exact_integer(value, target))
-}
-
-/// `value` with its fractional part discarded, or `None` for `NaN`, an infinity, or a
-/// result outside `i128` (`err:FOCA0002`/`err:FOCA0003`). The bounds are exact powers
-/// of two, so the comparison is exact and the final conversion never saturates.
-fn truncate_to_i128(value: f64) -> Option<i128> {
-    const LIMIT: f64 = 170_141_183_460_469_231_731_687_303_715_884_105_728.0; // 2^127
-    let truncated = value.trunc();
-    // `NaN` fails both comparisons; `-2^127` is `i128::MIN` itself.
-    if (-LIMIT..LIMIT).contains(&truncated) {
-        Some(truncated as i128)
-    } else {
-        None
-    }
-}
-
-/// The XPath F&O 3.1 §19.1.1 "Casting to `xs:string`" form of a boolean or numeric
-/// value — DISTINCT from the value's XSD canonical **literal** lexical mapping (which
-/// [`XsdValue::canonical_lexical`] provides for writing an actual `xsd:double`/
-/// `xsd:float` term). Returns `None` for a non-numeric, non-boolean value.
-///
-/// - `xsd:boolean` → `"true"`/`"false"`.
-/// - `xsd:integer` (and derived) → the plain decimal digits (no decimal point ever).
-/// - `xsd:decimal` → its XSD 1.1 canonical lexical form: an integer-valued decimal has
-///   no decimal point there (`1.0` → `"1"`), as the cast-to-string rule requires.
-/// - `xsd:float`/`xsd:double` → [`xpath_float_to_string`]/[`xpath_double_to_string`].
-fn numeric_or_bool_to_xpath_string(value: &XsdValue) -> Option<String> {
-    match value {
-        XsdValue::Boolean(b) => Some(if *b { "true" } else { "false" }.to_owned()),
-        XsdValue::Integer { value, .. } => Some(value.to_string()),
-        XsdValue::Decimal(d) => Some(d.canonical_lexical()),
-        XsdValue::BigInteger { .. } | XsdValue::BigDecimal(_) => Some(value.canonical_lexical()),
-        XsdValue::Float(f) => Some(xpath_float_to_string(*f)),
-        XsdValue::Double(d) => Some(xpath_double_to_string(*d)),
-        _ => None,
-    }
-}
-
-/// The cast-to-string special values (XPath F&O 3.1 §19.1.1): `"NaN"`, `"INF"`,
-/// `"-INF"`, and `"0"`/`"-0"` for the signed zeros.
-fn xpath_special_string(value: f64) -> Option<&'static str> {
-    if value.is_nan() {
-        Some("NaN")
-    } else if value.is_infinite() {
-        Some(if value > 0.0 { "INF" } else { "-INF" })
-    } else if value == 0.0 {
-        Some(if value.is_sign_negative() { "-0" } else { "0" })
-    } else {
-        None
-    }
-}
-
-/// Whether a finite, non-zero value's magnitude lies in `[0.000001, 1000000)`, the
-/// range XPath writes in plain decimal notation. The double written `1e-6` is a
-/// little BELOW one millionth (`9.99999999999999954748e-7`), so the lower bound is
-/// "greater than that double": no float or double lies strictly between it and one
-/// millionth.
-fn in_plain_notation_range(value: f64) -> bool {
-    let magnitude = value.abs();
-    magnitude > 1e-6 && magnitude < 1e6
-}
-
-/// XPath's `xs:double` → `xs:string` cast (F&O 3.1 §19.1.1): the special values as
-/// [`xpath_special_string`]; a magnitude in `[0.000001, 1000000)` in plain decimal
-/// notation, with no decimal point for an integral value (`"0.1"`, `"123456.5"`,
-/// `"100"`); every other value in scientific notation whose mantissa has exactly one
-/// non-zero digit before its point and at least one after it (`"1.0E7"`,
-/// `"1.25E-7"`). Both forms carry the shortest digit string that reads back as the
-/// same double.
-fn xpath_double_to_string(value: f64) -> String {
-    if let Some(special) = xpath_special_string(value) {
-        return special.to_owned();
-    }
-    if in_plain_notation_range(value) {
-        // `Display` writes the shortest round-tripping digits, never an exponent.
-        value.to_string()
-    } else {
-        purrdf_xsd::numeric::canonical_double(value)
-    }
-}
-
-/// XPath's `xs:float` → `xs:string` cast: [`xpath_double_to_string`]'s rule at SINGLE
-/// precision — the shortest digit string that reads back as the same float, so the
-/// float `0.1` is `"0.1"`, not the `"0.10000000149011612"` its widened double would
-/// give.
-fn xpath_float_to_string(value: f32) -> String {
-    let wide = f64::from(value);
-    if let Some(special) = xpath_special_string(wide) {
-        return special.to_owned();
-    }
-    if in_plain_notation_range(wide) {
-        value.to_string()
-    } else {
-        purrdf_xsd::numeric::canonical_float(value)
-    }
+    purrdf_xsd::numeric::numeric_cast_admitted(source, target, &mut |_| Ok(()))
+        .ok()
+        .flatten()
 }
 
 /// `heldIn(reifier, standpoint) -> xsd:boolean` — DIRECT, non-transitive
@@ -5416,13 +5780,20 @@ fn eval_held_in<D: DatasetView + Sync>(
     // The predicate table is mandatory configuration — fail loudly BEFORE looking at
     // the arguments, so a misconfigured deployment cannot get a quietly-wrong answer.
     let Some(predicates) = ctx.standpoint_predicates.clone() else {
-        return Err(EvalError::unsupported_deferred(
-            crate::error::UnsupportedKind::HeldInUnconfigured,
-            "heldIn requires a standpoint predicate configuration: supply the \
+        let kind = crate::error::UnsupportedKind::HeldInUnconfigured;
+        let message = "heldIn requires a standpoint predicate configuration: supply the \
              ontology's accordingTo/sharpens IRIs via \
              NativeSparqlEngine::with_standpoint_predicates (or \
-             EvalCtx::with_standpoint_predicates); there is no built-in default",
-        ));
+             EvalCtx::with_standpoint_predicates); there is no built-in default";
+        return Err(if ctx.growth.is_bounded() {
+            crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Unsupported(kind),
+                message,
+                &ctx.growth,
+            )
+        } else {
+            EvalError::unsupported_deferred(kind, message)
+        });
     };
 
     // Strict in both args: an unbound/error argument is a SPARQL error (None).
@@ -5435,22 +5806,28 @@ fn eval_held_in<D: DatasetView + Sync>(
     let (Some(reifier_id), Some(standpoint_id)) = (
         ctx.dataset
             .term_id_by_value(reifier_val)
-            .map_err(EvalError::source_read)?,
+            .map_err(|error| ctx.workspace.source_error(error))?,
         ctx.dataset
             .term_id_by_value(standpoint_val)
-            .map_err(EvalError::source_read)?,
+            .map_err(|error| ctx.workspace.source_error(error))?,
     ) else {
         return Ok(Some(intern_boolean(ctx, false)?));
     };
 
-    let according_to_id = ctx
-        .dataset
-        .term_id_by_value(&TermValue::Iri(predicates.according_to))
-        .map_err(EvalError::source_read)?;
-    let sharpens_id = ctx
-        .dataset
-        .term_id_by_value(&TermValue::Iri(predicates.sharpens))
-        .map_err(EvalError::source_read)?;
+    let lookup_predicate = |iri: &str| {
+        let allocation = ctx
+            .growth
+            .charge(u64::try_from(iri.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let value = crate::WorkspaceTerm::new(
+            TermValue::Iri(crate::workspace::string(iri, "standpoint predicate")?),
+            allocation,
+        );
+        ctx.dataset
+            .term_id_by_value(&value)
+            .map_err(|error| ctx.workspace.source_error(error))
+    };
+    let according_to_id = lookup_predicate(&predicates.according_to)?;
+    let sharpens_id = lookup_predicate(&predicates.sharpens)?;
 
     // The reifier's vantage standpoint(s): annotation objects under the configured
     // `accordingTo`. If it was never interned, there are no vantage standpoints.
@@ -5480,7 +5857,7 @@ fn eval_held_in<D: DatasetView + Sync>(
                     })
             })
         })
-        .map_err(EvalError::source_read)?;
+        .map_err(|error| ctx.workspace.source_error(error))?;
 
     Ok(Some(intern_boolean(ctx, held)?))
 }
@@ -5513,80 +5890,138 @@ pub(crate) fn lang_matches(tag: &str, range: &str) -> bool {
 /// and RDF 1.2 base direction.
 pub(crate) type StringArg = (String, Option<String>, Option<RdfTextDirection>);
 
-/// A term read as a string argument: its lexical form, language tag and base
-/// direction, when it is a simple, `xsd:string`, `rdf:langString` or
-/// `rdf:dirLangString` literal.
-///
-/// Out of line, so the per-row `String` it materializes is one compiled function
-/// rather than a fragment of each expression-VM caller.
+/// A runtime string operand borrowing all text from its original admitted term.
+/// Program constants continue to use `StringArg` in the authored program pool.
+pub(crate) struct OwnedStringArg {
+    value: crate::WorkspaceTerm,
+    projection: StringProjection,
+}
+
+#[derive(Clone, Copy)]
+enum StringProjection {
+    String,
+    Str,
+    Lang,
+}
+
+impl std::fmt::Debug for OwnedStringArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnedStringArg").finish_non_exhaustive()
+    }
+}
+
+impl OwnedStringArg {
+    fn read<D: DatasetView + Sync>(
+        ctx: &EvalCtx<'_, D>,
+        term: SolutionTerm<D::Id>,
+        projection: StringProjection,
+    ) -> Result<Option<Self>, EvalError> {
+        // Preserve the original fast paths' type refusal BEFORE any payload copy
+        // or nested traversal. STR(blank/triple) and LANG(nonliteral) read no
+        // component strings and cannot turn a type error into extra I/O.
+        let valid = match term {
+            SolutionTerm::Existing(id) => ctx
+                .dataset
+                .with_term(id, |value| match (projection, value) {
+                    (StringProjection::String, TermRef::Literal { datatype, .. }) => {
+                        ctx.dataset.with_term(datatype, |datatype| match datatype {
+                            TermRef::Iri(iri) => is_string_datatype(iri),
+                            _ => false,
+                        })
+                    }
+                    (StringProjection::Str, TermRef::Iri(_) | TermRef::Literal { .. })
+                    | (StringProjection::Lang, TermRef::Literal { .. }) => Ok(true),
+                    _ => Ok(false),
+                })
+                .map_err(|error| ctx.workspace.source_error(error))?
+                .map_err(|error| ctx.workspace.source_error(error))?,
+            SolutionTerm::Computed(id) => match (projection, ctx.scratch.computed_value(id)) {
+                (StringProjection::String, TermValue::Literal { datatype, .. }) => {
+                    is_string_datatype(datatype)
+                }
+                (StringProjection::Str, TermValue::Iri(_) | TermValue::Literal { .. })
+                | (StringProjection::Lang, TermValue::Literal { .. }) => true,
+                _ => false,
+            },
+        };
+        if !valid {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            value: owned_value_of(ctx, term)?,
+            projection,
+        }))
+    }
+
+    /// Every slice remains borrowed from this immutable owner. STR and LANG
+    /// intentionally return the same plain-string facets as their old fast path.
+    pub(crate) fn parts(&self) -> (&str, Option<&str>, Option<RdfTextDirection>) {
+        match (self.projection, &*self.value) {
+            (
+                StringProjection::String,
+                TermValue::Literal {
+                    lexical_form,
+                    language,
+                    direction,
+                    ..
+                },
+            ) => (lexical_form, language.as_deref(), *direction),
+            (StringProjection::Str, TermValue::Iri(iri)) => (iri, None, None),
+            (StringProjection::Str, TermValue::Literal { lexical_form, .. }) => {
+                (lexical_form, None, None)
+            }
+            (StringProjection::Lang, TermValue::Literal { language, .. }) => {
+                (language.as_deref().unwrap_or_default(), None, None)
+            }
+            _ => unreachable!("a runtime string carrier is classified before publication"),
+        }
+    }
+}
+
+fn is_string_datatype(datatype: &str) -> bool {
+    datatype == XSD_STRING || datatype == RDF_LANG_STRING || datatype == RDF_DIR_LANG_STRING
+}
+
+/// Materialize a transient term through the one native fallible fold/clone home.
+pub(crate) fn owned_value_of<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+) -> Result<crate::WorkspaceTerm, EvalError> {
+    ctx.scratch
+        .try_owned_value_of(ctx.dataset, term, &ctx.growth, |error| {
+            ctx.workspace.source_error(error)
+        })
+}
+
 #[inline(never)]
 pub(crate) fn string_arg_of_term<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
-) -> Result<Option<StringArg>, EvalError> {
-    Ok(string_arg_value_owned(value_of(ctx, term)?))
+) -> Result<Option<OwnedStringArg>, EvalError> {
+    OwnedStringArg::read(ctx, term, StringProjection::String)
 }
 
-/// The lexical form `STR(term)` has, read straight off the term without minting it.
 pub(crate) fn str_lexical_term<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
-) -> Result<Option<String>, EvalError> {
-    Ok(match term {
-        SolutionTerm::Existing(id) => ctx
-            .dataset
-            .with_term(id, |term| match term {
-                TermRef::Iri(iri) => Some(iri.to_owned()),
-                TermRef::Literal { lexical, .. } => Some(lexical.to_owned()),
-                TermRef::Blank { .. } | TermRef::Triple { .. } => None,
-            })
-            .map_err(EvalError::source_read)?,
-        SolutionTerm::Computed(_) => match value_of(ctx, term)? {
-            TermValue::Iri(iri) => Some(iri),
-            TermValue::Literal { lexical_form, .. } => Some(lexical_form),
-            TermValue::Blank { .. } | TermValue::Triple { .. } => None,
-        },
-    })
+) -> Result<Option<OwnedStringArg>, EvalError> {
+    OwnedStringArg::read(ctx, term, StringProjection::Str)
 }
 
-/// The tag `LANG(term)` has, read straight off the term without minting it.
 pub(crate) fn lang_lexical_term<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
-) -> Result<Option<String>, EvalError> {
-    Ok(match term {
-        SolutionTerm::Existing(id) => ctx
-            .dataset
-            .with_term(id, |term| match term {
-                TermRef::Literal { language, .. } => Some(language.unwrap_or_default().to_owned()),
-                _ => None,
-            })
-            .map_err(EvalError::source_read)?,
-        SolutionTerm::Computed(_) => match value_of(ctx, term)? {
-            TermValue::Literal { language, .. } => Some(language.unwrap_or_default()),
-            _ => None,
-        },
-    })
+) -> Result<Option<OwnedStringArg>, EvalError> {
+    OwnedStringArg::read(ctx, term, StringProjection::Lang)
 }
 
 /// Extract `(lexical, language)` from a plain/`xsd:string`/`rdf:langString` literal
 /// argument. `None` for any other term (a string-function type error).
-fn string_arg(vals: &[Option<TermValue>], i: usize) -> Option<(String, Option<String>)> {
-    string_arg_value(arg(vals, i)?).map(|(s, l, _)| (s, l))
+fn string_arg(vals: &[Option<TermValue>], i: usize) -> Option<(&str, Option<&str>)> {
+    string_arg3_ref(vals, i).map(|(lexical, language, _)| (lexical, language))
 }
 
-/// [`plain_string_arg`] without the copy: the lexical form of a simple literal or
-/// `xsd:string` argument, BORROWED from the argument rather than cloned out of it.
-///
-/// The accepted-datatype rule is identical to [`plain_string_arg`]'s: a
-/// language-tagged or directional string is an error, as the hash built-ins'
-/// signatures require (SPARQL 1.1 §17.4.6, SEP-0008). Callers that merely READ
-/// the lexical form — the hash built-ins, which hash it straight from its bytes —
-/// must use this one: [`plain_string_arg`] heap-allocates a fresh `String` per
-/// call, and these are evaluated once per solution row, so a `SHA3-256(?o)` over a
-/// million-row scan would pay a million allocations to hand `as_bytes()` a pointer
-/// it could have had for free. The hex digest is still allocated (it is a
-/// genuinely new string), so a hash call allocates once per row.
+/// Borrow a simple literal or xsd:string lexical form.
 fn plain_string_arg_ref(vals: &[Option<TermValue>], i: usize) -> Option<&str> {
     match arg(vals, i)? {
         TermValue::Literal {
@@ -5598,29 +6033,12 @@ fn plain_string_arg_ref(vals: &[Option<TermValue>], i: usize) -> Option<&str> {
     }
 }
 
-/// Extract the lexical form of a *plain* string argument — a simple literal or
-/// an explicitly `xsd:string`-typed one — for built-ins whose first argument
-/// must NOT already carry a language tag (`STRLANG`/`STRDT`, SPARQL 1.1
-/// §17.4.2.4/§17.4.2.5). Unlike [`string_arg`], a `rdf:langString` (or RDF 1.2
-/// `rdf:dirLangString`) argument is a type error here, not an accepted input
-/// whose language would silently be discarded.
-fn plain_string_arg(vals: &[Option<TermValue>], i: usize) -> Option<String> {
-    plain_string_arg_ref(vals, i).map(str::to_owned)
-}
-
-/// Like [`string_arg`] but also returns the RDF 1.2 base direction (for functions
-/// that must preserve or inspect it, e.g. `CONCAT`).
-fn string_arg3(
+/// Borrow a string lexical form and both RDF language facets.
+fn string_arg3_ref(
     vals: &[Option<TermValue>],
     i: usize,
-) -> Option<(String, Option<String>, Option<RdfTextDirection>)> {
-    string_arg_value(arg(vals, i)?)
-}
-
-fn string_arg_value(
-    value: &TermValue,
-) -> Option<(String, Option<String>, Option<RdfTextDirection>)> {
-    match value {
+) -> Option<(&str, Option<&str>, Option<RdfTextDirection>)> {
+    match arg(vals, i)? {
         TermValue::Literal {
             lexical_form,
             datatype,
@@ -5630,32 +6048,43 @@ fn string_arg_value(
             || datatype == RDF_LANG_STRING
             || datatype == RDF_DIR_LANG_STRING =>
         {
-            Some((lexical_form.clone(), language.clone(), *direction))
+            Some((lexical_form, language.as_deref(), *direction))
         }
         _ => None,
     }
 }
 
-/// By-value twin of [`string_arg_value`]: the same datatype guard, but MOVES the
-/// lexical form and language out of an owned `TermValue` the caller is about to drop,
-/// saving the two `String` clones per evaluated string argument.
-fn string_arg_value_owned(
-    value: TermValue,
-) -> Option<(String, Option<String>, Option<RdfTextDirection>)> {
-    match value {
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } if datatype == XSD_STRING
-            || datatype == RDF_LANG_STRING
-            || datatype == RDF_DIR_LANG_STRING =>
-        {
-            Some((lexical_form, language, direction))
-        }
-        _ => None,
-    }
+/// Copy a selected borrowed string slice only after its exact lexical and facet
+/// capacities have been admitted. Duplicate arena values release that copy's
+/// temporary admission immediately.
+fn copy_string_result<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    lexical: &str,
+    language: Option<&str>,
+    direction: Option<RdfTextDirection>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let direction = direction.filter(|_| language.is_some());
+    let datatype = match (language, direction) {
+        (Some(_), Some(_)) => RDF_DIR_LANG_STRING,
+        (Some(_), None) => RDF_LANG_STRING,
+        (None, _) => XSD_STRING,
+    };
+    let bytes = lexical
+        .len()
+        .checked_add(datatype.len())
+        .and_then(|n| n.checked_add(language.map_or(0, str::len)))
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    let admission =
+        ctx.admit_computed(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    let value = TermValue::Literal {
+        lexical_form: crate::workspace::string(lexical, "string result lexical form")?,
+        datatype: crate::workspace::string(datatype, "string result datatype")?,
+        language: language
+            .map(|lang| crate::workspace::string(lang, "string result language"))
+            .transpose()?,
+        direction,
+    };
+    ctx.intern_workspace_term(crate::WorkspaceTerm::new(value, admission))
 }
 
 /// Apply a pure string transform to a single string argument, preserving its
@@ -5663,57 +6092,68 @@ fn string_arg_value_owned(
 fn map_string<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-    f: impl Fn(&str) -> String,
+    uppercase: bool,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match string_arg3(vals, 0) {
-        Some((s, lang, dir)) => Ok(make_string_dir(ctx, f(&s), lang, dir)?),
-        None => Ok(None),
-    }
-}
-
-/// Intern a string literal, as `rdf:langString@lang` if a language is present, else
-/// `xsd:string`.
-fn make_string<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    lexical: String,
-    lang: Option<String>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match lang {
-        Some(l) => intern_leaf(
-            ctx,
-            TermValue::Literal {
-                lexical_form: lexical,
-                datatype: RDF_LANG_STRING.to_owned(),
-                language: Some(l),
-                direction: None,
-            },
-        ),
-        None => Ok(Some(string_term(ctx, &lexical)?)),
-    }
-}
-
-/// Intern a string literal keeping a language tag and (RDF 1.2) base direction:
-/// `rdf:dirLangString` when both are present, `rdf:langString` when only a
-/// language is, else `xsd:string`. A direction without a language is dropped.
-fn make_string_dir<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    lexical: String,
-    lang: Option<String>,
-    dir: Option<RdfTextDirection>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match (lang, dir) {
-        (Some(l), Some(d)) => intern_leaf(
-            ctx,
-            TermValue::Literal {
-                lexical_form: lexical,
-                datatype: RDF_DIR_LANG_STRING.to_owned(),
-                language: Some(l),
-                direction: Some(d),
-            },
-        ),
-        (Some(l), None) => make_string(ctx, lexical, Some(l)),
-        (None, _) => Ok(Some(string_term(ctx, &lexical)?)),
-    }
+    let Some((s, language, direction)) = string_arg3_ref(vals, 0) else {
+        return Ok(None);
+    };
+    let direction = direction.filter(|_| language.is_some());
+    let datatype = match (language, direction) {
+        (Some(_), Some(_)) => RDF_DIR_LANG_STRING,
+        (Some(_), None) => RDF_LANG_STRING,
+        (None, _) => XSD_STRING,
+    };
+    let mut frame = crate::workspace::LexicalFrame::new(&ctx.growth);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    let lexical_form = if uppercase {
+        let length =
+            s.chars()
+                .flat_map(char::to_uppercase)
+                .try_fold(0usize, |length, character| {
+                    length
+                        .checked_add(character.len_utf8())
+                        .ok_or(EvalError::WorkspaceBoundOverflow)
+                })?;
+        let mut output = String::new();
+        memory
+            .reserve_string(&mut output, length)
+            .map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "uppercase string output")
+            })?;
+        for character in s.chars().flat_map(char::to_uppercase) {
+            output.push(character);
+        }
+        output
+    } else {
+        purrdf_lex::unicode::lowercase_with_memory(s, &mut memory).map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "lowercase string output")
+        })?
+    };
+    let datatype = memory.string(datatype).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "case result datatype")
+    })?;
+    let language = language
+        .map(|language| {
+            memory.string(language).map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "case result language")
+            })
+        })
+        .transpose()?;
+    let value = memory.admission_mut().finish_term(|| TermValue::Literal {
+        lexical_form,
+        datatype,
+        language,
+        direction,
+    })?;
+    ctx.intern_workspace_term(value)
 }
 
 /// `CONCAT(...)`: concatenate string arguments. The result keeps the language tag
@@ -5723,24 +6163,74 @@ fn eval_concat<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let mut out = String::new();
-    let mut common: Option<(Option<String>, Option<RdfTextDirection>)> = None;
+    let mut length = 0usize;
+    let mut common: Option<(Option<&str>, Option<RdfTextDirection>)> = None;
     let mut consistent = true;
-    for i in 0..vals.len() {
-        let Some((s, lang, dir)) = string_arg3(vals, i) else {
+    for value in vals {
+        let Some(TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        }) = value
+        else {
             return Ok(None);
         };
-        out.push_str(&s);
+        if datatype != XSD_STRING && datatype != RDF_LANG_STRING && datatype != RDF_DIR_LANG_STRING
+        {
+            return Ok(None);
+        }
+        length = length
+            .checked_add(lexical_form.len())
+            .ok_or(EvalError::WorkspaceBoundOverflow)?;
+        let lang = language.as_deref();
+        let dir = *direction;
         match &common {
             None => common = Some((lang, dir)),
             Some((cl, cd)) if *cl == lang && *cd == dir => {}
             Some(_) => consistent = false,
         }
     }
-    match common {
-        Some((lang, dir)) if consistent => Ok(make_string_dir(ctx, out, lang, dir)?),
-        _ => Ok(Some(string_term(ctx, &out)?)),
+    let (language, direction) = if consistent {
+        common.unwrap_or((None, None))
+    } else {
+        (None, None)
+    };
+    let direction = direction.filter(|_| language.is_some());
+    let datatype = match (language, direction) {
+        (Some(_), Some(_)) => RDF_DIR_LANG_STRING,
+        (Some(_), None) => RDF_LANG_STRING,
+        (None, _) => XSD_STRING,
+    };
+    let bytes = length
+        .checked_add(datatype.len())
+        .and_then(|n| n.checked_add(language.map_or(0, str::len)))
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    let admission =
+        ctx.admit_computed(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    let mut out = String::new();
+    out.try_reserve_exact(length)
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "CONCAT output",
+        })?;
+    for value in vals.iter().flatten() {
+        if let TermValue::Literal { lexical_form, .. } = value {
+            out.push_str(lexical_form);
+        }
     }
+    let datatype = crate::workspace::string(datatype, "CONCAT datatype")?;
+    let language = language
+        .map(|lang| crate::workspace::string(lang, "CONCAT language"))
+        .transpose()?;
+    ctx.intern_workspace_term(crate::WorkspaceTerm::new(
+        TermValue::Literal {
+            lexical_form: out,
+            datatype,
+            language,
+            direction,
+        },
+        admission,
+    ))
 }
 
 /// `SUBSTR(str, start[, length])`: XPath F&O `fn:substring` over SPARQL's
@@ -5757,16 +6247,16 @@ fn eval_substr<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some((s, lang, dir)) = string_arg3(vals, 0) else {
+    let Some((s, lang, dir)) = string_arg3_ref(vals, 0) else {
         return Ok(None);
     };
-    let Some(start) = arg(vals, 1).and_then(xsd_integer_of) else {
+    let Some(start) = xsd_integer_of_admitted(arg(vals, 1), &ctx.growth)? else {
         return Ok(None);
     };
     let end = match vals.get(2) {
         None => None,
         Some(length) => {
-            let Some(length) = length.as_ref().and_then(xsd_integer_of) else {
+            let Some(length) = xsd_integer_of_admitted(length.as_ref(), &ctx.growth)? else {
                 return Ok(None);
             };
             // Saturating is exact here: the sum overflows only when both operands
@@ -5776,8 +6266,7 @@ fn eval_substr<D: DatasetView + Sync>(
             Some(start.saturating_add(length))
         }
     };
-    let slice = substring(&s, start, end).to_owned();
-    make_string_dir(ctx, slice, lang, dir)
+    copy_string_result(ctx, substring(s, start, end), lang, dir)
 }
 
 /// The characters of `s` at the 1-based positions `p` with `start <= p` and, when
@@ -5836,7 +6325,7 @@ fn eval_str_before_after<D: DatasetView + Sync>(
     before: bool,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let (Some((h, lang, dir)), Some((n, needle_lang, needle_dir))) =
-        (string_arg3(vals, 0), string_arg3(vals, 1))
+        (string_arg3_ref(vals, 0), string_arg3_ref(vals, 1))
     else {
         return Ok(None);
     };
@@ -5844,22 +6333,22 @@ fn eval_str_before_after<D: DatasetView + Sync>(
     // the call is a type error (unbound) — e.g. a `@cy`-tagged needle can never
     // match an untagged or `@en`-tagged haystack, nor an `@en--ltr` one an
     // `@en--rtl` haystack.
-    if !args_compatible(lang.as_deref(), dir, needle_lang.as_deref(), needle_dir) {
+    if !args_compatible(lang, dir, needle_lang, needle_dir) {
         return Ok(None);
     }
     // An empty needle matches at the start: STRBEFORE → "", STRAFTER → the haystack.
-    let result = match h.find(&n) {
+    let result = match h.find(n) {
         Some(idx) => {
             if before {
-                h[..idx].to_owned()
+                &h[..idx]
             } else {
-                h[idx + n.len()..].to_owned()
+                &h[idx + n.len()..]
             }
         }
         // No match → empty (typed xsd:string, no language).
         None => return Ok(Some(string_term(ctx, "")?)),
     };
-    make_string_dir(ctx, result, lang, dir)
+    copy_string_result(ctx, result, lang, dir)
 }
 
 /// `REPLACE(str, pattern, replacement[, flags])` via the regex engine.
@@ -5876,7 +6365,7 @@ fn eval_replace<D: DatasetView + Sync>(
     vals: &[Option<TermValue>],
     linked: Option<&crate::xpath_regex::LinkedPattern>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some((s, lang, dir)) = string_arg3(vals, 0) else {
+    let Some((s, lang, dir)) = string_arg3_ref(vals, 0) else {
         return Ok(None);
     };
     let (Some(pattern), Some(replacement)) =
@@ -5901,70 +6390,20 @@ fn eval_replace<D: DatasetView + Sync>(
     // inside `replace_all`, so this call site cannot drop either. A malformed
     // replacement is F&O [err:FORX0004], which SPARQL 1.1 §17.4.3.15 makes a
     // type error: the expression is left unbound, never aborts the query.
-    let Some(replaced) = compiled.replace_all(&s, replacement)? else {
+    let Some(replaced) = compiled.replace_literal(s, replacement, lang, dir, &ctx.growth)? else {
         return Ok(None);
     };
-    let replaced = replaced.into_owned();
-    make_string_dir(ctx, replaced, lang, dir)
+    ctx.intern_workspace_term(replaced)
 }
 
-/// The compiled pattern for `(pattern, flags)`, from the per-query cache.
-///
-/// The hit path probes with the **borrowed** strings (the two-level map avoids
-/// allocating a `(String, String)` key per row) and returns an `Arc` clone — the
-/// rows of one filter share a single compiled regex and therefore its lazy-DFA
-/// cache pool, instead of each row cloning a fresh one. Compile failures are
-/// cached as `None` (same errors, compiled once).
-pub(crate) fn cached_regex<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
+/// The original resident compatibility compiler, retained only as a test oracle.
+/// Production REGEX/REPLACE use the one admitted native program through
+/// `xpath_regex::resolve`; this helper never participates in a bounded query.
+#[cfg(test)]
+pub(crate) fn build_regex(
     pattern: &str,
     flags: &str,
-) -> Option<Arc<purrdf_core::xsd_regex::CompiledPattern>> {
-    if let Some(cached) = ctx
-        .regex_cache
-        .get(pattern)
-        .and_then(|by_flags| by_flags.get(flags))
-    {
-        return cached.clone();
-    }
-    let compiled = build_regex(pattern, flags).map(Arc::new);
-    ctx.regex_cache
-        .entry(pattern.to_owned())
-        .or_default()
-        .insert(flags.to_owned(), compiled.clone());
-    compiled
-}
-
-/// Build a compiled pattern from a SPARQL `REGEX`/`REPLACE` pattern plus its
-/// flag string (`i`, `s`, `m`, `x`, `q`).
-///
-/// SPARQL `REGEX` and `REPLACE` use XPath `fn:matches` and `fn:replace`.
-/// Unselected calls retain this compatibility translation through
-/// [`purrdf_core::xsd_regex::compile`]. An explicitly selected dated law uses
-/// [`purrdf_core::xsd_regex::xpath`] through the fallible expression boundary.
-///
-/// Two behaviours change as a result, both deliberate:
-///
-/// * `x` is XPath's flag — remove `#x9`, `#xA`, `#xD` and `#x20` outside
-///   character-class expressions — not `RegexBuilder::ignore_whitespace`, which
-///   removes the 26-member Unicode `White_Space` property, treats `#` as a
-///   comment introducer, and strips whitespace *inside* character classes that
-///   XPath explicitly exempts.
-/// * `q` (match the pattern literally) is accepted rather than rejected, and
-///   the returned [`CompiledPattern`](purrdf_core::xsd_regex::CompiledPattern)
-///   carries that bit so `REPLACE()` honours it in the replacement string —
-///   through `CompiledPattern::replace_all`, which owns both the `q` switch
-///   and XPath's `$N`/`\$`/`\\` replacement syntax.
-///
-/// # Contract
-///
-/// `None` — never an `EvalError` — for any flag or pattern that does not
-/// compile, because SPARQL's evaluation rules make an ill-formed `REGEX`/
-/// `REPLACE` argument a type error that leaves the expression unbound rather
-/// than failing the query. The specific [`XsdRegexError`](purrdf_core::xsd_regex::XsdRegexError)
-/// is therefore discarded here, exactly as the pre-existing `builder.build().ok()`
-/// discarded `regex::Error`.
-fn build_regex(pattern: &str, flags: &str) -> Option<purrdf_core::xsd_regex::CompiledPattern> {
+) -> Option<purrdf_core::xsd_regex::CompiledPattern> {
     purrdf_core::xsd_regex::compile(pattern, flags).ok()
 }
 
@@ -6001,6 +6440,47 @@ fn well_formed_langtag(lang: &str) -> bool {
     purrdf_iri::langtag::is_well_formed_with(lang, LANGTAG_PROFILE)
 }
 
+fn language_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    lexical: &str,
+    language: &str,
+    direction: Option<RdfTextDirection>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(&ctx.growth);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    let language =
+        purrdf_iri::langtag::identity_fold_with_memory(language, &mut memory).map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "language identity fold")
+        })?;
+    let lexical_form = memory.string(lexical).map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "language literal lexical")
+    })?;
+    let datatype = memory
+        .string(if direction.is_some() {
+            RDF_DIR_LANG_STRING
+        } else {
+            RDF_LANG_STRING
+        })
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "language literal datatype")
+        })?;
+    let mut value = Some(TermValue::Literal {
+        lexical_form,
+        datatype,
+        language: Some(language),
+        direction,
+    });
+    ctx.intern_workspace_term(
+        frame.finish_term(|| value.take().expect("language producer owns its value"))?,
+    )
+}
+
 /// `STRLANG(lexical, lang)`.
 ///
 /// # Failure mode
@@ -6021,16 +6501,17 @@ fn eval_str_lang<D: DatasetView + Sync>(
     // — one that ALREADY carries a language tag (or RDF 1.2 base direction) is a
     // type error, not silently re-tagged.
     // Both arguments are simple literals (§17.4.2.4): a tagged tag is an error too.
-    let (Some(lex), Some(lang)) = (plain_string_arg(vals, 0), plain_string_arg(vals, 1)) else {
+    let (Some(lex), Some(lang)) = (plain_string_arg_ref(vals, 0), plain_string_arg_ref(vals, 1))
+    else {
         return Ok(None);
     };
     if lang.is_empty() {
         return Ok(None); // an empty language tag is not a valid rdf:langString
     }
-    if !well_formed_langtag(&lang) {
+    if !well_formed_langtag(lang) {
         return Ok(None); // not a language tag at all — see `well_formed_langtag`
     }
-    make_string(ctx, lex, Some(purrdf_iri::langtag::identity_fold(&lang)))
+    language_term(ctx, lex, lang, None)
 }
 
 /// `STRLANGDIR(lexical, lang, dir)` — RDF 1.2 directional-language-string
@@ -6049,32 +6530,24 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
     // already tagged string would silently discard its language and direction.
     // The language and direction are simple literals too.
     let (Some(lex), Some(lang), Some(dir)) = (
-        plain_string_arg(vals, 0),
-        plain_string_arg(vals, 1),
-        plain_string_arg(vals, 2),
+        plain_string_arg_ref(vals, 0),
+        plain_string_arg_ref(vals, 1),
+        plain_string_arg_ref(vals, 2),
     ) else {
         return Ok(None);
     };
     if lang.is_empty() {
         return Ok(None); // a directional language string needs a language
     }
-    if !well_formed_langtag(&lang) {
+    if !well_formed_langtag(lang) {
         return Ok(None); // not a language tag at all — see `well_formed_langtag`
     }
     // The base direction must be exactly `ltr`/`rtl` (case-sensitive); anything
     // else, including an empty string, is a type error (unbound).
-    let Some(direction) = RdfTextDirection::from_str_token(&dir) else {
+    let Some(direction) = RdfTextDirection::from_str_token(dir) else {
         return Ok(None);
     };
-    intern_leaf(
-        ctx,
-        TermValue::Literal {
-            lexical_form: lex,
-            datatype: RDF_DIR_LANG_STRING.to_owned(),
-            language: Some(purrdf_iri::langtag::identity_fold(&lang)),
-            direction: Some(direction),
-        },
-    )
+    language_term(ctx, lex, lang, Some(direction))
 }
 
 /// `STRDT(lexical, datatypeIri)`.
@@ -6118,7 +6591,7 @@ fn eval_str_dt<D: DatasetView + Sync>(
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     // §17.4.2.4: the lexical-form argument must be a simple/`xsd:string` literal
     // — a language-tagged (or RDF 1.2 direction-tagged) argument is a type error.
-    let Some(lex) = plain_string_arg(vals, 0) else {
+    let Some(lex) = plain_string_arg_ref(vals, 0) else {
         return Ok(None);
     };
     let Some(TermValue::Iri(dt)) = arg(vals, 1) else {
@@ -6128,7 +6601,7 @@ fn eval_str_dt<D: DatasetView + Sync>(
     if RdfLiteral::validate_components(dt, None, None).is_err() {
         return Ok(None);
     }
-    Ok(Some(typed_term(ctx, &lex, dt)?))
+    Ok(Some(typed_term(ctx, lex, dt)?))
 }
 
 /// `TRIPLE(s, p, o)` — RDF 1.2 triple-term constructor.
@@ -6136,15 +6609,20 @@ fn eval_triple_ctor<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let triple = triple_value(
-        arg(vals, 0).cloned(),
-        arg(vals, 1).cloned(),
-        arg(vals, 2).cloned(),
-    );
-    Ok(triple
-        .map(|triple| intern(ctx, triple))
-        .transpose()?
-        .flatten())
+    let subject = arg(vals, 0)
+        .map(|value| ctx.growth.clone_term(value))
+        .transpose()?;
+    let predicate = arg(vals, 1)
+        .map(|value| ctx.growth.clone_term(value))
+        .transpose()?;
+    let object = arg(vals, 2)
+        .map(|value| ctx.growth.clone_term(value))
+        .transpose()?;
+    let triple = triple_value_admitted(subject, predicate, object, &ctx.growth)?;
+    triple
+        .map(|value| ctx.intern_workspace_term(value))
+        .transpose()
+        .map(Option::flatten)
 }
 
 /// The triple term `TRIPLE(s, p, o)` builds from its operands' values, uninterned: unbound
@@ -6152,6 +6630,7 @@ fn eval_triple_ctor<D: DatasetView + Sync>(
 /// predicate an IRI. Under RDF 1.2 a triple term may nest only in *object* position, so
 /// a triple term (or literal) in the subject/predicate slot is a type error, as is a
 /// literal predicate — all of which yield an unbound result.
+#[cfg(test)]
 pub(crate) fn triple_value(
     s: Option<TermValue>,
     p: Option<TermValue>,
@@ -6171,26 +6650,39 @@ pub(crate) fn triple_value(
     })
 }
 
+/// Assemble the actual nested constructor from already admitted native operands.
+/// Ownership is transferred only after all three fallible boxes exist. The new
+/// payload grant covers the exact moved strings/child boxes and the three new
+/// native boxes while the original operand grants still cover those operands.
+pub(crate) fn triple_value_admitted(
+    s: Option<crate::WorkspaceTerm>,
+    p: Option<crate::WorkspaceTerm>,
+    o: Option<crate::WorkspaceTerm>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+    let (Some(s), Some(p), Some(o)) = (s, p, o) else {
+        return Ok(None);
+    };
+    if !matches!(&*s, TermValue::Iri(_) | TermValue::Blank { .. })
+        || !matches!(&*p, TermValue::Iri(_))
+    {
+        return Ok(None);
+    }
+    crate::WorkspaceTerm::triple(s, p, o, workspace).map(Some)
+}
+
 /// Extract a component of a triple term (`SUBJECT`/`PREDICATE`/`OBJECT`).
 fn triple_part<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-    pick: impl Fn(TermValue, TermValue, TermValue) -> TermValue,
+    pick: impl for<'a> Fn(&'a TermValue, &'a TermValue, &'a TermValue) -> &'a TermValue,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match arg(vals, 0) {
         Some(TermValue::Triple { s, p, o }) => {
-            let part = pick((**s).clone(), (**p).clone(), (**o).clone());
-            Ok(intern(ctx, part)?)
+            let part = ctx.growth.clone_term(pick(s, p, o))?;
+            ctx.intern_workspace_term(part)
         }
         _ => Ok(None),
-    }
-}
-
-/// The value of an XSD integer argument (`xsd:integer` or a type derived from it).
-fn xsd_integer_of(v: &TermValue) -> Option<i128> {
-    match xsd_of(v)? {
-        XsdValue::Integer { value, .. } => Some(value),
-        _ => None,
     }
 }
 
@@ -6200,16 +6692,94 @@ pub(crate) fn xsd_to_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     v: &XsdValue,
 ) -> Result<SolutionTerm<D::Id>, EvalError> {
-    typed_term(ctx, &v.canonical_lexical(), v.datatype().iri())
+    let value = xsd_workspace_value(v, &ctx.growth)?;
+    ctx.intern_workspace_term(value)?
+        .ok_or(EvalError::WorkspaceBoundOverflow)
 }
 
-/// [`xsd_to_term`]'s value-only half: the canonical typed-literal [`TermValue`] for a
-/// computed [`XsdValue`], with no interning. Shared with `crate::modifier`'s built-in
-/// aggregate accumulators, whose [`crate::agg_fn::AggregateAccumulator::finish`] produces
-/// a plain `TermValue` (interned once, by the caller, exactly as a custom aggregate's own
-/// `finish` is) rather than an [`EvalCtx`]-bound [`SolutionTerm`].
-pub(crate) fn xsd_literal_value(v: &XsdValue) -> TermValue {
-    typed(&v.canonical_lexical(), v.datatype().iri())
+/// One canonical producer for expressions and aggregate results. Borrowed native
+/// inputs and render groups remain owned until the final literal is admitted.
+pub(crate) fn xsd_workspace_value(
+    value: &XsdValue,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::WorkspaceTerm, EvalError> {
+    let mut frame = crate::native_numeric::NumericFrame::new(workspace);
+    let prepared =
+        purrdf_xsd::numeric::prepare_numeric_text(value, &mut |layout| frame.admit(layout));
+    match frame.finish_text(prepared)? {
+        Some(text) => numeric_text_value(text, value.datatype().iri(), workspace),
+        None => {
+            let text = purrdf_xsd::value::canonical_non_numeric(value)
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            workspace.literal(text, value.datatype().iri())
+        }
+    }
+}
+
+fn borrowed_xsd_text_to_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    text: &impl core::fmt::Display,
+    datatype: &str,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let value = ctx.growth.literal(text, datatype)?;
+    ctx.intern_workspace_term(value)
+}
+
+/// Final lexical output consumes its original producer grant on interning.
+fn numeric_text_to_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    text: crate::native_numeric::NumericText,
+    datatype: &str,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let value = numeric_text_value(text, datatype, &ctx.growth)?;
+    ctx.intern_workspace_term(value)
+}
+
+/// The exact writer owns its admitted groups; destination sizing precedes
+/// allocation, and the returned immutable literal keeps its final payload grant.
+fn numeric_text_value(
+    text: crate::native_numeric::NumericText,
+    datatype: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<crate::WorkspaceTerm, EvalError> {
+    std::alloc::Layout::array::<u8>(text.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+    std::alloc::Layout::array::<u8>(datatype.len())
+        .map_err(|_| EvalError::WorkspaceBoundOverflow)?;
+    let bytes = text
+        .len()
+        .checked_add(datatype.len())
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    let admission =
+        workspace.charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    let mut lexical = String::new();
+    lexical
+        .try_reserve_exact(text.len())
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "numeric lexical destination",
+        })?;
+    text.write_to(&mut lexical)?;
+    drop(text);
+    let value = TermValue::Literal {
+        lexical_form: lexical,
+        datatype: crate::workspace::string(datatype, "numeric literal datatype")?,
+        language: None,
+        direction: None,
+    };
+    Ok(crate::WorkspaceTerm::new(value, admission))
+}
+
+fn xpath_value_to_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: &XsdValue,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    let capability = ctx.growth.clone();
+    let mut frame = crate::native_numeric::NumericFrame::new(&capability);
+    let prepared =
+        purrdf_xsd::numeric::prepare_xpath_text(value, &mut |layout| frame.admit(layout));
+    let Some(text) = frame.finish_text(prepared)? else {
+        return Ok(None);
+    };
+    numeric_text_to_term(ctx, text, XSD_STRING)
 }
 
 /// SPARQL's three-valued `||` over two effective boolean values (`None` is an
@@ -6251,9 +6821,6 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
     let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta)?, xsd_of_term(ctx, tb)?) else {
         return Ok(None);
     };
-    // An operation on the arbitrary-precision tower — a big operand, or any division
-    // under a non-default policy — is charged by operand size before it runs
-    // (machine-word operands cost nothing here).
     let cost_op = match op {
         ArithmeticOperator::Add | ArithmeticOperator::Subtract => CostOp::Add,
         ArithmeticOperator::Multiply => CostOp::Mul,
@@ -6262,23 +6829,22 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
     if !numeric_step_admitted(ctx, numeric_cost(&xa, &xb, cost_op)) {
         return Ok(None);
     }
-    let result = match op {
-        ArithmeticOperator::Add => value_add(&xa, &xb),
-        ArithmeticOperator::Subtract => value_sub(&xa, &xb),
-        ArithmeticOperator::Multiply => value_mul(&xa, &xb),
-        ArithmeticOperator::Divide => value_div_with_policy(&xa, &xb, ctx.division),
+    let operation = match op {
+        ArithmeticOperator::Add => purrdf_xsd::numeric::NumericBinaryOperator::Add,
+        ArithmeticOperator::Subtract => purrdf_xsd::numeric::NumericBinaryOperator::Subtract,
+        ArithmeticOperator::Multiply => purrdf_xsd::numeric::NumericBinaryOperator::Multiply,
+        ArithmeticOperator::Divide => purrdf_xsd::numeric::NumericBinaryOperator::Divide,
     };
-    match result {
-        // The result's rendering is charged too: a product of short coefficients
-        // has the sum of their scales, and its text is that long.
+    let capability = ctx.growth.clone();
+    let mut frame = crate::native_numeric::NumericFrame::new(&capability);
+    let computed =
+        purrdf_xsd::ops::value_binary_admitted(&xa, &xb, operation, ctx.division, &mut |layout| {
+            frame.admit(layout)
+        });
+    match frame.finish_value(computed)? {
         Ok(result) => governed_xsd_to_term(ctx, &result),
-        // Every failure is a SPARQL expression error (§17.2): the value is unbound.
-        // That includes a quotient the caller's division policy cannot express (a
-        // non-terminating quotient under `exact`, err:FOAR0002), so `COALESCE` and
-        // `BIND` handle it like division by zero; the F&O code goes to the governed
-        // outcome's evidence either way.
-        Err(error) => {
-            ctx.record_expression_error(error.code());
+        Err(code) => {
+            ctx.record_expression_error(code);
             Ok(None)
         }
     }
@@ -6333,24 +6899,15 @@ pub(crate) fn governed_xsd_to_term<D: DatasetView + Sync>(
 pub(crate) fn unary_numeric_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     operand: Option<SolutionTerm<D::Id>>,
-    op: impl Fn(&XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
+    op: purrdf_xsd::numeric::NumericUnaryOperator,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let Some(operand) = operand else {
         return Ok(None);
     };
-    let Some(xa) = xsd_of_term(ctx, operand)? else {
+    let Some(value) = xsd_of_term(ctx, operand)? else {
         return Ok(None);
     };
-    if !numeric_step_admitted(ctx, numeric_unary_cost(&xa)) {
-        return Ok(None);
-    }
-    match op(&xa) {
-        Ok(result) => governed_xsd_to_term(ctx, &result),
-        Err(error) => {
-            ctx.record_expression_error(error.code());
-            Ok(None)
-        }
-    }
+    apply_unary_numeric(ctx, &value, op)
 }
 
 /// Apply a unary numeric function from the `vals` pre-evaluated argument list.
@@ -6358,18 +6915,42 @@ pub(crate) fn unary_numeric_term<D: DatasetView + Sync>(
 fn unary_numeric_fn<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
-    op: impl Fn(&XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
+    op: purrdf_xsd::numeric::NumericUnaryOperator,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some(xa) = arg(vals, 0).and_then(xsd_of) else {
+    let Some(TermValue::Literal {
+        lexical_form,
+        datatype,
+        ..
+    }) = arg(vals, 0)
+    else {
         return Ok(None);
     };
-    if !numeric_step_admitted(ctx, numeric_unary_cost(&xa)) {
+    let Some(value) = parse_owned_xsd(lexical_form, datatype, &ctx.growth)? else {
+        return Ok(None);
+    };
+    apply_unary_numeric(ctx, &value, op)
+}
+
+fn apply_unary_numeric<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    value: &crate::parsed_value::ParsedValue,
+    op: purrdf_xsd::numeric::NumericUnaryOperator,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    if !numeric_step_admitted(ctx, numeric_unary_cost(value)) {
         return Ok(None);
     }
-    match op(&xa) {
-        Ok(result) => governed_xsd_to_term(ctx, &result),
-        Err(error) => {
-            ctx.record_expression_error(error.code());
+    // Identity keeps the same immutable parsed allocation, including its subtype.
+    if op == purrdf_xsd::numeric::NumericUnaryOperator::Plus && value.is_numeric() {
+        return governed_xsd_to_term(ctx, value);
+    }
+    let capability = ctx.growth.clone();
+    let mut frame = crate::native_numeric::NumericFrame::new(&capability);
+    let computed =
+        purrdf_xsd::numeric::numeric_unary_admitted(value, op, &mut |layout| frame.admit(layout));
+    match frame.finish_value(computed)? {
+        Ok(value) => governed_xsd_to_term(ctx, &value),
+        Err(code) => {
+            ctx.record_expression_error(code);
             Ok(None)
         }
     }
@@ -6393,13 +6974,11 @@ const fn next_u64<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> u64 {
 fn mint_bnode<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some(label) = ctx.try_mint_blank_label("bnode")? else {
+    let Some(label) = ctx.try_mint_blank_text("bnode")? else {
         return Ok(None);
     };
-    ctx.scratch
-        .try_intern_blank(ctx.dataset, label, BlankScope::DEFAULT)
-        .map(Some)
-        .map_err(EvalError::source_read)
+    let value = ctx.growth.blank(label.as_str(), BlankScope::DEFAULT)?;
+    ctx.intern_workspace_term(value)
 }
 
 /// Resolve `reference` for the `IRI()`/`URI()` built-in (SPARQL 1.1 §17.4.2.6):
@@ -6408,52 +6987,101 @@ fn mint_bnode<D: DatasetView + Sync>(
 /// IRI). Returns `None` when `reference` is relative and there is no base (or
 /// either string fails to parse as an IRI/IRI-reference) — a SPARQL expression
 /// error, matching every other malformed-argument built-in in this module.
-fn resolve_against_base(base: Option<&str>, reference: &str) -> Option<String> {
-    if purrdf_iri::parse(reference).is_ok_and(|iri| iri.has_scheme()) {
-        return Some(reference.to_owned());
-    }
-    let base = base?;
-    let base_iri = purrdf_iri::parse(base).ok()?;
-    Some(base_iri.resolve(reference).ok()?.as_str().to_owned())
-}
-
-/// Format a timezone offset in minutes as an `xsd:dayTimeDuration` string,
-/// e.g. `+60` → `"PT1H"`, `0` → `"PT0S"`, `-330` → `"-PT5H30M"`.
-fn format_daytime_duration(offset_minutes: i64) -> String {
-    use core::fmt::Write as _;
-
-    if offset_minutes == 0 {
-        return "PT0S".to_owned();
-    }
-    let neg = offset_minutes < 0;
-    let abs_min = offset_minutes.unsigned_abs();
-    let hours = abs_min / 60;
-    let mins = abs_min % 60;
-    let mut s = if neg {
-        "-PT".to_owned()
-    } else {
-        "PT".to_owned()
+fn resolve_against_base(
+    base: Option<&str>,
+    reference: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+    use purrdf_iri::IriReadError;
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    let parsed = purrdf_iri::parse_with_memory(reference, &mut memory);
+    let resolved = match parsed {
+        Ok(iri) if iri.has_scheme() => Some(iri),
+        Ok(iri) => {
+            memory.release_string(iri.into_text()).map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "IRI reference release")
+            })?;
+            None
+        }
+        Err(IriReadError::Lexical(error)) => {
+            let bytes = memory.admitted_bytes();
+            drop(error);
+            memory.release_bytes(bytes).map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "IRI recognition release")
+            })?;
+            None
+        }
+        Err(IriReadError::Storage(error)) => {
+            return Err(frame.storage_error(error, "IRI reference"));
+        }
     };
-    // Writing to a `String` is infallible, so the `write!` results are ignored.
-    if hours > 0 {
-        let _ = write!(s, "{hours}H");
-    }
-    if mins > 0 {
-        let _ = write!(s, "{mins}M");
-    }
-    s
+    let resolved = if let Some(iri) = resolved {
+        iri
+    } else {
+        let Some(base) = base else {
+            return Ok(None);
+        };
+        let base = match purrdf_iri::parse_with_memory(base, &mut memory) {
+            Ok(base) => base,
+            Err(IriReadError::Lexical(_)) => return Ok(None),
+            Err(IriReadError::Storage(error)) => return Err(frame.storage_error(error, "IRI base")),
+        };
+        let result = base.resolve_with_memory(reference, &mut memory);
+        memory.release_string(base.into_text()).map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "IRI base release")
+        })?;
+        match result {
+            Ok(result) => result,
+            Err(IriReadError::Lexical(_)) => return Ok(None),
+            Err(IriReadError::Storage(error)) => {
+                return Err(frame.storage_error(error, "IRI resolution"));
+            }
+        }
+    };
+    let mut value = Some(TermValue::Iri(resolved.into_text()));
+    Ok(Some(frame.finish_term(|| {
+        value.take().expect("IRI producer owns its value")
+    })?))
 }
 
-/// Format a timezone offset (minutes) as the SPARQL TZ() string:
-/// `Some(0)` → `"Z"`, `Some(n)` → `"+HH:MM"` / `"-HH:MM"`, `None` → `""`.
-fn format_tz_string(offset_minutes: Option<i64>) -> String {
-    match offset_minutes {
-        None => String::new(),
-        Some(0) => "Z".to_owned(),
-        Some(off) => {
-            let sign = if off < 0 { '-' } else { '+' };
-            let abs_min = off.unsigned_abs();
-            format!("{sign}{:02}:{:02}", abs_min / 60, abs_min % 60)
+enum TimezoneText {
+    Duration(i64),
+    Zone(Option<i64>),
+}
+impl core::fmt::Display for TimezoneText {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match *self {
+            Self::Duration(0) => formatter.write_str("PT0S"),
+            Self::Duration(offset) => {
+                if offset < 0 {
+                    formatter.write_str("-")?;
+                }
+                formatter.write_str("PT")?;
+                let minutes = offset.unsigned_abs();
+                if minutes / 60 != 0 {
+                    write!(formatter, "{}H", minutes / 60)?;
+                }
+                if minutes % 60 != 0 {
+                    write!(formatter, "{}M", minutes % 60)?;
+                }
+                Ok(())
+            }
+            Self::Zone(None) => Ok(()),
+            Self::Zone(Some(0)) => formatter.write_str("Z"),
+            Self::Zone(Some(offset)) => write!(
+                formatter,
+                "{}{:02}:{:02}",
+                if offset < 0 { '-' } else { '+' },
+                offset.unsigned_abs() / 60,
+                offset.unsigned_abs() % 60
+            ),
         }
     }
 }
@@ -6517,9 +7145,22 @@ fn adjust_timezone_arg(v: &XsdValue) -> Option<AdjustTimezone> {
     }
 }
 
+struct UuidText([u8; 36]);
+impl core::ops::Deref for UuidText {
+    type Target = str;
+    fn deref(&self) -> &str {
+        core::str::from_utf8(&self.0).expect("UUID hexadecimal is ASCII")
+    }
+}
+impl core::fmt::Display for UuidText {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self)
+    }
+}
+
 /// Mint a version-4 UUID from the PRNG state and return it as a
 /// lowercase-hyphenated `8-4-4-4-12` string (without any `urn:uuid:` prefix).
-fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 16]) {
+fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (UuidText, [u8; 16]) {
     let hi = next_u64(ctx);
     let lo = next_u64(ctx);
     let mut bytes = [0u8; 16];
@@ -6534,15 +7175,29 @@ fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 1
     // per byte, so byte *b* occupies characters `2b..2b+2` and every group
     // boundary is a character index: 8, 12, 16, 20. Every character is ASCII, so
     // the byte slices are also character slices.
-    let hex = purrdf_hash::hex::encode(&bytes);
-    let uuid = format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
+    let mut hex = [0_u8; 32];
+    let hex = purrdf_hash::hex::encode_to_slice(&bytes, &mut hex)
+        .expect("UUID's exact hexadecimal destination");
+    let mut output = [0_u8; 36];
+    let mut offset = 0;
+    for (ordinal, part) in [
+        &hex[..8],
         &hex[8..12],
         &hex[12..16],
         &hex[16..20],
-        &hex[20..32],
-    );
+        &hex[20..],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if ordinal != 0 {
+            output[offset] = b'-';
+            offset += 1;
+        }
+        output[offset..offset + part.len()].copy_from_slice(part.as_bytes());
+        offset += part.len();
+    }
+    let uuid = UuidText(output);
     (uuid, bytes)
 }
 
@@ -7096,7 +7751,7 @@ mod tests {
     }
 
     #[test]
-    fn regex_cache_reuses_compiled_pattern_and_failures() {
+    fn regex_cache_reuses_success_and_never_caches_request_failure() {
         let ds = empty_ds();
         let schema = VarSchema::default();
         let mut ctx = EvalCtx::new(&ds);
@@ -7108,13 +7763,7 @@ mod tests {
             Function::Regex,
             vec![lit("Hello"), lit("^h"), lit("z")].into(),
         );
-        // Total `(pattern, flags)` entries across the pattern-keyed two-level map.
-        let entries = |ctx: &EvalCtx<'_, Arc<RdfDataset>>| {
-            ctx.regex_cache
-                .values()
-                .map(crate::DetHashMap::len)
-                .sum::<usize>()
-        };
+        let entries = |ctx: &EvalCtx<'_, Arc<RdfDataset>>| ctx.xpath_regex_cache.stats().entries;
 
         assert_eq!(
             eval_ebv(&re, &[], &schema, &mut ctx).expect("first regex"),
@@ -7134,7 +7783,7 @@ mod tests {
             eval_ebv(&bad, &[], &schema, &mut ctx).expect("invalid regex cached"),
             None
         );
-        assert_eq!(entries(&ctx), 2);
+        assert_eq!(entries(&ctx), 1);
     }
 
     /// A `q`-flagged pattern compiles and is cached like any other, where it
@@ -10482,13 +11131,13 @@ mod tests {
     /// forms (`expr` and `term`) exactly as `outer_bindings_for_substitution`
     /// would build it for an IRI-valued row cell.
     fn row_binding_iri(var: &str, local: &str) -> SubstitutionRow {
-        SubstitutionRow {
-            expr: vec![(Variable::new(var), Expression::NamedNode(ex_iri(local)))],
-            term: vec![(
+        SubstitutionRow::resident(
+            vec![(Variable::new(var), Expression::NamedNode(ex_iri(local)))],
+            vec![(
                 Variable::new(var),
                 purrdf_sparql_algebra::GroundTerm::NamedNode(ex_iri(local)),
             )],
-        }
+        )
     }
 
     #[test]
@@ -10703,13 +11352,13 @@ mod tests {
             object_args: vec![ex_vp("parts")],
         });
         let literal = Literal::new_typed("hello world", NamedNode::new_unchecked(XSD_STRING));
-        let row = SubstitutionRow {
-            expr: vec![(Variable::new("w"), Expression::Literal(literal.clone()))],
-            term: vec![(
+        let row = SubstitutionRow::resident(
+            vec![(Variable::new("w"), Expression::Literal(literal.clone()))],
+            vec![(
                 Variable::new("w"),
                 purrdf_sparql_algebra::GroundTerm::Literal(literal.clone()),
             )],
-        };
+        );
 
         let substituted =
             *substitute_pattern(&call, &row).expect("the test stack is not exhausted");
@@ -10745,10 +11394,7 @@ mod tests {
         let blank = purrdf_sparql_algebra::GroundTerm::BlankNode(
             purrdf_sparql_algebra::BlankNode::new("b0"),
         );
-        let row = SubstitutionRow {
-            expr: Vec::new(),
-            term: vec![(Variable::new("w"), blank.clone())],
-        };
+        let row = SubstitutionRow::resident(Vec::new(), vec![(Variable::new("w"), blank.clone())]);
 
         let substituted =
             *substitute_pattern(&call, &row).expect("the test stack is not exhausted");
@@ -12068,7 +12714,7 @@ mod tests {
 /// small stack.
 #[cfg(test)]
 mod walk_tests {
-    use std::sync::Arc;
+    use crate::workspace::SharedWorkspace;
 
     use purrdf_core::{BlankScope, RdfTextDirection, TermBox, TermValue};
     use purrdf_sparql_algebra::{
@@ -12082,6 +12728,12 @@ mod walk_tests {
         pattern_vars_outside,
     };
     use crate::DetHashSet;
+
+    #[derive(Default)]
+    struct ReferenceFreeVars {
+        direct: DetHashSet<Variable>,
+        sites: Vec<SharedWorkspace<crate::deferred_exists::ExistsSite>>,
+    }
 
     const EX: &str = "http://example.org/";
     const DEPTH: usize = 100_000;
@@ -12346,10 +12998,10 @@ mod walk_tests {
     }
 
     impl Deferral<'_> {
-        fn reference_expr_vars(&self, expr: &Expression, out: &mut FreeVars) {
+        fn reference_expr_vars(&self, expr: &Expression, out: &mut ReferenceFreeVars) {
             match expr {
                 Expression::Exists(body) => match self.deferred_site(body) {
-                    Some((site, _)) => out.sites.push(Arc::clone(site)),
+                    Some((site, _)) => out.sites.push(site.clone()),
                     None => reference_expr_vars(expr, &mut out.direct),
                 },
                 Expression::Variable(_)
@@ -12373,9 +13025,9 @@ mod walk_tests {
             }
         }
 
-        fn reference_expr_vars_of_body(&self, body: &GraphPattern, out: &mut FreeVars) {
+        fn reference_expr_vars_of_body(&self, body: &GraphPattern, out: &mut ReferenceFreeVars) {
             match self.deferred_site(body) {
-                Some((site, _)) => out.sites.push(Arc::clone(site)),
+                Some((site, _)) => out.sites.push(site.clone()),
                 None => reference_pattern_vars_outside(body, None, &mut out.direct),
             }
         }
@@ -12691,8 +13343,8 @@ mod walk_tests {
         }
     }
 
-    fn sorted(vars: &DetHashSet<Variable>) -> Vec<String> {
-        let mut names: Vec<String> = vars.iter().map(|v| v.as_str().to_owned()).collect();
+    fn sorted<'a>(vars: impl IntoIterator<Item = &'a Variable>) -> Vec<String> {
+        let mut names: Vec<String> = vars.into_iter().map(|v| v.as_str().to_owned()).collect();
         names.sort();
         names
     }
@@ -12728,26 +13380,38 @@ mod walk_tests {
                 let mut expected = DetHashSet::default();
                 reference_pattern_vars_outside(&shape, exclude, &mut expected);
                 let expected_count = crate::op_count::read().var_walked;
-                assert_eq!(sorted(&ours), sorted(&expected), "seed {seed}: {shape:?}");
+                assert_eq!(
+                    sorted(ours.iter()),
+                    sorted(expected.iter()),
+                    "seed {seed}: {shape:?}"
+                );
                 assert_eq!(our_count, expected_count, "seed {seed}: nodes walked");
             }
             let mut all = DetHashSet::default();
             pattern_all_vars(&shape, &mut all);
             let mut outside = DetHashSet::default();
             pattern_vars_outside(&shape, Some(&endpoint), &mut outside);
-            excluded_something += usize::from(sorted(&all) != sorted(&outside));
+            excluded_something += usize::from(sorted(all.iter()) != sorted(outside.iter()));
 
             let mut ours = DetHashSet::default();
             expr_vars(&expr, &mut ours);
             let mut expected = DetHashSet::default();
             reference_expr_vars(&expr, &mut expected);
-            assert_eq!(sorted(&ours), sorted(&expected), "seed {seed}: {expr:?}");
+            assert_eq!(
+                sorted(ours.iter()),
+                sorted(expected.iter()),
+                "seed {seed}: {expr:?}"
+            );
 
             let mut ours = DetHashSet::default();
             term.collect_variables(&mut ours);
             let mut expected = DetHashSet::default();
             reference_term_pattern_vars(&term, &mut expected);
-            assert_eq!(sorted(&ours), sorted(&expected), "seed {seed}: {term:?}");
+            assert_eq!(
+                sorted(ours.iter()),
+                sorted(expected.iter()),
+                "seed {seed}: {term:?}"
+            );
         }
         assert!(
             excluded_something > 20,
@@ -12797,9 +13461,9 @@ mod walk_tests {
                 let mut term_vars = DetHashSet::default();
                 term.collect_variables(&mut term_vars);
                 (
-                    sorted(&pattern_vars),
-                    sorted(&expr_vars_found),
-                    sorted(&term_vars),
+                    sorted(pattern_vars.iter()),
+                    sorted(expr_vars_found.iter()),
+                    sorted(term_vars.iter()),
                 )
             })
             .expect("spawn");
@@ -12885,22 +13549,35 @@ mod walk_tests {
         bodies
     }
 
-    fn site_for(body: &GraphPattern) -> Arc<crate::deferred_exists::ExistsSite> {
-        let mut vars = DetHashSet::default();
-        pattern_all_vars(body, &mut vars);
-        Arc::new(crate::deferred_exists::ExistsSite {
-            prepared: Arc::new(crate::eval::PreparedExists::build(body)),
-            vars,
-            parallel_unsafe: false,
-            service_uses: Vec::new(),
-            plan_map: Arc::default(),
-        })
+    fn site_for(body: &GraphPattern) -> SharedWorkspace<crate::deferred_exists::ExistsSite> {
+        let workspace = crate::WorkspaceCapability::resident();
+        let vars =
+            super::pattern_all_vars_admitted(body, &workspace).expect("resident variable owner");
+        SharedWorkspace::new_admitted(
+            crate::deferred_exists::ExistsSite {
+                prepared: SharedWorkspace::new_admitted(
+                    crate::eval::PreparedExists::build(body),
+                    &workspace,
+                )
+                .expect("resident prepared site"),
+                vars,
+                parallel_unsafe: false,
+                service_uses: crate::AdmittedVec::new(&workspace),
+                plan_map: SharedWorkspace::new_admitted(
+                    super::SubstitutionSourceMap::default(),
+                    &workspace,
+                )
+                .expect("resident source-map control"),
+            },
+            &workspace,
+        )
+        .expect("resident site control")
     }
 
-    fn site_ids(free: &FreeVars) -> Vec<usize> {
-        free.sites
+    fn site_ids(sites: &[SharedWorkspace<crate::deferred_exists::ExistsSite>]) -> Vec<usize> {
+        sites
             .iter()
-            .map(|site| Arc::as_ptr(site) as usize)
+            .map(|site| std::ptr::from_ref(site.as_ref()) as usize)
             .collect()
     }
 
@@ -12915,14 +13592,24 @@ mod walk_tests {
             let expr = expression(&mut choices);
 
             let eager = Deferral::eager();
-            let mut ours = FreeVars::default();
-            eager.expr_vars(&expr, &mut ours);
-            let mut expected = FreeVars::default();
+            let mut ours = FreeVars::new(&crate::WorkspaceCapability::resident());
+            {
+                let mut frame =
+                    crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+                eager
+                    .expr_vars(
+                        &expr,
+                        &mut ours,
+                        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+                    )
+                    .expect("resident native deferral reader");
+            };
+            let mut expected = ReferenceFreeVars::default();
             eager.reference_expr_vars(&expr, &mut expected);
             assert!(ours.sites.is_empty() && expected.sites.is_empty());
             assert_eq!(
-                sorted(&ours.direct),
-                sorted(&expected.direct),
+                sorted(ours.direct.iter().map(|(variable, ())| variable)),
+                sorted(expected.direct.iter()),
                 "seed {seed}: {expr:?}"
             );
 
@@ -12931,18 +13618,28 @@ mod walk_tests {
                 sites.insert(std::ptr::from_ref(body) as usize, site_for(body));
             }
             let deferring = Deferral::new(None, &sites);
-            let mut ours = FreeVars::default();
-            deferring.expr_vars(&expr, &mut ours);
-            let mut expected = FreeVars::default();
+            let mut ours = FreeVars::new(&crate::WorkspaceCapability::resident());
+            {
+                let mut frame =
+                    crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+                deferring
+                    .expr_vars(
+                        &expr,
+                        &mut ours,
+                        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+                    )
+                    .expect("resident native deferral reader");
+            };
+            let mut expected = ReferenceFreeVars::default();
             deferring.reference_expr_vars(&expr, &mut expected);
             assert_eq!(
-                site_ids(&ours),
-                site_ids(&expected),
+                site_ids(&ours.sites),
+                site_ids(&expected.sites),
                 "seed {seed}: {expr:?}"
             );
             assert_eq!(
-                sorted(&ours.direct),
-                sorted(&expected.direct),
+                sorted(ours.direct.iter().map(|(variable, ())| variable)),
+                sorted(expected.direct.iter()),
                 "seed {seed}: {expr:?}"
             );
             deferred_bodies += ours.sites.len();
@@ -12974,14 +13671,41 @@ mod walk_tests {
             sites.insert(std::ptr::from_ref(bodies[0]) as usize, site_for(bodies[0]));
 
             let deferring = Deferral::new(None, &sites);
-            let mut deferred = FreeVars::default();
-            deferring.expr_vars(&expr, &mut deferred);
+            let mut deferred = FreeVars::new(&crate::WorkspaceCapability::resident());
+            {
+                let mut frame =
+                    crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+                deferring
+                    .expr_vars(
+                        &expr,
+                        &mut deferred,
+                        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+                    )
+                    .expect("resident native deferral reader");
+            };
             let eager = Deferral::eager();
-            let mut direct = FreeVars::default();
-            eager.expr_vars(&expr, &mut direct);
+            let mut direct = FreeVars::new(&crate::WorkspaceCapability::resident());
+            {
+                let mut frame =
+                    crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+                eager
+                    .expr_vars(
+                        &expr,
+                        &mut direct,
+                        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+                    )
+                    .expect("resident native deferral reader");
+            };
             (
-                (deferred.sites.len(), sorted(&deferred.direct)),
-                (direct.sites.len(), sorted(&direct.direct), sorted(&vars)),
+                (
+                    deferred.sites.len(),
+                    sorted(deferred.direct.iter().map(|(variable, ())| variable)),
+                ),
+                (
+                    direct.sites.len(),
+                    sorted(direct.direct.iter().map(|(variable, ())| variable)),
+                    sorted(vars.iter()),
+                ),
             )
         })
         .expect("spawn");
@@ -13223,5 +13947,333 @@ mod rdf_equal_tests {
             drop(a);
         })
         .expect("spawn");
+    }
+}
+
+fn ground_term_from_term_value_with_memory(
+    value: &TermValue,
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Option<purrdf_sparql_algebra::GroundTerm>, EvalError> {
+    use purrdf_sparql_algebra::{GroundTerm, GroundTriple, Literal, NamedNode};
+    enum Step<'a> {
+        Convert(&'a TermValue),
+        Assemble(&'a str),
+    }
+    let workspace = memory.admission_mut().workspace().clone();
+    let mut pending = crate::AdmittedVec::new(&workspace);
+    let mut built = crate::AdmittedVec::new(&workspace);
+    let baseline = memory.admitted_bytes();
+    pending.push(Step::Convert(value))?;
+    while let Some(step) = pending.pop() {
+        let term = match step {
+            Step::Convert(TermValue::Iri(iri)) => GroundTerm::NamedNode(NamedNode::from_admitted(
+                workspace.authored_text(&iri.as_str())?,
+            )),
+            Step::Convert(TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            }) => {
+                // Preserve stored-data spelling; this is not SHACL lexical validation.
+                let lexical = workspace.authored_text(&lexical_form.as_str())?;
+                let (datatype, language, direction) = match language {
+                    Some(language) => (
+                        purrdf_iri::vocab::language_datatype_iri(direction.is_some()),
+                        Some(workspace.authored_text(&language.as_str())?),
+                        *direction,
+                    ),
+                    None => (datatype.as_str(), None, None),
+                };
+                let datatype = NamedNode::from_admitted(workspace.authored_text(&datatype)?);
+                GroundTerm::Literal(Literal::from_admitted(
+                    lexical, datatype, language, direction,
+                ))
+            }
+            Step::Convert(TermValue::Blank { label, scope }) => GroundTerm::BlankNode(
+                crate::substitute::blank_admitted(label, *scope, &workspace)
+                    .map_err(crate::substitute::GroundFailure::into_eval_error)?,
+            ),
+            Step::Convert(TermValue::Triple { s, p, o }) => {
+                // Preserve the total skip law for malformed foreign quoted data.
+                let TermValue::Iri(predicate) = p.as_ref() else {
+                    drop(built);
+                    drop(pending);
+                    let released = memory
+                        .admitted_bytes()
+                        .checked_sub(baseline)
+                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                    memory
+                        .release_bytes(released)
+                        .map_err(|e| correlated_storage_error(memory, e))?;
+                    return Ok(None);
+                };
+                pending.push(Step::Assemble(predicate))?;
+                pending.push(Step::Convert(o))?;
+                pending.push(Step::Convert(s))?;
+                continue;
+            }
+            Step::Assemble(predicate) => {
+                let object = built.pop().expect("object is built before its parent");
+                let subject = built.pop().expect("subject is built before its parent");
+                let predicate = NamedNode::from_admitted(workspace.authored_text(&predicate)?);
+                GroundTerm::Triple(
+                    correlated_box(
+                        GroundTriple {
+                            subject,
+                            predicate,
+                            object,
+                        },
+                        memory,
+                    )?
+                    .into(),
+                )
+            }
+        };
+        built.push(term)?;
+    }
+    Ok(built.pop())
+}
+
+fn substitute_expression_list<const PRESERVE: bool>(
+    source: &[Expression],
+    row: &SubstitutionRow,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
+    defer: &mut Deferral<'_>,
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Vec<Expression>, EvalError> {
+    let mut copied = Vec::new();
+    memory
+        .reserve(&mut copied, source.len())
+        .map_err(|e| correlated_storage_error(memory, e))?;
+    for expression in source {
+        copied.push(substitute_expr::<PRESERVE>(
+            expression, row, map, defer, memory,
+        )?);
+    }
+    Ok(copied)
+}
+fn substitute_order_list<const PRESERVE: bool>(
+    source: &[purrdf_sparql_algebra::OrderExpression],
+    row: &SubstitutionRow,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
+    defer: &mut Deferral<'_>,
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Vec<purrdf_sparql_algebra::OrderExpression>, EvalError> {
+    let mut copied = Vec::new();
+    memory
+        .reserve(&mut copied, source.len())
+        .map_err(|e| correlated_storage_error(memory, e))?;
+    for order in source {
+        copied.push(crate::modifier::rebuild_order(
+            order,
+            substitute_expr::<PRESERVE>(order.expression(), row, map, defer, memory)?,
+        ));
+    }
+    Ok(copied)
+}
+fn substitute_aggregates<const PRESERVE: bool>(
+    source: &[(Variable, purrdf_sparql_algebra::AggregateExpression)],
+    row: &SubstitutionRow,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
+    defer: &mut Deferral<'_>,
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Vec<(Variable, purrdf_sparql_algebra::AggregateExpression)>, EvalError> {
+    let mut copied = Vec::new();
+    memory
+        .reserve(&mut copied, source.len())
+        .map_err(|e| correlated_storage_error(memory, e))?;
+    for (variable, aggregate) in source {
+        let args =
+            substitute_expression_list::<PRESERVE>(aggregate.args(), row, map, defer, memory)?;
+        let order =
+            substitute_order_list::<PRESERVE>(aggregate.order_by(), row, map, defer, memory)?;
+        // The sole native scalar-values clone preserves key order, spelling and
+        // literal identity; checked original arity/count cannot change here.
+        let aggregate = aggregate
+            .rebuild_with_memory(args, order, memory)
+            .map_err(|e| correlated_storage_error(memory, e))?;
+        copied.push((variable.clone(), aggregate));
+    }
+    Ok(copied)
+}
+
+fn join_selected_values(
+    node: Box<GraphPattern>,
+    term_row: &[(Variable, purrdf_sparql_algebra::GroundTerm)],
+    selected: impl Fn(&Variable) -> bool,
+    source: &GraphPattern,
+    map: &mut Option<&mut SubstitutionTracking<'_>>,
+    memory: &mut CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    let count = term_row.iter().filter(|(v, _)| selected(v)).count();
+    if count == 0 {
+        return Ok(node);
+    }
+    let mut variables = Vec::new();
+    let mut values = Vec::new();
+    memory
+        .reserve(&mut variables, count)
+        .map_err(|e| correlated_storage_error(memory, e))?;
+    memory
+        .reserve(&mut values, count)
+        .map_err(|e| correlated_storage_error(memory, e))?;
+    for (variable, value) in term_row.iter().filter(|(v, _)| selected(v)) {
+        variables.push(variable.clone());
+        values.push(Some(
+            value
+                .clone_with_memory(memory)
+                .map_err(|e| correlated_storage_error(memory, e))?,
+        ));
+    }
+    let mut bindings = Vec::new();
+    memory
+        .push(&mut bindings, values)
+        .map_err(|e| correlated_storage_error(memory, e))?;
+    demote_to_scaffolding(map, std::ptr::from_ref(node.as_ref()) as usize);
+    let values = boxed_and_mapped_scaffolding(
+        GraphPattern::Values {
+            variables,
+            bindings,
+        },
+        source,
+        map,
+        memory,
+    )?;
+    boxed_and_mapped(
+        GraphPattern::Join {
+            left: node.into(),
+            right: values.into(),
+        },
+        source,
+        map,
+        memory,
+    )
+}
+
+/// Immutable native site tree; ordinary clones retain its original body and grant.
+#[derive(Clone)]
+pub(crate) struct PreparedPattern(crate::workspace::SharedWorkspace<CorrelatedPattern>);
+impl std::ops::Deref for PreparedPattern {
+    type Target = GraphPattern;
+    fn deref(&self) -> &GraphPattern {
+        &self.0
+    }
+}
+impl AsRef<GraphPattern> for PreparedPattern {
+    fn as_ref(&self) -> &GraphPattern {
+        self
+    }
+}
+impl PreparedPattern {
+    pub(crate) fn new(
+        pattern: CorrelatedPattern,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        crate::workspace::SharedWorkspace::new_admitted(pattern, workspace).map(Self)
+    }
+}
+
+/// The original map stack, with immutable linked controls. Forks share the
+/// prefix without allocating a copied metadata array or changing lookup order.
+#[derive(Clone, Default)]
+pub(crate) struct CorrelatedMaps(Option<crate::workspace::SharedWorkspace<CorrelatedMapLayer>>);
+struct CorrelatedMapLayer {
+    map: crate::workspace::SharedWorkspace<SubstitutionSourceMap>,
+    parent: CorrelatedMaps,
+}
+impl CorrelatedMaps {
+    pub(crate) fn push(
+        &mut self,
+        map: crate::workspace::SharedWorkspace<SubstitutionSourceMap>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        let next = crate::workspace::SharedWorkspace::new_admitted(
+            CorrelatedMapLayer {
+                map,
+                parent: self.clone(),
+            },
+            workspace,
+        )?;
+        self.0 = Some(next);
+        Ok(())
+    }
+    pub(crate) fn pop(
+        &mut self,
+    ) -> Option<crate::workspace::SharedWorkspace<SubstitutionSourceMap>> {
+        let layer = self.0.take()?;
+        self.0.clone_from(&layer.parent.0);
+        Some(layer.map.clone())
+    }
+    pub(crate) fn last(&self) -> Option<&crate::workspace::SharedWorkspace<SubstitutionSourceMap>> {
+        self.0.as_ref().map(|layer| &layer.map)
+    }
+    pub(crate) fn iter(
+        &self,
+    ) -> impl Iterator<Item = &crate::workspace::SharedWorkspace<SubstitutionSourceMap>> {
+        std::iter::successors(self.0.as_deref(), |layer| layer.parent.0.as_deref())
+            .map(|layer| &layer.map)
+    }
+}
+
+impl crate::eval::PreparedExists {
+    pub(crate) fn build_admitted(
+        pattern: &GraphPattern,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        #[cfg(test)]
+        crate::eval::PREPARED_EXISTS_BUILD_COUNT.with(|count| count.set(count.get() + 1));
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let body = {
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+            match crate::enf::normalize_with_memory(pattern, &mut memory)? {
+                crate::enf::Enf::FoldedEmpty => return Ok(Self::FoldedFalse),
+                crate::enf::Enf::Pattern(pattern) => correlated_box(pattern, &mut memory)?,
+            }
+        };
+        let normalized = PreparedPattern::new(CorrelatedPattern { body, frame }, workspace)?;
+        let mut ledger_source =
+            crate::enf::ledger_source_map_admitted(pattern, &normalized, workspace)?;
+        #[cfg(test)]
+        crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(normalized.as_ref()));
+        let witness_inner = CorrelatedPattern::copy(&normalized, workspace)?;
+        let witness_map =
+            crate::enf::ledger_source_map_admitted(pattern, &witness_inner, workspace)?;
+        let root_source = ledger_source
+            .get(&(std::ptr::from_ref(normalized.as_ref()) as usize))
+            .map(|entry| entry.source);
+        for (&address, &entry) in witness_map.iter() {
+            ledger_source.insert_admitted(address, entry, workspace)?;
+        }
+        let witness_wrapped = PreparedPattern::new(witness_inner.first()?, workspace)?;
+        if let Some(source) = root_source {
+            ledger_source.insert_admitted(
+                std::ptr::from_ref(witness_wrapped.as_ref()) as usize,
+                SubstitutionSource {
+                    source,
+                    counts_rows: false,
+                },
+                workspace,
+            )?;
+        }
+        let mut analysis = crate::governor::soundness::NodeAnalysisTable::default();
+        let root = crate::governor::soundness::analyze_pattern_admitted(
+            &normalized,
+            &mut analysis,
+            workspace,
+        )?;
+        Ok(Self::Pattern {
+            normalized,
+            witness_wrapped,
+            free_vars: root.free_vars,
+            stateful: root.has_stateful_builtin,
+            analysis: crate::workspace::SharedWorkspace::new_admitted(analysis, workspace)?,
+            ledger_source: crate::workspace::SharedWorkspace::new_admitted(
+                ledger_source,
+                workspace,
+            )?,
+            witness_sites: std::sync::OnceLock::new(),
+            normalized_sites: std::sync::OnceLock::new(),
+        })
     }
 }

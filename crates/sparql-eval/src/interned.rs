@@ -40,8 +40,6 @@
 //! [`SparqlEngine`](purrdf_core::SparqlEngine) consumer keeps the owned egress; a
 //! caller that wants the interned one asks for it by name.
 
-use std::sync::Arc;
-
 use purrdf_core::{DatasetView, RdfDataset, TermValue};
 use purrdf_sparql_algebra::Variable;
 
@@ -139,7 +137,7 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
 
     /// The solution rows, in solution order, as a bag (duplicates preserved).
     #[must_use]
-    pub fn rows(&self) -> &'a [Solution<D::Id>] {
+    pub fn rows(&self) -> &'a [crate::solution::RetainedRow<D::Id>] {
         &self.seq.rows
     }
 
@@ -204,8 +202,9 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
     /// every borrowed result, on every row of every SHACL focus node, for an empty
     /// dataset nobody reads. Asked or not, a query that invented no cells walks no
     /// rows here.
-    pub fn try_constructed_dataset(&self) -> Result<Arc<RdfDataset>, crate::EvalError> {
-        self.ctx.constructed_dataset_of(self.seq)
+    pub fn try_constructed_dataset(&self) -> Result<crate::RetainedGraph, crate::EvalError> {
+        let graph = self.ctx.constructed_dataset_of(self.seq)?;
+        InternedGraph::new(&graph, &self.ctx.growth).retain()
     }
 
     /// Materialize a cell of a resident result.
@@ -226,12 +225,73 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
             .map(|term| self.value_of(term))
     }
     /// The auxiliary graph of a resident result.
-    pub fn constructed_dataset(&self) -> Arc<RdfDataset>
+    pub fn constructed_dataset(&self) -> crate::RetainedGraph
     where
         D: DatasetView<ReadError = core::convert::Infallible>,
     {
         self.try_constructed_dataset()
             .expect("resident result terms were admitted by this view")
+    }
+}
+
+/// A graph borrowed inside the evaluator's read scope. Retaining it transfers
+/// its original execution account with the shared frozen dataset, so an Arc
+/// handle cannot escape while its admission is destroyed.
+///
+/// ```compile_fail
+/// /// use purrdf_core::RdfDataset;
+/// use purrdf_sparql_eval::InternedGraph;
+/// fn escape(graph: InternedGraph<'_>) -> Arc<RdfDataset> {
+///     Arc::clone(&graph)
+/// }
+/// ```
+///
+/// ```
+/// use purrdf_sparql_eval::{EvalError, InternedGraph, RetainedGraph};
+/// fn retain(graph: InternedGraph<'_>) -> Result<RetainedGraph, EvalError> {
+///     graph.retain()
+/// }
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct InternedGraph<'a> {
+    graph: &'a purrdf_core::DatasetHandle,
+    workspace: &'a crate::WorkspaceCapability,
+}
+
+impl<'a> InternedGraph<'a> {
+    pub(crate) const fn new(
+        graph: &'a purrdf_core::DatasetHandle,
+        workspace: &'a crate::WorkspaceCapability,
+    ) -> Self {
+        Self { graph, workspace }
+    }
+
+    /// Share the frozen dataset with its original physical admission owner.
+    /// This shallow clone allocates no graph or shared control.
+    #[must_use]
+    pub fn dataset_handle(self) -> purrdf_core::DatasetHandle {
+        self.graph.clone()
+    }
+
+    /// Retain the existing frozen graph and its original account without
+    /// copying the dataset. The new shared control is admitted before allocation.
+    ///
+    /// # Errors
+    /// Returns physical admission, overflow or native allocator refusal.
+    pub fn retain(self) -> Result<crate::RetainedGraph, crate::EvalError> {
+        let result = crate::RetainedSparqlResult::new(
+            purrdf_core::SparqlResult::Graph(self.graph.clone()),
+            self.workspace.clone(),
+            self.workspace,
+        )?;
+        Ok(crate::RetainedGraph::from_result(result))
+    }
+}
+
+impl std::ops::Deref for InternedGraph<'_> {
+    type Target = RdfDataset;
+    fn deref(&self) -> &Self::Target {
+        self.graph
     }
 }
 
@@ -247,8 +307,8 @@ pub enum InternedOutcome<'a, 'd, D: DatasetView + Sync> {
     /// nothing was materialized to produce it.
     Boolean(bool),
     /// A CONSTRUCT/DESCRIBE result. The frozen graph is already built and shared
-    /// by `Arc`; a visitor that keeps it clones the handle, not the data.
-    Graph(&'a Arc<RdfDataset>),
+    /// by its original owner; a visitor retaining it keeps the admission too.
+    Graph(InternedGraph<'a>),
 }
 
 /// The outcome of a governed interned execution.

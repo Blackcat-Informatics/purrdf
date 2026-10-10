@@ -757,9 +757,7 @@ fn an_incomplete_index_declared_from_a_function_body_refuses_the_verdict() {
                 GENERATION,
                 Arc::clone(&opens),
             )
-            .with_service_level(ServiceLevel::Incomplete {
-                reason: "shard-3 offline".to_owned(),
-            }),
+            .with_service_level(ServiceLevel::incomplete_static("shard-3 offline")),
         ),
     );
 

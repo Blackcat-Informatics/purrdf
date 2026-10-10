@@ -13,6 +13,8 @@
 //! Callers combine its ranked relation with lexical retrieval using the existing
 //! retrieval composition API and explicit caller-selected weights.
 
+use crate::query_workspace::{QueryString, admitted};
+use purrdf_sparql_eval::{AdmittedVec, WorkspaceCapability};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -124,34 +126,65 @@ struct Unit {
 
 /// Visit Han runs without joining across a different script or punctuation.
 fn runs(text: &str, mut sink: impl FnMut(&[Unit])) {
-    let mut run = Vec::new();
+    runs_owned(text, &WorkspaceCapability::default(), |run| {
+        sink(run);
+        Ok(())
+    })
+    .expect("resident Han run allocation");
+}
+
+fn runs_owned(
+    text: &str,
+    workspace: &WorkspaceCapability,
+    mut sink: impl FnMut(&[Unit]) -> Result<(), TextError>,
+) -> Result<(), TextError> {
+    let mut run = AdmittedVec::new(workspace);
     for (start, grapheme) in unicode::grapheme_bounds(text) {
         if unicode::is_emoji_grapheme(grapheme) {
-            sink(&run);
+            sink(&run)?;
             run.clear();
             continue;
         }
-        // An EGC may begin with Prepend characters before its Han base. Walk
-        // every scalar while retaining that EGC as the enclosing highlight.
         for (offset, scalar) in grapheme.char_indices() {
-            // Script=Han includes Mc reading marks U+16FF0/U+16FF1. Marks are
-            // transparent attachments, never character retrieval keys.
             if unicode::is_word_internal_control(scalar) || unicode::is_combining_mark(scalar) {
                 continue;
             }
             if unicode::segmentation_script(scalar) == Some(SegmentationScript::Han) {
-                run.push(Unit {
+                admitted(run.push(Unit {
                     scalar,
                     range: start + offset..start + offset + scalar.len_utf8(),
                     grapheme: start..start + grapheme.len(),
-                });
+                }))?;
             } else {
-                sink(&run);
+                sink(&run)?;
                 run.clear();
             }
         }
     }
-    sink(&run);
+    sink(&run)
+}
+
+pub(crate) fn query_terms_owned(
+    analyzer: &Analyzer,
+    input: &str,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<QueryString>, TextError> {
+    let analysis = analyzer.analysis_form_owned(input, workspace)?;
+    let mut out = AdmittedVec::new(workspace);
+    runs_owned(&analysis, workspace, |run| {
+        if run.len() == 1 {
+            admitted(out.push(QueryString::chars([run[0].scalar].into_iter(), workspace)?))?;
+        } else {
+            for pair in run.windows(2) {
+                admitted(out.push(QueryString::chars(
+                    [pair[0].scalar, pair[1].scalar].into_iter(),
+                    workspace,
+                )?))?;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(out)
 }
 
 fn projection(analysis: &Analysis, units: &[Unit]) -> Projection {
@@ -190,17 +223,10 @@ pub(crate) fn index_projections(analysis: &Analysis) -> Vec<Projection> {
 }
 
 pub(crate) fn query_terms(analyzer: &Analyzer, input: &str) -> Result<Vec<String>, TextError> {
-    let analysis = analyzer.projections(input)?;
-    let mut out = Vec::new();
-    runs(&analysis.normalized.text, |run| {
-        if run.len() == 1 {
-            out.push(run[0].scalar.to_string());
-        } else {
-            out.extend(
-                run.windows(2)
-                    .map(|pair| [pair[0].scalar, pair[1].scalar].into_iter().collect()),
-            );
-        }
-    });
-    Ok(out)
+    Ok(
+        query_terms_owned(analyzer, input, &WorkspaceCapability::default())?
+            .into_iter()
+            .map(|term| term.as_str().to_owned())
+            .collect(),
+    )
 }

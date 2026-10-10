@@ -208,9 +208,7 @@ impl PfCursor for RowCursor {
     fn service_level(&self) -> ServiceLevel {
         match self.attests {
             Attests::Nothing | Attests::Generation(_) | Attests::Moving => ServiceLevel::Undeclared,
-            Attests::Incomplete(_, reason) => ServiceLevel::Incomplete {
-                reason: reason.to_owned(),
-            },
+            Attests::Incomplete(_, reason) => ServiceLevel::incomplete_static(reason),
         }
     }
 }
@@ -980,9 +978,7 @@ fn an_incomplete_index_is_carried_beside_an_exhausted_read() {
     let execution = run(&registry, &stats);
     assert_eq!(
         attested(&execution, &alpha).service,
-        ServiceLevel::Incomplete {
-            reason: "rebuilding".to_owned(),
-        },
+        ServiceLevel::incomplete_static("rebuilding"),
         "the relation's own words, verbatim: that is what tells an operator \
          which index to rebuild"
     );
@@ -1002,9 +998,7 @@ fn an_incomplete_index_is_carried_beside_an_exhausted_read() {
     );
     assert_eq!(
         result.trailer.attestations[&alpha].service,
-        ServiceLevel::Incomplete {
-            reason: "rebuilding".to_owned(),
-        }
+        ServiceLevel::incomplete_static("rebuilding")
     );
     assert_eq!(
         result.trailer.exactness,
@@ -1074,9 +1068,7 @@ fn a_short_index_that_served_no_row_still_reports_its_shortfall() {
     let attestation = attested(&execution, &alpha);
     assert_eq!(
         attestation.service,
-        ServiceLevel::Incomplete {
-            reason: "rebuilding".to_owned(),
-        },
+        ServiceLevel::incomplete_static("rebuilding"),
         "and the hole beneath that emptiness survives having no row to ride on"
     );
     assert_eq!(

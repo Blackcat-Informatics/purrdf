@@ -83,10 +83,12 @@ use std::fmt;
 use std::sync::Arc;
 
 use purrdf_core::{DatasetView, RdfDataset, TermValue, TrippedGovernor, ViewTermId};
-use purrdf_sparql_algebra::{GraphPattern, GroundTerm, NamedNodePattern, Variable};
+use purrdf_sparql_algebra::{GraphPattern, GroundTerm, NamedNodePattern, TriplePattern, Variable};
 
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, EvaluatedOutcome, Outcome, materialize_solutions};
+#[cfg(test)]
+use crate::eval::materialize_solutions;
+use crate::eval::{EvalCtx, EvaluatedOutcome, Outcome};
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::governor::{GovernorState, QueryGovernors, StopSignal};
 use crate::service::ServiceDenial;
@@ -200,6 +202,9 @@ pub enum RemoteError {
     /// An in-process source could not read its admitted dataset snapshot.
     /// This is an execution failure and is never swallowed by `SERVICE SILENT`.
     SourceRead(String),
+    /// The shared owned workspace refused growth. The original typed cause
+    /// remains at the outer publication boundary; SILENT cannot absorb it.
+    WorkspaceStopped,
     /// The asynchronous host cannot allocate another logical exchange identifier.
     /// This execution failure is never swallowed by `SERVICE SILENT`.
     ExchangeIdExhausted,
@@ -233,6 +238,7 @@ impl core::fmt::Display for RemoteError {
                 write!(f, "{}", EvalError::HostStackExhausted { construct })
             }
             Self::SourceRead(message) => write!(f, "dataset read failed: {message}"),
+            Self::WorkspaceStopped => EvalError::WorkspaceStopped.fmt(f),
             Self::ExchangeIdExhausted => EvalError::ExchangeIdExhausted.fmt(f),
         }
     }
@@ -240,11 +246,7 @@ impl core::fmt::Display for RemoteError {
 
 impl std::error::Error for RemoteError {}
 
-impl From<ServiceDenial> for RemoteError {
-    fn from(denial: ServiceDenial) -> Self {
-        Self::Denied(denial)
-    }
-}
+purrdf_lex::variant_from!(RemoteError { Denied(ServiceDenial) });
 
 /// The complete `SERVICE` request handed to a [`ServiceResolver`].
 ///
@@ -345,6 +347,332 @@ impl<'a> ServiceRequest<'a> {
     }
 }
 
+/// A host's certified maximum live bytes during one resolution, including its
+/// returned bindings or dynamic error. The grant is acquired before dispatch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServiceWorkspaceCertificate {
+    /// Concrete peak requested layouts, including transport and decoded output.
+    pub peak_bytes: u64,
+}
+
+#[derive(Debug)]
+enum ServiceStorage {
+    Native(crate::workspace::LexicalFrame),
+    Certified(crate::WorkspaceAllocation),
+}
+impl ServiceStorage {
+    fn is_bounded(&self) -> bool {
+        match self {
+            Self::Native(frame) => frame.workspace().is_bounded(),
+            Self::Certified(grant) => grant.is_bounded(),
+        }
+    }
+}
+
+/// Immutable remote bindings retaining their original producer allocation owner.
+/// Borrowed payload access permits caller-owned copies; the engine provides no
+/// deep Clone or detached bounded extraction.
+#[derive(Debug)]
+pub struct AdmittedResolvedBindings {
+    bindings: ResolvedBindings,
+    term_owners: crate::AdmittedVec<crate::WorkspaceAllocation>,
+    storage: ServiceStorage,
+}
+impl AdmittedResolvedBindings {
+    /// Borrow columns and rows while their original grant remains live.
+    #[must_use]
+    pub const fn bindings(&self) -> &ResolvedBindings {
+        &self.bindings
+    }
+    /// Build a response through the original native Memory. Every fresh buffer,
+    /// leaf and diagnostic must use this memory or its own admitted owner.
+    /// Caller-owned immutable variables may be shallow-cloned.
+    /// # Errors
+    /// Preserves the first operational refusal or the original invocation error.
+    pub fn try_build(
+        workspace: &crate::WorkspaceCapability,
+        build: impl FnOnce(
+            &mut purrdf_lex::allocation::Memory<'_, dyn purrdf_lex::allocation::Admission>,
+        ) -> Result<ResolvedBindings, ServiceBuildError>,
+    ) -> Result<Self, ServiceResolutionError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let result = {
+            let admission: &mut dyn purrdf_lex::allocation::Admission = &mut frame;
+            build(&mut purrdf_lex::allocation::Memory::new(admission))
+        };
+        if let Some(error) = frame.take_failure() {
+            return Err(ServiceResolutionError::Operational(error));
+        }
+        match result {
+            Ok(bindings) => Ok(Self {
+                bindings,
+                term_owners: crate::AdmittedVec::new(workspace),
+                storage: ServiceStorage::Native(frame),
+            }),
+            Err(ServiceBuildError::Remote(error)) => Err(ServiceResolutionError::Invocation(
+                AdmittedRemoteError::native(error, frame)?,
+            )),
+            Err(ServiceBuildError::Operational(error)) => {
+                Err(ServiceResolutionError::Operational(error))
+            }
+            Err(ServiceBuildError::Storage(error)) => Err(ServiceResolutionError::Operational(
+                frame.storage_error(error, "remote response producer"),
+            )),
+        }
+    }
+    pub(crate) fn from_native(
+        bindings: ResolvedBindings,
+        frame: crate::workspace::LexicalFrame,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Self {
+        Self {
+            bindings,
+            term_owners: crate::AdmittedVec::new(workspace),
+            storage: ServiceStorage::Native(frame),
+        }
+    }
+    /// Only resident producers may move a bare response out of this owner.
+    /// # Errors
+    /// Returns the intact owner when any original grant is bounded.
+    #[expect(
+        clippy::result_large_err,
+        reason = "refusal returns the intact original bindings and grants without allocating a new error carrier or detaching bounded storage"
+    )]
+    pub fn try_into_resident(self) -> Result<ResolvedBindings, Self> {
+        if self.storage.is_bounded()
+            || self
+                .term_owners
+                .iter()
+                .any(crate::WorkspaceAllocation::is_bounded)
+        {
+            Err(self)
+        } else {
+            Ok(self.bindings)
+        }
+    }
+}
+
+/// Native producer failures distinguish the language/transport error from
+/// operational allocation refusal before immutable error publication.
+#[derive(Debug)]
+pub enum ServiceBuildError {
+    /// Original invocation failure, whose payload was built under Memory.
+    Remote(RemoteError),
+    /// Already-owned evaluator operational failure.
+    Operational(EvalError),
+    /// Original native checked-layout, admission or allocator marker.
+    Storage(purrdf_lex::allocation::StorageError),
+}
+purrdf_lex::variant_from!(ServiceBuildError { Storage(purrdf_lex::allocation::StorageError) });
+purrdf_lex::variant_from!(ServiceBuildError { Operational(EvalError) });
+
+#[derive(Debug)]
+struct RemoteErrorPayload {
+    error: RemoteError,
+    storage: ServiceStorage,
+    control: crate::WorkspaceAllocation,
+}
+/// Original invocation failure and its immutable, shallow-cloned physical owner.
+#[derive(Clone, Debug)]
+pub struct AdmittedRemoteError {
+    payload: purrdf_core::small::Shared<RemoteErrorPayload>,
+}
+impl AdmittedRemoteError {
+    fn new(
+        error: RemoteError,
+        storage: ServiceStorage,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let bytes = purrdf_core::small::Shared::<RemoteErrorPayload>::allocation_layout().size();
+        let control = workspace
+            .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+        let payload = purrdf_core::small::Shared::try_new(RemoteErrorPayload {
+            error,
+            storage,
+            control,
+        })
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "remote error shared control",
+        })?;
+        Ok(Self { payload })
+    }
+    pub(crate) fn native(
+        error: RemoteError,
+        frame: crate::workspace::LexicalFrame,
+    ) -> Result<Self, EvalError> {
+        let workspace = frame.workspace().clone();
+        Self::new(error, ServiceStorage::Native(frame), &workspace)
+    }
+    pub(crate) fn certified(
+        error: RemoteError,
+        allocation: crate::WorkspaceAllocation,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Self::new(error, ServiceStorage::Certified(allocation), workspace)
+    }
+    /// Borrow the original classified error under its original lease.
+    #[must_use]
+    pub fn error(&self) -> &RemoteError {
+        &self.payload.error
+    }
+    /// A native message factory, with no unpriced formatting fallback.
+    /// # Errors
+    /// Returns original admission or allocator refusal.
+    pub fn message(
+        kind: purrdf_core::SilencedKind,
+        message: impl fmt::Display,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let text = purrdf_lex::allocation::Memory::new(&mut frame)
+            .format(&message)
+            .map_err(|error| frame.storage_error(error, "remote error text"))?;
+        let error = match kind {
+            purrdf_core::SilencedKind::Decode => RemoteError::Decode(text),
+            purrdf_core::SilencedKind::Unconfigured => RemoteError::Unconfigured(text),
+            _ => RemoteError::Transport(text),
+        };
+        Self::native(error, frame)
+    }
+    pub(crate) fn into_resident(self) -> Result<RemoteError, Self> {
+        if self.payload.storage.is_bounded() || self.payload.control.is_bounded() {
+            return Err(self);
+        }
+        // The resident error is a caller-owned copy; bounded errors cannot enter
+        // this compatibility route or lose their original lease.
+        Ok(self.error().clone())
+    }
+}
+impl PartialEq for AdmittedRemoteError {
+    fn eq(&self, rhs: &Self) -> bool {
+        self.error() == rhs.error()
+    }
+}
+impl Eq for AdmittedRemoteError {}
+impl fmt::Display for AdmittedRemoteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error().fmt(f)
+    }
+}
+impl std::error::Error for AdmittedRemoteError {}
+
+/// Physical failures remain a separate, unsilenceable channel.
+#[derive(Debug)]
+pub enum ServiceResolutionError {
+    /// Original native invocation error, retaining its allocation owner.
+    Invocation(AdmittedRemoteError),
+    /// Typed evaluator failure; operational variants are never silenced.
+    Operational(EvalError),
+}
+purrdf_lex::variant_from!(ServiceResolutionError { Operational(EvalError) });
+impl fmt::Display for ServiceResolutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Invocation(error) => error.fmt(f),
+            Self::Operational(error) => error.fmt(f),
+        }
+    }
+}
+impl std::error::Error for ServiceResolutionError {}
+
+/// Retained federation error preserves the original code, denial classification
+/// and English presentation across nested in-process resolvers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetainedServiceFailure {
+    endpoint: purrdf_lex::allocation::SharedText,
+    error: AdmittedRemoteError,
+}
+impl RetainedServiceFailure {
+    pub(crate) fn new(
+        endpoint: &str,
+        error: AdmittedRemoteError,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        Ok(Self {
+            endpoint: workspace.authored_text(&endpoint)?,
+            error,
+        })
+    }
+    fn into_eval_error(self) -> EvalError {
+        if self.error.payload.storage.is_bounded() || self.error.payload.control.is_bounded() {
+            return EvalError::RetainedServiceFailure(self);
+        }
+        let endpoint = self.endpoint.as_str();
+        match self.error.error().clone() {
+            RemoteError::Denied(denial) => EvalError::ServiceDenied(denial),
+            RemoteError::HostDenied { endpoint, message } => {
+                EvalError::ServiceHostDenied { endpoint, message }
+            }
+            RemoteError::HostFault { endpoint, message } => {
+                EvalError::ServiceHostFault { endpoint, message }
+            }
+            RemoteError::SourceRead(message) => EvalError::SourceRead(message),
+            RemoteError::Unconfigured(message) => {
+                EvalError::ServiceUnconfigured(format!("SERVICE <{endpoint}>: {message}"))
+            }
+            other => EvalError::remote(format!("SERVICE <{endpoint}>: {other}")),
+        }
+    }
+    /// Borrow the original invocation error without detaching its owner.
+    #[must_use]
+    pub const fn remote_error(&self) -> &AdmittedRemoteError {
+        &self.error
+    }
+    /// Stable federation diagnostic classification.
+    #[must_use]
+    pub fn failure_code(&self) -> crate::protocol::FailureCode {
+        crate::protocol::FailureCode::from(self.error.error())
+    }
+    /// Stable code, including the existing operational source-error identity.
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self.error.error() {
+            RemoteError::SourceRead(_) | RemoteError::WorkspaceStopped => {
+                "native-sparql-source-read"
+            }
+            _ => self.failure_code().code(),
+        }
+    }
+    fn silenced_kind(&self) -> purrdf_core::SilencedKind {
+        match self.error.error() {
+            RemoteError::Decode(_) => purrdf_core::SilencedKind::Decode,
+            RemoteError::Disabled => purrdf_core::SilencedKind::Disabled,
+            RemoteError::Unconfigured(_) => purrdf_core::SilencedKind::Unconfigured,
+            RemoteError::Denied(_) => purrdf_core::SilencedKind::Denied,
+            RemoteError::HostDenied { .. } => purrdf_core::SilencedKind::HostDenied,
+            RemoteError::HostFault { .. } => purrdf_core::SilencedKind::Fault,
+            _ => purrdf_core::SilencedKind::Transport,
+        }
+    }
+}
+impl fmt::Display for RetainedServiceFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.error.error() {
+            RemoteError::Denied(denial) => write!(f, "SERVICE federation denied: {denial}"),
+            RemoteError::HostDenied { endpoint, message } => write!(
+                f,
+                "SERVICE <{endpoint}>: the host denied the request: {message}"
+            ),
+            RemoteError::HostFault { endpoint, message } => write!(
+                f,
+                "SERVICE <{endpoint}>: the host faulted answering the request: {message}"
+            ),
+            RemoteError::Unconfigured(message) => write!(
+                f,
+                "SERVICE federation error: SERVICE <{}>: {message}",
+                self.endpoint.as_str()
+            ),
+            RemoteError::SourceRead(message) => write!(f, "dataset read failed: {message}"),
+            other => write!(
+                f,
+                "SERVICE federation error: SERVICE <{}>: {other}",
+                self.endpoint.as_str()
+            ),
+        }
+    }
+}
+impl std::error::Error for RetainedServiceFailure {}
+
 /// A source that resolves a forwarded SPARQL `SELECT` query at a `SERVICE`
 /// endpoint. Object-safe so [`EvalCtx`] can hold a `&dyn ServiceResolver`.
 pub trait ServiceResolver {
@@ -413,6 +741,55 @@ pub trait ServiceResolver {
     /// `SILENT` — or [`RemoteError::Governed`], which it never swallows. See
     /// [`crate::service`]'s `SILENT` contract table.
     fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError>;
+
+    /// A concrete upper bound for all fresh live producer allocations, including
+    /// returned bindings and dynamic errors, before opaque host dispatch. Native
+    /// implementations override `resolve_admitted` and need no certificate.
+    fn workspace_certificate(
+        &self,
+        _request: ServiceRequest<'_>,
+    ) -> Option<ServiceWorkspaceCertificate> {
+        None
+    }
+
+    /// Resolve through an original native owner or an honest full peak grant.
+    /// A missing opaque certificate fails BEFORE host dispatch in bounded mode.
+    /// # Errors
+    /// Preserves typed physical refusal and retained invocation failure.
+    fn resolve_admitted(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: crate::WorkspaceCapability,
+    ) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
+        if let Some(trip) = request.stop_trip() {
+            return Err(invocation_error(trip, &workspace)?);
+        }
+        if !workspace.is_bounded() {
+            let result = self.resolve(request);
+            return match result {
+                Ok(bindings) => Ok(AdmittedResolvedBindings::from_native(
+                    bindings,
+                    crate::workspace::LexicalFrame::new(&workspace),
+                    &workspace,
+                )),
+                Err(error) => Err(invocation_error(error, &workspace)?),
+            };
+        }
+        let certificate = self
+            .workspace_certificate(request)
+            .ok_or(EvalError::WorkspaceUnpriced("opaque SERVICE resolver"))?;
+        let allocation = workspace.charge(certificate.peak_bytes)?;
+        match self.resolve(request) {
+            Ok(bindings) => Ok(AdmittedResolvedBindings {
+                bindings,
+                term_owners: crate::AdmittedVec::new(&workspace),
+                storage: ServiceStorage::Certified(allocation),
+            }),
+            Err(error) => Err(ServiceResolutionError::Invocation(
+                AdmittedRemoteError::certified(error, allocation, &workspace)?,
+            )),
+        }
+    }
 }
 
 /// Strip every blank-node-carrying `VALUES` pushdown restriction from `pattern` before it
@@ -479,8 +856,62 @@ pub trait ServiceResolver {
 /// constant machine stack: a node is entered before its children, its children are
 /// entered left to right, and the node is rebuilt from their sanitized copies once the
 /// last of them is done.
+#[cfg(test)]
 fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
-    /// A node entered and not yet rebuilt: the sanitized copies of its children so far.
+    let mut frame = crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+    sanitize_forwarded_body_with_memory(
+        pattern,
+        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+    )
+    .expect("resident SERVICE sanitization allocation failed")
+}
+
+fn service_storage(
+    error: purrdf_lex::allocation::StorageError,
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> EvalError {
+    memory
+        .admission_mut()
+        .storage_error(error, "SERVICE forwarded body")
+}
+
+fn service_child<T: purrdf_sparql_algebra::Subtree + purrdf_lex::walk::Dismantle>(
+    value: T,
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<Child<T>, EvalError> {
+    let layout = core::alloc::Layout::new::<T>();
+    memory
+        .add_bytes(layout.size())
+        .map_err(|e| service_storage(e, memory))?;
+    purrdf_core::small::try_boxed(value)
+        .map(Child::from)
+        .map_err(|_| EvalError::AllocationFailed {
+            construct: "SERVICE child",
+        })
+}
+
+fn clone_service_slice<T, U>(
+    values: &[T],
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+    mut clone: impl FnMut(
+        &T,
+        &mut crate::expr::CorrelatedMemory<'_>,
+    ) -> Result<U, purrdf_lex::allocation::StorageError>,
+) -> Result<Vec<U>, EvalError> {
+    let mut result = Vec::new();
+    memory
+        .reserve(&mut result, values.len())
+        .map_err(|e| service_storage(e, memory))?;
+    for value in values {
+        result.push(clone(value, memory).map_err(|e| service_storage(e, memory))?);
+    }
+    Ok(result)
+}
+
+fn sanitize_forwarded_body_with_memory(
+    pattern: &GraphPattern,
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<GraphPattern, EvalError> {
     struct Frame<'a> {
         node: &'a GraphPattern,
         children: Vec<GraphPattern>,
@@ -489,19 +920,21 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
     let mut entering = Some(pattern);
     loop {
         if let Some(node) = entering.take() {
-            // A test build counts the pattern nodes the copies of this node's own
-            // expressions, sort keys and aggregates build. Its child patterns are
-            // rebuilt by this walk rather than copied, and are not counted.
             #[cfg(test)]
             purrdf_sparql_algebra::NodeRef::Pattern(node).for_each_child(|child| {
                 if !matches!(child, purrdf_sparql_algebra::NodeRef::Pattern(_)) {
                     crate::op_count::count_copied(child);
                 }
             });
-            frames.push(Frame {
-                node,
-                children: Vec::new(),
-            });
+            memory
+                .push(
+                    &mut frames,
+                    Frame {
+                        node,
+                        children: Vec::new(),
+                    },
+                )
+                .map_err(|e| service_storage(e, memory))?;
         }
         let frame = frames
             .last_mut()
@@ -511,15 +944,22 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
             continue;
         }
         let Frame { node, children } = frames.pop().expect("the frame is open");
-        let rebuilt = rebuild_sanitized(node, children);
+        let rebuilt = rebuild_sanitized_with_memory(node, children, memory)?;
         match frames.last_mut() {
-            None => return rebuilt,
-            Some(parent) => parent.children.push(rebuilt),
+            None => {
+                memory
+                    .release_vec(frames)
+                    .map_err(|e| service_storage(e, memory))?;
+                return Ok(rebuilt);
+            }
+            Some(parent) => memory
+                .push(&mut parent.children, rebuilt)
+                .map_err(|e| service_storage(e, memory))?,
         }
     }
 }
 
-/// The `index`th child pattern of `node`, in the order [`sanitize_forwarded_body`]
+/// The `index`th child pattern of `node`, in the order [`sanitize_forwarded_body_with_memory`]
 /// rebuilds them: left before right, a union's arms in order.
 fn nth_child_pattern(node: &GraphPattern, index: usize) -> Option<&GraphPattern> {
     match node {
@@ -552,35 +992,58 @@ fn nth_child_pattern(node: &GraphPattern, index: usize) -> Option<&GraphPattern>
 }
 
 /// `node`, rebuilt from `children` — the sanitized copies of its child patterns, in
-/// [`nth_child_pattern`]'s order — for [`sanitize_forwarded_body`].
-fn rebuild_sanitized(node: &GraphPattern, children: Vec<GraphPattern>) -> GraphPattern {
+/// [`nth_child_pattern`]'s order — for [`sanitize_forwarded_body_with_memory`].
+fn rebuild_sanitized_with_memory(
+    node: &GraphPattern,
+    children: Vec<GraphPattern>,
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<GraphPattern, EvalError> {
+    let child_bytes = core::alloc::Layout::array::<GraphPattern>(children.capacity())
+        .map_err(|_| EvalError::WorkspaceBoundOverflow)?
+        .size();
+    if matches!(node, GraphPattern::Union { .. }) {
+        return Ok(GraphPattern::Union {
+            arms: purrdf_sparql_algebra::Chain::try_from(children)
+                .expect("a UNION retains at least two arms"),
+        });
+    }
     let mut children = children.into_iter();
     let mut next = || {
         children
             .next()
             .expect("every child pattern is sanitized before its parent is rebuilt")
     };
-    match node {
+    let rebuilt = match node {
         // Leaves with no child pattern and no `Values` cells to inspect.
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
-            patterns: patterns.clone(),
+            patterns: clone_service_slice(patterns, memory, TriplePattern::clone_with_memory)?,
         },
         GraphPattern::Path {
             subject,
             path,
             object,
         } => GraphPattern::Path {
-            subject: subject.clone(),
-            path: path.clone(),
-            object: object.clone(),
+            subject: subject
+                .clone_with_memory(memory)
+                .map_err(|e| service_storage(e, memory))?,
+            path: path
+                .clone_with_memory(memory)
+                .map_err(|e| service_storage(e, memory))?,
+            object: object
+                .clone_with_memory(memory)
+                .map_err(|e| service_storage(e, memory))?,
         },
-        GraphPattern::PropertyFunction(call) => GraphPattern::PropertyFunction(call.clone()),
+        GraphPattern::PropertyFunction(call) => GraphPattern::PropertyFunction(
+            call.clone_with_memory(memory)
+                .map_err(|e| service_storage(e, memory))?,
+        ),
         // The one node kind that can carry the hazard directly.
         GraphPattern::Values {
             variables,
             bindings,
         } => {
-            let (variables, bindings) = strip_blank_columns(variables, bindings);
+            let (variables, bindings) =
+                strip_blank_columns_with_memory(variables, bindings, memory)?;
             GraphPattern::Values {
                 variables,
                 bindings,
@@ -591,45 +1054,55 @@ fn rebuild_sanitized(node: &GraphPattern, children: Vec<GraphPattern>) -> GraphP
         GraphPattern::Join { .. } => {
             let left = next();
             let right = next();
-            join_dropping_empty_values(left, right)
+            join_dropping_empty_values_with_memory(left, right, memory)?
         }
         // Every other node kind is rebuilt around its sanitized children as written: it
         // carries no `Values` cells of its own, and the wrapper Values-Insertion may
         // have added around it sits as one of ITS children, reached through the `Join`
         // arm above.
         GraphPattern::LeftJoin { expression, .. } => GraphPattern::LeftJoin {
-            left: Child::new(next()),
-            right: Child::new(next()),
-            expression: expression.clone(),
+            left: service_child(next(), memory)?,
+            right: service_child(next(), memory)?,
+            expression: expression
+                .as_ref()
+                .map(|e| e.clone_with_memory(memory))
+                .transpose()
+                .map_err(|e| service_storage(e, memory))?,
         },
         GraphPattern::Lateral { .. } => GraphPattern::Lateral {
-            left: Child::new(next()),
-            right: Child::new(next()),
+            left: service_child(next(), memory)?,
+            right: service_child(next(), memory)?,
         },
         GraphPattern::Apply { policy, .. } => GraphPattern::Apply {
-            left: Child::new(next()),
-            right: Child::new(next()),
-            policy: policy.clone(),
+            left: service_child(next(), memory)?,
+            right: service_child(next(), memory)?,
+            policy: policy
+                .clone_box_with_memory(memory)
+                .map_err(|e| service_storage(e, memory))?,
         },
         GraphPattern::Filter { expr, .. } => GraphPattern::Filter {
-            expr: expr.clone(),
-            inner: Child::new(next()),
+            expr: expr
+                .clone_with_memory(memory)
+                .map_err(|e| service_storage(e, memory))?,
+            inner: service_child(next(), memory)?,
         },
-        GraphPattern::Union { arms } => GraphPattern::Union {
-            arms: arms.map_ref(|_| next()),
-        },
+        GraphPattern::Union { .. } => {
+            unreachable!("union moves its admitted arms before child iteration")
+        }
         GraphPattern::Graph { name, .. } => GraphPattern::Graph {
             name: name.clone(),
-            inner: Child::new(next()),
+            inner: service_child(next(), memory)?,
         },
         GraphPattern::Extend {
             variable,
             expression,
             ..
         } => GraphPattern::Extend {
-            inner: Child::new(next()),
+            inner: service_child(next(), memory)?,
             variable: variable.clone(),
-            expression: expression.clone(),
+            expression: expression
+                .clone_with_memory(memory)
+                .map_err(|e| service_storage(e, memory))?,
         },
         GraphPattern::Unfold {
             expression,
@@ -637,36 +1110,42 @@ fn rebuild_sanitized(node: &GraphPattern, children: Vec<GraphPattern>) -> GraphP
             companion,
             ..
         } => GraphPattern::Unfold {
-            inner: Child::new(next()),
-            expression: expression.clone(),
+            inner: service_child(next(), memory)?,
+            expression: expression
+                .clone_with_memory(memory)
+                .map_err(|e| service_storage(e, memory))?,
             element: element.clone(),
             companion: companion.clone(),
         },
         GraphPattern::Minus { .. } => GraphPattern::Minus {
-            left: Child::new(next()),
-            right: Child::new(next()),
+            left: service_child(next(), memory)?,
+            right: service_child(next(), memory)?,
         },
         GraphPattern::Service { name, silent, .. } => GraphPattern::Service {
             name: name.clone(),
-            inner: Child::new(next()),
+            inner: service_child(next(), memory)?,
             silent: *silent,
         },
         GraphPattern::OrderBy { expression, .. } => GraphPattern::OrderBy {
-            inner: Child::new(next()),
-            expression: expression.clone(),
+            inner: service_child(next(), memory)?,
+            expression: clone_service_slice(
+                expression,
+                memory,
+                purrdf_sparql_algebra::OrderExpression::clone_with_memory,
+            )?,
         },
         GraphPattern::Project { variables, .. } => GraphPattern::Project {
-            inner: Child::new(next()),
-            variables: variables.clone(),
+            inner: service_child(next(), memory)?,
+            variables: clone_service_slice(variables, memory, |v, _| Ok(v.clone()))?,
         },
         GraphPattern::Distinct { .. } => GraphPattern::Distinct {
-            inner: Child::new(next()),
+            inner: service_child(next(), memory)?,
         },
         GraphPattern::Reduced { .. } => GraphPattern::Reduced {
-            inner: Child::new(next()),
+            inner: service_child(next(), memory)?,
         },
         GraphPattern::Slice { start, length, .. } => GraphPattern::Slice {
-            inner: Child::new(next()),
+            inner: service_child(next(), memory)?,
             start: *start,
             length: *length,
         },
@@ -675,31 +1154,57 @@ fn rebuild_sanitized(node: &GraphPattern, children: Vec<GraphPattern>) -> GraphP
             aggregates,
             ..
         } => GraphPattern::Group {
-            inner: Child::new(next()),
-            variables: variables.clone(),
-            aggregates: aggregates.clone(),
+            inner: service_child(next(), memory)?,
+            variables: clone_service_slice(variables, memory, |v, _| Ok(v.clone()))?,
+            aggregates: clone_service_slice(aggregates, memory, |(v, a), m| {
+                Ok((v.clone(), a.clone_with_memory(m)?))
+            })?,
         },
-    }
+    };
+    drop(children);
+    memory
+        .release_bytes(child_bytes)
+        .map_err(|e| service_storage(e, memory))?;
+    Ok(rebuilt)
 }
 
 /// Whether `term` is a blank node, or a ground RDF 1.2 quoted triple that transitively
 /// contains one anywhere in its subject/object tree — [`GroundTriple::predicate`] is
 /// always an IRI, so only the two nested positions are inspected, subject before
 /// object, over a work list that ends at the first blank node found.
-fn ground_term_has_blank_node(term: &GroundTerm) -> bool {
-    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
+fn ground_term_has_blank_node_with_memory(
+    term: &GroundTerm,
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<bool, EvalError> {
+    let mut pending = purrdf_lex::walk::WorkList::<_, 8>::with(term);
+    let mut found = false;
     while let Some(term) = pending.pop() {
         match term {
             GroundTerm::NamedNode(_) | GroundTerm::Literal(_) => {}
-            GroundTerm::BlankNode(_) => return true,
-            GroundTerm::Triple(t) => pending.extend([&t.object, &t.subject]),
+            GroundTerm::BlankNode(_) => {
+                found = true;
+                break;
+            }
+            GroundTerm::Triple(t) => {
+                for child in [&t.object, &t.subject] {
+                    pending
+                        .try_push_admitted(child, memory)
+                        .map_err(|e| service_storage(e, memory))?;
+                }
+            }
         }
     }
-    false
+    pending
+        .release_admitted(memory)
+        .map_err(|e| service_storage(e, memory))?;
+    Ok(found)
 }
 
+/// The original ordered column and row buffers of a forwarded VALUES block.
+type ForwardedValues = (Vec<Variable>, Vec<Vec<Option<GroundTerm>>>);
+
 /// Remove every column of a `Values` block whose cell, in ANY row, is a blank node or a
-/// ground triple transitively containing one — [`sanitize_forwarded_body`]'s core rewrite.
+/// ground triple transitively containing one — [`sanitize_forwarded_body_with_memory`]'s core rewrite.
 /// Preserves the order of the surviving columns and the row count exactly (an `UNDEF`
 /// cell, `None`, never carries a blank node, so it never causes a column to be dropped).
 ///
@@ -708,66 +1213,91 @@ fn ground_term_has_blank_node(term: &GroundTerm) -> bool {
 /// pushdown) is returned with its `Vec`s cloned but otherwise byte-for-byte unchanged —
 /// there is no column to remove, so `keep` is all-`true` and the filter below is a no-op
 /// pass.
-fn strip_blank_columns(
+fn strip_blank_columns_with_memory(
     variables: &[Variable],
     bindings: &[Vec<Option<GroundTerm>>],
-) -> (Vec<Variable>, Vec<Vec<Option<GroundTerm>>>) {
-    let keep: Vec<bool> = (0..variables.len())
-        .map(|column| {
-            !bindings.iter().any(|row| {
-                row.get(column)
-                    .and_then(Option::as_ref)
-                    .is_some_and(ground_term_has_blank_node)
-            })
-        })
-        .collect();
-    let new_variables = variables
-        .iter()
-        .zip(&keep)
-        .filter(|&(_, &k)| k)
-        .map(|(v, _)| v.clone())
-        .collect();
-    let new_bindings = bindings
-        .iter()
-        .map(|row| {
-            row.iter()
-                .zip(&keep)
-                .filter(|&(_, &k)| k)
-                .map(|(cell, _)| cell.clone())
-                .collect()
-        })
-        .collect();
-    (new_variables, new_bindings)
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<ForwardedValues, EvalError> {
+    let mut keep = Vec::new();
+    for column in 0..variables.len() {
+        let mut keep_column = true;
+        for row in bindings {
+            if let Some(Some(term)) = row.get(column)
+                && ground_term_has_blank_node_with_memory(term, memory)?
+            {
+                keep_column = false;
+                break;
+            }
+        }
+        memory
+            .push(&mut keep, keep_column)
+            .map_err(|e| service_storage(e, memory))?;
+    }
+    let mut new_variables = Vec::new();
+    for (v, k) in variables.iter().zip(&keep) {
+        if *k {
+            memory
+                .push(&mut new_variables, v.clone())
+                .map_err(|e| service_storage(e, memory))?;
+        }
+    }
+    let mut new_bindings = Vec::new();
+    for row in bindings {
+        let mut cells = Vec::new();
+        for (cell, k) in row.iter().zip(&keep) {
+            if *k {
+                let value = cell
+                    .as_ref()
+                    .map(|v| v.clone_with_memory(memory))
+                    .transpose()
+                    .map_err(|e| service_storage(e, memory))?;
+                memory
+                    .push(&mut cells, value)
+                    .map_err(|e| service_storage(e, memory))?;
+            }
+        }
+        memory
+            .push(&mut new_bindings, cells)
+            .map_err(|e| service_storage(e, memory))?;
+    }
+    memory
+        .release_vec(keep)
+        .map_err(|e| service_storage(e, memory))?;
+    Ok((new_variables, new_bindings))
 }
 
 /// `Join(x, Values { variables: [], bindings: [[]] })` — a `Values` block
-/// [`strip_blank_columns`] emptied of every column — is exactly the join identity
+/// [`strip_blank_columns_with_memory`] emptied of every column — is exactly the join identity
 /// (`identity_seq`: one row, zero bindings), so `Join(x, that)` and `Join(that, x)` both
 /// collapse to `x` rather than being serialized as a `VALUES { }` block, which the SPARQL
 /// grammar does not admit as a standalone group graph pattern element. The row-count
-/// guard (not merely `variables.is_empty()`) is deliberate: [`strip_blank_columns`]
+/// guard (not merely `variables.is_empty()`) is deliberate: [`strip_blank_columns_with_memory`]
 /// preserves row count exactly, so an all-columns-stripped block still carries its
 /// original row count, and an emptied block is the join identity only when that count is
 /// the single row Values-Insertion always injects — a hypothetical zero-row all-columns
 /// block (the empty relation, `FALSE`) is NOT the identity and must not be collapsed away.
 ///
 /// A block joined beside a filtered pattern is moved beneath its filters where that
-/// changes no answer — see [`sink_values_under_filters`].
-fn join_dropping_empty_values(left: GraphPattern, right: GraphPattern) -> GraphPattern {
-    if is_join_identity_values(&right) {
+/// changes no answer — see [`sink_values_under_filters_with_memory`].
+fn join_dropping_empty_values_with_memory(
+    left: GraphPattern,
+    right: GraphPattern,
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<GraphPattern, EvalError> {
+    Ok(if is_join_identity_values(&right) {
         left
     } else if is_join_identity_values(&left) {
         right
     } else if matches!(left, GraphPattern::Filter { .. })
         && matches!(right, GraphPattern::Values { .. })
     {
-        sink_values_under_filters(left, right)
+        sink_values_under_filters_with_memory(left, right, memory)?
     } else {
         GraphPattern::Join {
-            left: Child::new(left),
-            right: Child::new(right),
+            left: service_child(left, memory)?,
+            right: service_child(right, memory)?,
         }
-    }
+    })
 }
 
 /// `Join(Filter(…Filter(x, e1)…, eN), values)` — the shape Values Insertion builds when it
@@ -792,23 +1322,31 @@ fn join_dropping_empty_values(left: GraphPattern, right: GraphPattern) -> GraphP
 /// the root of its own filter chain — the shape Values Insertion builds for a filter that
 /// reads the variable itself: every row there already binds each of the block's
 /// variables to the block's own value, so joining the block again is the identity.
-fn sink_values_under_filters(filtered: GraphPattern, values: GraphPattern) -> GraphPattern {
+fn sink_values_under_filters_with_memory(
+    filtered: GraphPattern,
+    values: GraphPattern,
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<GraphPattern, EvalError> {
     let GraphPattern::Values {
         variables: block_vars,
         ..
     } = &values
     else {
-        return GraphPattern::Join {
-            left: Child::new(filtered),
-            right: Child::new(values),
-        };
+        return Ok(GraphPattern::Join {
+            left: service_child(filtered, memory)?,
+            right: service_child(values, memory)?,
+        });
     };
     let mut conditions = Vec::new();
     let mut rest = filtered;
     loop {
         match rest {
-            GraphPattern::Filter { expr, inner } if !mentions_any(&expr, block_vars) => {
-                conditions.push(expr);
+            GraphPattern::Filter { expr, inner }
+                if !mentions_any_admitted(&expr, block_vars, memory)? =>
+            {
+                memory
+                    .push(&mut conditions, expr)
+                    .map_err(|e| service_storage(e, memory))?;
                 rest = inner.into_inner();
             }
             other => {
@@ -817,48 +1355,63 @@ fn sink_values_under_filters(filtered: GraphPattern, values: GraphPattern) -> Gr
             }
         }
     }
-    let mut pattern = if joins_identical_block(&rest, &values) {
+    let mut pattern = if joins_identical_block_with_memory(&rest, &values, memory)? {
         rest
     } else {
         GraphPattern::Join {
-            left: Child::new(rest),
-            right: Child::new(values),
+            left: service_child(rest, memory)?,
+            right: service_child(values, memory)?,
         }
     };
-    for expr in conditions.into_iter().rev() {
+    while let Some(expr) = conditions.pop() {
         pattern = GraphPattern::Filter {
             expr,
-            inner: Child::new(pattern),
+            inner: service_child(pattern, memory)?,
         };
     }
-    pattern
+    memory
+        .release_vec(conditions)
+        .map_err(|e| service_storage(e, memory))?;
+    Ok(pattern)
 }
 
 /// Whether `expr` mentions any of `vars`, an `EXISTS` pattern's variables included.
-fn mentions_any(expr: &purrdf_sparql_algebra::Expression, vars: &[Variable]) -> bool {
-    let mut mentioned = crate::DetHashSet::default();
-    crate::expr::expr_vars(expr, &mut mentioned);
-    vars.iter().any(|v| mentioned.contains(v))
+fn mentions_any_admitted(
+    expr: &purrdf_sparql_algebra::Expression,
+    vars: &[Variable],
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<bool, EvalError> {
+    let mentioned = crate::expr::expr_vars_admitted(expr, memory.admission_mut().workspace())?;
+    Ok(vars.iter().any(|v| mentioned.contains(v)))
 }
 
 /// Whether `pattern`, below its own chain of filters, is `Join(_, values)` with `values`
 /// a one-row block binding every one of its variables — so every row of `pattern` already
-/// binds them to exactly the block's values. See [`sink_values_under_filters`].
-fn joins_identical_block(pattern: &GraphPattern, values: &GraphPattern) -> bool {
+/// binds them to exactly the block's values. See [`sink_values_under_filters_with_memory`].
+fn joins_identical_block_with_memory(
+    pattern: &GraphPattern,
+    values: &GraphPattern,
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<bool, EvalError> {
     let GraphPattern::Values { bindings, .. } = values else {
-        return false;
+        return Ok(false);
     };
     if bindings.len() != 1 || bindings[0].iter().any(Option::is_none) {
-        return false;
+        return Ok(false);
     }
     let mut cur = pattern;
     while let GraphPattern::Filter { inner, .. } = cur {
         cur = inner;
     }
-    matches!(cur, GraphPattern::Join { right, .. } if **right == *values)
+    match cur {
+        GraphPattern::Join { right, .. } => right
+            .eq_with_memory(values, memory)
+            .map_err(|e| service_storage(e, memory)),
+        _ => Ok(false),
+    }
 }
 
-/// See [`join_dropping_empty_values`].
+/// See [`join_dropping_empty_values_with_memory`].
 fn is_join_identity_values(pattern: &GraphPattern) -> bool {
     matches!(
         pattern,
@@ -888,6 +1441,35 @@ fn is_join_identity_values(pattern: &GraphPattern) -> bool {
 /// cell ceiling, or from a governor the source reports through [`RemoteError::Governed`].
 /// `SILENT` swallows none of those four.
 // Out of line by design: see the thin-dispatcher invariant on `eval::eval_node`.
+fn service_reaches(
+    pattern: &GraphPattern,
+    aggregate: bool,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<bool, EvalError> {
+    let mut frame = crate::workspace::LexicalFrame::new(workspace);
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+    if aggregate {
+        crate::property_fn_eval::pattern_reaches_custom_aggregate_with_memory(pattern, &mut memory)
+    } else {
+        crate::property_fn_eval::pattern_reaches_property_function_with_memory(pattern, &mut memory)
+    }
+}
+
+fn service_unsupported(message: &'static str, workspace: &crate::WorkspaceCapability) -> EvalError {
+    if workspace.is_bounded() {
+        match crate::RetainedDiagnostic::render(
+            EvalError::UNSUPPORTED_CODE,
+            &format_args!("unsupported: {message}"),
+            workspace,
+        ) {
+            Ok(error) => EvalError::RetainedDiagnostic(error),
+            Err(error) => error,
+        }
+    } else {
+        EvalError::unsupported(message)
+    }
+}
+
 #[inline(never)]
 pub(crate) fn eval_service<D: DatasetView + Sync>(
     node: &GraphPattern,
@@ -903,22 +1485,24 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
     // rows that are not the relation's, with no symptom anywhere. That is not an
     // invocation that fails but one that succeeds with the wrong question, so `SILENT`
     // has nothing to say about it.
-    if crate::property_fn_eval::pattern_reaches_property_function(inner) {
-        return Err(EvalError::unsupported(
+    if service_reaches(inner, false, &ctx.growth)? {
+        return Err(service_unsupported(
             "a property-function call inside a SERVICE body: the call would be forwarded as an \
              ordinary triple pattern and matched against the remote endpoint's data, so the \
              relation would never be invoked and the answer would be silently wrong",
+            &ctx.growth,
         ));
     }
     // A custom aggregate call inside a forwarded body is refused the same way, for the
     // same reason: `AGG(<iri>, …)` serializes as text the remote endpoint has no
     // registered meaning for, and this engine's registry — the one place the IRI is
     // actually resolved — never sees the call at all once it has been shipped away.
-    if crate::property_fn_eval::pattern_reaches_custom_aggregate(inner) {
-        return Err(EvalError::unsupported(
+    if service_reaches(inner, true, &ctx.growth)? {
+        return Err(service_unsupported(
             "a custom-aggregate call inside a SERVICE body: `AGG(<iri>, …)` would be forwarded as \
              text the remote endpoint has no registered meaning for, so this engine's aggregate \
              registry would never resolve the call and the answer would be silently wrong",
+            &ctx.growth,
         ));
     }
     // A variable endpoint still unresolved here was not substituted by a `LATERAL` (a
@@ -930,8 +1514,8 @@ pub(crate) fn eval_service<D: DatasetView + Sync>(
             match invoke_service(endpoint.as_str(), inner, silent, ctx)? {
                 Invocation::Answered(evaluated) => evaluated,
                 Invocation::Silenced(record) => {
-                    ctx.record_silenced(record);
-                    Evaluated::Complete(identity_seq())
+                    record.record(ctx)?;
+                    Evaluated::Complete(identity_seq(&ctx.growth)?)
                 }
             },
         ),
@@ -947,7 +1531,22 @@ pub(crate) enum Invocation<I: ViewTermId> {
     Answered(Evaluated<I>),
     /// The invocation did not succeed and the clause is `SILENT`: it contributes Ω0, and
     /// the consumer records this failure on the evidence.
-    Silenced(purrdf_core::SilencedInvocation),
+    Silenced(AdmittedSilencedInvocation),
+}
+
+pub(crate) struct AdmittedSilencedInvocation {
+    invocation: purrdf_core::SilencedInvocation,
+    _endpoint: crate::WorkspaceAllocation,
+    _message: crate::WorkspaceAllocation,
+}
+
+impl AdmittedSilencedInvocation {
+    pub(crate) fn record<D: DatasetView + Sync>(
+        self,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<(), EvalError> {
+        ctx.record_silenced(self.invocation)
+    }
 }
 
 /// A failed invocation of `endpoint`: under `SILENT`, [`Invocation::Silenced`] carrying
@@ -957,17 +1556,36 @@ pub(crate) fn failed_invocation<I: ViewTermId>(
     kind: purrdf_core::SilencedKind,
     error: EvalError,
     silent: bool,
+    workspace: &crate::WorkspaceCapability,
 ) -> Result<Invocation<I>, EvalError> {
-    if !silent {
+    if !silent
+        || matches!(
+            error,
+            EvalError::WorkspaceStopped
+                | EvalError::WorkspaceUnpriced(_)
+                | EvalError::WorkspaceBoundOverflow
+                | EvalError::AllocationFailed { .. }
+                | EvalError::UnstableNativeDiagnostic
+        )
+    {
         return Err(error);
     }
-    Ok(Invocation::Silenced(purrdf_core::SilencedInvocation::new(
+    let endpoint_admission = workspace
+        .charge(u64::try_from(endpoint.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+    let (message, message_admission) =
+        crate::workspace::render(workspace, &error, "SILENT service error")?;
+    let invocation = purrdf_core::SilencedInvocation::new(
         purrdf_core::SilencedTarget::Service {
-            endpoint: endpoint.to_owned(),
+            endpoint: crate::workspace::string(endpoint, "SILENT service endpoint")?,
         },
         kind,
-        error.to_string(),
-    )))
+        message,
+    );
+    Ok(Invocation::Silenced(AdmittedSilencedInvocation {
+        invocation,
+        _endpoint: endpoint_admission,
+        _message: message_admission,
+    }))
 }
 
 /// Invoke `endpoint` with `inner` as the forwarded body.
@@ -985,200 +1603,191 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Invocation<D::Id>, EvalError> {
     use purrdf_core::SilencedKind;
-
-    // `Option<&dyn _>` is `Copy`, so this does NOT borrow `ctx` — leaving `&mut
-    // ctx` free for interning the result below.
+    let workspace = ctx.growth.clone();
     let Some(source) = ctx.remote else {
+        let message = format_args!("no remote query source configured for SERVICE <{endpoint}>");
+        let error = if workspace.is_bounded() {
+            EvalError::RetainedDiagnostic(crate::RetainedDiagnostic::render(
+                EvalError::SERVICE_UNCONFIGURED_CODE,
+                &format_args!("SERVICE federation error: {message}"),
+                &workspace,
+            )?)
+        } else {
+            EvalError::ServiceUnconfigured(message.to_string())
+        };
         return failed_invocation(
             endpoint,
             SilencedKind::Unconfigured,
-            EvalError::ServiceUnconfigured(format!(
-                "no remote query source configured for SERVICE <{endpoint}>"
-            )),
+            error,
             silent,
+            &workspace,
         );
     };
-
-    // Poll the stop signal immediately before dispatch. The node-entry poll happens before
-    // this node's work begins; a deadline that expires in between must still PREVENT the
-    // request, because a signal observed only after the call returned is not a governor —
-    // the call is the wait it exists to bound. Highest precedence, so it is tested ahead
-    // of the charge below.
     if let Some(tripped) = ctx.stop_check() {
         return Ok(Invocation::Answered(Evaluated::Truncated(
             Truncation::origin(
-                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+                SolutionSeq::empty(crate::eval::syntactic_schema_admitted(inner, &workspace)?),
                 tripped,
             ),
         )));
     }
-
-    // The `remote-request-issued` charge point, plus the request against the remote
-    // request ceiling — charged **before** the call, so an exhausted budget prevents the
-    // request rather than merely observing it afterwards. A budget trip is never silenced:
-    // `SILENT` is a statement about the invocation, not about this engine's budget, and
-    // swallowing a trip to the join identity would return a result that looks complete
-    // and is wrong.
     if let Err(tripped) = ctx
         .charge(crate::governor::ChargePoint::RemoteRequestIssued)
         .and_then(|()| ctx.charge_amount(purrdf_core::ResourceDimension::RemoteRequests, 1))
     {
-        // The empty bag, never the join identity: the identity row is what makes a
-        // surrounding join a no-op, so returning it here would claim the remote endpoint
-        // had been consulted and had imposed nothing. An empty bag claims only that no
-        // remote row was established, which is exactly true and is a sound lower bound.
         return Ok(Invocation::Answered(Evaluated::Truncated(
             Truncation::origin(
-                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+                SolutionSeq::empty(crate::eval::syntactic_schema_admitted(inner, &workspace)?),
                 tripped,
             ),
         )));
     }
-
-    // Strip any blank-node-carrying `VALUES` pushdown correlated substitution injected
-    // into `inner`, BEFORE serialization — see [`sanitize_forwarded_body`]'s doc for why
-    // dropping it (never refusing, never emitting the illegal `_:` cell) is the sound,
-    // maximal-utility fix. Local evaluation never runs this: it walks `inner` fresh, not
-    // the sanitized copy. The copy and the serialization each run over a work list, so
-    // a body nested to any depth is forwarded on constant machine stack.
-    let sanitized = sanitize_forwarded_body(inner);
-    let query_text = purrdf_sparql_algebra::try_pattern_to_select_query(&sanitized)?;
-    // The signal travels WITH the call: while the evaluator is blocked inside it, nothing
-    // else is in a position to poll.
+    struct RequestText {
+        text: String,
+        _frame: crate::workspace::LexicalFrame,
+    }
+    let text = {
+        let mut frame = crate::workspace::LexicalFrame::new(&workspace);
+        let (sanitized, sanitized_live) = {
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+            let sanitized = sanitize_forwarded_body_with_memory(inner, &mut memory)?;
+            (sanitized, memory.admitted_bytes())
+        };
+        let result = {
+            let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, sanitized_live);
+            let result = purrdf_sparql_algebra::try_pattern_to_select_query_with_memory(
+                &sanitized,
+                &mut memory,
+            );
+            drop(sanitized);
+            memory.release_bytes(sanitized_live).map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "SERVICE sanitized AST release")
+            })?;
+            result
+        };
+        let text = match result {
+            Ok(text) => text,
+            Err(purrdf_sparql_algebra::CarrierError::Storage(error)) => {
+                return Err(frame.storage_error(error, "SERVICE carrier serialization"));
+            }
+            Err(purrdf_sparql_algebra::CarrierError::Parse(error)) => {
+                // The original serializer diagnostic remains covered by frame
+                // until the retained boundary has rendered it successfully.
+                return Err(EvalError::RetainedDiagnostic(
+                    crate::RetainedDiagnostic::render(
+                        "native-sparql-query-eval",
+                        &format_args!("SPARQL parse error: {error}"),
+                        &workspace,
+                    )?,
+                ));
+            }
+        };
+        RequestText {
+            text,
+            _frame: frame,
+        }
+    };
     let stop = ctx.stop_signal().map(Arc::clone);
-    // `caller_ceiling`, never `is_engaged_in` + `limits().get(..)`: the latter pair
-    // reports `QueryGovernors::METERED`'s bookkeeping sentinel as if it were a ceiling
-    // the caller had set, and a resolver sizing a remote `LIMIT` from that would be
-    // sizing it off a number that means "measure this, bound nothing".
     let max_intermediate_cells = ctx
         .governor_state()
         .and_then(|state| state.caller_ceiling(purrdf_core::ResourceDimension::IntermediateCells));
-    let response = source.resolve(
-        ServiceRequest::new(endpoint, &query_text)
+    let response = source.resolve_admitted(
+        ServiceRequest::new(endpoint, &text.text)
             .silent(silent)
             .with_stop(stop.as_ref())
             .with_max_intermediate_cells(max_intermediate_cells),
+        workspace.clone(),
     );
-    // Always inspect the signal immediately after control returns. A source is permitted
-    // to be unable to abandon an in-flight request; without this checkpoint a terminal
-    // SERVICE could launder a cancellation into `Complete` because no later operator
-    // would ever poll it.
     let post_return_trip = ctx.stop_check();
     let error = match response {
-        Ok(mut resolved) => {
-            // SPARQL SELECT needs a projection item, so a carrier for a body with
-            // no observable variables uses a fresh constant unit column. Restore
-            // the source body's zero-column schema, keeping its bag one row for
-            // one row. An endpoint's extra columns cannot become caller bindings.
-            let schema = crate::eval::syntactic_schema(inner);
+        Ok(mut response) => {
+            let schema = crate::eval::syntactic_schema_admitted(inner, &workspace)?;
             if schema
                 .vars()
                 .iter()
                 .all(crate::blank_scope::is_joined_blank)
             {
-                resolved.variables.clear();
-                for row in &mut resolved.rows {
+                response.bindings.variables.clear();
+                for row in &mut response.bindings.rows {
                     row.clear();
                 }
             }
             if let Some(tripped) = post_return_trip {
-                let schema = Arc::new(VarSchema::from_vars(resolved.variables));
+                let schema = VarSchema::from_vars_admitted(
+                    response.bindings.variables.iter().cloned(),
+                    &workspace,
+                )?
+                .shared_admitted(&workspace)?;
                 return Ok(Invocation::Answered(Evaluated::Truncated(
                     Truncation::bag_only_origin(SolutionSeq::empty(schema), tripped),
                 )));
             }
-            let (seq, tripped) = ingest(resolved, ctx)?;
+            let (seq, tripped) = ingest_admitted(&response, ctx)?;
             return Ok(Invocation::Answered(match tripped {
                 None => Evaluated::Complete(seq),
                 Some(tripped) => Evaluated::Truncated(Truncation::origin(seq, tripped)),
             }));
         }
-        // A governor the source was handed. Not a failure of the invocation and so never
-        // silenced — latched into the evidence so the receipt names the same governor the
-        // result does.
-        Err(RemoteError::Governed(governor)) => {
+        Err(ServiceResolutionError::Operational(error)) => return Err(error),
+        Err(ServiceResolutionError::Invocation(error)) => error,
+    };
+    match error.error() {
+        RemoteError::Governed(governor) => {
             return Ok(Invocation::Answered(Evaluated::Truncated(
                 Truncation::origin(
-                    SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
-                    ctx.record_trip(governor),
+                    SolutionSeq::empty(crate::eval::syntactic_schema_admitted(inner, &workspace)?),
+                    ctx.record_trip(*governor),
                 ),
             )));
         }
-        Err(RemoteError::GovernedAfterCompletion(governor)) => {
+        RemoteError::GovernedAfterCompletion(governor) => {
             return Ok(Invocation::Answered(Evaluated::Truncated(
                 Truncation::bag_only_origin(
-                    SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
-                    ctx.record_trip(governor),
+                    SolutionSeq::empty(crate::eval::syntactic_schema_admitted(inner, &workspace)?),
+                    ctx.record_trip(*governor),
                 ),
             )));
         }
-        // The forwarded body ran out of stack inside an in-process source: this host's
-        // limit, not the invocation's failure, so it is re-raised as the same typed
-        // refusal it was, `SILENT` or not, however deep the nesting of in-process sources
-        // that carried it out.
-        Err(RemoteError::StackExhausted(construct)) => {
+        RemoteError::StackExhausted(construct) => {
             return Err(EvalError::StackExhausted { construct });
         }
-        Err(RemoteError::HostStackExhausted(construct)) => {
+        RemoteError::HostStackExhausted(construct) => {
             return Err(EvalError::HostStackExhausted { construct });
         }
-        Err(RemoteError::SourceRead(message)) => return Err(EvalError::SourceRead(message)),
-        Err(RemoteError::ExchangeIdExhausted) => return Err(EvalError::ExchangeIdExhausted),
-        Err(error) => error,
-    };
-    // Every remaining variant is the invocation failing. Without `SILENT` the failure
-    // outranks a stop that fired during the same call; under `SILENT` the failure is
-    // erased, so the stop becomes the surviving fact and is reported as the governor it
-    // is.
+        RemoteError::WorkspaceStopped => return Err(EvalError::WorkspaceStopped),
+        RemoteError::ExchangeIdExhausted => return Err(EvalError::ExchangeIdExhausted),
+        RemoteError::SourceRead(_) => {
+            return Err(RetainedServiceFailure::new(endpoint, error, &workspace)?.into_eval_error());
+        }
+        _ => {}
+    }
     if silent && let Some(tripped) = post_return_trip {
         return Ok(Invocation::Answered(Evaluated::Truncated(
             Truncation::bag_only_origin(
-                SolutionSeq::empty(crate::eval::syntactic_schema(inner)),
+                SolutionSeq::empty(crate::eval::syntactic_schema_admitted(inner, &workspace)?),
                 tripped,
             ),
         )));
     }
-    let (kind, error) = match error {
-        // Raised as the STRUCTURED `EvalError::ServiceDenied` rather than as a formatted
-        // `EvalError::Remote`, because this error may not be at the end of its journey:
-        // an in-process resolver evaluates a forwarded body itself, so a denial raised by
-        // a clause NESTED in that body comes back out through this same return, and
-        // `remote_error_for` recognizes it as the denial it is.
-        RemoteError::Denied(denial) => (SilencedKind::Denied, EvalError::ServiceDenied(denial)),
-        RemoteError::HostDenied { endpoint, message } => (
-            SilencedKind::HostDenied,
-            EvalError::ServiceHostDenied { endpoint, message },
-        ),
-        RemoteError::HostFault { endpoint, message } => (
-            SilencedKind::Fault,
-            EvalError::ServiceHostFault { endpoint, message },
-        ),
-        RemoteError::Unconfigured(message) => (
-            SilencedKind::Unconfigured,
-            EvalError::ServiceUnconfigured(format!("SERVICE <{endpoint}>: {message}")),
-        ),
-        other => {
-            let kind = match &other {
-                RemoteError::Decode(_) => SilencedKind::Decode,
-                RemoteError::Disabled => SilencedKind::Disabled,
-                _ => SilencedKind::Transport,
-            };
-            (
-                kind,
-                EvalError::remote(format!("SERVICE <{endpoint}>: {other}")),
-            )
-        }
-    };
-    failed_invocation(endpoint, kind, error, silent)
+    let failure = RetainedServiceFailure::new(endpoint, error, &workspace)?;
+    let kind = failure.silenced_kind();
+    failed_invocation(
+        endpoint,
+        kind,
+        failure.into_eval_error(),
+        silent,
+        &workspace,
+    )
 }
 
 /// The join identity: a single empty-binding row. `Join(left, identity) == left`,
 /// so a silenced `SERVICE SILENT` leaves the surrounding query unchanged.
-pub(crate) fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
-    SolutionSeq {
-        schema: VarSchema::empty_shared(),
-        rows: vec![purrdf_core::smallvec![]],
-    }
+pub(crate) fn identity_seq<I: ViewTermId>(
+    workspace: &crate::WorkspaceCapability,
+) -> Result<SolutionSeq<I>, EvalError> {
+    SolutionSeq::unit_admitted(workspace)
 }
 
 /// Intern a remote result's owned [`TermValue`]s into the per-query scratch space,
@@ -1201,78 +1810,58 @@ pub(crate) fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
 /// a mistake) can size directly. The source seam receives the same bound so a built-in
 /// decoder can avoid constructing an over-limit owned response in the first place; this
 /// check remains the mandatory backstop for injected sources.
-fn ingest<D: DatasetView + Sync>(
-    resolved: ResolvedBindings,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
-    let ResolvedBindings {
-        variables,
-        rows: resolved_rows,
-        cell_limit_exceeded_at,
-    } = resolved;
-    let schema = Arc::new(VarSchema::from_vars(variables));
-    // The shared admission sequence (see `crate::row_ingest`): ceiling observed before
-    // the row is interned, then the per-row charge, then the intern. `SERVICE` names its
-    // own charge point here; the sequence itself is the one a property-function call
-    // also runs, so the two cannot drift apart.
-    let ingest = crate::row_ingest::GovernedRowIngest::new(
-        ctx,
-        schema.len(),
-        Some(crate::governor::ChargePoint::RemoteRowIngested),
-    );
-    let mut rows = Vec::with_capacity(ingest.capacity_for(resolved_rows.len()));
-    let mut blanks = crate::DetHashMap::default();
-    let mut tripped = None;
-    'bindings: for mut binding in resolved_rows {
-        match ingest.admit(ctx, rows.len()) {
-            crate::row_ingest::IngestVerdict::Abandoned(governor) => {
-                tripped = governor;
-                break;
-            }
-            crate::row_ingest::IngestVerdict::Admitted => {}
-        }
-        for value in binding.iter_mut().take(schema.len()) {
-            if let Some(term) = value.take() {
-                let Some(remapped) = response_blank_value(term, &mut blanks, ctx)? else {
-                    tripped = ctx.expression_barrier.observed();
-                    break 'bindings;
-                };
-                *value = Some(remapped);
-            }
-        }
-        let row = ingest.intern_row(ctx, binding)?;
-        rows.push(row);
-    }
-    if tripped.is_none()
-        && let Some(attempted_cells) = cell_limit_exceeded_at
-    {
-        tripped = ctx.observe_cell_count(attempted_cells).err();
-    }
-    Ok((SolutionSeq { schema, rows }, tripped))
-}
+type ResponseBlanks = crate::AdmittedMap<
+    purrdf_core::BlankScope,
+    crate::AdmittedMap<purrdf_lex::allocation::SharedText, purrdf_lex::allocation::SharedText>,
+>;
 
-/// Carry a response's blank-node equivalence classes into the caller's mint space.
-/// The same map covers bare blanks, triple terms and embedded composite blanks.
-fn response_blank_value<D: DatasetView + Sync>(
-    value: TermValue,
-    blanks: &mut crate::DetHashMap<purrdf_core::BlankScope, crate::DetHashMap<String, String>>,
+/// Carry the original copied cell plus every new remap allocation to scratch.
+fn response_blank_value_admitted<D: DatasetView + Sync>(
+    value: crate::WorkspaceTerm,
+    blanks: &mut ResponseBlanks,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<TermValue>, EvalError> {
+) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+    let workspace = ctx.growth.clone();
+    let mut frame = crate::workspace::LexicalFrame::new(&workspace);
     let mut has_blanks = false;
-    let visited = value.visit_blank_identities(|label, scope| {
-        has_blanks = true;
-        let labels = blanks.entry(scope).or_default();
-        if !labels.contains_key(label) {
-            match ctx.try_mint_blank_label("service") {
-                Ok(Some(fresh)) => {
-                    labels.insert(label.to_owned(), fresh);
-                }
-                Ok(None) => return core::ops::ControlFlow::Break(Ok(())),
-                Err(error) => return core::ops::ControlFlow::Break(Err(error)),
-            }
-        }
-        core::ops::ControlFlow::Continue(())
-    });
+    let visited = {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        value
+            .visit_blank_identities_with_memory(
+                |label, scope, _| {
+                    has_blanks = true;
+                    let answer = (|| {
+                        if blanks.get(&scope).is_none() {
+                            blanks.insert_admitted(
+                                scope,
+                                crate::AdmittedMap::default(),
+                                &workspace,
+                            )?;
+                        }
+                        let labels = blanks.get_mut(&scope).expect("response scope inserted");
+                        if !labels.contains_key(label) {
+                            let Some(fresh) = ctx.try_mint_blank_text("service")? else {
+                                return Ok(false);
+                            };
+                            let key = workspace.authored_text(&label)?;
+                            labels.insert_admitted(key, fresh, &workspace)?;
+                        }
+                        Ok::<_, EvalError>(true)
+                    })();
+                    match answer {
+                        Ok(true) => core::ops::ControlFlow::Continue(()),
+                        Ok(false) => core::ops::ControlFlow::Break(Ok(())),
+                        Err(error) => core::ops::ControlFlow::Break(Err(error)),
+                    }
+                },
+                &mut memory,
+            )
+            .map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "remote blank identity walk")
+            })?
+    };
     if let core::ops::ControlFlow::Break(aborted) = visited {
         aborted?;
         return Ok(None);
@@ -1280,59 +1869,52 @@ fn response_blank_value<D: DatasetView + Sync>(
     if !has_blanks {
         return Ok(Some(value));
     }
-    value
-        .try_fold_owned(
-            |term| {
-                Ok(match term {
-                    TermValue::Blank { label, scope } => TermValue::Blank {
-                        label: blanks[&scope][&label].clone(),
-                        scope: purrdf_core::BlankScope::DEFAULT,
-                    },
-                    TermValue::Literal {
-                        lexical_form,
-                        datatype,
-                        language,
-                        direction,
-                    } => {
-                        let rewritten = purrdf_core::cdt_blank::rewrite_cdt_blank_terms(
-                            &lexical_form,
-                            &datatype,
-                            &mut |token| {
-                                let (label, scope) = purrdf_core::blank_label::decode_blank_label(
-                                    token,
-                                    purrdf_core::blank_label::LabelAlphabet::BlankNodeLabel,
-                                );
-                                let encoded = purrdf_core::blank_label::encode_blank_label(
-                                    &blanks[&scope][label.as_ref()],
-                                    purrdf_core::BlankScope::DEFAULT,
-                                    purrdf_core::blank_label::LabelAlphabet::BlankNodeLabel,
-                                );
-                                Some(format!("_:{encoded}"))
-                            },
-                        );
-                        let lexical_form = match rewritten {
-                            std::borrow::Cow::Borrowed(_) => lexical_form,
-                            std::borrow::Cow::Owned(rewritten) => rewritten,
-                        };
-                        TermValue::Literal {
-                            lexical_form,
-                            datatype,
-                            language,
-                            direction,
-                        }
-                    }
-                    term => term,
-                })
-            },
-            |s, p, o| {
-                Ok(TermValue::Triple {
-                    s: purrdf_core::TermBox::new(s),
-                    p: purrdf_core::TermBox::new(p),
-                    o: purrdf_core::TermBox::new(o),
-                })
-            },
+    let original_bytes = value.layout(&workspace)?.bytes;
+    let (value, mut original) = value.into_parts();
+    let mapped = {
+        let mut memory = purrdf_lex::allocation::Memory::resume(&mut frame, 0);
+        value.try_fold_owned_with_memory(
+            |term, memory| Ok::<_, EvalError>(match term {
+                TermValue::Blank { label, scope } => {
+                    let fresh = blanks.get(&scope).and_then(|labels| labels.get(label.as_str())).expect("identity visitor registered each response blank");
+                    let label = memory.string(fresh.as_str()).map_err(|error| memory.admission_mut().storage_error(error, "remote remapped blank label"))?;
+                    TermValue::Blank { label, scope: purrdf_core::BlankScope::DEFAULT }
+                }
+                TermValue::Literal { lexical_form, datatype, language, direction } => {
+                    let rewritten = purrdf_core::cdt_blank::rewrite_cdt_blank_terms_with_memory(&lexical_form, &datatype, &mut |token, memory| {
+                        use purrdf_core::blank_label::{LabelAlphabet, decode_blank_label_with_memory, encode_blank_label_with_memory};
+                        let (label, scope) = decode_blank_label_with_memory(token, LabelAlphabet::BlankNodeLabel, memory)?;
+                        let fresh = blanks.get(&scope).and_then(|labels| labels.get(label.as_ref())).expect("identity visitor registered each embedded response blank");
+                        let encoded = encode_blank_label_with_memory(fresh.as_str(), purrdf_core::BlankScope::DEFAULT, LabelAlphabet::BlankNodeLabel, memory)?;
+                        let replacement = memory.format(&format_args!("_:{encoded}"))?;
+                        if let std::borrow::Cow::Owned(encoded) = encoded { memory.release_string(encoded)?; }
+                        if let std::borrow::Cow::Owned(label) = label { memory.release_string(label)?; }
+                        Ok(Some(replacement))
+                    }, memory).map_err(|error| memory.admission_mut().storage_error(error, "remote composite blank remapping"))?;
+                    let lexical_form = match rewritten { std::borrow::Cow::Borrowed(_) => lexical_form, std::borrow::Cow::Owned(rewritten) => rewritten };
+                    TermValue::Literal { lexical_form, datatype, language, direction }
+                }
+                term => term,
+            }),
+            |s, p, o, memory| {
+                let mut boxed = |term| {
+                    memory.add_bytes(std::alloc::Layout::new::<TermValue>().size()).map_err(|error| memory.admission_mut().storage_error(error, "remote triple component"))?;
+                    purrdf_core::small::try_boxed(term).map(purrdf_core::TermBox::from).map_err(|_| EvalError::AllocationFailed { construct: "remote remapped triple component" })
+                };
+                Ok(TermValue::Triple { s: boxed(s)?, p: boxed(p)?, o: boxed(o)? })
+            }, &mut memory,
+        ).map_err(|error| match error { purrdf_core::OwnedTermFoldError::Visitor(error) => error, purrdf_core::OwnedTermFoldError::Storage(error) => memory.admission_mut().storage_error(error, "remote owned term fold") })?
+    };
+    // Every new byte was admitted by frame before allocation. Transfer its
+    // original live total while the mapped payload and both old grants survive.
+    let total = original_bytes
+        .checked_add(
+            u64::try_from(frame.admitted_bytes()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
         )
-        .map(Some)
+        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+    original.resize(total)?;
+    drop(frame);
+    Ok(Some(crate::WorkspaceTerm::new(mapped, original)))
 }
 
 /// Reclassify an error raised by a forwarded in-memory evaluation for the resolver seam.
@@ -1355,9 +1937,11 @@ fn remote_error_for(error: EvalError) -> RemoteError {
             RemoteError::HostFault { endpoint, message }
         }
         EvalError::SourceRead(message) => RemoteError::SourceRead(message),
+        EvalError::WorkspaceStopped => RemoteError::WorkspaceStopped,
         EvalError::ExchangeIdExhausted => RemoteError::ExchangeIdExhausted,
         EvalError::StackExhausted { construct } => RemoteError::StackExhausted(construct),
         EvalError::HostStackExhausted { construct } => RemoteError::HostStackExhausted(construct),
+        EvalError::RetainedServiceFailure(error) => RemoteError::Decode(error.to_string()),
         other => RemoteError::Decode(other.to_string()),
     }
 }
@@ -1369,49 +1953,340 @@ fn remote_error_for(error: EvalError) -> RemoteError {
 /// `nested` is that resolver itself, which is what keeps a nested `SERVICE` subject to the
 /// same capability gate as the outer one: threading a bare dataset map instead would let a
 /// nested clause reach an endpoint the catalog refuses at the top level.
-pub(crate) fn evaluate_in_memory(
+pub(crate) fn build_error(
+    error: ServiceBuildError,
+    mut frame: crate::workspace::LexicalFrame,
+) -> ServiceResolutionError {
+    if let Some(error) = frame.take_failure() {
+        return ServiceResolutionError::Operational(error);
+    }
+    match error {
+        ServiceBuildError::Operational(error) => ServiceResolutionError::Operational(error),
+        ServiceBuildError::Storage(error) => {
+            ServiceResolutionError::Operational(frame.storage_error(error, "SERVICE producer"))
+        }
+        ServiceBuildError::Remote(error) => match AdmittedRemoteError::native(error, frame) {
+            Ok(error) => ServiceResolutionError::Invocation(error),
+            Err(error) => ServiceResolutionError::Operational(error),
+        },
+    }
+}
+
+macro_rules! resident_service_resolve {
+    ($(#[$meta:meta])*) => {
+        $(#[$meta])*
+        fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
+            crate::remote::resident_resolution(
+                self.resolve_admitted(request, crate::WorkspaceCapability::resident()),
+            )
+        }
+    };
+}
+pub(crate) use resident_service_resolve;
+
+pub(crate) fn resident_resolution(
+    result: Result<AdmittedResolvedBindings, ServiceResolutionError>,
+) -> Result<ResolvedBindings, RemoteError> {
+    match result {
+        Ok(response) => Ok(response
+            .try_into_resident()
+            .expect("resident response must retain only resident grants")),
+        Err(ServiceResolutionError::Invocation(error)) => {
+            Err(error.into_resident().expect("resident invocation error"))
+        }
+        Err(ServiceResolutionError::Operational(error)) => Err(remote_error_for(error)),
+    }
+}
+
+pub(crate) fn invocation_error(
+    error: RemoteError,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<ServiceResolutionError, EvalError> {
+    Ok(ServiceResolutionError::Invocation(
+        AdmittedRemoteError::native(error, crate::workspace::LexicalFrame::new(workspace))?,
+    ))
+}
+
+fn service_evaluation_error(
+    error: crate::engine::EvaluationFailure,
+    workspace: &crate::WorkspaceCapability,
+) -> ServiceResolutionError {
+    match error {
+        crate::engine::EvaluationFailure::Evaluation(EvalError::RetainedServiceFailure(error))
+            if matches!(
+                error.error.error(),
+                RemoteError::Denied(_)
+                    | RemoteError::HostDenied { .. }
+                    | RemoteError::HostFault { .. }
+            ) =>
+        {
+            ServiceResolutionError::Invocation(error.error)
+        }
+        crate::engine::EvaluationFailure::Evaluation(
+            error @ (EvalError::ServiceDenied(_)
+            | EvalError::ServiceHostDenied { .. }
+            | EvalError::ServiceHostFault { .. }),
+        ) if !workspace.is_bounded() => {
+            // Resident forwarded evaluation exposes the original typed variants.
+            // Move their original payloads back through the resolver seam;
+            // rendering here would erase denial/fault identity and inner endpoint.
+            match invocation_error(remote_error_for(error), workspace) {
+                Ok(error) => error,
+                Err(error) => ServiceResolutionError::Operational(error),
+            }
+        }
+        crate::engine::EvaluationFailure::Evaluation(error)
+            if error
+                .diagnostic_code()
+                .is_some_and(EvalError::diagnostic_requires_propagation) =>
+        {
+            ServiceResolutionError::Operational(error)
+        }
+        other => {
+            let result = match other {
+                crate::engine::EvaluationFailure::Diagnostic(error) => {
+                    AdmittedRemoteError::message(
+                        purrdf_core::SilencedKind::Decode,
+                        error,
+                        workspace,
+                    )
+                }
+                crate::engine::EvaluationFailure::RetainedDiagnostic(error) => {
+                    AdmittedRemoteError::message(
+                        purrdf_core::SilencedKind::Decode,
+                        &error.diagnostic().message,
+                        workspace,
+                    )
+                }
+                crate::engine::EvaluationFailure::Evaluation(error) => {
+                    AdmittedRemoteError::message(
+                        purrdf_core::SilencedKind::Decode,
+                        error,
+                        workspace,
+                    )
+                }
+            };
+            match result {
+                Ok(error) => ServiceResolutionError::Invocation(error),
+                Err(error) => ServiceResolutionError::Operational(error),
+            }
+        }
+    }
+}
+
+fn ingest_admitted<D: DatasetView + Sync>(
+    resolved: &AdmittedResolvedBindings,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
+    let response = resolved.bindings();
+    let schema = VarSchema::from_vars_admitted(response.variables.iter().cloned(), &ctx.growth)?
+        .shared_admitted(&ctx.growth)?;
+    let ingest = crate::row_ingest::GovernedRowIngest::new(
+        ctx,
+        schema.len(),
+        Some(crate::governor::ChargePoint::RemoteRowIngested),
+    );
+    let mut rows = crate::solution::RowsBuilder::from_storage(
+        crate::AdmittedVec::with_capacity(ingest.capacity_for(response.rows.len()), &ctx.growth)?,
+        &ctx.growth,
+    );
+    let mut blanks = ResponseBlanks::default();
+    let mut tripped = None;
+    'bindings: for binding in &response.rows {
+        match ingest.admit(ctx, rows.len()) {
+            crate::row_ingest::IngestVerdict::Abandoned(governor) => {
+                tripped = governor;
+                break;
+            }
+            crate::row_ingest::IngestVerdict::Admitted => {}
+        }
+        let mut cells =
+            crate::AdmittedVec::with_capacity(binding.len().min(schema.len()), &ctx.growth)?;
+        for value in binding.iter().take(schema.len()) {
+            let value = match value {
+                None => None,
+                Some(value) => {
+                    let value = ctx.growth.clone_term(value)?;
+                    let Some(value) = response_blank_value_admitted(value, &mut blanks, ctx)?
+                    else {
+                        tripped = ctx.expression_barrier.observed();
+                        break 'bindings;
+                    };
+                    Some(value)
+                }
+            };
+            cells.push(value)?;
+        }
+        rows.push_row(ingest.intern_row(ctx, cells)?)?;
+    }
+    if tripped.is_none()
+        && let Some(attempted) = response.cell_limit_exceeded_at
+    {
+        tripped = ctx.observe_cell_count(attempted).err();
+    }
+    Ok((
+        SolutionSeq {
+            schema,
+            rows: rows.finish()?,
+        },
+        tripped,
+    ))
+}
+
+#[cfg(test)]
+fn ingest<D: DatasetView + Sync>(
+    resolved: ResolvedBindings,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<(SolutionSeq<D::Id>, Option<TrippedGovernor>), EvalError> {
+    assert!(
+        !ctx.growth.is_bounded(),
+        "caller-owned fixtures are resident only"
+    );
+    let response = AdmittedResolvedBindings {
+        bindings: resolved,
+        term_owners: crate::AdmittedVec::new(&ctx.growth),
+        storage: ServiceStorage::Native(crate::workspace::LexicalFrame::new(&ctx.growth)),
+    };
+    ingest_admitted(&response, ctx)
+}
+
+/// The same native parser, blank-scope and normalization producers, sharing the
+/// calling query's original capability through output and every error path.
+pub(crate) fn evaluate_in_memory_admitted(
     dataset: &RdfDataset,
     request: ServiceRequest<'_>,
     nested: &(dyn ServiceResolver + Sync),
-) -> Result<ResolvedBindings, RemoteError> {
-    let ServiceRequest {
-        query_text,
-        stop,
-        max_intermediate_cells,
-        ..
-    } = request;
-    let parsed = purrdf_sparql_algebra::SparqlParser::new()
-        .parse_query(query_text)
-        .map_err(|e| RemoteError::Decode(e.to_string()))?;
-    // Evaluated here without the engine's admission, so the one rewrite admission
-    // makes that changes answers rather than refusing — a blank node label shared by
-    // two pieces of one basic graph pattern is one variable — is applied here too.
-    // A walk over the whole forwarded body, over work lists, at whatever depth the
-    // `SERVICE` sits.
-    let parsed = crate::blank_scope::join_shared_blanks_in_query(&parsed).unwrap_or(parsed);
-    let parsed = crate::join_plan::normalize_query(&parsed).unwrap_or(parsed);
-    let mut ctx = EvalCtx::new(dataset).with_remote(nested);
-    if stop.is_some() || max_intermediate_cells.is_some() {
-        let mut governors = QueryGovernors::UNBOUNDED;
-        if let Some(signal) = stop {
-            governors = governors.with_stop_signal(Arc::clone(signal));
+    workspace: &crate::WorkspaceCapability,
+) -> Result<AdmittedResolvedBindings, ServiceResolutionError> {
+    use crate::workspace::LexicalFrame;
+    use purrdf_lex::allocation::Memory;
+    let parsed = crate::engine::parse_admitted_query(
+        request.query_text,
+        &purrdf_sparql_algebra::ParserOptions::default(),
+        None,
+        &[],
+        workspace,
+    )
+    .map_err(|error| service_evaluation_error(error, workspace))?;
+    struct QueryOwner {
+        query: purrdf_sparql_algebra::Query,
+        frame: LexicalFrame,
+    }
+    let (query, allocation, live) = parsed.into_parts();
+    let mut owner = QueryOwner {
+        query,
+        frame: LexicalFrame::from_allocation(workspace, allocation, live),
+    };
+    {
+        let mut memory = Memory::resume(&mut owner.frame, live);
+        let prepared = crate::property_fn_plan::plan_query_with_memory(
+            &owner.query,
+            &crate::property_fn::PropertyFunctionRegistry::EMPTY,
+            &crate::agg_fn::AggregateRegistry::EMPTY,
+            &[],
+            &mut memory,
+        )
+        .map_err(|error| service_evaluation_error(error, workspace))?;
+        if let Some(prepared) = prepared {
+            owner.query = prepared;
+            memory.release_bytes(live).map_err(|error| {
+                memory
+                    .admission_mut()
+                    .storage_error(error, "SERVICE old parsed query")
+            })?;
         }
-        if let Some(cells) = max_intermediate_cells {
+    }
+    let mut ctx = EvalCtx::new_admitted(dataset, workspace)?.with_remote(nested);
+    ctx.growth = workspace.clone();
+    if request.stop.is_some() || request.max_intermediate_cells.is_some() {
+        let mut governors = QueryGovernors::UNBOUNDED;
+        if let Some(stop) = request.stop {
+            governors = governors.with_stop_signal(Arc::clone(stop));
+        }
+        if let Some(cells) = request.max_intermediate_cells {
             governors = governors.with_max_intermediate_cells(cells);
         }
-        ctx = ctx.with_governors(Arc::new(GovernorState::new(&governors)));
+        let state = crate::workspace::SharedWorkspace::new_admitted(
+            GovernorState::new(&governors),
+            workspace,
+        )?;
+        ctx = ctx.with_governor_owner(state);
     }
-    match crate::eval::evaluate_query_evaluated(&parsed, &mut ctx).map_err(remote_error_for)? {
+    let outcome = crate::eval::evaluate_query_evaluated(&owner.query, &mut ctx)
+        .map_err(|error| service_evaluation_error(error.into(), workspace))?;
+    // Query destruction precedes its ORIGINAL frame release, including failed
+    // output publication. Intrinsic leaf grants are independently shared.
+    // Keep the query carrier alive through context caches and response publication.
+    match outcome {
         EvaluatedOutcome::Complete(Outcome::Solutions(seq)) => {
-            let (variables, rows) = materialize_solutions(&seq, &ctx).map_err(remote_error_for)?;
-            Ok(ResolvedBindings {
-                variables: variables.into_iter().map(Variable::new).collect(),
-                rows,
-                cell_limit_exceeded_at: None,
+            let mut frame = LexicalFrame::new(workspace);
+            let mut owners = crate::AdmittedVec::new(workspace);
+            let bindings = {
+                let mut memory = Memory::new(&mut frame);
+                let mut variables = Vec::new();
+                for variable in seq.schema.vars() {
+                    memory
+                        .push(&mut variables, variable.clone())
+                        .map_err(|error| {
+                            memory
+                                .admission_mut()
+                                .storage_error(error, "SERVICE response variables")
+                        })?;
+                }
+                let mut rows = Vec::new();
+                for row in &seq.rows {
+                    let mut cells = Vec::new();
+                    memory
+                        .reserve(&mut cells, variables.len())
+                        .map_err(|error| {
+                            memory
+                                .admission_mut()
+                                .storage_error(error, "SERVICE response row")
+                        })?;
+                    for cell in row.iter().take(variables.len()) {
+                        let value = match cell {
+                            None => None,
+                            Some(term) => {
+                                let value = ctx.scratch.try_owned_value_of(
+                                    ctx.dataset,
+                                    *term,
+                                    workspace,
+                                    |error| match error {},
+                                )?;
+                                owners.reserve_next()?;
+                                let (value, allocation) = value.into_parts();
+                                // The vector is pre-reserved before detaching the
+                                // payload: the original guard cannot be lost here.
+                                owners.push(allocation)?;
+                                Some(value)
+                            }
+                        };
+                        cells.push(value);
+                    }
+                    memory.push(&mut rows, cells).map_err(|error| {
+                        memory
+                            .admission_mut()
+                            .storage_error(error, "SERVICE response bag")
+                    })?;
+                }
+                ResolvedBindings {
+                    variables,
+                    rows,
+                    cell_limit_exceeded_at: None,
+                }
+            };
+            Ok(AdmittedResolvedBindings {
+                bindings,
+                term_owners: owners,
+                storage: ServiceStorage::Native(frame),
             })
         }
-        EvaluatedOutcome::Complete(_) => Err(RemoteError::Decode(
-            "SERVICE expects a SELECT query".to_owned(),
+        EvaluatedOutcome::Complete(_) => Err(ServiceResolutionError::Invocation(
+            AdmittedRemoteError::message(
+                purrdf_core::SilencedKind::Decode,
+                "SERVICE expects a SELECT query",
+                workspace,
+            )?,
         )),
         EvaluatedOutcome::Truncated {
             outcome: Outcome::Solutions(seq),
@@ -1424,23 +2299,75 @@ pub(crate) fn evaluate_in_memory(
             }
         ) =>
         {
-            // The forwarded evaluator may have crossed its ceiling below a
-            // non-monotone operator, so do not promote its possibly-unknown rows to a
-            // remote prefix. The empty prefix is always a sound lower bound; the flag
-            // makes the outer evaluator record the same typed cell trip.
-            Ok(ResolvedBindings {
-                variables: seq.schema.vars().to_vec(),
-                rows: Vec::new(),
-                cell_limit_exceeded_at: match certificate.tripped() {
-                    TrippedGovernor::Budget { consumed, .. } => Some(consumed),
-                    _ => None,
-                },
+            let attempted = match certificate.tripped() {
+                TrippedGovernor::Budget { consumed, .. } => Some(consumed),
+                _ => None,
+            };
+            AdmittedResolvedBindings::try_build(workspace, |memory| {
+                let variables = memory.collect(seq.schema.vars().iter().cloned())?;
+                Ok(ResolvedBindings {
+                    variables,
+                    rows: Vec::new(),
+                    cell_limit_exceeded_at: attempted,
+                })
             })
         }
-        EvaluatedOutcome::Truncated { certificate, .. } => {
-            Err(RemoteError::Governed(certificate.tripped()))
-        }
+        EvaluatedOutcome::Truncated { certificate, .. } => Err(invocation_error(
+            RemoteError::Governed(certificate.tripped()),
+            workspace,
+        )?),
     }
+}
+
+// Resident oracle doors delegate the production native bodies; none is used
+// by a bounded query or opaque resolver.
+#[cfg(test)]
+fn ground_term_has_blank_node(term: &GroundTerm) -> bool {
+    ground_term_has_blank_node_with_memory(
+        term,
+        &mut purrdf_lex::allocation::Memory::new(&mut crate::workspace::LexicalFrame::new(
+            &crate::WorkspaceCapability::resident(),
+        )),
+    )
+    .expect("resident ground blank walk")
+}
+#[cfg(test)]
+fn strip_blank_columns(
+    variables: &[Variable],
+    bindings: &[Vec<Option<GroundTerm>>],
+) -> (Vec<Variable>, Vec<Vec<Option<GroundTerm>>>) {
+    strip_blank_columns_with_memory(
+        variables,
+        bindings,
+        &mut purrdf_lex::allocation::Memory::new(&mut crate::workspace::LexicalFrame::new(
+            &crate::WorkspaceCapability::resident(),
+        )),
+    )
+    .expect("resident blank column stripping")
+}
+#[cfg(test)]
+fn join_dropping_empty_values(left: GraphPattern, right: GraphPattern) -> GraphPattern {
+    join_dropping_empty_values_with_memory(
+        left,
+        right,
+        &mut purrdf_lex::allocation::Memory::new(&mut crate::workspace::LexicalFrame::new(
+            &crate::WorkspaceCapability::resident(),
+        )),
+    )
+    .expect("resident SERVICE join sanitization")
+}
+#[cfg(test)]
+pub(crate) fn evaluate_in_memory(
+    dataset: &RdfDataset,
+    request: ServiceRequest<'_>,
+    nested: &(dyn ServiceResolver + Sync),
+) -> Result<ResolvedBindings, RemoteError> {
+    resident_resolution(evaluate_in_memory_admitted(
+        dataset,
+        request,
+        nested,
+        &crate::WorkspaceCapability::resident(),
+    ))
 }
 
 #[cfg(test)]
@@ -1498,7 +2425,7 @@ mod tests {
         Ok(match outcome {
             Outcome::Solutions(seq) => {
                 let (variables, rows) = materialize_solutions(&seq, &ctx)?;
-                let aux = ctx.constructed_dataset(&rows);
+                let aux = ctx.constructed_dataset(&rows)?;
                 SparqlResult::Solutions {
                     variables,
                     rows,
@@ -1518,7 +2445,7 @@ mod tests {
         query: &str,
     ) -> (
         Result<SparqlResult, EvalError>,
-        Vec<purrdf_core::SilencedInvocation>,
+        purrdf_core::SilencedEvidence,
     ) {
         use crate::eval::evaluate_query;
         let parsed = purrdf_sparql_algebra::SparqlParser::new()
@@ -1533,7 +2460,7 @@ mod tests {
             Ok(match outcome {
                 Outcome::Solutions(seq) => {
                     let (variables, rows) = materialize_solutions(&seq, &ctx)?;
-                    let aux = ctx.constructed_dataset(&rows);
+                    let aux = ctx.constructed_dataset(&rows)?;
                     SparqlResult::Solutions {
                         variables,
                         rows,
@@ -2453,7 +3380,7 @@ mod tests {
         /// Fuel charged.
         fuel: u64,
         /// The invocations `SILENT` absorbed.
-        silenced: Vec<purrdf_core::SilencedInvocation>,
+        silenced: purrdf_core::SilencedEvidence,
     }
 
     /// Evaluate `pattern` over an empty dataset under `governors`, with `source` injected.

@@ -1995,11 +1995,11 @@ fn project_boolean<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
 #[allow(clippy::needless_pass_by_value)]
 fn project_graph<D: DatasetView<ReadError = std::convert::Infallible> + Sync>(
     outcome: InternedOutcome<'_, '_, D>,
-) -> Result<Arc<RdfDataset>, String> {
+) -> Result<purrdf_sparql_eval::RetainedGraph, String> {
     match outcome {
-        // The graph is already frozen and shared by `Arc`; taking it out of the
-        // evaluation is a handle clone, not a copy of the derived triples.
-        InternedOutcome::Graph(graph) => Ok(Arc::clone(graph)),
+        // Keep the original account with the shared frozen graph through rule
+        // consumption; retaining copies no derived triples.
+        InternedOutcome::Graph(graph) => graph.retain().map_err(|error| error.to_string()),
         InternedOutcome::Solutions(_) => {
             Err("query must be a CONSTRUCT, got a SELECT result".to_owned())
         }
@@ -2075,7 +2075,7 @@ pub(crate) fn run_bound_construct_with_shacl_prebinding_view<
     handle: &mut ShaclExecution,
     bnode_mint_prefix: Option<&str>,
     invocation: crate::query_law::Invocation<'_>,
-) -> Result<Arc<RdfDataset>, String> {
+) -> Result<purrdf_sparql_eval::RetainedGraph, String> {
     run_bound_view(
         dataset,
         handle,

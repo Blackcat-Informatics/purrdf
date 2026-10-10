@@ -272,7 +272,7 @@ fn materialize(
             Ok::<_, String>((closure, render_reasoning_report(&report)))
         })
         .map_err(PyValueError::new_err)?;
-    Ok((PyRdfDataset::from_arc(closure), report))
+    Ok((PyRdfDataset::from_frozen(closure), report))
 }
 
 /// Close an N-Quads (or N-Triples) document under `regime`, returning

@@ -189,6 +189,13 @@ fn the_integer_logarithm_agrees_with_its_hand_values_on_this_target() {
 #[path = "support/bm25f_reference.rs"]
 mod bm25f_reference;
 
+#[path = "support/unrestricted_ranking_cases.rs"]
+mod unrestricted_ranking;
+use unrestricted_ranking::{
+    declared_large_corpora_are_exact, five_thousand_term_index, promoted_field_arithmetic_is_exact,
+    thirty_two_index_fields_are_exact,
+};
+
 /// All fielded scoring vectors, including maximum bounds, agree on this target.
 fn the_independent_fielded_reference_is_reproduced_on_this_target() {
     bm25f_reference::verify_reference_corpus();
@@ -199,4 +206,8 @@ purrdf_testkit::harness_main!(
     the_integer_logarithm_agrees_with_its_hand_values_on_this_target,
     the_pinned_ranking_is_reproduced_on_this_target,
     the_sentence_boundaries_are_reproduced_on_this_target,
+    declared_large_corpora_are_exact,
+    five_thousand_term_index,
+    promoted_field_arithmetic_is_exact,
+    thirty_two_index_fields_are_exact,
 );

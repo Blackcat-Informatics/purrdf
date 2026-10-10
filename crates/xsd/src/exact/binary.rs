@@ -60,12 +60,36 @@ pub(crate) fn log2_of_pow10(x: i64) -> i64 {
 /// A zero `n` is `+0`; a nonzero value that rounds to zero keeps its sign; a value
 /// at or beyond the overflow threshold is the signed infinity.
 pub(crate) fn round_ratio(negative: bool, n: &BigInt, d: &BigInt, format: &Format) -> u64 {
+    round_ratio_admitted_using(
+        negative,
+        n,
+        d,
+        format,
+        &crate::bigint::scratch::Unbounded,
+        &mut |_| Ok(()),
+    )
+    .expect("unbounded integer storage")
+}
+
+/// The same one-rounding body borrowing source limbs and allocating through
+/// the selected native destination provider. Admission covers fresh live
+/// destinations; source ownership is retained by the calling frame.
+pub(crate) fn round_ratio_admitted_using(
+    negative: bool,
+    n: &BigInt,
+    d: &BigInt,
+    format: &Format,
+    storage: &impl crate::bigint::scratch::Allocate,
+    admit: &mut impl FnMut(
+        super::cost::NumericOperationLayout,
+    ) -> Result<(), crate::bigint::LimbScratchError>,
+) -> Result<u64, crate::bigint::LimbScratchError> {
     let precision = format.precision;
     let fraction_bits = precision - 1;
     let exponent_bits: u32 = if precision == 53 { 11 } else { 8 };
     let sign = u64::from(negative) << (fraction_bits + exponent_bits);
     if n.is_zero() {
-        return 0;
+        return Ok(0);
     }
     let infinity = sign | (((1_u64 << exponent_bits) - 1) << fraction_bits);
     // n ∈ [2^(bn−1), 2^bn) and d ∈ [2^(bd−1), 2^bd), so
@@ -83,23 +107,38 @@ pub(crate) fn round_ratio(negative: bool, n: &BigInt, d: &BigInt, format: &Forma
     let high = clamp(delta + 1);
     // value ≥ 2^low: beyond the largest binade, it overflows.
     if low > format.max_exponent + 1 {
-        return infinity;
+        return Ok(infinity);
     }
     // value < 2^high ≤ half the smallest subnormal: it rounds to a signed zero.
     let min_quantum = format.min_exponent - i64::from(fraction_bits);
     if high < min_quantum {
-        return sign;
+        return Ok(sign);
     }
     // q = ⌊value · 2^k⌋ < 2^126, and ≥ 2^(126 − (high − low)) ≥ 2^124.
     let k = 126 - high;
-    let (numerator, denominator) = if k >= 0 {
-        (n.mul_pow2(u32::try_from(k).unwrap_or(u32::MAX)), d.clone())
-    } else {
-        (n.clone(), d.mul_pow2(u32::try_from(-k).unwrap_or(u32::MAX)))
-    };
+    let shift = u32::try_from(k.unsigned_abs())
+        .map_err(|_| crate::bigint::LimbScratchError::SizeOverflow)?;
+    let selected = if k >= 0 { n } else { d };
+    admit(super::cost::binary_shift_layout(
+        selected.bit_len(),
+        shift,
+        0,
+    )?)?;
+    let shifted = selected.shl_using(shift, storage)?;
+    let (numerator, denominator) = if k >= 0 { (&shifted, d) } else { (n, &shifted) };
+    admit(
+        super::cost::integer_division_layout(
+            numerator.limb_len() as u64,
+            denominator.limb_len() as u64,
+        )?
+        .with_live(shifted.allocated_bytes())?,
+    )?;
     let (quotient, remainder) = numerator
-        .div_rem(&denominator)
+        .div_rem_using(denominator, storage)?
         .expect("the denominator is nonzero");
+    // Only magnitudes enter this algorithm. Taking an owned positive sign
+    // permits negative borrowed sources without an absolute-magnitude copy.
+    let quotient = quotient.with_sign(false);
     let sticky = !remainder.is_zero();
     let q = u128::try_from(quotient.to_i128().expect("q < 2^126 fits i128"))
         .expect("q is non-negative");
@@ -136,10 +175,10 @@ pub(crate) fn round_ratio(negative: bool, n: &BigInt, d: &BigInt, format: &Forma
         exponent += 1;
     }
     if significand == 0 {
-        return sign;
+        return Ok(sign);
     }
     if exponent + i64::from(fraction_bits) > format.max_exponent {
-        return infinity;
+        return Ok(infinity);
     }
     let bits = if significand < 1_u64 << fraction_bits {
         // Subnormal: the exponent field is zero and the quantum is the minimum.
@@ -150,7 +189,7 @@ pub(crate) fn round_ratio(negative: bool, n: &BigInt, d: &BigInt, format: &Forma
             .expect("a normal exponent is positive");
         (biased << fraction_bits) | (significand & ((1_u64 << fraction_bits) - 1))
     };
-    sign | bits
+    Ok(sign | bits)
 }
 
 /// The exact value of a finite `f64` as `(negative, significand, exponent)`

@@ -6,10 +6,9 @@
 use purrdf_core::{RdfDatasetBuilder, ResourceDimension, ValidatedRdfDatasetBuilder};
 
 use super::{
-    Arc, Cow, DatasetView, FallibleDatasetView, FallibleSparqlError, GovernedEvidence,
-    GovernorState, NativeSparqlEngine, PreparedQuery, Query, QueryOptions, RdfDiagnostic,
-    TermValue, ViewOperationStatus, apply_query_options, certain_partial,
-    check_plan_matches_relations, empty_result_for, eval_diagnostic_code,
+    Arc, DatasetView, FallibleDatasetView, FallibleSparqlError, GovernedEvidence, GovernorState,
+    NativeSparqlEngine, PreparedQuery, Query, QueryOptions, RdfDiagnostic, TermValue,
+    ViewOperationStatus, apply_query_options, empty_result_for,
 };
 
 /// Work performed when a complete typed graph is appended to its destination.
@@ -32,15 +31,21 @@ pub struct GraphBuildStats {
 
 /// Why a transactional graph build published no statements.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Typed budget refusal stays inline so reporting does not allocate after admission fails"
+)]
 pub enum GraphBuildError {
     /// Admission, substitution, evaluation or RDF validation failed.
     Query(RdfDiagnostic),
+    /// A native control allocation failed before diagnostic publication.
+    Evaluation(crate::EvalError),
     /// A shared operation governor stopped before complete publication.
     BudgetExhausted {
         /// The ceiling or stop signal that ended evaluation.
         tripped: crate::TrippedGovernor,
         /// The operation's accumulated resource evidence.
-        evidence: Box<crate::GovernorEvidence>,
+        evidence: crate::GovernorEvidence,
     },
 }
 
@@ -52,6 +57,7 @@ impl std::fmt::Display for GraphBuildError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Query(diagnostic) => std::fmt::Display::fmt(diagnostic, f),
+            Self::Evaluation(error) => std::fmt::Display::fmt(error, f),
             Self::BudgetExhausted { tripped, .. } => {
                 write!(f, "graph publication stopped: {tripped:?}")
             }
@@ -78,6 +84,10 @@ impl NativeSparqlEngine {
     /// # Errors
     /// Refuses non-CONSTRUCT forms, registry mismatches and evaluation failures.
     /// On every error the destination remains untouched.
+    #[expect(
+        clippy::result_large_err,
+        reason = "Typed budget refusal stays inline so reporting does not allocate after admission fails"
+    )]
     pub fn construct_prepared_into_view<
         'd,
         D: DatasetView<ReadError = std::convert::Infallible> + Sync,
@@ -98,7 +108,7 @@ impl NativeSparqlEngine {
             None,
             super::Sequencing::Free,
         )?;
-        Ok(publish(staged, destination, None))
+        publish(staged, destination, None)
     }
 
     /// Build a complete typed CONSTRUCT under an existing operation governor.
@@ -113,6 +123,10 @@ impl NativeSparqlEngine {
     #[allow(
         clippy::too_many_arguments,
         reason = "mirrors the prepared operation entry with an explicit publication destination"
+    )]
+    #[expect(
+        clippy::result_large_err,
+        reason = "Typed budget refusal stays inline so reporting does not allocate after admission fails"
     )]
     pub fn construct_prepared_in_operation_into_view<
         'd,
@@ -135,7 +149,7 @@ impl NativeSparqlEngine {
             Some(state),
             super::Sequencing::Free,
         )?;
-        Ok(publish(staged, destination, Some(state.evidence())))
+        publish(staged, destination, Some(state.evidence()))
     }
 
     /// Build from an operationally fallible view, checking readiness before append.
@@ -170,18 +184,13 @@ impl NativeSparqlEngine {
                 evidence: GovernedEvidence::new(evidence, state.evidence()),
             });
         }
-        let _reporting = super::reserve_fallible_reporting(dataset).map_err(|error| {
+        let reporting = super::reserve_fallible_reporting(dataset).map_err(|error| {
             error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
         })?;
-        let workspace = super::reserve_fallible_workspace(
-            dataset,
-            &prepared.query,
-            !substitutions.is_empty(),
-            options,
-        )
-        .map_err(|error| {
-            error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
-        })?;
+        let workspace =
+            super::reserve_fallible_execution(dataset, reporting.execution()).map_err(|error| {
+                error.map_evidence(|evidence| GovernedEvidence::new(evidence, state.evidence()))
+            })?;
         let publication = crate::user_fn::RefusalPublication::default();
         let options = publication
             .options(dataset, options)
@@ -202,6 +211,13 @@ impl NativeSparqlEngine {
             super::Sequencing::for_view::<D>(),
             &workspace,
         );
+        if let Some(error) = workspace.take_failure() {
+            return Err(super::fallible_admission_failure(
+                dataset,
+                super::bounded_workspace::AdmissionError::Operational(error),
+            )
+            .map_evidence(|view| GovernedEvidence::new(view, state.evidence())));
+        }
         let result = match dataset.operation_status() {
             ViewOperationStatus::Failed { error, evidence } => {
                 Err(FallibleSparqlError::Operational {
@@ -211,19 +227,51 @@ impl NativeSparqlEngine {
             }
             ViewOperationStatus::Ready { evidence } => {
                 let evidence = GovernedEvidence::new(evidence, state.evidence());
+                let evaluation = evaluation
+                    .and_then(|staged| publish(staged, destination, Some(state.evidence())));
                 match evaluation {
-                    Ok(staged) => Ok((
-                        publish(staged, destination, Some(state.evidence())),
-                        evidence,
-                    )),
-                    Err(GraphBuildError::Query(diagnostic)) => Err(FallibleSparqlError::Query {
-                        diagnostic,
-                        evidence,
-                    }),
+                    Ok(stats) => Ok((stats, evidence)),
+                    Err(error @ (GraphBuildError::Query(_) | GraphBuildError::Evaluation(_))) => {
+                        let failure = match error {
+                            GraphBuildError::Query(diagnostic) => diagnostic.into(),
+                            GraphBuildError::Evaluation(error) => error.into(),
+                            GraphBuildError::BudgetExhausted { .. } => {
+                                unreachable!("matched a query failure")
+                            }
+                        };
+                        super::finish_fallible_read::<D, ()>(
+                            dataset,
+                            Err(failure),
+                            Some(&workspace),
+                        )
+                        .map_err(|error| {
+                            error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+                        })
+                        .map(|_| unreachable!("a native failure cannot publish a graph"))
+                    }
                     Err(GraphBuildError::BudgetExhausted { tripped, .. }) => {
+                        let (empty, _) = super::finish_fallible_read(
+                            dataset,
+                            empty_result_for(&prepared.query, &workspace.capability())
+                                .map_err(super::EvaluationFailure::from),
+                            Some(&workspace),
+                        )
+                        .map_err(|error| {
+                            error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+                        })?;
+                        let (result, _) = super::retain_query_result(
+                            dataset,
+                            empty,
+                            Some(&workspace),
+                        )
+                        .map_err(|error| {
+                            error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
+                        })?;
                         Err(FallibleSparqlError::BudgetExhausted {
                             tripped,
-                            partial: certain_partial(empty_result_for(&prepared.query), true),
+                            partial: crate::PartialAnswers::Certain(
+                                crate::RetainedPartialSparqlResult::new(result, true),
+                            ),
                             evidence,
                         })
                     }
@@ -239,6 +287,10 @@ impl NativeSparqlEngine {
         clippy::too_many_arguments,
         reason = "the shared staging body borrows its publication destination to choose fresh minted blank identities after admission"
     )]
+    #[expect(
+        clippy::result_large_err,
+        reason = "Typed budget refusal stays inline so reporting does not allocate after admission fails"
+    )]
     fn stage_construct<'d, D: DatasetView + Sync>(
         &'d self,
         dataset: &'d D,
@@ -248,7 +300,7 @@ impl NativeSparqlEngine {
         destination: &RdfDatasetBuilder,
         state: Option<&Arc<GovernorState>>,
         sequencing: super::Sequencing,
-    ) -> Result<ValidatedRdfDatasetBuilder, GraphBuildError> {
+    ) -> Result<StagedGraph, GraphBuildError> {
         let workspace = super::bounded_workspace::reserve(
             dataset,
             &prepared.query,
@@ -268,7 +320,11 @@ impl NativeSparqlEngine {
             &workspace,
         );
         publication.finish(evaluation, |error| {
-            matches!(error, GraphBuildError::Query(_))
+            matches!(
+                error,
+                GraphBuildError::Query(_)
+                    | GraphBuildError::Evaluation(crate::EvalError::FunctionAdmission(_))
+            )
         })
     }
 
@@ -279,6 +335,10 @@ impl NativeSparqlEngine {
         clippy::too_many_arguments,
         reason = "the one staging body keeps its destination, governor and sequencing under the admitted guard"
     )]
+    #[expect(
+        clippy::result_large_err,
+        reason = "Typed budget refusal stays inline so reporting does not allocate after admission fails"
+    )]
     fn stage_construct_admitted<'d, D: DatasetView + Sync>(
         &'d self,
         dataset: &'d D,
@@ -288,71 +348,109 @@ impl NativeSparqlEngine {
         destination: &RdfDatasetBuilder,
         state: Option<&Arc<GovernorState>>,
         sequencing: super::Sequencing,
-        workspace: &impl purrdf_core::WorkspaceReservation<Error = D::ReadError>,
-    ) -> Result<ValidatedRdfDatasetBuilder, GraphBuildError> {
-        let prefix =
-            crate::template::destination_mint_prefix(options.bnode_mint_prefix, |prefix| {
+        workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+    ) -> Result<StagedGraph, GraphBuildError> {
+        let capability = workspace.capability();
+        let prefix = crate::template::destination_mint_prefix_admitted(
+            options.bnode_mint_prefix,
+            |prefix| {
                 destination.blank_identities().any(|(label, scope)| {
                     scope == purrdf_core::BlankScope::DEFAULT && label.starts_with(prefix)
                 })
-            });
+            },
+            &capability,
+        )
+        .map_err(GraphBuildError::Evaluation)?;
         let options = QueryOptions {
             bnode_mint_prefix: prefix.as_deref().or(options.bnode_mint_prefix),
             ..options
         };
-        self.admit_construct(dataset, prepared, options, state)?;
-        let query = if substitutions.is_empty() {
-            Cow::Borrowed(&prepared.query)
+        self.admit_construct(dataset, prepared, substitutions, options, state, workspace)?;
+        let substituted = if substitutions.is_empty() {
+            None
         } else {
-            Cow::Owned(crate::substitute::apply_shacl_prebinding(
-                prepared.query.clone(),
-                crate::substitute::Prebindings::Owned(substitutions),
-            )?)
+            Some(
+                super::runtime_substitution(
+                    &prepared.query,
+                    crate::substitute::Prebindings::Owned(substitutions),
+                    &capability,
+                )
+                .map_err(graph_evaluation_failure)?,
+            )
         };
-        let mut ctx = apply_query_options(self.eval_ctx(dataset, workspace), options)?;
+        let query = substituted
+            .as_ref()
+            .map_or(&prepared.query, |value| &value.query);
+        let ctx = self
+            .eval_ctx(dataset, workspace)
+            .map_err(GraphBuildError::Evaluation)?;
+        let mut ctx = apply_query_options(ctx, options).map_err(graph_evaluation_failure)?;
         if let Some(state) = state {
             ctx = ctx.with_governors(Arc::clone(state));
         }
         ctx.options.force_sequential |= sequencing == super::Sequencing::Sequential;
         let evaluated = (|| {
-            crate::eval::prepare_query_context(&query, &mut ctx)?;
+            crate::eval::prepare_query_context(query, &mut ctx)?;
             let Query::Construct {
                 template, pattern, ..
-            } = query.as_ref()
+            } = query
             else {
                 unreachable!("substitution preserves the admitted query form")
             };
             crate::construct::eval_construct_staged(template, pattern, &mut ctx)
         })();
-        finish_staging(evaluated.map_err(|error| query_error(&error))?, state)
+        finish_staging(evaluated.map_err(GraphBuildError::Evaluation)?, state)
     }
+    #[expect(
+        clippy::result_large_err,
+        reason = "Typed budget refusal stays inline so reporting does not allocate after admission fails"
+    )]
     fn admit_construct<D: DatasetView + Sync>(
         &self,
         dataset: &D,
         prepared: &PreparedQuery,
+        substitutions: &[(String, TermValue)],
         options: QueryOptions<'_>,
         state: Option<&Arc<GovernorState>>,
+        workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> Result<(), GraphBuildError> {
-        check_plan_matches_relations(prepared, options, &crate::DetHashSet::default())?;
+        let capability = workspace.capability();
+        let parameters = super::RequestParameters::of_admitted(
+            crate::substitute::Prebindings::Owned(substitutions),
+            options.declared_prebound,
+            &capability,
+        )
+        .map_err(GraphBuildError::Evaluation)?;
+        parameters
+            .check_admitted(prepared, options, &capability)
+            .map_err(graph_evaluation_failure)?;
         if !matches!(prepared.query, Query::Construct { .. }) {
-            return Err(RdfDiagnostic::error(
-                "native-sparql-construct",
-                "typed graph building requires a CONSTRUCT query",
-            )
-            .into());
+            return Err(graph_evaluation_failure(
+                super::EvaluationFailure::native_diagnostic(
+                    "native-sparql-construct",
+                    &"typed graph building requires a CONSTRUCT query",
+                    &capability,
+                ),
+            ));
         }
         if let Some(state) = state {
             let _ = state.poll_stop();
             if let Some(tripped) = state.tripped() {
                 return Err(GraphBuildError::BudgetExhausted {
                     tripped,
-                    evidence: Box::new(state.evidence()),
+                    evidence: state.evidence(),
                 });
             }
             let dimension = ResourceDimension::IntermediateCells;
             if state.is_engaged_in(dimension) {
                 let estimate = self
-                    .survey_plan(dataset, &prepared.query, options.property_functions())?
+                    .survey_plan_admitted(
+                        dataset,
+                        &prepared.query,
+                        options.property_functions(),
+                        workspace,
+                    )
+                    .map_err(GraphBuildError::Evaluation)?
                     .peak_cells();
                 let limit = state.limits().get(dimension);
                 if estimate > limit {
@@ -363,7 +461,7 @@ impl NativeSparqlEngine {
                     });
                     return Err(GraphBuildError::BudgetExhausted {
                         tripped,
-                        evidence: Box::new(state.evidence()),
+                        evidence: state.evidence(),
                     });
                 }
             }
@@ -372,19 +470,32 @@ impl NativeSparqlEngine {
     }
 }
 
-fn query_error(error: &crate::EvalError) -> RdfDiagnostic {
-    RdfDiagnostic::error(
-        eval_diagnostic_code(error, "native-sparql-query-eval"),
-        error.to_string(),
-    )
+fn graph_evaluation_failure(error: super::EvaluationFailure) -> GraphBuildError {
+    match error {
+        super::EvaluationFailure::Diagnostic(error) => GraphBuildError::Query(error),
+        super::EvaluationFailure::RetainedDiagnostic(error) => {
+            GraphBuildError::Evaluation(crate::EvalError::RetainedDiagnostic(error))
+        }
+        super::EvaluationFailure::Evaluation(error) => GraphBuildError::Evaluation(error),
+    }
 }
 
+struct StagedGraph {
+    builder: ValidatedRdfDatasetBuilder,
+    frame: crate::workspace::LexicalFrame,
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "Typed budget refusal stays inline so reporting does not allocate after admission fails"
+)]
 fn finish_staging<I: purrdf_core::ViewTermId>(
     result: crate::construct::StagedConstruct<I>,
     state: Option<&Arc<GovernorState>>,
-) -> Result<ValidatedRdfDatasetBuilder, GraphBuildError> {
+) -> Result<StagedGraph, GraphBuildError> {
     let crate::construct::StagedConstruct {
         builder: staged,
+        frame,
         certificate,
         ..
     } = result;
@@ -393,14 +504,14 @@ fn finish_staging<I: purrdf_core::ViewTermId>(
     {
         return Err(GraphBuildError::BudgetExhausted {
             tripped,
-            evidence: Box::new(state.evidence()),
+            evidence: state.evidence(),
         });
     }
     if let Some(certificate) = certificate {
         let state = state.expect("a truncation requires a governor");
         return Err(GraphBuildError::BudgetExhausted {
             tripped: certificate.tripped(),
-            evidence: Box::new(state.evidence()),
+            evidence: state.evidence(),
         });
     }
     if let Some(state) = state.filter(|state| state.is_engaged_in(ResourceDimension::AnswerRows)) {
@@ -408,7 +519,7 @@ fn finish_staging<I: purrdf_core::ViewTermId>(
             if let Err(tripped) = state.charge_final_output(ResourceDimension::AnswerRows, 1) {
                 return Err(GraphBuildError::BudgetExhausted {
                     tripped,
-                    evidence: Box::new(state.evidence()),
+                    evidence: state.evidence(),
                 });
             }
         }
@@ -418,28 +529,52 @@ fn finish_staging<I: purrdf_core::ViewTermId>(
         if let Some(tripped) = state.tripped() {
             return Err(GraphBuildError::BudgetExhausted {
                 tripped,
-                evidence: Box::new(state.evidence()),
+                evidence: state.evidence(),
             });
         }
     }
-    Ok(staged)
+    Ok(StagedGraph {
+        builder: staged,
+        frame,
+    })
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Typed budget refusal stays inline so reporting does not allocate after admission fails"
+)]
 fn publish(
-    staged: ValidatedRdfDatasetBuilder,
+    staged: StagedGraph,
     destination: &mut RdfDatasetBuilder,
     governors: Option<crate::GovernorEvidence>,
-) -> GraphBuildStats {
+) -> Result<GraphBuildStats, GraphBuildError> {
+    let StagedGraph {
+        builder: staged,
+        frame: original,
+    } = staged;
     let statements = staged.statement_count();
     let staged_terms = staged.term_count();
     let staged_payload_bytes = staged.payload_bytes();
-    let copied_payload_bytes = destination.append_validated(staged);
-    GraphBuildStats {
+    let copied_payload_bytes = if original.workspace().is_bounded() {
+        let mut publication = crate::workspace::LexicalFrame::new(original.workspace());
+        let copied = {
+            let mut memory = purrdf_lex::allocation::Memory::new(&mut publication);
+            destination.append_validated_with_memory(&staged, &mut memory)
+        };
+        copied.map_err(|error| {
+            GraphBuildError::Evaluation(
+                publication.storage_error(error, "transactional graph append"),
+            )
+        })?
+    } else {
+        destination.append_validated(staged)
+    };
+    Ok(GraphBuildStats {
         statements,
         staged_terms,
         staged_payload_bytes,
         copied_payload_bytes,
         intermediate_freezes: 0,
         governors,
-    }
+    })
 }

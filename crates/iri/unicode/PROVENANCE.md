@@ -101,3 +101,17 @@ From `https://www.unicode.org/Public/16.0.0/ucd/`:
 - `CaseFolding.txt` only, kept alongside the 17.0.0 copy so a case-fold
   differential between the two versions can be computed from the two
   published files rather than restated.
+
+Added 2026-10-09 for the admitted native unselected regex compatibility law:
+
+- `UnicodeData.txt` — verbatim
+  `https://www.unicode.org/Public/16.0.0/ucd/UnicodeData.txt`, SHA-256
+  `ff58e5823bd095166564a006e47d111130813dcf8bf234ef79fa51a870edb48f`,
+  BLAKE3 `24dd932e1b587f076f3895081f4eb2fd41c77881b3d84a2f743157f6b3f96c40`.
+
+The existing Rust generator's `xpath-compatibility` mode derives Unicode 16
+categories and simple-fold classes from these two exact original input
+identities. They preserve the unselected evaluator law of locked
+`regex-syntax` 0.8.11, while explicitly selected dated XPath laws continue to
+use their Unicode 17 full-case relation. The shared XML terminal and Unicode
+16 block table homes are reused. No external implementation is copied.

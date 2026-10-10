@@ -28,23 +28,35 @@ pub fn english(input: &str) -> String {
 /// The suffix law never increases the original byte length. Working storage
 /// holds scalar values and their vowel classifications, with no recursion.
 pub fn english_in_place(word: &mut String) {
+    let result: Result<(), std::convert::Infallible> =
+        english_with(word, |input| Ok(Stem::new(input)));
+    match result {
+        Ok(()) => {}
+        Err(never) => match never {},
+    }
+}
+
+fn english_with<E>(
+    word: &mut String,
+    create: impl FnOnce(&str) -> Result<Stem, E>,
+) -> Result<(), E> {
     let mut latin = false;
     for letter in word.chars() {
         if is_latin_letter(letter) {
             latin = true;
         } else if is_letter(letter) {
-            return;
+            return Ok(());
         }
     }
     if !latin || word.chars().take(3).count() < 3 {
-        return;
+        return Ok(());
     }
     if let Some(exception) = exception(word) {
         word.replace_range(.., exception);
-        return;
+        return Ok(());
     }
     let input = word.strip_prefix('\'').unwrap_or(word);
-    let mut state = Stem::new(input);
+    let mut state = create(input)?;
     state.possessive();
     state.plural();
     state.participle();
@@ -55,6 +67,26 @@ pub fn english_in_place(word: &mut String) {
     state.final_letter();
     word.clear();
     word.extend(state.letters.iter().map(|letter| letter.value));
+    Ok(())
+}
+
+/// Admit the native stem's selected Letter capacity before its existing body.
+/// Native suffix replacements never exceed the original scalar count; the
+/// existing byte-length Letter capacity is therefore a certified upper bound.
+pub(crate) fn english_in_place_owned(
+    word: &mut String,
+    workspace: &purrdf_sparql_eval::WorkspaceCapability,
+) -> Result<(), crate::TextError> {
+    let mut owner = None;
+    english_with(word, |input| {
+        let mut letters = Vec::new();
+        crate::query_workspace::admitted(workspace.reserve_vec(
+            &mut letters,
+            &mut owner,
+            input.len(),
+        ))?;
+        Ok(Stem::from_letters(input, letters))
+    })
 }
 
 fn exception(word: &str) -> Option<&'static str> {
@@ -94,7 +126,10 @@ struct Stem {
 
 impl Stem {
     fn new(input: &str) -> Self {
-        let mut letters: Vec<Letter> = Vec::with_capacity(input.len());
+        Self::from_letters(input, Vec::with_capacity(input.len()))
+    }
+
+    fn from_letters(input: &str, mut letters: Vec<Letter>) -> Self {
         for value in input.chars() {
             let vowel = simple_vowel(value)
                 && (value != 'y' || letters.last().is_some_and(|previous| !previous.vowel));

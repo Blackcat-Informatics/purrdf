@@ -834,10 +834,29 @@ fn matched_counts_distinct_needle_terms_present() {
         vec![2, 2],
         "the repeat counts once and the absent term counts not at all"
     );
+    let scored_identity = |rows: &[Scored]| {
+        rows.iter()
+            .map(|row| (row.document, row.score, row.partition_rank, row.matched))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(
-        padded, plain_rows,
+        scored_identity(&padded),
+        scored_identity(&plain_rows),
         "a repeated term and a term nobody holds change neither score nor rank"
     );
+    // The actual needle's reported bound also includes its absent term's IDF.
+    // Independent hand values: ln2=0.693147180559, ln10=2.302585092994;
+    // floor(2.2*ln2) twice, plus floor(2.2*ln10) for df=0 in N=4.
+    for row in &plain_rows {
+        assert_eq!(row.score_bound.maximum().into_raw(), 3_049_847_594_458);
+    }
+    for row in &padded {
+        assert_eq!(row.score_bound.maximum().into_raw(), 8_115_534_799_044);
+        assert_eq!(
+            row.score_bound.profile_fingerprint(),
+            index.ranking_profile().fingerprint()
+        );
+    }
 
     // A needle only one of the two documents holds.
     let single = rank_partition(
@@ -929,7 +948,7 @@ fn score_is_a_pure_function_of_index_and_needle() {
         .terms("alpha beta gamma")
         .expect("valid text analysis");
     let first = select(&index, &query, &everything(), None, None).expect("scores");
-    let rendered: Vec<(u32, u32, u32, String)> = first
+    let rendered: Vec<(u32, u32, usize, String)> = first
         .iter()
         .map(|row| {
             (
@@ -944,7 +963,7 @@ fn score_is_a_pure_function_of_index_and_needle() {
     for _ in 0..100 {
         let again = select(&index, &query, &everything(), None, None).expect("scores");
         assert_eq!(again, first);
-        let again_rendered: Vec<(u32, u32, u32, String)> = again
+        let again_rendered: Vec<(u32, u32, usize, String)> = again
             .iter()
             .map(|row| {
                 (
@@ -999,16 +1018,17 @@ fn two_independently_built_indexes_rank_identically() {
 /// fingerprint. Each is recorded by callers, so a moved value is a changed identity.
 /// The explicit empty-lexicon profile now binds scoped accents, projection bounds,
 /// control and emoji laws, and auxiliary retrieval parameters. Versioned
-/// control protection changes the analyzer and index identities even when the
-/// source contains no malformed controls. The RDF source and term-sequence
-/// identities remain frozen.
+/// control protection is part of analyzer identity. Ranking v2 changes the index
+/// identity because its canonical profile binds exact promotion and the actual
+/// query-bound law. The RDF source, analyzer, term-sequence and score lexical
+/// identities remain frozen across that ranking migration.
 #[test]
 fn the_published_text_identities_are_frozen() {
     let hex = |digest: [u8; 32]| purrdf_hash::hex::Lower(&digest).to_string();
     let index = golden_index();
     assert_eq!(
         hex(index.fingerprint()),
-        "05dd33b590fa769238926e237aadb69554c1522817da053ec497bc03bec44735",
+        "106fef6680a6be9aac5508747e74af3e28699ca24326095fd444d05f8ae8adcd",
         "the index fingerprint"
     );
     assert_eq!(

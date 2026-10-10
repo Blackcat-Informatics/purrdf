@@ -185,7 +185,7 @@
 //! empty under exactly the same condition as `P`.
 //!
 //! **Side condition**: none — unconditional. Only the dedup wrapper is erased; `P`
-//! itself is still evaluated by whatever [`normalize`] returns, so nothing
+//! itself is still evaluated by whatever [`normalize_with_memory`] returns, so nothing
 //! evaluable is ever discarded.
 //!
 //! The "no `Slice(start>0)` above" qualifier in the source rule is automatically
@@ -201,10 +201,10 @@
 //!   the front, so `P` non-empty always leaves row zero inside the slice's window —
 //!   the slice is empty exactly when `P` is. **Side condition**: none — unconditional,
 //!   for the same reason as law 3: only the `Slice` wrapper is erased, and `P` is
-//!   still evaluated by whatever [`normalize`] returns.
+//!   still evaluated by whatever [`normalize_with_memory`] returns.
 //! * **4b**: `Slice(_, Some(0))(P) → ⊥` (the whole `EXISTS` folds to constant
 //!   `false`). A zero-length slice is empty FOR EVERY `P` and EVERY μ — it needs no
-//!   evaluation at all, so the fold is represented directly: [`normalize`] returns
+//!   evaluation at all, so the fold is represented directly: [`normalize_with_memory`] returns
 //!   [`Enf::FoldedEmpty`] rather than a pattern to evaluate, and
 //!   [`crate::expr::exists`] answers `false` (making `NOT EXISTS`, `Not(Exists(..))`
 //!   in this algebra, answer `true`) without touching the dataset. **Side
@@ -220,7 +220,7 @@
 //!
 //! ## Fixpoint, determinism, idempotence
 //!
-//! [`normalize`] walks on through every law that erases a wrapper, so a chain of several
+//! [`normalize_with_memory`] walks on through every law that erases a wrapper, so a chain of several
 //! spine wrappers (e.g. `OrderBy(Distinct(LeftJoin(A, B, c)))`) collapses in one call
 //! to `A` (further normalized itself, in case `A` is ALSO spine-shaped). The walk is
 //! a pure function of the input tree — no clock, no RNG, no iteration-order
@@ -230,7 +230,7 @@
 //!
 //! # Prepare-seam choice
 //!
-//! [`normalize`] is invoked lazily, the first time each distinct `EXISTS`/`NOT
+//! [`normalize_with_memory`] is invoked lazily, the first time each distinct `EXISTS`/`NOT
 //! EXISTS` AST node is reached during an evaluation, and its result is cached for
 //! the remainder of that evaluation (`crate::eval::EvalCtx`'s per-query cache
 //! discipline, exactly like `exists_inner_cache`'s lifecycle) — NOT at
@@ -251,7 +251,7 @@
 //! distinct site per evaluation, before any row of that site is tested, never
 //! recomputed per row.
 
-use purrdf_sparql_algebra::{Chain, Child};
+use purrdf_sparql_algebra::Chain;
 use purrdf_sparql_algebra::{GraphPattern, OrderExpression, Variable};
 
 use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
@@ -260,6 +260,10 @@ use crate::governor::soundness;
 /// The outcome of normalizing one `EXISTS`/`NOT EXISTS` inner pattern to Existential
 /// Normal Form (see the [module docs](self)).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "normalization returns the original admitted tree inline; adding a box would introduce a separate allocation and change its owner layout"
+)]
 pub(crate) enum Enf {
     /// The normalized pattern: `exists(pattern, μ)` and `exists(original, μ)` agree
     /// for every μ (this module's laws are emptiness-preserving), so evaluating THIS
@@ -274,27 +278,24 @@ pub(crate) enum Enf {
 
 /// Law 1's gate: `LeftJoin{left, right, expression}` erases to `left` only when
 /// everything it would ERASE (`right`, the join condition) is effect-free. Shared
-/// verbatim by [`normalize`] and [`ledger_source_map`]'s spine walk — see that
+/// verbatim by [`normalize_with_memory`] and [`ledger_source_map_admitted`]'s spine walk — see that
 /// function's doc for why the two must never diverge.
+#[cfg(test)]
 fn left_join_erasable(
     right: &GraphPattern,
     expression: Option<&purrdf_sparql_algebra::Expression>,
 ) -> bool {
-    let right_clean = !soundness::pattern_can_hard_error(right);
-    let condition_clean = expression.is_none_or(|e| !soundness::expr_can_hard_error(e));
-    right_clean && condition_clean
+    left_join_erasable_admitted(right, expression, &crate::WorkspaceCapability::resident())
+        .expect("resident ENF gate failed")
 }
 
 /// Law 2's gate: `OrderBy` erases entirely only when its sort keys — the ERASED
-/// portion — are effect-free. Shared verbatim by [`normalize`] and
-/// [`ledger_source_map`]'s spine walk.
+/// portion — are effect-free. Shared verbatim by [`normalize_with_memory`] and
+/// [`ledger_source_map_admitted`]'s spine walk.
+#[cfg(test)]
 fn order_by_erasable(expression: &[OrderExpression]) -> bool {
-    !expression.iter().any(|oe| {
-        let e = match oe {
-            OrderExpression::Asc(e) | OrderExpression::Desc(e) => e,
-        };
-        soundness::expr_can_hard_error(e)
-    })
+    order_by_erasable_admitted(expression, &crate::WorkspaceCapability::resident())
+        .expect("resident ENF gate failed")
 }
 
 /// Normalize `pattern` — an `EXISTS`/`NOT EXISTS` inner — to Existential Normal Form
@@ -310,149 +311,31 @@ fn order_by_erasable(expression: &[OrderExpression]) -> bool {
 /// collect on a value stack — so a spine of any height needs no more machine stack.
 /// Union arms are entered left to right, each one's whole spine before the next, so the
 /// gates run and the copies are made in the order the arms are written.
+#[cfg(test)]
 pub(crate) fn normalize(pattern: &GraphPattern) -> Enf {
-    /// One step of the walk.
-    enum Step<'a> {
-        /// Normalize this spine node.
-        Enter(&'a GraphPattern),
-        /// Rebuild a `Project` over the normal form on top of the value stack.
-        Project(&'a [Variable]),
-        /// Rebuild a `Union` over the `count` normal forms on top of the value stack,
-        /// the first arm's deepest.
-        Union(usize),
-    }
-    let mut steps: Vec<Step<'_>> = vec![Step::Enter(pattern)];
-    let mut forms: Vec<Enf> = Vec::new();
-    while let Some(step) = steps.pop() {
-        match step {
-            Step::Enter(pattern) => match pattern {
-                // Law 1: THE F2 FIX BY LAW — gated on the ERASED portion (`right`, the
-                // join condition) being effect-free; see the module doc's "Side
-                // conditions" section and
-                // `crate::governor::soundness::NodeAnalysis::can_hard_error`.
-                GraphPattern::LeftJoin {
-                    left,
-                    right,
-                    expression,
-                } => {
-                    if left_join_erasable(right, expression.as_ref()) {
-                        steps.push(Step::Enter(left));
-                    } else {
-                        forms.push(Enf::Pattern(copied(pattern)));
-                    }
-                }
-                // Law 2 — gated on the ERASED portion (the sort keys) being effect-free.
-                GraphPattern::OrderBy { inner, expression } => {
-                    if order_by_erasable(expression) {
-                        steps.push(Step::Enter(inner));
-                    } else {
-                        forms.push(Enf::Pattern(copied(pattern)));
-                    }
-                }
-                // Law 3 (the "no Slice(start>0) above" qualifier holds automatically — see
-                // the module doc). Unconditional: nothing evaluable is erased, only the
-                // dedup wrapper — `inner` is still evaluated by whatever the walk
-                // returns.
-                GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
-                    steps.push(Step::Enter(inner));
-                }
-                // Law 4a/4b.
-                GraphPattern::Slice {
-                    inner,
-                    start,
-                    length,
-                } => match (*start, *length) {
-                    // 4b is gated on the WHOLE inner being effect-free: the fold answers
-                    // `EXISTS` without evaluating anything, so an inner that could have
-                    // hard-failed or reached a federation endpoint must not be erased.
-                    (_, Some(0)) => {
-                        forms.push(if soundness::pattern_can_hard_error(inner) {
-                            Enf::Pattern(copied(pattern))
-                        } else {
-                            Enf::FoldedEmpty
-                        });
-                    }
-                    // 4a is unconditional: an offset-zero, room-for-at-least-one-row
-                    // slice erases nothing evaluable — `inner` is still evaluated by
-                    // whatever the walk returns.
-                    (0, _) => steps.push(Step::Enter(inner)),
-                    // start > 0: not a transparent wrapper; stop here, unmodified.
-                    (_, _) => forms.push(Enf::Pattern(copied(pattern))),
-                },
-                // Project is transparent to the spine, but it is also a real node in the
-                // output (the `PrjMap` boundary substitution narrows against) — rebuild it
-                // over whatever its own child normalized to, rather than erasing it
-                // outright.
-                GraphPattern::Project { inner, variables } => {
-                    steps.push(Step::Project(variables));
-                    steps.push(Step::Enter(inner));
-                }
-                // Union: every arm is on the spine (empty iff ALL are), so each gets the
-                // same treatment; an arm that folds to empty drops out of the
-                // reconstructed Union entirely (Union(∅, R) ≡ R for emptiness purposes),
-                // and a union left with one arm is that arm. The arms are pushed last
-                // first, so the first arm is entered first.
-                GraphPattern::Union { arms } => {
-                    steps.push(Step::Union(arms.len()));
-                    for arm in arms.iter().rev() {
-                        steps.push(Step::Enter(arm));
-                    }
-                }
-                // Every other variant consumes a row SET, not merely emptiness (Join/
-                // Filter/Extend/Unfold/Graph/Minus/LeftJoin already handled above/Bgp/
-                // Path/Values/PropertyFunction/Service/Group/Lateral) — the spine stops
-                // here, unmodified.
-                //
-                // `Unfold` is on that list for a reason of its own rather than by
-                // default: it is NOT emptiness-transparent. Its inner can be non-empty
-                // while its own output is empty (every row whose expression denotes no
-                // composite, or an empty one, contributes zero rows), so erasing it
-                // would answer `EXISTS` `true` for a pattern that has no solutions.
-                other => forms.push(Enf::Pattern(copied(other))),
-            },
-            Step::Project(variables) => {
-                let inner = forms
-                    .pop()
-                    .expect("a Project's inner is normalized before the Project is rebuilt");
-                forms.push(match inner {
-                    Enf::FoldedEmpty => Enf::FoldedEmpty,
-                    Enf::Pattern(p) => Enf::Pattern(GraphPattern::Project {
-                        inner: Child::new(p),
-                        variables: variables.to_vec(),
-                    }),
-                });
-            }
-            Step::Union(count) => {
-                let first = forms.len() - count;
-                let kept: Vec<GraphPattern> = forms
-                    .drain(first..)
-                    .filter_map(|arm| match arm {
-                        Enf::FoldedEmpty => None,
-                        Enf::Pattern(p) => Some(p),
-                    })
-                    .collect();
-                forms.push(match Chain::try_from(kept) {
-                    Ok(arms) => Enf::Pattern(GraphPattern::Union { arms }),
-                    Err(mut kept) => kept.pop().map_or(Enf::FoldedEmpty, Enf::Pattern),
-                });
-            }
-        }
-    }
-    forms
-        .pop()
-        .expect("the root's normal form is the last one computed")
+    let mut frame = crate::workspace::LexicalFrame::new(&crate::WorkspaceCapability::resident());
+    normalize_with_memory(
+        pattern,
+        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+    )
+    .expect("resident ENF allocation failed")
 }
 
 /// A copy of `pattern`, made by the algebra's `Clone`; a test build counts the pattern
 /// nodes it builds (`crate::op_count::count_copied`).
-fn copied(pattern: &GraphPattern) -> GraphPattern {
+fn copied_with_memory(
+    pattern: &GraphPattern,
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<GraphPattern, crate::EvalError> {
     #[cfg(test)]
     crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(pattern));
-    pattern.clone()
+    pattern
+        .clone_with_memory(memory)
+        .map_err(|e| crate::expr::correlated_storage_error(memory, e))
 }
 
 /// Map every node address inside `normalized` — an already-computed `Enf::Pattern` result
-/// from calling [`normalize`] on `original` — back to the ORIGINAL, un-normalized
+/// from calling [`normalize_with_memory`] on `original` — back to the ORIGINAL, un-normalized
 /// `original` tree's node address.
 ///
 /// # Why this is needed at all
@@ -461,7 +344,7 @@ fn copied(pattern: &GraphPattern) -> GraphPattern {
 /// table — see [`crate::governor::ledger`]) assigns a ledger ordinal to every node
 /// [`crate::governor::soundness::walk_spine`] visits —
 /// including an `EXISTS`/`NOT EXISTS` inner pattern reached through an expression
-/// (`crate::governor::soundness::visit_exists_patterns`), so `original`'s own nodes
+/// (`crate::governor::soundness::visit_exists_patterns_admitted`), so `original`'s own nodes
 /// already have ledger identity. But `normalize`'s `other` arm (a wholesale copy of
 /// `other`) and its two erasure-fallback arms allocate a FRESH clone: `normalized`'s own
 /// addresses never equal `original`'s, so a charge made while evaluating `normalized`
@@ -475,7 +358,7 @@ fn copied(pattern: &GraphPattern) -> GraphPattern {
 ///
 /// # What this walk covers, and what it deliberately does not
 ///
-/// Mirrors [`normalize`]'s own spine walk for the two erasure-only wrappers (a
+/// Mirrors [`normalize_with_memory`]'s own spine walk for the two erasure-only wrappers (a
 /// spine-erasing `LeftJoin`/`OrderBy`/`Distinct`/`Reduced`/`Slice(0, _)`: no address of
 /// its own, pure delegation to whatever its child resolves to) and the common terminal
 /// case (every other variant, which `normalize` clones wholesale — `normalized` is then
@@ -491,27 +374,31 @@ fn copied(pattern: &GraphPattern) -> GraphPattern {
 /// `normalize`'s two SYNTHESIZING cases, `Project` and `Union`: their own root is a
 /// freshly built combination, not a clone of one single node, and reconstructing that
 /// correspondence needs the same `counts_rows` arbitration
-/// [`crate::expr::substitute_pattern_tracked`] already does for `LATERAL`'s Values-Insertion
+/// [`crate::expr::substitute_pattern_tracked_admitted`] already does for `LATERAL`'s Values-Insertion
 /// wrappers. Left as a documented, deliberate limitation rather than attempted here: a
 /// query whose `EXISTS` inner is directly `{ SELECT/DISTINCT/UNION ... }`-shaped at its
 /// OWN top level still charges correctly — its charges simply keep rolling into the
 /// enclosing `FILTER`/`BIND`, exactly the behavior before this function existed, never
 /// a regression.
+#[cfg(test)]
 pub(crate) fn ledger_source_map(
     original: &GraphPattern,
     normalized: &GraphPattern,
 ) -> SubstitutionSourceMap {
-    let mut map = SubstitutionSourceMap::default();
-    map_spine(original, normalized, &mut map);
-    map
+    ledger_source_map_admitted(
+        original,
+        normalized,
+        &crate::WorkspaceCapability::resident(),
+    )
+    .expect("resident source map allocation failed")
 }
 
-/// [`ledger_source_map`]'s spine walk. See that function's doc.
+/// [`ledger_source_map_admitted`]'s spine walk. See that function's doc.
 ///
 /// A **spine** node of `original` is one `normalize` erased or fell through, whose
 /// normalized counterpart is the whole `normalized` tree; the walk steps through the same
 /// wrappers `normalize` erased, by the same gates, in a loop. The node of the terminal
-/// shape `normalize` copied wholesale is then paired with its copy by [`map_clone`]: the
+/// shape `normalize` copied wholesale is then paired with its copy by [`map_clone_admitted`]: the
 /// copy is recorded against the node, and every one of its descendants — INCLUDING any
 /// `EXISTS` pattern reached through a nested expression — with its own copy.
 /// `counts_rows` is unconditionally `true`
@@ -519,7 +406,12 @@ pub(crate) fn ledger_source_map(
 /// node `original` did not already have, so there is no wrapper/wrapped ambiguity to
 /// arbitrate — every node here really is the one true output of the real node it
 /// corresponds to.
-fn map_spine(original: &GraphPattern, normalized: &GraphPattern, map: &mut SubstitutionSourceMap) {
+fn map_spine_admitted(
+    original: &GraphPattern,
+    normalized: &GraphPattern,
+    map: &mut SubstitutionSourceMap,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), crate::EvalError> {
     let mut original = original;
     loop {
         match original {
@@ -527,8 +419,12 @@ fn map_spine(original: &GraphPattern, normalized: &GraphPattern, map: &mut Subst
                 left,
                 right,
                 expression,
-            } if left_join_erasable(right, expression.as_ref()) => original = left,
-            GraphPattern::OrderBy { inner, expression } if order_by_erasable(expression) => {
+            } if left_join_erasable_admitted(right, expression.as_ref(), workspace)? => {
+                original = left;
+            }
+            GraphPattern::OrderBy { inner, expression }
+                if order_by_erasable_admitted(expression, workspace)? =>
+            {
                 original = inner;
             }
             GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => original = inner,
@@ -547,54 +443,11 @@ fn map_spine(original: &GraphPattern, normalized: &GraphPattern, map: &mut Subst
                 length,
             } if *length != Some(0) => original = inner,
             // `Project`/`Union`: synthesizing cases this walk declines to track — see
-            // [`ledger_source_map`]'s doc.
-            GraphPattern::Project { .. } | GraphPattern::Union { .. } => return,
+            // [`ledger_source_map_admitted`]'s doc.
+            GraphPattern::Project { .. } | GraphPattern::Union { .. } => return Ok(()),
             // Every other shape, including a non-erasing `LeftJoin`/`OrderBy`/`Slice`,
             // is the terminal shape `normalize` clones wholesale.
-            _ => return map_clone(original, normalized, map),
-        }
-    }
-}
-
-/// Record every node of `copy` — a structural clone of `original` — against the node of
-/// `original` it copies, `counts_rows` set: each copied node's output IS its original's.
-/// Every descendant is paired, INCLUDING any `EXISTS` pattern reached through a nested
-/// expression. The pairs wait on a work list, so a tree of any depth is mapped without a
-/// machine-stack frame per level.
-pub(crate) fn map_clone(
-    original: &GraphPattern,
-    copy: &GraphPattern,
-    map: &mut SubstitutionSourceMap,
-) {
-    let mut pending = vec![(original, copy)];
-    while let Some((original, copy)) = pending.pop() {
-        map.insert(
-            std::ptr::from_ref(copy) as usize,
-            SubstitutionSource {
-                source: std::ptr::from_ref(original) as usize,
-                counts_rows: true,
-            },
-        );
-        let mut original_children: purrdf_core::SmallVec<[&GraphPattern; 4]> =
-            purrdf_core::SmallVec::new();
-        soundness::visit_classified_children(original, &mut |child, _edge| {
-            original_children.push(child);
-            false
-        });
-        let mut copy_children: purrdf_core::SmallVec<[&GraphPattern; 4]> =
-            purrdf_core::SmallVec::new();
-        soundness::visit_classified_children(copy, &mut |child, _edge| {
-            copy_children.push(child);
-            false
-        });
-        debug_assert_eq!(
-            original_children.len(),
-            copy_children.len(),
-            "the copy is a structural clone of the original, so their classified children \
-             must pair up 1:1"
-        );
-        for (o, c) in original_children.into_iter().zip(copy_children).rev() {
-            pending.push((o, c));
+            _ => return map_clone_admitted(original, normalized, map, workspace),
         }
     }
 }
@@ -1184,8 +1037,8 @@ mod effect_free_gate_tests {
     }
 }
 
-/// The loop-based walks checked against their recursive forms: [`normalize`] and
-/// [`ledger_source_map`] over generated spines — every erasable wrapper, both outcomes
+/// The loop-based walks checked against their recursive forms: [`normalize_with_memory`] and
+/// [`ledger_source_map_admitted`] over generated spines — every erasable wrapper, both outcomes
 /// of every gate, `Project` and `Union` rebuilds, and the terminal shapes — and one
 /// spine a hundred thousand wrappers tall on a thread with a 128 KiB stack.
 #[cfg(test)]
@@ -1196,7 +1049,7 @@ mod iterative_walk_tests {
         Variable,
     };
 
-    use super::{Enf, copied, ledger_source_map, left_join_erasable, normalize, order_by_erasable};
+    use super::{Enf, ledger_source_map, left_join_erasable, normalize, order_by_erasable};
     use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
     use crate::governor::soundness;
 
@@ -1210,7 +1063,13 @@ mod iterative_walk_tests {
 
     // ── The recursive references ────────────────────────────────────────────────────
 
-    /// [`normalize`], written as the recursion over the spine it replaces.
+    /// The independent recursive oracle copies its caller-owned fixture tree.
+    fn copied(pattern: &GraphPattern) -> GraphPattern {
+        crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(pattern));
+        pattern.clone()
+    }
+
+    /// [`normalize_with_memory`], written as the recursion over the spine it replaces.
     fn normalize_ref(pattern: &GraphPattern) -> Enf {
         match pattern {
             GraphPattern::LeftJoin {
@@ -1273,7 +1132,7 @@ mod iterative_walk_tests {
         }
     }
 
-    /// [`ledger_source_map`]'s spine walk, written as the recursion it replaces.
+    /// [`ledger_source_map_admitted`]'s spine walk, written as the recursion it replaces.
     fn map_spine_ref(
         original: &GraphPattern,
         normalized: &GraphPattern,
@@ -1619,4 +1478,236 @@ mod iterative_walk_tests {
         })
         .expect("spawn");
     }
+}
+
+pub(crate) fn normalize_with_memory(
+    pattern: &GraphPattern,
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<Enf, crate::EvalError> {
+    /// One step of the walk.
+    enum Step<'a> {
+        /// Normalize this spine node.
+        Enter(&'a GraphPattern),
+        /// Rebuild a `Project` over the normal form on top of the value stack.
+        Project(&'a [Variable]),
+        /// Rebuild a `Union` over the `count` normal forms on top of the value stack,
+        /// the first arm's deepest.
+        Union(usize),
+    }
+    let workspace = memory.admission_mut().workspace().clone();
+    let mut steps = crate::AdmittedVec::new(&workspace);
+    steps.push(Step::Enter(pattern))?;
+    let mut forms = crate::AdmittedVec::new(&workspace);
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Enter(pattern) => match pattern {
+                // Law 1: THE F2 FIX BY LAW — gated on the ERASED portion (`right`, the
+                // join condition) being effect-free; see the module doc's "Side
+                // conditions" section and
+                // `crate::governor::soundness::NodeAnalysis::can_hard_error`.
+                GraphPattern::LeftJoin {
+                    left,
+                    right,
+                    expression,
+                } => {
+                    if left_join_erasable_admitted(right, expression.as_ref(), &workspace)? {
+                        steps.push(Step::Enter(left))?;
+                    } else {
+                        forms.push(Enf::Pattern(copied_with_memory(pattern, memory)?))?;
+                    }
+                }
+                // Law 2 — gated on the ERASED portion (the sort keys) being effect-free.
+                GraphPattern::OrderBy { inner, expression } => {
+                    if order_by_erasable_admitted(expression, &workspace)? {
+                        steps.push(Step::Enter(inner))?;
+                    } else {
+                        forms.push(Enf::Pattern(copied_with_memory(pattern, memory)?))?;
+                    }
+                }
+                // Law 3 (the "no Slice(start>0) above" qualifier holds automatically — see
+                // the module doc). Unconditional: nothing evaluable is erased, only the
+                // dedup wrapper — `inner` is still evaluated by whatever the walk
+                // returns.
+                GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+                    steps.push(Step::Enter(inner))?;
+                }
+                // Law 4a/4b.
+                GraphPattern::Slice {
+                    inner,
+                    start,
+                    length,
+                } => match (*start, *length) {
+                    // 4b is gated on the WHOLE inner being effect-free: the fold answers
+                    // `EXISTS` without evaluating anything, so an inner that could have
+                    // hard-failed or reached a federation endpoint must not be erased.
+                    (_, Some(0)) => {
+                        forms.push(
+                            if soundness::pattern_can_hard_error_admitted(inner, &workspace)? {
+                                Enf::Pattern(copied_with_memory(pattern, memory)?)
+                            } else {
+                                Enf::FoldedEmpty
+                            },
+                        )?;
+                    }
+                    // 4a is unconditional: an offset-zero, room-for-at-least-one-row
+                    // slice erases nothing evaluable — `inner` is still evaluated by
+                    // whatever the walk returns.
+                    (0, _) => {
+                        steps.push(Step::Enter(inner))?;
+                    }
+                    // start > 0: not a transparent wrapper; stop here, unmodified.
+                    (_, _) => {
+                        forms.push(Enf::Pattern(copied_with_memory(pattern, memory)?))?;
+                    }
+                },
+                // Project is transparent to the spine, but it is also a real node in the
+                // output (the `PrjMap` boundary substitution narrows against) — rebuild it
+                // over whatever its own child normalized to, rather than erasing it
+                // outright.
+                GraphPattern::Project { inner, variables } => {
+                    steps.push(Step::Project(variables))?;
+                    steps.push(Step::Enter(inner))?;
+                }
+                // Union: every arm is on the spine (empty iff ALL are), so each gets the
+                // same treatment; an arm that folds to empty drops out of the
+                // reconstructed Union entirely (Union(∅, R) ≡ R for emptiness purposes),
+                // and a union left with one arm is that arm. The arms are pushed last
+                // first, so the first arm is entered first.
+                GraphPattern::Union { arms } => {
+                    steps.push(Step::Union(arms.len()))?;
+                    for arm in arms.iter().rev() {
+                        steps.push(Step::Enter(arm))?;
+                    }
+                }
+                // Every other variant consumes a row SET, not merely emptiness (Join/
+                // Filter/Extend/Unfold/Graph/Minus/LeftJoin already handled above/Bgp/
+                // Path/Values/PropertyFunction/Service/Group/Lateral) — the spine stops
+                // here, unmodified.
+                //
+                // `Unfold` is on that list for a reason of its own rather than by
+                // default: it is NOT emptiness-transparent. Its inner can be non-empty
+                // while its own output is empty (every row whose expression denotes no
+                // composite, or an empty one, contributes zero rows), so erasing it
+                // would answer `EXISTS` `true` for a pattern that has no solutions.
+                other => {
+                    forms.push(Enf::Pattern(copied_with_memory(other, memory)?))?;
+                }
+            },
+            Step::Project(variables) => {
+                let inner = forms
+                    .pop()
+                    .expect("a Project's inner is normalized before the Project is rebuilt");
+                forms.push(match inner {
+                    Enf::FoldedEmpty => Enf::FoldedEmpty,
+                    Enf::Pattern(p) => Enf::Pattern(GraphPattern::Project {
+                        inner: crate::expr::correlated_box(p, memory)?.into(),
+                        variables: memory
+                            .collect(variables.iter().cloned())
+                            .map_err(|e| crate::expr::correlated_storage_error(memory, e))?,
+                    }),
+                })?;
+            }
+            Step::Union(count) => {
+                let first = forms.len() - count;
+                let count = forms[first..]
+                    .iter()
+                    .filter(|form| matches!(form, Enf::Pattern(_)))
+                    .count();
+                let mut kept = Vec::new();
+                memory
+                    .reserve(&mut kept, count)
+                    .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+                for form in forms.drain_from(first) {
+                    if let Enf::Pattern(pattern) = form {
+                        kept.push(pattern);
+                    }
+                }
+                forms.push(match Chain::try_from(kept) {
+                    Ok(arms) => Enf::Pattern(GraphPattern::Union { arms }),
+                    Err(mut kept) => {
+                        let form = kept.pop().map_or(Enf::FoldedEmpty, Enf::Pattern);
+                        memory
+                            .release_vec(kept)
+                            .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+                        form
+                    }
+                })?;
+            }
+        }
+    }
+    Ok(forms
+        .pop()
+        .expect("the root's normal form is the last one computed"))
+}
+
+fn left_join_erasable_admitted(
+    right: &GraphPattern,
+    expression: Option<&purrdf_sparql_algebra::Expression>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<bool, crate::EvalError> {
+    let right_clean = !soundness::pattern_can_hard_error_admitted(right, workspace)?;
+    let condition_clean = match expression {
+        None => true,
+        Some(expr) => !soundness::expr_can_hard_error_admitted(expr, workspace)?,
+    };
+    Ok(right_clean && condition_clean)
+}
+fn order_by_erasable_admitted(
+    expression: &[OrderExpression],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<bool, crate::EvalError> {
+    for order in expression {
+        if soundness::expr_can_hard_error_admitted(order.expression(), workspace)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub(crate) fn ledger_source_map_admitted(
+    original: &GraphPattern,
+    normalized: &GraphPattern,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<SubstitutionSourceMap, crate::EvalError> {
+    let mut map = SubstitutionSourceMap::default();
+    map_spine_admitted(original, normalized, &mut map, workspace)?;
+    Ok(map)
+}
+pub(crate) fn map_clone_admitted(
+    original: &GraphPattern,
+    copy: &GraphPattern,
+    map: &mut SubstitutionSourceMap,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), crate::EvalError> {
+    let mut pending = crate::AdmittedVec::new(workspace);
+    pending.push((original, copy))?;
+    while let Some((original, copy)) = pending.pop() {
+        map.insert_admitted(
+            std::ptr::from_ref(copy) as usize,
+            SubstitutionSource {
+                source: std::ptr::from_ref(original) as usize,
+                counts_rows: true,
+            },
+            workspace,
+        )?;
+        let mut originals = crate::AdmittedVec::new(workspace);
+        soundness::visit_classified_children_admitted(original, workspace, &mut |child, _| {
+            originals.push(child)?;
+            Ok(false)
+        })?;
+        let mut copies = crate::AdmittedVec::new(workspace);
+        soundness::visit_classified_children_admitted(copy, workspace, &mut |child, _| {
+            copies.push(child)?;
+            Ok(false)
+        })?;
+        assert_eq!(
+            originals.len(),
+            copies.len(),
+            "structural clone children pair 1:1"
+        );
+        for (original, copy) in originals.iter().zip(copies.iter()).rev() {
+            pending.push((*original, *copy))?;
+        }
+    }
+    Ok(())
 }

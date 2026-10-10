@@ -401,9 +401,7 @@ impl ScriptedStream {
     fn attesting_short(mut self) -> Self {
         self.attested = PfAttestation {
             generation: IndexGeneration::Undeclared,
-            service: ServiceLevel::Incomplete {
-                reason: "fixture shard offline".to_owned(),
-            },
+            service: ServiceLevel::incomplete_static("fixture shard offline"),
         };
         self
     }

@@ -7,7 +7,7 @@
 //! # One fielded arithmetic path
 //!
 //! The immutable [`crate::RankingProfile`] identifies field weights, length
-//! normalization, predicate routing, bounds, rounding and query aggregation.
+//! normalization, predicate routing, the query-bound law, rounding and query aggregation.
 //! [`K1`] stays fixed at 1.2; [`B`] is the single-field profile's default 0.75.
 //! Every profile, including that single field, runs the same prepared BM25F
 //! scorer. Field frequencies are normalized and weighted before saturation;
@@ -98,6 +98,10 @@
 //! predicate IRI is a [`TextError::Config`], and a needle asking about a document
 //! that does not exist is a [`TextError::Data`].
 
+use crate::query_workspace::{admitted, overflow, query_error};
+use purrdf_sparql_eval::{
+    AdmittedVec, NativeDiagnosticKind, WorkspaceAllocation, WorkspaceCapability,
+};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
@@ -106,7 +110,7 @@ use purrdf_core::TermValue;
 use crate::error::TextError;
 use crate::fixed::{Fixed, SCALE_DIGITS};
 use crate::index::{PartitionKey, TextIndex};
-use crate::ranking::{PreparedCorpus, PreparedQuery, QUERY_TERMS_MAX};
+use crate::ranking::{BoundedScore, PreparedCorpus, PreparedQuery, ScoreBound};
 
 /// The raw constants below are written at [`SCALE_DIGITS`] fractional digits, so
 /// the scale and the literals cannot drift apart unnoticed.
@@ -136,6 +140,8 @@ pub struct Scored {
     pub document: u32,
     /// The exact BM25 score, computed against this document's own partition.
     pub score: Fixed,
+    /// The actual query/corpus bound, including rounding, for host key sizing.
+    pub score_bound: ScoreBound,
     /// The 1-based position of this document **within its own partition**.
     ///
     /// Never a global position, and named so that it cannot be read as one. A
@@ -155,7 +161,7 @@ pub struct Scored {
     /// language a caller already has — a three-term needle restricted to
     /// documents holding all three is `FILTER(?matched = 3)` — rather than by
     /// PurRDF minting a boolean query dialect of its own.
-    pub matched: u32,
+    pub matched: usize,
 }
 
 /// One needle term's share of one document's score.
@@ -338,7 +344,7 @@ pub fn rank_partition(
     needle: &[String],
     limit: Option<u64>,
 ) -> Result<Vec<Scored>, TextError> {
-    let terms = distinct_terms(needle)?;
+    let terms = distinct_terms(needle);
     if terms.is_empty() {
         return Ok(Vec::new());
     }
@@ -387,31 +393,55 @@ pub(crate) fn select_counted(
     partition_rank: Option<u32>,
     work: &mut ScoringWork,
 ) -> Result<Vec<Scored>, TextError> {
-    let terms = distinct_terms(needle)?;
-    if terms.is_empty() {
-        return Ok(Vec::new());
-    }
+    let rows = select_counted_owned(
+        index,
+        needle.iter().map(String::as_str),
+        |key| filter.matches(key),
+        ceiling,
+        partition_rank,
+        work,
+        &WorkspaceCapability::default(),
+    )?;
+    // This API creates only resident owners; moving through their iterator cannot
+    // shed an operational grant. Bounded callers use the carrier below directly.
+    Ok(rows.into_iter().collect())
+}
 
-    // A bound rank needs the heap deep enough to know that rank; otherwise the
-    // ceiling is the only thing bounding it.
+pub(crate) fn select_counted_owned<'a>(
+    index: &TextIndex,
+    needle: impl ExactSizeIterator<Item = &'a str>,
+    matches: impl Fn(&PartitionKey) -> bool,
+    ceiling: Option<u64>,
+    partition_rank: Option<u32>,
+    work: &mut ScoringWork,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<Scored>, TextError> {
+    let terms = distinct_terms_owned(needle, workspace)?;
     let limit = partition_rank.map_or(ceiling, |wanted| Some(u64::from(wanted)));
     let emitted = ceiling.map_or(usize::MAX, |k| usize::try_from(k).unwrap_or(usize::MAX));
-
-    let mut rows: Vec<Scored> = Vec::new();
+    let mut rows = AdmittedVec::new(workspace);
+    if terms.is_empty() {
+        return Ok(rows);
+    }
     for (key, _) in index.partitions() {
         if rows.len() >= emitted {
             break;
         }
-        if !filter.matches(key) {
+        if !matches(key) {
             continue;
         }
-        let mut partition_rows = rank_terms(index, key, &terms, limit, work)?;
-        if let Some(wanted) = partition_rank {
-            partition_rows.retain(|row| row.partition_rank == wanted);
+        let partition_rows = rank_terms_owned(index, key, &terms, limit, work, workspace)?;
+        // Rank the entire required working population first. Move only the prefix
+        // this output can emit; no oversized append/truncate allocation remains.
+        for row in partition_rows {
+            if partition_rank.is_none_or(|wanted| row.partition_rank == wanted) {
+                if rows.len() == emitted {
+                    break;
+                }
+                admitted(rows.push(row))?;
+            }
         }
-        rows.append(&mut partition_rows);
     }
-    rows.truncate(emitted);
     Ok(rows)
 }
 
@@ -431,7 +461,7 @@ pub fn explain(
     document: u32,
     needle: &[String],
 ) -> Result<Vec<TermContribution>, TextError> {
-    let terms = distinct_terms(needle)?;
+    let terms = distinct_terms(needle);
     let Some(partition) = index.partition_key_of(document) else {
         return Err(TextError::data(format!(
             "document {document} is not in this index, so there is nothing to explain"
@@ -468,8 +498,10 @@ struct Candidate {
     document: u32,
     /// The exact score.
     score: Fixed,
+    /// Original prepared-query certificate carried through selection and sorting.
+    score_bound: ScoreBound,
     /// How many distinct needle terms the document holds.
-    matched: u32,
+    matched: usize,
 }
 
 /// A [`Candidate`] ordered so that **greater means ranks later**.
@@ -509,16 +541,33 @@ impl PartialOrd for ByRank {
 /// Sorted by the same byte order the index's dictionary is sorted by, so "visit
 /// the query's terms in order" and "visit the dictionary in order" are the same
 /// traversal.
-pub(crate) fn distinct_terms(needle: &[String]) -> Result<Vec<&str>, TextError> {
-    let mut terms: Vec<&str> = needle.iter().map(String::as_str).collect();
-    terms.sort_unstable();
-    terms.dedup();
-    if terms.len() > QUERY_TERMS_MAX {
-        return Err(TextError::data(format!(
-            "the needle holds {} distinct terms, which exceeds the profile bound of 1024",
-            terms.len()
-        )));
+pub(crate) fn distinct_terms(needle: &[String]) -> Vec<&str> {
+    distinct_terms_owned(
+        needle.iter().map(String::as_str),
+        &WorkspaceCapability::default(),
+    )
+    .expect("resident term destinations")
+    .into_iter()
+    .collect()
+}
+
+pub(crate) fn distinct_terms_owned<'a>(
+    needle: impl ExactSizeIterator<Item = &'a str>,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<&'a str>, TextError> {
+    let mut terms = admitted(AdmittedVec::with_capacity(needle.len(), workspace))?;
+    for term in needle {
+        admitted(terms.push(term))?;
     }
+    terms.as_mut_slice().sort_unstable();
+    let mut distinct = 0;
+    for at in 0..terms.len() {
+        if distinct == 0 || terms[at] != terms[distinct - 1] {
+            terms.as_mut_slice()[distinct] = terms[at];
+            distinct += 1;
+        }
+    }
+    terms.truncate(distinct);
     Ok(terms)
 }
 
@@ -530,24 +579,52 @@ fn rank_terms(
     limit: Option<u64>,
     work: &mut ScoringWork,
 ) -> Result<Vec<Scored>, TextError> {
-    let candidates = candidates(index, partition, terms, work)?;
-    let limit = limit.map(|value| usize::try_from(value).unwrap_or(usize::MAX));
-    let ordered = match limit {
-        Some(keep) => bounded(candidates, keep),
-        None => sorted(candidates),
-    };
+    Ok(rank_terms_owned(
+        index,
+        partition,
+        terms,
+        limit,
+        work,
+        &WorkspaceCapability::default(),
+    )?
+    .into_iter()
+    .collect())
+}
 
-    let mut rows = Vec::with_capacity(ordered.len());
+fn rank_terms_owned(
+    index: &TextIndex,
+    partition: &PartitionKey,
+    terms: &[&str],
+    limit: Option<u64>,
+    work: &mut ScoringWork,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<Scored>, TextError> {
+    let Some(partition) = admitted(index.partition_key_owned(partition, workspace))? else {
+        return Ok(AdmittedVec::new(workspace));
+    };
+    let candidates = candidates_owned(index, partition, terms, work, workspace)?;
+    let keep = limit.map(|n| usize::try_from(n).unwrap_or(usize::MAX));
+    let ordered = order_owned(candidates, keep, workspace)?;
+    let mut rows = admitted(AdmittedVec::with_capacity(ordered.len(), workspace))?;
     for (position, ByRank(candidate)) in ordered.into_iter().enumerate() {
-        let partition_rank = u32::try_from(position + 1).map_err(|_| {
-            TextError::overflow("a partition holds more ranked rows than a u32 can number")
+        let rank = position.checked_add(1).ok_or_else(overflow)?;
+        let partition_rank = u32::try_from(rank).map_err(|_| {
+            query_error(
+                workspace,
+                NativeDiagnosticKind::Function,
+                format_args!(
+                    "fixed-point overflow: a partition holds more ranked rows than a u32 can number"
+                ),
+            )
+            .unwrap_or_else(|failure| failure)
         })?;
-        rows.push(Scored {
+        admitted(rows.push(Scored {
             document: candidate.document,
             score: candidate.score,
+            score_bound: candidate.score_bound,
             partition_rank,
             matched: candidate.matched,
-        });
+        }))?;
     }
     Ok(rows)
 }
@@ -558,7 +635,7 @@ struct CandidateOccurrence<'a> {
     /// Canonical document identifier.
     document: u32,
     /// Ordinal of the sorted distinct query term.
-    ordinal: u32,
+    ordinal: usize,
     /// Borrowed predicate frequencies, avoiding per-candidate lookup or copying.
     counts: &'a [(u32, u64)],
 }
@@ -568,38 +645,53 @@ struct CandidateOccurrence<'a> {
 /// A document holding none of them is not a candidate. Candidate membership is
 /// independent of field weights: a matching document can legitimately score
 /// zero, and still participates in the canonical tie order.
-fn candidates(
+fn candidates_owned(
     index: &TextIndex,
     partition: &PartitionKey,
     terms: &[&str],
     work: &mut ScoringWork,
-) -> Result<Vec<Candidate>, TextError> {
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<Candidate>, TextError> {
     if index.partition_stats(partition).is_none() {
-        // Not a partition this index holds, so it holds no documents there. That
-        // is the true answer rather than a failure.
-        return Ok(Vec::new());
+        return Ok(AdmittedVec::new(workspace));
     }
-
-    // `(document, term ordinal, predicate frequencies)`. Sorting this groups the whole
-    // working set by document while leaving each document's terms in the sorted
-    // term order the sum is defined to run in.
-    let mut occurrences: Vec<CandidateOccurrence<'_>> = Vec::new();
+    let occurrences_count = terms.iter().try_fold(0usize, |count, term| {
+        let run =
+            usize::try_from(index.document_frequency(partition, term)).map_err(|_| overflow())?;
+        count.checked_add(run).ok_or_else(overflow)
+    })?;
+    let mut occurrences = admitted(AdmittedVec::with_capacity(occurrences_count, workspace))?;
     for (ordinal, term) in terms.iter().enumerate() {
         for (document, counts) in index.field_postings(partition, term) {
-            occurrences.push(CandidateOccurrence {
+            admitted(occurrences.push(CandidateOccurrence {
                 document,
-                ordinal: ordinal as u32,
+                ordinal,
                 counts,
-            });
+            }))?;
         }
     }
-    work.posting_lists += terms.len() as u64;
-    work.postings += occurrences.len() as u64;
-    occurrences.sort_unstable_by_key(|entry| (entry.document, entry.ordinal));
-    let corpus = index.prepared_corpus(partition)?;
-    let query = prepare_terms(index, partition, &corpus, terms)?;
-
-    let mut out: Vec<Candidate> = Vec::new();
+    work.posting_lists = work
+        .posting_lists
+        .checked_add(u64::try_from(terms.len()).map_err(|_| overflow())?)
+        .ok_or_else(overflow)?;
+    work.postings = work
+        .postings
+        .checked_add(u64::try_from(occurrences.len()).map_err(|_| overflow())?)
+        .ok_or_else(overflow)?;
+    occurrences
+        .as_mut_slice()
+        .sort_unstable_by_key(|entry| (entry.document, entry.ordinal));
+    let mut count = 0usize;
+    let mut prior = None;
+    for entry in &occurrences {
+        if prior != Some(entry.document) {
+            count = count.checked_add(1).ok_or_else(overflow)?;
+        }
+        prior = Some(entry.document);
+    }
+    let corpus = index.prepared_corpus_owned(partition, workspace)?;
+    let query = prepare_terms_owned(index, partition, &corpus, terms, workspace)?;
+    let mut out = admitted(AdmittedVec::with_capacity(count, workspace))?;
     let mut at = 0;
     while at < occurrences.len() {
         let document = occurrences[at].document;
@@ -609,8 +701,10 @@ fn candidates(
             .count();
         let held = occurrences[at..at + run]
             .iter()
-            .map(|entry| (entry.ordinal as usize, entry.counts));
-        out.push(score_document(index, &query, document, held, work)?);
+            .map(|entry| (entry.ordinal, entry.counts));
+        admitted(out.push(score_document(
+            index, &query, document, held, work, workspace,
+        )?))?;
         at += run;
     }
     Ok(out)
@@ -627,11 +721,27 @@ fn prepare_terms<'c, 'p>(
     corpus: &'c PreparedCorpus<'p>,
     terms: &[&str],
 ) -> Result<PreparedQuery<'c, 'p>, TextError> {
-    let frequencies: Vec<(&str, u64)> = terms
-        .iter()
-        .map(|term| (*term, index.document_frequency(partition, term)))
-        .collect();
-    corpus.prepare_query(&frequencies)
+    prepare_terms_owned(
+        index,
+        partition,
+        corpus,
+        terms,
+        &WorkspaceCapability::default(),
+    )
+}
+
+fn prepare_terms_owned<'c, 'p>(
+    index: &TextIndex,
+    partition: &PartitionKey,
+    corpus: &'c PreparedCorpus<'p>,
+    terms: &[&str],
+    workspace: &WorkspaceCapability,
+) -> Result<PreparedQuery<'c, 'p>, TextError> {
+    let mut frequencies = admitted(AdmittedVec::with_capacity(terms.len(), workspace))?;
+    for &term in terms {
+        admitted(frequencies.push((term, index.document_frequency(partition, term))))?;
+    }
+    corpus.prepare_query_owned(&frequencies, workspace)
 }
 
 /// One document's exact score: the **one** summation every score in this crate is
@@ -649,19 +759,26 @@ fn score_document<'a>(
     document: u32,
     held: impl Iterator<Item = (usize, &'a [(u32, u64)])>,
     work: &mut ScoringWork,
+    workspace: &WorkspaceCapability,
 ) -> Result<Candidate, TextError> {
     let field_count = index.ranking_profile().fields().len();
     let mut score = Fixed::ZERO;
-    let mut matched: u32 = 0;
+    let mut matched = 0;
     for (ordinal, counts) in held {
-        let fields = index.field_inputs_from_counts(document, counts)?;
-        score = score.checked_add(query.contribution(ordinal, &fields[..field_count])?)?;
+        let fields = index.field_inputs_from_counts_owned(document, counts, workspace)?;
+        score = score.checked_add_with(
+            query.contribution(ordinal, &fields[..field_count])?,
+            workspace.is_bounded().then_some(workspace),
+        )?;
         matched += 1;
     }
-    work.documents_scored += 1;
+    work.documents_scored = work.documents_scored.checked_add(1).ok_or_else(overflow)?;
     Ok(Candidate {
         document,
-        score: index.ranking_profile().validate_score(score)?,
+        score: query
+            .score_bound()
+            .validate_with(score, workspace.is_bounded().then_some(workspace))?,
+        score_bound: query.score_bound(),
         matched,
     })
 }
@@ -701,32 +818,111 @@ pub(crate) struct ScoringWork {
 ///
 /// Work is independent of the corpus: one binary search per needle term for its
 /// document frequency, and one field-input assembly per held term.
-pub(crate) fn score_located(
+pub(crate) fn score_located_owned(
     index: &TextIndex,
     document: u32,
     terms: &[&str],
     located: &[(usize, &[(u32, u64)])],
     work: &mut ScoringWork,
-) -> Result<(Fixed, u32), TextError> {
-    let partition = index.partition_key_of(document).ok_or_else(|| {
-        TextError::data(format!(
-            "document {document} is not in this index, so there is nothing to score"
-        ))
-    })?;
-    let corpus = index.prepared_corpus(partition)?;
-    let query = prepare_terms(index, partition, &corpus, terms)?;
-    let scored = score_document(index, &query, document, located.iter().copied(), work)?;
-    Ok((scored.score, scored.matched))
+    workspace: &WorkspaceCapability,
+) -> Result<(BoundedScore, usize), TextError> {
+    let Some(partition) = index.partition_key_of(document) else {
+        return Err(query_error(
+            workspace,
+            NativeDiagnosticKind::Data,
+            format_args!("document {document} is not in this index, so there is nothing to score"),
+        )?);
+    };
+    let corpus = index.prepared_corpus_owned(partition, workspace)?;
+    let query = prepare_terms_owned(index, partition, &corpus, terms, workspace)?;
+    let scored = score_document(
+        index,
+        &query,
+        document,
+        located.iter().copied(),
+        work,
+        workspace,
+    )?;
+    Ok((
+        BoundedScore {
+            value: scored.score,
+            bound: scored.score_bound,
+        },
+        scored.matched,
+    ))
 }
 
 /// Every candidate, in rank order.
-fn sorted(candidates: Vec<Candidate>) -> Vec<ByRank> {
-    let mut ordered: Vec<ByRank> = candidates.into_iter().map(ByRank).collect();
-    // Unstable is safe and canonical here: the order is strict and total, so
-    // there is no pair whose relative order a stable sort would preserve and an
-    // unstable one would not.
+struct OwnedOrder {
+    values: Vec<ByRank>,
+    allocation: Option<WorkspaceAllocation>,
+}
+struct OwnedOrderIter {
+    values: std::vec::IntoIter<ByRank>,
+    _allocation: Option<WorkspaceAllocation>,
+}
+impl IntoIterator for OwnedOrder {
+    type Item = ByRank;
+    type IntoIter = OwnedOrderIter;
+    fn into_iter(self) -> Self::IntoIter {
+        OwnedOrderIter {
+            values: self.values.into_iter(),
+            _allocation: self.allocation,
+        }
+    }
+}
+impl Iterator for OwnedOrderIter {
+    type Item = ByRank;
+    fn next(&mut self) -> Option<ByRank> {
+        self.values.next()
+    }
+}
+impl core::ops::Deref for OwnedOrder {
+    type Target = [ByRank];
+    fn deref(&self) -> &[ByRank] {
+        &self.values
+    }
+}
+
+/// The existing native BinaryHeap and strict ByRank law, with its actual Vec
+/// backing pre-admitted. `from`/`into_vec` move that backing without copying it.
+fn order_owned(
+    candidates: AdmittedVec<Candidate>,
+    keep: Option<usize>,
+    workspace: &WorkspaceCapability,
+) -> Result<OwnedOrder, TextError> {
+    let wanted = keep.map_or(candidates.len(), |keep| keep.min(candidates.len()));
+    let capacity = if keep.is_some_and(|keep| keep < candidates.len()) {
+        wanted.checked_add(1).ok_or_else(overflow)?
+    } else {
+        wanted
+    };
+    let mut allocation = None;
+    let mut values = Vec::new();
+    admitted(workspace.reserve_vec(&mut values, &mut allocation, capacity))?;
+    if wanted == 0 {
+        return Ok(OwnedOrder { values, allocation });
+    }
+    let mut ordered = if keep.is_some() {
+        let mut heap = BinaryHeap::from(values);
+        for candidate in candidates {
+            heap.push(ByRank(candidate));
+            if heap.len() > wanted {
+                heap.pop();
+            }
+        }
+        heap.into_vec()
+    } else {
+        for candidate in candidates {
+            values.push(ByRank(candidate));
+        }
+        values
+    };
     ordered.sort_unstable();
-    ordered
+    Ok(OwnedOrder {
+        values: ordered,
+        allocation,
+    })
 }
 
 /// The best `keep` candidates, in rank order, through a heap of that size.
@@ -735,23 +931,6 @@ fn sorted(candidates: Vec<Candidate>) -> Vec<ByRank> {
 /// of a million documents for a ten-row answer touches eleven of them at a time
 /// and sorts ten at the end — real work reduction, rather than a full sort that
 /// stops reading its own output early.
-fn bounded(candidates: Vec<Candidate>, keep: usize) -> Vec<ByRank> {
-    if keep == 0 {
-        return Vec::new();
-    }
-    let mut heap: BinaryHeap<ByRank> = BinaryHeap::with_capacity(keep.min(candidates.len()) + 1);
-    for candidate in candidates {
-        heap.push(ByRank(candidate));
-        if heap.len() > keep {
-            // The maximum under `ByRank` is the worst-ranked entry held.
-            heap.pop();
-        }
-    }
-    let mut ordered = heap.into_vec();
-    ordered.sort_unstable();
-    ordered
-}
-
 #[cfg(test)]
 mod tests {
     use purrdf_core::TermValue;
@@ -772,10 +951,7 @@ mod tests {
     #[test]
     fn the_needle_is_reduced_to_sorted_distinct_terms() {
         let needle = ["gamma", "alpha", "gamma", "beta"].map(str::to_owned);
-        assert_eq!(
-            distinct_terms(&needle).expect("a short needle"),
-            vec!["alpha", "beta", "gamma"]
-        );
+        assert_eq!(distinct_terms(&needle), vec!["alpha", "beta", "gamma"]);
     }
 
     /// An absent dimension is not the same as a present empty one, in either

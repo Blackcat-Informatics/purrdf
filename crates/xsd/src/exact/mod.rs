@@ -94,15 +94,15 @@
 pub mod cost;
 
 pub(crate) mod binary;
-mod decimal;
+pub(crate) mod decimal;
 mod error;
 mod integer;
 mod rational;
 mod rounding;
 
 pub use cost::Cost;
-pub use decimal::Decimal;
-pub use error::{BoundedTarget, ExactError, ExactKind};
+pub use decimal::{Decimal, PreparedDecimalText};
+pub use error::{BoundedTarget, ExactError, ExactKind, ExactOperationError, ExactParseError};
 pub use integer::Integer;
 pub use rational::Rational;
 pub use rounding::{DivisionPolicy, DivisionPolicyError, Rounding};

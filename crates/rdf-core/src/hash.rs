@@ -33,6 +33,43 @@ pub type FastSet<T> = std::collections::HashSet<T, FastHasher>;
 /// A [`FastSet`] of interned [`TermId`](crate::TermId)s — the common id-membership set.
 pub type IdSet = FastSet<crate::TermId>;
 
+/// Checked allocation bound for a fresh `hashbrown::HashTable<T>` holding
+/// `capacity` elements. This is a physical layout certificate, not a governor
+/// proxy. It includes bucket storage, control bytes and their alignment.
+///
+/// The workspace pins hashbrown 0.17: its small-table minimum uses at most a
+/// 16-byte control group and its larger tables reserve one eighth of buckets.
+/// The 16-byte bound also covers the portable eight-byte implementation. A
+/// dependency upgrade changing those allocation rules must update this home.
+#[must_use]
+pub fn hash_table_allocation_bound<T>(capacity: usize) -> Option<usize> {
+    if capacity == 0 {
+        return Some(0);
+    }
+    let buckets = if capacity < 15 {
+        let minimum = match size_of::<T>() {
+            0..=1 => 14,
+            2..=3 => 7,
+            _ => 3,
+        };
+        match capacity.max(minimum) {
+            0..=3 => 4,
+            4..=7 => 8,
+            _ => 16,
+        }
+    } else {
+        (capacity.checked_mul(8)? / 7).checked_next_power_of_two()?
+    };
+    let alignment = align_of::<T>().max(16);
+    let controls = buckets
+        .checked_mul(size_of::<T>())?
+        .checked_next_multiple_of(alignment)?;
+    let bytes = controls.checked_add(buckets)?.checked_add(16)?;
+    std::alloc::Layout::from_size_align(bytes, alignment)
+        .ok()
+        .map(|layout| layout.size())
+}
+
 /// The [`FastHasher`] hash of `value`: the bucket hash of the IR's store-once
 /// tables and interners. Equal values hash alike within one build; the hash only
 /// chooses a bucket, is never persisted, and never orders an output.
@@ -151,6 +188,70 @@ pub(crate) fn hash_triple_for_interner(s: u64, p: u64, o: u64) -> u64 {
         hash.write_u128(u128::from(o) | (3 << 64));
     }
     hash.finish()
+}
+
+/// Grow a native table under the original buffer admission. Both old and new
+/// tables remain covered until the old allocation has been destroyed.
+///
+/// # Errors
+/// Returns layout overflow, original admission refusal or allocator refusal.
+pub fn reserve_table_with_memory<T, S: purrdf_lex::allocation::Admission + ?Sized>(
+    table: &mut hashbrown::HashTable<T>,
+    required: usize,
+    hash: impl Fn(&T) -> u64,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    use purrdf_lex::allocation::StorageError;
+    if required <= table.capacity() {
+        return Ok(());
+    }
+    let old =
+        hash_table_allocation_bound::<T>(table.capacity()).ok_or(StorageError::SizeOverflow)?;
+    let next = hash_table_allocation_bound::<T>(required).ok_or(StorageError::SizeOverflow)?;
+    memory.add_bytes(next)?;
+    let mut replacement = hashbrown::HashTable::new();
+    replacement
+        .try_reserve(required, &hash)
+        .map_err(|_| StorageError::AllocationFailed)?;
+    for value in table.drain() {
+        replacement.insert_unique(hash(&value), value, &hash);
+    }
+    drop(core::mem::replace(table, replacement));
+    memory.release_bytes(old)
+}
+
+/// Grow a fixed-key map at the same physical table home as native hash tables.
+///
+/// # Errors
+/// Returns layout overflow, original admission or allocator refusal.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "physical growth preserves the workspace's required fixed-key native map"
+)]
+pub fn reserve_map_with_memory<
+    K: Eq + core::hash::Hash,
+    V,
+    S: purrdf_lex::allocation::Admission + ?Sized,
+>(
+    map: &mut FastMap<K, V>,
+    required: usize,
+    memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+) -> Result<(), purrdf_lex::allocation::StorageError> {
+    use purrdf_lex::allocation::StorageError;
+    if required <= map.capacity() {
+        return Ok(());
+    }
+    let old =
+        hash_table_allocation_bound::<(K, V)>(map.capacity()).ok_or(StorageError::SizeOverflow)?;
+    let next = hash_table_allocation_bound::<(K, V)>(required).ok_or(StorageError::SizeOverflow)?;
+    memory.add_bytes(next)?;
+    let mut replacement = FastMap::default();
+    replacement
+        .try_reserve(required)
+        .map_err(|_| StorageError::AllocationFailed)?;
+    replacement.extend(map.drain());
+    drop(core::mem::replace(map, replacement));
+    memory.release_bytes(old)
 }
 
 #[cfg(test)]

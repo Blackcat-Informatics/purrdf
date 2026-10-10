@@ -89,34 +89,37 @@
 //! analysis reads as written — one holding a `SERVICE ?v` — and a property-function
 //! call, which `crate::binop::eval_lateral` drives itself, are never deferred.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use purrdf_core::DatasetView;
 use purrdf_sparql_algebra::{Child, Expression, GraphPattern, NamedNodePattern, Variable};
 
-use crate::DetHashSet;
+use crate::error::EvalError;
 use crate::eval::{EvalCtx, PreparedExists};
 use crate::expr::{SubstitutionRow, SubstitutionSource, SubstitutionSourceMap};
 use crate::governor::soundness::{ExpressionPart, PatternPart};
+use crate::solution::VarSchema;
+use crate::workspace::SharedWorkspace;
+use crate::{AdmittedMap, AdmittedVec, WorkspaceCapability};
 
 /// One nested `EXISTS` body, prepared once per evaluation from the body as written.
 pub(crate) struct ExistsSite {
     /// The body's preparation: its normal form, the first-witness form and the analysis.
-    pub(crate) prepared: Arc<PreparedExists>,
+    pub(crate) prepared: SharedWorkspace<PreparedExists>,
     /// Every variable the written body mentions anywhere
     /// ([`crate::expr::pattern_all_vars`]): the variables a substitution can reach in it,
     /// and so the only ones an environment needs to carry for it.
-    pub(crate) vars: DetHashSet<Variable>,
+    pub(crate) vars: VarSchema,
     /// Whether the body reaches a builtin or callee a forked worker must not run
     /// ([`crate::parallel::is_parallel_safe_pattern`]).
     pub(crate) parallel_unsafe: bool,
     /// Every variable-endpoint `SERVICE ?v` in the body that no `SELECT` inside the body
     /// hides — what the endpoint analysis would have recorded for it. Empty when the
     /// query has no variable-endpoint `SERVICE` at all.
-    pub(crate) service_uses: Vec<Variable>,
+    pub(crate) service_uses: AdmittedVec<Variable>,
     /// The preparation's nodes mapped one hop to the plan nodes the ledger indexes; empty
     /// without a ledger.
-    pub(crate) plan_map: Arc<SubstitutionSourceMap>,
+    pub(crate) plan_map: SharedWorkspace<SubstitutionSourceMap>,
 }
 
 /// The substitution a nested `EXISTS` body is owed, carried rather than applied.
@@ -124,16 +127,16 @@ pub(crate) struct ExistsSite {
 pub(crate) struct SubstitutionEnv {
     /// Every layer applied so far, newest first, each restricted to the site's variables;
     /// `None` when no layer binds any of them.
-    layers: Option<Arc<EnvLayer>>,
+    layers: Option<SharedWorkspace<EnvLayer>>,
     /// The layers merged into one row, or `None` when two of them bind a shared variable
     /// differently. Meaningful only when `layers` is `Some`.
-    merged: Option<Arc<SubstitutionRow>>,
+    merged: Option<SubstitutionRow>,
 }
 
 /// One substitution layer.
 struct EnvLayer {
     row: SubstitutionRow,
-    parent: Option<Arc<Self>>,
+    parent: Option<SharedWorkspace<Self>>,
 }
 
 /// What a [`SubstitutionEnv`] amounts to.
@@ -148,23 +151,31 @@ pub(crate) enum EnvState<'a> {
 
 impl SubstitutionEnv {
     /// This environment with `row` applied after it, restricted to `vars`.
-    pub(crate) fn then(&self, row: &SubstitutionRow, vars: &DetHashSet<Variable>) -> Self {
-        let pruned = restrict(row, vars);
+    pub(crate) fn then(
+        &self,
+        row: &SubstitutionRow,
+        vars: &VarSchema,
+        workspace: &WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let pruned = restrict(row, vars, workspace)?;
         if pruned.term.is_empty() && pruned.expr.is_empty() {
-            return self.clone();
+            return Ok(self.clone());
         }
         let merged = match (&self.layers, &self.merged) {
-            (None, _) => Some(Arc::new(pruned.clone())),
-            (Some(_), Some(base)) => merge(base, &pruned).map(Arc::new),
+            (None, _) => Some(pruned.clone()),
+            (Some(_), Some(base)) => merge(base, &pruned, workspace)?,
             (Some(_), None) => None,
         };
-        Self {
-            layers: Some(Arc::new(EnvLayer {
-                row: pruned,
-                parent: self.layers.clone(),
-            })),
+        Ok(Self {
+            layers: Some(SharedWorkspace::new_admitted(
+                EnvLayer {
+                    row: pruned,
+                    parent: self.layers.clone(),
+                },
+                workspace,
+            )?),
             merged,
-        }
+        })
     }
 
     /// What this environment amounts to.
@@ -177,15 +188,18 @@ impl SubstitutionEnv {
     }
 
     /// Every layer, oldest first.
-    pub(crate) fn layers(&self) -> Vec<&SubstitutionRow> {
-        let mut out = Vec::new();
+    pub(crate) fn layers(
+        &self,
+        workspace: &WorkspaceCapability,
+    ) -> Result<AdmittedVec<&SubstitutionRow>, EvalError> {
+        let mut output = AdmittedVec::new(workspace);
         let mut next = self.layers.as_deref();
         while let Some(layer) = next {
-            out.push(&layer.row);
+            output.push(&layer.row)?;
             next = layer.parent.as_deref();
         }
-        out.reverse();
-        out
+        output.as_mut_slice().reverse();
+        Ok(output)
     }
 
     /// Whether substituting this environment turns a `SERVICE ?variable` into a clause
@@ -210,41 +224,74 @@ impl SubstitutionEnv {
 }
 
 /// `row` restricted to `vars`, each side in its own order.
-fn restrict(row: &SubstitutionRow, vars: &DetHashSet<Variable>) -> SubstitutionRow {
-    SubstitutionRow {
-        expr: row
-            .expr
-            .iter()
-            .filter(|(v, _)| vars.contains(v))
-            .cloned()
-            .collect(),
-        term: row
-            .term
-            .iter()
-            .filter(|(v, _)| vars.contains(v))
-            .cloned()
-            .collect(),
-    }
+fn restrict(
+    row: &SubstitutionRow,
+    vars: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<SubstitutionRow, EvalError> {
+    row.filtered(workspace, |v| vars.contains(v))
 }
 
 /// `base` followed by `next`, as one row: `None` when they bind a shared variable to
 /// different terms. Where they agree, the term (and so the expression constant, which is
 /// a function of the term) is the same, so the merged row keeps `base`'s entry.
-fn merge(base: &SubstitutionRow, next: &SubstitutionRow) -> Option<SubstitutionRow> {
-    let mut out = base.clone();
-    for (v, t) in &next.term {
-        match base.term.iter().find(|(bv, _)| bv == v) {
-            Some((_, bt)) if bt != t => return None,
-            Some(_) => {}
-            None => out.term.push((v.clone(), t.clone())),
+fn merge(
+    base: &SubstitutionRow,
+    next: &SubstitutionRow,
+    workspace: &WorkspaceCapability,
+) -> Result<Option<SubstitutionRow>, EvalError> {
+    let mut conflict = false;
+    let row = SubstitutionRow::build(workspace, |expr, term, memory| {
+        for (variable, value) in &base.expr {
+            let copy = value
+                .clone_with_memory(memory)
+                .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+            memory
+                .push(expr, (variable.clone(), copy))
+                .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
         }
-    }
-    for (v, e) in &next.expr {
-        if !base.expr.iter().any(|(bv, _)| bv == v) {
-            out.expr.push((v.clone(), e.clone()));
+        for (variable, value) in &base.term {
+            let copy = value
+                .clone_with_memory(memory)
+                .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+            memory
+                .push(term, (variable.clone(), copy))
+                .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
         }
-    }
-    Some(out)
+        for (variable, value) in &next.term {
+            match base.term.iter().find(|(name, _)| name == variable) {
+                Some((_, existing)) => {
+                    if !existing
+                        .eq_with_memory(value, memory)
+                        .map_err(|e| crate::expr::correlated_storage_error(memory, e))?
+                    {
+                        conflict = true;
+                        return Ok(());
+                    }
+                }
+                None => {
+                    let copy = value
+                        .clone_with_memory(memory)
+                        .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+                    memory
+                        .push(term, (variable.clone(), copy))
+                        .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+                }
+            }
+        }
+        for (variable, value) in &next.expr {
+            if !base.expr.iter().any(|(name, _)| name == variable) {
+                let copy = value
+                    .clone_with_memory(memory)
+                    .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+                memory
+                    .push(expr, (variable.clone(), copy))
+                    .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+            }
+        }
+        Ok(())
+    })?;
+    Ok((!conflict).then_some(row))
 }
 
 /// The environment `env` followed by the current row `row`, restricted to `vars`, as one
@@ -252,16 +299,17 @@ fn merge(base: &SubstitutionRow, next: &SubstitutionRow) -> Option<SubstitutionR
 pub(crate) fn with_row(
     env: &SubstitutionRow,
     row: &SubstitutionRow,
-    vars: &DetHashSet<Variable>,
-) -> Option<SubstitutionRow> {
-    merge(env, &restrict(row, vars))
+    vars: &VarSchema,
+    workspace: &WorkspaceCapability,
+) -> Result<Option<SubstitutionRow>, EvalError> {
+    merge(env, &restrict(row, vars, workspace)?, workspace)
 }
 
 /// A placeholder's site and the substitution it is owed.
 #[derive(Clone)]
 pub(crate) struct DeferredExists {
     /// The body.
-    pub(crate) site: Arc<ExistsSite>,
+    pub(crate) site: SharedWorkspace<ExistsSite>,
     /// What to substitute into it.
     pub(crate) env: SubstitutionEnv,
 }
@@ -270,7 +318,7 @@ pub(crate) struct DeferredExists {
 #[derive(Clone)]
 pub(crate) struct DeferredLateral {
     /// The right operand.
-    pub(crate) site: Arc<LateralSite>,
+    pub(crate) site: SharedWorkspace<LateralSite>,
     /// What to substitute into it, before the left row it is evaluated for.
     pub(crate) env: SubstitutionEnv,
 }
@@ -312,19 +360,19 @@ impl Deferred {
 }
 
 /// A substituted copy's placeholders, by address.
-pub(crate) type DeferredMap = crate::DetHashMap<usize, Deferred>;
+pub(crate) type DeferredMap = AdmittedMap<usize, Deferred>;
 
 /// The sites of the `EXISTS` bodies a substitution source holds, by the body's address —
 /// what the map dereferences to — and of its deferred `LATERAL` right operands, by the
 /// operand's address.
 #[derive(Default)]
 pub(crate) struct NestedSites {
-    exists: crate::DetHashMap<usize, Arc<ExistsSite>>,
-    pub(crate) lateral: crate::DetHashMap<usize, Arc<LateralSite>>,
+    exists: AdmittedMap<usize, SharedWorkspace<ExistsSite>>,
+    pub(crate) lateral: AdmittedMap<usize, SharedWorkspace<LateralSite>>,
 }
 
 impl std::ops::Deref for NestedSites {
-    type Target = crate::DetHashMap<usize, Arc<ExistsSite>>;
+    type Target = AdmittedMap<usize, SharedWorkspace<ExistsSite>>;
     fn deref(&self) -> &Self::Target {
         &self.exists
     }
@@ -345,21 +393,22 @@ pub(crate) struct LateralSite {
     pub(crate) body: Box<GraphPattern>,
     /// The columns the uncut operand exposes, in its schema order: the columns its
     /// placeholder exposes.
-    pub(crate) schema: Vec<Variable>,
+    pub(crate) schema: VarSchema,
     /// Every variable the uncut operand mentions anywhere: the variables a substitution
     /// can reach in it, and so the only ones an environment needs to carry for it.
-    pub(crate) vars: DetHashSet<Variable>,
+    pub(crate) vars: VarSchema,
     /// Whether the uncut operand reaches a builtin or callee a forked worker must not run.
     pub(crate) parallel_unsafe: bool,
     /// Every node of the whole cut chain mapped one hop to the plan node it copies; empty
     /// without a ledger. One map, shared by every site cut from the same copy.
-    pub(crate) plan_map: Arc<SubstitutionSourceMap>,
+    pub(crate) plan_map: SharedWorkspace<SubstitutionSourceMap>,
     /// The sites of the operands cut out of [`Self::body`], by their placeholder's
     /// address.
-    children: crate::DetHashMap<usize, Arc<Self>>,
+    children: AdmittedMap<usize, SharedWorkspace<Self>>,
     /// The sites of the body's own nested `EXISTS` bodies and of `children`, prepared on
     /// the body's first substitution.
-    sites: OnceLock<Arc<NestedSites>>,
+    sites: OnceLock<SharedWorkspace<NestedSites>>,
+    _body_owner: SharedWorkspace<std::sync::Mutex<crate::workspace::LexicalFrame>>,
 }
 
 /// The sites of the `EXISTS` bodies of the plan nodes a `LATERAL` substitutes, by the
@@ -372,7 +421,7 @@ pub(crate) struct LateralSite {
 /// outlives the evaluation, so an address key cannot be reused while the entry exists.
 #[derive(Default)]
 pub(crate) struct PlanSites {
-    by_root: std::sync::RwLock<crate::DetHashMap<usize, Arc<NestedSites>>>,
+    by_root: std::sync::RwLock<AdmittedMap<usize, SharedWorkspace<NestedSites>>>,
 }
 
 /// Where the sites of a substitution source's nested `EXISTS` bodies are kept.
@@ -380,7 +429,7 @@ pub(crate) struct PlanSites {
 pub(crate) enum SiteSlot<'a> {
     /// The source belongs to this preparation, which owns the tree the bodies are in and
     /// keeps their sites for as long as it lives.
-    Prepared(&'a OnceLock<Arc<NestedSites>>),
+    Prepared(&'a OnceLock<SharedWorkspace<NestedSites>>),
     /// The source is a plan node: its sites are kept on the evaluation's [`PlanSites`].
     Plan,
     /// The source is part of a per-row copy: its sites are prepared for this use alone.
@@ -403,7 +452,7 @@ pub(crate) struct CorrelatedSource<'a> {
 /// one use.
 pub(crate) enum SitesRef<'a> {
     Kept(&'a NestedSites),
-    Owned(Arc<NestedSites>),
+    Owned(SharedWorkspace<NestedSites>),
 }
 
 impl std::ops::Deref for SitesRef<'_> {
@@ -420,24 +469,7 @@ impl std::ops::Deref for SitesRef<'_> {
 /// a space, so it names no variable of any query.
 const PLACEHOLDER_VARIABLE: &str = "purrdf deferred exists";
 
-/// The placeholder standing in a copy for a nested `EXISTS` body: a `VALUES` block with no
-/// rows over a variable no query can name. Its address keys the window's [`DeferredMap`];
-/// its shape lets [`is_placeholder`] tell a placeholder that lost its entry (which would
-/// be a bug) from a body, so it can never be evaluated as one.
-#[allow(
-    clippy::unnecessary_box_returns,
-    reason = "the box's heap address is the placeholder's identity: it keys the DeferredMap \
-              and must be fixed before the placeholder moves into the substituted copy \
-              (the lint fires only where GraphPattern is small, i.e. on wasm32)"
-)]
-pub(crate) fn placeholder() -> Box<GraphPattern> {
-    Box::new(GraphPattern::Values {
-        variables: vec![Variable::new(PLACEHOLDER_VARIABLE)],
-        bindings: Vec::new(),
-    })
-}
-
-/// Whether `pattern` has the shape [`placeholder`] builds.
+/// Whether `pattern` has the shape [`placeholder_with_memory`] builds.
 pub(crate) fn is_placeholder(pattern: &GraphPattern) -> bool {
     matches!(
         pattern,
@@ -448,25 +480,7 @@ pub(crate) fn is_placeholder(pattern: &GraphPattern) -> bool {
     )
 }
 
-/// The placeholder standing in a copy for a nested `LATERAL`'s right operand, whose
-/// columns are `schema`: a `SELECT` of those columns over a [`placeholder`], so the
-/// columns read off the copy without evaluating it are the operand's. Its address keys
-/// the window's [`DeferredMap`]; its shape lets [`is_lateral_placeholder`] tell one that
-/// lost its entry from an operand, so it is never evaluated as one.
-#[allow(
-    clippy::unnecessary_box_returns,
-    reason = "the box's heap address is the placeholder's identity: it keys the DeferredMap \
-              and must be fixed before the placeholder moves into the substituted copy \
-              (the lint fires only where GraphPattern is small, i.e. on wasm32)"
-)]
-pub(crate) fn lateral_placeholder(schema: &[Variable]) -> Box<GraphPattern> {
-    Box::new(GraphPattern::Project {
-        inner: Child::from(placeholder()),
-        variables: schema.to_vec(),
-    })
-}
-
-/// Whether `pattern` has the shape [`lateral_placeholder`] builds.
+/// Whether `pattern` has the shape [`lateral_placeholder_with_memory`] builds.
 pub(crate) fn is_lateral_placeholder(pattern: &GraphPattern) -> bool {
     matches!(pattern, GraphPattern::Project { inner, .. } if is_placeholder(inner))
 }
@@ -482,20 +496,30 @@ pub(crate) fn nested_sites<'a, D: DatasetView + Sync>(
     pattern: &GraphPattern,
     source: CorrelatedSource<'a>,
     ctx: &mut EvalCtx<'_, D>,
-) -> SitesRef<'a> {
+) -> Result<SitesRef<'a>, EvalError> {
     let root = std::ptr::from_ref(pattern) as usize;
-    match source.sites {
+    let workspace = ctx.growth.clone();
+    Ok(match source.sites {
         SiteSlot::Prepared(slot) => {
             if let Some(kept) = slot.get() {
-                return SitesRef::Kept(kept);
+                return Ok(SitesRef::Kept(kept));
             }
-            let sites = Arc::new(prepare_sites(pattern, source, ctx));
-            // Another worker may have kept its own first; both are the same sites.
-            let kept = slot.get_or_init(|| sites);
-            SitesRef::Kept(kept)
+            let sites =
+                SharedWorkspace::new_admitted(prepare_sites(pattern, source, ctx)?, &workspace)?;
+            SitesRef::Kept(slot.get_or_init(|| sites))
         }
         SiteSlot::Plan => {
-            let plan_sites = Arc::clone(ctx.plan_exists_sites.get_or_insert_with(Arc::default));
+            if ctx.plan_exists_sites.is_none() {
+                ctx.plan_exists_sites = Some(SharedWorkspace::new_admitted(
+                    PlanSites::default(),
+                    &workspace,
+                )?);
+            }
+            let plan_sites = ctx
+                .plan_exists_sites
+                .as_ref()
+                .expect("initialized above")
+                .clone();
             let kept = plan_sites
                 .by_root
                 .read()
@@ -503,27 +527,37 @@ pub(crate) fn nested_sites<'a, D: DatasetView + Sync>(
                 .get(&root)
                 .cloned();
             if let Some(kept) = kept {
-                return SitesRef::Owned(kept);
+                return Ok(SitesRef::Owned(kept));
             }
-            let sites = Arc::new(prepare_sites(pattern, source, ctx));
-            let kept = Arc::clone(
-                plan_sites
-                    .by_root
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .entry(root)
-                    .or_insert(sites),
-            );
+            let sites =
+                SharedWorkspace::new_admitted(prepare_sites(pattern, source, ctx)?, &workspace)?;
+            let mut table = plan_sites
+                .by_root
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let kept = match table.get(&root) {
+                Some(kept) => kept.clone(),
+                None => {
+                    table.insert_admitted(root, sites.clone(), &workspace)?;
+                    sites
+                }
+            };
+            drop(table);
             SitesRef::Owned(kept)
         }
-        SiteSlot::Transient => SitesRef::Owned(Arc::new(prepare_sites(pattern, source, ctx))),
+        SiteSlot::Transient => SitesRef::Owned(SharedWorkspace::new_admitted(
+            prepare_sites(pattern, source, ctx)?,
+            &workspace,
+        )?),
         SiteSlot::Lateral(site) => {
-            let kept = site
-                .sites
-                .get_or_init(|| Arc::new(prepare_sites(pattern, source, ctx)));
-            SitesRef::Kept(kept)
+            if let Some(kept) = site.sites.get() {
+                return Ok(SitesRef::Kept(kept));
+            }
+            let sites =
+                SharedWorkspace::new_admitted(prepare_sites(pattern, source, ctx)?, &workspace)?;
+            SitesRef::Kept(site.sites.get_or_init(|| sites))
         }
-    }
+    })
 }
 
 /// Prepare the site of every body and operand [`nested_sites`] names.
@@ -531,28 +565,36 @@ fn prepare_sites<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     source: CorrelatedSource<'_>,
     ctx: &EvalCtx<'_, D>,
-) -> NestedSites {
+) -> Result<NestedSites, EvalError> {
     let mut sites = NestedSites::default();
     let deferrable = Deferrable::of(ctx);
-    let (bodies, operands) = nested_bodies(pattern, ctx.deferred_exists.as_deref(), deferrable);
+    let workspace = &ctx.growth;
+    let (bodies, operands) = nested_bodies(
+        pattern,
+        ctx.deferred_exists.as_deref(),
+        deferrable,
+        workspace,
+    )?;
     for body in bodies {
-        let site = build_site(body, source, ctx);
-        sites.insert(std::ptr::from_ref(body) as usize, Arc::new(site));
+        let site = SharedWorkspace::new_admitted(build_site(body, source, ctx)?, workspace)?;
+        sites
+            .exists
+            .insert_admitted(std::ptr::from_ref(body) as usize, site, workspace)?;
     }
     for operand in operands {
-        let site = build_lateral_site(operand, source, deferrable, ctx);
+        let site = build_lateral_site(operand, source, deferrable, ctx)?;
         sites
             .lateral
-            .insert(std::ptr::from_ref(operand) as usize, site);
+            .insert_admitted(std::ptr::from_ref(operand) as usize, site, workspace)?;
     }
     if let SiteSlot::Lateral(site) = source.sites {
-        sites.lateral.extend(
-            site.children
-                .iter()
-                .map(|(&address, child)| (address, Arc::clone(child))),
-        );
+        for (&address, child) in site.children.iter() {
+            sites
+                .lateral
+                .insert_admitted(address, child.clone(), workspace)?;
+        }
     }
-    sites
+    Ok(sites)
 }
 
 /// Which `LATERAL` right operands the substitution walk leaves as placeholders.
@@ -574,11 +616,17 @@ impl Deferrable {
     /// property-function call (`crate::binop::eval_lateral` drives one per left row
     /// itself), not already a placeholder, and holding no variable-endpoint `SERVICE` the
     /// endpoint analysis of an enclosing operator must read as written.
-    fn operand(self, operand: &GraphPattern) -> bool {
-        !matches!(operand, GraphPattern::PropertyFunction(_))
+    fn operand(
+        self,
+        operand: &GraphPattern,
+        workspace: &WorkspaceCapability,
+    ) -> Result<bool, EvalError> {
+        Ok(!matches!(operand, GraphPattern::PropertyFunction(_))
             && !is_lateral_placeholder(operand)
             && (self.no_variable_endpoint
-                || !crate::service_endpoints::mentions_variable_endpoint(operand))
+                || !crate::service_endpoints::mentions_variable_endpoint_admitted(
+                    operand, workspace,
+                )?))
     }
 }
 
@@ -590,53 +638,61 @@ fn nested_bodies<'p>(
     pattern: &'p GraphPattern,
     placeholders: Option<&DeferredMap>,
     deferrable: Deferrable,
-) -> (Vec<&'p GraphPattern>, Vec<&'p GraphPattern>) {
-    enum Node<'p> {
-        Pattern(&'p GraphPattern),
-        Expression(&'p Expression),
+    workspace: &WorkspaceCapability,
+) -> Result<(AdmittedVec<&'p GraphPattern>, AdmittedVec<&'p GraphPattern>), EvalError> {
+    enum Node<'a> {
+        Pattern(&'a GraphPattern),
+        Expression(&'a Expression),
     }
-    let mut bodies = Vec::new();
-    let mut operands = Vec::new();
-    let mut pending = vec![Node::Pattern(pattern)];
+    let mut bodies = AdmittedVec::new(workspace);
+    let mut operands = AdmittedVec::new(workspace);
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push(Node::Pattern(pattern))?;
     while let Some(node) = pending.pop() {
+        let mut failure = None;
         match node {
-            // A `SERVICE` body is substituted in full: it is forwarded as text.
             Node::Pattern(GraphPattern::Service { .. }) => {}
             Node::Pattern(GraphPattern::Lateral { left, right }) => {
-                if deferrable.operand(right) {
-                    operands.push(&**right);
+                if deferrable.operand(right, workspace)? {
+                    operands.push(&**right)?;
                 } else if !is_lateral_placeholder(right) {
-                    pending.push(Node::Pattern(right));
+                    pending.push(Node::Pattern(right))?;
                 }
-                pending.push(Node::Pattern(left));
+                pending.push(Node::Pattern(left))?;
             }
             Node::Pattern(pattern) => {
                 crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
-                    pending.push(match part {
-                        PatternPart::Child(child, _) => Node::Pattern(child),
-                        PatternPart::Expression(expr) => Node::Expression(expr),
-                    });
-                    false
+                    remember_failure(
+                        pending.push(match part {
+                            PatternPart::Child(child, _) => Node::Pattern(child),
+                            PatternPart::Expression(expr) => Node::Expression(expr),
+                        }),
+                        &mut failure,
+                    )
                 });
             }
             Node::Expression(expr) => {
-                crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
-                    match part {
-                        ExpressionPart::Sub(sub) => pending.push(Node::Expression(sub)),
-                        ExpressionPart::Exists(body) => {
-                            let address = std::ptr::from_ref(body) as usize;
-                            if !placeholders.is_some_and(|map| map.contains_key(&address)) {
-                                bodies.push(body);
-                            }
-                        }
-                        ExpressionPart::Call(_) => {}
+                crate::governor::soundness::visit_expression_parts(expr, &mut |part| match part {
+                    ExpressionPart::Sub(sub) => {
+                        remember_failure(pending.push(Node::Expression(sub)), &mut failure)
                     }
-                    false
+                    ExpressionPart::Exists(body) => {
+                        let address = std::ptr::from_ref(body) as usize;
+                        if placeholders.is_some_and(|map| map.contains_key(&address)) {
+                            false
+                        } else {
+                            remember_failure(bodies.push(body), &mut failure)
+                        }
+                    }
+                    ExpressionPart::Call(_) => false,
                 });
             }
         }
+        if let Some(error) = failure {
+            return Err(error);
+        }
     }
-    (bodies, operands)
+    Ok((bodies, operands))
 }
 
 /// Call `visit` with the right operand of every `LATERAL` in `body` outside a `SERVICE`
@@ -644,24 +700,39 @@ fn nested_bodies<'p>(
 /// worklist, so a body of any height costs heap and never stack.
 fn visit_lateral_operands_mut(
     body: &mut GraphPattern,
-    visit: &mut impl FnMut(&mut Child<GraphPattern>) -> bool,
-) {
-    let mut pending: Vec<&mut GraphPattern> = vec![body];
+    visit: &mut impl FnMut(
+        &mut Child<GraphPattern>,
+        &mut crate::expr::CorrelatedMemory<'_>,
+    ) -> Result<bool, EvalError>,
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<(), EvalError> {
+    let mut pending = AdmittedVec::new(memory.admission_mut().workspace());
+    pending.push(body)?;
     while let Some(node) = pending.pop() {
         match node {
             GraphPattern::Lateral { left, right } => {
-                if visit(right) {
-                    pending.push(&mut **right);
+                if visit(right, memory)? {
+                    pending.push(&mut **right)?;
                 }
-                pending.push(&mut **left);
+                pending.push(&mut **left)?;
             }
-            node => crate::blank_scope::for_each_child_mut(node, &mut |child| {
-                if let crate::blank_scope::ChildMut::Pattern(child) = child {
-                    pending.push(child);
+            node => {
+                let mut failure = None;
+                crate::blank_scope::for_each_child_mut(node, &mut |child| {
+                    if failure.is_none()
+                        && let crate::blank_scope::ChildMut::Pattern(child) = child
+                        && let Err(error) = pending.push(child)
+                    {
+                        failure = Some(error);
+                    }
+                });
+                if let Some(error) = failure {
+                    return Err(error);
                 }
-            }),
+            }
         }
     }
+    Ok(())
 }
 
 /// Prepare the site of `operand`, the right operand of a `LATERAL`, read from `source`:
@@ -675,86 +746,134 @@ fn build_lateral_site<D: DatasetView + Sync>(
     source: CorrelatedSource<'_>,
     deferrable: Deferrable,
     ctx: &EvalCtx<'_, D>,
-) -> Arc<LateralSite> {
-    /// One cut piece: its body, and the piece and the placeholder it was cut out of.
+) -> Result<SharedWorkspace<LateralSite>, EvalError> {
     struct Piece {
         body: Box<GraphPattern>,
         parent: Option<(usize, usize)>,
     }
-
-    let copy = Box::new(operand.clone());
+    let workspace = &ctx.growth;
+    // Publish the actual empty frame control FIRST, so every subsequently
+    // created piece is destroyed before this shared original AST admission.
+    let owner = SharedWorkspace::new_admitted(
+        std::sync::Mutex::new(crate::workspace::LexicalFrame::new(workspace)),
+        workspace,
+    )?;
+    let copy = {
+        let mut frame = owner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut *frame);
+        let copy = operand
+            .clone_with_memory(&mut memory)
+            .map_err(|e| crate::expr::correlated_storage_error(&mut memory, e))?;
+        let copy = crate::expr::correlated_box(copy, &mut memory)?;
+        drop(frame);
+        copy
+    };
     #[cfg(test)]
     crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(operand));
-    let plan_map = if ctx.ledger.is_some() {
-        let mut map = SubstitutionSourceMap::default();
-        crate::enf::map_clone(operand, &copy, &mut map);
-        Arc::new(to_plan(&map, source.plan_map))
-    } else {
-        Arc::default()
-    };
-
-    // Cut: each deferrable operand leaves its piece for a placeholder, and is cut in turn.
-    // A piece is numbered after the piece it was cut from, so children follow parents.
-    let mut pieces: Vec<Piece> = Vec::new();
-    let mut queue = vec![Piece {
+    let mut mapping = SubstitutionSourceMap::default();
+    if ctx.ledger.is_some() {
+        crate::enf::map_clone_admitted(operand, &copy, &mut mapping, workspace)?;
+    }
+    let plan_map =
+        SharedWorkspace::new_admitted(to_plan(&mapping, source.plan_map, workspace)?, workspace)?;
+    let mut pieces = AdmittedVec::new(workspace);
+    let mut queue = AdmittedVec::new(workspace);
+    queue.push(Piece {
         body: copy,
         parent: None,
-    }];
+    })?;
     while let Some(Piece { mut body, parent }) = queue.pop() {
         let index = pieces.len();
-        visit_lateral_operands_mut(&mut body, &mut |right| {
-            if !deferrable.operand(right) {
-                return true;
-            }
-            let cut = std::mem::replace(right, Child::from(lateral_placeholder(&[])));
-            queue.push(Piece {
-                body: cut.into_box(),
-                parent: Some((index, std::ptr::from_ref::<GraphPattern>(&**right) as usize)),
-            });
-            false
-        });
-        pieces.push(Piece { body, parent });
+        let mut frame = owner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let live = frame.admitted_bytes();
+        let mut memory = purrdf_lex::allocation::Memory::resume(&mut *frame, live);
+        visit_lateral_operands_mut(
+            &mut body,
+            &mut |right, memory| {
+                if !deferrable.operand(right, workspace)? {
+                    return Ok(true);
+                }
+                let replacement = lateral_placeholder_with_memory(&[], memory)?;
+                let cut = std::mem::replace(right, replacement.into());
+                queue.push(Piece {
+                    body: cut.into_box(),
+                    parent: Some((index, std::ptr::from_ref::<GraphPattern>(&**right) as usize)),
+                })?;
+                Ok(false)
+            },
+            &mut memory,
+        )?;
+        drop(frame);
+        pieces.push(Piece { body, parent })?;
     }
-
-    // Assemble, deepest piece first: a piece's children are built before it, so its
-    // placeholders take their columns and its site reads theirs.
-    let mut children_of: Vec<Vec<(usize, usize)>> = vec![Vec::new(); pieces.len()];
+    let mut children_of = AdmittedVec::with_capacity(pieces.len(), workspace)?;
+    for _ in 0..pieces.len() {
+        children_of.push(AdmittedVec::new(workspace))?;
+    }
     for (index, piece) in pieces.iter().enumerate() {
         if let Some((parent, placeholder)) = piece.parent {
-            children_of[parent].push((placeholder, index));
+            children_of.as_mut_slice()[parent].push((placeholder, index))?;
         }
     }
-    let mut built: Vec<Option<Arc<LateralSite>>> = vec![None; pieces.len()];
+    let mut built: AdmittedVec<Option<SharedWorkspace<LateralSite>>> =
+        AdmittedVec::with_capacity(pieces.len(), workspace)?;
+    for _ in 0..pieces.len() {
+        built.push(None)?;
+    }
     while let Some(Piece { mut body, .. }) = pieces.pop() {
         let index = pieces.len();
-        let children: crate::DetHashMap<usize, Arc<LateralSite>> = children_of[index]
-            .iter()
-            .map(|&(placeholder, child)| {
-                let site = built[child]
-                    .take()
-                    .expect("a piece is assembled before the piece it was cut from");
-                (placeholder, site)
-            })
-            .collect();
+        let mut children: AdmittedMap<usize, SharedWorkspace<LateralSite>> = AdmittedMap::default();
+        for &(placeholder, child) in &children_of[index] {
+            let site = built.as_mut_slice()[child]
+                .take()
+                .expect("children assembled before parents");
+            children.insert_admitted(placeholder, site, workspace)?;
+        }
         if !children.is_empty() {
-            visit_lateral_operands_mut(&mut body, &mut |right| {
-                let address = std::ptr::from_ref::<GraphPattern>(&**right) as usize;
-                match (children.get(&address), &mut **right) {
-                    (Some(child), GraphPattern::Project { variables, .. }) => {
-                        variables.clone_from(&child.schema);
-                        false
+            let mut frame = owner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let live = frame.admitted_bytes();
+            let mut memory = purrdf_lex::allocation::Memory::resume(&mut *frame, live);
+            visit_lateral_operands_mut(
+                &mut body,
+                &mut |right, memory| {
+                    let address = std::ptr::from_ref::<GraphPattern>(&**right) as usize;
+                    match (children.get(&address), &mut **right) {
+                        (Some(child), GraphPattern::Project { variables, .. }) => {
+                            let previous = std::mem::take(variables);
+                            memory
+                                .release_vec(previous)
+                                .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+                            *variables = memory
+                                .collect(child.schema.vars().iter().cloned())
+                                .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+                            Ok(false)
+                        }
+                        _ => Ok(true),
                     }
-                    _ => true,
-                }
-            });
+                },
+                &mut memory,
+            )?;
+            drop(frame);
         }
-        let schema = crate::eval::syntactic_schema(&body).vars().to_vec();
-        let mut vars = DetHashSet::default();
-        crate::expr::pattern_all_vars(&body, &mut vars);
+        let schema = (*crate::eval::syntactic_schema_admitted(&body, workspace)?).clone();
+        let mut vars = crate::solution::SchemaBuilder::new(workspace);
+        vars.try_extend(
+            crate::expr::pattern_all_vars_admitted(&body, workspace)?
+                .vars()
+                .iter()
+                .cloned(),
+        )?;
         for child in children.values() {
-            vars.extend(child.vars.iter().cloned());
+            vars.try_extend(child.vars.vars().iter().cloned())?;
         }
-        let parallel_unsafe = !crate::parallel::is_parallel_safe_pattern_with(
+        let vars = vars.finish()?;
+        let parallel_unsafe = !crate::parallel::is_parallel_safe_pattern_with_admitted(
             &body,
             ctx.safety_registries(),
             &|pattern| {
@@ -762,20 +881,25 @@ fn build_lateral_site<D: DatasetView + Sync>(
                     .get(&(std::ptr::from_ref(pattern) as usize))
                     .map(|child| child.parallel_unsafe)
             },
-        );
-        built[index] = Some(Arc::new(LateralSite {
-            body,
-            schema,
-            vars,
-            parallel_unsafe,
-            plan_map: Arc::clone(&plan_map),
-            children,
-            sites: OnceLock::new(),
-        }));
+            workspace,
+        )?;
+        built.as_mut_slice()[index] = Some(SharedWorkspace::new_admitted(
+            LateralSite {
+                body,
+                schema,
+                vars,
+                parallel_unsafe,
+                plan_map: plan_map.clone(),
+                children,
+                sites: OnceLock::new(),
+                _body_owner: owner.clone(),
+            },
+            workspace,
+        )?);
     }
-    built[0]
+    Ok(built.as_mut_slice()[0]
         .take()
-        .expect("the operand itself is the first piece")
+        .expect("root is the first piece"))
 }
 
 /// Prepare the site of `body`, read from `source`.
@@ -783,71 +907,87 @@ fn build_site<D: DatasetView + Sync>(
     body: &GraphPattern,
     source: CorrelatedSource<'_>,
     ctx: &EvalCtx<'_, D>,
-) -> ExistsSite {
-    let prepared = Arc::new(PreparedExists::build(body));
-    let mut vars = DetHashSet::default();
-    crate::expr::pattern_all_vars(body, &mut vars);
-    let parallel_unsafe = !crate::parallel::is_parallel_safe_pattern(body, ctx.safety_registries());
+) -> Result<ExistsSite, EvalError> {
+    let workspace = &ctx.growth;
+    let prepared =
+        SharedWorkspace::new_admitted(PreparedExists::build_admitted(body, workspace)?, workspace)?;
+    let vars = crate::expr::pattern_all_vars_admitted(body, workspace)?;
+    let parallel_unsafe = !crate::parallel::is_parallel_safe_pattern_with_admitted(
+        body,
+        ctx.safety_registries(),
+        &|_| None,
+        workspace,
+    )?;
     let service_uses = match ctx.endpoint_scan() {
-        crate::service_endpoints::EndpointScan::Absent => Vec::new(),
+        crate::service_endpoints::EndpointScan::Absent => AdmittedVec::new(workspace),
         crate::service_endpoints::EndpointScan::Present(index) => {
             match ctx.plan_node(body).and_then(|body| index.exists_uses(body)) {
-                Some(uses) => uses.to_vec(),
-                None => endpoint_uses(body),
+                Some(uses) => {
+                    let mut out = AdmittedVec::new(workspace);
+                    out.try_extend(uses.iter().cloned())?;
+                    out
+                }
+                None => endpoint_uses(body, workspace)?,
             }
         }
     };
-    let plan_map = match (&ctx.ledger, prepared.as_ref()) {
+    let map = match (&ctx.ledger, prepared.as_ref()) {
         (Some(_), PreparedExists::Pattern { ledger_source, .. }) => {
-            Arc::new(to_plan(ledger_source, source.plan_map))
+            to_plan(ledger_source, source.plan_map, workspace)?
         }
-        _ => Arc::new(SubstitutionSourceMap::default()),
+        _ => SubstitutionSourceMap::default(),
     };
-    ExistsSite {
+    let plan_map = SharedWorkspace::new_admitted(map, workspace)?;
+    Ok(ExistsSite {
         prepared,
         vars,
         parallel_unsafe,
         service_uses,
         plan_map,
-    }
+    })
 }
 
 /// `map`, each entry's source carried one hop further through `outer` when `outer` maps it.
 fn to_plan(
     map: &SubstitutionSourceMap,
     outer: Option<&SubstitutionSourceMap>,
-) -> SubstitutionSourceMap {
-    let Some(outer) = outer else {
-        return map.clone();
-    };
-    map.iter()
-        .map(|(&address, entry)| {
-            let source = outer.get(&entry.source).map_or(entry.source, |e| e.source);
-            (
-                address,
-                SubstitutionSource {
-                    source,
-                    counts_rows: entry.counts_rows,
-                },
-            )
-        })
-        .collect()
+    workspace: &WorkspaceCapability,
+) -> Result<SubstitutionSourceMap, EvalError> {
+    let mut output = SubstitutionSourceMap::default();
+    for (&address, entry) in map.iter() {
+        let source = outer
+            .and_then(|outer| outer.get(&entry.source))
+            .map_or(entry.source, |entry| entry.source);
+        output.insert_admitted(
+            address,
+            SubstitutionSource {
+                source,
+                counts_rows: entry.counts_rows,
+            },
+            workspace,
+        )?;
+    }
+    Ok(output)
 }
 
 /// Every variable-endpoint `SERVICE ?v` in `body` that no `SELECT` inside `body` hides,
 /// with its `SILENT` flag. A `SERVICE` body is not entered: it is forwarded as text, and
 /// the analysis it stands in for does not enter it either.
-fn endpoint_uses(body: &GraphPattern) -> Vec<Variable> {
+fn endpoint_uses(
+    body: &GraphPattern,
+    workspace: &WorkspaceCapability,
+) -> Result<AdmittedVec<Variable>, EvalError> {
     enum Node<'p> {
         Pattern(&'p GraphPattern, usize),
         Expression(&'p Expression, usize),
     }
     // The `SELECT` lists entered, shared by every node below them: each node carries how
     // many of `scopes` enclose it.
-    let mut scopes: Vec<&[Variable]> = Vec::new();
-    let mut scope_of: Vec<usize> = Vec::new();
-    let mut uses = Vec::new();
-    let mut pending = vec![Node::Pattern(body, usize::MAX)];
+    let mut scopes = AdmittedVec::new(workspace);
+    let mut scope_of = AdmittedVec::new(workspace);
+    let mut uses = AdmittedVec::new(workspace);
+    let mut pending = AdmittedVec::new(workspace);
+    pending.push(Node::Pattern(body, usize::MAX))?;
     while let Some(node) = pending.pop() {
         match node {
             Node::Pattern(pattern, scope) => match pattern {
@@ -855,37 +995,61 @@ fn endpoint_uses(body: &GraphPattern) -> Vec<Variable> {
                     if let NamedNodePattern::Variable(v) = name
                         && visible(&scopes, &scope_of, scope, v)
                     {
-                        uses.push(v.clone());
+                        uses.push(v.clone())?;
                     }
                 }
                 GraphPattern::Project { inner, variables } => {
-                    scopes.push(variables);
-                    scope_of.push(scope);
-                    pending.push(Node::Pattern(inner, scopes.len() - 1));
+                    scopes.push(variables)?;
+                    scope_of.push(scope)?;
+                    pending.push(Node::Pattern(inner, scopes.len() - 1))?;
                 }
                 _ => {
+                    let mut failure = None;
                     crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
-                        pending.push(match part {
-                            PatternPart::Child(child, _) => Node::Pattern(child, scope),
-                            PatternPart::Expression(expr) => Node::Expression(expr, scope),
-                        });
-                        false
+                        remember_failure(
+                            pending.push(match part {
+                                PatternPart::Child(child, _) => Node::Pattern(child, scope),
+                                PatternPart::Expression(expr) => Node::Expression(expr, scope),
+                            }),
+                            &mut failure,
+                        )
                     });
+                    if let Some(error) = failure {
+                        return Err(error);
+                    }
                 }
             },
             Node::Expression(expr, scope) => {
+                let mut failure = None;
                 crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
                     match part {
-                        ExpressionPart::Sub(sub) => pending.push(Node::Expression(sub, scope)),
-                        ExpressionPart::Exists(inner) => pending.push(Node::Pattern(inner, scope)),
+                        ExpressionPart::Sub(sub) => {
+                            if remember_failure(
+                                pending.push(Node::Expression(sub, scope)),
+                                &mut failure,
+                            ) {
+                                return true;
+                            }
+                        }
+                        ExpressionPart::Exists(inner) => {
+                            if remember_failure(
+                                pending.push(Node::Pattern(inner, scope)),
+                                &mut failure,
+                            ) {
+                                return true;
+                            }
+                        }
                         ExpressionPart::Call(_) => {}
                     }
                     false
                 });
+                if let Some(error) = failure {
+                    return Err(error);
+                }
             }
         }
     }
-    uses
+    Ok(uses)
 }
 
 /// Whether every `SELECT` list enclosing a node in scope `scope` names `variable`.
@@ -935,5 +1099,48 @@ pub(crate) struct ForceEagerGuard {
 impl Drop for ForceEagerGuard {
     fn drop(&mut self) {
         FORCE_EAGER.with(|cell| cell.set(self.previous));
+    }
+}
+
+pub(crate) fn placeholder_with_memory(
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    let workspace = memory.admission_mut().workspace().clone();
+    let variable = Variable::from_admitted(workspace.authored_text(&PLACEHOLDER_VARIABLE)?);
+    let variables = memory
+        .collect([variable])
+        .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+    crate::expr::correlated_box(
+        GraphPattern::Values {
+            variables,
+            bindings: Vec::new(),
+        },
+        memory,
+    )
+}
+pub(crate) fn lateral_placeholder_with_memory(
+    schema: &[Variable],
+    memory: &mut crate::expr::CorrelatedMemory<'_>,
+) -> Result<Box<GraphPattern>, EvalError> {
+    let inner = placeholder_with_memory(memory)?;
+    let variables = memory
+        .collect(schema.iter().cloned())
+        .map_err(|e| crate::expr::correlated_storage_error(memory, e))?;
+    crate::expr::correlated_box(
+        GraphPattern::Project {
+            inner: inner.into(),
+            variables,
+        },
+        memory,
+    )
+}
+
+fn remember_failure(result: Result<(), EvalError>, failure: &mut Option<EvalError>) -> bool {
+    match result {
+        Ok(()) => false,
+        Err(error) => {
+            *failure = Some(error);
+            true
+        }
     }
 }

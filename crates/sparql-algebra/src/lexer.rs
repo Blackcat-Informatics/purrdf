@@ -17,6 +17,7 @@
 //! Every token carries its source byte span so the parser can report
 //! [`crate::error::ParseError::Syntax`] at a precise offset.
 
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 use std::borrow::Cow;
 
 use purrdf_lex::scan::{find_byte, find_byte2};
@@ -142,6 +143,35 @@ pub struct Spanned<'a> {
     pub end: usize,
 }
 
+impl Spanned<'_> {
+    pub(crate) fn clone_with_memory<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> core::result::Result<Self, StorageError> {
+        fn text<'a, S: Admission + ?Sized>(
+            value: &Cow<'a, str>,
+            memory: &mut Memory<'_, S>,
+        ) -> core::result::Result<Cow<'a, str>, StorageError> {
+            match value {
+                Cow::Borrowed(text) => Ok(Cow::Borrowed(text)),
+                Cow::Owned(text) => Ok(Cow::Owned(memory.string(text)?)),
+            }
+        }
+        let token = match &self.token {
+            Token::Iri(value) => Token::Iri(text(value, memory)?),
+            Token::PrefixedName(prefix, value) => Token::PrefixedName(prefix, text(value, memory)?),
+            Token::StringLit(value) => Token::StringLit(text(value, memory)?),
+            Token::LongStringLit(value) => Token::LongStringLit(text(value, memory)?),
+            token => token.clone(),
+        };
+        Ok(Self {
+            token,
+            start: self.start,
+            end: self.end,
+        })
+    }
+}
+
 /// Lexer leniency options. These default OFF so [`tokenize`] (the SPARQL entry)
 /// stays byte-for-byte unchanged; only an explicitly opted-in caller (the Turtle
 /// text codec via [`tokenize_turtle`]) flips them.
@@ -159,7 +189,7 @@ pub struct LexerOptions {
 /// Whitespace and `#`-comments are dropped. Returns
 /// [`ParseError::Lex`] on the first malformed token.
 pub fn tokenize(input: &str) -> Result<Vec<Spanned<'_>>> {
-    Lexer::new(input).run()
+    tokenize_with(input, LexerOptions::default())
 }
 
 /// Tokenize Turtle/TriG text, admitting a bare `/` inside `PN_LOCAL` (e.g.
@@ -178,7 +208,91 @@ pub fn tokenize_turtle(input: &str) -> Result<Vec<Spanned<'_>>> {
 /// Tokenize with explicit [`LexerOptions`]. [`tokenize`] is exactly
 /// `tokenize_with(input, LexerOptions::default())`.
 pub fn tokenize_with(input: &str, options: LexerOptions) -> Result<Vec<Spanned<'_>>> {
-    Lexer::with_options(input, options).run()
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    tokenize_with_memory(input, options, &mut memory)
+}
+
+/// Tokenize through the caller's original physical storage admission.
+/// The caller retains that admission through the returned token buffers and
+/// decoded strings, including any lexical error's reason text.
+///
+/// # Errors
+/// Returns the original lexical failure or a distinct physical storage refusal.
+pub fn tokenize_with_memory<'a, S: Admission + ?Sized>(
+    input: &'a str,
+    options: LexerOptions,
+    memory: &mut Memory<'_, S>,
+) -> Result<Vec<Spanned<'a>>> {
+    Lexer::with_options(input, options, memory).run()
+}
+
+trait LexerStorage {
+    fn push_token<'a>(
+        &mut self,
+        values: &mut Vec<Spanned<'a>>,
+        value: Spanned<'a>,
+    ) -> core::result::Result<(), StorageError>;
+    fn push_char(
+        &mut self,
+        value: &mut String,
+        character: char,
+    ) -> core::result::Result<(), StorageError>;
+    fn push_str(
+        &mut self,
+        value: &mut String,
+        text: &str,
+    ) -> core::result::Result<(), StorageError>;
+    fn format(
+        &mut self,
+        value: &dyn core::fmt::Display,
+    ) -> core::result::Result<String, StorageError>;
+    fn release_string(&mut self, value: String) -> core::result::Result<(), StorageError>;
+    fn settle_error(&mut self, error: &ParseError) -> core::result::Result<(), StorageError>;
+}
+
+impl<S: Admission + ?Sized> LexerStorage for Memory<'_, S> {
+    fn push_token<'a>(
+        &mut self,
+        values: &mut Vec<Spanned<'a>>,
+        value: Spanned<'a>,
+    ) -> core::result::Result<(), StorageError> {
+        self.push(values, value)
+    }
+    fn push_char(
+        &mut self,
+        value: &mut String,
+        character: char,
+    ) -> core::result::Result<(), StorageError> {
+        self.push_char(value, character)
+    }
+    fn push_str(
+        &mut self,
+        value: &mut String,
+        text: &str,
+    ) -> core::result::Result<(), StorageError> {
+        self.push_str(value, text)
+    }
+    fn format(
+        &mut self,
+        value: &dyn core::fmt::Display,
+    ) -> core::result::Result<String, StorageError> {
+        self.format(value)
+    }
+    fn release_string(&mut self, value: String) -> core::result::Result<(), StorageError> {
+        self.release_string(value)
+    }
+    fn settle_error(&mut self, error: &ParseError) -> core::result::Result<(), StorageError> {
+        let retained = match error {
+            ParseError::Lex { reason, .. } => reason.capacity(),
+            _ => 0,
+        };
+        let dead = self
+            .admitted_bytes()
+            .checked_sub(retained)
+            .ok_or(StorageError::SizeOverflow)?;
+        self.release_bytes(dead)
+    }
 }
 
 /// A byte-cursor tokenizer over the source `str`.
@@ -188,25 +302,51 @@ pub fn tokenize_with(input: &str, options: LexerOptions) -> Result<Vec<Spanned<'
 /// `char_indices().collect()` full-input materialization the prior cursor paid up
 /// front, and lets the hot scans (string body, `IRIREF` end, comment tails) run
 /// through the chunked byte scans of [`purrdf_lex::scan`]. Token spans are byte offsets, so `pos` *is* the span cursor.
-struct Lexer<'a> {
+struct Lexer<'a, 'm> {
     src: &'a str,
     bytes: &'a [u8],
     /// Byte offset into `src` (char boundary).
     pos: usize,
     options: LexerOptions,
+    storage: Option<&'m mut dyn LexerStorage>,
 }
 
-impl<'a> Lexer<'a> {
+impl<'a, 'm> Lexer<'a, 'm> {
+    #[cfg(test)]
     fn new(src: &'a str) -> Self {
-        Self::with_options(src, LexerOptions::default())
+        Self {
+            src,
+            bytes: src.as_bytes(),
+            pos: 0,
+            options: LexerOptions::default(),
+            storage: None,
+        }
     }
 
-    fn with_options(src: &'a str, options: LexerOptions) -> Self {
+    fn with_options(
+        src: &'a str,
+        options: LexerOptions,
+        storage: &'m mut dyn LexerStorage,
+    ) -> Self {
         Self {
             src,
             bytes: src.as_bytes(),
             pos: 0,
             options,
+            storage: Some(storage),
+        }
+    }
+
+    fn storage(&mut self) -> &mut dyn LexerStorage {
+        self.storage
+            .as_deref_mut()
+            .expect("allocation-producing lexer has its original storage")
+    }
+
+    fn lex_error(&mut self, reason: &dyn core::fmt::Display, at: usize) -> ParseError {
+        match self.storage().format(reason) {
+            Ok(reason) => ParseError::Lex { reason, at },
+            Err(error) => ParseError::Storage(error),
         }
     }
 
@@ -259,9 +399,24 @@ impl<'a> Lexer<'a> {
             self.skip_trivia();
             let start = self.pos;
             let Some(c) = self.cur() else { break };
-            let token = self.lex_one(c, start)?;
+            let token = match self.lex_one(c, start) {
+                Ok(token) => token,
+                Err(error) => {
+                    drop(out);
+                    self.storage().settle_error(&error)?;
+                    return Err(error);
+                }
+            };
             let end = self.pos;
-            out.push(Spanned { token, start, end });
+            if let Err(error) = self
+                .storage()
+                .push_token(&mut out, Spanned { token, start, end })
+            {
+                drop(out);
+                let error = ParseError::Storage(error);
+                self.storage().settle_error(&error)?;
+                return Err(error);
+            }
         }
         Ok(out)
     }
@@ -362,7 +517,7 @@ impl<'a> Lexer<'a> {
             // `PN_CHARS_U` member that is not in it, `'_'`, opens only a
             // `BLANK_NODE_LABEL` and is handled above.
             _ if terminals::is_pn_chars_base(c) => self.lex_word_or_prefixed(start),
-            _ => Err(ParseError::lex(unexpected_character(c), start)),
+            _ => Err(self.lex_error(&UnexpectedCharacter(c), start)),
         }
     }
 
@@ -406,7 +561,7 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
             Ok(Token::And)
         } else {
-            Err(ParseError::lex("expected '&&'", start))
+            Err(self.lex_error(&"expected '&&'", start))
         }
     }
 
@@ -458,7 +613,7 @@ impl<'a> Lexer<'a> {
             if c == '\\' {
                 // UCHAR escape inside an IRIREF.
                 if let Some((consumed, decoded)) = self.read_uchar(i) {
-                    content.push(decoded);
+                    self.storage().push_char(&mut content, decoded)?;
                     i += consumed;
                     continue;
                 }
@@ -467,14 +622,15 @@ impl<'a> Lexer<'a> {
             if terminals::is_iriref_forbidden(c) {
                 break; // forbidden raw in IRIREF → not an IRIREF
             }
-            content.push(c);
+            self.storage().push_char(&mut content, c)?;
             i += c.len_utf8();
         }
         if ok {
             self.pos = i;
             return Ok(Token::Iri(Cow::Owned(content)));
         }
-        // Not an IRIREF: fall back to `<<` / `<=` / `<`.
+        // Not an IRIREF: destroy the decoded scratch before falling back.
+        self.storage().release_string(content)?;
         Ok(self.two_or_one('<', Token::TripleOpen, '=', Token::LtEq, Token::Lt))
     }
 
@@ -522,10 +678,11 @@ impl<'a> Lexer<'a> {
                 )
             };
             let Some(stop) = stop else {
-                return Err(ParseError::lex("unterminated string literal", start));
+                return Err(self.lex_error(&"unterminated string literal", start));
             };
             if stop > 0 {
-                value.push_str(&self.src[self.pos..self.pos + stop]);
+                let clean = &self.src[self.pos..self.pos + stop];
+                self.storage().push_str(&mut value, clean)?;
                 self.pos += stop;
             }
             let c = self
@@ -534,10 +691,10 @@ impl<'a> Lexer<'a> {
             if c == '\\' {
                 self.pos += 1;
                 let Some(esc) = self.cur() else {
-                    return Err(ParseError::lex("unterminated escape", start));
+                    return Err(self.lex_error(&"unterminated escape", start));
                 };
                 if let Some(decoded) = u8::try_from(esc).ok().and_then(terminals::echar_value) {
-                    value.push(decoded);
+                    self.storage().push_char(&mut value, decoded)?;
                     self.pos += 1; // the escape char is ASCII
                     continue;
                 }
@@ -546,14 +703,14 @@ impl<'a> Lexer<'a> {
                         // Re-decode via read_uchar starting at the backslash.
                         let bs = self.pos - 1;
                         if let Some((consumed, decoded)) = self.read_uchar(bs) {
-                            value.push(decoded);
+                            self.storage().push_char(&mut value, decoded)?;
                             self.pos = bs + consumed;
                             continue;
                         }
-                        return Err(ParseError::lex("bad unicode escape", start));
+                        return Err(self.lex_error(&"bad unicode escape", start));
                     }
                     other => {
-                        return Err(ParseError::lex(format!("bad escape \\{other}"), start));
+                        return Err(self.lex_error(&format_args!("bad escape \\{other}"), start));
                     }
                 }
             }
@@ -566,7 +723,7 @@ impl<'a> Lexer<'a> {
                         return Ok(Token::LongStringLit(Cow::Owned(value)));
                     }
                     // a lone quote inside a long string is literal
-                    value.push(c);
+                    self.storage().push_char(&mut value, c)?;
                     self.pos += 1;
                     continue;
                 }
@@ -575,10 +732,7 @@ impl<'a> Lexer<'a> {
             }
             // Short form only: `stop` landed on a raw CR/LF. SPARQL STRING_LITERAL1/2
             // forbid raw line breaks (only `'''`/`"""` admit them) — reject.
-            return Err(ParseError::lex(
-                "raw newline in short string literal",
-                start,
-            ));
+            return Err(self.lex_error(&"raw newline in short string literal", start));
         }
     }
 
@@ -638,7 +792,7 @@ impl<'a> Lexer<'a> {
         let begin = self.pos;
         match self.cur() {
             Some(c) if terminals::is_varname_start(c) => self.pos += c.len_utf8(),
-            _ => return Err(ParseError::lex("empty variable name after sigil", start)),
+            _ => return Err(self.lex_error(&"empty variable name after sigil", start)),
         }
         self.take_while(terminals::is_varname_continue);
         Ok(Token::Variable(&self.src[begin..self.pos]))
@@ -677,8 +831,8 @@ impl<'a> Lexer<'a> {
         match self.cur() {
             Some(c) if terminals::is_blank_node_label_start(c) => self.pos += c.len_utf8(),
             _ => {
-                return Err(ParseError::lex(
-                    "a blank node label must begin with PN_CHARS_U or [0-9]: \
+                return Err(self.lex_error(
+                    &"a blank node label must begin with PN_CHARS_U or [0-9]: \
                      BLANK_NODE_LABEL ::= '_:' ( PN_CHARS_U | [0-9] ) \
                      ((PN_CHARS | '.')* PN_CHARS)?",
                     start,
@@ -735,7 +889,7 @@ impl<'a> Lexer<'a> {
         self.pos += 1; // `@`
         let tag = self.take_while(|c| c.is_ascii_alphanumeric() || c == '-');
         if tag.is_empty() {
-            return Err(ParseError::lex("empty language tag", start));
+            return Err(self.lex_error(&"empty language tag", start));
         }
         Ok(Token::LangTag(tag))
     }
@@ -743,7 +897,7 @@ impl<'a> Lexer<'a> {
     /// A bare `:local` or `:` prefixed name (empty prefix).
     fn lex_prefixed_name(&mut self, _start: usize) -> Result<Token<'a>> {
         self.pos += 1; // `:`
-        let local = self.take_local();
+        let local = self.take_local()?;
         Ok(Token::PrefixedName("", local))
     }
 
@@ -753,7 +907,7 @@ impl<'a> Lexer<'a> {
         let word = self.take_pn_prefix();
         if self.cur() == Some(':') {
             self.pos += 1; // `:`
-            let local = self.take_local();
+            let local = self.take_local()?;
             Ok(Token::PrefixedName(word, local))
         } else {
             Ok(Token::Word(word))
@@ -927,13 +1081,13 @@ impl<'a> Lexer<'a> {
     /// exactly as it already was, and `ex:-a` becomes `ex:`, `Minus`, `a`. The
     /// tightening moves a token BOUNDARY; it refuses no document that has a
     /// reading.
-    fn take_local(&mut self) -> Cow<'a, str> {
+    fn take_local(&mut self) -> Result<Cow<'a, str>> {
         // Fast path: scan the local name assuming no `PN_LOCAL_ESC`. When no `\`
         // escape is present the local part is a contiguous source slice (borrowed);
         // hitting a valid escape rewinds and defers to the owned builder below.
         let begin = self.pos;
         if !self.at_pn_local_start() {
-            return Cow::Borrowed(&self.src[begin..begin]);
+            return Ok(Cow::Borrowed(&self.src[begin..begin]));
         }
         let mut trailing_dots = 0usize;
         while let Some(c) = self.cur() {
@@ -941,7 +1095,7 @@ impl<'a> Lexer<'a> {
                 if self.peek(1).is_some_and(terminals::is_pn_local_esc) {
                     // An escape rewrites bytes — restart with the owned builder.
                     self.pos = begin;
-                    return Cow::Owned(self.take_local_owned());
+                    return self.take_local_owned().map(Cow::Owned);
                 }
                 break; // a non-PN_LOCAL_ESC backslash does not belong to the local name
             }
@@ -977,20 +1131,20 @@ impl<'a> Lexer<'a> {
             // Push back the trailing-dot run: it is the statement terminator.
             self.pos -= trailing_dots;
         }
-        Cow::Borrowed(&self.src[begin..self.pos])
+        Ok(Cow::Borrowed(&self.src[begin..self.pos]))
     }
 
     /// The `take_local` owned path: identical scan but decoding `PN_LOCAL_ESC`
     /// (`\X`) into the returned local name. Only reached when the fast path saw a
     /// `\` escape, so building a fresh `String` here is the rare case.
-    fn take_local_owned(&mut self) -> String {
+    fn take_local_owned(&mut self) -> Result<String> {
         let mut out = String::new();
         let mut trailing_dots = 0usize;
         while let Some(c) = self.cur() {
             if c == '\\' {
                 // PN_LOCAL_ESC: consume the backslash and emit the next char verbatim.
                 if let Some(escaped) = self.peek(1).filter(|e| terminals::is_pn_local_esc(*e)) {
-                    out.push(escaped);
+                    self.storage().push_char(&mut out, escaped)?;
                     self.pos += 2;
                     trailing_dots = 0;
                     continue;
@@ -1000,7 +1154,7 @@ impl<'a> Lexer<'a> {
             if c == '.' {
                 // A dot may be internal, but a RUN of trailing dots is the terminator;
                 // track the run and trim it after the scan.
-                out.push(c);
+                self.storage().push_char(&mut out, c)?;
                 trailing_dots += 1;
                 self.pos += 1;
                 continue;
@@ -1010,7 +1164,7 @@ impl<'a> Lexer<'a> {
                 // grammar requires `\/`, but purrdf-gts accepts the bare
                 // form, e.g. `purrdf:report/shacl/sarif`). Turtle has no `/`
                 // operator, so this is unambiguous in term position.
-                out.push(c);
+                self.storage().push_char(&mut out, c)?;
                 trailing_dots = 0;
                 self.pos += 1;
                 continue;
@@ -1021,15 +1175,18 @@ impl<'a> Lexer<'a> {
                 if !self.at_percent() {
                     break;
                 }
-                out.push(c);
-                out.extend(self.peek(1));
-                out.extend(self.peek(2));
+                self.storage().push_char(&mut out, c)?;
+                for ahead in 1..=2 {
+                    if let Some(character) = self.peek(ahead) {
+                        self.storage().push_char(&mut out, character)?;
+                    }
+                }
                 trailing_dots = 0;
                 self.pos += 3;
                 continue;
             }
             if terminals::is_pn_chars(c) || c == ':' {
-                out.push(c);
+                self.storage().push_char(&mut out, c)?;
                 trailing_dots = 0;
                 self.pos += c.len_utf8();
             } else {
@@ -1041,7 +1198,7 @@ impl<'a> Lexer<'a> {
             out.truncate(out.len() - trailing_dots);
             self.pos -= trailing_dots;
         }
-        out
+        Ok(out)
     }
 }
 
@@ -1173,20 +1330,34 @@ fn lookup_scalar_name(table: &[(char, &'static str)], c: char) -> Option<&'stati
 ///
 /// Total by construction — a lookup miss returns `None` and a hit formats a
 /// `&'static str` — so it cannot panic on input that is already an error.
-fn invisible_scalar_diagnostic(c: char) -> Option<String> {
-    if let Some(name) = lookup_scalar_name(NON_WS_UNICODE_SPACES, c) {
-        return Some(format!(
-            "U+{:04X} {name} cannot separate tokens: WS is {WS_MEMBERS}. \
-             Replace it with a space.",
-            u32::from(c)
-        ));
+struct UnexpectedCharacter(char);
+
+impl core::fmt::Display for UnexpectedCharacter {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let c = self.0;
+        if let Some(name) = lookup_scalar_name(NON_WS_UNICODE_SPACES, c) {
+            return write!(
+                f,
+                "U+{:04X} {name} cannot separate tokens: WS is {WS_MEMBERS}. Replace it with a space.",
+                u32::from(c)
+            );
+        }
+        if let Some(name) = lookup_scalar_name(INVISIBLE_NON_SPACES, c) {
+            return write!(
+                f,
+                "U+{:04X} {name} is invisible and starts no token: PN_CHARS does not name it, and WS is {WS_MEMBERS}. Delete it.",
+                u32::from(c)
+            );
+        }
+        write!(f, "unexpected character {c:?}")
     }
-    let name = lookup_scalar_name(INVISIBLE_NON_SPACES, c)?;
-    Some(format!(
-        "U+{:04X} {name} is invisible and starts no token: PN_CHARS does not name it, \
-         and WS is {WS_MEMBERS}. Delete it.",
-        u32::from(c)
-    ))
+}
+
+#[cfg(test)]
+fn invisible_scalar_diagnostic(c: char) -> Option<String> {
+    (lookup_scalar_name(NON_WS_UNICODE_SPACES, c).is_some()
+        || lookup_scalar_name(INVISIBLE_NON_SPACES, c).is_some())
+    .then(|| UnexpectedCharacter(c).to_string())
 }
 
 /// The reason text for a scalar that begins no SPARQL token.
@@ -1194,8 +1365,9 @@ fn invisible_scalar_diagnostic(c: char) -> Option<String> {
 /// An invisible offender is named and told which production refuses it; a
 /// visible one keeps the ordinary `unexpected character '%'` form, which already
 /// shows the reader exactly what they typed.
+#[cfg(test)]
 fn unexpected_character(c: char) -> String {
-    invisible_scalar_diagnostic(c).unwrap_or_else(|| format!("unexpected character {c:?}"))
+    UnexpectedCharacter(c).to_string()
 }
 
 /// Whether `name` is a complete `VARNAME`, sigil already stripped.
@@ -1227,7 +1399,7 @@ pub fn is_varname(name: &str) -> bool {
 /// The implementations the chunked scans and the ASCII cursor replaced, kept as
 /// the oracle the equivalence tests hold the rewrites to.
 #[cfg(test)]
-impl<'a> Lexer<'a> {
+impl<'a> Lexer<'a, '_> {
     fn peek_reference(&self, ahead: usize) -> Option<char> {
         self.src[self.pos..].chars().nth(ahead)
     }
@@ -1379,7 +1551,7 @@ mod tests {
         out
     }
 
-    fn lexer_at(src: &str, pos: usize) -> Lexer<'_> {
+    fn lexer_at(src: &str, pos: usize) -> Lexer<'_, 'static> {
         let mut lexer = Lexer::new(src);
         lexer.pos = pos;
         lexer
@@ -1427,8 +1599,14 @@ mod tests {
                 if c != '<' {
                     continue;
                 }
-                let mut new = lexer_at(&src, pos);
-                let mut old = lexer_at(&src, pos);
+                let mut resident = Resident;
+                let mut memory = Memory::new(&mut resident);
+                let mut new = Lexer::with_options(&src, LexerOptions::default(), &mut memory);
+                new.pos = pos;
+                let mut old_resident = Resident;
+                let mut old_memory = Memory::new(&mut old_resident);
+                let mut old = Lexer::with_options(&src, LexerOptions::default(), &mut old_memory);
+                old.pos = pos;
                 let got = new.lex_lt_or_iri();
                 let expected = old.lex_lt_or_iri_reference();
                 assert_eq!(

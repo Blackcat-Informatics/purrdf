@@ -43,10 +43,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use purrdf_core::{
-    BlankScope, CompositeDatasetView, CompositeSource, ContentStore, DatasetMut, DatasetProvenance,
-    DatasetView, DeltaDatasetView, GraphMatch, MutableDataset, PackBuilder, PipelineBundle,
-    PipelineViewBundle, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLookaside,
-    RetentionLedger, TermValue, ViewAccountingReport, ViewLimits, ViewWork,
+    BlankScope, CompositeDatasetView, CompositeSource, ContentStore, DatasetHandle, DatasetMut,
+    DatasetProvenance, DatasetView, DeltaDatasetView, GraphMatch, MutableDataset, PackBuilder,
+    PipelineBundle, PipelineViewBundle, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    RdfLookaside, RetentionLedger, TermValue, ViewAccountingReport, ViewLimits, ViewWork,
 };
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
@@ -613,11 +613,11 @@ struct PackShape {
     /// place, so the two differ by nothing but the freeze.
     composite: Arc<CompositeDatasetView>,
     /// The frozen owners behind `composite`, for this group's own ledger.
-    owners: Vec<Arc<RdfDataset>>,
+    owners: Vec<DatasetHandle>,
     /// The same effective content reached through the delta read path.
     delta: CompositeDatasetView,
     /// The delta's base and delta halves, plus the same stage contributions.
-    delta_owners: Vec<Arc<RdfDataset>>,
+    delta_owners: Vec<DatasetHandle>,
     /// A graph SELECTION over `composite`, composed back into a view of its own:
     /// the same retained leaves, projected down to the base's named graphs.
     selection: CompositeDatasetView,
@@ -628,16 +628,16 @@ impl PackShape {
     /// admit every shape here, so nothing is fabricated for the bench.
     fn new(shape: &CarrierShape) -> Self {
         let limits = ViewLimits::default();
-        let mut owners = vec![Arc::clone(&shape.base)];
+        let mut owners = vec![DatasetHandle::from(Arc::clone(&shape.base))];
         let mut sources = vec![CompositeSource::new(Arc::clone(&shape.base))];
         let mut delta_sources = vec![CompositeSource::from_delta(Arc::clone(&shape.delta))];
         let mut delta_owners = vec![
-            Arc::clone(shape.delta.base()),
-            Arc::clone(shape.delta.delta()),
+            shape.delta.base().clone(),
+            Arc::clone(shape.delta.delta()).into(),
         ];
         for (_, quads) in &shape.stages {
-            owners.push(Arc::clone(quads));
-            delta_owners.push(Arc::clone(quads));
+            owners.push(Arc::clone(quads).into());
+            delta_owners.push(Arc::clone(quads).into());
             sources.push(CompositeSource::new(Arc::clone(quads)));
             delta_sources.push(CompositeSource::new(Arc::clone(quads)));
         }
@@ -706,11 +706,11 @@ fn run_pack_flat(shape: &PackShape) -> Observation {
 /// The VIEW output path: pack `view` where it stands. `owners` are the frozen
 /// datasets this view keeps resident; each call gets its OWN ledger so the
 /// retention figures belong to this run and nothing else.
-fn run_pack_view(view: &CompositeDatasetView, owners: &[Arc<RdfDataset>]) -> Observation {
+fn run_pack_view(view: &CompositeDatasetView, owners: &[DatasetHandle]) -> Observation {
     let ledger = RetentionLedger::new();
     let guards = owners
         .iter()
-        .map(|owner| ledger.retain_dataset(owner))
+        .map(|owner| ledger.retain_dataset_handle(owner))
         .collect::<Vec<_>>();
     let before = view.stats().work;
     let bytes = PackBuilder::build_view_bytes(view).expect("the view packs without materializing");

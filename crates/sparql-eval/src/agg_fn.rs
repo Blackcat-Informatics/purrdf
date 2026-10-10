@@ -129,7 +129,7 @@ use purrdf_core::{ContentDigest, TermValue};
 
 use crate::DetHashMap;
 use crate::error::EvalError;
-use crate::registry_id::append_framed_part;
+use crate::registry_id::append_framed_part_with_memory;
 use crate::user_fn::{Arity, Volatility};
 
 // ---------------------------------------------------------------------------
@@ -235,7 +235,7 @@ impl ScalarvalSpec {
 ///
 /// Object-safe and boxed: one instance per `GROUP BY` group (or, for an implicit
 /// single-group aggregate with no `GROUP BY` at all, one instance for the query),
-/// created by `init_contained`, driven by `step_contained`/`combine_contained`,
+/// created by `init_admitted`, driven by `step_admitted`/`combine_admitted`,
 /// and consumed exactly once by `finish_contained`. Never shared across groups and
 /// never read after `finish` — the accumulator is the aggregate's entire mutable
 /// state, and the trait's three methods are the entire lifecycle.
@@ -252,6 +252,13 @@ impl ScalarvalSpec {
 /// accumulator this crate has ever boxed holds only owned data, never a borrow,
 /// so every existing and future implementor already satisfies it.
 pub trait AggregateAccumulator: Send + 'static {
+    /// A first-party native accumulator retains the capability used by its
+    /// factory. Opaque implementations keep the default and must override the
+    /// admitted lifecycle themselves before serving bounded queries.
+    fn native_workspace(&self) -> Option<&crate::WorkspaceCapability> {
+        None
+    }
+
     /// Fold one row's already-evaluated, positional argument tuple into this
     /// accumulator's state.
     ///
@@ -271,6 +278,29 @@ pub trait AggregateAccumulator: Send + 'static {
     /// silently dropping the row, which would be indistinguishable from an
     /// honest omission.
     fn step(&mut self, args: &[TermValue]) -> Result<(), EvalError>;
+
+    /// Fold borrowed inputs using the operation's physical allocation capability.
+    /// Native implementations admit all state growth before allocation.
+    ///
+    /// # Errors
+    /// Returns native failures or refuses an opaque bounded implementation before
+    /// its body runs when it provides no physical ownership contract.
+    fn step_admitted(
+        &mut self,
+        args: &[TermValue],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        if workspace.is_bounded()
+            && !self
+                .native_workspace()
+                .is_some_and(crate::WorkspaceCapability::is_bounded)
+        {
+            return Err(EvalError::WorkspaceUnpriced(
+                "an aggregate without admitted state growth",
+            ));
+        }
+        self.step(args)
+    }
 
     /// Merge `other`'s folded state into `self`, **in the order the caller
     /// presents accumulators** — i.e. `self` holds the earlier (in source/chunk
@@ -308,6 +338,26 @@ pub trait AggregateAccumulator: Send + 'static {
     /// that target.
     fn combine(&mut self, other: Box<dyn AggregateAccumulator>) -> Result<(), EvalError>;
 
+    /// Merge through the original native state owners.
+    /// # Errors
+    /// Refuses an opaque bounded merge before its body executes.
+    fn combine_admitted(
+        &mut self,
+        other: Box<dyn AggregateAccumulator>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(), EvalError> {
+        if workspace.is_bounded()
+            && !self
+                .native_workspace()
+                .is_some_and(crate::WorkspaceCapability::is_bounded)
+        {
+            return Err(EvalError::WorkspaceUnpriced(
+                "an aggregate without admitted state merging",
+            ));
+        }
+        self.combine(other)
+    }
+
     /// Recover this accumulator's original concrete type from behind the trait
     /// object — [`combine`](Self::combine)'s escape hatch for a merge that needs
     /// more than `finish()`'s single answer (see the module docs' "Merging
@@ -339,6 +389,28 @@ pub trait AggregateAccumulator: Send + 'static {
     /// Any [`EvalError`] the aggregate raises while producing its answer.
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError>;
 
+    /// Publish an answer together with its original physical payload ownership.
+    ///
+    /// # Errors
+    /// Returns native failures or refuses an opaque bounded output before its body.
+    fn finish_admitted(
+        self: Box<Self>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        if workspace.is_bounded() {
+            return Err(EvalError::WorkspaceUnpriced(
+                "an aggregate without admitted output ownership",
+            ));
+        }
+        self.finish()?
+            .map(|value| {
+                workspace
+                    .charge(0)
+                    .map(|allocation| crate::WorkspaceTerm::new(value, allocation))
+            })
+            .transpose()
+    }
+
     /// [`Self::finish`], handing each SPARQL expression error the answer absorbed into
     /// an unbound value to `absorb` by its XPath F&O code — so a governed query
     /// counts it in [`GovernorEvidence::expression_errors`](purrdf_core::GovernorEvidence::expression_errors),
@@ -354,6 +426,20 @@ pub trait AggregateAccumulator: Send + 'static {
     ) -> Result<Option<TermValue>, EvalError> {
         let _ = absorb;
         self.finish()
+    }
+    /// The native absorbing publication boundary retains original output grants.
+    /// # Errors
+    /// Returns physical refusal or the original aggregate's operational error.
+    fn finish_absorbing_admitted(
+        self: Box<Self>,
+        absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+        if workspace.is_bounded() {
+            return self.finish_admitted(workspace);
+        }
+        self.finish_absorbing(absorb)
+            .map(|value| value.map(crate::WorkspaceTerm::resident))
     }
 }
 
@@ -485,11 +571,223 @@ pub trait CustomAggregate: Send + Sync {
         let _ = division;
         self.exact_numeric_cost(survivors, scalarvals)
     }
+    /// Begin a native invocation whose box and state retain original admission.
+    /// # Errors
+    /// Refuses an opaque bounded factory before calling resident host code.
+    fn init_admitted(
+        &self,
+        scalarvals: &[(String, TermValue)],
+        division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<WorkspaceAccumulator, EvalError> {
+        if workspace.is_bounded() {
+            return Err(EvalError::WorkspaceUnpriced(
+                "an aggregate without an admitted factory",
+            ));
+        }
+        Ok(WorkspaceAccumulator::resident(
+            self.init_under(scalarvals, division),
+        ))
+    }
+    /// Price the original arithmetic while admitting any cost-analysis scratch.
+    /// # Errors
+    /// Refuses an opaque bounded cost producer before its body executes.
+    fn exact_numeric_cost_admitted(
+        &self,
+        survivors: &[Vec<TermValue>],
+        scalarvals: &[(String, TermValue)],
+        division: purrdf_xsd::exact::DivisionPolicy,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<purrdf_xsd::exact::Cost, EvalError> {
+        if workspace.is_bounded() {
+            return Err(EvalError::WorkspaceUnpriced(
+                "an aggregate without admitted cost analysis",
+            ));
+        }
+        Ok(self.exact_numeric_cost_under(survivors, scalarvals, division))
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Panic containment
 // ---------------------------------------------------------------------------
+
+/// A native factory's original accumulator box and its physical grant travel
+/// together. The box is destroyed before its outside admission is released.
+pub struct WorkspaceAccumulator {
+    value: Box<dyn AggregateAccumulator>,
+    allocation: crate::WorkspaceAllocation,
+}
+purrdf_hash::debug_non_exhaustive!(WorkspaceAccumulator { allocation });
+impl WorkspaceAccumulator {
+    /// Box the actual concrete native state after admitting its exact layout.
+    /// State payloads must already retain their own original producer grants.
+    /// # Errors
+    /// Returns physical refusal before the accumulator box is allocated.
+    pub fn new<A: AggregateAccumulator>(
+        value: A,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Self, EvalError> {
+        let allocation = workspace.charge(
+            u64::try_from(size_of::<A>()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+        )?;
+        let value =
+            purrdf_core::small::try_boxed(value).map_err(|_| EvalError::AllocationFailed {
+                construct: "native aggregate control",
+            })?;
+        Ok(Self { value, allocation })
+    }
+    fn resident(value: Box<dyn AggregateAccumulator>) -> Self {
+        Self {
+            value,
+            allocation: crate::WorkspaceCapability::resident()
+                .charge(0)
+                .expect("resident zero admission"),
+        }
+    }
+    fn as_mut(&mut self) -> &mut dyn AggregateAccumulator {
+        self.value.as_mut()
+    }
+    pub(crate) fn into_resident(self) -> Result<Box<dyn AggregateAccumulator>, Self> {
+        if self.allocation.is_bounded() {
+            Err(self)
+        } else {
+            Ok(self.value)
+        }
+    }
+}
+
+/// Recover native state through the original downcast, admitting its diagnostic
+/// only if a host violates the concrete-type contract.
+pub(crate) fn downcast_combine_partial_admitted<T: 'static>(
+    other: Box<dyn AggregateAccumulator>,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<T, EvalError> {
+    other.into_any().downcast::<T>().map(|boxed| *boxed).map_err(|_| {
+        crate::error::NativeDiagnostic::error(
+            crate::error::NativeDiagnosticKind::FunctionOperational,
+            concat!("AggregateAccumulator::combine received a partial accumulator of a different ",
+                "concrete type than Self — every partial combine merges was created by the SAME ",
+                "CustomAggregate::init factory, so a mismatch here is a host bug in how partial ",
+                "accumulators were constructed, not a state this crate's own evaluator can produce"),
+            workspace,
+        )
+    })
+}
+
+pub(crate) fn init_contained_admitted(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+    scalarvals: &[(String, TermValue)],
+    division: purrdf_xsd::exact::DivisionPolicy,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<WorkspaceAccumulator, EvalError> {
+    crate::contain::call_contained_admitted(
+        KIND,
+        iri,
+        "initial accumulator",
+        || agg.init_admitted(scalarvals, division, workspace),
+        workspace,
+    )
+}
+
+pub(crate) fn step_contained_admitted(
+    accumulator: &mut WorkspaceAccumulator,
+    iri: &str,
+    args: &[TermValue],
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
+    crate::contain::call_contained_admitted(
+        KIND,
+        iri,
+        "folding a row",
+        || accumulator.as_mut().step_admitted(args, workspace),
+        workspace,
+    )
+}
+
+pub(crate) fn combine_contained_admitted(
+    accumulator: &mut WorkspaceAccumulator,
+    iri: &str,
+    other: WorkspaceAccumulator,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<(), EvalError> {
+    let WorkspaceAccumulator { value, allocation } = other;
+    let result = crate::contain::call_contained_admitted(
+        KIND,
+        iri,
+        "combining partial state",
+        || accumulator.as_mut().combine_admitted(value, workspace),
+        workspace,
+    );
+    drop(allocation);
+    result
+}
+
+pub(crate) fn finish_contained_admitted(
+    accumulator: WorkspaceAccumulator,
+    iri: &str,
+    absorb: &mut dyn FnMut(purrdf_xsd::ErrorCode),
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Option<crate::WorkspaceTerm>, EvalError> {
+    let WorkspaceAccumulator { value, allocation } = accumulator;
+    let result = crate::contain::call_contained_admitted(
+        KIND,
+        iri,
+        "finishing",
+        || value.finish_absorbing_admitted(absorb, workspace),
+        workspace,
+    );
+    drop(allocation);
+    result
+}
+
+pub(crate) fn exact_numeric_cost_contained_admitted(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+    survivors: &[Vec<TermValue>],
+    scalarvals: &[(String, TermValue)],
+    division: purrdf_xsd::exact::DivisionPolicy,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<purrdf_xsd::exact::Cost, EvalError> {
+    crate::contain::call_contained_admitted(
+        KIND,
+        iri,
+        "exact numeric cost",
+        || agg.exact_numeric_cost_admitted(survivors, scalarvals, division, workspace),
+        workspace,
+    )
+}
+
+/// Read the original declaration with admitted panic diagnostics.
+pub(crate) fn state_bound_contained_admitted(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<u64, EvalError> {
+    crate::contain::declaration_contained_admitted(
+        KIND,
+        iri,
+        "state bound",
+        || agg.state_bound(),
+        workspace,
+    )
+}
+
+/// Read the original determinism declaration with admitted panic diagnostics.
+pub(crate) fn volatility_contained_admitted(
+    agg: &dyn CustomAggregate,
+    iri: &str,
+    workspace: &crate::WorkspaceCapability,
+) -> Result<Volatility, EvalError> {
+    crate::contain::declaration_contained_admitted(
+        KIND,
+        iri,
+        "determinism class",
+        || agg.volatility(),
+        workspace,
+    )
+}
 
 /// The fixed diagnostic label every containment message and the registry
 /// fingerprint use to name this seam — the `kind` argument every
@@ -503,6 +801,7 @@ const KIND: &str = "custom aggregate";
 ///
 /// [`EvalError::FunctionOperational`] on a caught panic; otherwise `Ok` of the boxed
 /// accumulator.
+#[cfg(test)]
 pub(crate) fn init_contained(
     agg: &dyn CustomAggregate,
     iri: &str,
@@ -520,6 +819,7 @@ pub(crate) fn init_contained(
 ///
 /// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
 /// failure. More specific typed causes propagate unchanged.
+#[cfg(test)]
 pub(crate) fn step_contained(
     accumulator: &mut dyn AggregateAccumulator,
     iri: &str,
@@ -536,6 +836,7 @@ pub(crate) fn step_contained(
 ///
 /// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
 /// failure. More specific typed causes propagate unchanged.
+#[cfg(test)]
 pub(crate) fn combine_contained(
     accumulator: &mut dyn AggregateAccumulator,
     iri: &str,
@@ -589,6 +890,7 @@ pub(crate) fn downcast_combine_partial<T: 'static>(
 ///
 /// [`EvalError::FunctionOperational`] on a caught panic or opaque host-returned
 /// failure. More specific typed causes propagate unchanged.
+#[cfg(test)]
 pub(crate) fn finish_contained(
     accumulator: Box<dyn AggregateAccumulator>,
     iri: &str,
@@ -613,64 +915,9 @@ pub(crate) fn finish_contained(
 /// # Errors
 ///
 /// [`EvalError::FunctionOperational`] on a caught panic.
+#[cfg(test)]
 pub(crate) fn arity_contained(agg: &dyn CustomAggregate, iri: &str) -> Result<Arity, EvalError> {
     crate::contain::declaration_contained(KIND, iri, "arity", || agg.arity())
-}
-
-/// [`arity_contained`]'s twin for [`CustomAggregate::volatility`].
-///
-/// # Errors
-///
-/// [`EvalError::FunctionOperational`] on a caught panic.
-pub(crate) fn volatility_contained(
-    agg: &dyn CustomAggregate,
-    iri: &str,
-) -> Result<Volatility, EvalError> {
-    crate::contain::declaration_contained(KIND, iri, "determinism class", || agg.volatility())
-}
-
-/// [`arity_contained`]'s twin for [`CustomAggregate::algebraic_class`].
-///
-/// # Errors
-///
-/// [`EvalError::FunctionOperational`] on a caught panic.
-pub(crate) fn algebraic_class_contained(
-    agg: &dyn CustomAggregate,
-    iri: &str,
-) -> Result<AlgebraicClass, EvalError> {
-    crate::contain::declaration_contained(KIND, iri, "algebraic class", || agg.algebraic_class())
-}
-
-/// Read `agg`'s declared per-accumulator [`CustomAggregate::state_bound`] with
-/// the panic contained — the one declaration `crate::modifier::eval_custom_aggregate`
-/// reads directly (to meter it), so it gets its own named entry point rather
-/// than only being reachable through [`AggregateRegistry::describe`].
-///
-/// # Errors
-///
-/// [`EvalError::FunctionOperational`] on a caught panic.
-pub(crate) fn state_bound_contained(
-    agg: &dyn CustomAggregate,
-    iri: &str,
-) -> Result<u64, EvalError> {
-    crate::contain::declaration_contained(KIND, iri, "state bound", || agg.state_bound())
-}
-
-/// [`CustomAggregate::exact_numeric_cost`] with the host call contained.
-///
-/// # Errors
-///
-/// [`EvalError::Function`] on a caught panic.
-pub(crate) fn exact_numeric_cost_contained(
-    agg: &dyn CustomAggregate,
-    iri: &str,
-    survivors: &[Vec<TermValue>],
-    scalarvals: &[(String, TermValue)],
-    division: purrdf_xsd::exact::DivisionPolicy,
-) -> Result<purrdf_xsd::exact::Cost, EvalError> {
-    crate::contain::declaration_contained(KIND, iri, "exact numeric cost", || {
-        agg.exact_numeric_cost_under(survivors, scalarvals, division)
-    })
 }
 
 /// [`arity_contained`]'s twin for [`CustomAggregate::scalarvals`] — read by
@@ -680,13 +927,20 @@ pub(crate) fn exact_numeric_cost_contained(
 /// # Errors
 ///
 /// [`EvalError::FunctionOperational`] on a caught panic.
+#[cfg(test)]
 pub(crate) fn scalarvals_contained(
     agg: &dyn CustomAggregate,
     iri: &str,
 ) -> Result<Vec<ScalarvalSpec>, EvalError> {
-    crate::contain::declaration_contained(KIND, iri, "scalarval declaration", || {
-        agg.scalarvals().to_vec()
-    })
+    scalarvals_borrowed(agg, iri).map(<[ScalarvalSpec]>::to_vec)
+}
+
+#[cfg(test)]
+fn scalarvals_borrowed<'a>(
+    agg: &'a dyn CustomAggregate,
+    iri: &str,
+) -> Result<&'a [ScalarvalSpec], EvalError> {
+    crate::contain::declaration_contained(KIND, iri, "scalarval declaration", || agg.scalarvals())
 }
 
 // ---------------------------------------------------------------------------
@@ -949,19 +1203,80 @@ impl AggregateRegistry {
     /// [`EvalError::FunctionOperational`] if any registered aggregate's declaration methods
     /// panic.
     pub fn describe(&self) -> Result<Vec<AggDescriptor>, EvalError> {
-        let mut out: Vec<AggDescriptor> = Vec::with_capacity(self.aggregates.len());
+        self.describe_admitted(&crate::WorkspaceCapability::resident())?
+            .try_into_resident()
+            .map_err(|_| EvalError::WorkspaceBoundOverflow)
+    }
+
+    pub(crate) fn describe_admitted(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<crate::workspace::AdmittedRecords<AggDescriptor>, EvalError> {
+        let mut out =
+            crate::workspace::AdmittedRecords::with_capacity(self.aggregates.len(), workspace)?;
         for (iri, aggregate) in &self.aggregates {
             let aggregate = aggregate.as_ref();
-            out.push(AggDescriptor {
-                iri: iri.clone(),
-                arity: arity_contained(aggregate, iri)?,
-                volatility: volatility_contained(aggregate, iri)?,
-                algebraic_class: algebraic_class_contained(aggregate, iri)?,
-                state_bound: state_bound_contained(aggregate, iri)?,
-                scalarvals: scalarvals_contained(aggregate, iri)?,
-            });
+            let arity = crate::contain::declaration_contained_admitted(
+                KIND,
+                iri,
+                "arity",
+                || aggregate.arity(),
+                workspace,
+            )?;
+            let volatility = crate::contain::declaration_contained_admitted(
+                KIND,
+                iri,
+                "determinism class",
+                || aggregate.volatility(),
+                workspace,
+            )?;
+            let algebraic_class = crate::contain::declaration_contained_admitted(
+                KIND,
+                iri,
+                "algebraic class",
+                || aggregate.algebraic_class(),
+                workspace,
+            )?;
+            let state_bound = crate::contain::declaration_contained_admitted(
+                KIND,
+                iri,
+                "state bound",
+                || aggregate.state_bound(),
+                workspace,
+            )?;
+            let scalarvals = crate::contain::declaration_contained_admitted(
+                KIND,
+                iri,
+                "scalarval declaration",
+                || aggregate.scalarvals(),
+                workspace,
+            )?;
+            let bytes = std::alloc::Layout::array::<ScalarvalSpec>(scalarvals.len())
+                .map_err(|_| EvalError::WorkspaceBoundOverflow)?
+                .size()
+                .checked_add(iri.len())
+                .ok_or(EvalError::WorkspaceBoundOverflow)?;
+            let allocation = workspace
+                .charge(u64::try_from(bytes).map_err(|_| EvalError::WorkspaceBoundOverflow)?)?;
+            let mut owned_scalarvals = crate::workspace::vector::<ScalarvalSpec>(
+                scalarvals.len(),
+                "EXPLAIN aggregate scalar declarations",
+            )?;
+            owned_scalarvals.extend_from_slice(scalarvals);
+            out.push(
+                AggDescriptor {
+                    iri: crate::workspace::string(iri, "EXPLAIN aggregate IRI")?,
+                    arity,
+                    volatility,
+                    algebraic_class,
+                    state_bound,
+                    scalarvals: owned_scalarvals,
+                },
+                allocation,
+            )?;
         }
-        out.sort_by(|a, b| a.iri.cmp(&b.iri));
+        out.as_mut_slice()
+            .sort_unstable_by(|a, b| a.iri.cmp(&b.iri));
         Ok(out)
     }
 }
@@ -1000,39 +1315,59 @@ impl AggregateRegistry {
 /// raised when `aggregates` is empty (which [`AggregateRegistry::EMPTY`] — the
 /// canonical "no registry" value — always is).
 pub(crate) fn registry_fingerprint(aggregates: &AggregateRegistry) -> Result<String, EvalError> {
+    let capability = crate::WorkspaceCapability::resident();
+    let mut frame = crate::workspace::LexicalFrame::new(&capability);
+    registry_fingerprint_with_memory(
+        aggregates,
+        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+    )
+}
+
+/// The original live metadata fold with one admitted borrowed-field formatter.
+pub(crate) fn registry_fingerprint_with_memory(
+    aggregates: &AggregateRegistry,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<String, EvalError> {
     if aggregates.is_empty() {
         return Ok(String::new());
     }
-    let registry = aggregates;
-    let mut out = String::new();
-    out.push_str(&registry.id.stable_encoding().to_string());
-    out.push('\u{5}');
-    for descriptor in registry.describe()? {
-        out.push_str(&descriptor.iri);
-        out.push('\u{2}');
-        out.push_str(&descriptor.arity.stable_encoding());
-        out.push('\u{2}');
-        out.push_str(descriptor.volatility.label());
-        out.push('\u{2}');
-        out.push_str(descriptor.algebraic_class.label());
-        out.push('\u{2}');
-        out.push_str(&descriptor.state_bound.to_string());
-        out.push('\u{2}');
-        // Declared scalarvals affect prepare-time admission (an unrecognized or
-        // wrong-typed `; NAME=value` is refused there) exactly as arity does, so
-        // they must fold into the fingerprint too: two registries that declare
-        // the SAME IRI with different accepted scalarval names/kinds must not
-        // share a fingerprint, or a plan admitted under one's (looser or
-        // stricter) declaration could be silently reused under the other's.
-        for spec in &descriptor.scalarvals {
-            out.push_str(spec.name);
-            out.push('\u{3}');
-            out.push_str(spec.kind.label());
-            out.push('\u{3}');
-        }
-        out.push('\u{4}');
+    struct Identity<'a> {
+        id: u64,
+        descriptors: &'a [AggDescriptor],
     }
-    Ok(out)
+    impl core::fmt::Display for Identity<'_> {
+        fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(out, "{}\u{5}", self.id)?;
+            for descriptor in self.descriptors {
+                write!(
+                    out,
+                    "{}\u{2}{}\u{2}{}\u{2}{}\u{2}{}\u{2}",
+                    descriptor.iri,
+                    descriptor.arity.stable_display(),
+                    descriptor.volatility.label(),
+                    descriptor.algebraic_class.label(),
+                    descriptor.state_bound
+                )?;
+                for spec in &descriptor.scalarvals {
+                    write!(out, "{}\u{3}{}\u{3}", spec.name, spec.kind.label())?;
+                }
+                out.write_str("\u{4}")?;
+            }
+            Ok(())
+        }
+    }
+    let capability = memory.admission_mut().workspace().clone();
+    let descriptors = aggregates.describe_admitted(&capability)?;
+    memory
+        .format(&Identity {
+            id: aggregates.id.stable_encoding(),
+            descriptors: &descriptors,
+        })
+        .map_err(|error| {
+            memory
+                .admission_mut()
+                .storage_error(error, "aggregate fingerprint")
+        })
 }
 
 /// The domain separator every custom-aggregate content fingerprint opens with — see
@@ -1065,41 +1400,76 @@ const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/aggregate-regist
 /// [`EvalError::FunctionOperational`] if a registered aggregate's declaration methods panic —
 /// [`AggregateRegistry::describe`]'s own failure, propagated unchanged.
 pub fn content_fingerprint(aggregates: &AggregateRegistry) -> Result<ContentDigest, EvalError> {
-    let mut bytes = Vec::new();
-    append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
-    for descriptor in aggregates.describe()? {
-        append_framed_part(&mut bytes, "iri", descriptor.iri.as_bytes());
-        append_framed_part(
-            &mut bytes,
-            "arity",
-            descriptor.arity.stable_encoding().as_bytes(),
-        );
-        append_framed_part(
-            &mut bytes,
-            "volatility",
-            descriptor.volatility.label().as_bytes(),
-        );
-        append_framed_part(
-            &mut bytes,
-            "algebraic-class",
-            descriptor.algebraic_class.label().as_bytes(),
-        );
-        append_framed_part(
-            &mut bytes,
-            "state-bound",
-            &descriptor.state_bound.to_be_bytes(),
-        );
-        append_framed_part(
-            &mut bytes,
-            "scalarval-count",
-            &(descriptor.scalarvals.len() as u64).to_be_bytes(),
-        );
-        for spec in &descriptor.scalarvals {
-            append_framed_part(&mut bytes, "scalarval-name", spec.name.as_bytes());
-            append_framed_part(&mut bytes, "scalarval-kind", spec.kind.label().as_bytes());
+    let capability = crate::WorkspaceCapability::resident();
+    let mut frame = crate::workspace::LexicalFrame::new(&capability);
+    content_fingerprint_with_memory(
+        aggregates,
+        &mut purrdf_lex::allocation::Memory::new(&mut frame),
+    )
+}
+
+fn content_fingerprint_with_memory(
+    aggregates: &AggregateRegistry,
+    memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
+) -> Result<ContentDigest, EvalError> {
+    let capability = memory.admission_mut().workspace().clone();
+    let descriptors = aggregates.describe_admitted(&capability)?;
+    let result = (|| -> Result<ContentDigest, purrdf_lex::allocation::StorageError> {
+        let mut bytes = Vec::new();
+        append_framed_part_with_memory(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes(), memory)?;
+        for descriptor in descriptors.iter() {
+            append_framed_part_with_memory(&mut bytes, "iri", descriptor.iri.as_bytes(), memory)?;
+            let arity = memory.format(&descriptor.arity.stable_display())?;
+            append_framed_part_with_memory(&mut bytes, "arity", arity.as_bytes(), memory)?;
+            memory.release_string(arity)?;
+            append_framed_part_with_memory(
+                &mut bytes,
+                "volatility",
+                descriptor.volatility.label().as_bytes(),
+                memory,
+            )?;
+            append_framed_part_with_memory(
+                &mut bytes,
+                "algebraic-class",
+                descriptor.algebraic_class.label().as_bytes(),
+                memory,
+            )?;
+            append_framed_part_with_memory(
+                &mut bytes,
+                "state-bound",
+                &descriptor.state_bound.to_be_bytes(),
+                memory,
+            )?;
+            append_framed_part_with_memory(
+                &mut bytes,
+                "scalarval-count",
+                &(descriptor.scalarvals.len() as u64).to_be_bytes(),
+                memory,
+            )?;
+            for spec in &descriptor.scalarvals {
+                append_framed_part_with_memory(
+                    &mut bytes,
+                    "scalarval-name",
+                    spec.name.as_bytes(),
+                    memory,
+                )?;
+                append_framed_part_with_memory(
+                    &mut bytes,
+                    "scalarval-kind",
+                    spec.kind.label().as_bytes(),
+                    memory,
+                )?;
+            }
         }
-    }
-    Ok(ContentDigest::of(&bytes))
+        let digest = ContentDigest::of(&bytes);
+        memory.release_vec(bytes)?;
+        Ok(digest)
+    })();
+    result.map_err(|error| {
+        memory
+            .admission_mut()
+            .storage_error(error, "aggregate fingerprint")
+    })
 }
 
 #[cfg(test)]

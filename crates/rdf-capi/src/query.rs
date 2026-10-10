@@ -258,7 +258,12 @@ unsafe fn run_query(
         engine
             .prepare_query_with_options(query, base_iri, options)
             .and_then(|prepared| {
-                engine.query_prepared(PurrdfDataset::arc(dataset), &prepared, &[], options)
+                engine.query_prepared_view(
+                    PurrdfDataset::handle(dataset).as_ref(),
+                    &prepared,
+                    &[],
+                    options,
+                )
             })
             .map_err(|diagnostic| query_error(&diagnostic))
     }
@@ -893,8 +898,8 @@ unsafe fn query_governed_entry(
         let regex = decode_regex_profile(regex_profile)?;
         let env = aggregate_env(aggregates.as_ref())?;
         let outcome = sparql_engine(regex)
-            .query_governed(
-                PurrdfDataset::arc(dataset),
+            .query_governed_view(
+                PurrdfDataset::handle(dataset).as_ref(),
                 SparqlRequest {
                     query,
                     base_iri,
@@ -1181,7 +1186,7 @@ unsafe fn query_entailment_governed_entry(
         let env = aggregate_env(aggregates.as_ref())?;
         let outcome = query_with_entailment_closure_governed(
             &sparql_engine(regex),
-            PurrdfDataset::arc(dataset),
+            PurrdfDataset::handle(dataset).as_ref(),
             SparqlRequest {
                 query,
                 base_iri,
@@ -1386,7 +1391,7 @@ unsafe fn update_governed_entry(
         let env = aggregate_env(aggregates.as_ref())?;
         let division = PurrdfDataset::division(dataset);
         let outcome = sparql_engine(regex)
-            .update_governed(
+            .update_governed_handle(
                 &mut (*dataset).0,
                 SparqlRequest {
                     query: request,
@@ -1443,7 +1448,6 @@ fn aggregate_env(
 mod tests {
     use std::ffi::CString;
     use std::mem::MaybeUninit;
-    use std::sync::Arc;
 
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermValue};
     use purrdf_rs::SparqlEngine as _;
@@ -2011,7 +2015,7 @@ mod tests {
     #[test]
     fn governed_update_trip_preserves_the_exact_dataset_arc() {
         let dataset = query_dataset();
-        let before = unsafe { Arc::clone(&(*dataset).0) };
+        let before = unsafe { (*dataset).0.clone() };
         let request = CString::new(
             "INSERT DATA { <http://example.org/new> <http://example.org/p> \
              <http://example.org/value> }",
@@ -2039,7 +2043,7 @@ mod tests {
         assert_eq!(status, PurrdfStatus::Ok as i32);
         assert!(error.is_null());
         assert_eq!(outcome, PurrdfUpdateOutcomeKind::BudgetExhausted as i32);
-        assert!(unsafe { Arc::ptr_eq(&before, &(*dataset).0) });
+        assert!(unsafe { std::ptr::eq(before.as_ref(), (*dataset).0.as_ref()) });
         assert_eq!(unsafe { (*dataset).0.quad_count() }, 3);
         let evidence = unsafe { evidence.assume_init() };
         assert_eq!(
@@ -2274,14 +2278,15 @@ mod tests {
         assert_eq!(outcome, PurrdfUpdateOutcomeKind::Applied as i32);
 
         let check = sparql_engine(None)
-            .query(
-                unsafe { &(*dataset).0 },
+            .query_with_options_view(
+                unsafe { (*dataset).0.as_ref() },
                 SparqlRequest {
                     query: "PREFIX ex: <http://example.org/> \
                             SELECT ?m WHERE { ex:summary ex:median ?m }",
                     base_iri: None,
                     substitutions: &[],
                 },
+                QueryOptions::EMPTY,
             )
             .expect("check query evaluates");
         let SparqlResult::Solutions { rows, .. } = check else {

@@ -17,15 +17,13 @@
 //!
 //! The union SCBD of that subject set is returned as a frozen dataset.
 
-use std::collections::BTreeSet;
-
 use purrdf_core::describe::Describer;
 use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_algebra::{GraphPattern, NamedNodePattern};
 
 use crate::construct::ConstructedGraph;
 use crate::error::EvalError;
-use crate::eval::{EvalCtx, eval_evaluated, materialize_solutions};
+use crate::eval::{EvalCtx, eval_evaluated};
 use crate::governor::lift::Evaluated;
 use crate::solution::{SolutionSeq, VarSchema};
 
@@ -42,78 +40,105 @@ pub(crate) fn eval_describe<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<ConstructedGraph<D::Id>, EvalError> {
     // A `BTreeSet` gives a deterministic, deduplicated subject order.
-    let mut subjects: BTreeSet<String> = BTreeSet::new();
-    let mut var_targets: Vec<&str> = Vec::new();
-    for target in targets {
-        match target {
-            NamedNodePattern::NamedNode(nn) => {
-                subjects.insert(nn.as_str().to_owned());
+    enum Subject<'a> {
+        Authored(&'a str),
+        Resolved(crate::WorkspaceTerm),
+    }
+    impl Subject<'_> {
+        fn iri(&self) -> &str {
+            match self {
+                Self::Authored(iri) => iri,
+                Self::Resolved(term) => match &**term {
+                    TermValue::Iri(iri) => iri,
+                    _ => unreachable!("only IRI terms enter description subjects"),
+                },
             }
-            NamedNodePattern::Variable(v) => var_targets.push(v.as_str()),
         }
     }
-
-    // `DESCRIBE *` (no explicit targets) describes every variable the `WHERE`
-    // projects; an explicit variable describes just that one. Either way we need the
-    // solutions. Concrete `DESCRIBE <iri>` targets skip evaluation entirely.
+    let mut subjects = crate::AdmittedVec::new(&ctx.growth);
+    let mut var_targets = crate::AdmittedVec::new(&ctx.growth);
+    for target in targets {
+        match target {
+            NamedNodePattern::NamedNode(node) => subjects.push(Subject::Authored(node.as_str()))?,
+            NamedNodePattern::Variable(variable) => var_targets.push(variable.as_str())?,
+        }
+    }
     let describe_all = targets.is_empty();
-    // The `WHERE`'s certificate, and its rows kept past the subject scan so the answer cap
-    // can certify a graph-level trip against what the pattern actually bound.
     let (certificate, where_rows) = if describe_all || !var_targets.is_empty() {
         let (seq, certificate) = match eval_evaluated(pattern, ctx)? {
             Evaluated::Complete(seq) => (seq, None),
-            Evaluated::Truncated(truncation) => {
-                let rows = truncation.rows().clone();
-                (rows, Some(truncation))
-            }
+            Evaluated::Truncated(truncation) => (truncation.rows().clone(), Some(truncation)),
         };
-        let (vars, rows) = materialize_solutions(&seq, ctx)?;
-        for (col, name) in vars.iter().enumerate() {
-            if !describe_all && !var_targets.contains(&name.as_str()) {
+        for (column, variable) in seq.schema.vars().iter().enumerate() {
+            if (!describe_all && !var_targets.contains(&variable.as_str()))
+                || (describe_all && crate::blank_scope::is_joined_blank(variable))
+            {
                 continue;
             }
-            // `DESCRIBE *` names the pattern's variables; a blank node shared
-            // between the pieces of a basic graph pattern is not one of them
-            // (see `crate::blank_scope`), whatever column it rides in.
-            if describe_all && crate::blank_scope::is_joined_blank(&seq.schema.vars()[col]) {
-                continue;
-            }
-            for row in &rows {
-                // Only IRI bindings are describable subjects; a literal, blank, or
-                // unbound cell contributes nothing.
-                if let Some(Some(TermValue::Iri(iri))) = row.get(col) {
-                    subjects.insert(iri.clone());
+            for row in &seq.rows {
+                let Some(Some(term)) = row.get(column) else {
+                    continue;
+                };
+                let value =
+                    ctx.scratch
+                        .try_owned_value_of(ctx.dataset, *term, &ctx.growth, |error| {
+                            ctx.workspace.source_error(error)
+                        })?;
+                if matches!(&*value, TermValue::Iri(_)) {
+                    subjects.push(Subject::Resolved(value))?;
                 }
             }
         }
         (certificate, seq)
     } else {
-        // A `DESCRIBE <iri>` with no variable target evaluates no pattern at all, and the
-        // empty sequence is the honest statement of that.
         (None, SolutionSeq::empty(VarSchema::empty_shared()))
     };
-
-    let graph = Describer::try_new(ctx.dataset)
-        .map_err(EvalError::source_read)?
-        .describe_iris(subjects.iter().map(String::as_str))
-        .map_err(|d| EvalError::internal(format!("DESCRIBE output failed to build: {d:?}")))?;
-    // The cap denominates the description's triples, exactly as it does a `CONSTRUCT`'s —
-    // and it matters more here, because a `DESCRIBE` whose `WHERE` bound a single subject
-    // can still return that subject's entire concise bounded description.
-    Ok(crate::construct::commit_answer_triples(
-        graph,
-        certificate,
-        &where_rows,
-        ctx,
-    ))
+    subjects
+        .as_mut_slice()
+        .sort_unstable_by(|left, right| left.iri().cmp(right.iri()));
+    let mut frame = crate::workspace::LexicalFrame::new(&ctx.growth);
+    let native = (|| {
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut frame);
+        let describer = Describer::try_new_with_memory(ctx.dataset, &mut memory)?;
+        let result =
+            describer.describe_iris_with_memory(subjects.iter().map(Subject::iri), &mut memory);
+        describer.release_with_memory(&mut memory)?;
+        let mut graph = result?;
+        graph.warm_query_indexes_with_memory(&mut memory)?;
+        Ok::<_, purrdf_core::describe::DescribeError<D::ReadError>>(graph)
+    })();
+    let graph = match native {
+        Ok(graph) => graph,
+        Err(purrdf_core::describe::DescribeError::Source(error)) => {
+            return Err(ctx.workspace.source_error(error));
+        }
+        Err(purrdf_core::describe::DescribeError::Storage(error)) => {
+            return Err(frame.storage_error(error, "description graph storage"));
+        }
+        Err(purrdf_core::describe::DescribeError::Build(
+            purrdf_core::NativeBuildError::Storage(error),
+        )) => return Err(frame.storage_error(error, "description graph freeze")),
+        Err(purrdf_core::describe::DescribeError::Build(
+            purrdf_core::NativeBuildError::Diagnostic(error),
+        )) => {
+            return Err(EvalError::RetainedDiagnostic(
+                frame.finish_diagnostic(&mut Some(error))?,
+            ));
+        }
+        Err(error) => {
+            return Err(crate::NativeDiagnostic::error(
+                crate::NativeDiagnosticKind::Internal,
+                &error,
+                &ctx.growth,
+            ));
+        }
+    };
+    let graph = frame.finish_dataset(&mut Some(graph))?;
+    crate::construct::commit_answer_triples(graph, certificate, &where_rows, ctx)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use purrdf_core::RdfDataset;
-
     use super::*;
 
     /// The ungoverned `DESCRIBE`, which is complete by construction.
@@ -121,7 +146,7 @@ mod tests {
         pattern: &GraphPattern,
         targets: &[NamedNodePattern],
         ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<Arc<RdfDataset>, EvalError> {
+    ) -> Result<purrdf_core::DatasetHandle, EvalError> {
         let (graph, certificate) = super::eval_describe(pattern, targets, ctx)?;
         assert!(
             certificate.is_none(),

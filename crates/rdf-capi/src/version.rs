@@ -287,7 +287,7 @@ pub unsafe extern "C" fn purrdf_capabilities(
             if dataset.is_null() || out.is_null() {
                 return PurrdfStatus::NullPointer as i32;
             }
-            *out = capabilities_to_c(PurrdfDataset::arc(dataset).capabilities());
+            *out = capabilities_to_c(PurrdfDataset::handle(dataset).capabilities());
             PurrdfStatus::Ok as i32
         })
     }

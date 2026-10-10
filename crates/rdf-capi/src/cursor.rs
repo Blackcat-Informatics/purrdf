@@ -4,9 +4,7 @@
 //! `purrdf_quads_for_pattern` + `purrdf_cursor_next`: pattern iteration over a
 //! frozen dataset with zero-copy borrowed term views.
 
-use std::sync::Arc;
-
-use purrdf_core::{GraphMatch, QuadIds, QuadPatternCursor, RdfDataset, TermId};
+use purrdf_core::{DatasetHandle, GraphMatch, QuadIds, QuadPatternCursor, RdfDataset, TermId};
 
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
@@ -16,7 +14,7 @@ use crate::term::{
     PurrdfGraphMatch, PurrdfGraphMatchKind, PurrdfTermView, render_term, view_to_value,
 };
 
-/// A pattern-quad cursor. It holds an `Arc<RdfDataset>` clone (`pin`) so the
+/// A pattern-quad cursor. It holds a frozen storage-owner clone (`pin`) so the
 /// term arena the views borrow into cannot dangle — the cursor stays valid even
 /// after every `PurrdfDataset` handle is freed. Matching rows are pulled lazily
 /// from the core's owned indexed cursor and are never collected. Single-threaded.
@@ -27,7 +25,7 @@ pub struct PurrdfCursor {
 
 #[derive(Debug)]
 enum CursorState {
-    Empty(Arc<RdfDataset>),
+    Empty(DatasetHandle),
     Pattern(QuadPatternCursor),
 }
 
@@ -142,7 +140,7 @@ pub unsafe extern "C" fn purrdf_quads_for_pattern(
                     "null pointer argument to purrdf_quads_for_pattern",
                 ));
             }
-            let pin = PurrdfDataset::arc(dataset).clone();
+            let pin = PurrdfDataset::handle(dataset).clone();
             let view = pin.as_ref();
             let subject = resolve_slot(view, s)?;
             let predicate = resolve_slot(view, p)?;
@@ -157,7 +155,8 @@ pub unsafe extern "C" fn purrdf_quads_for_pattern(
                     CursorState::Empty(pin)
                 }
                 GraphSlot::Match(graph_match) => {
-                    let cursor = pin.quads_for_pattern_cursor(
+                    let cursor = QuadPatternCursor::new(
+                        pin,
                         subject.term_id(),
                         predicate.term_id(),
                         object.term_id(),

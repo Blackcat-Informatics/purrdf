@@ -3,14 +3,12 @@
 
 //! The frozen-dataset handle and its read-only accessors.
 
-use std::sync::Arc;
-
-use purrdf_core::RdfDataset;
+use purrdf_core::{DatasetHandle, RdfDataset};
 use purrdf_sparql_eval::DivisionPolicy;
 
 use crate::status::PurrdfStatus;
 
-/// A frozen, immutable RDF-1.2 dataset. Wraps `Arc<RdfDataset>`, so it is
+/// A frozen, immutable RDF-1.2 dataset. Retains the frozen dataset storage owner, so it is
 /// `Send + Sync`: it may be read concurrently from multiple threads. Release
 /// with `purrdf_dataset_free`.
 ///
@@ -19,7 +17,7 @@ use crate::status::PurrdfStatus;
 /// `purrdf_dataset_set_division_policy`. Every handle the library returns starts at
 /// [`DivisionPolicy::xsd_default`]: eighteen fractional digits, truncated toward zero.
 #[derive(Debug)]
-pub struct PurrdfDataset(pub(crate) Arc<RdfDataset>, pub(crate) DivisionPolicy);
+pub struct PurrdfDataset(pub(crate) DatasetHandle, pub(crate) DivisionPolicy);
 
 /// Compile-time proof of the `Send + Sync` guarantee documented on
 /// [`PurrdfDataset`] (and published in the README thread-safety table). If a
@@ -32,8 +30,8 @@ const _: fn() = || {
 
 impl PurrdfDataset {
     /// A handle over `dataset` at the default division policy.
-    pub(crate) const fn new(dataset: Arc<RdfDataset>) -> Self {
-        Self(dataset, DivisionPolicy::xsd_default())
+    pub(crate) fn new(dataset: impl Into<DatasetHandle>) -> Self {
+        Self(dataset.into(), DivisionPolicy::xsd_default())
     }
 
     /// The division policy every query and UPDATE over this handle runs under.
@@ -44,12 +42,12 @@ impl PurrdfDataset {
         unsafe { (*ptr).1 }
     }
 
-    /// Borrow the inner `Arc` from a non-null handle pointer (used where an
-    /// owned clone of the `Arc` is needed, e.g. pinning a cursor).
+    /// Borrow the frozen storage handle from a non-null handle pointer (used where an
+    /// owned clone of the handle is needed, e.g. pinning a cursor).
     ///
     /// # Safety
     /// `ptr` must be a live `PurrdfDataset` handle.
-    pub(crate) unsafe fn arc<'a>(ptr: *const Self) -> &'a Arc<RdfDataset> {
+    pub(crate) unsafe fn handle<'a>(ptr: *const Self) -> &'a DatasetHandle {
         unsafe { &(*ptr).0 }
     }
 

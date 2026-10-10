@@ -580,3 +580,476 @@ fn elements_of_any_size_compare_by_every_digit() {
         Ok(true)
     );
 }
+
+// Original native storage receipts are measured against the real allocator.
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
+use purrdf_cdt::CdtTripleTerm;
+use purrdf_cdt::memory::{Admission, Storage, StorageError};
+
+#[global_allocator]
+static NATIVE_ALLOCATOR: CountingAllocator = CountingAllocator;
+
+struct NativeGrant {
+    live: usize,
+    peak: usize,
+    calls: usize,
+    refuse_growth: Option<usize>,
+    refuse_box: bool,
+}
+
+impl NativeGrant {
+    const fn new() -> Self {
+        Self {
+            live: 0,
+            peak: 0,
+            calls: 0,
+            refuse_growth: None,
+            refuse_box: false,
+        }
+    }
+    fn boxed<T>(&self, value: T) -> Result<Box<T>, StorageError> {
+        if self.refuse_box {
+            return Err(StorageError::AllocationFailed);
+        }
+        purrdf_lex::allocation::try_boxed(value).map_err(|_| StorageError::AllocationFailed)
+    }
+}
+impl Admission for NativeGrant {
+    fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+        if next > self.live {
+            self.calls += 1;
+            if self.refuse_growth == Some(self.calls) {
+                return Err(StorageError::AdmissionFailed);
+            }
+        }
+        self.live = next;
+        self.peak = self.peak.max(next);
+        Ok(())
+    }
+}
+impl Storage for NativeGrant {
+    fn boxed_value(&mut self, value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
+        self.boxed(value)
+    }
+    fn boxed_triple(&mut self, value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
+        self.boxed(value)
+    }
+}
+
+fn literal_composite(lexical: &str) -> CdtTerm {
+    CdtTerm::Literal(CdtLiteral::typed(lexical, purrdf_cdt::CDT_LIST))
+}
+
+#[test]
+fn native_relations_preserve_original_answers_and_price_actual_peak() {
+    let cases = [
+        (
+            literal_composite("[[1],{'a':[2,null]}]"),
+            literal_composite("[[1.0],{'a':[2.0,null]}]"),
+        ),
+        (
+            literal_composite("[[1,2],3]"),
+            literal_composite("[[1,2],4]"),
+        ),
+        (
+            literal_composite("[1,'x'^^<http://example.org/unknown>]"),
+            literal_composite("[2,'y'^^<http://example.org/unknown>]"),
+        ),
+        (literal_composite("[_:a]"), literal_composite("[ _:a ]")),
+        (literal_composite("[]"), literal_composite("[_:a]")),
+        (literal_composite("[{'a':1}]"), literal_composite("[[1]]")),
+        (
+            typed("170141183460469231731687303715884105728", "integer"),
+            typed("170141183460469231731687303715884105728.0", "decimal"),
+        ),
+        (
+            typed("9007199254740993", "integer"),
+            typed("9007199254740992", "double"),
+        ),
+        (typed("abc", "integer"), typed("1", "integer")),
+        (typed("NaN", "double"), typed("1", "double")),
+    ];
+    for (left, right) in &cases {
+        let expected_equal = term_equal(left, right);
+        let expected_less = term_less_than(left, right);
+        for less in [false, true] {
+            let mut grant = NativeGrant::new();
+            let window = CurrentThreadWindow::open();
+            let answer = if less {
+                purrdf_cdt::ops::try_term_less_than(left, right, &mut grant)
+            } else {
+                purrdf_cdt::ops::try_term_equal(left, right, &mut grant)
+            }
+            .expect("native physical storage");
+            let measured = window.close();
+            assert_eq!(
+                answer,
+                if less {
+                    expected_less.clone()
+                } else {
+                    expected_equal.clone()
+                }
+            );
+            assert_eq!(
+                grant.live, 0,
+                "every original comparison allocation has died"
+            );
+            assert_eq!(measured.retained_bytes, 0);
+            assert!(
+                measured.peak_working_bytes <= i64::try_from(grant.peak).unwrap(),
+                "actual peak exceeded original before-birth admission"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_relations_refuse_each_original_growth_without_retained_scratch() {
+    let left = literal_composite("[[1],{'a':[2,null]}]");
+    let right = literal_composite("[[1.0],{'a':[2.0,null]}]");
+    for less in [false, true] {
+        let call = |grant: &mut NativeGrant| {
+            if less {
+                purrdf_cdt::ops::try_term_less_than(&left, &right, grant)
+            } else {
+                purrdf_cdt::ops::try_term_equal(&left, &right, grant)
+            }
+        };
+        let mut healthy = NativeGrant::new();
+        let _ = call(&mut healthy).unwrap();
+        assert!(
+            healthy.calls > 1,
+            "exercise nested native parser and walk growth"
+        );
+        for refusal in 1..=healthy.calls {
+            let mut grant = NativeGrant::new();
+            grant.refuse_growth = Some(refusal);
+            let window = CurrentThreadWindow::open();
+            let answer = call(&mut grant);
+            let measured = window.close();
+            assert_eq!(answer, Err(StorageError::AdmissionFailed));
+            assert_eq!(grant.live, 0);
+            assert_eq!(measured.retained_bytes, 0);
+            if refusal == 1 {
+                assert_eq!(
+                    measured.allocations, 0,
+                    "first refusal precedes original worklist birth"
+                );
+            }
+        }
+    }
+    let mut grant = NativeGrant::new();
+    grant.refuse_box = true;
+    let window = CurrentThreadWindow::open();
+    let answer = purrdf_cdt::ops::try_term_equal(&left, &right, &mut grant);
+    let measured = window.close();
+    assert_eq!(answer, Err(StorageError::AllocationFailed));
+    assert_eq!(grant.live, 0);
+    assert_eq!(measured.retained_bytes, 0);
+}
+
+#[test]
+fn native_canonical_render_retains_the_original_output_and_releases_scratch() {
+    let value = parse_list("[[1],{'a':[2,null]},'é'@fr--rtl]").unwrap();
+    let expected = value.canonical_lexical();
+    let mut grant = NativeGrant::new();
+    let window = CurrentThreadWindow::open();
+    let (output, retained) = purrdf_cdt::render::try_canonical_lexical(&value, &mut grant).unwrap();
+    let measured = window.close();
+    assert_eq!(output, expected);
+    assert_eq!(retained, output.capacity());
+    assert_eq!(grant.live, retained);
+    assert_eq!(measured.retained_bytes, i64::try_from(retained).unwrap());
+    assert!(measured.peak_working_bytes <= i64::try_from(grant.peak).unwrap());
+    drop(output);
+    grant.resize(0).unwrap();
+    assert_eq!(grant.live, 0);
+    let mut grant = NativeGrant::new();
+    grant.refuse_growth = Some(1);
+    let window = CurrentThreadWindow::open();
+    let answer = purrdf_cdt::render::try_canonical_lexical(&value, &mut grant);
+    let measured = window.close();
+    assert_eq!(answer, Err(StorageError::AdmissionFailed));
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(grant.live, 0);
+}
+
+// Native primitive ownership uses the same original grant/allocator fixture above.
+#[test]
+fn native_clone_retains_only_original_payload_and_refuses_every_growth() {
+    let source = parse_list("[[1],{'a':[2,null]},<<( <urn:s> 'é'@fr--rtl [3] )>>]").unwrap();
+    let mut healthy = NativeGrant::new();
+    let window = CurrentThreadWindow::open();
+    let (copy, live) = source.clone_admitted(&mut healthy).unwrap();
+    let measured = window.close();
+    assert_eq!(copy, source);
+    assert_eq!(healthy.live, live);
+    assert_eq!(measured.retained_bytes, i64::try_from(live).unwrap());
+    assert!(measured.peak_working_bytes <= i64::try_from(healthy.peak).unwrap());
+    let calls = healthy.calls;
+    drop(copy);
+    healthy.resize(0).unwrap();
+    assert!(calls > 1);
+    for refusal in 1..=calls {
+        let mut grant = NativeGrant::new();
+        grant.refuse_growth = Some(refusal);
+        let window = CurrentThreadWindow::open();
+        let answer = source.clone_admitted(&mut grant);
+        let measured = window.close();
+        assert!(matches!(answer, Err(StorageError::AdmissionFailed)));
+        assert_eq!(
+            grant.live, 0,
+            "original failed-prefix payload dies before release"
+        );
+        assert_eq!(measured.retained_bytes, 0);
+        if refusal == 1 {
+            assert_eq!(measured.allocations, 0);
+        }
+    }
+    let mut grant = NativeGrant::new();
+    grant.refuse_box = true;
+    let window = CurrentThreadWindow::open();
+    let answer = source.clone_admitted(&mut grant);
+    let measured = window.close();
+    assert!(matches!(answer, Err(StorageError::AllocationFailed)));
+    assert_eq!(grant.live, 0);
+    assert_eq!(measured.retained_bytes, 0);
+
+    let mut grant = NativeGrant::new();
+    grant.refuse_growth = Some(1);
+    let window = CurrentThreadWindow::open();
+    let (null, live) = CdtTerm::Null.clone_admitted(&mut grant).unwrap();
+    let measured = window.close();
+    assert!(matches!(null, CdtTerm::Null));
+    assert_eq!(live, 0);
+    assert_eq!(measured.allocations, 0);
+    assert_eq!(
+        grant.calls, 0,
+        "inline leaves require no artificial reservation"
+    );
+}
+
+#[test]
+fn native_map_constructor_keeps_last_binding_and_releases_discarded_keys() {
+    let pairs = vec![
+        (
+            CdtTerm::Iri("urn:k".into()),
+            CdtTerm::Iri("urn:left".into()),
+        ),
+        (CdtTerm::Null, CdtTerm::Iri("urn:discarded".into())),
+        (CdtTerm::Iri("urn:z".into()), CdtTerm::Null),
+        (
+            CdtTerm::Iri("urn:k".into()),
+            CdtTerm::Iri("urn:right".into()),
+        ),
+    ];
+    let mut grant = NativeGrant::new();
+    let window = CurrentThreadWindow::open();
+    let (answer, live) =
+        purrdf_cdt::functions::map_constructor_admitted(&pairs, &mut grant).unwrap();
+    let measured = window.close();
+    let purrdf_cdt::CdtOutcome::Value(value) = answer else {
+        panic!("native constructed map");
+    };
+    assert_eq!(
+        value,
+        parse_map("{<urn:k>:<urn:right>,<urn:z>:null}").unwrap()
+    );
+    assert_eq!(grant.live, live);
+    assert_eq!(measured.retained_bytes, i64::try_from(live).unwrap());
+    assert!(measured.peak_working_bytes <= i64::try_from(grant.peak).unwrap());
+    drop(value);
+    grant.resize(0).unwrap();
+}
+
+#[test]
+fn native_merge_keeps_first_map_and_releases_selection_metadata() {
+    let maps = vec![
+        parse_map("{<urn:k>:<urn:first>,<urn:z>:null}").unwrap(),
+        parse_map("{<urn:k>:<urn:second>,<urn:a>:<urn:other>}").unwrap(),
+    ];
+    let mut grant = NativeGrant::new();
+    let window = CurrentThreadWindow::open();
+    let (answer, live) = purrdf_cdt::functions::merge_admitted(&maps, &mut grant).unwrap();
+    let measured = window.close();
+    let purrdf_cdt::CdtOutcome::Value(value) = answer else {
+        panic!("native merged map");
+    };
+    assert_eq!(
+        value,
+        parse_map("{<urn:a>:<urn:other>,<urn:k>:<urn:first>,<urn:z>:null}").unwrap()
+    );
+    assert_eq!(grant.live, live);
+    assert_eq!(measured.retained_bytes, i64::try_from(live).unwrap());
+    assert!(measured.peak_working_bytes <= i64::try_from(grant.peak).unwrap());
+    drop(value);
+    grant.resize(0).unwrap();
+}
+
+#[test]
+fn native_duplicate_diagnostic_preserves_stable_original_value_order() {
+    let entries = vec![
+        CdtEntry {
+            key: CdtKey::Iri("urn:z".into()),
+            value: CdtTerm::Null,
+        },
+        CdtEntry {
+            key: CdtKey::Iri("urn:k".into()),
+            value: CdtTerm::Iri("urn:one".into()),
+        },
+        CdtEntry {
+            key: CdtKey::Iri("urn:k".into()),
+            value: CdtTerm::Iri("urn:second-very-long".into()),
+        },
+    ];
+    let mut grant = NativeGrant::new();
+    let error = CdtValue::map_admitted(entries, &mut grant).unwrap_err();
+    let purrdf_cdt::memory::ReadError::Lexical(purrdf_cdt::CdtError::DuplicateMapKey {
+        offset,
+        key,
+    }) = error
+    else {
+        panic!("original duplicate-key diagnostic");
+    };
+    // "{<urn:k>:<urn:one>," occupies nineteen bytes before the duplicate.
+    assert_eq!(offset, 19);
+    assert_eq!(key, "<urn:k>");
+    assert_eq!(
+        grant.live,
+        key.capacity(),
+        "only the owned diagnostic survives the native constructor"
+    );
+    drop(key);
+    grant.resize(0).unwrap();
+}
+
+#[test]
+fn native_large_index_parse_stays_expression_error_while_physical_refusal_is_hard() {
+    let index = CdtTerm::Literal(CdtLiteral::typed(
+        "1".repeat(2_000),
+        purrdf_cdt::XSD_INTEGER,
+    ));
+    let mut grant = NativeGrant::new();
+    let window = CurrentThreadWindow::open();
+    let (answer, live) = purrdf_cdt::functions::list_get_admitted(&[], &index, &mut grant).unwrap();
+    let measured = window.close();
+    assert!(
+        answer.is_error(),
+        "a non-inline integer remains an invalid list index"
+    );
+    assert_eq!(live, 0);
+    assert_eq!(grant.live, 0);
+    assert_eq!(measured.retained_bytes, 0);
+    assert!(measured.peak_working_bytes > 0);
+    assert!(measured.peak_working_bytes <= i64::try_from(grant.peak).unwrap());
+
+    let mut grant = NativeGrant::new();
+    grant.refuse_growth = Some(1);
+    let window = CurrentThreadWindow::open();
+    let answer = purrdf_cdt::functions::list_get_admitted(&[], &index, &mut grant);
+    let measured = window.close();
+    assert!(matches!(answer, Err(StorageError::AdmissionFailed)));
+    assert_eq!(grant.live, 0);
+    assert_eq!(
+        measured.allocations, 0,
+        "native parsing refuses before magnitude birth"
+    );
+}
+
+#[test]
+fn native_clone_and_release_do_not_recurse_on_a_small_stack() {
+    purrdf_stack::on_stack(128 * 1024, || {
+        let mut source = CdtTerm::Null;
+        for _ in 0..10_000 {
+            source = CdtTerm::TripleTerm(Box::new(CdtTripleTerm {
+                subject: source,
+                predicate: CdtTerm::Null,
+                object: CdtTerm::Null,
+            }));
+        }
+        let mut grant = NativeGrant::new();
+        let window = CurrentThreadWindow::open();
+        let (copy, live) = source.clone_admitted(&mut grant).unwrap();
+        let measured = window.close();
+        assert_eq!(copy, source);
+        assert_eq!(measured.retained_bytes, i64::try_from(live).unwrap());
+        assert!(measured.peak_working_bytes <= i64::try_from(grant.peak).unwrap());
+        let window = CurrentThreadWindow::open();
+        drop(copy);
+        let measured = window.close();
+        assert_eq!(
+            measured.allocations, 0,
+            "cleanup uses original native slots"
+        );
+        grant.resize(0).unwrap();
+        drop(source);
+    })
+    .unwrap();
+}
+
+// A concrete native box refusal remains the first error when refund refuses too.
+struct RefuseBoxAndShrink(NativeGrant, bool);
+impl Admission for RefuseBoxAndShrink {
+    fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+        if self.1 && next < self.0.live {
+            return Err(StorageError::AdmissionFailed);
+        }
+        self.0.resize(next)
+    }
+}
+impl Storage for RefuseBoxAndShrink {
+    fn boxed_value(&mut self, _value: CdtValue) -> Result<Box<CdtValue>, StorageError> {
+        self.1 = true;
+        Err(StorageError::AllocationFailed)
+    }
+    fn boxed_triple(&mut self, _value: CdtTripleTerm) -> Result<Box<CdtTripleTerm>, StorageError> {
+        self.1 = true;
+        Err(StorageError::AllocationFailed)
+    }
+}
+#[test]
+fn native_box_failure_stays_primary_when_original_refund_also_refuses() {
+    let source = parse_list("[[1],{'a':[2]}]").unwrap();
+    let mut grant = RefuseBoxAndShrink(NativeGrant::new(), false);
+    let window = CurrentThreadWindow::open();
+    let answer = source.clone_admitted(&mut grant);
+    let measured = window.close();
+    assert!(
+        matches!(answer, Err(StorageError::AllocationFailed)),
+        "actual native factory refusal remains primary"
+    );
+    assert_eq!(
+        measured.retained_bytes, 0,
+        "all failed clone payloads die even when logical refund refuses"
+    );
+    assert!(
+        grant.0.live > 0,
+        "the failed shrink kept the original grant until owner destruction"
+    );
+}
+
+#[test]
+fn native_literal_parser_keeps_original_box_failure_through_child_refund() {
+    let left = literal_composite("[[1],{'a':[2]}]");
+    let right = literal_composite("[[1], {'a': [2]}]");
+    // Distinct lexical terms denote the same nested value. Identical terms can
+    // answer by term identity without entering the native denotation producer.
+    assert_eq!(term_equal(&left, &right), Ok(true));
+    let mut grant = RefuseBoxAndShrink(NativeGrant::new(), false);
+    let window = CurrentThreadWindow::open();
+    let answer = purrdf_cdt::ops::try_term_equal(&left, &right, &mut grant);
+    let measured = window.close();
+    assert!(
+        grant.1,
+        "exercise the actual nested native parser box factory"
+    );
+    assert!(
+        matches!(answer, Err(StorageError::AllocationFailed)),
+        "child refund cannot turn physical parser failure into another cause"
+    );
+    assert_eq!(measured.retained_bytes, 0);
+    assert!(
+        grant.0.live > 0,
+        "original admission remains held after failed shrink"
+    );
+}

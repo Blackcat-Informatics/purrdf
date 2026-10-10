@@ -36,11 +36,12 @@
 
 use std::cell::RefCell;
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
-use std::collections::BinaryHeap;
 
 use purrdf_core::distance::{Arithmetic, Resolved};
 use purrdf_sparql_eval::knn::{Kernel, Ranked};
+use purrdf_sparql_eval::{
+    AdmittedHeap, AdmittedMap, AdmittedVec, WorkspaceAllocation, WorkspaceCapability,
+};
 
 use crate::error::{HnswError, Result};
 use crate::graph::{Graph, VectorMatrix};
@@ -50,15 +51,27 @@ use crate::graph::{Graph, VectorMatrix};
 pub(crate) struct Visited {
     stamps: Vec<u32>,
     generation: u32,
+    _allocation: Option<WorkspaceAllocation>,
 }
 
 impl Visited {
     /// Scratch sized for a graph of `nodes` rows.
     pub(crate) fn new(nodes: usize) -> Self {
-        Self {
-            stamps: vec![0; nodes],
+        Self::try_new(nodes, &WorkspaceCapability::resident())
+            .expect("resident HNSW visited storage")
+    }
+
+    /// Allocate the actual stamp array under this execution's ownership.
+    pub(crate) fn try_new(nodes: usize, workspace: &WorkspaceCapability) -> Result<Self> {
+        let mut stamps = Vec::new();
+        let mut allocation = None;
+        workspace.reserve_vec(&mut stamps, &mut allocation, nodes)?;
+        stamps.resize(nodes, 0);
+        Ok(Self {
+            stamps,
             generation: 0,
-        }
+            _allocation: allocation,
+        })
     }
 
     /// Start a fresh search, invalidating every prior stamp.
@@ -90,7 +103,7 @@ impl Visited {
 #[derive(Debug, Default)]
 struct CacheState {
     /// `row -> distance from this query`.
-    entries: BTreeMap<usize, f64>,
+    entries: AdmittedMap<usize, f64>,
     /// Kernel evaluations that actually ran, as opposed to cache hits.
     ///
     /// Incremented where the kernel is invoked and nowhere else, so it is exactly the
@@ -102,9 +115,9 @@ struct CacheState {
 
 /// A memoized `row -> distance` map owned by one query.
 ///
-/// A `BTreeMap` rather than a hash map: the key is an integer, the map is consulted in a hot
-/// loop, and a `BTreeMap` needs no hasher choice at all, which keeps the determinism argument
-/// free of "which `BuildHasher`" entirely.
+/// The fixed-key table is sparse and consulted only by row key. Iteration order
+/// never contributes to ranking, batch order or artifact bytes; its array owner
+/// uses the same admitted native table as the evaluator's parsed-value cache.
 ///
 /// The key is a single row, not a pair, because a query's own endpoint does not change while
 /// it is being answered. That also lets the query be a vector that is not in the matrix at
@@ -123,19 +136,31 @@ struct CacheState {
 #[derive(Debug, Default)]
 pub(crate) struct DistanceCache {
     state: RefCell<CacheState>,
+    workspace: WorkspaceCapability,
 }
 
 impl DistanceCache {
+    /// A fresh sparse memo belonging to the query's native account.
+    pub(crate) fn admitted(workspace: &WorkspaceCapability) -> Self {
+        Self {
+            state: RefCell::new(CacheState::default()),
+            workspace: workspace.clone(),
+        }
+    }
+
     /// A stored distance to `row`.
     fn get(&self, row: usize) -> Option<f64> {
         self.state.borrow().entries.get(&row).copied()
     }
 
     /// Record a distance and charge it as one evaluation.
-    fn insert(&self, row: usize, distance: f64) {
+    fn insert(&self, row: usize, distance: f64) -> Result<()> {
         let mut state = self.state.borrow_mut();
-        state.entries.insert(row, distance);
+        let _ = state
+            .entries
+            .insert_admitted(row, distance, &self.workspace)?;
         state.evaluations = state.evaluations.saturating_add(1);
+        Ok(())
     }
 
     /// The number of kernel evaluations performed through this cache.
@@ -180,6 +205,11 @@ enum Target<'a> {
 }
 
 impl<'a, A: Arithmetic> Query<'a, A> {
+    /// The capability every traversal buffer and cached distance shares.
+    pub(crate) fn workspace(&self) -> &WorkspaceCapability {
+        &self.cache.workspace
+    }
+
     /// Bind an arbitrary vector as the search's query.
     ///
     /// `vector` must have the matrix's dimension; the caller validates that once rather than
@@ -268,7 +298,7 @@ impl<'a, A: Arithmetic> Query<'a, A> {
             ),
         }
         .ok_or(HnswError::NonFiniteDistance { row })?;
-        self.cache.insert(row, distance);
+        self.cache.insert(row, distance)?;
         Ok(distance)
     }
 
@@ -287,7 +317,21 @@ impl<'a, A: Arithmetic> Query<'a, A> {
         rows: &[usize],
         scratch: &mut Scratch,
         out: &mut Vec<f64>,
+        out_allocation: &mut Option<WorkspaceAllocation>,
     ) -> Result<()> {
+        let workspace = self.workspace();
+        workspace.reserve_vec(out, out_allocation, rows.len())?;
+        let missing = rows
+            .iter()
+            .filter(|&&row| self.cache.get(row).is_none())
+            .count();
+        workspace.reserve_vec(
+            &mut scratch.missing_rows,
+            &mut scratch.rows_allocation,
+            missing,
+        )?;
+        workspace.reserve_vec(&mut scratch.missing_at, &mut scratch.at_allocation, missing)?;
+        workspace.reserve_vec(&mut scratch.scored, &mut scratch.scored_allocation, missing)?;
         out.clear();
         scratch.missing_rows.clear();
         scratch.missing_at.clear();
@@ -332,7 +376,7 @@ impl<'a, A: Arithmetic> Query<'a, A> {
             .zip(&scratch.scored)
         {
             let distance = scored.ok_or(HnswError::NonFiniteDistance { row })?;
-            self.cache.insert(row, distance);
+            self.cache.insert(row, distance)?;
             out[at] = distance;
         }
         Ok(())
@@ -355,6 +399,9 @@ pub(crate) struct Scratch {
     missing_at: Vec<usize>,
     /// The batch kernel's output for them.
     scored: Vec<Option<f64>>,
+    rows_allocation: Option<WorkspaceAllocation>,
+    at_allocation: Option<WorkspaceAllocation>,
+    scored_allocation: Option<WorkspaceAllocation>,
 }
 
 /// The L2 norm of `row`, or `0.0` for a kernel that does not divide by one.
@@ -380,6 +427,8 @@ pub(crate) fn greedy_descend<A: Arithmetic>(
         return Ok((current, current_distance));
     }
     let mut scratch = Scratch::default();
+    let mut rows_allocation = None;
+    let mut distances_allocation = None;
     let mut rows: Vec<usize> = Vec::new();
     let mut distances: Vec<f64> = Vec::new();
     for layer in (to_layer..=from_layer).rev() {
@@ -389,8 +438,17 @@ pub(crate) fn greedy_descend<A: Arithmetic>(
             // then compared in adjacency order exactly as a one-at-a-time climb would:
             // a distance does not depend on which node is current.
             rows.clear();
-            rows.extend(graph.neighbors(current, layer).iter().map(|n| n.row));
-            query.of_many(&rows, &mut scratch, &mut distances)?;
+            let neighbors = graph.neighbors(current, layer);
+            query
+                .workspace()
+                .reserve_vec(&mut rows, &mut rows_allocation, neighbors.len())?;
+            rows.extend(neighbors.iter().map(|n| n.row));
+            query.of_many(
+                &rows,
+                &mut scratch,
+                &mut distances,
+                &mut distances_allocation,
+            )?;
             for (&row, &distance) in rows.iter().zip(&distances) {
                 let candidate = Ranked { distance, row };
                 if candidate
@@ -425,9 +483,28 @@ pub(crate) fn search_layer<A: Arithmetic>(
     layer: u32,
     ef: usize,
 ) -> Result<Vec<Ranked>> {
+    crate::resident_ranked(search_layer_admitted(
+        graph,
+        query,
+        visited,
+        entry_points,
+        layer,
+        ef,
+    )?)
+}
+
+/// The same two-heap traversal retaining actual buffer admission through sorting.
+pub(crate) fn search_layer_admitted<A: Arithmetic>(
+    graph: &Graph,
+    query: &Query<'_, A>,
+    visited: &mut Visited,
+    entry_points: &[usize],
+    layer: u32,
+    ef: usize,
+) -> Result<AdmittedVec<Ranked>> {
     visited.begin();
-    let mut candidates: BinaryHeap<Reverse<Ranked>> = BinaryHeap::new();
-    let mut results: BinaryHeap<Ranked> = BinaryHeap::new();
+    let mut candidates: AdmittedHeap<Reverse<Ranked>> = AdmittedHeap::new(query.workspace());
+    let mut results: AdmittedHeap<Ranked> = AdmittedHeap::new(query.workspace());
 
     for &entry in entry_points {
         if !visited.visit(entry) {
@@ -437,14 +514,16 @@ pub(crate) fn search_layer<A: Arithmetic>(
             distance: query.of(entry)?,
             row: entry,
         };
-        candidates.push(Reverse(score));
-        results.push(score);
+        candidates.push(Reverse(score))?;
+        results.push(score)?;
         if results.len() > ef {
-            results.pop();
+            let _ = results.pop();
         }
     }
 
     let mut scratch = Scratch::default();
+    let mut fresh_allocation = None;
+    let mut distances_allocation = None;
     let mut fresh: Vec<usize> = Vec::new();
     let mut distances: Vec<f64> = Vec::new();
     while let Some(Reverse(current)) = candidates.pop() {
@@ -459,20 +538,33 @@ pub(crate) fn search_layer<A: Arithmetic>(
         // order: visiting does not depend on admission, and admission sees exactly the
         // beam a one-at-a-time expansion would have built up to that neighbour.
         fresh.clear();
-        for neighbor in graph.neighbors(current.row, layer) {
+        let neighbors = graph.neighbors(current.row, layer);
+        let unvisited = neighbors
+            .iter()
+            .filter(|neighbor| visited.stamps[neighbor.row] != visited.generation)
+            .count();
+        query
+            .workspace()
+            .reserve_vec(&mut fresh, &mut fresh_allocation, unvisited)?;
+        for neighbor in neighbors {
             if visited.visit(neighbor.row) {
                 fresh.push(neighbor.row);
             }
         }
-        query.of_many(&fresh, &mut scratch, &mut distances)?;
+        query.of_many(
+            &fresh,
+            &mut scratch,
+            &mut distances,
+            &mut distances_allocation,
+        )?;
         for (&row, &distance) in fresh.iter().zip(&distances) {
             let score = Ranked { distance, row };
             let admitted = results.len() < ef || results.peek().is_some_and(|worst| score < *worst);
             if admitted {
-                candidates.push(Reverse(score));
-                results.push(score);
+                candidates.push(Reverse(score))?;
+                results.push(score)?;
                 if results.len() > ef {
-                    results.pop();
+                    let _ = results.pop();
                 }
             }
         }

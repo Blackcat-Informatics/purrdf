@@ -11,7 +11,7 @@ use std::sync::Arc;
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_core::{
     DatasetView, SegmentedBytes, SegmentedError, SegmentedReadLimits, SegmentedReceipt,
-    SegmentedReceiptAuthority, SegmentedSession, SparqlResult, TermValue,
+    SegmentedReceiptAuthority, SegmentedSession, TermValue,
 };
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
 use wasm_bindgen::prelude::*;
@@ -71,7 +71,7 @@ fn qualify(source: Vec<u8>, encoded_receipt: &[u8], trusted_pin: &str) -> Result
     let answer = engine
         .query_prepared_fallible_view(&session, &prepared, &[], QueryOptions::EMPTY)
         .map_err(|error| error.to_string())?;
-    let SparqlResult::Solutions { rows, .. } = &answer.result else {
+    let Some((_, rows)) = answer.result.solutions() else {
         return Err("SELECT did not return solutions".to_owned());
     };
     if rows.len() != 1

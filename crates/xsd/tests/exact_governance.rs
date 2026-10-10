@@ -29,6 +29,179 @@ fn measured<T>(operation: impl FnOnce() -> T) -> (T, Measurement) {
     (result, window.close())
 }
 
+#[test]
+fn full_native_parser_preserves_all_value_families_and_original_heap_owners() {
+    use purrdf_lex::allocation::{Admission, Memory, StorageError};
+    use purrdf_xsd::value::{ParsedValue, try_parse_with_memory};
+    #[derive(Default)]
+    struct ParseAccount {
+        live: usize,
+        peak: usize,
+        limit: usize,
+    }
+    impl Admission for ParseAccount {
+        fn resize(&mut self, bytes: usize) -> Result<(), StorageError> {
+            if bytes > self.limit {
+                return Err(StorageError::AdmissionFailed);
+            }
+            self.live = bytes;
+            self.peak = self.peak.max(bytes);
+            Ok(())
+        }
+    }
+    use XsdDatatype as D;
+    let huge_integer = "7".repeat(4096);
+    let huge_decimal = format!("1.{}1", "0".repeat(4096));
+    let fixtures = [
+        (D::Integer, huge_integer.as_str()),
+        (D::Decimal, huge_decimal.as_str()),
+        (D::Long, "-9223372036854775808"),
+        (D::Int, "2147483647"),
+        (D::Short, "-32768"),
+        (D::Byte, "127"),
+        (D::UnsignedLong, "18446744073709551615"),
+        (D::UnsignedInt, "4294967295"),
+        (D::UnsignedShort, "65535"),
+        (D::UnsignedByte, "255"),
+        (D::NonNegativeInteger, "0"),
+        (D::PositiveInteger, "1"),
+        (D::NonPositiveInteger, "0"),
+        (D::NegativeInteger, "-1"),
+        (D::Float, "+INF"),
+        (D::Double, "-0.0"),
+        (D::Boolean, "true"),
+        (D::String, "é\ntext"),
+        (D::HexBinary, "00aF"),
+        (D::Base64Binary, " A P 8 = "),
+        (D::DateTime, "2024-02-29T12:34:56Z"),
+        (D::DateTimeStamp, "2024-02-29T12:34:56Z"),
+        (D::DateTimeStamp, "2024-02-29T12:34:56+05:30"),
+        (D::Date, "2024-02-29+05:30"),
+        (D::Time, "12:34:56-03:00"),
+        (D::Duration, "P1Y2M3DT4H5M6S"),
+        (D::DayTimeDuration, "-P2DT3H"),
+        (D::YearMonthDuration, "P2Y3M"),
+        (D::GYear, "2024Z"),
+        (D::GMonth, "--02Z"),
+        (D::GDay, "---29Z"),
+        (D::GYearMonth, "2024-02Z"),
+        (D::GMonthDay, "--02-29Z"),
+    ];
+    for (datatype, lexical) in fixtures {
+        let expected = purrdf_xsd::parse(lexical, datatype).unwrap();
+        let mut account = ParseAccount {
+            limit: 1_000_000,
+            ..Default::default()
+        };
+        let mut memory = Memory::new(&mut account);
+        let (parsed, measured) =
+            measured(|| try_parse_with_memory(lexical, datatype, false, &mut memory));
+        let ParsedValue::Value(value) = parsed.unwrap() else {
+            panic!("valid {datatype:?}");
+        };
+        assert_eq!(value.datatype(), expected.datatype());
+        assert_eq!(format!("{value:?}"), format!("{expected:?}"));
+        assert_eq!(value.canonical_lexical(), expected.canonical_lexical());
+        let live = memory.admitted_bytes();
+        assert_eq!(
+            usize::try_from(measured.retained_bytes).unwrap(),
+            live,
+            "{datatype:?}"
+        );
+        drop(value);
+        memory.release_bytes(live).unwrap();
+        assert_eq!(account.live, 0);
+        assert!(
+            usize::try_from(measured.peak_working_bytes).unwrap() <= account.peak,
+            "{datatype:?}"
+        );
+    }
+    for (datatype, lexical) in [
+        (D::Integer, "invalid"),
+        (D::Decimal, "invalid"),
+        (D::Boolean, "invalid"),
+        (D::HexBinary, "invalid"),
+        (D::Base64Binary, "invalid"),
+        (D::DateTime, "invalid"),
+        (D::DateTimeStamp, "2024-02-29T12:34:56"),
+        (D::DateTimeStamp, "2024-02-29T12:34:56+15:00"),
+    ] {
+        let mut account = ParseAccount::default();
+        let (answer, measured) = measured(|| {
+            try_parse_with_memory(lexical, datatype, false, &mut Memory::new(&mut account))
+        });
+        assert!(matches!(
+            answer,
+            Ok(ParsedValue::Invalid(Some(purrdf_xsd::ErrorCode::Forg0001)))
+        ));
+        assert_eq!(measured.allocations, 0);
+        assert_eq!(account.live, 0);
+    }
+    for (datatype, lexical) in [
+        (D::Integer, huge_integer.as_str()),
+        (D::Decimal, huge_decimal.as_str()),
+        (D::String, "owned"),
+        (D::HexBinary, "abcd"),
+    ] {
+        let mut account = ParseAccount::default();
+        let (answer, measured) = measured(|| {
+            try_parse_with_memory(lexical, datatype, false, &mut Memory::new(&mut account))
+        });
+        assert!(matches!(answer, Err(StorageError::AdmissionFailed)));
+        assert_eq!(measured.allocations, 0);
+        assert_eq!(account.live, 0);
+    }
+}
+
+#[test]
+fn admitted_operator_comparison_preserves_lossy_promotion_and_physical_refusal() {
+    use purrdf_xsd::bigint::LimbScratchError;
+    use purrdf_xsd::ops::{value_cmp_admitted, value_equal_admitted};
+    use std::cmp::Ordering;
+
+    let exact = big_decimal(format!("1.{}1", "0".repeat(2000)).parse().unwrap());
+    for promoted in [XsdValue::Float(1.0), XsdValue::Double(1.0)] {
+        let mut admitted_peak = 0;
+        let (answer, measurement) = measured(|| {
+            value_cmp_admitted(&exact, &promoted, &mut |layout| {
+                admitted_peak = admitted_peak.max(layout.required_bytes());
+                Ok(())
+            })
+        });
+        assert_eq!(answer.unwrap(), Some(Ordering::Equal));
+        assert!(
+            admitted_peak > 0,
+            "the native magnitude conversion allocated"
+        );
+        assert!(usize::try_from(measurement.peak_working_bytes).unwrap() <= admitted_peak);
+        assert_eq!(measurement.retained_bytes, 0);
+        assert_eq!(
+            numeric_total_cmp(&exact, &promoted),
+            Some(Ordering::Greater)
+        );
+        assert_eq!(
+            value_equal_admitted(&exact, &promoted, &mut |_| Ok(())).unwrap(),
+            Some(true)
+        );
+
+        let (failure, measurement) = measured(|| {
+            value_cmp_admitted(&exact, &promoted, &mut |layout| {
+                if layout.required_bytes() == 0 {
+                    Ok(())
+                } else {
+                    Err(LimbScratchError::AllocationFailed)
+                }
+            })
+        });
+        assert_eq!(failure, Err(LimbScratchError::AllocationFailed));
+        assert_eq!(
+            measurement.allocations, 0,
+            "refusal precedes the first native destination"
+        );
+        assert_eq!(measurement.retained_bytes, 0);
+    }
+}
+
 /// Hold one operation's measured peak and allocator traffic to its estimate.
 fn assert_bounded(what: &str, cost: Cost, measurement: Measurement) {
     let bound = i64::try_from(cost.bytes()).expect("a test-sized bound");
@@ -218,4 +391,199 @@ fn a_long_integer_converts_to_a_float_from_its_length() {
     let (double, measurement) = measured(|| near.to_f64());
     assert_eq!(double, 1e308);
     assert_bounded("10^308 to f64", cost, measurement);
+}
+
+/// A final exact scale-up is part of the quotient's actual retained storage.
+#[test]
+fn exact_division_positive_scale_gap_covers_retained_result() {
+    let divisor = Decimal::new(Integer::ONE, 10_000);
+    let cost = Decimal::ONE.div_cost(&divisor, DivisionPolicy::Exact);
+    let expected = format!("1{}", "0".repeat(10_000));
+    let (result, measurement) = measured(|| {
+        Decimal::ONE
+            .div(&divisor, DivisionPolicy::Exact)
+            .expect("a power-of-ten divisor terminates")
+    });
+    assert_eq!(result.scale(), 0);
+    assert!(result.heap_bytes() <= cost.bytes(), "{cost:?}");
+    assert_eq!(result.canonical_lexical(), expected);
+    assert_bounded("exact positive scale gap", cost, measurement);
+}
+
+/// (3*10^2000 + 1)/3 = 10^2000 + 1/3, rounded to two places.
+#[test]
+fn rounded_division_prices_a_long_scaled_dividend() {
+    let coefficient: Integer = format!("3{}1", "0".repeat(1_999))
+        .parse()
+        .expect("an integer");
+    let dividend = Decimal::from_integer(coefficient);
+    let divisor = Decimal::from_integer(Integer::from(3));
+    let policy = DivisionPolicy::scale(2, Rounding::HalfEven);
+    let cost = dividend.div_cost(&divisor, policy);
+    let expected = format!("1{}.33", "0".repeat(2_000));
+    let (result, measurement) =
+        measured(|| dividend.div(&divisor, policy).expect("a rounded quotient"));
+    assert_eq!(result.canonical_lexical(), expected);
+    assert!(result.heap_bytes() <= cost.bytes(), "{cost:?}");
+    // This measures the real native computation, including its temporary
+    // coefficients, rather than reconstructing the estimate's formula.
+    assert_bounded("long rounded dividend", cost, measurement);
+}
+
+/// 0.01/(3*10^2000 + 1) rounds to zero; its denominator still grows by 10^2.
+#[test]
+fn rounded_division_prices_a_long_scaled_divisor() {
+    let coefficient: Integer = format!("3{}1", "0".repeat(1_999))
+        .parse()
+        .expect("an integer");
+    let dividend = Decimal::new(Integer::ONE, 2);
+    let divisor = Decimal::from_integer(coefficient);
+    let policy = DivisionPolicy::scale(0, Rounding::HalfEven);
+    let cost = dividend.div_cost(&divisor, policy);
+    let (result, measurement) =
+        measured(|| dividend.div(&divisor, policy).expect("a rounded quotient"));
+    assert_eq!(result.canonical_lexical(), "0");
+    assert_bounded("long rounded divisor", cost, measurement);
+}
+#[test]
+fn temporal_native_values_and_deferred_refusals_allocate_no_heap() {
+    use purrdf_xsd::temporal::{TemporalReadError, read_temporal};
+    enum Expect {
+        Value(&'static str),
+        Invalid,
+        Range,
+    }
+    use Expect::{Invalid, Range, Value};
+    use XsdDatatype as D;
+
+    fn check(datatype: XsdDatatype, lexical: &str, expected: Expect) {
+        let (parsed, allocation) = measured(|| read_temporal(lexical, datatype));
+        assert_eq!(
+            allocation.requested_bytes, 0,
+            "{datatype:?}: native parser traffic"
+        );
+        assert_eq!(
+            allocation.peak_working_bytes, 0,
+            "{datatype:?}: native parser peak"
+        );
+        let parsed = parsed.expect("supported temporal datatype");
+        match (parsed, expected) {
+            (Ok(value), Value(canonical)) => assert_eq!(value.canonical_lexical(), canonical),
+            (Err(TemporalReadError::Invalid { .. }), Invalid)
+            | (Err(TemporalReadError::OutOfRange { .. }), Range) => {}
+            (actual, _) => panic!("unexpected temporal outcome: {actual:?}"),
+        }
+    }
+
+    for (datatype, lexical, expected) in [
+        (
+            D::DateTime,
+            "2026-01-01T00:00:00Z",
+            Value("2026-01-01T00:00:00Z"),
+        ),
+        (D::Date, "2026-01-01+05:30", Value("2026-01-01+05:30")),
+        (D::Time, "00:00:00Z", Value("00:00:00Z")),
+        (D::Duration, "P1Y2M3DT4H5M6.5S", Value("P1Y2M3DT4H5M6.5S")),
+        (D::YearMonthDuration, "P1Y", Value("P1Y")),
+        (D::DayTimeDuration, "PT0S", Value("PT0S")),
+        (D::GYear, "2026Z", Value("2026Z")),
+        (D::GMonth, "--02Z", Value("--02Z")),
+        (D::GDay, "---29Z", Value("---29Z")),
+        (D::GYearMonth, "2026-02Z", Value("2026-02Z")),
+        (D::GMonthDay, "--02-29Z", Value("--02-29Z")),
+        (D::Time, "00:00:00+14:01", Invalid),
+        (D::DateTime, "2026-02-30T00:00:00Z", Invalid),
+        (D::YearMonthDuration, "P1Y1D", Invalid),
+        (D::Time, "00:00:00.", Invalid),
+    ] {
+        check(datatype, lexical, expected);
+    }
+
+    // Construct hostile authored input outside each measured execution window.
+    let zeros = "0".repeat(8192);
+    check(D::Time, &format!("00:00:00.{zeros}Z"), Value("00:00:00Z"));
+    check(D::Time, &format!("00:00:00.{zeros}1Z"), Range);
+    // A deferred range refusal cannot hide a later lexical failure.
+    check(D::Time, &format!("25:00:00.{zeros}1Z"), Invalid);
+    let wide_year = "9".repeat(8192);
+    check(D::Date, &format!("{wide_year}-01-01"), Range);
+    check(D::Date, &format!("{wide_year}-02-30"), Invalid);
+    check(D::Duration, &format!("P{wide_year}Y"), Range);
+    check(D::Duration, &format!("P{wide_year}YQ"), Invalid);
+}
+#[test]
+fn inline_ieee_text_preserves_extreme_values_without_heap_traffic() {
+    use purrdf_xsd::numeric::{canonical_double_text, canonical_float_text};
+    let doubles = [
+        (0.0, "0.0E0"),
+        (-0.0, "-0.0E0"),
+        (1.0, "1.0E0"),
+        (-1.5, "-1.5E0"),
+        (f64::MAX, "1.7976931348623157E308"),
+        (f64::MIN_POSITIVE, "2.2250738585072014E-308"),
+        (f64::from_bits(1), "5.0E-324"),
+        (-f64::from_bits(1), "-5.0E-324"),
+        (f64::INFINITY, "INF"),
+        (f64::NEG_INFINITY, "-INF"),
+        (f64::NAN, "NaN"),
+    ];
+    for (value, expected) in doubles {
+        let (text, allocation) = measured(|| canonical_double_text(value));
+        assert_eq!(text.as_str(), expected);
+        assert_eq!(text.len(), expected.len());
+        assert_eq!(allocation.requested_bytes, 0);
+        assert_eq!(allocation.peak_working_bytes, 0);
+    }
+    let singles = [
+        (0.0_f32, "0.0E0"),
+        (-0.0_f32, "-0.0E0"),
+        (1.234_567_8_f32, "1.2345678E0"),
+        (f32::MAX, "3.4028235E38"),
+        (f32::MIN_POSITIVE, "1.1754944E-38"),
+        (f32::from_bits(1), "1.0E-45"),
+        (f32::INFINITY, "INF"),
+        (f32::NEG_INFINITY, "-INF"),
+        (f32::NAN, "NaN"),
+    ];
+    for (value, expected) in singles {
+        let (text, allocation) = measured(|| canonical_float_text(value));
+        assert_eq!(text.as_str(), expected);
+        assert_eq!(text.len(), expected.len());
+        assert_eq!(allocation.requested_bytes, 0);
+        assert_eq!(allocation.peak_working_bytes, 0);
+    }
+}
+
+#[test]
+fn inline_ieee_append_refuses_before_mutation_and_never_grows() {
+    use purrdf_xsd::numeric::{NumericRenderError, canonical_double_text};
+    let text = canonical_double_text(f64::MAX);
+    let mut output = String::with_capacity(text.len() + 3);
+    output.push_str("rdf");
+    let capacity = output.capacity();
+    let (result, allocation) = measured(|| text.write_to(&mut output));
+    result.expect("the admitted destination fits the full lexical");
+    assert_eq!(output, "rdf1.7976931348623157E308");
+    assert_eq!(output.capacity(), capacity);
+    assert_eq!(allocation.requested_bytes, 0);
+
+    // Make free capacity smaller than the lexical regardless of any allocator
+    // over-allocation. Setup occurs outside the measured native operation.
+    output.clear();
+    while output.len() < output.capacity() {
+        output.push('x');
+    }
+    let before = output.clone();
+    let (result, allocation) = measured(|| text.write_to(&mut output));
+    assert_eq!(
+        result,
+        Err(NumericRenderError::DestinationTooSmall {
+            required_bytes: text.len(),
+            available_bytes: 0,
+        })
+    );
+    assert_eq!(output, before);
+    assert_eq!(output.capacity(), capacity);
+    assert_eq!(allocation.requested_bytes, 0);
+    assert_eq!(allocation.peak_working_bytes, 0);
 }

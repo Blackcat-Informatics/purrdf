@@ -443,7 +443,7 @@ fn construct_data_document(
         ));
     };
     let bytes =
-        serialize_dataset(&graph, &construct.format, SerializeGraph::Dataset).map_err(|e| {
+        serialize_dataset(&*graph, &construct.format, SerializeGraph::Dataset).map_err(|e| {
             format!(
                 "serialize the {} result graph as {}: {e}",
                 construct.query.display(),

@@ -27,10 +27,62 @@ use crate::ir::{QuadIds, QuadProbePlan, QuadRef, RdfDataset, TermId, TermRef, Te
 /// Lock internal operational read state, preserving its invariants after a
 /// poison marker. Host callbacks never execute under these state locks; failed
 /// admissions retain conservative charges and the typed sticky source error.
-pub(crate) fn lock_read_state<T>(state: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+pub fn lock_read_state<T>(state: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     state
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The sole typed leaf-conversion body. The storage factory determines physical
+/// ownership; view resolution and lexical/type semantics remain shared.
+fn owned_term_leaf<D: DatasetView + ?Sized, C: ?Sized, E>(
+    view: &D,
+    term: TermRef<'_, D::Id>,
+    ctx: &mut C,
+    mut text: impl FnMut(&mut C, &str) -> Result<String, E>,
+    lookup_error: impl Fn(TermLookupError<D::ReadError>) -> E,
+) -> Result<TermValue, E> {
+    Ok(match term {
+        TermRef::Iri(iri) => TermValue::Iri(text(ctx, iri)?),
+        TermRef::Blank { label, scope } => TermValue::Blank {
+            label: text(ctx, label)?,
+            scope,
+        },
+        TermRef::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => {
+            let guard = view
+                .resolve(datatype)
+                .map_err(|error| lookup_error(TermLookupError::Read(error)))?;
+            let TermRef::Iri(datatype) = guard.term() else {
+                return Err(lookup_error(TermLookupError::ForeignId));
+            };
+            TermValue::Literal {
+                lexical_form: text(ctx, lexical)?,
+                datatype: text(ctx, datatype)?,
+                language: language.map(|language| text(ctx, language)).transpose()?,
+                direction,
+            }
+        }
+        TermRef::Triple { .. } => unreachable!("a triple term is assembled from its components"),
+    })
+}
+
+/// One original component assembly; each concrete box factory admits before birth.
+fn owned_term_triple<E>(
+    s: TermValue,
+    p: TermValue,
+    o: TermValue,
+    mut boxed: impl FnMut(TermValue) -> Result<crate::ir::TermBox, E>,
+) -> Result<TermValue, E> {
+    Ok(TermValue::Triple {
+        s: boxed(s)?,
+        p: boxed(p)?,
+        o: boxed(o)?,
+    })
 }
 
 mod sealed {
@@ -121,6 +173,10 @@ pub trait WorkspaceReservation {
     /// Refuses a requested growth before it can exceed the live session ceiling.
     fn resize(&mut self, bytes: u64) -> Result<(), Self::Error>;
 }
+
+/// An independently owned live-capacity account. The erased guard is a resource
+/// capability, not an erased dataset: dataset reads remain statically dispatched.
+pub type OwnedWorkspaceReservation<E> = Box<dyn WorkspaceReservation<Error = E> + Send + Sync>;
 
 /// Zero-sized resident reservation; no heap owner, lock or accounting operation.
 #[derive(Debug)]
@@ -504,6 +560,29 @@ pub trait DatasetView {
         Ok(NoopReservation::<Self::ReadError>::default())
     }
 
+    /// Admit capacity whose allocations may outlive this borrowed read view.
+    ///
+    /// Unlike [`Self::reserve_workspace`], this capability owns its backing
+    /// account. A bounded adapter must provide it to publish retained query
+    /// output. `None` means the adapter provides scoped admission only; callers
+    /// must refuse retained execution rather than extend a borrowed guard's
+    /// lifetime or silently replace it with resident accounting.
+    ///
+    /// The factory must admit its own concrete control allocation before
+    /// constructing it. That provider-owned fixed charge survives every payload
+    /// resize, including `resize(0)`, and is released only when the final owned
+    /// reservation is dropped. The engine separately admits the layouts of its
+    /// own accounts and payloads; it cannot price an erased provider's box.
+    ///
+    /// # Errors
+    /// A present capability can refuse capacity with the exact operational cause.
+    fn reserve_owned_workspace(
+        &self,
+        _: u64,
+    ) -> Option<Result<OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        None
+    }
+
     /// A certified upper bound for fully expanded owned term allocation, including
     /// nested triples and their string/box payloads. `None` makes no bounded claim.
     fn max_owned_term_bytes(&self) -> Option<u64> {
@@ -637,46 +716,98 @@ pub trait DatasetView {
     /// operation reserves their certified footprint before calling this method and
     /// retains that reservation until those values are released.
     fn term_value(&self, id: Self::Id) -> Result<TermValue, TermLookupError<Self::ReadError>> {
-        crate::ir::try_fold_term(
+        self.term_value_with_storage(
+            id,
+            |error| error,
+            |error| panic!("resident term value allocation: {error}"),
+        )
+    }
+
+    /// Resolve the same owned term using fallible strings, boxes and working buffers.
+    /// The caller admits the certified payload and fold capacities before invocation
+    /// and retains its original payload admission until the returned value dies.
+    ///
+    /// # Errors
+    /// Preserves malformed-id and backing failures through `lookup_error`, and
+    /// returns actual allocator refusal separately through `storage_error`.
+    fn term_value_with_storage<E>(
+        &self,
+        id: Self::Id,
+        lookup_error: impl Fn(TermLookupError<Self::ReadError>) -> E,
+        storage_error: impl Fn(std::collections::TryReserveError) -> E,
+    ) -> Result<TermValue, E> {
+        crate::ir::try_fold_term_with_storage(
             self,
             id,
             |_, term| {
-                Ok(match term {
-                    TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-                    TermRef::Blank { label, scope } => TermValue::Blank {
-                        label: label.to_owned(),
-                        scope,
-                    },
-                    TermRef::Literal {
-                        lexical,
-                        datatype,
-                        language,
-                        direction,
-                    } => {
-                        let guard = self.resolve(datatype).map_err(TermLookupError::Read)?;
-                        let TermRef::Iri(datatype) = guard.term() else {
-                            return Err(TermLookupError::ForeignId);
-                        };
-                        TermValue::Literal {
-                            lexical_form: lexical.to_owned(),
-                            datatype: datatype.to_owned(),
-                            language: language.map(str::to_owned),
-                            direction,
-                        }
-                    }
-                    TermRef::Triple { .. } => {
-                        unreachable!("a triple term is assembled from its components")
-                    }
-                })
+                owned_term_leaf(
+                    self,
+                    term,
+                    &mut (),
+                    |(), source| crate::ir::try_owned_text(source).map_err(&storage_error),
+                    &lookup_error,
+                )
             },
             |_, s, p, o| {
-                Ok(TermValue::Triple {
-                    s: crate::TermBox::new(s),
-                    p: crate::TermBox::new(p),
-                    o: crate::TermBox::new(o),
+                owned_term_triple(s, p, o, |value| {
+                    crate::small::try_boxed(value)
+                        .map(Into::into)
+                        .map_err(&storage_error)
                 })
             },
-            TermLookupError::Read,
+            |error| lookup_error(TermLookupError::Read(error)),
+            &storage_error,
+        )
+    }
+
+    /// Resolve the same original owned term under actual native live-capacity admission.
+    ///
+    /// Every copied string, child box and fold buffer is admitted before its
+    /// fallible construction. Construction scratch dies before its grant is
+    /// released. The caller retains this memory's surviving original payload
+    /// grant with the returned value; no whole-view maximum is required.
+    ///
+    /// # Errors
+    /// Preserves malformed-id and backing failures through `lookup_error`, and
+    /// checked layout/admission/allocator failure through `storage_error`. A failed
+    /// copy destroys all partial children before releasing its original delta.
+    fn term_value_with_memory<S: purrdf_lex::allocation::Admission + ?Sized, E>(
+        &self,
+        id: Self::Id,
+        memory: &mut purrdf_lex::allocation::Memory<'_, S>,
+        lookup_error: impl Fn(TermLookupError<Self::ReadError>) -> E,
+        storage_error: impl Fn(
+            purrdf_lex::allocation::StorageError,
+            &mut purrdf_lex::allocation::Memory<'_, S>,
+        ) -> E,
+    ) -> Result<TermValue, E> {
+        crate::ir::try_fold_term_with_memory(
+            self,
+            id,
+            |_, term, memory| {
+                owned_term_leaf(
+                    self,
+                    term,
+                    memory,
+                    |memory, source| {
+                        memory
+                            .string(source)
+                            .map_err(|error| storage_error(error, memory))
+                    },
+                    &lookup_error,
+                )
+            },
+            |_, s, p, o, memory| {
+                owned_term_triple(s, p, o, |value| {
+                    memory
+                        .boxed(value)
+                        .map(Into::into)
+                        .map_err(|error| storage_error(error, memory))
+                })
+            },
+            |error| lookup_error(TermLookupError::Read(error)),
+            &storage_error,
+            memory,
         )
     }
 
@@ -793,6 +924,42 @@ pub trait DatasetView {
     ) -> u64 {
         self.quads_for_pattern(s, p, o, g).fold(0_u64, |count, _| {
             count.checked_add(1).expect("quad count fits logical width")
+        })
+    }
+
+    /// Certified upper bound for the complete ordinary/reifier/annotation BGP
+    /// candidate stream. Unlike cost ranking, this must never underestimate.
+    /// `None` reports checked count overflow. The default counts the actual
+    /// three streams without materializing rows; indexed adapters can override
+    /// it with equally complete checked metadata.
+    ///
+    /// # Errors
+    /// Preserves the first operational failure of the complete counting drain.
+    fn workspace_candidate_bound(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> Result<Option<u64>, Self::ReadError> {
+        self.checked_read(|view| {
+            let mut count = Some(0_u64);
+            let mut add = |_: QuadIds<Self::Id>| {
+                count = count.and_then(|n| n.checked_add(1));
+            };
+            view.quads_for_pattern(s, p, o, g).for_each(&mut add);
+            let matches = |quad: &QuadIds<Self::Id>| {
+                s.is_none_or(|s| quad.s == s)
+                    && p.is_none_or(|p| quad.p == p)
+                    && o.is_none_or(|o| quad.o == o)
+            };
+            view.reifier_quads_in_graph(g)
+                .filter(matches)
+                .for_each(&mut add);
+            view.annotation_quads_in_graph(g)
+                .filter(matches)
+                .for_each(&mut add);
+            count
         })
     }
 
@@ -1607,6 +1774,12 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     fn max_owned_term_bytes(&self) -> Option<u64> {
         (**self).max_owned_term_bytes()
     }
+    fn reserve_owned_workspace(
+        &self,
+        bytes: u64,
+    ) -> Option<Result<OwnedWorkspaceReservation<Self::ReadError>, Self::ReadError>> {
+        (**self).reserve_owned_workspace(bytes)
+    }
     fn storage_live_budget(&self) -> Option<u64> {
         (**self).storage_live_budget()
     }
@@ -1699,6 +1872,16 @@ impl<T: DatasetView> DatasetView for Arc<T> {
         g: GraphMatch<Self::Id>,
     ) -> u64 {
         (**self).cardinality_estimate(s, p, o, g)
+    }
+
+    fn workspace_candidate_bound(
+        &self,
+        s: Option<Self::Id>,
+        p: Option<Self::Id>,
+        o: Option<Self::Id>,
+        g: GraphMatch<Self::Id>,
+    ) -> Result<Option<u64>, Self::ReadError> {
+        (**self).workspace_candidate_bound(s, p, o, g)
     }
 
     #[inline]

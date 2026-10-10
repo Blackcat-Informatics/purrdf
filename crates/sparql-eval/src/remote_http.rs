@@ -126,6 +126,279 @@ pub struct HttpRequest<'a> {
 pub trait HttpTransport {
     /// POST `request.query_text` to `request.endpoint` and return the response body.
     fn post(&self, request: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError>;
+    /// Certified peak live bytes for an opaque host exchange, including body
+    /// and dynamic error storage. Native `post_admitted` overrides need no bound.
+    fn workspace_certificate(
+        &self,
+        _request: HttpRequest<'_>,
+    ) -> Option<crate::remote::ServiceWorkspaceCertificate> {
+        None
+    }
+    /// The native/certified body door used by bounded SERVICE production.
+    /// # Errors
+    /// Refuses an unpriced opaque exchange before calling it.
+    fn post_admitted(
+        &self,
+        request: HttpRequest<'_>,
+        workspace: crate::WorkspaceCapability,
+    ) -> Result<AdmittedHttpBody, crate::remote::ServiceResolutionError> {
+        use crate::remote::{AdmittedRemoteError, ServiceResolutionError};
+        let grant = if workspace.is_bounded() {
+            let certificate = self
+                .workspace_certificate(request)
+                .ok_or(crate::EvalError::WorkspaceUnpriced("opaque HTTP transport"))?;
+            Some(workspace.charge(certificate.peak_bytes)?)
+        } else {
+            None
+        };
+        match self.post(request) {
+            Ok(body) => Ok(AdmittedHttpBody {
+                body,
+                storage: match grant {
+                    Some(grant) => HttpStorage::Certified(grant),
+                    None => HttpStorage::Native(crate::workspace::LexicalFrame::new(&workspace)),
+                },
+            }),
+            Err(error) => Err(ServiceResolutionError::Invocation(match grant {
+                Some(grant) => AdmittedRemoteError::certified(error, grant, &workspace)?,
+                None => AdmittedRemoteError::native(
+                    error,
+                    crate::workspace::LexicalFrame::new(&workspace),
+                )?,
+            })),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum HttpStorage {
+    Native(crate::workspace::LexicalFrame),
+    Certified(crate::WorkspaceAllocation),
+}
+
+/// Immutable response bytes retaining the transport's original allocation grant.
+#[derive(Debug)]
+pub struct AdmittedHttpBody {
+    body: Vec<u8>,
+    storage: HttpStorage,
+}
+impl AdmittedHttpBody {
+    /// Borrow the original bytes while their grant remains live.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.body
+    }
+    /// Move a resident body out while refusing to detach any bounded grant.
+    /// # Errors
+    /// Returns the intact original carrier when its producer is bounded.
+    #[expect(
+        clippy::result_large_err,
+        reason = "bounded refusal returns the original bytes and their original grant inline, with no allocation after the extraction was refused"
+    )]
+    pub fn try_into_resident(self) -> Result<Vec<u8>, Self> {
+        let bounded = match &self.storage {
+            HttpStorage::Native(frame) => frame.workspace().is_bounded(),
+            HttpStorage::Certified(grant) => grant.is_bounded(),
+        };
+        if bounded { Err(self) } else { Ok(self.body) }
+    }
+    /// Construct transport buffers through their original native allocation owner.
+    /// All fresh buffers and dynamic errors must use `memory` or an independent
+    /// admitted owner. Input configuration owned by the caller is borrowed.
+    /// # Errors
+    /// Preserves the first physical refusal or retained invocation failure.
+    pub fn try_build(
+        workspace: &crate::WorkspaceCapability,
+        build: impl FnOnce(
+            &mut purrdf_lex::allocation::Memory<'_, dyn purrdf_lex::allocation::Admission>,
+        ) -> Result<Vec<u8>, crate::remote::ServiceBuildError>,
+    ) -> Result<Self, crate::remote::ServiceResolutionError> {
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let result = {
+            let admission: &mut dyn purrdf_lex::allocation::Admission = &mut frame;
+            build(&mut purrdf_lex::allocation::Memory::new(admission))
+        };
+        if let Some(error) = frame.take_failure() {
+            return Err(error.into());
+        }
+        match result {
+            Ok(body) => Ok(Self {
+                body,
+                storage: HttpStorage::Native(frame),
+            }),
+            Err(error) => Err(crate::remote::build_error(error, frame)),
+        }
+    }
+}
+
+impl<T: HttpTransport> HttpRemoteQuerySource<T> {
+    fn resolve_native(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<crate::remote::AdmittedResolvedBindings, crate::remote::ServiceResolutionError>
+    {
+        use crate::remote::{
+            AdmittedRemoteError, AdmittedResolvedBindings, ServiceResolutionError,
+        };
+        use purrdf_lex::allocation::Memory;
+        if let Some(trip) = request.stop_trip() {
+            return Err(crate::remote::invocation_error(trip, workspace)?);
+        }
+        let ServiceRequest {
+            endpoint,
+            query_text,
+            stop,
+            max_intermediate_cells,
+            ..
+        } = request;
+        struct Headers {
+            values: Vec<(String, String)>,
+            _frame: crate::workspace::LexicalFrame,
+        }
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let profile = {
+            let mut memory = Memory::new(&mut frame);
+            match &self.catalog {
+                Some(catalog) => catalog
+                    .authorize_with_memory(
+                        endpoint,
+                        ServiceCapabilities::granting([
+                            ServiceCapability::Query,
+                            ServiceCapability::Network,
+                        ]),
+                        &mut memory,
+                    )
+                    .map(Some),
+                None => Ok(None),
+            }
+        };
+        let profile = match profile {
+            Ok(profile) => profile,
+            Err(error) => return Err(crate::remote::build_error(error, frame)),
+        };
+        let headers = {
+            let live = frame.admitted_bytes();
+            let mut memory = Memory::resume(&mut frame, live);
+            match profile {
+                Some(profile) => {
+                    profile
+                        .request_headers_with_memory(&mut memory)
+                        .map_err(|error| {
+                            memory
+                                .admission_mut()
+                                .storage_error(error, "SERVICE HTTP headers")
+                        })?
+                }
+                None => Vec::new(),
+            }
+        };
+        let headers = Headers {
+            values: headers,
+            _frame: frame,
+        };
+        let body = self.transport.post_admitted(
+            HttpRequest {
+                endpoint,
+                query_text,
+                user_agent: profile
+                    .and_then(ServiceProfile::user_agent)
+                    .unwrap_or(&self.user_agent),
+                timeout: profile
+                    .and_then(ServiceProfile::timeout)
+                    .unwrap_or(self.timeout),
+                content_type: "application/sparql-query",
+                accept: "application/sparql-results+json",
+                headers: &headers.values,
+                stop: stop.map(|signal| &**signal),
+            },
+            workspace.clone(),
+        )?;
+        if let Some(cause) = stop.and_then(|signal| signal.poll()) {
+            return Err(crate::remote::invocation_error(
+                RemoteError::GovernedAfterCompletion(TrippedGovernor::Stopped { cause }),
+                workspace,
+            )?);
+        }
+        // Decode under its ORIGINAL producer frame, holding the original HTTP
+        // body and request headers until every decoder-owned value has settled.
+        let mut frame = crate::workspace::LexicalFrame::new(workspace);
+        let parsed = {
+            let mut memory = Memory::new(&mut frame);
+            purrdf_sparql_results::from_json_with_memory(
+                body.bytes(),
+                max_intermediate_cells,
+                &mut memory,
+            )
+        };
+        let parsed = match parsed {
+            Ok(parsed) => parsed,
+            Err(purrdf_sparql_results::ReadError::Storage(error)) => {
+                return Err(ServiceResolutionError::Operational(
+                    frame.storage_error(error, "SERVICE results JSON"),
+                ));
+            }
+            Err(purrdf_sparql_results::ReadError::Lexical(error)) => {
+                let live = frame.admitted_bytes();
+                let text = Memory::resume(&mut frame, live)
+                    .format(&format_args!(
+                        "SPARQL-results JSON from <{endpoint}>: {error}"
+                    ))
+                    .map_err(|error| frame.storage_error(error, "SERVICE JSON diagnostic"))?;
+                drop(error);
+                // Decoder error scratch has died; a conservative original
+                // grant remains until the retained invocation diagnostic dies.
+                return Err(ServiceResolutionError::Invocation(
+                    AdmittedRemoteError::native(RemoteError::Decode(text), frame)?,
+                ));
+            }
+        };
+        let attempted = if parsed.truncated {
+            let rows = u64::try_from(parsed.solutions.rows.len())
+                .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
+            let columns = u64::try_from(parsed.solutions.variables.len().max(1))
+                .map_err(|_| crate::EvalError::WorkspaceBoundOverflow)?;
+            Some(
+                rows.checked_add(1)
+                    .and_then(|rows| rows.checked_mul(columns))
+                    .ok_or(crate::EvalError::WorkspaceBoundOverflow)?,
+            )
+        } else {
+            None
+        };
+        let live = frame.admitted_bytes();
+        let bindings = {
+            let mut memory = Memory::resume(&mut frame, live);
+            let mut variables = Vec::new();
+            for name in &parsed.solutions.variables {
+                let name = workspace.authored_text(name)?;
+                memory
+                    .push(&mut variables, Variable::from_admitted(name))
+                    .map_err(|error| {
+                        memory
+                            .admission_mut()
+                            .storage_error(error, "SERVICE result variables")
+                    })?;
+            }
+            for name in parsed.solutions.variables {
+                memory.release_string(name).map_err(|error| {
+                    memory
+                        .admission_mut()
+                        .storage_error(error, "SERVICE decoded variable release")
+                })?;
+            }
+            // The original outer variable-vector capacity remains conservatively
+            // charged until this response is destroyed. No census fee occurs.
+            ResolvedBindings {
+                variables,
+                rows: parsed.solutions.rows,
+                cell_limit_exceeded_at: attempted,
+            }
+        };
+        Ok(AdmittedResolvedBindings::from_native(
+            bindings, frame, workspace,
+        ))
+    }
 }
 
 impl<F> HttpTransport for F
@@ -197,6 +470,7 @@ impl<T> ServiceResolver for HttpRemoteQuerySource<T>
 where
     T: HttpTransport,
 {
+    crate::remote::resident_service_resolve!(
     /// # The signal is polled before the transport is touched
     ///
     /// An already-expired deadline **prevents** the request: the poll below happens before
@@ -210,76 +484,14 @@ where
     /// [`HttpTransport::post`], so a service denied [`ServiceCapability::Network`] does
     /// not have its socket opened and then discarded — the transport is never reached at
     /// all. That ordering is the entire difference between a policy and an audit log.
-    fn resolve(&self, request: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
-        if let Some(trip) = request.stop_trip() {
-            return Err(trip);
-        }
-        let ServiceRequest {
-            endpoint,
-            query_text,
-            stop,
-            max_intermediate_cells,
-            ..
-        } = request;
-        let profile = match &self.catalog {
-            Some(catalog) => Some(catalog.authorize(
-                endpoint,
-                ServiceCapabilities::granting([
-                    ServiceCapability::Query,
-                    ServiceCapability::Network,
-                ]),
-            )?),
-            None => None,
-        };
-        let headers = profile.map_or_else(Vec::new, ServiceProfile::request_headers);
-        let body = self.transport.post(HttpRequest {
-            endpoint,
-            query_text,
-            user_agent: profile
-                .and_then(ServiceProfile::user_agent)
-                .unwrap_or(&self.user_agent),
-            timeout: profile
-                .and_then(ServiceProfile::timeout)
-                .unwrap_or(self.timeout),
-            content_type: "application/sparql-query",
-            accept: "application/sparql-results+json",
-            headers: &headers,
-            stop: stop.map(|signal| &**signal),
-        })?;
-
-        // A transport may be unable to abandon an in-flight exchange. Poll immediately
-        // after it returns and before decoding or allocating bindings, then preserve the
-        // fact that a completed response was discarded so the evaluator can withdraw the
-        // positional-prefix claim.
-        if let Some(cause) = stop.and_then(|signal| signal.poll()) {
-            return Err(RemoteError::GovernedAfterCompletion(
-                TrippedGovernor::Stopped { cause },
-            ));
-        }
-
-        let (parsed, cell_limit_exceeded_at) = if let Some(max_cells) = max_intermediate_cells {
-            let bounded =
-                purrdf_sparql_results::from_json_bounded(&body, max_cells).map_err(|e| {
-                    RemoteError::Decode(format!("SPARQL-results JSON from <{endpoint}>: {e}"))
-                })?;
-            let attempted = bounded.truncated.then(|| {
-                (bounded.solutions.rows.len() as u64)
-                    .saturating_add(1)
-                    .saturating_mul((bounded.solutions.variables.len() as u64).max(1))
-            });
-            (bounded.solutions, attempted)
-        } else {
-            let parsed = purrdf_sparql_results::from_json(&body).map_err(|e| {
-                RemoteError::Decode(format!("SPARQL-results JSON from <{endpoint}>: {e}"))
-            })?;
-            (parsed, None)
-        };
-
-        Ok(ResolvedBindings {
-            variables: parsed.variables.into_iter().map(Variable::new).collect(),
-            rows: parsed.rows,
-            cell_limit_exceeded_at,
-        })
+    );
+    fn resolve_admitted(
+        &self,
+        request: ServiceRequest<'_>,
+        workspace: crate::WorkspaceCapability,
+    ) -> Result<crate::remote::AdmittedResolvedBindings, crate::remote::ServiceResolutionError>
+    {
+        self.resolve_native(request, &workspace)
     }
 }
 

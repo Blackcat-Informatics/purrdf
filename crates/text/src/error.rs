@@ -19,6 +19,10 @@
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum TextError {
+    /// Native query workspace refusal, without allocating a diagnostic.
+    Capacity(crate::query_workspace::CapacityFailure),
+    /// Immutable native query diagnostic retaining its allocation admission.
+    Diagnostic(purrdf_sparql_eval::NativeDiagnostic),
     /// Exact substring admission or resource refusal, with generation and counters.
     Substring(crate::surface::SubstringRefusal),
     /// Explicit phonetic-domain or pronunciation refusal.
@@ -84,6 +88,8 @@ purrdf_lex::constructors! {
 impl core::fmt::Display for TextError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Capacity(failure) => core::fmt::Display::fmt(failure, f),
+            Self::Diagnostic(diagnostic) => core::fmt::Display::fmt(diagnostic, f),
             Self::Substring(refusal) => core::fmt::Display::fmt(refusal, f),
             Self::Phonetic(refusal) => core::fmt::Display::fmt(refusal, f),
             Self::Html(diagnostics) => write!(f, "HTML reference errors: {diagnostics:?}"),
@@ -123,6 +129,8 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
     ///   dataset, so neither borrows those labels.
     fn from(err: TextError) -> Self {
         match err {
+            TextError::Capacity(failure) => failure.into_eval(),
+            TextError::Diagnostic(diagnostic) => Self::NativeDiagnostic(diagnostic),
             TextError::Substring(refusal) => Self::data(refusal.to_string()),
             TextError::Phonetic(refusal) => Self::data(refusal.to_string()),
             TextError::Html(diagnostics) => {
@@ -180,7 +188,11 @@ mod tests {
         ] {
             let rendered = err.to_string();
             let detail = match &err {
-                TextError::Html(_) | TextError::Substring(_) | TextError::Phonetic(_) => {
+                TextError::Html(_)
+                | TextError::Substring(_)
+                | TextError::Phonetic(_)
+                | TextError::Capacity(_)
+                | TextError::Diagnostic(_) => {
                     unreachable!("test uses string diagnostic variants")
                 }
                 TextError::Config(m)

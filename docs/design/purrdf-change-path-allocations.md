@@ -61,9 +61,9 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 | surface | allocations per focus node |
 |---|---:|
 | `sh:sparql` constraint | 40 |
-| custom `sh:ask` component | 78 |
+| custom `sh:ask` component | 77 |
 | custom `sh:select` component | 48 |
-| `sh:expression` function call | 85 |
+| `sh:expression` function call | 79 |
 
 That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
 the lane an incremental host with a budget runs, reached through
@@ -74,12 +74,19 @@ delta-backed view whose pattern probe is type-erased:
 
 | surface | allocations per focus node, governed |
 |---|---:|
-| `sh:sparql` constraint, governed | 58 |
-| custom `sh:ask` component, governed | 98 |
-| custom `sh:select` component, governed | 66 |
-| `sh:expression` function call, governed | 110 |
+| `sh:sparql` constraint, governed | 56 |
+| custom `sh:ask` component, governed | 97 |
+| custom `sh:select` component, governed | 64 |
+| `sh:expression` function call, governed | 104 |
 
-Short BIND loops stay on the sequential evaluator path rather than constructing
+Native ownership retains an unchanged immutable schema through a union or
+projection instead of copying its columns and publishing another outer control.
+The expression's two scalar calls save six allocations per focus node; the
+governed SELECT paths also avoid their redundant projected array and control.
+Filtered layouts still use the same admitted builder. The original entry constants,
+doubling terms and exact allocation assertions are unchanged.
+
+Historically, short BIND loops moved to the sequential evaluator path rather than constructing
 a worker context and converting its output. On the expression fixture this
 reduces the ungoverned term from 101 to 85 allocations per focus node, and the
 governed term from 126 to 110. The exact allocation pins retain their zero
