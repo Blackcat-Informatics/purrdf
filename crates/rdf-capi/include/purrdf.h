@@ -903,7 +903,7 @@ typedef struct PurrdfBuffer PurrdfBuffer;
 typedef struct PurrdfCancellation PurrdfCancellation;
 
 /**
- * A pattern-quad cursor. It holds an `Arc<RdfDataset>` clone (`pin`) so the
+ * A pattern-quad cursor. It holds a frozen storage-owner clone (`pin`) so the
  * term arena the views borrow into cannot dangle — the cursor stays valid even
  * after every `PurrdfDataset` handle is freed. Matching rows are pulled lazily
  * from the core's owned indexed cursor and are never collected. Single-threaded.
@@ -911,7 +911,7 @@ typedef struct PurrdfCancellation PurrdfCancellation;
 typedef struct PurrdfCursor PurrdfCursor;
 
 /**
- * A frozen, immutable RDF-1.2 dataset. Wraps `Arc<RdfDataset>`, so it is
+ * A frozen, immutable RDF-1.2 dataset. Retains the frozen dataset storage owner, so it is
  * `Send + Sync`: it may be read concurrently from multiple threads. Release
  * with `purrdf_dataset_free`.
  *

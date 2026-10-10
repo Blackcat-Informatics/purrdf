@@ -498,6 +498,30 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
         schema: &VarSchema,
         ctx: &mut EvalCtx<'_, D>,
     ) -> Result<Option<SolutionTerm<I>>, EvalError> {
+        self.stack.clear();
+        let mut pc = 0;
+        loop {
+            match self.advance(&mut pc, row, ctx)? {
+                VmStep::Value(value) => return Ok(value),
+                VmStep::Suspend(suspend) => {
+                    let value = resolve(suspend, &self.program, row, schema, ctx)?;
+                    self.stack.push(Val::Term(value));
+                }
+            }
+        }
+    }
+
+    /// Run instructions up to a recursive suspension or the completed value.
+    /// The instruction temporaries must die before `term` resolves the suspension:
+    /// keeping this frame live would charge every opcode's native owners to each
+    /// nested EXISTS or SPARQL function, even when that opcode never runs there.
+    #[inline(never)]
+    fn advance<'d, D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        pc: &mut usize,
+        row: &[Option<SolutionTerm<I>>],
+        ctx: &mut EvalCtx<'d, D>,
+    ) -> Result<VmStep<'e, 'd, I>, EvalError> {
         let Self {
             program,
             slots,
@@ -508,11 +532,9 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
             args,
             ..
         } = self;
-        stack.clear();
         let ops = &program.ops;
-        let mut pc = 0_usize;
-        while let Some(op) = ops.get(pc) {
-            pc += 1;
+        while let Some(op) = ops.get(*pc) {
+            *pc += 1;
             match *op {
                 Op::Const(k) => {
                     let k = k as usize;
@@ -587,16 +609,16 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 }
                 Op::Branch { on_false, end } => match pop_ebv(stack)? {
                     Some(true) => {}
-                    Some(false) => pc = on_false as usize,
+                    Some(false) => *pc = on_false as usize,
                     None => {
                         stack.push(Val::Term(None));
-                        pc = end as usize;
+                        *pc = end as usize;
                     }
                 },
-                Op::Jmp(target) => pc = target as usize,
+                Op::Jmp(target) => *pc = target as usize,
                 Op::CoalesceNext(end) => {
                     if matches!(stack.last(), Some(Val::Term(Some(_)))) {
-                        pc = end as usize;
+                        *pc = end as usize;
                     } else {
                         pop_term(stack)?;
                     }
@@ -605,7 +627,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 Op::InNeedle(end) => match pop_term(stack)? {
                     None => {
                         stack.push(Val::Term(None));
-                        pc = end as usize;
+                        *pc = end as usize;
                     }
                     Some(target) => {
                         let value = helpers::owned_value_of(ctx, target)?;
@@ -645,7 +667,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                     if matched {
                         stack.pop();
                         stack.push(Val::Term(Some(helpers::intern_boolean(ctx, true)?)));
-                        pc = end as usize;
+                        *pc = end as usize;
                     }
                 }
                 Op::InEnd => {
@@ -689,8 +711,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                              for it",
                         )
                     })?;
-                    let value = resolve(Suspend::Exists(pattern), program, row, schema, ctx)?;
-                    stack.push(Val::Term(value));
+                    return Ok(VmStep::Suspend(Suspend::Exists(pattern)));
                 }
                 Op::Call { call, argc, regex } => {
                     pop_values(stack, argc, ctx, args)?;
@@ -702,13 +723,12 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 }
                 Op::CallCustom { call, argc } => {
                     pop_values(stack, argc, ctx, args)?;
-                    let result = match call_custom(program, call, args, ctx) {
-                        Ok(VmStep::Value(value)) => Ok(value),
-                        Ok(VmStep::Suspend(suspend)) => resolve(suspend, program, row, schema, ctx),
-                        Err(error) => Err(error),
-                    };
+                    let result = call_custom(program, call, args, ctx);
                     args.clear();
-                    stack.push(Val::Term(result?));
+                    match result? {
+                        VmStep::Value(value) => stack.push(Val::Term(value)),
+                        suspension @ VmStep::Suspend(_) => return Ok(suspension),
+                    }
                 }
                 Op::Triple { intern } => {
                     let object = match stack.pop() {
@@ -850,7 +870,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
                 "an expression program left more than its value on the stack",
             ));
         }
-        Ok(value)
+        Ok(VmStep::Value(value))
     }
 }
 

@@ -133,16 +133,20 @@ mod tests {
             ("AΣ1", "aς1"),
             ("AΣΣ", "aσς"),
             ("ΣΣ", "σς"),
+            ("A\u{558}Σ", "a\u{558}σ"),
+            ("A\u{559}Σ", "a\u{559}ς"),
         ] {
             let mut resident = crate::allocation::Resident;
             let mut memory = Memory::new(&mut resident);
             let output = lowercase_with_memory(input, &mut memory).unwrap();
             assert_eq!(output, expected, "{input:?}");
-            assert_eq!(
-                output,
-                input.to_lowercase(),
-                "whole-string resident reference"
-            );
+            if core::char::UNICODE_VERSION == super::super::UNICODE_VERSION {
+                assert_eq!(
+                    output,
+                    input.to_lowercase(),
+                    "whole-string resident reference"
+                );
+            }
             memory.release_string(output).unwrap();
             assert_eq!(memory.admitted_bytes(), 0);
         }
@@ -150,6 +154,33 @@ mod tests {
 
     #[test]
     fn generated_context_range_boundaries_match_the_existing_whole_string_law() {
+        // The compiler's std tables can advance independently of the shipped UCD.
+        // Always check the pinned source, and also compare std when its version agrees.
+        let source = include_str!("../../../iri/unicode/17.0.0/DerivedCoreProperties.txt");
+        let mut ignorable = Vec::new();
+        let mut cased = Vec::new();
+        for line in source.lines() {
+            let line = line.split('#').next().unwrap().trim();
+            let Some((span, property)) = line.split_once(';') else {
+                continue;
+            };
+            let target = match property.trim() {
+                "Case_Ignorable" => &mut ignorable,
+                "Cased" => &mut cased,
+                _ => continue,
+            };
+            let span = span.trim();
+            let (low, high) = span.split_once("..").unwrap_or((span, span));
+            target.push((
+                u32::from_str_radix(low, 16).unwrap(),
+                u32::from_str_radix(high, 16).unwrap(),
+            ));
+        }
+        let contains = |character: char, ranges: &[(u32, u32)]| {
+            ranges
+                .iter()
+                .any(|&(low, high)| (low..=high).contains(&u32::from(character)))
+        };
         for &(_, ranges) in case_tables::CONTEXT_PROPERTIES {
             for &(low, high) in ranges {
                 for point in [low.saturating_sub(1), low, high, high + 1] {
@@ -162,7 +193,36 @@ mod tests {
                         format!("{character}Σ"),
                         format!("AΣ{character}"),
                     ] {
-                        let expected = input.to_lowercase();
+                        let mut expected = String::new();
+                        for (offset, character) in input.char_indices() {
+                            if character == 'Σ' {
+                                let preceding = input[..offset]
+                                    .chars()
+                                    .rev()
+                                    .find(|&value| !contains(value, &ignorable));
+                                let following = input[offset + character.len_utf8()..]
+                                    .chars()
+                                    .find(|&value| !contains(value, &ignorable));
+                                expected.push(
+                                    if preceding.is_some_and(|value| contains(value, &cased))
+                                        && !following.is_some_and(|value| contains(value, &cased))
+                                    {
+                                        'ς'
+                                    } else {
+                                        'σ'
+                                    },
+                                );
+                            } else {
+                                expected.extend(character.to_lowercase());
+                            }
+                        }
+                        if core::char::UNICODE_VERSION == super::super::UNICODE_VERSION {
+                            assert_eq!(
+                                expected,
+                                input.to_lowercase(),
+                                "same-version std reference: {input:?}"
+                            );
+                        }
                         let mut resident = crate::allocation::Resident;
                         let mut memory = Memory::new(&mut resident);
                         let output = lowercase_with_memory(&input, &mut memory).unwrap();

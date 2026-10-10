@@ -191,7 +191,8 @@ pub struct PreparedQuery {
     /// The numbered tree of [`Self::query`], built on the first evaluation of this plan
     /// and shared by every later one. See [`crate::plan::PlanCache`].
     pub(crate) plan: crate::plan::PlanCache,
-    certified_bytes: Option<usize>,
+    /// Retained payload bytes measured through the original native memory owner.
+    measured_retained_bytes: Option<usize>,
     // Parsed/rewrite containers die before their original allocation grant.
     _allocation: Option<crate::WorkspaceAllocation>,
 }
@@ -367,7 +368,7 @@ impl PreparedQuery {
             aggregates,
             memory: PlanCharge::new(memory, bytes),
             plan: crate::plan::PlanCache::default(),
-            certified_bytes: None,
+            measured_retained_bytes: None,
             _allocation: None,
         }
     }
@@ -448,7 +449,7 @@ impl PreparedQuery {
     /// evaluation builds and later evaluations share.
     #[must_use]
     pub fn retained_size_bytes(&self) -> usize {
-        if let Some(bytes) = self.certified_bytes {
+        if let Some(bytes) = self.measured_retained_bytes {
             return bytes;
         }
         plan_payload_bytes(
@@ -1203,7 +1204,7 @@ impl PlanCache {
             aggregates: preparing.aggregates,
             memory: charge,
             plan,
-            certified_bytes: Some(bytes),
+            measured_retained_bytes: Some(bytes),
             _allocation: preparing.frame.into_allocation(),
         };
         let prepared = if workspace.is_bounded() {
